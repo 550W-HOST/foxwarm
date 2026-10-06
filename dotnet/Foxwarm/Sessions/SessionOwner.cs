@@ -1,9 +1,9 @@
-using Foxwarm.Tools;
 using System.Collections.Concurrent;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
+using Foxwarm.Tools;
 using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Sessions;
@@ -20,30 +20,46 @@ internal sealed partial class SessionOwner
     private readonly HostModels models;
     internal Func<string, SessionMetadata?>? ResolveAncestry { get; set; }
     internal string? SnapshotRefreshWarning { get; set; }
+
     private sealed record OwnerIdentity(string Id, string Agent);
+
     private OwnerIdentity identity;
     private SessionEntry? entry;
     public string Id => Volatile.Read(ref identity).Id;
     public string Agent => Volatile.Read(ref identity).Agent;
+
     internal void RebindIdentity(string id, string agent)
     {
         var current = Entry;
         Registry.BindIdentity(id, current);
-        current.WithState(state => { state.Id = id; state.AuthorityEnvelope["agent"] = agent; if (state.AuthorityEnvelope.ContainsKey("id")) state.AuthorityEnvelope["id"] = id; });
+        current.WithState(state =>
+        {
+            state.Id = id;
+            state.AuthorityEnvelope["agent"] = agent;
+            if (state.AuthorityEnvelope.ContainsKey("id"))
+                state.AuthorityEnvelope["id"] = id;
+        });
         Volatile.Write(ref identity, new(id, agent));
     }
+
     public SessionRegistry Registry { get; set; } = null!;
     public SessionCompactor Compactor { get; set; } = null!;
     public SqliteArchiveMessageStore Archive { get; set; } = null!;
     public LocalExecManager Executor { get; set; } = null!;
     internal PersistentSessionAuthorityStore AuthorityStore { get; set; } = null!;
     internal bool Processing => !running.IsEmpty;
+
     internal void NotifyDeleted()
     {
         var value = new SessionRuntimeEvent(Id, SessionEventKind.Deleted, null);
-        foreach (var channel in listeners.Values) { channel.Writer.TryWrite(value); channel.Writer.TryComplete(); }
+        foreach (var channel in listeners.Values)
+        {
+            channel.Writer.TryWrite(value);
+            channel.Writer.TryComplete();
+        }
         listeners.Clear();
     }
+
     public SessionEntry Entry => entry ??= Registry.GetRequired(Id);
 
     public SessionOwner(string id, string agent, HostModels models)
@@ -69,7 +85,7 @@ internal sealed partial class SessionOwner
             failureCount = Entry.BackgroundProcessorFailureCount,
             bestEffortFailureCount = Entry.BestEffortFailureCount,
             snapshotRefreshWarning = SnapshotRefreshWarning,
-            lastError = Entry.LastBackgroundProcessorFailure?.Message
+            lastError = Entry.LastBackgroundProcessorFailure?.Message,
         };
     }
 
@@ -77,13 +93,15 @@ internal sealed partial class SessionOwner
 
     public void EnableCommittedNotifications()
     {
-        lastNotifiedSeq = Entry.Snapshot().History.LastOrDefault()?["__meta"]?["seq"]?.GetValue<long>() ?? 0;
+        lastNotifiedSeq =
+            Entry.Snapshot().History.LastOrDefault()?["__meta"]?["seq"]?.GetValue<long>() ?? 0;
         Entry.Committed = snapshot =>
         {
             foreach (var message in snapshot.History)
             {
                 var seq = message["__meta"]?["seq"]?.GetValue<long>() ?? 0;
-                if (seq <= lastNotifiedSeq) continue;
+                if (seq <= lastNotifiedSeq)
+                    continue;
                 lastNotifiedSeq = seq;
                 Emit(SessionEventKind.MessageCommitted, message);
                 ClearCommittedDraft(message);
@@ -92,7 +110,8 @@ internal sealed partial class SessionOwner
         };
     }
 
-    private static JsonNode JsonSerializerNode(object value) => System.Text.Json.JsonSerializer.SerializeToNode(value)!;
+    private static JsonNode JsonSerializerNode(object value) =>
+        System.Text.Json.JsonSerializer.SerializeToNode(value)!;
 
     public Task StartProcessing(bool retry = false)
     {
@@ -102,12 +121,23 @@ internal sealed partial class SessionOwner
         async Task ExecuteAsync()
         {
             await ready.Task;
-            try { await Registry.Runner.ProcessQueueAsync(Id, retry); }
+            try
+            {
+                await Registry.Runner.ProcessQueueAsync(Id, retry);
+            }
             catch (Exception error)
             {
-                if (error is not SessionContinuationUnavailableException && !(retry && error is InvalidOperationException && error.Message == "Session is already running."))
+                if (
+                    error is not SessionContinuationUnavailableException
+                    && !(
+                        retry
+                        && error is InvalidOperationException
+                        && error.Message == "Session is already running."
+                    )
+                )
                     Entry.RecordBackgroundProcessorFailure(error);
-                if (retry) throw;
+                if (retry)
+                    throw;
             }
             finally
             {
@@ -116,8 +146,14 @@ internal sealed partial class SessionOwner
                 if (failures != lastReportedFailureCount)
                 {
                     lastReportedFailureCount = failures;
-                    if (Entry.LastBackgroundProcessorFailure is not ModelRequestException { TerminalNoticeDelivered: true })
-                        Emit(SessionEventKind.ProcessingError, JsonValue.Create(Entry.LastBackgroundProcessorFailure?.Message));
+                    if (
+                        Entry.LastBackgroundProcessorFailure
+                        is not ModelRequestException { TerminalNoticeDelivered: true }
+                    )
+                        Emit(
+                            SessionEventKind.ProcessingError,
+                            JsonValue.Create(Entry.LastBackgroundProcessorFailure?.Message)
+                        );
                 }
                 Emit(SessionEventKind.StateChanged);
                 running.TryRemove(index, out _);
@@ -131,7 +167,8 @@ internal sealed partial class SessionOwner
 
     public async Task DrainForegroundAsync()
     {
-        while (running.Count > 0) await Task.WhenAll(running.Values.ToArray());
+        while (running.Count > 0)
+            await Task.WhenAll(running.Values.ToArray());
     }
 
     public async Task DrainAsync()
@@ -142,12 +179,14 @@ internal sealed partial class SessionOwner
 
     public (long Id, ChannelReader<SessionRuntimeEvent> Reader) Subscribe()
     {
-        var channel = Channel.CreateUnbounded<SessionRuntimeEvent>(new UnboundedChannelOptions
-        {
-            SingleReader = true,
-            SingleWriter = false,
-            AllowSynchronousContinuations = false
-        });
+        var channel = Channel.CreateUnbounded<SessionRuntimeEvent>(
+            new UnboundedChannelOptions
+            {
+                SingleReader = true,
+                SingleWriter = false,
+                AllowSynchronousContinuations = false,
+            }
+        );
         var id = Interlocked.Increment(ref nextListener);
         listeners[id] = channel;
         return (id, channel.Reader);
@@ -155,22 +194,28 @@ internal sealed partial class SessionOwner
 
     public void Unsubscribe(long id)
     {
-        if (listeners.TryRemove(id, out var channel)) channel.Writer.TryComplete();
+        if (listeners.TryRemove(id, out var channel))
+            channel.Writer.TryComplete();
     }
 
     public void CloseSubscribers()
     {
-        foreach (var id in listeners.Keys) Unsubscribe(id);
+        foreach (var id in listeners.Keys)
+            Unsubscribe(id);
     }
 
     public void Emit(SessionEventKind kind, JsonNode? data = null)
     {
-        if (Entry.Retired) return;
+        if (Entry.Retired)
+            return;
         var value = new SessionRuntimeEvent(Id, kind, data?.DeepClone());
         Changed?.Invoke(value);
-        foreach (var channel in listeners.Values) channel.Writer.TryWrite(value);
+        foreach (var channel in listeners.Values)
+            channel.Writer.TryWrite(value);
     }
 
     public void PublishStateChanged() => Emit(SessionEventKind.StateChanged);
-    public void PublishCompactError(Exception error) => Emit(SessionEventKind.ProcessingError, JsonValue.Create(error.Message));
+
+    public void PublishCompactError(Exception error) =>
+        Emit(SessionEventKind.ProcessingError, JsonValue.Create(error.Message));
 }

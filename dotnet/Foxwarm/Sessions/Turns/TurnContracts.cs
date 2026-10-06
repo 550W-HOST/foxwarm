@@ -9,28 +9,46 @@ namespace Foxwarm.Sessions;
 public sealed class CancellationHandle : IDisposable
 {
     private int disposed;
-    internal CancellationHandle(CancellationTokenSource source) { Source = source; Token = source.Token; }
+
+    internal CancellationHandle(CancellationTokenSource source)
+    {
+        Source = source;
+        Token = source.Token;
+    }
+
     internal CancellationTokenSource Source { get; }
     internal bool TakenByStop { get; set; }
+
     // Stop may dispose the source while an already-started tool finishes its paired response.
     public CancellationToken Token { get; }
+
     public void Cancel() => Source.Cancel();
+
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref disposed, 1) == 0) Source.Dispose();
+        if (Interlocked.Exchange(ref disposed, 1) == 0)
+            Source.Dispose();
     }
 }
 
 public interface IChatService
 {
-    Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken cancellationToken);
+    Task<ChatResult> ChatAsync(
+        string sessionId,
+        IReadOnlyList<JsonObject> history,
+        CancellationToken cancellationToken
+    );
 }
 
 /// <summary>Ordinary owner chat may prepare committed input before a real provider retry.</summary>
 public interface ISessionChatService : IChatService
 {
-    Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history,
-        Func<CancellationToken, Task<bool>> prepareRetry, CancellationToken cancellationToken);
+    Task<ChatResult> ChatAsync(
+        string sessionId,
+        IReadOnlyList<JsonObject> history,
+        Func<CancellationToken, Task<bool>> prepareRetry,
+        CancellationToken cancellationToken
+    );
 }
 
 public interface ITurnToolExecutor
@@ -44,51 +62,80 @@ public interface ITurnToolControl
     void BeginTurn();
     bool PolicyUnavailable => false;
     bool ConsumeFinishAfterBatch();
-    Task<bool> CompleteBatchAsync(JsonObject toolMessage, bool stopping) => Task.FromResult(ConsumeFinishAfterBatch());
+    Task<bool> CompleteBatchAsync(JsonObject toolMessage, bool stopping) =>
+        Task.FromResult(ConsumeFinishAfterBatch());
 }
 
 public sealed class UnsupportedTurnToolExecutor : ITurnToolExecutor
 {
-    public Task<JsonObject> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken)
+    public Task<JsonObject> ExecuteAsync(
+        JsonObject functionCall,
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var name = functionCall["name"]?.GetValue<string>() ?? "";
         return Task.FromResult(ToolError("unknown_tool", $"Unknown tool: {name}"));
     }
 
-    public static JsonObject ToolError(string type, string message) => new()
-    {
-        ["error"] = new JsonObject { ["type"] = type, ["message"] = message }
-    };
+    public static JsonObject ToolError(string type, string message) =>
+        new()
+        {
+            ["error"] = new JsonObject { ["type"] = type, ["message"] = message },
+        };
 }
 
 public sealed class ToolLoopLimitException(int limit)
-    : InvalidOperationException($"Experimental Session turn exceeded the {limit} iteration tool-loop limit.");
+    : InvalidOperationException(
+        $"Experimental Session turn exceeded the {limit} iteration tool-loop limit."
+    );
 
 public sealed record ChatResult(JsonObject? AssistantMessage, JsonObject? Usage = null)
 {
     internal HistoryAppendFinalizer? HistoryAppend { get; init; }
-    internal void FinalizeHistory(IReadOnlyList<JsonObject>? rows, Action<Exception>? warning = null) => HistoryAppend?.Settle(rows, warning);
-    public static ChatResult Text(string text) => new(new JsonObject
-    {
-        ["role"] = "model",
-        ["parts"] = new JsonArray(new JsonObject { ["text"] = text })
-    });
+
+    internal void FinalizeHistory(
+        IReadOnlyList<JsonObject>? rows,
+        Action<Exception>? warning = null
+    ) => HistoryAppend?.Settle(rows, warning);
+
+    public static ChatResult Text(string text) =>
+        new(
+            new JsonObject
+            {
+                ["role"] = "model",
+                ["parts"] = new JsonArray(new JsonObject { ["text"] = text }),
+            }
+        );
 }
 
 public sealed class UnsupportedSessionTurnException : InvalidOperationException
 {
     public string Path { get; }
-    public UnsupportedSessionTurnException(string path) : base($"Experimental Session turns do not support {path}.") => Path = path;
+
+    public UnsupportedSessionTurnException(string path)
+        : base($"Experimental Session turns do not support {path}.") => Path = path;
 }
 
 internal sealed class HistoryAppendFinalizer(Action<IReadOnlyList<JsonObject>?> finalize)
 {
     private int settled;
+
     internal void Settle(IReadOnlyList<JsonObject>? rows, Action<Exception>? warning)
     {
-        if (Interlocked.Exchange(ref settled, 1) != 0) return;
-        try { finalize(rows); }
-        catch (Exception error) { try { warning?.Invoke(error); } catch { } }
+        if (Interlocked.Exchange(ref settled, 1) != 0)
+            return;
+        try
+        {
+            finalize(rows);
+        }
+        catch (Exception error)
+        {
+            try
+            {
+                warning?.Invoke(error);
+            }
+            catch { }
+        }
     }
 }

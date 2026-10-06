@@ -4,7 +4,10 @@ namespace Foxwarm.Tools;
 
 internal static class UnifiedToolDefinitions
 {
-    internal static JsonArray All() => JsonNode.Parse("""
+    internal static JsonArray All() =>
+        JsonNode
+            .Parse(
+                """
 [
   {
     "name": "search_tools",
@@ -202,5 +205,7 @@ internal static class UnifiedToolDefinitions
     "strict": false
   }
 ]
-""")!.AsArray();
+"""
+            )!
+            .AsArray();
 }

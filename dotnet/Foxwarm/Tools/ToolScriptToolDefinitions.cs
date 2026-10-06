@@ -4,7 +4,10 @@ namespace Foxwarm.Tools;
 
 internal static class ToolScriptToolDefinitions
 {
-    internal static JsonArray Definitions() => JsonNode.Parse("""
+    internal static JsonArray Definitions() =>
+        JsonNode
+            .Parse(
+                """
 [
   {
     "type": "function",
@@ -180,5 +183,7 @@ internal static class ToolScriptToolDefinitions
     }
   }
 ]
-""")!.AsArray();
+"""
+            )!
+            .AsArray();
 }

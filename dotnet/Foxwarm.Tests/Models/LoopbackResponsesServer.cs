@@ -4,14 +4,19 @@ using System.Text;
 
 namespace Foxwarm.Tests;
 
-internal sealed record CapturedHttpRequest(string RequestLine, IReadOnlyDictionary<string, string> Headers, string Body);
+internal sealed record CapturedHttpRequest(
+    string RequestLine,
+    IReadOnlyDictionary<string, string> Headers,
+    string Body
+);
 
 internal sealed class LoopbackResponsesServer : IAsyncDisposable
 {
     private readonly TcpListener listener;
     private readonly Func<NetworkStream, CapturedHttpRequest, Task> respond;
     private readonly Task serverTask;
-    private readonly TaskCompletionSource<CapturedHttpRequest> request = NewSignal<CapturedHttpRequest>();
+    private readonly TaskCompletionSource<CapturedHttpRequest> request =
+        NewSignal<CapturedHttpRequest>();
     private int requestCount;
 
     public LoopbackResponsesServer(Func<NetworkStream, CapturedHttpRequest, Task> respond)
@@ -48,25 +53,37 @@ internal sealed class LoopbackResponsesServer : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         listener.Stop();
-        try { await serverTask.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); }
+        try
+        {
+            await serverTask.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        }
         catch (Exception) when (serverTask.IsFaulted || serverTask.IsCanceled) { }
     }
 
-    public static async Task WriteResponseAsync(NetworkStream stream, int status, string contentType, byte[] body, params int[] chunks)
+    public static async Task WriteResponseAsync(
+        NetworkStream stream,
+        int status,
+        string contentType,
+        byte[] body,
+        params int[] chunks
+    )
     {
         var reason = status == 200 ? "OK" : "Error";
-        var header = $"HTTP/1.1 {status} {reason}\r\nContent-Type: {contentType}\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n";
+        var header =
+            $"HTTP/1.1 {status} {reason}\r\nContent-Type: {contentType}\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n";
         await stream.WriteAsync(Encoding.ASCII.GetBytes(header)).ConfigureAwait(false);
         var offset = 0;
         foreach (var requested in chunks)
         {
-            if (offset >= body.Length) break;
+            if (offset >= body.Length)
+                break;
             var count = Math.Min(requested, body.Length - offset);
             await stream.WriteAsync(body.AsMemory(offset, count)).ConfigureAwait(false);
             await stream.FlushAsync().ConfigureAwait(false);
             offset += count;
         }
-        if (offset < body.Length) await stream.WriteAsync(body.AsMemory(offset)).ConfigureAwait(false);
+        if (offset < body.Length)
+            await stream.WriteAsync(body.AsMemory(offset)).ConfigureAwait(false);
     }
 
     internal static async Task<CapturedHttpRequest> ReadRequestAsync(NetworkStream stream)
@@ -77,37 +94,52 @@ internal sealed class LoopbackResponsesServer : IAsyncDisposable
         while (headerEnd < 0)
         {
             var read = await stream.ReadAsync(buffer).ConfigureAwait(false);
-            if (read == 0) throw new EndOfStreamException("HTTP request ended before headers.");
+            if (read == 0)
+                throw new EndOfStreamException("HTTP request ended before headers.");
             bytes.Write(buffer, 0, read);
             headerEnd = Find(bytes.GetBuffer().AsSpan(0, (int)bytes.Length), "\r\n\r\n"u8);
         }
         var all = bytes.ToArray();
         var headerText = Encoding.ASCII.GetString(all, 0, headerEnd);
         var lines = headerText.Split("\r\n", StringSplitOptions.None);
-        var headers = lines.Skip(1)
+        var headers = lines
+            .Skip(1)
             .Select(line => line.Split(':', 2))
             .Where(parts => parts.Length == 2)
-            .ToDictionary(parts => parts[0], parts => parts[1].Trim(), StringComparer.OrdinalIgnoreCase);
-        var contentLength = headers.TryGetValue("Content-Length", out var rawLength) ? int.Parse(rawLength) : 0;
+            .ToDictionary(
+                parts => parts[0],
+                parts => parts[1].Trim(),
+                StringComparer.OrdinalIgnoreCase
+            );
+        var contentLength = headers.TryGetValue("Content-Length", out var rawLength)
+            ? int.Parse(rawLength)
+            : 0;
         var bodyOffset = headerEnd + 4;
         while (bytes.Length - bodyOffset < contentLength)
         {
             var read = await stream.ReadAsync(buffer).ConfigureAwait(false);
-            if (read == 0) throw new EndOfStreamException("HTTP request ended before body.");
+            if (read == 0)
+                throw new EndOfStreamException("HTTP request ended before body.");
             bytes.Write(buffer, 0, read);
         }
         all = bytes.ToArray();
-        return new CapturedHttpRequest(lines[0], headers, Encoding.UTF8.GetString(all, bodyOffset, contentLength));
+        return new CapturedHttpRequest(
+            lines[0],
+            headers,
+            Encoding.UTF8.GetString(all, bodyOffset, contentLength)
+        );
     }
 
     private static int Find(ReadOnlySpan<byte> source, ReadOnlySpan<byte> pattern)
     {
         for (var index = 0; index <= source.Length - pattern.Length; index++)
-            if (source.Slice(index, pattern.Length).SequenceEqual(pattern)) return index;
+            if (source.Slice(index, pattern.Length).SequenceEqual(pattern))
+                return index;
         return -1;
     }
 
-    private static TaskCompletionSource<T> NewSignal<T>() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private static TaskCompletionSource<T> NewSignal<T>() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 }
 
 internal sealed class ScriptedResponsesSequenceServer : IAsyncDisposable
@@ -120,12 +152,17 @@ internal sealed class ScriptedResponsesSequenceServer : IAsyncDisposable
 
     public ScriptedResponsesSequenceServer(
         int expectedRequests,
-        Func<int, NetworkStream, CapturedHttpRequest, Task> respond)
+        Func<int, NetworkStream, CapturedHttpRequest, Task> respond
+    )
     {
-        if (expectedRequests <= 0) throw new ArgumentOutOfRangeException(nameof(expectedRequests));
+        if (expectedRequests <= 0)
+            throw new ArgumentOutOfRangeException(nameof(expectedRequests));
         this.respond = respond;
-        requests = Enumerable.Range(0, expectedRequests)
-            .Select(_ => new TaskCompletionSource<CapturedHttpRequest>(TaskCreationOptions.RunContinuationsAsynchronously))
+        requests = Enumerable
+            .Range(0, expectedRequests)
+            .Select(_ => new TaskCompletionSource<CapturedHttpRequest>(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            ))
             .ToArray();
         listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -135,6 +172,7 @@ internal sealed class ScriptedResponsesSequenceServer : IAsyncDisposable
 
     public Uri BaseUri { get; }
     public int RequestCount => Volatile.Read(ref requestCount);
+
     public Task<CapturedHttpRequest> RequestAt(int index) => requests[index].Task;
 
     private async Task RunAsync()
@@ -146,7 +184,9 @@ internal sealed class ScriptedResponsesSequenceServer : IAsyncDisposable
                 using var client = await listener.AcceptTcpClientAsync().ConfigureAwait(false);
                 Interlocked.Increment(ref requestCount);
                 await using var stream = client.GetStream();
-                var captured = await LoopbackResponsesServer.ReadRequestAsync(stream).ConfigureAwait(false);
+                var captured = await LoopbackResponsesServer
+                    .ReadRequestAsync(stream)
+                    .ConfigureAwait(false);
                 requests[index].TrySetResult(captured);
                 await respond(index, stream, captured).ConfigureAwait(false);
             }
@@ -161,7 +201,10 @@ internal sealed class ScriptedResponsesSequenceServer : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         listener.Stop();
-        try { await serverTask.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); }
+        try
+        {
+            await serverTask.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        }
         catch (Exception) when (serverTask.IsFaulted || serverTask.IsCanceled) { }
     }
 }

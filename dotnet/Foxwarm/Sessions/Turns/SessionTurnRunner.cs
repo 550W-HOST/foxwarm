@@ -22,28 +22,37 @@ public sealed class SessionTurnRunner
         var entry = registry.GetRequired(sessionId);
         if (!entry.TryClaimProcessor())
         {
-            if (retry) throw new InvalidOperationException("Session is already running.");
+            if (retry)
+                throw new InvalidOperationException("Session is already running.");
             return;
         }
         var claimed = false;
         var failed = false;
         try
         {
-            if (retry) entry.WithState(state =>
-            {
-                if (state.Busy || state.Stopping) throw new InvalidOperationException("Session is already running.");
-                if (SessionRuntimeState.WaitProjection(state.Meta) is not null) throw new SessionContinuationUnavailableException("Session is waiting and cannot be continued manually.");
-                if (!SessionContinuation.IsIncomplete(state.History)) throw new SessionContinuationUnavailableException();
-            });
+            if (retry)
+                entry.WithState(state =>
+                {
+                    if (state.Busy || state.Stopping)
+                        throw new InvalidOperationException("Session is already running.");
+                    if (SessionRuntimeState.WaitProjection(state.Meta) is not null)
+                        throw new SessionContinuationUnavailableException(
+                            "Session is waiting and cannot be continued manually."
+                        );
+                    if (!SessionContinuation.IsIncomplete(state.History))
+                        throw new SessionContinuationUnavailableException();
+                });
             var host = hosts.For(entry);
             claimed = await host.TryClaimBusyAsync().ConfigureAwait(false);
-            if (!claimed) return;
+            if (!claimed)
+                return;
             var retryPending = retry;
             while (true)
             {
                 if (entry.WithState(state => state.Stopping))
                 {
-                    if (await ResumeQueuedOverrideAsync(entry).ConfigureAwait(false)) continue;
+                    if (await ResumeQueuedOverrideAsync(entry).ConfigureAwait(false))
+                        continue;
                     await host.FinalizeStoppedAsync().ConfigureAwait(false);
                     claimed = false;
                     break;
@@ -53,22 +62,30 @@ public sealed class SessionTurnRunner
                 {
                     retryPending = false;
                     await entry.SaveLane.ClearWaitAsync().ConfigureAwait(false);
-                    if (registry.OnTurnStarting is not null) await registry.OnTurnStarting(entry).ConfigureAwait(false);
+                    if (registry.OnTurnStarting is not null)
+                        await registry.OnTurnStarting(entry).ConfigureAwait(false);
                 }
                 else
                 {
-                    if (!entry.WithState(state => state.Queue.Any(SessionCompactor.Ordinary))) break;
-                    if (registry.OnTurnStarting is not null) await registry.OnTurnStarting(entry).ConfigureAwait(false);
+                    if (!entry.WithState(state => state.Queue.Any(SessionCompactor.Ordinary)))
+                        break;
+                    if (registry.OnTurnStarting is not null)
+                        await registry.OnTurnStarting(entry).ConfigureAwait(false);
                     await entry.SaveLane.SaveBestEffortAsync().ConfigureAwait(false);
                     await host.SafePointAsync().ConfigureAwait(false);
                     var batch = DrainLeading(entry);
-                    if (batch.Count == 0) break;
+                    if (batch.Count == 0)
+                        break;
                     await host.AppendQueuedInputsAsync(batch).ConfigureAwait(false);
                 }
                 try
                 {
-                    var result = await host.ChatAsync(Guid.NewGuid().ToString()).ConfigureAwait(false);
-                    if ((result.AssistantMessage is not null || result.Usage is not null) && registry.OnTurnCompleted is not null)
+                    var result = await host.ChatAsync(Guid.NewGuid().ToString())
+                        .ConfigureAwait(false);
+                    if (
+                        (result.AssistantMessage is not null || result.Usage is not null)
+                        && registry.OnTurnCompleted is not null
+                    )
                         await registry.OnTurnCompleted(entry, result).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (entry.WithState(state => state.Stopping))
@@ -76,7 +93,10 @@ public sealed class SessionTurnRunner
                     if (await ResumeQueuedOverrideAsync(entry).ConfigureAwait(false))
                     {
                         // Retry preparation may have committed the selected inputs before Run queued canceled it.
-                        retryPending = entry.WithState(state => !state.Queue.Any(SessionCompactor.Ordinary) && SessionContinuation.IsIncomplete(state.History));
+                        retryPending = entry.WithState(state =>
+                            !state.Queue.Any(SessionCompactor.Ordinary)
+                            && SessionContinuation.IsIncomplete(state.History)
+                        );
                         continue;
                     }
                     await host.FinalizeStoppedAsync().ConfigureAwait(false);
@@ -112,12 +132,18 @@ public sealed class SessionTurnRunner
         {
             try
             {
-                if (claimed) await hosts.For(entry).ReleaseBusyAsync().ConfigureAwait(false);
+                if (claimed)
+                    await hosts.For(entry).ReleaseBusyAsync().ConfigureAwait(false);
             }
             finally
             {
                 entry.ReleaseProcessor();
-                if (!failed && entry.WithState(state => !state.Busy) && registry.HasRunnableWork(entry)) registry.Trigger(sessionId);
+                if (
+                    !failed
+                    && entry.WithState(state => !state.Busy)
+                    && registry.HasRunnableWork(entry)
+                )
+                    registry.Trigger(sessionId);
             }
         }
     }
@@ -134,11 +160,14 @@ public sealed class SessionTurnRunner
     {
         var resume = entry.WithState(state =>
         {
-            if (state.Meta["runQueuedAfterStop"]?.GetValue<bool>() != true) return false;
-            state.Meta.Remove("runQueuedAfterStop"); state.Stopping = false;
+            if (state.Meta["runQueuedAfterStop"]?.GetValue<bool>() != true)
+                return false;
+            state.Meta.Remove("runQueuedAfterStop");
+            state.Stopping = false;
             return true;
         });
-        if (resume) await entry.SaveLane.SaveBestEffortAsync().ConfigureAwait(false);
+        if (resume)
+            await entry.SaveLane.SaveBestEffortAsync().ConfigureAwait(false);
         return resume;
     }
 }

@@ -10,68 +10,119 @@ internal sealed partial class SessionManager
     {
         internal readonly bool Creating = creating;
         internal bool CatalogCreated;
-        internal bool Retired, Retiring;
-        internal readonly TaskCompletionSource<SessionOwner> Owner = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        internal readonly TaskCompletionSource Finished = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal bool Retired,
+            Retiring;
+        internal readonly TaskCompletionSource<SessionOwner> Owner = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        internal readonly TaskCompletionSource Finished = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
     }
+
     private readonly Dictionary<string, IdentitySlot> identities = new(StringComparer.Ordinal);
     private readonly HashSet<TaskCompletionSource> creations = [];
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> creationKeys = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> creationKeys = new(
+        StringComparer.Ordinal
+    );
     private readonly CancellationTokenSource admissionStop = new();
     private volatile bool servicesReady;
     private readonly AsyncLocal<CancellationToken?> semanticCaller = new();
     internal Func<string, CancellationToken, Task>? BeforeAdmissionRead { get; set; }
     internal Action<string>? AdmissionReadObserved { get; set; }
 
-    internal async Task<SessionOwner?> GetExistingAsync(string requestedId, CancellationToken cancellationToken = default, bool forDeletion = false)
+    internal async Task<SessionOwner?> GetExistingAsync(
+        string requestedId,
+        CancellationToken cancellationToken = default,
+        bool forDeletion = false
+    )
     {
-        if (!cancellationToken.CanBeCanceled) cancellationToken = semanticCaller.Value ?? default;
+        if (!cancellationToken.CanBeCanceled)
+            cancellationToken = semanticCaller.Value ?? default;
         await EnsureIdentityStartupAsync();
         while (true)
         {
             await WaitForIdentityMutationAsync(requestedId, cancellationToken);
-            IdentitySlot? slot; IdentityMoveOperation? moving;
+            IdentitySlot? slot;
+            IdentityMoveOperation? moving;
             lock (lifecycle)
             {
-                if (!accepting) throw new InvalidOperationException("Host is shutting down.");
-                identityMoveClaims.TryGetValue(requestedId, out moving); identities.TryGetValue(requestedId, out slot);
+                if (!accepting)
+                    throw new InvalidOperationException("Host is shutting down.");
+                identityMoveClaims.TryGetValue(requestedId, out moving);
+                identities.TryGetValue(requestedId, out slot);
             }
-            if (moving is not null && moving != owningIdentityMove.Value) { await moving.Finished.Task.WaitAsync(cancellationToken); continue; }
+            if (moving is not null && moving != owningIdentityMove.Value)
+            {
+                await moving.Finished.Task.WaitAsync(cancellationToken);
+                continue;
+            }
             if (slot is not null)
             {
-                if (slot.Retired || slot.Retiring) throw new SessionDeletionException("Session authority is retired pending deletion cleanup.", "SESSION_STATE_UNAVAILABLE");
+                if (slot.Retired || slot.Retiring)
+                    throw new SessionDeletionException(
+                        "Session authority is retired pending deletion cleanup.",
+                        "SESSION_STATE_UNAVAILABLE"
+                    );
                 var owner = await slot.Owner.Task.WaitAsync(cancellationToken);
-                await WaitForIdentityMutationAsync(owner.Id, cancellationToken); owner.Entry.RequireIdentityAuthority(); return owner;
+                await WaitForIdentityMutationAsync(owner.Id, cancellationToken);
+                owner.Entry.RequireIdentityAuthority();
+                return owner;
             }
             // Main identity resolution may read SQLite. It never runs under the owner registry gate.
             var canonical = SessionCatalog.Text(Catalog.Resolve(requestedId)["sessionId"]);
-            string? id = null; bool start = false;
+            string? id = null;
+            bool start = false;
             lock (lifecycle)
             {
-                if (!accepting) throw new InvalidOperationException("Host is shutting down.");
+                if (!accepting)
+                    throw new InvalidOperationException("Host is shutting down.");
                 identityMoveClaims.TryGetValue(requestedId, out moving);
-                if (moving is null && canonical is not null) identityMoveClaims.TryGetValue(canonical, out moving);
+                if (moving is null && canonical is not null)
+                    identityMoveClaims.TryGetValue(canonical, out moving);
                 if (moving is null || moving == owningIdentityMove.Value)
                 {
-                    if (identities.TryGetValue(requestedId, out slot)) id = requestedId;
+                    if (identities.TryGetValue(requestedId, out slot))
+                        id = requestedId;
                     else if (canonical is not null)
                     {
                         id = canonical;
-                        if (deletionClaims.ContainsKey(id) && !forDeletion) throw new SessionDeletionException("Session is being deleted.", "SESSION_DELETE_IN_PROGRESS");
-                        if (!identities.TryGetValue(id, out slot)) { slot = new(false); identities.Add(id, slot); start = true; }
+                        if (deletionClaims.ContainsKey(id) && !forDeletion)
+                            throw new SessionDeletionException(
+                                "Session is being deleted.",
+                                "SESSION_DELETE_IN_PROGRESS"
+                            );
+                        if (!identities.TryGetValue(id, out slot))
+                        {
+                            slot = new(false);
+                            identities.Add(id, slot);
+                            start = true;
+                        }
                     }
                 }
             }
-            if (moving is not null && moving != owningIdentityMove.Value) { await moving.Finished.Task.WaitAsync(cancellationToken); continue; }
-            if (id is null) return null;
-            if (start) _ = LoadOwnerAsync(id, slot!);
+            if (moving is not null && moving != owningIdentityMove.Value)
+            {
+                await moving.Finished.Task.WaitAsync(cancellationToken);
+                continue;
+            }
+            if (id is null)
+                return null;
+            if (start)
+                _ = LoadOwnerAsync(id, slot!);
             var admitted = await slot!.Owner.Task.WaitAsync(cancellationToken);
-            await WaitForIdentityMutationAsync(admitted.Id, cancellationToken); admitted.Entry.RequireIdentityAuthority(); return admitted;
+            await WaitForIdentityMutationAsync(admitted.Id, cancellationToken);
+            admitted.Entry.RequireIdentityAuthority();
+            return admitted;
         }
     }
 
-    internal async Task<SessionOwner> RequiredAsync(string id, CancellationToken cancellationToken = default)
-        => await GetExistingAsync(id, cancellationToken) ?? throw new InvalidDataException($"Session `{id}` not found.");
+    internal async Task<SessionOwner> RequiredAsync(
+        string id,
+        CancellationToken cancellationToken = default
+    ) =>
+        await GetExistingAsync(id, cancellationToken)
+        ?? throw new InvalidDataException($"Session `{id}` not found.");
 
     private async Task LoadOwnerAsync(string id, IdentitySlot slot)
     {
@@ -79,28 +130,55 @@ internal sealed partial class SessionManager
         {
             var token = admissionStop.Token;
             token.ThrowIfCancellationRequested();
-            if (BeforeAdmissionRead is { } before) await before(id, token);
+            if (BeforeAdmissionRead is { } before)
+                await before(id, token);
             await AdmissionBarrierAsync(id, token);
-            AdmissionReadObserved?.Invoke(id); ObserveAdmission("read", id);
-            var row = Catalog.Get(id) ?? throw new InvalidDataException("Cataloged Session membership disappeared during admission.");
+            AdmissionReadObserved?.Invoke(id);
+            ObserveAdmission("read", id);
+            var row =
+                Catalog.Get(id)
+                ?? throw new InvalidDataException(
+                    "Cataloged Session membership disappeared during admission."
+                );
             var agent = SessionCatalog.Text(row["agent"])!;
-            if (!SessionIdentity.IsValid(id) || !agents.Exists(agent)) throw new InvalidDataException("Catalog Session binding is unsupported or its Agent is missing.");
+            if (!SessionIdentity.IsValid(id) || !agents.Exists(agent))
+                throw new InvalidDataException(
+                    "Catalog Session binding is unsupported or its Agent is missing."
+                );
             var store = MakeStore(id, agent);
-            var snapshot = await store.LoadAsync(id) ?? throw new InvalidDataException("Cataloged Session authority is missing.");
+            var snapshot =
+                await store.LoadAsync(id)
+                ?? throw new InvalidDataException("Cataloged Session authority is missing.");
             AgentMemory.NormalizePersistedSelection(snapshot.AuthorityEnvelope);
-            ValidateExecutionEnvironment(snapshot.AuthorityEnvelope, agents.AgentDirectory(agent), Directory.GetCurrentDirectory());
+            ValidateExecutionEnvironment(
+                snapshot.AuthorityEnvelope,
+                agents.AgentDirectory(agent),
+                Directory.GetCurrentDirectory()
+            );
             var recoveringBusy = snapshot.Busy;
             snapshot = recoveringBusy ? RecoverBusySnapshot(snapshot) : snapshot;
-            if (snapshot.Stopping) throw new InvalidDataException("Stopping-only Session cannot be resumed automatically by the experiment host.");
+            if (snapshot.Stopping)
+                throw new InvalidDataException(
+                    "Stopping-only Session cannot be resumed automatically by the experiment host."
+                );
             token.ThrowIfCancellationRequested();
-            var owner = MakeSession(id, agent, store); owner.Registry.Add(id, snapshot);
+            var owner = MakeSession(id, agent, store);
+            owner.Registry.Add(id, snapshot);
             BindMutations(owner);
-            if (recoveringBusy) await owner.Entry.SaveLane.SaveStrictAsync(token);
+            if (recoveringBusy)
+                await owner.Entry.SaveLane.SaveStrictAsync(token);
             PublishOwner(owner, slot);
-            if (servicesReady && !IsDeletionClaimed(owner.Id)) WaitTransition(owner.Id);
+            if (servicesReady && !IsDeletionClaimed(owner.Id))
+                WaitTransition(owner.Id);
         }
-        catch (Exception error) { FailIdentity(id, slot, error); }
-        finally { slot.Finished.TrySetResult(); }
+        catch (Exception error)
+        {
+            FailIdentity(id, slot, error);
+        }
+        finally
+        {
+            slot.Finished.TrySetResult();
+        }
     }
 
     private static SessionSnapshot RecoverBusySnapshot(SessionSnapshot snapshot)
@@ -108,126 +186,250 @@ internal sealed partial class SessionManager
         var queue = snapshot.Queue.Select(item => item.CloneItem()).ToList();
         if (queue.LastOrDefault() is not { } last || !HasTrailingResumeEvent(last))
         {
-            queue.Add(new QueueItem(QueueItemType.Background,
-                [new JsonObject { ["system"] = SessionBoundary.SystemEvent(
-                    "session-resumed",
-                    "The Foxwarm process restarted while this session was busy. Foxwarm is resuming session processing.") }]));
+            queue.Add(
+                new QueueItem(
+                    QueueItemType.Background,
+                    [
+                        new JsonObject
+                        {
+                            ["system"] = SessionBoundary.SystemEvent(
+                                "session-resumed",
+                                "The Foxwarm process restarted while this session was busy. Foxwarm is resuming session processing."
+                            ),
+                        },
+                    ]
+                )
+            );
         }
-        return snapshot with { Queue = queue, Busy = false, BusyStartedAt = null, Stopping = false };
+        return snapshot with
+        {
+            Queue = queue,
+            Busy = false,
+            BusyStartedAt = null,
+            Stopping = false,
+        };
     }
 
     private static bool HasTrailingResumeEvent(QueueItem item)
     {
-        if (item.Type != QueueItemType.Background || item.Source is not null || item.Message is not null || item.Parts is null || item.Parts.Count != 1) return false;
+        if (
+            item.Type != QueueItemType.Background
+            || item.Source is not null
+            || item.Message is not null
+            || item.Parts is null
+            || item.Parts.Count != 1
+        )
+            return false;
         var system = SessionWait.Text(item.Parts[0]["system"]);
-        if (system is null) return false;
-        var match = Regex.Match(system, "^<foxwarm-system\\s+(?<attributes>[^>]*)\\s*/>$", RegexOptions.CultureInvariant);
-        if (!match.Success) return false;
+        if (system is null)
+            return false;
+        var match = Regex.Match(
+            system,
+            "^<foxwarm-system\\s+(?<attributes>[^>]*)\\s*/>$",
+            RegexOptions.CultureInvariant
+        );
+        if (!match.Success)
+            return false;
         var attributes = match.Groups["attributes"].Value;
-        return Regex.IsMatch(attributes, "(?:^|\\s)kind=\"event\"(?:\\s|$)", RegexOptions.CultureInvariant)
-            && Regex.IsMatch(attributes, "(?:^|\\s)type=\"session-resumed\"(?:\\s|$)", RegexOptions.CultureInvariant);
+        return Regex.IsMatch(
+                attributes,
+                "(?:^|\\s)kind=\"event\"(?:\\s|$)",
+                RegexOptions.CultureInvariant
+            )
+            && Regex.IsMatch(
+                attributes,
+                "(?:^|\\s)type=\"session-resumed\"(?:\\s|$)",
+                RegexOptions.CultureInvariant
+            );
     }
 
-    internal static void ValidateExecutionEnvironment(JsonObject envelope, string workspace, string processCwd)
+    internal static void ValidateExecutionEnvironment(
+        JsonObject envelope,
+        string workspace,
+        string processCwd
+    )
     {
         var node = SessionGoal.Trim(SessionWait.Text(envelope["currentNode"]) ?? "");
         if (node.Length > 0 && node != "master")
-            throw new UnsupportedSessionExecutionEnvironmentException($"The .NET host does not support this Session's execution environment: currentNode '{node}' is not master.");
-
+            throw new UnsupportedSessionExecutionEnvironmentException(
+                $"The .NET host does not support this Session's execution environment: currentNode '{node}' is not master."
+            );
     }
 
     private readonly object admissionObservationGate = new();
+
     private void ObserveAdmission(string stage, string id)
     {
         var marker = Path.Combine(root, "state", "experiment-faults", "record-admissions");
-        if (!File.Exists(marker)) return;
-        try { lock (admissionObservationGate) File.AppendAllText(marker + ".events", stage + " " + id + "\n"); }
-        catch (IOException) { } catch (UnauthorizedAccessException) { }
+        if (!File.Exists(marker))
+            return;
+        try
+        {
+            lock (admissionObservationGate)
+                File.AppendAllText(marker + ".events", stage + " " + id + "\n");
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
+
     private async Task AdmissionBarrierAsync(string id, CancellationToken token)
     {
-        var marker = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(id) + ".admission-hold");
-        if (!File.Exists(marker)) return;
+        var marker = Path.Combine(
+            root,
+            "state",
+            "experiment-faults",
+            SessionIdentity.ExecDirectorySegment(id) + ".admission-hold"
+        );
+        if (!File.Exists(marker))
+            return;
         await File.WriteAllTextAsync(marker + ".reached", "reached", token);
         var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (File.Exists(marker) && DateTime.UtcNow < deadline) await Task.Delay(2, token);
-        if (File.Exists(marker)) throw new TimeoutException("Experimental admission barrier expired.");
+        while (File.Exists(marker) && DateTime.UtcNow < deadline)
+            await Task.Delay(2, token);
+        if (File.Exists(marker))
+            throw new TimeoutException("Experimental admission barrier expired.");
     }
 
     private async Task CreationPublicationBarrierAsync(string id)
     {
-        var marker = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(id) + ".creation-publication-hold");
-        if (!File.Exists(marker)) return;
-        await File.WriteAllTextAsync(marker + ".reached", "reached"); var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (File.Exists(marker) && DateTime.UtcNow < deadline) await Task.Delay(2);
-        if (File.Exists(marker)) throw new TimeoutException("Experimental creation publication barrier expired.");
+        var marker = Path.Combine(
+            root,
+            "state",
+            "experiment-faults",
+            SessionIdentity.ExecDirectorySegment(id) + ".creation-publication-hold"
+        );
+        if (!File.Exists(marker))
+            return;
+        await File.WriteAllTextAsync(marker + ".reached", "reached");
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (File.Exists(marker) && DateTime.UtcNow < deadline)
+            await Task.Delay(2);
+        if (File.Exists(marker))
+            throw new TimeoutException("Experimental creation publication barrier expired.");
     }
+
     private void PublishOwner(SessionOwner owner, IdentitySlot slot)
     {
         lock (lifecycle)
         {
-            if (!slot.Creating) admissionStop.Token.ThrowIfCancellationRequested();
-            if (!identities.TryGetValue(owner.Id, out var current) || current != slot
-                || !sessions.TryAdd(owner.Id, owner)) throw new InvalidOperationException("Session identity collision after validation.");
+            if (!slot.Creating)
+                admissionStop.Token.ThrowIfCancellationRequested();
+            if (
+                !identities.TryGetValue(owner.Id, out var current)
+                || current != slot
+                || !sessions.TryAdd(owner.Id, owner)
+            )
+                throw new InvalidOperationException("Session identity collision after validation.");
         }
         owner.EnableCommittedNotifications();
-        try { NotifyCreated(owner); }
-        finally { ObserveAdmission(slot.Creating ? "created" : "admitted", owner.Id); slot.Owner.TrySetResult(owner); }
+        try
+        {
+            NotifyCreated(owner);
+        }
+        finally
+        {
+            ObserveAdmission(slot.Creating ? "created" : "admitted", owner.Id);
+            slot.Owner.TrySetResult(owner);
+        }
     }
 
     private void FailIdentity(string id, IdentitySlot slot, Exception error)
     {
         lock (lifecycle)
         {
-            if (!sessions.ContainsKey(id) && identities.TryGetValue(id, out var current) && current == slot) identities.Remove(id);
+            if (
+                !sessions.ContainsKey(id)
+                && identities.TryGetValue(id, out var current)
+                && current == slot
+            )
+                identities.Remove(id);
             slot.Owner.TrySetException(error);
         }
         _ = slot.Owner.Task.Exception; // A failed creator can have no joining caller.
     }
 
-    private async Task<SessionOwner> WithCreationIdentityAsync(string id, Func<Task<SessionOwner>> action)
+    private async Task<SessionOwner> WithCreationIdentityAsync(
+        string id,
+        Func<Task<SessionOwner>> action
+    )
     {
-        if (Catalog.Get(id) is not null) throw new InvalidDataException($"Session ID '{id}' is already reserved.");
+        if (Catalog.Get(id) is not null)
+            throw new InvalidDataException($"Session ID '{id}' is already reserved.");
         IdentitySlot slot;
         lock (lifecycle)
         {
-            RequireIdentityAction([id]); RequireAgentCreation(SessionIdentity.Agent(id));
-            if (deletionClaims.ContainsKey(id)) throw new SessionDeletionException("Session ID is claimed for deletion.", "SESSION_DELETE_IN_PROGRESS");
+            RequireIdentityAction([id]);
+            RequireAgentCreation(SessionIdentity.Agent(id));
+            if (deletionClaims.ContainsKey(id))
+                throw new SessionDeletionException(
+                    "Session ID is claimed for deletion.",
+                    "SESSION_DELETE_IN_PROGRESS"
+                );
             if (sessions.ContainsKey(id) || identities.ContainsKey(id))
                 throw new InvalidDataException($"Session ID '{id}' is already reserved.");
-            slot = new(true); identities.Add(id, slot);
+            slot = new(true);
+            identities.Add(id, slot);
         }
-        try { return await action(); }
-        catch (Exception error) { FailIdentity(id, slot, error); throw; }
-        finally { slot.Finished.TrySetResult(); }
+        try
+        {
+            return await action();
+        }
+        catch (Exception error)
+        {
+            FailIdentity(id, slot, error);
+            throw;
+        }
+        finally
+        {
+            slot.Finished.TrySetResult();
+        }
     }
 
-    private sealed class CreationOperation(SessionManager manager, TaskCompletionSource completion) : IDisposable
+    private sealed class CreationOperation(SessionManager manager, TaskCompletionSource completion)
+        : IDisposable
     {
-        public void Dispose() { lock (manager.lifecycle) { manager.creations.Remove(completion); completion.TrySetResult(); } }
+        public void Dispose()
+        {
+            lock (manager.lifecycle)
+            {
+                manager.creations.Remove(completion);
+                completion.TrySetResult();
+            }
+        }
     }
+
     private IDisposable TrackCreation()
     {
         lock (lifecycle)
         {
-            if (!accepting) throw new InvalidOperationException("Host is shutting down.");
-            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            creations.Add(completion); return new CreationOperation(this, completion);
+            if (!accepting)
+                throw new InvalidOperationException("Host is shutting down.");
+            var completion = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            creations.Add(completion);
+            return new CreationOperation(this, completion);
         }
     }
+
     private SemaphoreSlim CreationKey(string key) => creationKeys.GetOrAdd(key, _ => new(1, 1));
+
     private async Task DrainPublicationsAsync()
     {
         Task[] pending;
         lock (lifecycle)
         {
             accepting = false;
-            pending = identities.Values.Select(slot => slot.Finished.Task).Concat(creations.Select(value => value.Task))
-                .Concat(deletionOperations.Select(operation => operation.Finished.Task)).ToArray();
+            pending = identities
+                .Values.Select(slot => slot.Finished.Task)
+                .Concat(creations.Select(value => value.Task))
+                .Concat(deletionOperations.Select(operation => operation.Finished.Task))
+                .ToArray();
         }
         admissionStop.Cancel();
         await Task.WhenAll(pending);
     }
 }
 
-internal sealed class UnsupportedSessionExecutionEnvironmentException(string message) : InvalidOperationException(message);
+internal sealed class UnsupportedSessionExecutionEnvironmentException(string message)
+    : InvalidOperationException(message);

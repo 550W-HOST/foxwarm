@@ -20,7 +20,10 @@ public sealed class SessionTurnTests
         Assert.Single(chat.Calls);
         var snapshot = await store.LoadAsync("s");
         Assert.NotNull(snapshot);
-        Assert.Contains(store.Calls, call => call.Kind == SaveKind.Strict && snapshot!.Busy == false);
+        Assert.Contains(
+            store.Calls,
+            call => call.Kind == SaveKind.Strict && snapshot!.Busy == false
+        );
 
         var failingStore = new InMemorySessionAuthorityStore();
         failingStore.Fail("f", new InvalidOperationException("strict failure"));
@@ -42,7 +45,10 @@ public sealed class SessionTurnTests
         var registry = NewRegistry(store, chat, out _);
         registry.TriggerOverride = _ => Task.CompletedTask;
         store.Hold("s");
-        var enqueue = registry.Ingress.EnqueueAsync("s", QueueItem.UserText("queued", clientMessageId: "c1"));
+        var enqueue = registry.Ingress.EnqueueAsync(
+            "s",
+            QueueItem.UserText("queued", clientMessageId: "c1")
+        );
         await store.WaitForCommitAsync("s");
         Assert.False(enqueue.IsCompleted);
         store.Release("s");
@@ -88,9 +94,27 @@ public sealed class SessionTurnTests
         var chat = new ControlledChat();
         var registry = NewRegistry(store, chat, out var entry);
         registry.TriggerOverride = _ => Task.CompletedTask;
-        entry.State.Queue.Add(QueueItem.UserText("one", new QueueSource("wework", "u1", ChannelId: "wework-a", ConversationId: "room-a"), "m1"));
-        entry.State.Queue.Add(QueueItem.UserText("two", new QueueSource("qqbot", "u2", ChannelId: "qq-a", ConversationId: "room-b"), "m2"));
-        entry.State.Queue.Add(QueueItem.UserText("three", new QueueSource("webui", "browser", ChannelId: "webui", ConversationId: "browser"), "m3"));
+        entry.State.Queue.Add(
+            QueueItem.UserText(
+                "one",
+                new QueueSource("wework", "u1", ChannelId: "wework-a", ConversationId: "room-a"),
+                "m1"
+            )
+        );
+        entry.State.Queue.Add(
+            QueueItem.UserText(
+                "two",
+                new QueueSource("qqbot", "u2", ChannelId: "qq-a", ConversationId: "room-b"),
+                "m2"
+            )
+        );
+        entry.State.Queue.Add(
+            QueueItem.UserText(
+                "three",
+                new QueueSource("webui", "browser", ChannelId: "webui", ConversationId: "browser"),
+                "m3"
+            )
+        );
         chat.QueueResult("answer");
 
         await registry.Runner.ProcessQueueAsync("s");
@@ -102,8 +126,16 @@ public sealed class SessionTurnTests
         Assert.Equal(new[] { "m1", "m2", "m3" }, snapshot.History.Take(3).Select(ClientId));
         Assert.Empty(snapshot.Queue);
         Assert.Equal(
-            new[] { SaveKind.Strict, SaveKind.BestEffort, SaveKind.Strict, SaveKind.Strict, SaveKind.Strict },
-            store.Calls.Select(call => call.Kind));
+            new[]
+            {
+                SaveKind.Strict,
+                SaveKind.BestEffort,
+                SaveKind.Strict,
+                SaveKind.Strict,
+                SaveKind.Strict,
+            },
+            store.Calls.Select(call => call.Kind)
+        );
     }
 
     [Fact]
@@ -118,7 +150,7 @@ public sealed class SessionTurnTests
         var prebuilt = new JsonObject
         {
             ["role"] = "user",
-            ["parts"] = new JsonArray(new JsonObject { ["text"] = "prebuilt" })
+            ["parts"] = new JsonArray(new JsonObject { ["text"] = "prebuilt" }),
         };
         entry.State.Queue.Add(QueueItem.Prebuilt(prebuilt));
         entry.State.Queue.Add(QueueItem.UserText("later"));
@@ -147,10 +179,13 @@ public sealed class SessionTurnTests
         await registry.Runner.ProcessQueueAsync("s");
 
         var snapshot = entry.Snapshot();
-        var user = snapshot.History.Single(message => message["role"]?.GetValue<string>() == "user");
+        var user = snapshot.History.Single(message =>
+            message["role"]?.GetValue<string>() == "user"
+        );
         Assert.Equal(
             "<foxwarm-system kind=\"session\" currentSessionId=\"s\" />",
-            ((JsonArray)user["parts"]!)[0]?["system"]?.GetValue<string>());
+            ((JsonArray)user["parts"]!)[0]?["system"]?.GetValue<string>()
+        );
         Assert.True(snapshot.Meta["lastMessageTime"]?.GetValue<long>() > 0);
     }
 
@@ -215,14 +250,22 @@ public sealed class SessionTurnTests
         chat.QueueAwaitingResult();
         var registry = NewRegistry(store, chat, out var entry);
         entry.State.Queue.Add(QueueItem.UserText("one"));
-        var runs = Enumerable.Range(0, 20).Select(_ => registry.Runner.ProcessQueueAsync("s")).ToArray();
+        var runs = Enumerable
+            .Range(0, 20)
+            .Select(_ => registry.Runner.ProcessQueueAsync("s"))
+            .ToArray();
         await chat.Started.WaitAsync(TimeSpan.FromSeconds(5));
         chat.Complete("done");
-        try { await Task.WhenAll(runs).WaitAsync(TimeSpan.FromSeconds(5)); }
+        try
+        {
+            await Task.WhenAll(runs).WaitAsync(TimeSpan.FromSeconds(5));
+        }
         catch (TimeoutException)
         {
             var snapshot = entry.Snapshot();
-            throw new TimeoutException($"Concurrent run did not settle: busy={snapshot.Busy}, queue={snapshot.Queue.Count}, history={snapshot.History.Count}, saves={store.CommitCount}, statuses={string.Join(',', runs.Select(run => run.Status))}.");
+            throw new TimeoutException(
+                $"Concurrent run did not settle: busy={snapshot.Busy}, queue={snapshot.Queue.Count}, history={snapshot.History.Count}, saves={store.CommitCount}, statuses={string.Join(',', runs.Select(run => run.Status))}."
+            );
         }
         Assert.Single(chat.Calls);
     }
@@ -262,7 +305,10 @@ public sealed class SessionTurnTests
 
         store.ResetCommitSignal("s");
         store.Hold("s");
-        var enqueue = registry.Ingress.EnqueueAsync("s", QueueItem.UserText("during-stop", clientMessageId: "during"));
+        var enqueue = registry.Ingress.EnqueueAsync(
+            "s",
+            QueueItem.UserText("during-stop", clientMessageId: "during")
+        );
         await store.WaitForCommitAsync("s");
         var stop = registry.Control.StopAsync("s");
         await chat.Cancelled;
@@ -284,14 +330,27 @@ public sealed class SessionTurnTests
         entry.State.Queue.Add(QueueItem.UserText("first", clientMessageId: "first"));
         var run = registry.Runner.ProcessQueueAsync("s");
         await chat.Started;
-        await registry.Ingress.EnqueueAsync("s", QueueItem.UserText(
-            "second",
-            new QueueSource("wework", "room-a", ChannelId: "wework-a", ConversationId: "room-a"),
-            "second"));
-        await registry.Ingress.EnqueueAsync("s", QueueItem.UserText(
-            "third",
-            new QueueSource("qqbot", "room-b", ChannelId: "qq-a", ConversationId: "room-b"),
-            "third"));
+        await registry.Ingress.EnqueueAsync(
+            "s",
+            QueueItem.UserText(
+                "second",
+                new QueueSource(
+                    "wework",
+                    "room-a",
+                    ChannelId: "wework-a",
+                    ConversationId: "room-a"
+                ),
+                "second"
+            )
+        );
+        await registry.Ingress.EnqueueAsync(
+            "s",
+            QueueItem.UserText(
+                "third",
+                new QueueSource("qqbot", "room-b", ChannelId: "qq-a", ConversationId: "room-b"),
+                "third"
+            )
+        );
         await registry.Control.StopAsync("s");
         await run;
         var snapshot = entry.Snapshot();
@@ -313,7 +372,12 @@ public sealed class SessionTurnTests
         var committedOnce = 0;
         entry.Committed = snapshot =>
         {
-            if (snapshot.Busy || snapshot.Stopping || Interlocked.Exchange(ref committedOnce, 1) != 0) return;
+            if (
+                snapshot.Busy
+                || snapshot.Stopping
+                || Interlocked.Exchange(ref committedOnce, 1) != 0
+            )
+                return;
             entry.WithStateForTest(state => state.Queue.Add(QueueItem.UserText("late")));
         };
         var trailingRun = NewSignal<Task>();
@@ -339,7 +403,10 @@ public sealed class SessionTurnTests
         var final = entry.Snapshot();
         Assert.Empty(final.Queue);
         Assert.False(final.Busy);
-        Assert.Contains(final.History, message => message.ToJsonString().Contains("late", StringComparison.Ordinal));
+        Assert.Contains(
+            final.History,
+            message => message.ToJsonString().Contains("late", StringComparison.Ordinal)
+        );
         Assert.Contains(final.History, message => message["role"]?.GetValue<string>() == "model");
     }
 
@@ -379,7 +446,10 @@ public sealed class SessionTurnTests
         {
             if (Interlocked.Exchange(ref once, 1) == 0)
             {
-                callbackEnqueue = registry.Ingress.EnqueueAsync("s", QueueItem.UserText("callback"));
+                callbackEnqueue = registry.Ingress.EnqueueAsync(
+                    "s",
+                    QueueItem.UserText("callback")
+                );
                 callbackDone.TrySetResult(true);
             }
         };
@@ -388,25 +458,47 @@ public sealed class SessionTurnTests
         await registry.Runner.ProcessQueueAsync("s");
         await callbackDone.Task;
         await callbackEnqueue!;
-        Assert.Contains(entry.Snapshot().History, message => message.ToJsonString().Contains("callback", StringComparison.Ordinal));
+        Assert.Contains(
+            entry.Snapshot().History,
+            message => message.ToJsonString().Contains("callback", StringComparison.Ordinal)
+        );
     }
 
     [Fact]
     public async Task UnsupportedPathsFailNamedAndDoNotMutate()
     {
-        var registry = NewRegistry(new InMemorySessionAuthorityStore(), new ControlledChat(), out var entry);
-        foreach (var type in new[] { QueueItemType.CompactCommit, QueueItemType.Tools, QueueItemType.Retry, QueueItemType.Wait, QueueItemType.Managed, QueueItemType.Channel })
-        {
-            var error = await Assert.ThrowsAsync<UnsupportedSessionTurnException>(() => registry.Ingress.EnqueueAsync("s", new QueueItem(type)));
-            Assert.Contains(type switch
+        var registry = NewRegistry(
+            new InMemorySessionAuthorityStore(),
+            new ControlledChat(),
+            out var entry
+        );
+        foreach (
+            var type in new[]
             {
-                QueueItemType.CompactCommit => "compact",
-                QueueItemType.Tools => "tools",
-                QueueItemType.Retry => "retry",
-                QueueItemType.Wait => "waits",
-                QueueItemType.Managed => "managed state",
-                _ => "channel delivery"
-            }, error.Message);
+                QueueItemType.CompactCommit,
+                QueueItemType.Tools,
+                QueueItemType.Retry,
+                QueueItemType.Wait,
+                QueueItemType.Managed,
+                QueueItemType.Channel,
+            }
+        )
+        {
+            var error = await Assert.ThrowsAsync<UnsupportedSessionTurnException>(() =>
+                registry.Ingress.EnqueueAsync("s", new QueueItem(type))
+            );
+            Assert.Contains(
+                type switch
+                {
+                    QueueItemType.CompactCommit => "compact",
+                    QueueItemType.Tools => "tools",
+                    QueueItemType.Retry => "retry",
+                    QueueItemType.Wait => "waits",
+                    QueueItemType.Managed => "managed state",
+                    _ => "channel delivery",
+                },
+                error.Message
+            );
         }
         Assert.Empty(entry.Snapshot().Queue);
         Assert.Empty(entry.Snapshot().History);
@@ -420,8 +512,18 @@ public sealed class SessionTurnTests
         chat.QueueFailure(new InvalidOperationException("chat failed"));
         var registry = NewRegistry(store, chat, out var entry);
         registry.TriggerOverride = _ => Task.CompletedTask;
-        entry.State.Queue.Add(QueueItem.UserText("fails", new QueueSource("qq", "u", ChannelId: "c", ConversationId: "one")));
-        entry.State.Queue.Add(QueueItem.UserText("same turn", new QueueSource("wework", "u", ChannelId: "other", ConversationId: "two")));
+        entry.State.Queue.Add(
+            QueueItem.UserText(
+                "fails",
+                new QueueSource("qq", "u", ChannelId: "c", ConversationId: "one")
+            )
+        );
+        entry.State.Queue.Add(
+            QueueItem.UserText(
+                "same turn",
+                new QueueSource("wework", "u", ChannelId: "other", ConversationId: "two")
+            )
+        );
 
         await registry.Runner.ProcessQueueAsync("s");
 
@@ -448,12 +550,21 @@ public sealed class SessionTurnTests
         var runner = registry.Runner.ProcessQueueAsync("s");
         await store.HeldStrictAppend;
 
-        var ingress = registry.Ingress.EnqueueAsync("s", QueueItem.UserText("B", clientMessageId: "b"));
+        var ingress = registry.Ingress.EnqueueAsync(
+            "s",
+            QueueItem.UserText("B", clientMessageId: "b")
+        );
         Assert.False(ingress.IsCompleted);
         var hotBeforeRelease = entry.Snapshot();
         // Wait-aware ordinary admissions publish when their ordered operation starts, not before a held preceding save.
-        Assert.DoesNotContain(hotBeforeRelease.Queue, item => item.Parts?.FirstOrDefault()?["text"]?.GetValue<string>() == "B");
-        Assert.DoesNotContain(hotBeforeRelease.History, message => message.ToJsonString().Contains("B", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            hotBeforeRelease.Queue,
+            item => item.Parts?.FirstOrDefault()?["text"]?.GetValue<string>() == "B"
+        );
+        Assert.DoesNotContain(
+            hotBeforeRelease.History,
+            message => message.ToJsonString().Contains("B", StringComparison.Ordinal)
+        );
         Assert.False(hotBeforeRelease.Meta.ContainsKey("lastMessageTime"));
         const long timestamp = 9876;
         entry.WithStateForTest(state => state.Meta["lastMessageTime"] = timestamp);
@@ -489,11 +600,14 @@ public sealed class SessionTurnTests
         await registry.Runner.ProcessQueueAsync(sessionId);
 
         var initial = entry.Snapshot();
-        var initialUser = initial.History.Single(message => message["role"]?.GetValue<string>() == "user");
+        var initialUser = initial.History.Single(message =>
+            message["role"]?.GetValue<string>() == "user"
+        );
         var initialParts = (JsonArray)initialUser["parts"]!;
         Assert.Equal(
             "<foxwarm-system kind=\"session\" currentSessionId=\"alpha &amp; &lt; &gt; &quot; &apos; omega \u0085\" />",
-            initialParts[0]?["system"]?.GetValue<string>());
+            initialParts[0]?["system"]?.GetValue<string>()
+        );
         Assert.True(initial.Meta["lastMessageTime"]?.GetValue<long>() > 0);
 
         entry.State.Meta["lastMessageTime"] = 1;
@@ -501,7 +615,9 @@ public sealed class SessionTurnTests
         await registry.Runner.ProcessQueueAsync(sessionId);
 
         var noninitial = entry.Snapshot();
-        var secondUser = noninitial.History.Last(message => message["role"]?.GetValue<string>() == "user");
+        var secondUser = noninitial.History.Last(message =>
+            message["role"]?.GetValue<string>() == "user"
+        );
         var secondParts = (JsonArray)secondUser["parts"]!;
         Assert.Equal("second", secondParts[0]?["text"]?.GetValue<string>());
         Assert.DoesNotContain(secondParts, part => part?["system"] is not null);
@@ -517,7 +633,7 @@ public sealed class SessionTurnTests
         var prebuilt = new JsonObject
         {
             ["role"] = "user",
-            ["parts"] = new JsonArray(new JsonObject { ["text"] = "prebuilt" })
+            ["parts"] = new JsonArray(new JsonObject { ["text"] = "prebuilt" }),
         };
         entry.State.Queue.Add(QueueItem.Prebuilt(prebuilt));
         entry.State.Queue.Add(QueueItem.UserText("later"));
@@ -544,7 +660,7 @@ public sealed class SessionTurnTests
         var prebuilt = new JsonObject
         {
             ["role"] = "user",
-            ["parts"] = new JsonArray(new JsonObject { ["text"] = "prebuilt" })
+            ["parts"] = new JsonArray(new JsonObject { ["text"] = "prebuilt" }),
         };
         entry.State.Queue.Add(new QueueItem(QueueItemType.User, Array.Empty<JsonObject>()));
         entry.State.Queue.Add(QueueItem.Prebuilt(prebuilt));
@@ -552,7 +668,9 @@ public sealed class SessionTurnTests
         await registry.Runner.ProcessQueueAsync("s");
 
         var snapshot = entry.Snapshot();
-        var user = snapshot.History.Single(message => message["role"]?.GetValue<string>() == "user");
+        var user = snapshot.History.Single(message =>
+            message["role"]?.GetValue<string>() == "user"
+        );
         Assert.Equal("user", user["role"]?.GetValue<string>());
         Assert.True(JsonNode.DeepEquals(prebuilt["parts"], user["parts"]));
         Assert.Equal(1, user["__meta"]?["seq"]?.GetValue<long>());
@@ -569,7 +687,8 @@ public sealed class SessionTurnTests
         var once = 0;
         entry.Committed = _ =>
         {
-            if (Interlocked.Exchange(ref once, 1) == 0) throw new InvalidOperationException("observer failed");
+            if (Interlocked.Exchange(ref once, 1) == 0)
+                throw new InvalidOperationException("observer failed");
         };
         entry.State.Queue.Add(QueueItem.UserText("committed"));
 
@@ -578,8 +697,14 @@ public sealed class SessionTurnTests
         var hot = entry.Snapshot();
         var stored = await store.LoadAsync("s");
         Assert.NotNull(stored);
-        Assert.Contains(hot.History, message => message.ToJsonString().Contains("committed", StringComparison.Ordinal));
-        Assert.Contains(stored!.History, message => message.ToJsonString().Contains("committed", StringComparison.Ordinal));
+        Assert.Contains(
+            hot.History,
+            message => message.ToJsonString().Contains("committed", StringComparison.Ordinal)
+        );
+        Assert.Contains(
+            stored!.History,
+            message => message.ToJsonString().Contains("committed", StringComparison.Ordinal)
+        );
         Assert.Empty(hot.Queue);
         Assert.Empty(stored.Queue);
         Assert.False(hot.Busy);
@@ -600,7 +725,8 @@ public sealed class SessionTurnTests
         var once = 0;
         entry.Committed = _ =>
         {
-            if (Interlocked.Exchange(ref once, 1) == 0) throw new InvalidOperationException("observer failed");
+            if (Interlocked.Exchange(ref once, 1) == 0)
+                throw new InvalidOperationException("observer failed");
         };
 
         await host.FinalizeStoppedAsync();
@@ -608,8 +734,14 @@ public sealed class SessionTurnTests
         var hot = entry.Snapshot();
         var stored = await store.LoadAsync("s");
         Assert.NotNull(stored);
-        Assert.Contains(hot.History, message => message.ToJsonString().Contains("finalized", StringComparison.Ordinal));
-        Assert.Contains(stored!.History, message => message.ToJsonString().Contains("finalized", StringComparison.Ordinal));
+        Assert.Contains(
+            hot.History,
+            message => message.ToJsonString().Contains("finalized", StringComparison.Ordinal)
+        );
+        Assert.Contains(
+            stored!.History,
+            message => message.ToJsonString().Contains("finalized", StringComparison.Ordinal)
+        );
         Assert.Empty(hot.Queue);
         Assert.Empty(stored.Queue);
         Assert.False(hot.Busy);
@@ -646,7 +778,10 @@ public sealed class SessionTurnTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => finalization);
 
         var snapshot = entry.Snapshot();
-        Assert.Equal(new[] { "A", "B" }, snapshot.Queue.Select(item => item.Parts?.FirstOrDefault()?["text"]?.GetValue<string>()));
+        Assert.Equal(
+            new[] { "A", "B" },
+            snapshot.Queue.Select(item => item.Parts?.FirstOrDefault()?["text"]?.GetValue<string>())
+        );
         Assert.Empty(snapshot.History);
         Assert.True(snapshot.Busy);
         Assert.Equal(before.BusyStartedAt, snapshot.BusyStartedAt);
@@ -654,8 +789,14 @@ public sealed class SessionTurnTests
         Assert.Equal("kept", snapshot.Meta["before"]?.GetValue<string>());
         Assert.Equal("kept", snapshot.Meta["independent"]?.GetValue<string>());
         Assert.Null(snapshot.Meta["lastMessageTime"]);
-        Assert.DoesNotContain(snapshot.History, message => message.ToJsonString().Contains("A", StringComparison.Ordinal));
-        Assert.DoesNotContain(snapshot.History, message => message.ToJsonString().Contains("B", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            snapshot.History,
+            message => message.ToJsonString().Contains("A", StringComparison.Ordinal)
+        );
+        Assert.DoesNotContain(
+            snapshot.History,
+            message => message.ToJsonString().Contains("B", StringComparison.Ordinal)
+        );
     }
 
     [Fact]
@@ -663,11 +804,15 @@ public sealed class SessionTurnTests
     {
         var store = new InMemorySessionAuthorityStore();
         var chat = new ControlledChat();
-        chat.QueueChatResult(FunctionCalls(FunctionCall("call_a", "write_fixture", new JsonObject
-        {
-            ["fileName"] = "a.txt",
-            ["content"] = "a"
-        })));
+        chat.QueueChatResult(
+            FunctionCalls(
+                FunctionCall(
+                    "call_a",
+                    "write_fixture",
+                    new JsonObject { ["fileName"] = "a.txt", ["content"] = "a" }
+                )
+            )
+        );
         chat.QueueResult("final");
         var tools = new BarrierToolExecutor();
         var registry = new SessionRegistry(store, chat, tools);
@@ -681,13 +826,17 @@ public sealed class SessionTurnTests
         tools.Release();
         await run.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.Equal(new[] { "user", "model", "tool", "user", "user", "model" },
-            entry.Snapshot().History.Select(message => message["role"]!.GetValue<string>()));
+        Assert.Equal(
+            new[] { "user", "model", "tool", "user", "user", "model" },
+            entry.Snapshot().History.Select(message => message["role"]!.GetValue<string>())
+        );
         Assert.Contains("B", entry.Snapshot().History[3].ToJsonString(), StringComparison.Ordinal);
         Assert.Contains("C", entry.Snapshot().History[4].ToJsonString(), StringComparison.Ordinal);
         Assert.Equal(2, chat.Calls.Count);
-        Assert.Equal(new[] { "user", "model", "tool", "user", "user" },
-            chat.Calls[1].History.Select(message => message["role"]!.GetValue<string>()));
+        Assert.Equal(
+            new[] { "user", "model", "tool", "user", "user" },
+            chat.Calls[1].History.Select(message => message["role"]!.GetValue<string>())
+        );
         Assert.Equal(1, tools.Invocations);
         Assert.Equal(1, entry.ProcessorClaimCount);
     }
@@ -697,9 +846,18 @@ public sealed class SessionTurnTests
     {
         var store = new InMemorySessionAuthorityStore();
         var chat = new ControlledChat();
-        chat.QueueChatResult(FunctionCalls(
-            FunctionCall("bad_args", "write_fixture", new JsonObject(), "{", "Invalid tool arguments JSON: bad"),
-            FunctionCall("unknown", "other_tool", new JsonObject())));
+        chat.QueueChatResult(
+            FunctionCalls(
+                FunctionCall(
+                    "bad_args",
+                    "write_fixture",
+                    new JsonObject(),
+                    "{",
+                    "Invalid tool arguments JSON: bad"
+                ),
+                FunctionCall("unknown", "other_tool", new JsonObject())
+            )
+        );
         chat.QueueResult("final");
         var tools = new RecordingToolExecutor();
         var registry = new SessionRegistry(store, chat, tools);
@@ -708,11 +866,22 @@ public sealed class SessionTurnTests
 
         await registry.Runner.ProcessQueueAsync("s");
 
-        var toolMessage = entry.Snapshot().History.Single(message => message["role"]?.GetValue<string>() == "tool");
+        var toolMessage = entry
+            .Snapshot()
+            .History.Single(message => message["role"]?.GetValue<string>() == "tool");
         var parts = Assert.IsType<JsonArray>(toolMessage["parts"]);
-        Assert.Equal(new[] { "bad_args", "unknown" }, parts.Select(part => part!["functionResponse"]!["tool_use_id"]!.GetValue<string>()));
-        Assert.Equal("invalid_tool_arguments", parts[0]?["functionResponse"]?["response"]?["error"]?["type"]?.GetValue<string>());
-        Assert.Equal("unknown_tool", parts[1]?["functionResponse"]?["response"]?["error"]?["type"]?.GetValue<string>());
+        Assert.Equal(
+            new[] { "bad_args", "unknown" },
+            parts.Select(part => part!["functionResponse"]!["tool_use_id"]!.GetValue<string>())
+        );
+        Assert.Equal(
+            "invalid_tool_arguments",
+            parts[0]?["functionResponse"]?["response"]?["error"]?["type"]?.GetValue<string>()
+        );
+        Assert.Equal(
+            "unknown_tool",
+            parts[1]?["functionResponse"]?["response"]?["error"]?["type"]?.GetValue<string>()
+        );
         Assert.Equal(1, tools.Invocations);
         Assert.Equal(2, chat.Calls.Count);
     }
@@ -735,11 +904,17 @@ public sealed class SessionTurnTests
         Assert.Equal(2, tools.Invocations);
         Assert.Equal(1, entry.ProcessorClaimCount);
         Assert.False(entry.Snapshot().Busy);
-        Assert.Equal(new[] { "user", "model", "tool", "model", "tool" },
-            entry.Snapshot().History.Select(message => message["role"]!.GetValue<string>()));
+        Assert.Equal(
+            new[] { "user", "model", "tool", "model", "tool" },
+            entry.Snapshot().History.Select(message => message["role"]!.GetValue<string>())
+        );
     }
 
-    private static SessionRegistry NewRegistry(InMemorySessionAuthorityStore store, ControlledChat chat, out SessionEntry entry)
+    private static SessionRegistry NewRegistry(
+        InMemorySessionAuthorityStore store,
+        ControlledChat chat,
+        out SessionEntry entry
+    )
     {
         var registry = new SessionRegistry(store, chat);
         entry = registry.Add("s");
@@ -751,28 +926,61 @@ public sealed class SessionTurnTests
         await registry.Runner.ProcessQueueAsync(sessionId);
     }
 
-    private static string? ClientId(JsonObject message) => message["__meta"]?["clientMessageId"]?.GetValue<string>();
+    private static string? ClientId(JsonObject message) =>
+        message["__meta"]?["clientMessageId"]?.GetValue<string>();
+
     private static int CountValue(SessionSnapshot snapshot, string value) =>
-        snapshot.Queue.Count(item => item.Parts?.FirstOrDefault()?["text"]?.GetValue<string>() == value)
-        + snapshot.History.Count(message => message.ToJsonString().Contains($"\"text\":\"{value}\"", StringComparison.Ordinal));
-    private static ChatResult FunctionCalls(params JsonObject[] calls) => new(new JsonObject
+        snapshot.Queue.Count(item =>
+            item.Parts?.FirstOrDefault()?["text"]?.GetValue<string>() == value
+        )
+        + snapshot.History.Count(message =>
+            message.ToJsonString().Contains($"\"text\":\"{value}\"", StringComparison.Ordinal)
+        );
+
+    private static ChatResult FunctionCalls(params JsonObject[] calls) =>
+        new(
+            new JsonObject
+            {
+                ["role"] = "model",
+                ["parts"] = new JsonArray(
+                    calls
+                        .Select(call =>
+                            (JsonNode)new JsonObject { ["functionCall"] = call.DeepClone() }
+                        )
+                        .ToArray()
+                ),
+            }
+        );
+
+    private static JsonObject FunctionCall(
+        string id,
+        string name,
+        JsonObject args,
+        string? rawArgsText = null,
+        string? argsParseError = null
+    )
     {
-        ["role"] = "model",
-        ["parts"] = new JsonArray(calls.Select(call => (JsonNode)new JsonObject { ["functionCall"] = call.DeepClone() }).ToArray())
-    });
-    private static JsonObject FunctionCall(string id, string name, JsonObject args, string? rawArgsText = null, string? argsParseError = null)
-    {
-        var call = new JsonObject { ["id"] = id, ["name"] = name, ["args"] = args.DeepClone() };
-        if (rawArgsText is not null) call["rawArgsText"] = rawArgsText;
-        if (argsParseError is not null) call["argsParseError"] = argsParseError;
+        var call = new JsonObject
+        {
+            ["id"] = id,
+            ["name"] = name,
+            ["args"] = args.DeepClone(),
+        };
+        if (rawArgsText is not null)
+            call["rawArgsText"] = rawArgsText;
+        if (argsParseError is not null)
+            call["argsParseError"] = argsParseError;
         return call;
     }
-    private static TaskCompletionSource<T> NewSignal<T>() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private static TaskCompletionSource<T> NewSignal<T>() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 }
 
 internal sealed class ControlledChat : IChatService
 {
-    private readonly ConcurrentQueue<Func<string, CancellationToken, Task<ChatResult>>> plans = new();
+    private readonly ConcurrentQueue<Func<string, CancellationToken, Task<ChatResult>>> plans =
+        new();
     private readonly ConcurrentQueue<Call> calls = new();
     private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> startedById = new();
     private readonly object signalGate = new();
@@ -790,33 +998,64 @@ internal sealed class ControlledChat : IChatService
     public Task WaiterPausedBeforeSignalGate => waiterPausedBeforeSignalGate.Task;
     public bool CancellationObserved { get; private set; }
 
-    public void PauseNextCallCountWaiterBeforeSignalGate() => Interlocked.Exchange(ref pauseNextWaiter, 1);
+    public void PauseNextCallCountWaiterBeforeSignalGate() =>
+        Interlocked.Exchange(ref pauseNextWaiter, 1);
+
     public void ReleaseCallCountWaiter() => releaseWaiterBeforeSignalGate.TrySetResult(true);
 
-    public void QueueResult(string result) => plans.Enqueue((_, _) => Task.FromResult(ChatResult.Text(result)));
-    public void QueueChatResult(ChatResult result) => plans.Enqueue((_, _) => Task.FromResult(result));
-    public void QueueFailure(Exception error) => plans.Enqueue((_, _) => Task.FromException<ChatResult>(error));
-    public void QueueAwaitingResult() => plans.Enqueue(async (_, token) =>
-    {
-        pendingResult = new TaskCompletionSource<ChatResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var registration = token.Register(() => pendingResult.TrySetCanceled(token));
-        return await pendingResult.Task;
-    });
-    public void QueueAwaitingCancellation() => plans.Enqueue(async (_, token) =>
-    {
-        try { await Task.Delay(Timeout.InfiniteTimeSpan, token); return ChatResult.Text("unexpected"); }
-        catch (OperationCanceledException) { CancellationObserved = true; cancelled.TrySetResult(true); throw; }
-    });
-    public void QueuePlan(Func<string, CancellationToken, Task<string>> plan) => plans.Enqueue(async (id, token) => ChatResult.Text(await plan(id, token)));
+    public void QueueResult(string result) =>
+        plans.Enqueue((_, _) => Task.FromResult(ChatResult.Text(result)));
+
+    public void QueueChatResult(ChatResult result) =>
+        plans.Enqueue((_, _) => Task.FromResult(result));
+
+    public void QueueFailure(Exception error) =>
+        plans.Enqueue((_, _) => Task.FromException<ChatResult>(error));
+
+    public void QueueAwaitingResult() =>
+        plans.Enqueue(
+            async (_, token) =>
+            {
+                pendingResult = new TaskCompletionSource<ChatResult>(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
+                using var registration = token.Register(() => pendingResult.TrySetCanceled(token));
+                return await pendingResult.Task;
+            }
+        );
+
+    public void QueueAwaitingCancellation() =>
+        plans.Enqueue(
+            async (_, token) =>
+            {
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    return ChatResult.Text("unexpected");
+                }
+                catch (OperationCanceledException)
+                {
+                    CancellationObserved = true;
+                    cancelled.TrySetResult(true);
+                    throw;
+                }
+            }
+        );
+
+    public void QueuePlan(Func<string, CancellationToken, Task<string>> plan) =>
+        plans.Enqueue(async (id, token) => ChatResult.Text(await plan(id, token)));
+
     public void Complete(string result) => pendingResult?.TrySetResult(ChatResult.Text(result));
 
-    public async Task WaitForStarted(string sessionId) => await startedById.GetOrAdd(sessionId, _ => NewSignal()).Task;
+    public async Task WaitForStarted(string sessionId) =>
+        await startedById.GetOrAdd(sessionId, _ => NewSignal()).Task;
 
     public async Task WaitForCallCount(int count)
     {
         while (true)
         {
-            if (calls.Count >= count) return;
+            if (calls.Count >= count)
+                return;
             if (Interlocked.Exchange(ref pauseNextWaiter, 0) == 1)
             {
                 waiterPausedBeforeSignalGate.TrySetResult(true);
@@ -826,14 +1065,19 @@ internal sealed class ControlledChat : IChatService
             Task signal;
             lock (signalGate)
             {
-                if (calls.Count >= count) return;
+                if (calls.Count >= count)
+                    return;
                 signal = callSignal.Task;
             }
             await signal;
         }
     }
 
-    public async Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken cancellationToken)
+    public async Task<ChatResult> ChatAsync(
+        string sessionId,
+        IReadOnlyList<JsonObject> history,
+        CancellationToken cancellationToken
+    )
     {
         calls.Enqueue(new Call(sessionId, history));
         lock (signalGate)
@@ -841,7 +1085,9 @@ internal sealed class ControlledChat : IChatService
             callSignal.TrySetResult(true);
             callSignal = NewSignal();
         }
-        var plan = plans.TryDequeue(out var queued) ? queued : ((_, _) => Task.FromResult(ChatResult.Text("ok")));
+        var plan = plans.TryDequeue(out var queued)
+            ? queued
+            : ((_, _) => Task.FromResult(ChatResult.Text("ok")));
         var result = plan(sessionId, cancellationToken);
         started.TrySetResult(true);
         startedById.GetOrAdd(sessionId, _ => NewSignal()).TrySetResult(true);
@@ -849,18 +1095,29 @@ internal sealed class ControlledChat : IChatService
     }
 
     public sealed record Call(string SessionId, IReadOnlyList<JsonObject> History);
-    private static TaskCompletionSource<bool> NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private static TaskCompletionSource<bool> NewSignal() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 }
 
 internal sealed class BarrierToolExecutor : ITurnToolExecutor
 {
-    private readonly TaskCompletionSource<bool> started = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly TaskCompletionSource<bool> release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<bool> started = new(
+        TaskCreationOptions.RunContinuationsAsynchronously
+    );
+    private readonly TaskCompletionSource<bool> release = new(
+        TaskCreationOptions.RunContinuationsAsynchronously
+    );
     private int invocations;
     public Task Started => started.Task;
     public int Invocations => Volatile.Read(ref invocations);
+
     public void Release() => release.TrySetResult(true);
-    public async Task<JsonObject> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken)
+
+    public async Task<JsonObject> ExecuteAsync(
+        JsonObject functionCall,
+        CancellationToken cancellationToken
+    )
     {
         Interlocked.Increment(ref invocations);
         started.TrySetResult(true);
@@ -871,10 +1128,16 @@ internal sealed class BarrierToolExecutor : ITurnToolExecutor
 
 internal sealed class RecordingToolExecutor(JsonObject? response = null) : ITurnToolExecutor
 {
-    private readonly JsonObject response = response ?? UnsupportedTurnToolExecutor.ToolError("unknown_tool", "Unknown tool: other_tool");
+    private readonly JsonObject response =
+        response
+        ?? UnsupportedTurnToolExecutor.ToolError("unknown_tool", "Unknown tool: other_tool");
     private int invocations;
     public int Invocations => Volatile.Read(ref invocations);
-    public Task<JsonObject> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken)
+
+    public Task<JsonObject> ExecuteAsync(
+        JsonObject functionCall,
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         Interlocked.Increment(ref invocations);
@@ -898,15 +1161,22 @@ internal sealed class AppendFailureProbeStore : ISessionAuthorityStore
     {
         get
         {
-            lock (gate) return observations.ToArray();
+            lock (gate)
+                return observations.ToArray();
         }
     }
 
     public void FailNextStrictAppend() => FailStrictCommitNumber(2);
+
     public void FailStrictCommitNumber(int commitNumber) => failingStrictCommit = commitNumber;
+
     public void ReleaseHeldStrictAppend() => releaseHeldStrictAppend.TrySetResult(true);
 
-    public async Task CommitAsync(SessionSnapshot snapshot, SaveKind kind, CancellationToken cancellationToken = default)
+    public async Task CommitAsync(
+        SessionSnapshot snapshot,
+        SaveKind kind,
+        CancellationToken cancellationToken = default
+    )
     {
         CommitObservation observation;
         var holdAndFail = false;
@@ -924,7 +1194,8 @@ internal sealed class AppendFailureProbeStore : ISessionAuthorityStore
                 snapshot.Stopping,
                 QueueValues(snapshot.Queue),
                 snapshot.History.Select(message => message.ToJsonString()).ToArray(),
-                "started");
+                "started"
+            );
             observations.Add(observation);
         }
 
@@ -943,7 +1214,10 @@ internal sealed class AppendFailureProbeStore : ISessionAuthorityStore
         }
     }
 
-    public Task<SessionSnapshot?> LoadAsync(string sessionId, CancellationToken cancellationToken = default)
+    public Task<SessionSnapshot?> LoadAsync(
+        string sessionId,
+        CancellationToken cancellationToken = default
+    )
     {
         lock (gate)
         {
@@ -952,26 +1226,40 @@ internal sealed class AppendFailureProbeStore : ISessionAuthorityStore
         }
     }
 
-    private static string[] QueueValues(IEnumerable<QueueItem> items) => items.Select(item =>
-        item.Parts?.FirstOrDefault()?["text"]?.GetValue<string>() ?? item.Type.ToString()).ToArray();
+    private static string[] QueueValues(IEnumerable<QueueItem> items) =>
+        items
+            .Select(item =>
+                item.Parts?.FirstOrDefault()?["text"]?.GetValue<string>() ?? item.Type.ToString()
+            )
+            .ToArray();
 
-    private static SessionSnapshot Clone(SessionSnapshot snapshot) => new(
-        snapshot.Id,
-        snapshot.History.Select(message => (JsonObject)message.DeepClone()).ToArray(),
-        snapshot.Queue.Select(item => item.CloneItem()).ToArray(),
-        snapshot.Busy,
-        snapshot.BusyStartedAt,
-        snapshot.Stopping,
-        (JsonObject)snapshot.Meta.DeepClone(),
-        snapshot.NextMessageSeq,
-        snapshot.HistoryVersion,
-        (JsonObject)snapshot.AuthorityEnvelope.DeepClone());
+    private static SessionSnapshot Clone(SessionSnapshot snapshot) =>
+        new(
+            snapshot.Id,
+            snapshot.History.Select(message => (JsonObject)message.DeepClone()).ToArray(),
+            snapshot.Queue.Select(item => item.CloneItem()).ToArray(),
+            snapshot.Busy,
+            snapshot.BusyStartedAt,
+            snapshot.Stopping,
+            (JsonObject)snapshot.Meta.DeepClone(),
+            snapshot.NextMessageSeq,
+            snapshot.HistoryVersion,
+            (JsonObject)snapshot.AuthorityEnvelope.DeepClone()
+        );
 
-    private static TaskCompletionSource<bool> NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private static TaskCompletionSource<bool> NewSignal() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public sealed class CommitObservation
     {
-        public CommitObservation(SaveKind kind, bool busy, bool stopping, string[] queue, string[] history, string outcome)
+        public CommitObservation(
+            SaveKind kind,
+            bool busy,
+            bool stopping,
+            string[] queue,
+            string[] history,
+            string outcome
+        )
         {
             Kind = kind;
             Busy = busy;
@@ -995,6 +1283,7 @@ internal static class SessionEntryTestExtensions
     public static void WithStateForTest(this SessionEntry entry, Action<SessionState> action)
     {
         var gate = entry.StateGate;
-        lock (gate) action(entry.State);
+        lock (gate)
+            action(entry.State);
     }
 }

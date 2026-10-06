@@ -1,13 +1,17 @@
-using System.Text;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json.Nodes;
 
 namespace Foxwarm.Models;
 
 internal static class ProviderHttpRequest
 {
-    internal static HttpRequestMessage Create(Uri endpoint, JsonObject body, ResponsesClientOptions options,
-        IReadOnlyDictionary<string, string> defaults)
+    internal static HttpRequestMessage Create(
+        Uri endpoint,
+        JsonObject body,
+        ResponsesClientOptions options,
+        IReadOnlyDictionary<string, string> defaults
+    )
     {
         HttpRequestMessage? request = null;
         try
@@ -16,13 +20,31 @@ internal static class ProviderHttpRequest
             if (options.RequestCompression is string compression)
             {
                 using var buffer = new MemoryStream();
-                using (Stream encoder = compression == "gzip"
-                    ? new System.IO.Compression.GZipStream(buffer, System.IO.Compression.CompressionLevel.Optimal, true)
-                    : new System.IO.Compression.BrotliStream(buffer, System.IO.Compression.CompressionLevel.Optimal, true)) encoder.Write(bytes);
+                using (
+                    Stream encoder =
+                        compression == "gzip"
+                            ? new System.IO.Compression.GZipStream(
+                                buffer,
+                                System.IO.Compression.CompressionLevel.Optimal,
+                                true
+                            )
+                            : new System.IO.Compression.BrotliStream(
+                                buffer,
+                                System.IO.Compression.CompressionLevel.Optimal,
+                                true
+                            )
+                )
+                    encoder.Write(bytes);
                 bytes = buffer.ToArray();
             }
-            request = new HttpRequestMessage(HttpMethod.Post, endpoint) { Content = new ByteArrayContent(bytes) };
-            request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
+            request = new HttpRequestMessage(HttpMethod.Post, endpoint)
+            {
+                Content = new ByteArrayContent(bytes),
+            };
+            request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json")
+            {
+                CharSet = "utf-8",
+            };
             void Set(string name, string value)
             {
                 if (request.Headers.TryAddWithoutValidation(name, value))
@@ -36,9 +58,11 @@ internal static class ProviderHttpRequest
                     request.Content.Headers.TryAddWithoutValidation(name, value);
                 }
             }
-            foreach (var (name, value) in defaults) Set(name, value);
+            foreach (var (name, value) in defaults)
+                Set(name, value);
             if (options.ExtraHeaders is not null)
-                foreach (var (name, value) in options.ExtraHeaders) Set(name, value?.ToString() ?? "");
+                foreach (var (name, value) in options.ExtraHeaders)
+                    Set(name, value?.ToString() ?? "");
             if (options.RequestCompression is not null)
             {
                 request.Content.Headers.ContentEncoding.Clear();
@@ -50,7 +74,10 @@ internal static class ProviderHttpRequest
         catch (Exception error)
         {
             request?.Dispose();
-            throw new ModelPreparationException("Provider request preparation failed: " + error.Message, error);
+            throw new ModelPreparationException(
+                "Provider request preparation failed: " + error.Message,
+                error
+            );
         }
     }
 }

@@ -4,7 +4,12 @@ using Foxwarm.Models;
 
 namespace Foxwarm.Sessions;
 
-internal sealed record CompactAdmission(bool AlreadyPending, bool Started, bool Background, bool BackgroundUnavailable);
+internal sealed record CompactAdmission(
+    bool AlreadyPending,
+    bool Started,
+    bool Background,
+    bool BackgroundUnavailable
+);
 
 internal sealed partial class SessionCompactor
 {
@@ -19,17 +24,32 @@ internal sealed partial class SessionCompactor
     private readonly object gate = new();
     private readonly ConcurrentDictionary<CompactRun, Task> lifetimes = new();
     private CompactRun? active;
-    private sealed class CompactRun(SessionSnapshot snapshot, HostModels catalog, double keep, bool background, bool standalone)
+
+    private sealed class CompactRun(
+        SessionSnapshot snapshot,
+        HostModels catalog,
+        double keep,
+        bool background,
+        bool standalone
+    )
     {
         internal readonly SessionSnapshot Snapshot = snapshot;
         internal readonly HostModels Catalog = catalog;
         internal readonly double Keep = keep;
-        internal readonly bool Background = background, Standalone = standalone;
+        internal readonly bool Background = background,
+            Standalone = standalone;
         internal readonly CancellationTokenSource Cancellation = new();
-        internal readonly TaskCompletionSource PipelineDone = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        internal readonly TaskCompletionSource Completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal readonly TaskCompletionSource PipelineDone = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        internal readonly TaskCompletionSource Completion = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         internal string Phase = "planning";
-        internal bool Committed, Applying, Ready, OwnsProcessor;
+        internal bool Committed,
+            Applying,
+            Ready,
+            OwnsProcessor;
         internal int Finished;
         internal CompactCandidates? Candidates;
         internal CompactPlan? Plan;
@@ -38,78 +58,174 @@ internal sealed partial class SessionCompactor
         internal object? PhaseLease;
     }
 
-    public SessionCompactor(SessionOwner hosted, SessionManager sessions, PersistentSessionAuthorityStore store,
-        HostModels models, ResponsesClientOptions baseOptions, ModelRequestOwner requests, AgentMemory memory, Func<JsonArray>? definitions = null)
+    public SessionCompactor(
+        SessionOwner hosted,
+        SessionManager sessions,
+        PersistentSessionAuthorityStore store,
+        HostModels models,
+        ResponsesClientOptions baseOptions,
+        ModelRequestOwner requests,
+        AgentMemory memory,
+        Func<JsonArray>? definitions = null
+    )
     {
-        this.hosted = hosted; this.sessions = sessions; this.store = store; this.models = models; this.baseOptions = baseOptions;
-        this.requests = requests; this.memory = memory; this.definitions = definitions;
+        this.hosted = hosted;
+        this.sessions = sessions;
+        this.store = store;
+        this.models = models;
+        this.baseOptions = baseOptions;
+        this.requests = requests;
+        this.memory = memory;
+        this.definitions = definitions;
     }
-    public bool Active { get { lock (gate) return active is not null; } }
-    public bool Standalone { get { lock (gate) return active is { Standalone: true, OwnsProcessor: true }; } }
-    public bool HasCompletedJob { get { lock (gate) return active is { Background: true, Ready: true, Applying: false } run && !run.Cancellation.IsCancellationRequested; } }
-    public string? Phase { get { lock (gate) return active?.Phase; } }
+
+    public bool Active
+    {
+        get
+        {
+            lock (gate)
+                return active is not null;
+        }
+    }
+    public bool Standalone
+    {
+        get
+        {
+            lock (gate)
+                return active is { Standalone: true, OwnsProcessor: true };
+        }
+    }
+    public bool HasCompletedJob
+    {
+        get
+        {
+            lock (gate)
+                return active is { Background: true, Ready: true, Applying: false } run
+                    && !run.Cancellation.IsCancellationRequested;
+        }
+    }
+    public string? Phase
+    {
+        get
+        {
+            lock (gate)
+                return active?.Phase;
+        }
+    }
+
     public async Task DrainAsync()
     {
-        while (!lifetimes.IsEmpty) await Task.WhenAll(lifetimes.Values.ToArray());
+        while (!lifetimes.IsEmpty)
+            await Task.WhenAll(lifetimes.Values.ToArray());
     }
-    private CompactRun? Begin(SessionSnapshot snapshot, HostModels catalog, double keep, bool background, bool standalone)
+
+    private CompactRun? Begin(
+        SessionSnapshot snapshot,
+        HostModels catalog,
+        double keep,
+        bool background,
+        bool standalone
+    )
     {
         lock (gate)
         {
-            if (hosted.Entry.HistoryMutation) return null;
-            if (active is not null) return null;
+            if (hosted.Entry.HistoryMutation)
+                return null;
+            if (active is not null)
+                return null;
             var run = new CompactRun(snapshot, catalog, keep, background, standalone);
-            active = run; lifetimes[run] = run.Completion.Task;
+            active = run;
+            lifetimes[run] = run.Completion.Task;
             return run;
         }
     }
+
     private void Report(Exception error)
     {
         hosted.Entry.RecordBestEffortFailure(error);
         hosted.PublishCompactError(error);
     }
+
     private async Task FinishAsync(CompactRun run)
     {
-        if (Interlocked.Exchange(ref run.Finished, 1) != 0) { await run.Completion.Task; return; }
-        lock (gate) { if (ReferenceEquals(active, run)) active = null; }
+        if (Interlocked.Exchange(ref run.Finished, 1) != 0)
+        {
+            await run.Completion.Task;
+            return;
+        }
+        lock (gate)
+        {
+            if (ReferenceEquals(active, run))
+                active = null;
+        }
         try
         {
             await run.PipelineDone.Task;
             await hosted.Entry.SaveLane.RemoveCompactWakeAsync(run);
         }
-        catch (Exception error) { Report(error); }
+        catch (Exception error)
+        {
+            Report(error);
+        }
         finally
         {
-            if (run.PhaseLease is not null) hosted.EndCompactPhase(run.PhaseLease);
+            if (run.PhaseLease is not null)
+                hosted.EndCompactPhase(run.PhaseLease);
             run.Cancellation.Dispose();
-            run.Completion.TrySetResult(); lifetimes.TryRemove(run, out _);
+            run.Completion.TrySetResult();
+            lifetimes.TryRemove(run, out _);
         }
     }
+
     public async Task<(bool Cancelled, bool TooLate)> StopAsync()
     {
         CompactRun? run;
-        lock (gate) run = active;
-        if (run is null) return (false, false);
-        try { run.Cancellation.Cancel(); } catch (ObjectDisposedException) { }
+        lock (gate)
+            run = active;
+        if (run is null)
+            return (false, false);
+        try
+        {
+            run.Cancellation.Cancel();
+        }
+        catch (ObjectDisposedException) { }
         await run.PipelineDone.Task;
         bool finish;
-        lock (gate) finish = ReferenceEquals(active, run) && !run.Applying;
-        if (finish) await FinishAsync(run);
+        lock (gate)
+            finish = ReferenceEquals(active, run) && !run.Applying;
+        if (finish)
+            await FinishAsync(run);
         await run.Completion.Task;
         return run.Committed ? (false, true) : (true, false);
     }
 
-    public async Task<CompactAdmission> StartManualAsync(string? guidance = null, double? keepPercent = null)
+    public async Task<CompactAdmission> StartManualAsync(
+        string? guidance = null,
+        double? keepPercent = null
+    )
     {
-        if (hosted.Entry.HistoryMutation) throw new InvalidOperationException("Session history change is in progress.");
+        if (hosted.Entry.HistoryMutation)
+            throw new InvalidOperationException("Session history change is in progress.");
         using var admission = hosted.Entry.AdmitMutation();
-        var snapshot = hosted.Entry.Snapshot(); var catalog = models.Capture();
+        var snapshot = hosted.Entry.Snapshot();
+        var catalog = models.Capture();
         var background = SupportsBackground(snapshot, catalog);
-        lock (gate) { if (active is not null) return new(true, false, background, false); }
+        lock (gate)
+        {
+            if (active is not null)
+                return new(true, false, background, false);
+        }
         if (!background && (snapshot.Busy || snapshot.Stopping || snapshot.Queue.Any(Ordinary)))
             return new(false, false, false, true);
-        var run = Begin(snapshot, catalog, keepPercent ?? catalog.CompactKeepFraction, background, !background);
-        if (run is null) return new(true, false, background, false);
+        var run = Begin(
+            snapshot,
+            catalog,
+            keepPercent ?? catalog.CompactKeepFraction,
+            background,
+            !background
+        );
+        if (run is null)
+            return new(true, false, background, false);
         if (background)
         {
             _ = ProduceBackgroundAsync(run, guidance);
@@ -118,7 +234,8 @@ internal sealed partial class SessionCompactor
         var entry = hosted.Entry;
         if (!entry.TryClaimProcessor())
         {
-            run.PipelineDone.TrySetResult(); await FinishAsync(run);
+            run.PipelineDone.TrySetResult();
+            await FinishAsync(run);
             return new(false, false, false, true);
         }
         run.OwnsProcessor = true;
@@ -126,7 +243,8 @@ internal sealed partial class SessionCompactor
         try
         {
             claimed = await hosted.Registry.HostFor(hosted.Id).TryClaimBusyAsync();
-            if (!claimed) return new(false, false, false, true);
+            if (!claimed)
+                return new(false, false, false, true);
             run.PhaseLease = hosted.BeginCompactPhase();
             _ = RunStandaloneAsync(run, guidance);
             return new(false, true, false, false);
@@ -135,7 +253,9 @@ internal sealed partial class SessionCompactor
         {
             if (!claimed)
             {
-                entry.ReleaseProcessor(); run.PipelineDone.TrySetResult(); await FinishAsync(run);
+                entry.ReleaseProcessor();
+                run.PipelineDone.TrySetResult();
+                await FinishAsync(run);
             }
         }
     }
@@ -143,18 +263,35 @@ internal sealed partial class SessionCompactor
     private async Task RunStandaloneAsync(CompactRun run, string? guidance)
     {
         await Task.Yield();
-        try { await PlanAndApplyAwaitedAsync(run, guidance); }
+        try
+        {
+            await PlanAndApplyAwaitedAsync(run, guidance);
+        }
         catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested) { }
         catch (CompactionSnapshotIncompatibleException) { }
-        catch (Exception error) { Report(error); }
+        catch (Exception error)
+        {
+            Report(error);
+        }
         finally
         {
-            try { await hosted.Entry.SaveLane.ReleaseStandaloneCompactAsync(); }
-            catch (Exception error) { Report(error); }
+            try
+            {
+                await hosted.Entry.SaveLane.ReleaseStandaloneCompactAsync();
+            }
+            catch (Exception error)
+            {
+                Report(error);
+            }
             hosted.Entry.ReleaseProcessor();
-            run.PipelineDone.TrySetResult(); await FinishAsync(run);
+            run.PipelineDone.TrySetResult();
+            await FinishAsync(run);
             hosted.PublishStateChanged();
-            if (hosted.Entry.WithState(state => !state.Busy && !state.Stopping && state.Queue.Any(Ordinary)))
+            if (
+                hosted.Entry.WithState(state =>
+                    !state.Busy && !state.Stopping && state.Queue.Any(Ordinary)
+                )
+            )
                 _ = hosted.StartProcessing();
         }
     }
@@ -162,39 +299,70 @@ internal sealed partial class SessionCompactor
     public async Task AutoAfterTurnAsync(ChatResult result)
     {
         var usage = result.Usage ?? result.AssistantMessage?["__meta"]?["usage"] as JsonObject;
-        if (usage is null) return;
-        var total = (CompactCandidateBuilder.Finite(usage["cachedTokens"]) ?? 0)
+        if (usage is null)
+            return;
+        var total =
+            (CompactCandidateBuilder.Finite(usage["cachedTokens"]) ?? 0)
             + (CompactCandidateBuilder.Finite(usage["inputTokens"]) ?? 0)
             + (CompactCandidateBuilder.Finite(usage["outputTokens"]) ?? 0);
-        var snapshot = hosted.Entry.Snapshot(); var catalog = models.Capture();
-        if (total <= 0 || total <= SessionModelSettings.EffectiveThreshold(snapshot.AuthorityEnvelope, catalog)) return;
+        var snapshot = hosted.Entry.Snapshot();
+        var catalog = models.Capture();
+        if (
+            total <= 0
+            || total <= SessionModelSettings.EffectiveThreshold(snapshot.AuthorityEnvelope, catalog)
+        )
+            return;
         var background = SupportsBackground(snapshot, catalog);
         var run = Begin(snapshot, catalog, catalog.CompactKeepFraction, background, false);
-        if (run is null) return;
+        if (run is null)
+            return;
         var handedOff = false;
         try
         {
             if (await TryPruneToolsAsync(snapshot, run.Cancellation.Token, run.Keep, catalog))
             {
-                run.Committed = true; run.PipelineDone.TrySetResult(); await FinishAsync(run); return;
+                run.Committed = true;
+                run.PipelineDone.TrySetResult();
+                await FinishAsync(run);
+                return;
             }
-            if (background) { handedOff = true; _ = ProduceBackgroundAsync(run, null); return; }
+            if (background)
+            {
+                handedOff = true;
+                _ = ProduceBackgroundAsync(run, null);
+                return;
+            }
             run.PhaseLease = hosted.BeginCompactPhase();
             await PlanAndApplyAwaitedAsync(run, null);
         }
         catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested) { }
         catch (CompactionSnapshotIncompatibleException) { }
-        catch (AuthorityCommittedException error) { run.Committed = true; Report(error); }
-        catch (Exception error) { Report(error); }
+        catch (AuthorityCommittedException error)
+        {
+            run.Committed = true;
+            Report(error);
+        }
+        catch (Exception error)
+        {
+            Report(error);
+        }
         finally
         {
             if (!handedOff)
-            { run.PipelineDone.TrySetResult(); await FinishAsync(run); }
+            {
+                run.PipelineDone.TrySetResult();
+                await FinishAsync(run);
+            }
         }
     }
 
     private static bool SupportsBackground(SessionSnapshot snapshot, HostModels catalog) =>
-        !ModelRoutingFingerprint.False(catalog.Resolve(SessionWait.Text(snapshot.AuthorityEnvelope["model"])).Configuration["asyncCompact"]);
+        !ModelRoutingFingerprint.False(
+            catalog.Resolve(SessionWait.Text(snapshot.AuthorityEnvelope["model"])).Configuration[
+                "asyncCompact"
+            ]
+        );
+
     internal static bool Ordinary(QueueItem item) => item.Type != QueueItemType.CompactCommit;
 
     private async Task PreparePlanAsync(CompactRun run, string? guidance)
@@ -205,12 +373,29 @@ internal sealed partial class SessionCompactor
         token.ThrowIfCancellationRequested();
         var candidates = CompactCandidateBuilder.Build(run.Snapshot.History, run.Keep);
         run.Candidates = candidates;
-        if (candidates.Split <= 0 || candidates.Items.Count == 0 && candidates.Preserved.Count == 0
-            && !run.Snapshot.History.Take(candidates.Split).Any(row => !CompactCandidateBuilder.Visible(row))) return;
-        run.Plan = candidates.Items.Count == 0 && candidates.Preserved.Count == 0
-            ? new CompactPlan([], new HashSet<long>(), new HashSet<long>())
-            : await PlanAsync(run.Snapshot, candidates, guidance, token, run.CacheKey,
-                run.Background ? ModelRequestScope.BackgroundCompactPlan : ModelRequestScope.CompactPlan, run.Catalog.DefaultKey);
+        if (
+            candidates.Split <= 0
+            || candidates.Items.Count == 0
+                && candidates.Preserved.Count == 0
+                && !run
+                    .Snapshot.History.Take(candidates.Split)
+                    .Any(row => !CompactCandidateBuilder.Visible(row))
+        )
+            return;
+        run.Plan =
+            candidates.Items.Count == 0 && candidates.Preserved.Count == 0
+                ? new CompactPlan([], new HashSet<long>(), new HashSet<long>())
+                : await PlanAsync(
+                    run.Snapshot,
+                    candidates,
+                    guidance,
+                    token,
+                    run.CacheKey,
+                    run.Background
+                        ? ModelRequestScope.BackgroundCompactPlan
+                        : ModelRequestScope.CompactPlan,
+                    run.Catalog.DefaultKey
+                );
     }
 
     private async Task ProduceBackgroundAsync(CompactRun run, string? guidance)
@@ -218,34 +403,60 @@ internal sealed partial class SessionCompactor
         await Task.Yield();
         try
         {
-            try { await PreparePlanAsync(run, guidance); }
-            catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested) { throw; }
-            catch (Exception error) { run.Failure = error; }
+            try
+            {
+                await PreparePlanAsync(run, guidance);
+            }
+            catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception error)
+            {
+                run.Failure = error;
+            }
             run.Cancellation.Token.ThrowIfCancellationRequested();
             lock (gate)
             {
-                if (!ReferenceEquals(active, run)) return;
-                run.Ready = true; run.Phase = "enqueueing";
+                if (!ReferenceEquals(active, run))
+                    return;
+                run.Ready = true;
+                run.Phase = "enqueueing";
             }
-            await hosted.Entry.SaveLane.PublishCompactWakeAsync(run, run.Cancellation.Token, run.Snapshot.Id);
+            await hosted.Entry.SaveLane.PublishCompactWakeAsync(
+                run,
+                run.Cancellation.Token,
+                run.Snapshot.Id
+            );
             lock (gate)
-                if (ReferenceEquals(active, run) && !run.Applying) run.Phase = "ready";
+                if (ReferenceEquals(active, run) && !run.Applying)
+                    run.Phase = "ready";
         }
         catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested) { }
-        catch (CompactionSnapshotIncompatibleException) { run.Ready = false; }
-        catch (Exception error) { Report(error); run.Ready = false; }
+        catch (CompactionSnapshotIncompatibleException)
+        {
+            run.Ready = false;
+        }
+        catch (Exception error)
+        {
+            Report(error);
+            run.Ready = false;
+        }
         finally
         {
             run.PipelineDone.TrySetResult();
-            bool finish, wake;
+            bool finish,
+                wake;
             lock (gate)
             {
                 var cancelled = run.Cancellation.IsCancellationRequested;
                 finish = !run.Applying && (cancelled || !run.Ready);
                 wake = !cancelled && run.Ready;
             }
-            if (finish) await FinishAsync(run);
-            else if (wake && hosted.Entry.WithState(state => !state.Busy && !state.Stopping)) _ = hosted.StartProcessing();
+            if (finish)
+                await FinishAsync(run);
+            else if (wake && hosted.Entry.WithState(state => !state.Busy && !state.Stopping))
+                _ = hosted.StartProcessing();
         }
     }
 
@@ -255,57 +466,118 @@ internal sealed partial class SessionCompactor
         lock (gate)
         {
             run = active;
-            if (run is not { Background: true, Ready: true, Applying: false } || run.Cancellation.IsCancellationRequested) return;
-            run.Applying = true; run.Phase = "committing";
+            if (
+                run is not { Background: true, Ready: true, Applying: false }
+                || run.Cancellation.IsCancellationRequested
+            )
+                return;
+            run.Applying = true;
+            run.Phase = "committing";
         }
         run.PhaseLease = hosted.BeginCompactPhase();
         try
         {
-            if (run.Failure is not null) throw run.Failure;
-            if (run.Plan is not null) await ApplyAsync(run);
+            if (run.Failure is not null)
+                throw run.Failure;
+            if (run.Plan is not null)
+                await ApplyAsync(run);
         }
         catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested) { }
         catch (CompactionSnapshotIncompatibleException) { }
-        catch (Exception error) { Report(error); if (propagateFailure) throw; }
-        finally { await FinishAsync(run); }
+        catch (Exception error)
+        {
+            Report(error);
+            if (propagateFailure)
+                throw;
+        }
+        finally
+        {
+            await FinishAsync(run);
+        }
     }
+
     public async Task SafePointAsync(bool propagateFailure = false)
     {
         await ApplyCompletedAsync(propagateFailure);
-        try { await hosted.Entry.SaveLane.RemoveCompactWakeAsync(staleOnly: true); }
-        catch (Exception error) { Report(error); if (propagateFailure) throw; }
+        try
+        {
+            await hosted.Entry.SaveLane.RemoveCompactWakeAsync(staleOnly: true);
+        }
+        catch (Exception error)
+        {
+            Report(error);
+            if (propagateFailure)
+                throw;
+        }
     }
+
     private async Task PlanAndApplyAwaitedAsync(CompactRun run, string? guidance)
     {
         await PreparePlanAsync(run, guidance);
-        if (run.Plan is not null) await ApplyAsync(run);
+        if (run.Plan is not null)
+            await ApplyAsync(run);
     }
+
     private async Task ApplyAsync(CompactRun run)
     {
         run.Cancellation.Token.ThrowIfCancellationRequested();
-        lock (gate) run.Phase = "committing";
+        lock (gate)
+            run.Phase = "committing";
         try
         {
             long archiveMaximum = 0;
-            await hosted.Entry.SaveLane.CommitCompactionAsync(state => state.Id != run.Snapshot.Id ? throw new CompactionSnapshotIncompatibleException("Compaction was planned for a previous Session identity.") : PrepareCompact(state, run.Snapshot, run.Candidates!, run.Plan!, archiveMaximum),
-                run.Cancellation.Token, async (snapshot, token) =>
+            await hosted.Entry.SaveLane.CommitCompactionAsync(
+                state =>
+                    state.Id != run.Snapshot.Id
+                        ? throw new CompactionSnapshotIncompatibleException(
+                            "Compaction was planned for a previous Session identity."
+                        )
+                        : PrepareCompact(
+                            state,
+                            run.Snapshot,
+                            run.Candidates!,
+                            run.Plan!,
+                            archiveMaximum
+                        ),
+                run.Cancellation.Token,
+                async (snapshot, token) =>
                 {
                     archiveMaximum = store.Archive.EffectiveBlockHighWater();
                     return await RefreshCommitMemoryAsync(snapshot, token);
-                });
-            run.Committed = true; hosted.PublishStateChanged();
+                }
+            );
+            run.Committed = true;
+            hosted.PublishStateChanged();
         }
-        catch (AuthorityCommittedException) { run.Committed = true; hosted.PublishStateChanged(); throw; }
+        catch (AuthorityCommittedException)
+        {
+            run.Committed = true;
+            hosted.PublishStateChanged();
+            throw;
+        }
     }
-    private async Task<string?> RefreshCommitMemoryAsync(SessionSnapshot live, CancellationToken token)
+
+    private async Task<string?> RefreshCommitMemoryAsync(
+        SessionSnapshot live,
+        CancellationToken token
+    )
     {
-        var modelId = ConditionalMemory.ReadCurrentModelSnapshotId(SessionWait.Text(live.AuthorityEnvelope["persistentMemorySnapshot"]) ?? "");
+        var modelId = ConditionalMemory.ReadCurrentModelSnapshotId(
+            SessionWait.Text(live.AuthorityEnvelope["persistentMemorySnapshot"]) ?? ""
+        );
         if (modelId is null)
         {
             var model = models.Capture().Resolve(SessionWait.Text(live.AuthorityEnvelope["model"]));
-            if (model.IsVirtual) return null;
+            if (model.IsVirtual)
+                return null;
             modelId = model.Key;
         }
-        return await memory.BuildAsync(hosted.Agent, hosted.Id, modelId, token, AgentMemory.Selection(live.AuthorityEnvelope));
+        return await memory.BuildAsync(
+            hosted.Agent,
+            hosted.Id,
+            modelId,
+            token,
+            AgentMemory.Selection(live.AuthorityEnvelope)
+        );
     }
 }

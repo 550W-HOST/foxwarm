@@ -8,7 +8,8 @@ public class MessageJsonTests
     [Fact]
     public void Round_trips_open_parts_and_presence_without_mutation_or_aliasing()
     {
-        var input = "{\"role\":\"model\",\"modelVisible\":null,\"parts\":[{\"text\":\"\",\"phase\":null,\"unknown\":{\"nested\":[null,{}]},\"fields\":[1,-0.0,1e-6]}],\"extra\":{\"x\":true}}";
+        var input =
+            "{\"role\":\"model\",\"modelVisible\":null,\"parts\":[{\"text\":\"\",\"phase\":null,\"unknown\":{\"nested\":[null,{}]},\"fields\":[1,-0.0,1e-6]}],\"extra\":{\"x\":true}}";
         var message = CanonicalMessage.Parse(input);
         Assert.Equal("model", message.Role);
         Assert.True(message.Parts[0].Has("phase"));
@@ -23,12 +24,18 @@ public class MessageJsonTests
     public void Visibility_is_exact_false_only_and_roles_are_bounded()
     {
         var visible = CanonicalMessage.Parse("{\"role\":\"user\",\"parts\":[]}");
-        var nullValue = CanonicalMessage.Parse("{\"role\":\"user\",\"modelVisible\":null,\"parts\":[]}");
-        var hidden = CanonicalMessage.Parse("{\"role\":\"user\",\"modelVisible\":false,\"parts\":[]}");
+        var nullValue = CanonicalMessage.Parse(
+            "{\"role\":\"user\",\"modelVisible\":null,\"parts\":[]}"
+        );
+        var hidden = CanonicalMessage.Parse(
+            "{\"role\":\"user\",\"modelVisible\":false,\"parts\":[]}"
+        );
         Assert.True(visible.IsModelVisible);
         Assert.True(nullValue.IsModelVisible);
         Assert.False(hidden.IsModelVisible);
-        Assert.Throws<FormatException>(() => CanonicalMessage.Parse("{\"role\":\"developer\",\"parts\":[]}"));
+        Assert.Throws<FormatException>(() =>
+            CanonicalMessage.Parse("{\"role\":\"developer\",\"parts\":[]}")
+        );
     }
 
     [Fact]
@@ -41,7 +48,10 @@ public class MessageJsonTests
         Assert.Equal(raw, FunctionCallArguments.Stringify(parsed.Args, parsed.RawArgsText));
         var failed = FunctionCallArguments.Parse(JsonValue.Create("{"));
         Assert.StartsWith("Invalid tool arguments JSON:", failed.ArgsParseError);
-        Assert.Contains("rawArgsText", FunctionCallArguments.Stringify(failed.Args, failed.RawArgsText, failed.ArgsParseError));
+        Assert.Contains(
+            "rawArgsText",
+            FunctionCallArguments.Stringify(failed.Args, failed.RawArgsText, failed.ArgsParseError)
+        );
         Assert.Equal("{}", FunctionCallArguments.Stringify(new JsonObject()));
     }
 }

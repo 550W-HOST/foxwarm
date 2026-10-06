@@ -9,18 +9,20 @@ public enum AtomicJsonWriteStage
     AfterTempFileSync,
     BeforeRename,
     AfterRenameBeforeDirectorySync,
-    AfterDirectorySync
+    AfterDirectorySync,
 }
 
 public enum DirectorySyncResult
 {
     Synced,
-    Unsupported
+    Unsupported,
 }
 
 public sealed class AuthorityCommittedException : IOException
 {
-    public AuthorityCommittedException(string message, Exception cause) : base(message, cause) { }
+    public AuthorityCommittedException(string message, Exception cause)
+        : base(message, cause) { }
+
     public bool AuthorityCommitted => true;
 }
 
@@ -30,33 +32,65 @@ public sealed class LinuxAtomicJsonFile
     private readonly string filePath;
     private readonly Action<AtomicJsonWriteStage>? stageHook;
 
-    public LinuxAtomicJsonFile(string root, string relativePath, Action<AtomicJsonWriteStage>? stageHook = null)
+    public LinuxAtomicJsonFile(
+        string root,
+        string relativePath,
+        Action<AtomicJsonWriteStage>? stageHook = null
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
         this.root = Path.GetFullPath(root);
         filePath = Path.GetFullPath(Path.Combine(this.root, relativePath));
         if (!filePath.StartsWith(this.root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-            throw new ArgumentException("Authority path must remain under the supplied root.", nameof(relativePath));
+            throw new ArgumentException(
+                "Authority path must remain under the supplied root.",
+                nameof(relativePath)
+            );
         this.stageHook = stageHook;
     }
 
     public string FilePath => filePath;
     public DirectorySyncResult LastDirectorySyncResult { get; private set; }
 
-    public void Write(SessionAuthorityDocument document, CancellationToken cancellationToken = default) => WriteText(document.ToJson(indented: true), cancellationToken);
-    internal void WritePayload(System.Text.Json.Nodes.JsonObject payload) => WriteText(payload.ToJsonString(), default);
-    internal void WriteTextPayload(string payload, CancellationToken cancellationToken) => WriteText(payload, cancellationToken);
-    private void WriteText(string text, CancellationToken cancellationToken) => WriteStreamPayload(stream => stream.Write(new UTF8Encoding(false).GetBytes(text)), cancellationToken);
+    public void Write(
+        SessionAuthorityDocument document,
+        CancellationToken cancellationToken = default
+    ) => WriteText(document.ToJson(indented: true), cancellationToken);
+
+    internal void WritePayload(System.Text.Json.Nodes.JsonObject payload) =>
+        WriteText(payload.ToJsonString(), default);
+
+    internal void WriteTextPayload(string payload, CancellationToken cancellationToken) =>
+        WriteText(payload, cancellationToken);
+
+    private void WriteText(string text, CancellationToken cancellationToken) =>
+        WriteStreamPayload(
+            stream => stream.Write(new UTF8Encoding(false).GetBytes(text)),
+            cancellationToken
+        );
+
     internal void WriteStreamPayload(Action<Stream> write, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
-        var tempPath = Path.Combine(Path.GetDirectoryName(filePath)!, $"{Path.GetFileName(filePath)}.tmp-{Environment.ProcessId}-{Guid.NewGuid():N}");
+        var tempPath = Path.Combine(
+            Path.GetDirectoryName(filePath)!,
+            $"{Path.GetFileName(filePath)}.tmp-{Environment.ProcessId}-{Guid.NewGuid():N}"
+        );
         var renamed = false;
         try
         {
             stageHook?.Invoke(AtomicJsonWriteStage.BeforeTempWrite);
-            using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+            using (
+                var stream = new FileStream(
+                    tempPath,
+                    FileMode.CreateNew,
+                    FileAccess.Write,
+                    FileShare.None,
+                    4096,
+                    FileOptions.WriteThrough
+                )
+            )
             {
                 write(stream);
                 stream.Flush(flushToDisk: true);
@@ -74,10 +108,17 @@ public sealed class LinuxAtomicJsonFile
         {
             if (!renamed)
             {
-                try { File.Delete(tempPath); } catch { }
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch { }
                 throw;
             }
-            throw new AuthorityCommittedException("Session authority was renamed into place before a later durability step failed.", error);
+            throw new AuthorityCommittedException(
+                "Session authority was renamed into place before a later durability step failed.",
+                error
+            );
         }
     }
 
@@ -92,19 +133,25 @@ public sealed class LinuxAtomicJsonFile
 
         public static DirectorySyncResult Sync(string directoryPath)
         {
-            if (!OperatingSystem.IsLinux()) return DirectorySyncResult.Unsupported;
+            if (!OperatingSystem.IsLinux())
+                return DirectorySyncResult.Unsupported;
             var descriptor = open(directoryPath, O_RDONLY | O_DIRECTORY);
             if (descriptor < 0)
             {
                 var error = Marshal.GetLastPInvokeError();
-                if (UnsupportedErrnos.Contains(error)) return DirectorySyncResult.Unsupported;
-                throw new IOException($"Unable to open authority directory for fsync (errno {error}).");
+                if (UnsupportedErrnos.Contains(error))
+                    return DirectorySyncResult.Unsupported;
+                throw new IOException(
+                    $"Unable to open authority directory for fsync (errno {error})."
+                );
             }
             try
             {
-                if (fsync(descriptor) == 0) return DirectorySyncResult.Synced;
+                if (fsync(descriptor) == 0)
+                    return DirectorySyncResult.Synced;
                 var error = Marshal.GetLastPInvokeError();
-                if (UnsupportedErrnos.Contains(error)) return DirectorySyncResult.Unsupported;
+                if (UnsupportedErrnos.Contains(error))
+                    return DirectorySyncResult.Unsupported;
                 throw new IOException($"Unable to fsync authority directory (errno {error}).");
             }
             finally
@@ -115,8 +162,10 @@ public sealed class LinuxAtomicJsonFile
 
         [DllImport("libc", SetLastError = true)]
         private static extern int open(string pathname, int flags);
+
         [DllImport("libc", SetLastError = true)]
         private static extern int fsync(int fd);
+
         [DllImport("libc", SetLastError = true)]
         private static extern int close(int fd);
     }

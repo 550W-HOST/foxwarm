@@ -7,39 +7,131 @@
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="Code/workbench.html" />
-    <Content Include="../../packages/webui/public/login.html" Link="packages/webui/login.html" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="../../packages/vscode-web/foxwarm-fs/package.json" Link="packages/vscode-web/foxwarm-fs/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="../../packages/vscode-web/foxwarm-fs/dist/**/*" Link="packages/vscode-web/foxwarm-fs/dist/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="../../packages/vscode-web/foxwarm-fs/media/**/*" Link="packages/vscode-web/foxwarm-fs/media/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="../../packages/vscode-web/foxwarm-scm/package.json" Link="packages/vscode-web/foxwarm-scm/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="../../packages/vscode-web/foxwarm-scm/dist/**/*" Link="packages/vscode-web/foxwarm-scm/dist/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="../../packages/vscode-web/foxwarm-scm/media/**/*" Link="packages/vscode-web/foxwarm-scm/media/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="../../packages/vscode-web/foxwarm-webui/package.json" Link="packages/vscode-web/foxwarm-webui/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="../../packages/vscode-web/foxwarm-webui/dist/**/*" Link="packages/vscode-web/foxwarm-webui/dist/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="../../packages/vscode-web/foxwarm-webui/media/**/*" Link="packages/vscode-web/foxwarm-webui/media/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="../../packages/vscode-web/foxwarm-terminal/package.json" Link="packages/vscode-web/foxwarm-terminal/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="../../packages/vscode-web/foxwarm-terminal/dist/**/*" Link="packages/vscode-web/foxwarm-terminal/dist/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content
+      Include="../../packages/webui/public/login.html"
+      Link="packages/webui/login.html"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+    <Content
+      Include="../../packages/vscode-web/foxwarm-fs/package.json"
+      Link="packages/vscode-web/foxwarm-fs/%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+    <Content
+      Include="../../packages/vscode-web/foxwarm-fs/dist/**/*"
+      Link="packages/vscode-web/foxwarm-fs/dist/%(RecursiveDir)%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+    <Content
+      Include="../../packages/vscode-web/foxwarm-fs/media/**/*"
+      Link="packages/vscode-web/foxwarm-fs/media/%(RecursiveDir)%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+    <Content
+      Include="../../packages/vscode-web/foxwarm-scm/package.json"
+      Link="packages/vscode-web/foxwarm-scm/%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+    <Content
+      Include="../../packages/vscode-web/foxwarm-scm/dist/**/*"
+      Link="packages/vscode-web/foxwarm-scm/dist/%(RecursiveDir)%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+    <Content
+      Include="../../packages/vscode-web/foxwarm-scm/media/**/*"
+      Link="packages/vscode-web/foxwarm-scm/media/%(RecursiveDir)%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+    <Content
+      Include="../../packages/vscode-web/foxwarm-webui/package.json"
+      Link="packages/vscode-web/foxwarm-webui/%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+    <Content
+      Include="../../packages/vscode-web/foxwarm-webui/dist/**/*"
+      Link="packages/vscode-web/foxwarm-webui/dist/%(RecursiveDir)%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+    <Content
+      Include="../../packages/vscode-web/foxwarm-webui/media/**/*"
+      Link="packages/vscode-web/foxwarm-webui/media/%(RecursiveDir)%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+    <Content
+      Include="../../packages/vscode-web/foxwarm-terminal/package.json"
+      Link="packages/vscode-web/foxwarm-terminal/%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+    <Content
+      Include="../../packages/vscode-web/foxwarm-terminal/dist/**/*"
+      Link="packages/vscode-web/foxwarm-terminal/dist/%(RecursiveDir)%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
     <PackageReference Include="ModelContextProtocol.Core" Version="2.2.0" />
     <PackageReference Include="Google.Protobuf" Version="3.35.1" />
     <PackageReference Include="Grpc.Tools" Version="2.84.0" PrivateAssets="all" />
     <Protobuf Include="ToolScript/Protocol/monty.proto" GrpcServices="None" />
-    <Content Include="ToolScript/*LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="ToolScript/THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content
+      Include="ToolScript/*LICENSE"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+    <Content
+      Include="ToolScript/THIRD-PARTY-NOTICES.md"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
     <PackageReference Include="SkiaSharp" Version="4.153.1" />
     <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.153.1" />
-    <Content Include="../../templates/agents/00_SYSTEM.md" Link="templates/agents/00_SYSTEM.md" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="../../templates/main/memory/**/*" Link="templates/main/memory/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="../../templates/models.example.yaml" Link="templates/models.example.yaml" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="../../skills/mcp-management/**/*" Link="skills/mcp-management/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content
+      Include="../../templates/agents/00_SYSTEM.md"
+      Link="templates/agents/00_SYSTEM.md"
+      CopyToOutputDirectory="PreserveNewest"
+    />
+    <Content
+      Include="../../templates/main/memory/**/*"
+      Link="templates/main/memory/%(RecursiveDir)%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest"
+    />
+    <Content
+      Include="../../templates/models.example.yaml"
+      Link="templates/models.example.yaml"
+      CopyToOutputDirectory="PreserveNewest"
+    />
+    <Content
+      Include="../../skills/mcp-management/**/*"
+      Link="skills/mcp-management/%(RecursiveDir)%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest"
+    />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
     <PackageReference Include="YamlDotNet" Version="18.1.0" />
-    <Content Include="Timers/THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content
+      Include="Timers/THIRD-PARTY-NOTICES.md"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
   </ItemGroup>
   <Target Name="BuildFoxwarmPty" AfterTargets="Build" Condition="'$(OS)' != 'Windows_NT'">
     <Exec Command="gcc -std=c11 -O2 -Wall -Wextra -Werror -fPIC -shared -Wl,-z,relro,-z,now -o &quot;$(TargetDir)libfoxwarm-pty.so&quot; &quot;$(MSBuildProjectDirectory)/Terminal/native/foxwarm-pty.c&quot; -lutil" />
   </Target>
   <Target Name="PublishFoxwarmPty" AfterTargets="Publish" Condition="'$(OS)' != 'Windows_NT'">
-    <Copy SourceFiles="$(TargetDir)libfoxwarm-pty.so" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+    <Copy
+      SourceFiles="$(TargetDir)libfoxwarm-pty.so"
+      DestinationFolder="$(PublishDir)"
+      SkipUnchangedFiles="true"
+    />
   </Target>
   <Target Name="CleanFoxwarmPty" AfterTargets="Clean" Condition="'$(OS)' != 'Windows_NT'">
     <Delete Files="$(TargetDir)libfoxwarm-pty.so" />

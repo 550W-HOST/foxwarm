@@ -9,6 +9,7 @@ namespace Foxwarm.Sessions;
 public sealed class SessionControl
 {
     private readonly SessionRegistry registry;
+
     public SessionControl(SessionRegistry registry) => this.registry = registry;
 
     internal async Task<StopResult> StopFromToolAsync(string sessionId, bool self)
@@ -40,14 +41,24 @@ public sealed class SessionControl
         var entry = registry.GetRequired(sessionId);
         var snapshot = entry.Snapshot();
         var count = snapshot.Queue.Count(SessionCompactor.Ordinary);
-        if (count == 0) return new(0, false, false);
-        if (!snapshot.Busy) { registry.Trigger(sessionId); return new(count, false, false); }
+        if (count == 0)
+            return new(0, false, false);
+        if (!snapshot.Busy)
+        {
+            registry.Trigger(sessionId);
+            return new(count, false, false);
+        }
         var handle = entry.BeginStop(runQueued: true);
-        if (handle is not null) { handle.Cancel(); handle.Dispose(); }
+        if (handle is not null)
+        {
+            handle.Cancel();
+            handle.Dispose();
+        }
         await entry.SaveLane.SaveBestEffortAsync().ConfigureAwait(false);
         return new(count, true, handle is not null);
     }
 }
 
 public sealed record StopResult(bool AbortedInFlight, bool StoppedCurrent);
+
 public sealed record DequeueResult(int QueuedItems, bool StoppedCurrent, bool AbortedInFlight);

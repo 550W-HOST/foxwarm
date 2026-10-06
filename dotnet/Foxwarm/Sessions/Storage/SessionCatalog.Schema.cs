@@ -2,7 +2,9 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionCatalog
 {
-    internal const string WaitPresenceIndexSql = "CREATE INDEX IF NOT EXISTS idx_session_catalog_wait_presence ON session_catalog(session_id) WHERE json_type(metadata_json,'$.meta.wait.id')='text'";
+    internal const string WaitPresenceIndexSql =
+        "CREATE INDEX IF NOT EXISTS idx_session_catalog_wait_presence ON session_catalog(session_id) WHERE json_type(metadata_json,'$.meta.wait.id')='text'";
+
     // Exact v2 Session schema and v1 migration from the Main-owned catalog.
     private const string CreateSchemaSql = """
 

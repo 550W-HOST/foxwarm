@@ -7,7 +7,10 @@ namespace Foxwarm.Sessions;
 /// Bounded C2 adapter: active JSON remains authoritative while Archive rows are immutable audit records.
 /// All calls are expected to be serialized by one SessionSaveLane.
 /// </summary>
-public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, ICanonicalAppendAuthorityStore, ICompactionAuthorityStore
+public sealed class PersistentSessionAuthorityStore
+    : ISessionAuthorityStore,
+        ICanonicalAppendAuthorityStore,
+        ICompactionAuthorityStore
 {
     private string sessionId;
     private string agent;
@@ -23,9 +26,20 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
     private readonly Action? checkLifetime;
     private volatile bool retired;
     private Exception? identityUnavailable;
-    internal void MarkIdentityUnavailable(Exception error) => Volatile.Write(ref identityUnavailable, error);
+
+    internal void MarkIdentityUnavailable(Exception error) =>
+        Volatile.Write(ref identityUnavailable, error);
+
     internal void Retire() => retired = true;
-    private void CheckWrite() { if (Volatile.Read(ref identityUnavailable) is { } error) throw error; if (retired) throw new InvalidOperationException("Session authority owner has retired."); checkLifetime?.Invoke(); }
+
+    private void CheckWrite()
+    {
+        if (Volatile.Read(ref identityUnavailable) is { } error)
+            throw error;
+        if (retired)
+            throw new InvalidOperationException("Session authority owner has retired.");
+        checkLifetime?.Invoke();
+    }
 
     public PersistentSessionAuthorityStore(
         string root,
@@ -33,44 +47,80 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
         string agent = "main",
         Action<AtomicJsonWriteStage>? authorityStageHook = null,
         Func<int, CancellationToken, Task>? canonicalCommitBarrier = null,
-        Action<SessionSnapshot>? publishProjection = null, Func<JsonObject?>? mainFields = null, Action? checkLifetime = null)
+        Action<SessionSnapshot>? publishProjection = null,
+        Func<JsonObject?>? mainFields = null,
+        Action? checkLifetime = null
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(agent);
-        this.root = root; Images = new(root); this.authorityStageHook = authorityStageHook;
+        this.root = root;
+        Images = new(root);
+        this.authorityStageHook = authorityStageHook;
         this.sessionId = sessionId;
         this.agent = agent;
         this.canonicalCommitBarrier = canonicalCommitBarrier;
-        this.publishProjection = publishProjection; this.mainFields = mainFields; this.checkLifetime = checkLifetime;
-        authorityFile = new LinuxAtomicJsonFile(root, $"state/sessions/{sessionId}.json", authorityStageHook);
-        archive = new SqliteArchiveMessageStore(Path.Combine(root, "state", "archive-store.sqlite"), sessionId);
+        this.publishProjection = publishProjection;
+        this.mainFields = mainFields;
+        this.checkLifetime = checkLifetime;
+        authorityFile = new LinuxAtomicJsonFile(
+            root,
+            $"state/sessions/{sessionId}.json",
+            authorityStageHook
+        );
+        archive = new SqliteArchiveMessageStore(
+            Path.Combine(root, "state", "archive-store.sqlite"),
+            sessionId
+        );
         archive.Initialize();
     }
 
     internal string SessionId => sessionId;
     internal string Agent => agent;
+
     internal void RebindIdentity(string id, string targetAgent)
     {
         // Caller owns the ordered lane; no old-bound commit can overlap replacement.
-        var next = new SqliteArchiveMessageStore(ArchivePath, id); next.Initialize();
-        sessionId = id; agent = targetAgent; archive = next;
-        authorityFile = new LinuxAtomicJsonFile(root, $"state/sessions/{id}.json", authorityStageHook);
+        var next = new SqliteArchiveMessageStore(ArchivePath, id);
+        next.Initialize();
+        sessionId = id;
+        agent = targetAgent;
+        archive = next;
+        authorityFile = new LinuxAtomicJsonFile(
+            root,
+            $"state/sessions/{id}.json",
+            authorityStageHook
+        );
     }
+
     public string AuthorityPath => authorityFile.FilePath;
     public string ArchivePath => archive.DatabasePath;
     public DirectorySyncResult LastDirectorySyncResult => authorityFile.LastDirectorySyncResult;
     public SqliteArchiveMessageStore Archive => archive;
 
     internal bool IsIdentitySnapshotCommit { get; private set; }
+
     internal Task PersistIdentitySnapshotAsync(SessionSnapshot snapshot)
     {
-        ValidateBoundSnapshot(snapshot); IsIdentitySnapshotCommit = true;
-        try { authorityFile.Write(ToAuthority(snapshot)); return Task.CompletedTask; }
-        finally { IsIdentitySnapshotCommit = false; }
+        ValidateBoundSnapshot(snapshot);
+        IsIdentitySnapshotCommit = true;
+        try
+        {
+            authorityFile.Write(ToAuthority(snapshot));
+            return Task.CompletedTask;
+        }
+        finally
+        {
+            IsIdentitySnapshotCommit = false;
+        }
     }
 
-    public Task CommitAsync(SessionSnapshot snapshot, SaveKind kind, CancellationToken cancellationToken = default)
+    public Task CommitAsync(
+        SessionSnapshot snapshot,
+        SaveKind kind,
+        CancellationToken cancellationToken = default
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         ValidateBoundSnapshot(snapshot);
@@ -82,7 +132,8 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
     public async Task CommitCanonicalAppendAsync(
         SessionSnapshot stagedSnapshot,
         IReadOnlyList<JsonObject> appendedMessages,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         ValidateBoundSnapshot(stagedSnapshot);
@@ -91,7 +142,11 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
         try
         {
             if (canonicalCommitBarrier is not null)
-                await canonicalCommitBarrier(Interlocked.Increment(ref canonicalCommitCount), cancellationToken).ConfigureAwait(false);
+                await canonicalCommitBarrier(
+                        Interlocked.Increment(ref canonicalCommitCount),
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
             authorityFile.Write(ToAuthority(stagedSnapshot));
         }
         catch (AuthorityCommittedException)
@@ -100,18 +155,29 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
         }
         catch (Exception writeError)
         {
-            try { archive.RollbackInsertedMessages(inserted); }
+            try
+            {
+                archive.RollbackInsertedMessages(inserted);
+            }
             catch (Exception rollbackError)
             {
-                throw new AggregateException("Authority precommit failed and exact Archive rollback also failed.", writeError, rollbackError);
+                throw new AggregateException(
+                    "Authority precommit failed and exact Archive rollback also failed.",
+                    writeError,
+                    rollbackError
+                );
             }
             throw;
         }
         PublishProjection(stagedSnapshot);
     }
 
-    public Task CommitCompactionAsync(SessionSnapshot stagedSnapshot, IReadOnlyList<ArchiveBlockRecord> blocks,
-        IReadOnlyList<JsonObject> messages, CancellationToken cancellationToken = default)
+    public Task CommitCompactionAsync(
+        SessionSnapshot stagedSnapshot,
+        IReadOnlyList<ArchiveBlockRecord> blocks,
+        IReadOnlyList<JsonObject> messages,
+        CancellationToken cancellationToken = default
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         ValidateBoundSnapshot(stagedSnapshot);
@@ -124,7 +190,10 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
             cancellationToken.ThrowIfCancellationRequested();
             authorityFile.Write(ToAuthority(stagedSnapshot), cancellationToken);
         }
-        catch (AuthorityCommittedException) { throw; }
+        catch (AuthorityCommittedException)
+        {
+            throw;
+        }
         catch (Exception error)
         {
             try
@@ -132,7 +201,10 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
                 archive.RollbackInsertedMessages(newMessages);
                 archive.RollbackInsertedBlocks(newBlocks);
             }
-            catch (Exception rollback) { throw new AggregateException("Compact precommit rollback failed.", error, rollback); }
+            catch (Exception rollback)
+            {
+                throw new AggregateException("Compact precommit rollback failed.", error, rollback);
+            }
             throw;
         }
         PublishProjection(stagedSnapshot);
@@ -141,38 +213,79 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
 
     private void PublishProjection(SessionSnapshot snapshot)
     {
-        try { publishProjection?.Invoke(snapshot); }
-        catch (Exception error) { throw new AuthorityCommittedException("Session authority committed, but its Main catalog projection failed.", error); }
+        try
+        {
+            publishProjection?.Invoke(snapshot);
+        }
+        catch (Exception error)
+        {
+            throw new AuthorityCommittedException(
+                "Session authority committed, but its Main catalog projection failed.",
+                error
+            );
+        }
     }
 
-    public async Task<SessionSnapshot?> LoadAsync(string requestedSessionId, CancellationToken cancellationToken = default)
+    public async Task<SessionSnapshot?> LoadAsync(
+        string requestedSessionId,
+        CancellationToken cancellationToken = default
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (requestedSessionId != sessionId)
-            throw new InvalidOperationException($"Persistent store is bound to Session '{sessionId}', not '{requestedSessionId}'.");
+            throw new InvalidOperationException(
+                $"Persistent store is bound to Session '{sessionId}', not '{requestedSessionId}'."
+            );
         if (!File.Exists(authorityFile.FilePath))
         {
             if (archive.ReadMessages().Count > 0)
-                throw new InvalidDataException("Active Session authority is missing while Archive rows exist; Archive cannot rebuild active history.");
+                throw new InvalidDataException(
+                    "Active Session authority is missing while Archive rows exist; Archive cannot rebuild active history."
+                );
             return null;
         }
         JsonObject raw;
-        try { raw = JsonNode.Parse(File.ReadAllText(authorityFile.FilePath)) as JsonObject ?? throw new InvalidDataException("Session authority must be an object."); }
-        catch (System.Text.Json.JsonException error) { throw new InvalidDataException("Session authority is malformed JSON.", error); }
+        try
+        {
+            raw =
+                JsonNode.Parse(File.ReadAllText(authorityFile.FilePath)) as JsonObject
+                ?? throw new InvalidDataException("Session authority must be an object.");
+        }
+        catch (System.Text.Json.JsonException error)
+        {
+            throw new InvalidDataException("Session authority is malformed JSON.", error);
+        }
         var normalized = SessionCatalog.NormalizeAuthority(raw, sessionId, agent);
-        if (mainFields?.Invoke() is { } main) SessionCatalog.OverlayAuthorityContext(normalized, main);
+        if (mainFields?.Invoke() is { } main)
+            SessionCatalog.OverlayAuthorityContext(normalized, main);
         var document = SessionAuthorityDocument.FromOwned(normalized, sessionId, agent);
         var loaded = FromAuthority(document.CloneRoot());
-        foreach (var message in loaded.History) await Images.ExternalizeMessageAsync(message, strict: false, cancellationToken);
+        foreach (var message in loaded.History)
+            await Images.ExternalizeMessageAsync(message, strict: false, cancellationToken);
         foreach (var item in loaded.Queue)
         {
-            if (item.Message is not null) await Images.ExternalizeMessageAsync(item.Message, strict: false, cancellationToken);
+            if (item.Message is not null)
+                await Images.ExternalizeMessageAsync(
+                    item.Message,
+                    strict: false,
+                    cancellationToken
+                );
             if (item.Parts is not null)
             {
-                var wrapper = new JsonObject { ["parts"] = new JsonArray(item.Parts.Select(part => (JsonNode)part.DeepClone()).ToArray()) };
+                var wrapper = new JsonObject
+                {
+                    ["parts"] = new JsonArray(
+                        item.Parts.Select(part => (JsonNode)part.DeepClone()).ToArray()
+                    ),
+                };
                 await Images.ExternalizeMessageAsync(wrapper, strict: false, cancellationToken);
                 foreach (var (part, index) in item.Parts.Select((part, index) => (part, index)))
-                    if (wrapper["parts"] is JsonArray parts && parts.Count == item.Parts.Count) { part.Clear(); foreach (var pair in parts[index]!.AsObject()) part[pair.Key] = pair.Value?.DeepClone(); }
+                    if (wrapper["parts"] is JsonArray parts && parts.Count == item.Parts.Count)
+                    {
+                        part.Clear();
+                        foreach (var pair in parts[index]!.AsObject())
+                            part[pair.Key] = pair.Value?.DeepClone();
+                    }
             }
         }
         await Images.ExternalizeTreeAsync(loaded.Meta, strict: false, cancellationToken);
@@ -183,12 +296,15 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
     {
         CheckWrite();
         if (snapshot.Id != sessionId)
-            throw new InvalidOperationException($"Persistent store is bound to Session '{sessionId}', not '{snapshot.Id}'.");
+            throw new InvalidOperationException(
+                $"Persistent store is bound to Session '{sessionId}', not '{snapshot.Id}'."
+            );
     }
 
     private ArchiveMessageRecord ToArchiveRecord(JsonObject message)
     {
-        var meta = message["__meta"] as JsonObject
+        var meta =
+            message["__meta"] as JsonObject
             ?? throw new InvalidDataException("Canonical appended message requires __meta.");
         var seq = ReadInteger(meta["seq"], "message seq");
         var timestamp = ReadNumber(meta["timestamp"], "message timestamp");
@@ -198,20 +314,27 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
     private SessionAuthorityDocument ToAuthority(SessionSnapshot snapshot)
     {
         var root = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();
-        if (mainFields?.Invoke() is { } main) SessionCatalog.OverlayAuthorityContext(root, main);
-        foreach (var field in new[] { "archived", "pinned", "sidebarOrder" }) root.Remove(field);
+        if (mainFields?.Invoke() is { } main)
+            SessionCatalog.OverlayAuthorityContext(root, main);
+        foreach (var field in new[] { "archived", "pinned", "sidebarOrder" })
+            root.Remove(field);
         root["sessionStateVersion"] = 1;
-        if (root["goalState"] is JsonObject goal) goal.Remove("remindOnTurnEnd");
+        if (root["goalState"] is JsonObject goal)
+            goal.Remove("remindOnTurnEnd");
         root["agent"] = agent;
-        root["history"] = new JsonArray(snapshot.History.Select(message => (JsonNode)message.DeepClone()).ToArray());
+        root["history"] = new JsonArray(
+            snapshot.History.Select(message => (JsonNode)message.DeepClone()).ToArray()
+        );
         root["persistentMemorySnapshot"] ??= "";
-        root["queue"] = new JsonArray(snapshot.Queue.Select(ToQueueJson).Cast<JsonNode>().ToArray());
+        root["queue"] = new JsonArray(
+            snapshot.Queue.Select(ToQueueJson).Cast<JsonNode>().ToArray()
+        );
         root["stats"] ??= new JsonObject
         {
             ["totalCachedTokens"] = 0,
             ["totalInputTokens"] = 0,
             ["totalOutputTokens"] = 0,
-            ["lastUsage"] = null
+            ["lastUsage"] = null,
         };
         var meta = (JsonObject)snapshot.Meta.DeepClone();
         meta.Remove("lastChannel");
@@ -230,10 +353,16 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
 
     private SessionSnapshot FromAuthority(JsonObject root)
     {
-        var history = ((JsonArray)root["history"]!).Select(node => (JsonObject)node!.DeepClone()).ToArray();
-        var queue = ((JsonArray)root["queue"]!).Select(node => FromQueueJson((JsonObject)node!)).ToArray();
+        var history = ((JsonArray)root["history"]!)
+            .Select(node => (JsonObject)node!.DeepClone())
+            .ToArray();
+        var queue = ((JsonArray)root["queue"]!)
+            .Select(node => FromQueueJson((JsonObject)node!))
+            .ToArray();
         var busy = root["busy"]!.GetValue<bool>();
-        long? busyStartedAt = root["busyStartedAt"] is JsonValue busyNode ? ReadInteger(busyNode, "busyStartedAt") : null;
+        long? busyStartedAt = root["busyStartedAt"] is JsonValue busyNode
+            ? ReadInteger(busyNode, "busyStartedAt")
+            : null;
         var stopping = root["stopping"]?.GetValue<bool>() ?? false;
         return new SessionSnapshot(
             sessionId,
@@ -245,13 +374,17 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
             (JsonObject)root["meta"]!.DeepClone(),
             ReadInteger(root["nextMessageSeq"], "nextMessageSeq"),
             ReadInteger(root["historyVersion"], "historyVersion"),
-            (JsonObject)root.DeepClone());
+            (JsonObject)root.DeepClone()
+        );
     }
 
     internal static JsonObject ToQueueJson(QueueItem item)
     {
-        if (item.Type == QueueItemType.CompactCommit) return new JsonObject { ["type"] = "compact-commit" };
-        var result = item.OpenFields is null ? new JsonObject() : (JsonObject)item.OpenFields.DeepClone();
+        if (item.Type == QueueItemType.CompactCommit)
+            return new JsonObject { ["type"] = "compact-commit" };
+        var result = item.OpenFields is null
+            ? new JsonObject()
+            : (JsonObject)item.OpenFields.DeepClone();
         result["type"] = item.Type switch
         {
             QueueItemType.User => "user",
@@ -259,12 +392,15 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
             QueueItemType.Background => "background",
             QueueItemType.Trigger => "trigger",
             QueueItemType.OnBoot => "onboot",
-            _ => throw new UnsupportedSessionTurnException($"persisted queue type {item.Type}")
+            _ => throw new UnsupportedSessionTurnException($"persisted queue type {item.Type}"),
         };
-        if (item.Source is null) result.Remove("source");
+        if (item.Source is null)
+            result.Remove("source");
         else
         {
-            var source = item.Source.OpenFields is null ? new JsonObject() : (JsonObject)item.Source.OpenFields.DeepClone();
+            var source = item.Source.OpenFields is null
+                ? new JsonObject()
+                : (JsonObject)item.Source.OpenFields.DeepClone();
             source["platform"] = item.Source.Platform;
             source["channelUserId"] = item.Source.ChannelUserId;
             SetOptional(source, "channelId", item.Source.ChannelId);
@@ -277,10 +413,16 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
         SetOptional(result, "clientMessageId", item.ClientMessageId);
         SetOptional(result, "sourceSessionId", item.SourceSessionId);
         SetOptional(result, "sourceSessionRelation", item.SourceSessionRelation);
-        if (item.Parts is null) result.Remove("parts");
-        else result["parts"] = new JsonArray(item.Parts.Select(part => (JsonNode)part.DeepClone()).ToArray());
-        if (item.Message is null) result.Remove("message");
-        else result["message"] = item.Message.DeepClone();
+        if (item.Parts is null)
+            result.Remove("parts");
+        else
+            result["parts"] = new JsonArray(
+                item.Parts.Select(part => (JsonNode)part.DeepClone()).ToArray()
+            );
+        if (item.Message is null)
+            result.Remove("message");
+        else
+            result["message"] = item.Message.DeepClone();
         return result;
     }
 
@@ -294,7 +436,9 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
             "trigger" => QueueItemType.Trigger,
             "onboot" => QueueItemType.OnBoot,
             "compact-commit" => QueueItemType.CompactCommit,
-            var unsupported => throw new UnsupportedSessionTurnException($"persisted queue type {unsupported}")
+            var unsupported => throw new UnsupportedSessionTurnException(
+                $"persisted queue type {unsupported}"
+            ),
         };
         QueueSource? source = null;
         if (value["source"] is JsonObject sourceJson)
@@ -306,7 +450,8 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
                 OptionalString(sourceJson, "conversationId"),
                 OptionalString(sourceJson, "username"),
                 OptionalString(sourceJson, "senderId"),
-                (JsonObject)sourceJson.DeepClone());
+                (JsonObject)sourceJson.DeepClone()
+            );
         var parts = value["parts"] is JsonArray partArray
             ? partArray.Select(node => (JsonObject)node!.DeepClone()).ToArray()
             : null;
@@ -318,17 +463,22 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
             OptionalString(value, "clientMessageId"),
             OptionalString(value, "sourceSessionId"),
             OptionalString(value, "sourceSessionRelation"),
-            (JsonObject)value.DeepClone());
+            (JsonObject)value.DeepClone()
+        );
     }
 
     private static void SetOptional(JsonObject value, string property, string? content)
     {
-        if (content is null) value.Remove(property);
-        else value[property] = content;
+        if (content is null)
+            value.Remove(property);
+        else
+            value[property] = content;
     }
 
     private static string? OptionalString(JsonObject value, string property) =>
-        value[property] is JsonValue node && node.TryGetValue<string>(out var result) ? result : null;
+        value[property] is JsonValue node && node.TryGetValue<string>(out var result)
+            ? result
+            : null;
 
     private static long ReadInteger(JsonNode? node, string label)
     {
@@ -340,13 +490,19 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
 
     private static double ReadNumber(JsonNode? node, string label)
     {
-        if (node is not JsonValue value) throw new InvalidDataException($"{label} must be numeric.");
+        if (node is not JsonValue value)
+            throw new InvalidDataException($"{label} must be numeric.");
         double number;
-        if (value.TryGetValue<double>(out var direct)) number = direct;
-        else if (value.TryGetValue<long>(out var signed)) number = signed;
-        else if (value.TryGetValue<int>(out var integer)) number = integer;
-        else throw new InvalidDataException($"{label} must be numeric.");
-        if (!double.IsFinite(number)) throw new InvalidDataException($"{label} must be finite.");
+        if (value.TryGetValue<double>(out var direct))
+            number = direct;
+        else if (value.TryGetValue<long>(out var signed))
+            number = signed;
+        else if (value.TryGetValue<int>(out var integer))
+            number = integer;
+        else
+            throw new InvalidDataException($"{label} must be numeric.");
+        if (!double.IsFinite(number))
+            throw new InvalidDataException($"{label} must be finite.");
         return number;
     }
 }

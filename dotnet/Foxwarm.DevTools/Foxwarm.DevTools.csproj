@@ -7,7 +7,15 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Foxwarm/Foxwarm.csproj" />
-    <None Include="../parity-corpus.json" Link="parity-corpus.json" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="../responses-stream-corpus.json" Link="responses-stream-corpus.json" CopyToOutputDirectory="PreserveNewest" />
+    <None
+      Include="../parity-corpus.json"
+      Link="parity-corpus.json"
+      CopyToOutputDirectory="PreserveNewest"
+    />
+    <None
+      Include="../responses-stream-corpus.json"
+      Link="responses-stream-corpus.json"
+      CopyToOutputDirectory="PreserveNewest"
+    />
   </ItemGroup>
 </Project>

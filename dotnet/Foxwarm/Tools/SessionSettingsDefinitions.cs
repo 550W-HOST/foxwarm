@@ -4,7 +4,10 @@ namespace Foxwarm.Tools;
 
 internal static class SessionSettingsDefinitions
 {
-    internal static JsonArray Definitions() => JsonNode.Parse("""
+    internal static JsonArray Definitions() =>
+        JsonNode
+            .Parse(
+                """
 [
   {
     "type": "function",
@@ -71,5 +74,7 @@ internal static class SessionSettingsDefinitions
     }
   }
 ]
-""")!.AsArray();
+"""
+            )!
+            .AsArray();
 }

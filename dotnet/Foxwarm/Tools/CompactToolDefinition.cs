@@ -4,7 +4,10 @@ namespace Foxwarm.Tools;
 
 internal static class CompactToolDefinition
 {
-    internal static JsonObject Definition() => JsonNode.Parse("""
+    internal static JsonObject Definition() =>
+        JsonNode
+            .Parse(
+                """
 {
   "type": "function",
   "name": "compact_session",
@@ -19,5 +22,7 @@ internal static class CompactToolDefinition
     }
   }
 }
-""")!.AsObject();
+"""
+            )!
+            .AsObject();
 }

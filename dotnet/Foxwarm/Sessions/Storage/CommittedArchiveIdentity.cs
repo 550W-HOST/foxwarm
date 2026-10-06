@@ -12,6 +12,7 @@ internal sealed partial class CommittedArchiveIdentity(string root)
     private HashSet<string> reserved = new(StringComparer.Ordinal);
     private string DatabasePath => Path.Combine(root, "state", "archive-store.sqlite");
     private string LedgerPath => Path.Combine(root, "state", "session-id-reservations.jsonl");
+
     internal bool IsReserved(string id) => reserved.Contains(id);
 
     internal async Task InitializeAsync(SessionCatalog catalog)
@@ -19,7 +20,8 @@ internal sealed partial class CommittedArchiveIdentity(string root)
         await initialization.WaitAsync();
         try
         {
-            if (initialized) return;
+            if (initialized)
+                return;
             ValidateStartupEvidence(root);
             catalog.Initialize();
             var mappings = ReadLedger(out var rewrite);
@@ -29,15 +31,21 @@ internal sealed partial class CommittedArchiveIdentity(string root)
                 if (SqliteArchiveMessageStore.HasReservationTable(connection))
                 {
                     using var command = connection.CreateCommand();
-                    command.CommandText = "SELECT session_id,canonical_session_id FROM archive_session_id_reservations";
+                    command.CommandText =
+                        "SELECT session_id,canonical_session_id FROM archive_session_id_reservations";
                     using var rows = command.ExecuteReader();
                     while (rows.Read())
                     {
-                        var id = rows.GetString(0); var canonical = rows.GetString(1);
-                        ValidateIdentity(id); ValidateIdentity(canonical);
+                        var id = rows.GetString(0);
+                        var canonical = rows.GetString(1);
+                        ValidateIdentity(id);
+                        ValidateIdentity(canonical);
                         if (mappings.TryGetValue(id, out var prior) && prior != canonical)
-                            throw new InvalidDataException("Archive identity ledger and SQLite have conflicting committed mappings.");
-                        if (mappings.TryAdd(id, canonical)) rewrite = true;
+                            throw new InvalidDataException(
+                                "Archive identity ledger and SQLite have conflicting committed mappings."
+                            );
+                        if (mappings.TryAdd(id, canonical))
+                            rewrite = true;
                     }
                 }
             }
@@ -45,46 +53,91 @@ internal sealed partial class CommittedArchiveIdentity(string root)
             foreach (var row in catalog.List())
             {
                 var canonical = SessionCatalog.Text(row["id"])!;
-                foreach (var alias in (row["aliases"] as JsonArray)?.Select(SessionCatalog.Text).OfType<string>().Reverse() ?? [])
+                foreach (
+                    var alias in (row["aliases"] as JsonArray)
+                        ?.Select(SessionCatalog.Text)
+                        .OfType<string>()
+                        .Reverse()
+                        ?? []
+                )
                 {
                     // Presentation claims are proof only when Main's exact-first resolution uniquely selects this owner.
-                    if (SessionCatalog.Text(catalog.Resolve(alias)["sessionId"]) != canonical) continue;
+                    if (SessionCatalog.Text(catalog.Resolve(alias)["sessionId"]) != canonical)
+                        continue;
                     if (mappings.TryGetValue(alias, out _))
                     {
                         if (Resolve(mappings, alias) != canonical)
-                            throw new InvalidDataException("Proven Main alias conflicts with committed Archive identity.");
+                            throw new InvalidDataException(
+                                "Proven Main alias conflicts with committed Archive identity."
+                            );
                         continue;
                     }
-                    mappings.Add(alias, canonical); ValidateGraph(mappings); rewrite = true;
+                    mappings.Add(alias, canonical);
+                    ValidateGraph(mappings);
+                    rewrite = true;
                 }
             }
-            if (rewrite) WriteLedger(mappings);
-            if (File.Exists(DatabasePath) || mappings.Count > 0) Mirror(mappings);
+            if (rewrite)
+                WriteLedger(mappings);
+            if (File.Exists(DatabasePath) || mappings.Count > 0)
+                Mirror(mappings);
             reserved = mappings.Keys.Concat(mappings.Values).ToHashSet(StringComparer.Ordinal);
             initialized = true;
         }
-        finally { initialization.Release(); }
+        finally
+        {
+            initialization.Release();
+        }
     }
 
     private Dictionary<string, string> ReadLedger(out bool rewrite)
     {
         var result = new Dictionary<string, string>(StringComparer.Ordinal);
         string text;
-        try { text = File.ReadAllText(LedgerPath); rewrite = false; }
-        catch (FileNotFoundException) { rewrite = true; return result; }
-        catch (DirectoryNotFoundException) { rewrite = true; return result; }
+        try
+        {
+            text = File.ReadAllText(LedgerPath);
+            rewrite = false;
+        }
+        catch (FileNotFoundException)
+        {
+            rewrite = true;
+            return result;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            rewrite = true;
+            return result;
+        }
         foreach (var raw in text.Split('\n'))
         {
-            var line = SessionGoal.Trim(raw); if (line.Length == 0) continue;
+            var line = SessionGoal.Trim(raw);
+            if (line.Length == 0)
+                continue;
             JsonObject? row;
-            try { row = JsonNode.Parse(line) as JsonObject; }
-            catch (System.Text.Json.JsonException) { rewrite = true; continue; }
-            if (row is null || SessionCatalog.Number(row["v"]) != 1
+            try
+            {
+                row = JsonNode.Parse(line) as JsonObject;
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                rewrite = true;
+                continue;
+            }
+            if (
+                row is null
+                || SessionCatalog.Number(row["v"]) != 1
                 || SessionCatalog.Text(row["sessionId"]) is not { Length: > 0 } id
-                || SessionCatalog.Text(row["canonicalSessionId"]) is not { Length: > 0 } canonical)
-            { rewrite = true; continue; }
+                || SessionCatalog.Text(row["canonicalSessionId"]) is not { Length: > 0 } canonical
+            )
+            {
+                rewrite = true;
+                continue;
+            }
             if (result.TryGetValue(id, out var prior) && prior != canonical)
-                throw new InvalidDataException("Archive identity ledger has conflicting committed mappings.");
+                throw new InvalidDataException(
+                    "Archive identity ledger has conflicting committed mappings."
+                );
             result[id] = canonical;
         }
         return result;
@@ -92,47 +145,80 @@ internal sealed partial class CommittedArchiveIdentity(string root)
 
     private void WriteLedger(Dictionary<string, string> mappings, Action? afterRename = null)
     {
-        if (!OperatingSystem.IsLinux()) throw new PlatformNotSupportedException("Durable Main authority writes require Linux.");
+        if (!OperatingSystem.IsLinux())
+            throw new PlatformNotSupportedException("Durable Main authority writes require Linux.");
         Directory.CreateDirectory(Path.GetDirectoryName(LedgerPath)!);
         var temp = LedgerPath + ".tmp-" + Guid.NewGuid().ToString("N");
         try
         {
-            using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            using (
+                var stream = new FileStream(
+                    temp,
+                    FileMode.CreateNew,
+                    FileAccess.Write,
+                    FileShare.None
+                )
+            )
             {
                 File.SetUnixFileMode(temp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
                 var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                foreach (var (id, canonical) in mappings.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+                foreach (
+                    var (id, canonical) in mappings.OrderBy(
+                        pair => pair.Key,
+                        StringComparer.Ordinal
+                    )
+                )
                 {
-                    var line = EcmaJson.Stringify(new JsonObject { ["v"] = 1, ["sessionId"] = id, ["canonicalSessionId"] = canonical, ["timestamp"] = now }) + "\n";
+                    var line =
+                        EcmaJson.Stringify(
+                            new JsonObject
+                            {
+                                ["v"] = 1,
+                                ["sessionId"] = id,
+                                ["canonicalSessionId"] = canonical,
+                                ["timestamp"] = now,
+                            }
+                        ) + "\n";
                     stream.Write(Encoding.UTF8.GetBytes(line));
                 }
                 stream.Flush(flushToDisk: true);
             }
-            File.Move(temp, LedgerPath, overwrite: true); afterRename?.Invoke();
+            File.Move(temp, LedgerPath, overwrite: true);
+            afterRename?.Invoke();
             LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(LedgerPath)!);
         }
-        finally { File.Delete(temp); }
+        finally
+        {
+            File.Delete(temp);
+        }
     }
 
     private void Mirror(Dictionary<string, string> mappings)
     {
-        if (!File.Exists(DatabasePath)) SqliteArchiveMessageStore.InitializeDatabase(DatabasePath);
+        if (!File.Exists(DatabasePath))
+            SqliteArchiveMessageStore.InitializeDatabase(DatabasePath);
         using var connection = Open(DatabasePath, SqliteOpenMode.ReadWrite);
         SqliteArchiveMessageStore.InitializeReservations(connection);
         using var transaction = connection.BeginTransaction(deferred: false);
-        using var command = connection.CreateCommand(); command.Transaction = transaction;
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             INSERT INTO archive_session_id_reservations(session_id,canonical_session_id,created_at,updated_at)
             VALUES($id,$canonical,$at,$at)
             ON CONFLICT(session_id) DO UPDATE SET updated_at=excluded.updated_at
             WHERE archive_session_id_reservations.canonical_session_id=excluded.canonical_session_id
             """;
-        command.Parameters.Add("$id", SqliteType.Text); command.Parameters.Add("$canonical", SqliteType.Text);
+        command.Parameters.Add("$id", SqliteType.Text);
+        command.Parameters.Add("$canonical", SqliteType.Text);
         command.Parameters.AddWithValue("$at", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         foreach (var (id, canonical) in mappings)
         {
-            command.Parameters["$id"].Value = id; command.Parameters["$canonical"].Value = canonical;
-            if (command.ExecuteNonQuery() != 1) throw new InvalidDataException("Archive identity mirror changed during initialization.");
+            command.Parameters["$id"].Value = id;
+            command.Parameters["$canonical"].Value = canonical;
+            if (command.ExecuteNonQuery() != 1)
+                throw new InvalidDataException(
+                    "Archive identity mirror changed during initialization."
+                );
         }
         transaction.Commit();
     }
@@ -142,18 +228,47 @@ internal sealed partial class CommittedArchiveIdentity(string root)
         var seen = new HashSet<string>(StringComparer.Ordinal);
         while (seen.Add(id))
         {
-            if (!mappings.TryGetValue(id, out var next) || next == id) return id;
+            if (!mappings.TryGetValue(id, out var next) || next == id)
+                return id;
             id = next;
         }
         throw new InvalidDataException("Archive committed identity mappings contain a cycle.");
     }
+
     private static void ValidateGraph(Dictionary<string, string> mappings)
-    { foreach (var id in mappings.Keys) _ = Resolve(mappings, id); }
+    {
+        foreach (var id in mappings.Keys)
+            _ = Resolve(mappings, id);
+    }
+
     internal static void ValidateIdentity(string id)
-    { if (id.Length == 0) throw new InvalidDataException("Archive historical identity must be an exact nonempty string."); }
+    {
+        if (id.Length == 0)
+            throw new InvalidDataException(
+                "Archive historical identity must be an exact nonempty string."
+            );
+    }
+
     private static SqliteConnection Open(string path, SqliteOpenMode mode)
     {
-        var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Mode = mode, Pooling = false, DefaultTimeout = 5 }.ToString());
-        try { connection.Open(); return connection; } catch { connection.Dispose(); throw; }
+        var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder
+            {
+                DataSource = path,
+                Mode = mode,
+                Pooling = false,
+                DefaultTimeout = 5,
+            }.ToString()
+        );
+        try
+        {
+            connection.Open();
+            return connection;
+        }
+        catch
+        {
+            connection.Dispose();
+            throw;
+        }
     }
 }

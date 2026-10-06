@@ -6,6 +6,10 @@ Files: `dotnet/Foxwarm.sln`, `dotnet/README.md`, `dotnet/Foxwarm/`, `dotnet/Foxw
 
 Contains a bounded .NET 10 host and compatibility probes outside the production Node.js runtime and normal test graph. One solution owns three projects; source folders do not represent separate assemblies.
 
+### C# formatting
+
+The author-maintained C# and supported project XML under `dotnet/` use the pinned local CSharpier `1.3.0` tool. From `dotnet/`, restore with `dotnet tool restore`, format with `dotnet csharpier format .`, and verify with `dotnet csharpier check .`. Formatting is governed by `dotnet/.editorconfig` (four-space C#, approximately 100-column lines, LF; project XML remains strict whitespace).
+
 ## Scope
 
 - `Foxwarm` is one Web executable: root `Foxwarm` memory helpers; `Foxwarm.Sessions` Message JSON, ordered Session turns, persistence/Archive, and layered compaction; `Foxwarm.Models` Responses HTTP/WebSocket and Chat Completions SSE clients and concrete model configuration; `Foxwarm.Tools` unified registration/discovery/resolved dispatch, workspace and trusted local exec handlers; `Foxwarm.Timers` bounded Main scheduling and forward cron calculation; `Foxwarm.ToolScript` unmanaged Main native execution, host dispatch and run records; `Foxwarm.Channels.WebUi` authenticated localhost HTTP/realtime channel. Root `Foxwarm` also owns startup, HTTP infrastructure, the message router and the outbound MCP client/configuration. Its persisted JSON/SQLite and provider-facing contracts remain limited to the supported ordinary subset.

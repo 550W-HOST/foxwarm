@@ -29,7 +29,8 @@ public sealed record QueueSource(
     string? ConversationId = null,
     string? Username = null,
     string? SenderId = null,
-    JsonObject? OpenFields = null);
+    JsonObject? OpenFields = null
+);
 
 public sealed record QueueItem(
     QueueItemType Type,
@@ -39,23 +40,43 @@ public sealed record QueueItem(
     string? ClientMessageId = null,
     string? SourceSessionId = null,
     string? SourceSessionRelation = null,
-    JsonObject? OpenFields = null)
+    JsonObject? OpenFields = null
+)
 {
     // An owner wake is opaque on disk; this exact identity survives only runtime clones.
     internal object? CompactOwner { get; init; }
-    public static QueueItem UserText(string text, QueueSource? source = null, string? clientMessageId = null) =>
-        new(QueueItemType.User, new[] { new JsonObject { ["text"] = text } }, null, source, clientMessageId);
+
+    public static QueueItem UserText(
+        string text,
+        QueueSource? source = null,
+        string? clientMessageId = null
+    ) =>
+        new(
+            QueueItemType.User,
+            new[] { new JsonObject { ["text"] = text } },
+            null,
+            source,
+            clientMessageId
+        );
 
     public static QueueItem Prebuilt(JsonObject message, QueueSource? source = null) =>
         new(QueueItemType.User, null, (JsonObject)message.DeepClone(), source);
 
-    public QueueItem CloneItem() => this with
-    {
-        Parts = Parts?.Select(p => (JsonObject)p.DeepClone()).ToArray(),
-        Message = Message is null ? null : (JsonObject)Message.DeepClone(),
-        Source = Source is null ? null : Source with { OpenFields = Source.OpenFields is null ? null : (JsonObject)Source.OpenFields.DeepClone() },
-        OpenFields = OpenFields is null ? null : (JsonObject)OpenFields.DeepClone()
-    };
+    public QueueItem CloneItem() =>
+        this with
+        {
+            Parts = Parts?.Select(p => (JsonObject)p.DeepClone()).ToArray(),
+            Message = Message is null ? null : (JsonObject)Message.DeepClone(),
+            Source = Source is null
+                ? null
+                : Source with
+                {
+                    OpenFields = Source.OpenFields is null
+                        ? null
+                        : (JsonObject)Source.OpenFields.DeepClone(),
+                },
+            OpenFields = OpenFields is null ? null : (JsonObject)OpenFields.DeepClone(),
+        };
 }
 
 public sealed class SessionState
@@ -76,17 +97,25 @@ public sealed class SessionState
     // Invoked only after the staged Archive→JSON rewrite has committed, while
     // SessionEntry owns the short publication gate. Queue/Stop/model metadata
     // are deliberately not replaced by the older compaction snapshot.
-    public void PublishCommittedHistoryRewrite(IReadOnlyList<JsonObject> history,
-        long expectedHistoryVersion, long expectedNextSeq, long nextSeq, long? nextBlockId = null)
+    public void PublishCommittedHistoryRewrite(
+        IReadOnlyList<JsonObject> history,
+        long expectedHistoryVersion,
+        long expectedNextSeq,
+        long nextSeq,
+        long? nextBlockId = null
+    )
     {
         if (HistoryVersion != expectedHistoryVersion || NextMessageSeq != expectedNextSeq)
-            throw new InvalidOperationException("History rewrite publication base changed after authority commit.");
+            throw new InvalidOperationException(
+                "History rewrite publication base changed after authority commit."
+            );
         History.Clear();
         History.AddRange(history.Select(row => (JsonObject)row.DeepClone()));
         NextMessageSeq = nextSeq;
         HistoryVersion++;
         Meta["messageCount"] = History.Count;
-        if (nextBlockId is not null) AuthorityEnvelope["nextBlockId"] = nextBlockId.Value;
+        if (nextBlockId is not null)
+            AuthorityEnvelope["nextBlockId"] = nextBlockId.Value;
     }
 
     internal SessionState Clone()
@@ -101,8 +130,10 @@ public sealed class SessionState
         };
         clone.History.AddRange(History.Select(message => (JsonObject)message.DeepClone()));
         clone.Queue.AddRange(Queue.Select(item => item.CloneItem()));
-        foreach (var property in Meta) clone.Meta[property.Key] = property.Value?.DeepClone();
-        foreach (var property in AuthorityEnvelope) clone.AuthorityEnvelope[property.Key] = property.Value?.DeepClone();
+        foreach (var property in Meta)
+            clone.Meta[property.Key] = property.Value?.DeepClone();
+        foreach (var property in AuthorityEnvelope)
+            clone.AuthorityEnvelope[property.Key] = property.Value?.DeepClone();
         return clone;
     }
 
@@ -119,7 +150,8 @@ public sealed class SessionState
             (JsonObject)clone.Meta.DeepClone(),
             clone.NextMessageSeq,
             clone.HistoryVersion,
-            (JsonObject)clone.AuthorityEnvelope.DeepClone());
+            (JsonObject)clone.AuthorityEnvelope.DeepClone()
+        );
     }
 }
 
@@ -133,7 +165,8 @@ public sealed record SessionSnapshot(
     JsonObject Meta,
     long NextMessageSeq,
     long HistoryVersion,
-    JsonObject AuthorityEnvelope);
+    JsonObject AuthorityEnvelope
+);
 
 public sealed record DisplayNameChange(bool Changed, string? Previous, string? Current);
 
@@ -145,8 +178,15 @@ public enum SaveKind
 
 public interface ISessionAuthorityStore
 {
-    Task CommitAsync(SessionSnapshot snapshot, SaveKind kind, CancellationToken cancellationToken = default);
-    Task<SessionSnapshot?> LoadAsync(string sessionId, CancellationToken cancellationToken = default);
+    Task CommitAsync(
+        SessionSnapshot snapshot,
+        SaveKind kind,
+        CancellationToken cancellationToken = default
+    );
+    Task<SessionSnapshot?> LoadAsync(
+        string sessionId,
+        CancellationToken cancellationToken = default
+    );
 }
 
 public interface ICanonicalAppendAuthorityStore
@@ -154,21 +194,31 @@ public interface ICanonicalAppendAuthorityStore
     Task CommitCanonicalAppendAsync(
         SessionSnapshot stagedSnapshot,
         IReadOnlyList<JsonObject> appendedMessages,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 }
 
 public interface ICompactionAuthorityStore
 {
-    Task CommitCompactionAsync(SessionSnapshot stagedSnapshot, IReadOnlyList<ArchiveBlockRecord> blocks,
-        IReadOnlyList<JsonObject> messages, CancellationToken cancellationToken = default);
+    Task CommitCompactionAsync(
+        SessionSnapshot stagedSnapshot,
+        IReadOnlyList<ArchiveBlockRecord> blocks,
+        IReadOnlyList<JsonObject> messages,
+        CancellationToken cancellationToken = default
+    );
 }
 
-public sealed record CompactionPreparation(SessionSnapshot StagedSnapshot,
-    IReadOnlyList<ArchiveBlockRecord> Blocks, IReadOnlyList<JsonObject> ArchivedMessages, Action<SessionState> Publish);
+public sealed record CompactionPreparation(
+    SessionSnapshot StagedSnapshot,
+    IReadOnlyList<ArchiveBlockRecord> Blocks,
+    IReadOnlyList<JsonObject> ArchivedMessages,
+    Action<SessionState> Publish
+);
 
 internal sealed record CanonicalAppendPreparation(
     SessionSnapshot StagedSnapshot,
     IReadOnlyList<JsonObject> AppendedMessages,
-    Action<SessionState> Publish);
+    Action<SessionState> Publish
+);
 
 /// <summary>Test-only authority snapshot store. It proves ordering and round-trip cloning only.</summary>

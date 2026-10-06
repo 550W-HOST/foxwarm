@@ -1,160 +1,324 @@
 using System.Text.Json.Nodes;
-using Foxwarm.Tools;
 using Foxwarm.Sessions;
+using Foxwarm.Tools;
 
 namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionManager
 {
     internal async Task<(JsonObject Response, bool Finish)> ExecuteAgentToolAsync(
-        SessionOwner source, string name, JsonObject? args, CancellationToken cancellationToken = default)
+        SessionOwner source,
+        string name,
+        JsonObject? args,
+        CancellationToken cancellationToken = default
+    )
     {
-        var previous = semanticCaller.Value; semanticCaller.Value = cancellationToken;
-        try { return await ExecuteAgentToolCoreAsync(source, name, args); }
-        finally { semanticCaller.Value = previous; }
+        var previous = semanticCaller.Value;
+        semanticCaller.Value = cancellationToken;
+        try
+        {
+            return await ExecuteAgentToolCoreAsync(source, name, args);
+        }
+        finally
+        {
+            semanticCaller.Value = previous;
+        }
     }
-    private async Task<(JsonObject Response, bool Finish)> ExecuteAgentToolCoreAsync(SessionOwner source, string name, JsonObject? args)
+
+    private async Task<(JsonObject Response, bool Finish)> ExecuteAgentToolCoreAsync(
+        SessionOwner source,
+        string name,
+        JsonObject? args
+    )
     {
         try
         {
-            if (args is null) throw new InvalidDataException("Tool arguments must be an object.");
+            if (args is null)
+                throw new InvalidDataException("Tool arguments must be an object.");
             if (name == "delete_session" && AgentIsolated(source.Agent))
-                throw new SessionDeletionException("Isolated session cannot use delete_session tool.", "SESSION_DELETE_ISOLATED", 403);
-            await AuthorizeToolAsync(source, new(name, "builtin", name, args), null, semanticCaller.Value ?? CancellationToken.None);
+                throw new SessionDeletionException(
+                    "Isolated session cannot use delete_session tool.",
+                    "SESSION_DELETE_ISOLATED",
+                    403
+                );
+            await AuthorizeToolAsync(
+                source,
+                new(name, "builtin", name, args),
+                null,
+                semanticCaller.Value ?? CancellationToken.None
+            );
             HandoffConfirmation.Validate(name, args, HandoffConfirmationEnabled);
             switch (name)
             {
                 case "move_session":
-                    return (await MoveIdentityAsync(source, args, semanticCaller.Value ?? default), false);
+                    return (
+                        await MoveIdentityAsync(source, args, semanticCaller.Value ?? default),
+                        false
+                    );
                 case "delete_session":
-                    {
-                        Keys(args, ["sessionId"], ["sessionId"]);
-                        if (!IsCurrentOwner(source)) throw new SessionDeletionException("Cannot delete a session without current session context.", "SESSION_DELETE_SOURCE_NOT_FOUND", 404);
-                        if (agents.MetadataSnapshot()[source.Agent] is JsonObject metadata && SessionCatalog.Flag(metadata["isolated"]))
-                            throw new SessionDeletionException("Isolated session cannot use delete_session tool.", "SESSION_DELETE_ISOLATED", 403);
-                        var result = await DeleteAsync(RequiredString(args, "sessionId"), source: source);
-                        return (Output(DeleteToolText(RequiredString(args, "sessionId"), result)), false);
-                    }
+                {
+                    Keys(args, ["sessionId"], ["sessionId"]);
+                    if (!IsCurrentOwner(source))
+                        throw new SessionDeletionException(
+                            "Cannot delete a session without current session context.",
+                            "SESSION_DELETE_SOURCE_NOT_FOUND",
+                            404
+                        );
+                    if (
+                        agents.MetadataSnapshot()[source.Agent] is JsonObject metadata
+                        && SessionCatalog.Flag(metadata["isolated"])
+                    )
+                        throw new SessionDeletionException(
+                            "Isolated session cannot use delete_session tool.",
+                            "SESSION_DELETE_ISOLATED",
+                            403
+                        );
+                    var result = await DeleteAsync(
+                        RequiredString(args, "sessionId"),
+                        source: source
+                    );
+                    return (
+                        Output(DeleteToolText(RequiredString(args, "sessionId"), result)),
+                        false
+                    );
+                }
                 case "create_agent":
-                    {
-                        Keys(args, ["agentName", "createMainSession", "inherit"], ["agentName"]);
-                        var nameValue = RequiredString(args, "agentName");
-                        var createMain = OptionalBool(args, "createMainSession") ?? true;
-                        var created = await CreateAgentAsync(nameValue, createMain, inherit: OptionalString(args, "inherit"));
-                        return (Output(created.MainSessionId is null
-                            ? $"Created Agent {created.AgentName} without a main Session."
-                            : $"Created Agent {created.AgentName} with main Session {created.MainSessionId}."), false);
-                    }
+                {
+                    Keys(args, ["agentName", "createMainSession", "inherit"], ["agentName"]);
+                    var nameValue = RequiredString(args, "agentName");
+                    var createMain = OptionalBool(args, "createMainSession") ?? true;
+                    var created = await CreateAgentAsync(
+                        nameValue,
+                        createMain,
+                        inherit: OptionalString(args, "inherit")
+                    );
+                    return (
+                        Output(
+                            created.MainSessionId is null
+                                ? $"Created Agent {created.AgentName} without a main Session."
+                                : $"Created Agent {created.AgentName} with main Session {created.MainSessionId}."
+                        ),
+                        false
+                    );
+                }
                 case "set_session_child_model":
-                case "set_session_compact_threshold": return (await SessionSettingsAsync(source, name, args), false);
-                case "compact_session": return (await CompactSessionAsync(source, args), false);
+                case "set_session_compact_threshold":
+                    return (await SessionSettingsAsync(source, name, args), false);
+                case "compact_session":
+                    return (await CompactSessionAsync(source, args), false);
                 case "session":
                 case "get_session_messages":
-                case "set_goal": return (await ObserveAsync(source, name, args), false);
-                case "skill": return (await SkillAsync(source, args), false);
+                case "set_goal":
+                    return (await ObserveAsync(source, name, args), false);
+                case "skill":
+                    return (await SkillAsync(source, args), false);
                 case "set_agent_inherit":
-                    {
-                        Keys(args, ["agentName", "inheritAgentName", "refreshSnapshots"], ["agentName"]);
-                        var agent = RequiredString(args, "agentName");
-                        var result = await SetAgentInheritAsync(agent, OptionalString(args, "inheritAgentName"), OptionalBool(args, "refreshSnapshots") ?? false);
-                        return (Output(System.Text.Json.JsonSerializer.Serialize(result)), false);
-                    }
+                {
+                    Keys(
+                        args,
+                        ["agentName", "inheritAgentName", "refreshSnapshots"],
+                        ["agentName"]
+                    );
+                    var agent = RequiredString(args, "agentName");
+                    var result = await SetAgentInheritAsync(
+                        agent,
+                        OptionalString(args, "inheritAgentName"),
+                        OptionalBool(args, "refreshSnapshots") ?? false
+                    );
+                    return (Output(System.Text.Json.JsonSerializer.Serialize(result)), false);
+                }
                 case "create_session":
-                    {
-                        Keys(args, ["agentName", "sessionName", "displayName", "forceModel"], ["agentName", "sessionName"]);
-                        var forceModel = OptionalForceModel(args);
-                        var created = await CreateNamedAsync(RequiredString(args, "agentName"),
-                            RequiredString(args, "sessionName"), OptionalString(args, "displayName"), forceModel);
-                        return (Output($"Created Session {created.Id} under Agent {created.Agent}."), false);
-                    }
+                {
+                    Keys(
+                        args,
+                        ["agentName", "sessionName", "displayName", "forceModel"],
+                        ["agentName", "sessionName"]
+                    );
+                    var forceModel = OptionalForceModel(args);
+                    var created = await CreateNamedAsync(
+                        RequiredString(args, "agentName"),
+                        RequiredString(args, "sessionName"),
+                        OptionalString(args, "displayName"),
+                        forceModel
+                    );
+                    return (
+                        Output($"Created Session {created.Id} under Agent {created.Agent}."),
+                        false
+                    );
+                }
                 case "create_child_session":
-                    {
-                        Keys(args, ["agentName", "suffix", "displayName", "message", "afterSend", "forceModel", "fork", "confirmation"], ["suffix"]);
-                        var forceModel = OptionalForceModel(args);
-                        var after = AfterSend(args);
-                        if (after == "wait" && string.IsNullOrWhiteSpace(OptionalString(args, "message")))
-                            throw new InvalidDataException("create_child_session with afterSend=wait requires a nonempty initial message.");
-                        var (child, delivered) = await CreateChildAsync(source, RequiredString(args, "suffix"),
-                            OptionalString(args, "agentName"), OptionalString(args, "displayName"),
-                            OptionalString(args, "message"), forceModel, OptionalBool(args, "fork") ?? false);
-                        return (Output($"Created child Session {child.Id} under Agent {child.Agent}; "
-                            + (delivered ? "initial message delivered to its queue." : "no initial message was supplied."), after == "wait" ? child.Id : null), after == "finish");
-                    }
+                {
+                    Keys(
+                        args,
+                        [
+                            "agentName",
+                            "suffix",
+                            "displayName",
+                            "message",
+                            "afterSend",
+                            "forceModel",
+                            "fork",
+                            "confirmation",
+                        ],
+                        ["suffix"]
+                    );
+                    var forceModel = OptionalForceModel(args);
+                    var after = AfterSend(args);
+                    if (
+                        after == "wait"
+                        && string.IsNullOrWhiteSpace(OptionalString(args, "message"))
+                    )
+                        throw new InvalidDataException(
+                            "create_child_session with afterSend=wait requires a nonempty initial message."
+                        );
+                    var (child, delivered) = await CreateChildAsync(
+                        source,
+                        RequiredString(args, "suffix"),
+                        OptionalString(args, "agentName"),
+                        OptionalString(args, "displayName"),
+                        OptionalString(args, "message"),
+                        forceModel,
+                        OptionalBool(args, "fork") ?? false
+                    );
+                    return (
+                        Output(
+                            $"Created child Session {child.Id} under Agent {child.Agent}; "
+                                + (
+                                    delivered
+                                        ? "initial message delivered to its queue."
+                                        : "no initial message was supplied."
+                                ),
+                            after == "wait" ? child.Id : null
+                        ),
+                        after == "finish"
+                    );
+                }
                 case "send_to_session":
-                    {
-                        Keys(args, ["sessionId", "message", "afterSend", "confirmation"], ["sessionId", "message"]);
-                        var after = AfterSend(args);
-                        var requested = RequiredString(args, "sessionId");
-                        var target = await SendAsync(source, requested, RequiredString(args, "message"));
-                        return (Output($"Delivered a message from {source.Id} to Session {target} (requested {requested}).", after == "wait" ? target : null), after == "finish");
-                    }
+                {
+                    Keys(
+                        args,
+                        ["sessionId", "message", "afterSend", "confirmation"],
+                        ["sessionId", "message"]
+                    );
+                    var after = AfterSend(args);
+                    var requested = RequiredString(args, "sessionId");
+                    var target = await SendAsync(
+                        source,
+                        requested,
+                        RequiredString(args, "message")
+                    );
+                    return (
+                        Output(
+                            $"Delivered a message from {source.Id} to Session {target} (requested {requested}).",
+                            after == "wait" ? target : null
+                        ),
+                        after == "finish"
+                    );
+                }
                 case "refresh_session_snapshot":
-                    {
-                        Keys(args, [], []);
-                        var model = await RefreshSnapshotAsync(source);
-                        return (Output($"Refreshed Session {source.Id} prompt snapshot for concrete model {model}."), false);
-                    }
-                default: throw new InvalidDataException("Unsupported Agent tool.");
+                {
+                    Keys(args, [], []);
+                    var model = await RefreshSnapshotAsync(source);
+                    return (
+                        Output(
+                            $"Refreshed Session {source.Id} prompt snapshot for concrete model {model}."
+                        ),
+                        false
+                    );
+                }
+                default:
+                    throw new InvalidDataException("Unsupported Agent tool.");
             }
         }
-        catch (SessionIdentityMoveException error) { var detail = (JsonObject)error.Details.DeepClone(); detail["error"] = error.Message; return (detail, false); }
+        catch (SessionIdentityMoveException error)
+        {
+            var detail = (JsonObject)error.Details.DeepClone();
+            detail["error"] = error.Message;
+            return (detail, false);
+        }
         catch (SessionDeletionException error)
         {
             var response = UnsupportedTurnToolExecutor.ToolError(error.Code, error.Message);
-            response["error"]!["details"] = error.Details.DeepClone(); return (response, false);
+            response["error"]!["details"] = error.Details.DeepClone();
+            return (response, false);
         }
         catch (CommittedSessionCreationException error)
         {
             var response = UnsupportedTurnToolExecutor.ToolError("partial_create", error.Message);
             var detail = response["error"] as JsonObject;
-            if (error.SessionId is not null) detail!["sessionId"] = error.SessionId;
-            if (error.InitialDeliveryCommitted is not null) detail!["initialDeliveryCommitted"] = error.InitialDeliveryCommitted;
-            if (error.ParentNoticeCommitted is not null) detail!["parentNoticeCommitted"] = error.ParentNoticeCommitted;
+            if (error.SessionId is not null)
+                detail!["sessionId"] = error.SessionId;
+            if (error.InitialDeliveryCommitted is not null)
+                detail!["initialDeliveryCommitted"] = error.InitialDeliveryCommitted;
+            if (error.ParentNoticeCommitted is not null)
+                detail!["parentNoticeCommitted"] = error.ParentNoticeCommitted;
             return (response, false);
         }
-        catch (Exception error) when (error is InvalidDataException or IOException or InvalidOperationException
-                                     or System.Text.Json.JsonException or ArgumentException or UnauthorizedAccessException or YamlDotNet.Core.YamlException)
+        catch (Exception error)
+            when (error
+                    is InvalidDataException
+                        or IOException
+                        or InvalidOperationException
+                        or System.Text.Json.JsonException
+                        or ArgumentException
+                        or UnauthorizedAccessException
+                        or YamlDotNet.Core.YamlException
+            )
         {
-            return (UnsupportedTurnToolExecutor.ToolError("agent_tool_error", error.Message), false);
+            return (
+                UnsupportedTurnToolExecutor.ToolError("agent_tool_error", error.Message),
+                false
+            );
         }
     }
 
     private static JsonObject Output(string value, string? waitTarget = null)
     {
         var output = new JsonObject { ["output"] = value };
-        if (waitTarget is not null) output["__waitTarget"] = waitTarget;
+        if (waitTarget is not null)
+            output["__waitTarget"] = waitTarget;
         return output;
     }
 
     private static void Keys(JsonObject args, string[] allowed, string[] required)
     {
-        if (args.Any(item => !allowed.Contains(item.Key, StringComparer.Ordinal))
-            || required.Any(key => !args.ContainsKey(key)))
+        if (
+            args.Any(item => !allowed.Contains(item.Key, StringComparer.Ordinal))
+            || required.Any(key => !args.ContainsKey(key))
+        )
             throw new InvalidDataException("Tool arguments contain unsupported or missing fields.");
     }
 
     private static string RequiredString(JsonObject args, string key) =>
         args[key] is JsonValue value && value.TryGetValue<string>(out var text)
-            ? text : throw new InvalidDataException($"{key} must be a string.");
+            ? text
+            : throw new InvalidDataException($"{key} must be a string.");
+
     private static string? OptionalString(JsonObject args, string key) =>
         args.ContainsKey(key) ? RequiredString(args, key) : null;
+
     private static bool? OptionalBool(JsonObject args, string key) =>
-        !args.ContainsKey(key) ? null : args[key] is JsonValue value && value.TryGetValue<bool>(out var result)
-            ? result : throw new InvalidDataException($"{key} must be a boolean.");
+        !args.ContainsKey(key) ? null
+        : args[key] is JsonValue value && value.TryGetValue<bool>(out var result) ? result
+        : throw new InvalidDataException($"{key} must be a boolean.");
+
     private static string AfterSend(JsonObject args)
     {
         var value = OptionalString(args, "afterSend") ?? "continue";
-        if (value is not ("continue" or "finish" or "wait")) throw new InvalidDataException("afterSend must be continue, finish, or wait.");
+        if (value is not ("continue" or "finish" or "wait"))
+            throw new InvalidDataException("afterSend must be continue, finish, or wait.");
         return value;
     }
 
     private static JsonObject? OptionalForceModel(JsonObject args)
     {
-        if (!args.ContainsKey("forceModel")) return null;
+        if (!args.ContainsKey("forceModel"))
+            return null;
         if (args["forceModel"] is not JsonObject force)
             throw new InvalidDataException("forceModel must be an object.");
         Keys(force, ["modelId", "effort"], []);
-        if (force.ContainsKey("modelId")) _ = RequiredString(force, "modelId");
+        if (force.ContainsKey("modelId"))
+            _ = RequiredString(force, "modelId");
         if (force.ContainsKey("effort"))
         {
             var effort = RequiredString(force, "effort");
