@@ -273,9 +273,6 @@ internal sealed partial class ModelConfiguration
             var currentRaw = ReadCurrentAppRaw();
             var current = ConfigurationYaml.Parse(currentRaw, "app config");
             AppConfigurationRules.Validate(current);
-            var next = (JsonObject)current.DeepClone();
-            next["channels"] = channels.DeepClone();
-            AppConfigurationRules.Validate(next);
             var serializer = new SerializerBuilder().Build();
             var serialized = serializer.Serialize(JsonNodeToObject(channels)).TrimEnd();
             var section =
