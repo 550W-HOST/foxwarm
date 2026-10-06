@@ -40,13 +40,25 @@ internal static class SessionRestartCommand
             }
         }
 
-        if (mode == "busy-b")
+        if (mode is "busy-b" or "busy-c")
         {
-            await using var manager = new SessionManager(root, root + "-workspace",
-                new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "test-model", "openai/test-model", "test-token", "instructions", 321),
-                HostModels.ForTest(new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "test-model", "openai/test-model", "test-token", "instructions", 321)));
+            if (mode == "busy-b" && args.Length != 6) throw new ArgumentException("Usage: busy-b ROOT SESSION_ID RESULT_PATH BASE_URI EFFECT_ROOT");
+            if (mode == "busy-c" && args.Length != 4) throw new ArgumentException("Usage: busy-c ROOT SESSION_ID RESULT_PATH");
+            var recoveryOptions = mode == "busy-b"
+                ? new ResponsesClientOptions(new Uri(args[4], UriKind.Absolute), "test-model", "openai/test-model", "test-token", "instructions", 321)
+                : new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "test-model", "openai/test-model", "test-token", "instructions", 321);
+            await using var manager = new SessionManager(root, root + "-workspace", recoveryOptions, HostModels.ForTest(recoveryOptions));
+            await manager.LoadMainHostAsync();
             var owner = await manager.RequiredAsync(sessionId);
-            var snapshot = owner.Entry.Snapshot();
+            var deadline = DateTime.UtcNow.AddSeconds(15);
+            SessionSnapshot snapshot;
+            do
+            {
+                snapshot = owner.Entry.Snapshot();
+                if (mode == "busy-c" || !snapshot.Busy && !snapshot.Stopping && snapshot.Queue.Count == 0) break;
+                await Task.Delay(10);
+            } while (DateTime.UtcNow < deadline);
+            if (mode == "busy-b" && (snapshot.Busy || snapshot.Stopping || snapshot.Queue.Count != 0)) throw new TimeoutException("Recovered Session did not return idle.");
             await WriteResultAsync(new JsonObject
             {
                 ["mode"] = mode,
@@ -56,8 +68,10 @@ internal static class SessionRestartCommand
                 ["busy"] = snapshot.Busy,
                 ["stopping"] = snapshot.Stopping,
                 ["queueCount"] = snapshot.Queue.Count,
-                ["queueSystems"] = new JsonArray(snapshot.Queue.SelectMany(item => item.Parts ?? []).Select(part => SessionWait.Text(part["system"])).Where(text => text is not null).Select(text => JsonValue.Create(text)).ToArray())
+                ["queueSystems"] = new JsonArray(snapshot.Queue.SelectMany(item => item.Parts ?? []).Select(part => SessionWait.Text(part["system"])).Where(text => text is not null).Select(text => JsonValue.Create(text)).ToArray()),
+                ["history"] = new JsonArray(snapshot.History.Select(row => JsonValue.Create(row.ToJsonString())).ToArray())
             });
+            await manager.ShutdownAsync();
             return;
         }
 

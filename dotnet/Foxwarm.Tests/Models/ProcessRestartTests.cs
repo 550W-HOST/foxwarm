@@ -151,7 +151,7 @@ public sealed class ProcessRestartTests
     public async Task Real_owned_busy_producer_recovers_after_abrupt_process_exit()
     {
         var ownedRoot = Path.Combine(Path.GetTempPath(), $"foxwarm-dotnet-busy-restart-{Guid.NewGuid():N}");
-        var resultA = Path.Combine(ownedRoot, "a.json"); var resultB = Path.Combine(ownedRoot, "b.json"); var effectRoot = Path.Combine(ownedRoot, "effects");
+        var resultA = Path.Combine(ownedRoot, "a.json"); var resultB = Path.Combine(ownedRoot, "b.json"); var resultC = Path.Combine(ownedRoot, "c.json"); var effectRoot = Path.Combine(ownedRoot, "effects");
         Directory.CreateDirectory(effectRoot);
         await using var server = new LoopbackResponsesServer(async (stream, _) =>
         {
@@ -167,16 +167,27 @@ public sealed class ProcessRestartTests
             await server.Request.WaitAsync(TimeSpan.FromSeconds(5));
             processA.Kill(); await processA.WaitForExitAsync();
 
-            using var processB = StartRestartHarness("busy-b", ownedRoot, resultB, null, null);
+            await using var responseServer = new ScriptedResponsesSequenceServer(1, async (_, stream, _) => await LoopbackResponsesServer.WriteResponseAsync(stream, 200, "text/event-stream", Encoding.UTF8.GetBytes(CompletedSse(new JsonArray(new JsonObject
+            {
+                ["type"] = "message", ["role"] = "assistant", ["phase"] = "final_answer",
+                ["content"] = new JsonArray(new JsonObject { ["type"] = "output_text", ["text"] = "recovered" })
+            })))));
+            using var processB = StartRestartHarness("busy-b", ownedRoot, resultB, responseServer.BaseUri, effectRoot);
             await processB.WaitForExitAsync(); Assert.Equal(0, processB.ExitCode);
             var recovered = JsonNode.Parse(await File.ReadAllTextAsync(resultB))!.AsObject();
-            Assert.False(recovered["busy"]!.GetValue<bool>()); Assert.False(recovered["stopping"]!.GetValue<bool>()); Assert.Equal(1, recovered["queueCount"]!.GetValue<int>());
-            Assert.Contains(recovered["queueSystems"]!.AsArray(), value => value?.GetValue<string>().Contains("type=\"session-resumed\"", StringComparison.Ordinal) == true);
+            Assert.False(recovered["busy"]!.GetValue<bool>()); Assert.False(recovered["stopping"]!.GetValue<bool>()); Assert.Equal(0, recovered["queueCount"]!.GetValue<int>()); Assert.Equal(1, responseServer.RequestCount);
+            var recoveredHistory = recovered["history"]!.AsArray().Select(value => value!.GetValue<string>()).ToArray();
+            Assert.Single(recoveredHistory, value => value.Contains("session-resumed", StringComparison.Ordinal)); Assert.Single(recoveredHistory, value => value.Contains("busy restart", StringComparison.Ordinal));
+
+            using var processC = StartRestartHarness("busy-c", ownedRoot, resultC, null, null);
+            await processC.WaitForExitAsync(); Assert.Equal(0, processC.ExitCode);
+            var ordinary = JsonNode.Parse(await File.ReadAllTextAsync(resultC))!.AsObject(); Assert.False(ordinary["busy"]!.GetValue<bool>()); Assert.False(ordinary["stopping"]!.GetValue<bool>()); Assert.Equal(0, ordinary["queueCount"]!.GetValue<int>()); Assert.Equal(recoveredHistory, ordinary["history"]!.AsArray().Select(value => value!.GetValue<string>()).ToArray());
         }
         finally
         {
             if (processA is { HasExited: false }) processA.Kill(entireProcessTree: true);
             if (Directory.Exists(ownedRoot)) Directory.Delete(ownedRoot, true);
+            if (Directory.Exists(ownedRoot + "-workspace")) Directory.Delete(ownedRoot + "-workspace", true);
         }
     }
 
