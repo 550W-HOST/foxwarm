@@ -2207,7 +2207,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
             <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full">
               <ThreadCardHeightContext.Provider value={cardHeightContext}>
                 <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-                  <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} />
+                  <ChatTimeline sessionId={sessionId} isRunningTool={sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} />
                 </ToolScriptProgressContext.Provider>
               </ThreadCardHeightContext.Provider>
             </div>

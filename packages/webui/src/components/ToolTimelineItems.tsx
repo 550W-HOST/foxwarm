@@ -627,6 +627,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   responses,
   imageParts,
   modelMessage,
+  runningTool = false,
   onOpenCodeFile,
   toolIndex,
   searchTarget,
@@ -637,6 +638,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   responses: FunctionResponse[]
   imageParts: MessagePart[]
   modelMessage?: Message
+  runningTool?: boolean
   onOpenCodeFile?: OpenCodeFileHandler
   toolIndex: number
   searchTarget?: SessionSearchMatch | null
@@ -699,6 +701,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const primaryName = call?.name || primaryResponse?.name || (imageParts.length > 0 ? 'image' : 'tool')
   const primaryLabel = call ? getToolDisplayLabel(call) : primaryName
   const hasResponseContent = responses.length > 0 || imageParts.length > 0
+  const showRunning = runningTool && !!call && !hasResponseContent && !partialToolCall
   const showDiffToggles = !!call && !partialToolCall && (isLegacyDiffToolName(call.name) || isPatchToolName(call.name))
 
   const responsePreview = useMemo(() => {
@@ -723,7 +726,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
 
   const jsonText = useMemo(() => JSON.stringify({ modelMessage, call, responses, imageParts }, null, 2), [call, imageParts, modelMessage, responses])
   const baseTextClass = 'font-mono text-fw-text'
-  const hasBody = expanded || !!responsePreview || hasToolScriptProgress
+  const hasBody = expanded || !!responsePreview || hasToolScriptProgress || showRunning
 
   const actionButtonsToneClass = `foxwarm-tool-action-buttons-${tagTone}`
   const resultSeparatorClass = `pt-2 border-t ${isError ? 'border-fw-danger-border dark:border-fw-danger-border/40' : 'border-fw-tool-border dark:border-fw-tool-border/40'}`
@@ -787,7 +790,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         <div className={baseTextClass}>
           <div className="space-y-1">
             {header(true)}
-            {responsePreview && !hasToolScriptProgress && <div ref={resultFade.ref} {...resultFade.overflowFadeProps} className="foxwarm-tool-result-preview pr-2 text-fw-text" style={{ ...clampContentStyle(3), ...resultFade.overflowFadeProps.style }}>{responsePreview}</div>}
+            {((responsePreview && !hasToolScriptProgress) || showRunning) && <div ref={resultFade.ref} {...resultFade.overflowFadeProps} className="foxwarm-tool-result-preview pr-2 text-fw-text" style={{ ...clampContentStyle(3), ...resultFade.overflowFadeProps.style }}>{showRunning ? 'Running...' : responsePreview}</div>}
             {hasToolScriptProgress && <ToolScriptSubCallsTags subCalls={toolScriptSubCalls!} />}
           </div>
         </div>
@@ -795,8 +798,9 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         <div className={baseTextClass}>
           {header(false, true)}
 
-          {(hasResponseContent || hasToolScriptProgress) && (
+          {(hasResponseContent || hasToolScriptProgress || showRunning) && (
             <div className="foxwarm-tool-expanded-content foxwarm-tool-result-content mt-1 min-w-0 max-w-full cursor-default pr-2" onClick={(e) => e.stopPropagation()}>
+              {showRunning && <div className="text-fw-text">Running...</div>}
               {hasResponseContent && !hasToolScriptProgress && (
                 <div className="text-fw-text">
                   {responses.length > 0 && responses.map((resp, idx) => (
@@ -912,7 +916,7 @@ const toolCallDisclosureKey = (call: FunctionCall, index: number): string => (
   call.id ? `call-id-${call.id}` : `call-index-${index}`
 )
 
-export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, nextMsg, messageKeyPrefix, onOpenCodeFile, searchTarget, expandedToolKeys, onToolToggle }: { msg: Message; nextMsg: Message; messageKeyPrefix: string; onOpenCodeFile?: OpenCodeFileHandler; searchTarget?: SessionSearchMatch | null } & ToolDisclosureProps) {
+export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, nextMsg, messageKeyPrefix, runningTool, onOpenCodeFile, searchTarget, expandedToolKeys, onToolToggle }: { msg: Message; runningTool?: boolean; nextMsg: Message; messageKeyPrefix: string; onOpenCodeFile?: OpenCodeFileHandler; searchTarget?: SessionSearchMatch | null } & ToolDisclosureProps) {
   const entries = useMemo(() => getGroupedToolEntries(msg, nextMsg, messageKeyPrefix), [messageKeyPrefix, msg, nextMsg])
 
   return (
@@ -928,6 +932,7 @@ export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, ne
           responses={entry.responses}
           imageParts={entry.imageParts}
           modelMessage={entry.modelMessage}
+          runningTool={runningTool}
           onOpenCodeFile={onOpenCodeFile}
         />
       ))}
@@ -935,7 +940,7 @@ export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, ne
   )
 })
 
-export const ToolCallsBlock = memo(function ToolCallsBlock({ msg, onOpenCodeFile, searchTarget, expandedToolKeys, onToolToggle }: { msg: Message; onOpenCodeFile?: OpenCodeFileHandler; searchTarget?: SessionSearchMatch | null } & ToolDisclosureProps) {
+export const ToolCallsBlock = memo(function ToolCallsBlock({ msg, runningTool, onOpenCodeFile, searchTarget, expandedToolKeys, onToolToggle }: { msg: Message; runningTool?: boolean; onOpenCodeFile?: OpenCodeFileHandler; searchTarget?: SessionSearchMatch | null } & ToolDisclosureProps) {
   const functionCalls = useMemo(() => msg.parts.filter(p => p.functionCall).map(p => p.functionCall!), [msg.parts])
   if (functionCalls.length === 0) return null
 
@@ -952,6 +957,7 @@ export const ToolCallsBlock = memo(function ToolCallsBlock({ msg, onOpenCodeFile
           responses={[]}
           imageParts={[]}
           modelMessage={msg}
+          runningTool={runningTool}
           onOpenCodeFile={onOpenCodeFile}
         />
       ))}

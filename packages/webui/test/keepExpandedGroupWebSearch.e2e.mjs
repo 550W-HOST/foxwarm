@@ -41,19 +41,25 @@ async function buildFixtureBundle() {
 
     const cases = ${JSON.stringify(CASES)}
     const roots = new Map()
-    function render(id, messages, sessionId = 'fixture/main', searchTarget = null) {
+    function render(id, messages, sessionId = 'fixture/main', searchTarget = null, { runtimeState = 'idle', groupTools = true } = {}) {
       if (!roots.has(id)) roots.set(id, createRoot(document.getElementById(id)))
       roots.get(id).render(React.createElement(ChatTimeline, {
         sessionId,
         messages,
         searchTarget,
         isMobile: false,
-        groupTools: true,
+        groupTools,
+        isRunningTool: runtimeState === 'running-tool',
         showUsageBadge: false,
       }))
     }
     for (const [id, messages] of Object.entries(cases)) render(id, messages)
-    window.renderLiveTimeline = (messages, sessionId, searchTarget) => render('live', messages, sessionId, searchTarget)
+    let liveArgs
+    window.renderLiveTimeline = (...args) => { liveArgs = args; render('live', ...args) }
+    window.updateLiveRuntime = (runtimeState) => {
+      liveArgs[3] = { ...liveArgs[3], runtimeState }
+      render('live', ...liveArgs)
+    }
   `
 
   const result = await build({
@@ -113,8 +119,8 @@ const liveResult = (id, seq) => ({
 const liveAnswer = { role: 'model', parts: [{ text: 'Live run finished.' }], __meta: { seq: 99 } }
 const liveTool = '#live [data-search-tool-index="0"]'
 
-async function renderLive(messages, sessionId = 'fixture/main', searchTarget = null) {
-  await page.evaluate((messages, sessionId, searchTarget) => window.renderLiveTimeline(messages, sessionId, searchTarget), messages, sessionId, searchTarget)
+async function renderLive(messages, sessionId = 'fixture/main', searchTarget = null, options = {}) {
+  await page.evaluate((messages, sessionId, searchTarget, options) => window.renderLiveTimeline(messages, sessionId, searchTarget, options), messages, sessionId, searchTarget, options)
   // Await a committed React render rather than assuming evaluate flushed it.
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
 }
@@ -183,4 +189,69 @@ test('ID-less tool choices are scoped to their stable message, not another messa
   await renderLive([first, second, liveAnswer], 'fixture/idless')
   const choices = await page.$$eval('#live [data-search-tool-index="0"]', nodes => nodes.map(node => !!node.querySelector('.foxwarm-tool-call-args')))
   assert.deepEqual(choices, [true, false])
+})
+
+const runningOptions = { runtimeState: 'running-tool' }
+const runningResults = '#live .foxwarm-tool-result-preview, #live .foxwarm-tool-result-content'
+async function runningResultCount() {
+  return page.$$eval(runningResults, nodes => nodes.filter(node => node.textContent.includes('Running...')).length)
+}
+
+test('tail execution uses the result area in collapsed and expanded cards, and runtime exit removes it', async () => {
+  const call = liveCall('running-call', 40)
+  const messages = [call]
+  await renderLive(messages, 'fixture/running', null, runningOptions)
+  assert.equal(await runningResultCount(), 1)
+  assert.equal(await page.$eval(`${liveTool} .foxwarm-tool-result-preview`, node => node.textContent), 'Running...')
+  assert.equal(await page.$eval(`${liveTool} .foxwarm-tool-header`, node => node.textContent.includes('Running...')), false)
+
+  await page.click('#live [aria-label="Expand exec tool"]')
+  await page.waitForSelector(`${liveTool} .foxwarm-tool-call-args`)
+  assert.equal(await page.$eval(`${liveTool} .foxwarm-tool-result-content`, node => node.textContent), 'Running...')
+  await page.click('#live [aria-label="Collapse exec tool"]')
+  await page.waitForSelector(`${liveTool} .foxwarm-tool-result-preview`)
+  assert.equal(await runningResultCount(), 1)
+
+  await renderLive(messages, 'fixture/running', null, { ...runningOptions, groupTools: false })
+  assert.equal(await runningResultCount(), 1, 'Group tools off retains the tail result indication')
+  for (const runtimeState of ['idle', 'waiting', 'requesting-model']) {
+    await page.evaluate(runtimeState => window.updateLiveRuntime(runtimeState), runtimeState)
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    assert.equal(await runningResultCount(), 0, `${runtimeState} is not tool execution`)
+    await page.evaluate(() => window.updateLiveRuntime('running-tool'))
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    assert.equal(await runningResultCount(), 1, 'a runtime-only update reaches the memoized tool card')
+  }
+})
+
+test('responses end the placeholder independently, including empty results and event-separated tail batches', async () => {
+  const first = liveCall('batch-first', 50)
+  const second = liveCall('batch-second', 50).parts[0]
+  const batch = { ...first, parts: [...first.parts, second] }
+  const event = { role: 'user', parts: [{ system: '<foxwarm-system kind="event">\nTool event\n</foxwarm-system>' }], __meta: { seq: 51 } }
+  const reminder = { role: 'user', parts: [{ system: '<foxwarm-system kind="goal-reminder">\nKeep working\n</foxwarm-system>' }], __meta: { seq: 53 } }
+  await renderLive([batch, event], 'fixture/batch', null, runningOptions)
+  assert.equal(await runningResultCount(), 2)
+  const firstResult = liveResult('batch-first', 52)
+  await renderLive([batch, event, firstResult, reminder], 'fixture/batch', null, runningOptions)
+  assert.equal(await runningResultCount(), 1, 'only the unmatched member remains pending')
+  assert.equal(await page.$eval('#live [data-search-tool-index="0"] .foxwarm-tool-result-preview', node => node.textContent), 'Result 52')
+  const emptyResult = { functionResponse: { name: 'exec', tool_use_id: 'batch-second', response: '' } }
+  await renderLive([batch, event, { ...firstResult, parts: [...firstResult.parts, emptyResult] }, reminder], 'fixture/batch', null, runningOptions)
+  assert.equal(await runningResultCount(), 0, 'an empty real response is still a response')
+})
+
+test('historical unmatched calls and streaming argument drafts are not running result cards', async () => {
+  const historyCall = liveCall('history-pending', 60)
+  const currentCall = liveCall('current-pending', 61)
+  await renderLive([historyCall, currentCall], 'fixture/history', null, { ...runningOptions, groupTools: false })
+  const previews = await page.$$eval('#live .foxwarm-tool-card', nodes => nodes.map(node => node.querySelector('.foxwarm-tool-result-preview')?.textContent || ''))
+  assert.deepEqual(previews, ['', 'Running...'])
+  await renderLive([historyCall, liveAnswer], 'fixture/history', null, { ...runningOptions, groupTools: false })
+  assert.equal(await runningResultCount(), 0, 'ordinary output ends tail eligibility')
+  for (const meta of [{ streaming: true }, { synthetic: 'streamingAssistantDraft' }]) {
+    const draft = { ...currentCall, __meta: { ...currentCall.__meta, ...meta } }
+    await renderLive([draft], 'fixture/draft', null, runningOptions)
+    assert.equal(await runningResultCount(), 0, 'streaming arguments are not finalized tool execution')
+  }
 })

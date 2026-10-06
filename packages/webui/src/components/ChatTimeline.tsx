@@ -65,6 +65,7 @@ import {
 interface ChatTimelineProps {
   sessionId: string
   messages: Message[]
+  isRunningTool?: boolean
   isMobile: boolean
   groupTools: boolean
   showUsageBadge: boolean
@@ -875,6 +876,7 @@ const MessageRow = memo(function MessageRow({
     key: messageKey,
     msg,
     pairedToolResponse,
+    runningTool,
     collapsedGroup,
     hideFoldedThinking,
     suppressWebSearchCards,
@@ -1004,7 +1006,7 @@ const MessageRow = memo(function MessageRow({
               return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={part.providerMeta?.openaiResponses?.annotations} onOpenCodeCommit={onOpenCodeCommit} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'model' && rowSearchTarget.partIndex === partIndex} />
             })}
             {(surface !== 'grouped' || msg.role !== 'model') && <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />}
-            {surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup && pairedToolResponse ? <InterleavedToolGroup {...toolDisclosure} msg={msg} nextMsg={pairedToolResponse} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} /> : <ToolCallsBlock {...toolDisclosure} msg={msg} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} />)}
+            {surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup && pairedToolResponse ? <InterleavedToolGroup {...toolDisclosure} runningTool={runningTool} msg={msg} nextMsg={pairedToolResponse} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} /> : <ToolCallsBlock {...toolDisclosure} runningTool={runningTool} msg={msg} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} />)}
             {surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup ? null : <ToolResponsesBlock {...toolDisclosure} msg={msg} searchTarget={rowSearchTarget} />)}
             {surface !== 'ordinary' && usageBadge && <ModelUsageAnchor usage={usageBadge.usage} isMobile={isMobile} callCount={usageBadge.callCount} attribution={usageBadge.attribution} sessionId={sessionId} />}
           </div>
@@ -1084,7 +1086,7 @@ const TimelineTimeSeparator = memo(function TimelineTimeSeparator({ marker }: { 
   )
 })
 
-const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget }: ChatTimelineProps) {
+const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, isRunningTool = false, isMobile, groupTools, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget }: ChatTimelineProps) {
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
   const [expandedTools, setExpandedTools] = useState<ExpandedTools>(new Map())
   const rowsCacheRef = useRef<TimelineRowsCache | null>(null)
@@ -1106,7 +1108,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, isM
   ), [groupTools, isMobile, onOpenCodeCommit, onOpenCodeFile, sessionId, showUsageBadge, showUserMessageMetadata])
 
   const rows = useMemo(() => {
-    const input = { messages, isMobile, groupTools, showUsageBadge, showTimeDividers, nestedDepth, expandedGroupKeys: expandedToolGroups }
+    const input = { messages, isRunningTool, isMobile, groupTools, showUsageBadge, showTimeDividers, nestedDepth, expandedGroupKeys: expandedToolGroups }
     let result = buildTimelineRows(input, rowsCacheRef.current)
     // A search reveal is transient: include only its owning group without changing manual expansion state.
     if (searchTarget && groupTools && nestedDepth === 0) {
@@ -1121,7 +1123,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, isM
     }
     rowsCacheRef.current = result.cache
     return result.rows
-  }, [expandedToolGroups, groupTools, isMobile, messages, nestedDepth, searchTarget, showUsageBadge, showTimeDividers])
+  }, [expandedToolGroups, groupTools, isMobile, isRunningTool, messages, nestedDepth, searchTarget, showUsageBadge, showTimeDividers])
 
 
   const groupedRows = useMemo(() => {

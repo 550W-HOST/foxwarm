@@ -70,6 +70,7 @@ export interface TimelineRowView {
   readonly prevMsg: Message | null
   readonly nextMsg: Message | null
   readonly pairedToolResponse: Message | null
+  readonly runningTool: boolean
   readonly requestTiming: DerivedRequestTiming
   /**
    * Null for rows outside any callable run (for example a direct user message), so `group` is the
@@ -95,6 +96,7 @@ export interface TimelineRowView {
 
 export interface TimelineRowsInput {
   readonly messages: Message[]
+  readonly isRunningTool?: boolean
   readonly isMobile: boolean
   readonly groupTools: boolean
   readonly showUsageBadge: boolean
@@ -442,6 +444,7 @@ const sameRowView = (a: TimelineRowView, b: TimelineRowView): boolean => (
   && a.prevMsg === b.prevMsg
   && a.nextMsg === b.nextMsg
   && a.pairedToolResponse === b.pairedToolResponse
+  && a.runningTool === b.runningTool
   && a.group === b.group
   && a.collapsedGroup === b.collapsedGroup
   && a.renderSummary === b.renderSummary
@@ -464,7 +467,7 @@ const reuseWhenEqual = <T,>(previous: T | undefined, next: T, isEqual: (a: T, b:
 )
 
 export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRowsCache | null): TimelineRowsResult => {
-  const { messages, isMobile, groupTools, showUsageBadge, showTimeDividers, nestedDepth, expandedGroupKeys } = input
+  const { messages, isRunningTool = false, isMobile, groupTools, showUsageBadge, showTimeDividers, nestedDepth, expandedGroupKeys } = input
   const requestTimings = deriveRequestTimings(messages)
   const timeMarkers = showTimeDividers && nestedDepth === 0 ? deriveTimelineTimeMarkers(messages, isGroupableSystemMessage) : []
   const messageKeys = messages.map((msg, index) => getMessageStableKey(msg, index))
@@ -514,6 +517,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       prevMsg,
       nextMsg,
       pairedToolResponse,
+      runningTool: isRunningTool && index === finalStandaloneStartIdx,
       requestTiming,
       group,
       collapsedGroup,
