@@ -11,8 +11,8 @@ options.cwd = owned.root; options.env = { HOME: join(owned.root, 'home'), FOXWAR
 await mkdir(options.env.HOME); await writeFile(join(owned.work, 'helper.txt'), 'one\ntwo\nthree\n')
 const open = async (record, control = false) => {
   const url = `ws://127.0.0.1:${owned.port}/api/terminals/stream?terminalId=${encodeURIComponent(record.id)}${control ? '&control=code' : ''}`
-  const socket = new WebSocket(url, { headers: { authorization: `Bearer ${owned.token}` } }); await once(socket, 'open')
-  const events = []; socket.on('message', bytes => { try { events.push(JSON.parse(bytes.toString())) } catch {} })
+  const socket = new WebSocket(url, { headers: { authorization: `Bearer ${owned.token}` } })
+  const events = []; socket.on('message', bytes => { try { events.push(JSON.parse(bytes.toString())) } catch {} }); await once(socket, 'open')
   await until(() => events.some(item => item.type === 'ready'), 'terminal ready')
   return { socket, events }
 }
