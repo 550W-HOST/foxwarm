@@ -3,6 +3,7 @@ using Foxwarm.Tools;
 namespace Foxwarm.Sessions;
 
 internal sealed record AgentMemoryFile(string Path, string AbsolutePath, long Size, double ModifiedAt);
+internal sealed record AgentListEntry(string Id, string? Inherit, string? IsolatedNode, bool Isolated, int SessionCount, int ActiveSessionCount, int QueuedSessionCount, int ToolRuleCount);
 internal sealed record AgentMemoryManifest(string MemoryRoot, IReadOnlyList<AgentMemoryFile> Files);
 
 internal sealed partial class AgentMemory
@@ -35,15 +36,28 @@ internal sealed partial class SessionManager
 {
     internal string ListAgentsText()
     {
-        var rows = AgentRegistry(); if (rows.Length == 0) return "No agents found.";
+        var rows = AgentListEntries(); if (rows.Length == 0) return "No agents found.";
         var result = $"Found {rows.Length} agent(s):\n\n";
         foreach (var row in rows)
         {
-            var type = row.GetType(); var name = type.GetProperty("id")?.GetValue(row)?.ToString() ?? "";
-            var count = Convert.ToInt32(type.GetProperty("sessionCount")?.GetValue(row) ?? 0); var inherit = type.GetProperty("inherit")?.GetValue(row)?.ToString(); var isolated = Convert.ToBoolean(type.GetProperty("isolated")?.GetValue(row) ?? false); var node = type.GetProperty("isolatedNode")?.GetValue(row)?.ToString(); var memoryFiles = Convert.ToInt32(type.GetProperty("memoryFileCount")?.GetValue(row) ?? 0); var rules = Convert.ToInt32(type.GetProperty("toolRuleCount")?.GetValue(row) ?? 0);
-            result += $"- **{name}**" + (count > 0 ? $" ({count} session{(count == 1 ? "" : "s")})" : "") + (inherit is null ? "" : $" [inherits: {inherit}]") + (isolated ? $" [isolated{(node is null ? "" : ":" + node)}]" : "") + $" [memory files:{memoryFiles}] [tool rules:{rules}]\n";
+            result += $"- **{row.Id}**" + (row.SessionCount > 0 ? $" ({row.SessionCount} session{(row.SessionCount == 1 ? "" : "s")})" : "") + (row.Inherit is null ? "" : $" [inherits: {row.Inherit}]") + (row.Isolated ? $" [isolated{(row.IsolatedNode is null ? "" : ":" + row.IsolatedNode)}]" : "") + $" [tool rules:{row.ToolRuleCount}]\n";
         }
         return result.TrimEnd();
+    }
+    internal AgentListEntry[] AgentListEntries()
+    {
+        var counts = Catalog.AgentActivityCounts(); var local = LocalProjections(); var persisted = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+        foreach (var chunk in local.Select(row => SessionCatalog.Text(row["id"])!).Chunk(200)) foreach (var row in Catalog.GetMany(chunk)) persisted[SessionCatalog.Text(row["id"])!] = row;
+        foreach (var row in local)
+        {
+            var current = Metadata(row); var previous = persisted.GetValueOrDefault(current.Id) is { } old ? Metadata(old) : null; var count = counts.GetValueOrDefault(current.Agent);
+            counts[current.Agent] = (count.Total + (previous is null ? 1 : 0), count.Active + (current.Busy ? 1 : 0) - (previous?.Busy == true ? 1 : 0), count.Queued + (current.QueueLength > 0 ? 1 : 0) - (previous?.QueueLength > 0 ? 1 : 0));
+        }
+        return Agents().Select(name =>
+        {
+            var owned = counts.GetValueOrDefault(name); var isolation = IsolatedToolCompatibility.Metadata(agents.MetadataSnapshot()[name]);
+            return new AgentListEntry(name, AgentInherit(name), isolation.RecordedNode, isolation.Isolated, owned.Total, owned.Active, owned.Queued, isolation.Rules.Count);
+        }).ToArray();
     }
     internal AgentMemoryManifest AgentManifest(string name) => memory.Manifest(name);
     internal object[] AgentRegistry()
