@@ -22,7 +22,8 @@ public sealed class CompactLifecycleTests
     {
         var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work"); Directory.CreateDirectory(work);
-        await using var peer = new ScriptedResponsesSequenceServer(5, async (index, stream, captured) =>
+        SessionManager? managerForPeer = null; var policyPath = Path.Combine(data, "state", "tool-authorization.yaml");
+        await using var peer = new ScriptedResponsesSequenceServer(6, async (index, stream, captured) =>
         {
             var texts = JsonNode.Parse(captured.Body)!["input"]!.AsArray().OfType<JsonObject>()
                 .SelectMany(row => (row["content"] as JsonArray)?.OfType<JsonObject>() ?? [])
@@ -41,8 +42,23 @@ public sealed class CompactLifecycleTests
                 call = FunctionCall("cancel", "edit", new JsonObject { ["filePath"] = path!, ["oldText"] = "[]", ["newText"] = validBlocks.ToJsonString(), ["__cancelTool"] = true });
             else if (index == 3)
                 call = FunctionCall("repair", "edit", new JsonObject { ["filePath"] = path!, ["oldText"] = "[]", ["newText"] = validBlocks.ToJsonString() });
+            else if (index == 4)
+            {
+                var patch = "*** Begin Patch\n*** Update File: " + path + "\n-{\"replaceAsBlocks\":[]}\n+{\"replaceAsBlocks\":" + validBlocks.ToJsonString() + "}\n*** End Patch";
+                call = FunctionCall("repair-after-deny", "apply_patch", new JsonObject { ["input"] = patch });
+            }
             else
                 call = FunctionCall("submit", "submit_compact_plan", new JsonObject { ["argsFilePath"] = path! });
+            if (index == 3)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(policyPath)!);
+                await File.WriteAllTextAsync(policyPath, "version: 1\nrules: [{id: deny-edit, action: deny, match: {tool: {source: node, name: edit}}}]\n");
+                managerForPeer!.Authorization.Invalidate();
+            }
+            else if (index == 4)
+            {
+                File.Delete(policyPath); managerForPeer!.Authorization.Invalidate();
+            }
             var output = new JsonArray(call);
             var payload = new JsonObject { ["type"] = "response.completed", ["response"] = new JsonObject { ["id"] = "compact-repair", ["output"] = output } };
             await LoopbackResponsesServer.WriteResponseAsync(stream, 200, "text/event-stream", Encoding.UTF8.GetBytes("data: " + payload.ToJsonString() + "\n\n"));
@@ -50,6 +66,7 @@ public sealed class CompactLifecycleTests
         var options = new ResponsesClientOptions(peer.BaseUri, "wire", "a/wire", "", "", 20000);
         var models = HostModels.ForTest(options);
         await using var manager = new SessionManager(data, work, options, models, Path.Combine(AppContext.BaseDirectory, "skills"));
+        managerForPeer = manager;
         await manager.LoadMainHostAsync();
         var owner = await manager.CreateNamedAsync("main", "compact-repair", null, null);
         owner.Entry.WithState(state =>
@@ -62,14 +79,41 @@ public sealed class CompactLifecycleTests
         var admission = await owner.Compactor.StartManualAsync(); Assert.True(admission.Started);
         try { await owner.Compactor.DrainAsync().WaitAsync(TimeSpan.FromSeconds(30)); } catch (TimeoutException error) { throw new TimeoutException($"compact drain timeout; provider requests={peer.RequestCount}", error); }
         await owner.DrainAsync().WaitAsync(TimeSpan.FromSeconds(30));
-        Assert.Equal(5, peer.RequestCount);
+        Assert.Equal(6, peer.RequestCount);
         Assert.Contains("This file was saved from the original provider arguments.", (await peer.RequestAt(1)).Body);
         Assert.Contains("Compact repair failed", (await peer.RequestAt(2)).Body);
         Assert.Contains("Compact repair canceled", (await peer.RequestAt(3)).Body);
+        Assert.Contains("Compact repair failed", (await peer.RequestAt(4)).Body);
         Assert.Single(manager.Catalog.List());
         Assert.Single(owner.Archive.ReadBlocks()); Assert.True(owner.Entry.Snapshot().History.Count < before);
         Assert.DoesNotContain(owner.Entry.Snapshot().History, row => row.ToJsonString().Contains("Compact arguments file updated", StringComparison.Ordinal));
         Assert.Empty(Directory.EnumerateDirectories(Path.Combine(manager.IdentityWorkspace(owner).ToolDirectory, ".temp"), "compact-plan-*"));
+        await manager.ShutdownAsync().WaitAsync(TimeSpan.FromSeconds(30)); temp.Dispose();
+    }
+
+    [Fact]
+    public async Task Real_main_compact_provider_failure_cleans_pending_repair_artifact()
+    {
+        var temp = new TempDirectory(); var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work"); Directory.CreateDirectory(work);
+        await using var peer = new ScriptedResponsesSequenceServer(2, async (index, stream, _) =>
+        {
+            if (index == 0)
+            {
+                var output = new JsonArray(FunctionCall("invalid", "submit_compact_plan", new JsonObject { ["replaceAsBlocks"] = new JsonArray() }, "{\"replaceAsBlocks\":[]}"));
+                var payload = new JsonObject { ["type"] = "response.completed", ["response"] = new JsonObject { ["id"] = "compact-failure", ["output"] = output } };
+                await LoopbackResponsesServer.WriteResponseAsync(stream, 200, "text/event-stream", Encoding.UTF8.GetBytes("data: " + payload.ToJsonString() + "\n\n"));
+            }
+            else await LoopbackResponsesServer.WriteResponseAsync(stream, 400, "text/plain", Encoding.UTF8.GetBytes("provider failed"));
+        });
+        var options = new ResponsesClientOptions(peer.BaseUri, "wire", "a/wire", "", "", 20000); var models = HostModels.ForTest(options);
+        await using var manager = new SessionManager(data, work, options, models, Path.Combine(AppContext.BaseDirectory, "skills")); await manager.LoadMainHostAsync();
+        var owner = await manager.CreateNamedAsync("main", "compact-failure", null, null); owner.Entry.WithState(state =>
+        {
+            for (var seq = 1; seq <= 8; seq++) state.History.Add(new JsonObject { ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["text"] = "context " + seq + " " + new string('x', 5000) }), ["__meta"] = new JsonObject { ["seq"] = seq, ["timestamp"] = seq } });
+            state.NextMessageSeq = 9; state.Meta["messageCount"] = 8;
+        });
+        await owner.Entry.SaveLane.SaveStrictAsync(); await owner.Compactor.StartManualAsync(); await owner.Compactor.DrainAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(2, peer.RequestCount); Assert.Empty(Directory.EnumerateDirectories(Path.Combine(manager.IdentityWorkspace(owner).ToolDirectory, ".temp"), "compact-plan-*"));
         await manager.ShutdownAsync().WaitAsync(TimeSpan.FromSeconds(30)); temp.Dispose();
     }
 
@@ -329,7 +373,7 @@ public sealed class CompactLifecycleTests
         internal readonly ManualResetEventSlim StageRelease = new(false); internal AtomicJsonWriteStage? HoldStage; internal bool HoldSignal, FailHeldStage;
         internal bool HoldIngress; internal bool HoldApplyAfterSignal; internal readonly TaskCompletionSource ApplyReached = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal readonly ManualResetEventSlim ApplyRelease = new(false);
-        internal readonly PersistentSessionAuthorityStore Store; internal readonly SessionOwner Owner; internal readonly string MemoryPath;
+        internal readonly PersistentSessionAuthorityStore Store; internal readonly SessionOwner Owner; internal readonly string MemoryPath; internal readonly SessionManager AuthorizationManager;
         private CompactFixture(bool background)
         {
             var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work"); Directory.CreateDirectory(work);
@@ -358,9 +402,11 @@ public sealed class CompactLifecycleTests
             if (!background) models = HostModels.Parse(JsonNode.Parse("""{"default":"a","providers":{"a":{"providerType":"openai-responses","baseUrl":"http://localhost","models":["wire"],"contextLimit":20000,"asyncCompact":false}}}""")!.AsObject(), new JsonObject());
             var agents = new AgentCatalog(data, work); var skills = new Skills(agents, Path.Combine(temp.Path, "skills")); var memory = new AgentMemory(agents, skills);
             Owner = new SessionOwner("s", "main", models) { Archive = Store.Archive }; var requests = new ModelRequestOwner(http, options, new ModelRouting(), images: Store.Images);
+            var authorizationData = Path.Combine(temp.Path, "authorization-data"); var authorizationWork = Path.Combine(temp.Path, "authorization-work"); Directory.CreateDirectory(authorizationWork);
+            AuthorizationManager = new SessionManager(authorizationData, authorizationWork, options, models, Path.Combine(temp.Path, "skills"));
             var chat = new SessionChatService(requests, options, Owner, models, memory, (_, _) => { });
             Owner.Registry = new SessionRegistry(Store, chat); Owner.Registry.Add("s");
-            Owner.Compactor = new SessionCompactor(Owner, Store, models, options, requests, memory);
+            Owner.Compactor = new SessionCompactor(Owner, AuthorizationManager, Store, models, options, requests, memory);
             Owner.Registry.OnSafePoint = _ => Owner.Compactor.SafePointAsync(); Owner.Registry.OnRetrySafePoint = _ => Owner.Compactor.SafePointAsync(propagateFailure: true); Owner.Registry.HasCompletedCompact = _ => Owner.Compactor.HasCompletedJob;
             Owner.Registry.TriggerOverride = _ => Owner.StartProcessing();
         }
@@ -369,7 +415,7 @@ public sealed class CompactLifecycleTests
         public async ValueTask DisposeAsync()
         {
             StageRelease.Set(); ApplyRelease.Set(); Peer.ReleaseForeground(); Peer.ReleasePlan();
-            if (Owner.Compactor.Active) await Owner.Compactor.StopAsync(); await Owner.DrainAsync(); http.Dispose(); StageRelease.Dispose(); ApplyRelease.Dispose(); temp.Dispose();
+            if (Owner.Compactor.Active) await Owner.Compactor.StopAsync(); await Owner.DrainAsync(); await AuthorizationManager.DisposeAsync(); http.Dispose(); StageRelease.Dispose(); ApplyRelease.Dispose(); temp.Dispose();
         }
     }
 

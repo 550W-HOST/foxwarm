@@ -9,17 +9,16 @@ internal sealed class CompactPlanRepairFile : IAsyncDisposable
 {
     private readonly SessionManager sessions;
     private readonly SessionOwner owner;
-    private readonly object operation;
     private readonly string directory;
     private readonly string filePath;
     private readonly FileStream file;
     private readonly FileIdentity identity;
     private int closed;
 
-    private CompactPlanRepairFile(SessionManager sessions, SessionOwner owner, object operation,
+    private CompactPlanRepairFile(SessionManager sessions, SessionOwner owner,
         string directory, string filePath, FileStream file, FileIdentity identity, bool structuredFallback)
     {
-        this.sessions = sessions; this.owner = owner; this.operation = operation;
+        this.sessions = sessions; this.owner = owner;
         this.directory = directory; this.filePath = filePath; this.file = file;
         this.identity = identity; StructuredFallback = structuredFallback;
     }
@@ -28,7 +27,7 @@ internal sealed class CompactPlanRepairFile : IAsyncDisposable
     internal bool StructuredFallback { get; }
 
     internal static async Task<CompactPlanRepairFile> CreateAsync(JsonObject call, SessionManager sessions,
-        SessionOwner owner, object operation, CancellationToken token)
+        SessionOwner owner, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         var raw = call["rawArgsText"] is JsonValue rawValue && rawValue.TryGetValue<string>(out var rawText) ? rawText : null;
@@ -53,7 +52,7 @@ internal sealed class CompactPlanRepairFile : IAsyncDisposable
         {
             file = new FileStream(filePath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 8192, FileOptions.Asynchronous);
             SetMode(filePath, 384);
-            var repair = new CompactPlanRepairFile(sessions, owner, operation, directory, filePath, file, Capture(filePath, file), structuredFallback);
+            var repair = new CompactPlanRepairFile(sessions, owner, directory, filePath, file, Capture(filePath), structuredFallback);
             await repair.AssertOwnedAsync(filePath, token);
             var bytes = StrictUtf8.GetBytes(content);
             await file.WriteAsync(bytes, token); await file.FlushAsync(token);
@@ -84,10 +83,13 @@ internal sealed class CompactPlanRepairFile : IAsyncDisposable
         string target; string updated;
         if (name == "edit")
         {
-            if (args.Count != 3 || SessionWait.Text(args["filePath"]) is not string path
+            if (SessionWait.Text(args["filePath"]) is not string path
                 || SessionWait.Text(args["oldText"]) is not string oldText || SessionWait.Text(args["newText"]) is not string newText)
                 throw new InvalidDataException("edit requires filePath, oldText and newText strings.");
             target = path;
+            await AssertOwnedAsync(target, token);
+            var authorized = (JsonObject)args.DeepClone(); authorized["filePath"] = target;
+            await sessions.AuthorizeToolAsync(owner, new(name, "node", name, authorized), sessions.IdentityWorkspace(owner), token);
             var current = await ReadAsync(target, token);
             var count = oldText.Length == 0 ? current.Length + 1 : CountOccurrences(current, oldText);
             if (count == 0) throw new InvalidDataException("Could not find oldText in the pending compact repair file.");
@@ -96,15 +98,16 @@ internal sealed class CompactPlanRepairFile : IAsyncDisposable
         }
         else if (name == "apply_patch")
         {
-            if (args.Count != 1 || SessionWait.Text(args["input"]) is not string input) throw new InvalidDataException("apply_patch requires input string.");
+            if (SessionWait.Text(args["input"]) is not string input) throw new InvalidDataException("apply_patch requires input string.");
             var patches = WorkspacePatch.Parse(input);
             if (patches.Length != 1 || patches[0].Action != "update") throw new InvalidDataException("Repair patches must update only the pending compact repair file.");
             target = patches[0].Path;
+            await AssertOwnedAsync(target, token);
+            await sessions.AuthorizeToolAsync(owner, new(name, "node", name, (JsonObject)args.DeepClone()), sessions.IdentityWorkspace(owner), token);
             updated = WorkspacePatch.Update(await ReadAsync(target, token), patches[0].Lines, target);
         }
         else throw new InvalidDataException("Only edit or apply_patch may repair compact arguments.");
 
-        await sessions.AuthorizeToolAsync(owner, new(name, "node", name, new JsonObject { ["filePath"] = target, ["input"] = args["input"]?.DeepClone() }), sessions.IdentityWorkspace(owner), token);
         await AssertOwnedAsync(target, token);
         file.Position = 0; file.SetLength(0);
         var bytes = StrictUtf8.GetBytes(updated); await file.WriteAsync(bytes, token); await file.FlushAsync(token);
@@ -134,13 +137,19 @@ internal sealed class CompactPlanRepairFile : IAsyncDisposable
 
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private static int CountOccurrences(string text, string needle) { var count = 0; for (var index = 0; (index = text.IndexOf(needle, index, StringComparison.Ordinal)) >= 0; index += Math.Max(needle.Length, 1)) count++; return count; }
-    private static void EnsureDirectory(string path, int mode) { Directory.CreateDirectory(path); SetMode(path, mode); if (File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint)) throw new InvalidDataException("The compact repair directory must not be a symbolic link."); }
+    private static void EnsureDirectory(string path, int mode)
+    {
+        if (Directory.Exists(path) && File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint)) throw new InvalidDataException("The compact repair directory must not be a symbolic link.");
+        var existed = Directory.Exists(path); Directory.CreateDirectory(path);
+        if (!existed) SetMode(path, mode);
+        if (File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint)) throw new InvalidDataException("The compact repair directory must not be a symbolic link.");
+    }
     private static void SetMode(string path, int mode) { if (OperatingSystem.IsLinux()) File.SetUnixFileMode(path, (UnixFileMode)mode); }
     private static void TryDelete(string path) { try { if (File.Exists(path)) File.Delete(path); else if (Directory.Exists(path)) Directory.Delete(path); } catch { } }
     private static bool Matches(string path, FileIdentity identity) { try { var current = Stat(path, false); return current.Regular && current.Ino == identity.Ino && current.DevMajor == identity.DevMajor && current.DevMinor == identity.DevMinor; } catch { return false; } }
-    private static FileIdentity Capture(string path, FileStream file) => Stat(path, false) with { Held = Stat(file.SafeFileHandle.DangerousGetHandle().ToInt32(), true) };
+    private static FileIdentity Capture(string path) => Stat(path, false);
 
-    private sealed record FileIdentity(bool Regular, bool Directory, uint Uid, ulong Ino, uint DevMajor, uint DevMinor, ushort Mode, uint Nlink, FileIdentity? Held = null);
+    private sealed record FileIdentity(bool Regular, bool Directory, uint Uid, ulong Ino, uint DevMajor, uint DevMinor, ushort Mode, uint Nlink);
     private static FileIdentity Stat(string path, bool held) => StatCore(held ? "" : path, held ? StatxFlags.EmptyPath : StatxFlags.NoFollow, held ? -1 : -100);
     private static FileIdentity Stat(int fd, bool held) => StatCore("", StatxFlags.EmptyPath, fd);
     private static FileIdentity StatCore(string path, int flags, int dirfd)

@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
+using Foxwarm.Tools;
 
 namespace Foxwarm.Sessions;
 
@@ -16,7 +17,6 @@ internal sealed partial class SessionCompactor
         var routeKey = SessionWait.Text(snapshot.AuthorityEnvelope["model"]) ?? capturedDefault;
         var rawEffort = SessionWait.Text(snapshot.AuthorityEnvelope["effort"]);
         var turnId = Guid.NewGuid().ToString();
-        var operation = new object();
         CompactPlanRepairFile? repairFile = null;
         async Task<string> ResolvePrompt(ConcreteHostModel leaf, CancellationToken token)
         {
@@ -56,18 +56,20 @@ internal sealed partial class SessionCompactor
                 {
                 try
                 {
-                    if (CancellationRequested(calls[0]!))
+                    var controlled = ToolCallControls.Plan([calls[0]!])[0];
+                    if (controlled.Preset is not null)
                     {
-                        AppendToolFeedback(detached, calls[0]!, "Compact repair canceled.");
+                        var canceled = controlled.Preset["canceled"]?.GetValue<bool>() == true;
+                        AppendToolFeedback(detached, calls[0]!, canceled ? "Compact repair canceled." : $"Compact repair failed: {SessionWait.Text(controlled.Preset["message"])}");
                     }
                     else
                     {
-                        await repairFile.ApplyAsync(calls[0]!, cancellationToken);
+                        await repairFile.ApplyAsync(controlled.Call, cancellationToken);
                         AppendToolFeedback(detached, calls[0]!, "Compact arguments file updated.");
                     }
                     prompt = RepairInstructions(repairFile);
                 }
-                catch (Exception error) when (error is InvalidDataException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+                catch (Exception error) when (error is InvalidDataException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or ToolAuthorizationDeniedException)
                 {
                     AppendToolFeedback(detached, calls[0]!, $"Compact repair failed: {error.Message}");
                     prompt = RepairInstructions(repairFile);
@@ -90,8 +92,13 @@ internal sealed partial class SessionCompactor
                     if (args.Count != 1 || SessionWait.Text(args["argsFilePath"]) is not string path || path.Length == 0)
                         throw new CompactPlanInvalidException("Supply argsFilePath alone, or direct plan fields without argsFilePath.");
                     if (repairFile is null) throw new CompactPlanInvalidException("No repair file is pending for this compact operation.");
-                    var text = await repairFile.ReadAsync(path, cancellationToken);
-                    var parsed = JsonNode.Parse(text) as JsonObject ?? throw new CompactPlanInvalidException("The repair file must contain valid JSON with a top-level object.");
+                    string text;
+                    try { text = await repairFile.ReadAsync(path, cancellationToken); }
+                    catch (Exception readError) when (readError is InvalidDataException or IOException or UnauthorizedAccessException)
+                    { throw new CompactPlanInvalidException("The repair file could not be read: " + readError.Message); }
+                    JsonObject parsed;
+                    try { parsed = JsonNode.Parse(text) as JsonObject ?? throw new CompactPlanInvalidException("The repair file must contain valid JSON with a top-level object."); }
+                    catch (JsonException parseError) { throw new CompactPlanInvalidException("The repair file must contain valid JSON: " + parseError.Message); }
                     if (parsed.ContainsKey("argsFilePath")) throw new CompactPlanInvalidException("The repair file must contain direct plan fields, not argsFilePath.");
                     args = parsed;
                 }
@@ -101,11 +108,12 @@ internal sealed partial class SessionCompactor
                 {
                 prompt = PlanRejected(error.Message, repairFile);
                 AppendRejectedCalls(detached, calls, prompt);
-                if (repairFile is null && !calls[0]!.AsObject().ContainsKey("argsFilePath"))
+                var submittedArgs = calls[0]!["args"] as JsonObject;
+                if (repairFile is null && submittedArgs?.ContainsKey("argsFilePath") != true)
                 {
                     try
                     {
-                        repairFile = await CompactPlanRepairFile.CreateAsync(calls[0]!, sessions ?? throw new NotSupportedException("Compact repair requires a hosted SessionManager."), hosted, operation, cancellationToken);
+                        repairFile = await CompactPlanRepairFile.CreateAsync(calls[0]!, sessions ?? throw new NotSupportedException("Compact repair requires a hosted SessionManager."), hosted, cancellationToken);
                         prompt = PlanRejected(error.Message, repairFile);
                     }
                     catch (Exception saveError) when (saveError is InvalidDataException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
@@ -120,9 +128,6 @@ internal sealed partial class SessionCompactor
         }
         throw new InvalidDataException("Compaction skipped after 15 compact planning round(s) because no valid plan was produced via submit_compact_plan.");
     }
-
-    private static bool CancellationRequested(JsonObject call) => call["args"] is JsonObject args
-        && (args["__cancelTool"]?.GetValue<bool>() == true || args["__cancelAllTools"]?.GetValue<bool>() == true);
 
     private static string RepairInstructions(CompactPlanRepairFile? repairFile) => repairFile is null
         ? "Submit corrected direct plan fields with submit_compact_plan."

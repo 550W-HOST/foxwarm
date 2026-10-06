@@ -44,9 +44,6 @@ internal sealed partial class SessionCompactor
         this.hosted = hosted; this.sessions = sessions; this.store = store; this.models = models; this.baseOptions = baseOptions;
         this.requests = requests; this.memory = memory; this.definitions = definitions;
     }
-    public SessionCompactor(SessionOwner hosted, PersistentSessionAuthorityStore store,
-        HostModels models, ResponsesClientOptions baseOptions, ModelRequestOwner requests, AgentMemory memory, Func<JsonArray>? definitions = null)
-        : this(hosted, null!, store, models, baseOptions, requests, memory, definitions) { }
     public bool Active { get { lock (gate) return active is not null; } }
     public bool Standalone { get { lock (gate) return active is { Standalone: true, OwnsProcessor: true }; } }
     public bool HasCompletedJob { get { lock (gate) return active is { Background: true, Ready: true, Applying: false } run && !run.Cancellation.IsCancellationRequested; } }
