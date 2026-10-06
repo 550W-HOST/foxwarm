@@ -92,7 +92,7 @@ public sealed class MainLocalToolsTests
     public async Task Real_main_turn_dispatches_local_tools_and_externalizes_then_saves_crop()
     {
         using var temp = new TempDirectory(); var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work"); Directory.CreateDirectory(work);
-        await using var peer = new ScriptedResponsesSequenceServer(4, async (index, stream, _) =>
+        await using var peer = new ScriptedResponsesSequenceServer(3, async (index, stream, _) =>
         {
             JsonArray output;
             if (index == 0)
@@ -181,19 +181,51 @@ public sealed class MainLocalToolsTests
     [Fact]
     public async Task Cross_target_stop_requires_permission_and_stops_a_busy_target()
     {
-        await using var f = await Fixture.Create();
-        var target = await f.Manager.CreateNamedAsync("main", "target", null, null);
-        target.Entry.MarkBusy();
-        var stopped = await f.Call("stop_session", new JsonObject { ["sessionId"] = target.Id });
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        var work = Path.Combine(temp.Path, "work");
+        await using var peer = new ScriptedResponsesSequenceServer(3, async (index, stream, _) =>
+        {
+            JsonArray output;
+            if (index == 0)
+                output = new JsonArray(FunctionCall("target-exec", "exec", new JsonObject { ["command"] = "sleep 30", ["timeoutMs"] = 30000 }));
+            else if (index == 1)
+                output = new JsonArray(FunctionCall("stop-target", "stop_session", new JsonObject { ["sessionId"] = "target" }));
+            else
+                output = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = "denied turn complete" });
+            var payload = new JsonObject { ["type"] = "response.completed", ["response"] = new JsonObject { ["id"] = $"response-{index}", ["output"] = output } };
+            await LoopbackResponsesServer.WriteResponseAsync(stream, 200, "text/event-stream", Encoding.UTF8.GetBytes("data: " + payload.ToJsonString() + "\n\n"));
+        });
+        var options = new ResponsesClientOptions(peer.BaseUri, "wire", "a/wire", "", "", 20000);
+        await using var manager = new SessionManager(data, work, options, HostModels.ForTest(options));
+        await manager.LoadMainHostAsync();
+        var target = await manager.CreateNamedAsync("main", "target", null, null);
+        var source = await manager.CreateNamedAsync("main", "source", null, null);
+        await target.Registry.Ingress.EnqueueAsync(target.Id, QueueItem.UserText("run"));
+        await peer.RequestAt(0);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (!target.Processing && DateTime.UtcNow < deadline) await Task.Yield();
+        Assert.True(target.Processing);
+        await manager.Authorization.InstallAsync(Encoding.UTF8.GetBytes("version: 1\ndefaultAction: allow\nrules:\n- id: deny-stop\n  action: deny\n  match: {tool: {source: builtin, name: stop_session}}"), CancellationToken.None);
+        await source.Registry.Ingress.EnqueueAsync(source.Id, QueueItem.UserText("try stop"));
+        await peer.RequestAt(1);
+        await peer.RequestAt(2);
+        Assert.True(target.Processing);
+        await manager.Authorization.InstallAsync(Encoding.UTF8.GetBytes("version: 1\ndefaultAction: allow"), CancellationToken.None);
+        await using var mcp = new Foxwarm.McpClient(Path.Combine(temp.Path, "mcp"));
+        var definitions = MainLocalToolDefinitions.Definitions();
+        foreach (var definition in ArchiveControlTools.Definitions().OfType<JsonObject>()) definitions.Add(definition.DeepClone());
+        var registry = SessionToolExecutor.CreateRegistry(definitions, mcp, _ => manager.IdentityWorkspace(source)!.ToolDirectory);
+        var tools = new SessionToolExecutor(new WorkspaceTools(manager.IdentityWorkspace(source)!.ToolDirectory), source, manager, registry);
+        tools.BeginTurn();
+        var stopped = await tools.ExecuteAsync(new JsonObject { ["id"] = "direct-stop", ["name"] = "stop_session", ["args"] = new JsonObject { ["sessionId"] = target.Id } }, default);
         Assert.Null(Error(stopped));
-        Assert.Contains("Stop signal sent", stopped["output"]!.GetValue<string>());
-        Assert.True(target.Entry.Snapshot().Stopping);
-
-        await f.Manager.Authorization.InstallAsync(
-            Encoding.UTF8.GetBytes("version: 1\ndefaultAction: allow\nrules:\n- id: deny-stop\n  action: deny\n  match: {tool: {source: builtin, name: stop_session}}"),
-            CancellationToken.None);
-        var denied = await f.Call("stop_session", new JsonObject { ["sessionId"] = target.Id });
-        Assert.Equal("tool_authorization_denied", Error(denied));
+        Assert.Contains("in-flight request was canceled", stopped["output"]!.GetValue<string>());
+        await target.DrainForegroundAsync();
+        Assert.False(target.Entry.Snapshot().Busy);
+        Assert.False(target.Entry.Snapshot().Stopping);
+        Assert.Contains(target.History(), row => row.ToJsonString().Contains("sleep 30", StringComparison.Ordinal));
+        Assert.Contains(source.History(), row => row.ToJsonString().Contains("stop_session", StringComparison.Ordinal));
     }
 
     [Fact]
