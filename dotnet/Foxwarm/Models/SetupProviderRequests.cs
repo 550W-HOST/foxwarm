@@ -151,33 +151,16 @@ internal static class SetupProviderRequests
             SetHeader(request, "anthropic-version", "2023-06-01");
         }
         AddHeaders(request, model.Configuration["extraHeaders"] as JsonObject);
-        var contentType = (model.Configuration["extraHeaders"] as JsonObject)
-            ?.FirstOrDefault(pair =>
-                pair.Key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase)
-            )
-            .Value;
-        if (contentType is not null)
-        {
-            request.Content = new StringContent(" ");
-            request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(
-                SessionWait.Text(contentType) ?? ""
-            );
-        }
-        using var headerClient = contentType is null
-            ? null
-            : new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
-        if (contentType is not null)
-            headerClient!.DefaultRequestHeaders.TryAddWithoutValidation(
-                "Content-Type",
-                SessionWait.Text(contentType) ?? ""
-            );
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(ListTimeoutMs);
         HttpResponseMessage response;
         try
         {
-            response = await (headerClient ?? http)
-                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token)
+            response = await http.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    timeout.Token
+                )
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -322,20 +305,14 @@ internal static class SetupProviderRequests
 
     private static void SetHeader(HttpRequestMessage request, string name, string value)
     {
-        if (name.Equals("Content-Type", StringComparison.OrdinalIgnoreCase))
+        if (request.Headers.TryAddWithoutValidation(name, value))
         {
-            request.Content?.Headers.Remove(name);
-            request.Content ??= new StringContent(" ");
-            request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(
-                value
-            );
+            request.Headers.Remove(name);
+            request.Headers.TryAddWithoutValidation(name, value);
             return;
         }
-        request.Headers.Remove(name);
-        request.Content?.Headers.Remove(name);
-        if (request.Headers.TryAddWithoutValidation(name, value))
-            return;
         request.Content ??= new ByteArrayContent([]);
+        request.Content.Headers.Remove(name);
         request.Content.Headers.TryAddWithoutValidation(name, value);
     }
 

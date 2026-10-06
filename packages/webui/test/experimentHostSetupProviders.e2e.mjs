@@ -62,9 +62,15 @@ try {
     if (request.method === 'GET' && (request.url === '/models' || request.url?.startsWith('/v1/models?'))) {
       const anthropic = request.url.startsWith('/v1/models?')
       const overridden = request.headers['x-fixture-mode'] === 'override'
+      const chunks = []
+      for await (const chunk of request) chunks.push(chunk)
+      assert.equal(Buffer.concat(chunks).length, 0)
       assert.equal(request.headers.authorization, anthropic ? undefined : `Bearer ${overridden ? 'override-list' : listToken}`)
       assert.equal(request.headers['x-api-key'], anthropic ? listToken : undefined)
-      if (overridden) assert.equal(request.headers['content-type'], 'application/custom')
+      if (overridden) {
+        assert.equal(request.headers['content-type'], 'application/custom')
+        assert.equal(request.headers['content-language'], 'en')
+      }
       if (anthropic) assert.equal(request.headers['anthropic-version'], '2023-06-01')
       listRequests.push({ url: request.url, anthropic })
       return sendJson(response, 200, {
@@ -132,7 +138,7 @@ try {
     providerType: 'openai-responses',
     baseUrl: providerRoot,
     apiKey: listToken,
-    extraHeaders: { Authorization: 'Bearer override-list', 'Content-Type': 'application/custom', 'x-fixture-mode': 'override' },
+    extraHeaders: { Authorization: 'Bearer override-list', 'Content-Type': 'application/custom', 'Content-Language': 'en', 'x-fixture-mode': 'override' },
   })
   assert.equal(overridden.status, 200, JSON.stringify(overridden))
   const anthropic = await fixture.api('POST', '/api/setup/models/list', {
