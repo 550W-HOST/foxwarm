@@ -188,7 +188,7 @@ public sealed class MainLocalToolsTests
         {
             JsonArray output;
             if (index == 0)
-                output = new JsonArray(FunctionCall("target-exec", "exec", new JsonObject { ["command"] = "sleep 30", ["timeoutMs"] = 30000 }));
+                output = new JsonArray(FunctionCall("target-exec", "exec", new JsonObject { ["command"] = "sleep 30" }));
             else if (index == 1)
                 output = new JsonArray(FunctionCall("stop-target", "stop_session", new JsonObject { ["sessionId"] = "target" }));
             else
