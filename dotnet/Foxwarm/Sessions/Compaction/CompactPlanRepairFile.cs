@@ -41,11 +41,14 @@ internal sealed class CompactPlanRepairFile : IAsyncDisposable
             content = args.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
         }
 
-        var agent = sessions.IdentityWorkspace(owner).ToolDirectory;
-        var root = Path.Combine(Path.GetFullPath(agent), ".temp");
+        var agent = AuthorizationPaths.CanonicalPotential(Path.GetFullPath(sessions.IdentityWorkspace(owner).ToolDirectory));
+        var literalRoot = Path.Combine(agent, ".temp");
+        var root = AuthorizationPaths.CanonicalPotential(literalRoot);
+        if (root != literalRoot) throw new InvalidDataException("The compact repair root must not be a symbolic link.");
         EnsureDirectory(root, 448);
         var directory = Path.Combine(root, "compact-plan-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory); SetMode(directory, 448);
+        if (AuthorizationPaths.CanonicalPotential(directory) != directory) { TryDelete(directory); throw new InvalidDataException("The compact repair operation directory must not be a symbolic link."); }
         var filePath = Path.Combine(directory, "plan.json");
         FileStream? file = null;
         try
@@ -117,7 +120,7 @@ internal sealed class CompactPlanRepairFile : IAsyncDisposable
     private async Task AssertOwnedAsync(string requestedPath, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        if (Volatile.Read(ref closed) != 0 || requestedPath != filePath)
+        if (Volatile.Read(ref closed) != 0 || requestedPath != filePath || AuthorizationPaths.CanonicalPotential(requestedPath) != filePath)
             throw new InvalidDataException("Only the pending repair file for this compact operation may be used.");
         var named = Stat(filePath, false); var held = Stat(file.SafeFileHandle.DangerousGetHandle().ToInt32(), true); var directoryInfo = Stat(directory, false);
         if (!named.Regular || named.Nlink != 1 || named.Uid != identity.Uid || named.Ino != identity.Ino || named.DevMajor != identity.DevMajor || named.DevMinor != identity.DevMinor

@@ -60,7 +60,9 @@ internal sealed partial class SessionCompactor
                     if (controlled.Preset is not null)
                     {
                         var canceled = controlled.Preset["canceled"]?.GetValue<bool>() == true;
-                        AppendToolFeedback(detached, calls[0]!, canceled ? "Compact repair canceled." : $"Compact repair failed: {SessionWait.Text(controlled.Preset["message"])}");
+                        var presetType = SessionWait.Text(controlled.Preset["error"]?["type"]);
+                        var presetMessage = SessionWait.Text(controlled.Preset["message"]) ?? SessionWait.Text(controlled.Preset["error"]?["message"]);
+                        AppendToolFeedback(detached, calls[0]!, canceled ? "Compact repair canceled." : $"Compact repair failed [{presetType}]: {presetMessage}");
                     }
                     else
                     {

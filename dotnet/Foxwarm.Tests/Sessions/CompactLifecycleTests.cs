@@ -23,7 +23,7 @@ public sealed class CompactLifecycleTests
         var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work"); Directory.CreateDirectory(work);
         SessionManager? managerForPeer = null; var policyPath = Path.Combine(data, "state", "tool-authorization.yaml");
-        await using var peer = new ScriptedResponsesSequenceServer(6, async (index, stream, captured) =>
+        await using var peer = new ScriptedResponsesSequenceServer(8, async (index, stream, captured) =>
         {
             var texts = JsonNode.Parse(captured.Body)!["input"]!.AsArray().OfType<JsonObject>()
                 .SelectMany(row => (row["content"] as JsonArray)?.OfType<JsonObject>() ?? [])
@@ -32,30 +32,34 @@ public sealed class CompactLifecycleTests
             var match = Regex.Matches(all, "^- M#(\\d+)(?:-#(\\d+))?\\s", RegexOptions.Multiline);
             var start = long.Parse(match[0].Groups[1].Value); var last = match[^1]; var end = long.Parse(last.Groups[2].Success ? last.Groups[2].Value : last.Groups[1].Value);
             var validBlocks = new JsonArray(new JsonObject { ["level"] = 1, ["sourceKind"] = "message", ["sourceStart"] = start, ["sourceEnd"] = end, ["summary"] = "Repaired compact plan." });
-            var path = index == 0 ? null : Directory.EnumerateFiles(Path.Combine(work, ".temp"), "plan.json", SearchOption.AllDirectories).Single();
+            var path = index <= 1 ? null : Directory.EnumerateFiles(Path.Combine(work, ".temp"), "plan.json", SearchOption.AllDirectories).Single();
             JsonObject call;
             if (index == 0)
-                call = FunctionCall("invalid", "submit_compact_plan", new JsonObject { ["replaceAsBlocks"] = new JsonArray() }, raw: "{\"replaceAsBlocks\":[]}");
+                call = FunctionCall("no-pending-file", "submit_compact_plan", new JsonObject { ["argsFilePath"] = "/tmp/no-pending-compact-plan.json" });
             else if (index == 1)
-                call = FunctionCall("wrong-path", "edit", new JsonObject { ["filePath"] = path! + ".wrong", ["oldText"] = "[]", ["newText"] = validBlocks.ToJsonString() });
+                call = FunctionCall("malformed", "submit_compact_plan", new JsonObject(), raw: "{\"replaceAsBlocks\":");
             else if (index == 2)
-                call = FunctionCall("cancel", "edit", new JsonObject { ["filePath"] = path!, ["oldText"] = "[]", ["newText"] = validBlocks.ToJsonString(), ["__cancelTool"] = true });
+                call = FunctionCall("bad-file-submit", "submit_compact_plan", new JsonObject { ["argsFilePath"] = path! });
             else if (index == 3)
-                call = FunctionCall("repair", "edit", new JsonObject { ["filePath"] = path!, ["oldText"] = "[]", ["newText"] = validBlocks.ToJsonString() });
+                call = FunctionCall("cancel-all", "edit", new JsonObject { ["filePath"] = path!, ["oldText"] = "{\"replaceAsBlocks\":", ["newText"] = "ignored", ["__cancelAllToolsThisTurn"] = true });
             else if (index == 4)
+                call = FunctionCall("false-control", "edit", new JsonObject { ["filePath"] = path!, ["oldText"] = "{\"replaceAsBlocks\":", ["newText"] = "ignored", ["__cancelTool"] = false });
+            else if (index == 5)
+                call = FunctionCall("deny-edit", "edit", new JsonObject { ["filePath"] = path!, ["oldText"] = "{\"replaceAsBlocks\":", ["newText"] = "ignored" });
+            else if (index == 6)
             {
-                var patch = "*** Begin Patch\n*** Update File: " + path + "\n-{\"replaceAsBlocks\":[]}\n+{\"replaceAsBlocks\":" + validBlocks.ToJsonString() + "}\n*** End Patch";
+                var patch = "*** Begin Patch\n*** Update File: " + path + "\n-{\"replaceAsBlocks\":\n+{\"replaceAsBlocks\":" + validBlocks.ToJsonString() + "}\n*** End Patch";
                 call = FunctionCall("repair-after-deny", "apply_patch", new JsonObject { ["input"] = patch });
             }
             else
                 call = FunctionCall("submit", "submit_compact_plan", new JsonObject { ["argsFilePath"] = path! });
-            if (index == 3)
+            if (index == 5)
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(policyPath)!);
                 await File.WriteAllTextAsync(policyPath, "version: 1\nrules: [{id: deny-edit, action: deny, match: {tool: {source: node, name: edit}}}]\n");
                 managerForPeer!.Authorization.Invalidate();
             }
-            else if (index == 4)
+            else if (index == 6)
             {
                 File.Delete(policyPath); managerForPeer!.Authorization.Invalidate();
             }
@@ -79,11 +83,13 @@ public sealed class CompactLifecycleTests
         var admission = await owner.Compactor.StartManualAsync(); Assert.True(admission.Started);
         try { await owner.Compactor.DrainAsync().WaitAsync(TimeSpan.FromSeconds(30)); } catch (TimeoutException error) { throw new TimeoutException($"compact drain timeout; provider requests={peer.RequestCount}", error); }
         await owner.DrainAsync().WaitAsync(TimeSpan.FromSeconds(30));
-        Assert.Equal(6, peer.RequestCount);
-        Assert.Contains("This file was saved from the original provider arguments.", (await peer.RequestAt(1)).Body);
-        Assert.Contains("Compact repair failed", (await peer.RequestAt(2)).Body);
-        Assert.Contains("Compact repair canceled", (await peer.RequestAt(3)).Body);
-        Assert.Contains("Compact repair failed", (await peer.RequestAt(4)).Body);
+        Assert.Equal(8, peer.RequestCount);
+        Assert.DoesNotContain("compact-plan-", (await peer.RequestAt(1)).Body);
+        Assert.Contains("This file was saved from the original provider arguments.", (await peer.RequestAt(2)).Body);
+        Assert.Contains("repair file must contain valid JSON", (await peer.RequestAt(3)).Body);
+        Assert.Contains("Compact repair canceled", (await peer.RequestAt(4)).Body);
+        Assert.Contains("invalid_tool_control_argument", (await peer.RequestAt(6)).Body);
+        Assert.Contains("Compact repair failed", (await peer.RequestAt(7)).Body);
         Assert.Single(manager.Catalog.List());
         Assert.Single(owner.Archive.ReadBlocks()); Assert.True(owner.Entry.Snapshot().History.Count < before);
         Assert.DoesNotContain(owner.Entry.Snapshot().History, row => row.ToJsonString().Contains("Compact arguments file updated", StringComparison.Ordinal));
