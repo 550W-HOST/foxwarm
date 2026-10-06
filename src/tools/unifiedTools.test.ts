@@ -1175,7 +1175,10 @@ test('recall model-facing schema separates target/vector retrieval from literal 
 test('submit_compact_plan exposes the replaceAsBlocks array-or-JSON-string contract', () => {
   const compactDef = modelFacingDefinitions.find(def => def.name === 'submit_compact_plan');
   assert.ok(compactDef);
-  assert.deepEqual(compactDef.parameters.required, ['replaceAsBlocks']);
+  assert.equal(compactDef.parameters.required, undefined);
+  assert.equal((compactDef.parameters as any).oneOf, undefined);
+  assert.equal((compactDef.parameters as any).anyOf, undefined);
+  assert.equal(compactDef.parameters.properties.argsFilePath.type, 'string');
   assert.equal(Object.prototype.hasOwnProperty.call(compactDef.parameters.properties, 'createBlocksJson'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(compactDef.parameters.properties, 'createBlocks'), false);
   const replacementSchema = compactDef.parameters.properties.replaceAsBlocks as any;

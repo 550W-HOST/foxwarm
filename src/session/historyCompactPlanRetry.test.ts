@@ -1977,3 +1977,165 @@ test('clear, reload and later compact keep block identities and new fork caps wi
     for (const sessionId of createdIds.reverse()) await manager.deleteSession(sessionId).catch(() => {});
   }
 });
+
+function repairPathFromFeedback(parts: MessagePart[] | null): string {
+  const match = flattenPrompt(parts).match(/Repair the JSON arguments in ("(?:[^"\\]|\\.)*")/);
+  assert(match, 'feedback identifies the operation repair file');
+  return JSON.parse(match[1]);
+}
+
+test('malformed raw compact arguments retain one file through JSON and range retries, exact edits and blocked tools', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const { parseFunctionCallArgs } = await import('../toolCallArgs');
+  const session = await makeCompactableSession(archive, makeSessionId('compact_file_repair'));
+  const before = structuredClone(session.history);
+  const originalChat = llm.chat;
+  const invalidArgs = { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 999, summary: 'repaired raw résumé 🦊' }] };
+  const validJson = JSON.stringify(invalidArgs, null, 2) + '\n';
+  const raw = validJson.slice(0, -2);
+  let filePath = '';
+  let round = 0;
+  try {
+    (llm as any).chat = async (parts: MessagePart[] | null, active: Session, _iteration: number, options: any) => {
+      round += 1;
+      assert.deepEqual(session.history, before);
+      if (round > 1) {
+        const currentPath = repairPathFromFeedback(parts);
+        if (filePath) assert.equal(currentPath, filePath);
+        filePath = currentPath;
+        assert.deepEqual(await fs.readdir(path.dirname(filePath)), ['plan.json']);
+        const expected = round <= 3 ? raw : round <= 5 ? validJson : validJson.replace('999', '2');
+        assert.deepEqual(await fs.readFile(filePath), Buffer.from(expected));
+        const responses = active.history.flatMap(message => message.parts).filter(part => part.functionResponse?.name === 'submit_compact_plan');
+        assert(responses.length > 0);
+        assert(!JSON.stringify(responses).includes(raw), 'tool feedback does not duplicate malformed raw JSON');
+      }
+      let toolCall: any;
+      switch (round) {
+        case 1: toolCall = { name: 'submit_compact_plan', ...parseFunctionCallArgs(raw) }; break;
+        case 2: toolCall = { name: 'submit_compact_plan', args: { argsFilePath: filePath } }; break;
+        case 3: toolCall = { name: 'edit', args: { filePath, oldText: '\n  ]\n', newText: '\n  ]\n}\n' } }; break;
+        case 4: toolCall = { name: 'submit_compact_plan', args: { argsFilePath: filePath } }; break;
+        case 5: toolCall = { name: 'apply_patch', args: { input: `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-      "sourceEnd": 999,\n+      "sourceEnd": 2,\n*** End Patch` } }; break;
+        case 6: toolCall = { name: 'exec', args: { command: 'must never execute' } }; break;
+        case 7: toolCall = { name: 'write_memory', args: { filePath: 'must-not-exist.md', content: 'must not write' } }; break;
+        case 8: toolCall = { name: 'submit_compact_plan', args: { argsFilePath: path.join(path.dirname(filePath), 'other.json') } }; break;
+        case 9: toolCall = { name: 'submit_compact_plan', args: { argsFilePath: filePath, replaceAsBlocks: [] } }; break;
+        default: toolCall = { name: 'submit_compact_plan', args: { argsFilePath: filePath } };
+      }
+      toolCall.id = `file-round-${round}`;
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+    await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0.5 }, 'await');
+    assert.equal(round, 10);
+    assert.equal(await fs.pathExists(filePath), false);
+    assert.equal(await fs.pathExists(path.dirname(filePath)), false);
+    assert(session.history.some(message => message.parts.some(part => (part.text || '').includes('repaired raw résumé 🦊'))));
+    assert(!JSON.stringify(session.history).includes(filePath));
+    assert(!JSON.stringify(session.history).includes('must never execute'));
+    assert.equal(await fs.pathExists(path.join(path.dirname(path.dirname(path.dirname(filePath))), 'memory', 'must-not-exist.md')), false);
+    const records = await archive.readArchiveMessagesBySeqRange(session.id, 1, session.nextMessageSeq);
+    assert(!JSON.stringify(records).includes(filePath), 'repair feedback stays outside Archive');
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('valid raw compact JSON with invalid endpoints is saved without reserialization and repaired with edit', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const { parseFunctionCallArgs } = await import('../toolCallArgs');
+  const session = await makeCompactableSession(archive, makeSessionId('compact_valid_raw_repair'));
+  const originalChat = llm.chat;
+  const raw = ' { "replaceAsBlocks" : [{"level":1,"sourceKind":"message","sourceStart":1,"sourceEnd":99,"summary":"exact raw repair"}] }\r\n';
+  let filePath = '';
+  let round = 0;
+  try {
+    (llm as any).chat = async (parts: MessagePart[] | null, _active: Session, _iteration: number, options: any) => {
+      round += 1;
+      let toolCall: any;
+      if (round === 1) toolCall = { name: 'submit_compact_plan', ...parseFunctionCallArgs(raw) };
+      else {
+        const currentPath = repairPathFromFeedback(parts);
+        if (filePath) assert.equal(currentPath, filePath);
+        filePath = currentPath;
+        if (round <= 4) {
+          assert.deepEqual(await fs.readFile(filePath), Buffer.from(raw));
+          toolCall = { name: 'edit', args: { filePath, oldText: '"sourceEnd":99', newText: '"sourceEnd":2', ...(round === 2 ? { __cancelTool: true } : round === 3 ? { __cancelTool: false } : {}) } };
+        } else toolCall = { name: 'submit_compact_plan', args: { argsFilePath: filePath } };
+      }
+      toolCall.id = `valid-raw-${round}`;
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+    await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0.5 }, 'await');
+    assert.equal(round, 5);
+    assert.equal(await fs.pathExists(filePath), false);
+    assert(session.history.some(message => message.parts.some(part => (part.text || '').includes('exact raw repair'))));
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('pending repair files are cleaned after planner error or round exhaustion without changing live history', async () => {
+  const { sessionHistory, archive, llm, compactPlan } = await loadDeps();
+  const originalChat = llm.chat;
+  try {
+    for (const outcome of ['provider-error', 'round-exhaustion'] as const) {
+      const session = await makeCompactableSession(archive, makeSessionId(`compact_repair_${outcome}`));
+      const before = structuredClone(session.history);
+      let filePath = '';
+      let round = 0;
+      (llm as any).chat = async (parts: MessagePart[] | null, _active: Session, _iteration: number, options: any) => {
+        round += 1;
+        if (round > 1) {
+          const currentPath = repairPathFromFeedback(parts);
+          if (filePath) assert.equal(currentPath, filePath);
+          filePath = currentPath;
+          if (outcome === 'provider-error') throw new Error('held planner failure');
+        }
+        const toolCall = { id: `exhaust-${round}`, name: 'submit_compact_plan', args: {}, rawArgsText: '{', argsParseError: 'bad JSON' };
+        await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+        return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+      };
+      await assert.rejects(sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0.5 }, 'await'), outcome === 'provider-error' ? /held planner failure/ : /Compaction skipped after 15/);
+      assert.equal(round, outcome === 'provider-error' ? 2 : compactPlan.COMPACT_FLOW_MAX_ROUNDS);
+      assert.deepEqual(session.history, before);
+      assert.equal(await fs.pathExists(filePath), false);
+      assert.equal(await fs.pathExists(path.dirname(filePath)), false);
+    }
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('cancelling a compact planner with a pending repair file cleans it and preserves live history', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_repair_cancel'));
+  const before = structuredClone(session.history);
+  const deps = makeDepsForSession(session, { count: 0 });
+  const originalChat = llm.chat;
+  let started!: () => void;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  let round = 0;
+  let filePath = '';
+  try {
+    (llm as any).chat = async (parts: MessagePart[] | null, _active: Session, _iteration: number, options: any) => {
+      round += 1;
+      if (round === 1) {
+        const toolCall = { id: 'cancel-invalid', name: 'submit_compact_plan', args: {}, rawArgsText: '{', argsParseError: 'bad JSON' };
+        await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+        return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+      }
+      filePath = repairPathFromFeedback(parts);
+      assert.equal(await fs.readFile(filePath, 'utf8'), '{');
+      started();
+      await new Promise<void>((_resolve, reject) => options.abortSignal.addEventListener('abort', () => {
+        const error = new Error('aborted'); error.name = 'AbortError'; reject(error);
+      }, { once: true }));
+      throw new Error('unreachable');
+    };
+    const running = sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.5 }, 'await');
+    await entered;
+    assert.deepEqual(await sessionHistory.cancelSessionCompaction(deps, session.id), { outcome: 'cancelled', phase: 'planning' });
+    await running;
+    assert.equal(round, 2);
+    assert.deepEqual(session.history, before);
+    assert.equal(await fs.pathExists(filePath), false);
+    assert.equal(await fs.pathExists(path.dirname(filePath)), false);
+  } finally { (llm as any).chat = originalChat; }
+});

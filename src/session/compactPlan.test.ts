@@ -359,7 +359,10 @@ test('selectCompactCandidateTargetLevels does not let an unsupported single bloc
 
 test('submit compact plan opts into the normal model-facing tool schema', () => {
   assert.equal(COMPACT_PLAN_TOOL_DEFINITION.defaultInject, true);
-  assert.deepStrictEqual(COMPACT_PLAN_TOOL_DEFINITION.parameters.required, ['replaceAsBlocks']);
+  assert.equal(COMPACT_PLAN_TOOL_DEFINITION.parameters.required, undefined);
+  assert.equal((COMPACT_PLAN_TOOL_DEFINITION.parameters as any).oneOf, undefined);
+  assert.equal((COMPACT_PLAN_TOOL_DEFINITION.parameters as any).anyOf, undefined);
+  assert.equal(COMPACT_PLAN_TOOL_DEFINITION.parameters.properties.argsFilePath.type, 'string');
   assert.equal(COMPACT_PLAN_TOOL_DEFINITION.parameters.properties.createBlocksJson, undefined);
   assert.equal(COMPACT_PLAN_TOOL_DEFINITION.parameters.properties.createBlocks, undefined);
   const replacementSchema = COMPACT_PLAN_TOOL_DEFINITION.parameters.properties.replaceAsBlocks;

@@ -6,6 +6,8 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 
 ## Steps
 
+Dedicated compaction uses its own bounded gate rather than the ordinary tool loop. Pending arguments-file repair retains the existing concrete master-file authorization and isolation checks; see [D-context-compact-runtime-gate](./context-compaction-and-recall.md#d-context-compact-runtime-gate).
+
 1. The LLM returns one or more tool calls in a `ChatResult`.
 2. Before target resolution, per-call `onToolStart` publication, or tool effect, ordinary model-turn batches consume the reserved top-level cancellation controls. Batch-level returned-call progress/runtime state may already have been published by the turn runner. One `__cancelAllToolsThisTurn:true` returns a canceled response for every call without resolving any of them; `__cancelTool:true` skips only that call. Invalid reserved values fail only their own call. The controls are removed from execution arguments while the canonical assistant call remains unchanged. The dedicated compact-plan tool is excluded from this ordinary model-facing cancellation schema surface.
 3. The message-processing loop schedules the remaining batch in model order. Adjacent direct `exec` calls form a bounded parallel segment; every other direct or unified tool is a serial barrier.

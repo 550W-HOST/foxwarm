@@ -4250,3 +4250,55 @@ test('chat persists a generated prompt cache key for stored legacy sessions', as
     await sessionManager.deleteSession(sessionId).catch(() => {});
   }
 });
+
+test('compact-plan provider schemas export direct/file fields and returned calls retain raw text or structured input', async () => {
+  const { COMPACT_PLAN_TOOL_DEFINITION } = await import('./session/compactPlan');
+  const originalPost = axios.post;
+  const raw = ' { "replaceAsBlocks": [\r\n';
+  const structured = { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 99, summary: 'structured invalid range' }] };
+  const cases = [
+    { provider: 'openai-completions', payload: () => ({ choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'compact-provider', type: 'function', function: { name: 'submit_compact_plan', arguments: raw } }] }, finish_reason: 'tool_calls' }] }) },
+    { provider: 'openai-responses', payload: () => ({ type: 'response.completed', response: { id: 'compact-response', output: [{ type: 'function_call', call_id: 'compact-provider', name: 'submit_compact_plan', arguments: raw }], usage: { input_tokens: 1, output_tokens: 1 } } }) },
+    { provider: 'anthropic', payload: () => ({ content: [{ type: 'tool_use', id: 'compact-provider', name: 'submit_compact_plan', input: structured }] }) },
+  ];
+  try {
+    for (const fixture of cases) {
+      let exportedSchema: any;
+      (axios as any).post = async (_url: string, body: any) => {
+        exportedSchema = fixture.provider === 'anthropic' ? body.tools[0].input_schema
+          : fixture.provider === 'openai-completions' ? body.tools[0].function.parameters : body.tools[0].parameters;
+        const payload = fixture.payload();
+        let data: any = payload;
+        if (fixture.provider !== 'anthropic') {
+          const stream = new PassThrough();
+          process.nextTick(() => { stream.end(`data: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n`); });
+          data = stream;
+        }
+        return { status: 200, statusText: 'OK', headers: {}, data };
+      };
+      const result = await requestLlmOnce({
+        contents: [{ role: 'user', parts: [{ text: 'compact candidates' }] }], systemPrompt: '',
+        modelEntryOverride: { providerKey: 'fixture', providerType: fixture.provider, baseUrl: 'https://fixture.example/v1', model: 'model', extraFields: {}, extraHeaders: {} } as any,
+        toolDefinitions: [COMPACT_PLAN_TOOL_DEFINITION], purpose: 'compact-plan',
+        notifySessionEvents: false, registerAbortController: false, maxRetries: 1,
+      });
+      assert.deepEqual(exportedSchema, COMPACT_PLAN_TOOL_DEFINITION.parameters);
+      assert.equal(exportedSchema.required, undefined);
+      assert.equal((exportedSchema as any).oneOf, undefined);
+      assert.equal((exportedSchema as any).anyOf, undefined);
+      assert.equal(exportedSchema.properties.argsFilePath.type, 'string');
+      assert.deepEqual(exportedSchema.properties.replaceAsBlocks.oneOf.map((item: any) => item.type), ['array', 'string']);
+      const call = result.toolCalls[0];
+      assert.equal(call, result.allParts.find(part => part.functionCall)?.functionCall);
+      if (fixture.provider === 'anthropic') {
+        assert.deepEqual(call.args, structured);
+        assert.equal(call.rawArgsText, undefined);
+        assert.equal(call.argsParseError, undefined);
+      } else {
+        assert.equal(call.rawArgsText, raw);
+        assert.match(call.argsParseError || '', /Invalid tool arguments JSON/);
+        assert.deepEqual(call.args, {});
+      }
+    }
+  } finally { (axios as any).post = originalPost; }
+});

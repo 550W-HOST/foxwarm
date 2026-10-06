@@ -1,4 +1,7 @@
 import * as llm from '../llm';
+import { CompactPlanRepairFile, compactPlanSubmissionUsesFile } from './compactPlanRepair';
+import { parseFunctionCallArgs } from '../toolCallArgs';
+import { getToolCancellationArgumentError, isSingleToolCancellationRequested, isWholeBatchCancellationRequested, stripToolCancellationArguments } from '../toolCallControls';
 import { isDeepStrictEqual } from 'node:util';
 import { logger } from '../common';
 import {
@@ -35,7 +38,7 @@ import {
   selectCompactCandidateTargetLevels,
   validateCompactPlanArgs,
 } from './compactPlan';
-import { CompactionRequest, Message, MessagePart, QueueItem, Session, TokenUsage } from '../types';
+import { CompactionRequest, FunctionCall, Message, MessagePart, QueueItem, Session, TokenUsage } from '../types';
 import { formatToolResponsePayload } from '../../packages/shared/dist/toolResponseFormatting';
 import { formatMessagePreviewText } from '../utils/messageFormat';
 import { buildSystemMessageParts } from '../utils/systemMessageParts';
@@ -1165,62 +1168,126 @@ async function runCompactJob(
   let compactRoundsUsed = 0;
   let invalidCompactPlanAttempts = 0;
 
-  while (compactRoundsUsed < COMPACT_FLOW_MAX_ROUNDS) {
-    if (isCompactCancelled(operation)) throw new CompactCancelledError();
-    compactRoundsUsed += 1;
-    const result = await llm.chat(nextPromptParts, transientSession, invalidCompactPlanAttempts, {
-      appendMessage: async (message) => {
-        await appendTransientSessionMessage(transientSession, message);
-        mirrorTemporaryCompactMessage(deps, sessionId, message);
-      },
-      notifySessionEvents: false,
-      registerAbortController: false,
-      abortSignal: operation.controller.signal,
-      purpose: 'compact-plan',
-      ...(execution === 'background' ? { compactPlanBackground: true } : {}),
-      snapshotAuthority: 'detached',
-    });
+  let repairFile: CompactPlanRepairFile | undefined;
+  const appendToolFeedback = async (call: FunctionCall, response: string) => {
+    const message: Message = { role: 'tool', parts: [{ functionResponse: {
+      tool_use_id: call.id, name: call.name, response: { output: response },
+    } }] };
+    await appendTransientSessionMessage(transientSession, message);
+    mirrorTemporaryCompactMessage(deps, sessionId, message);
+  };
+  const repairInstructions = () => repairFile
+    ? [
+      `Repair the JSON arguments in ${JSON.stringify(repairFile.filePath)} using edit or apply_patch (one update only).`,
+      `Then call ${COMPACT_PLAN_TOOL_NAME} by itself with {"argsFilePath":${JSON.stringify(repairFile.filePath)}}.`,
+      'Only this exact file is available for repair; ordinary tool permissions still apply.',
+      repairFile.structuredFallback
+        ? "This file was saved by serializing the provider's structured arguments."
+        : 'This file was saved from the original provider arguments.',
+    ].join(' ')
+    : `Submit corrected direct plan fields with ${COMPACT_PLAN_TOOL_NAME}.`;
 
-    const toolCalls = result.toolCalls || [];
-    const onlyPlanCall = toolCalls.length === 1 && toolCalls[0].name === COMPACT_PLAN_TOOL_NAME;
-    if (!onlyPlanCall) {
-      const invalidToolName = toolCalls.find(call => call.name !== COMPACT_PLAN_TOOL_NAME)?.name || COMPACT_PLAN_TOOL_NAME;
-      logger.warn({ sessionId, invalidToolName, toolCallCount: toolCalls.length, compactRoundsUsed }, 'Layered compact flow rejected a missing or non-plan tool call; retrying with feedback');
-      const invalidToolNotice = toolCalls.length === 0
-        ? `Compact planning must be submitted by calling ${COMPACT_PLAN_TOOL_NAME}; plain text/no tool call cannot complete compaction.`
-        : invalidToolName === COMPACT_PLAN_TOOL_NAME
-        ? `Call ${COMPACT_PLAN_TOOL_NAME} exactly once, by itself.`
-        : `Do not call \`${invalidToolName}\`; the only accepted tool call during compaction is ${COMPACT_PLAN_TOOL_NAME}.`;
-      nextPromptParts = [{
-        system: [
-          'COMPACT TOOL CALL INVALID.',
-          invalidToolNotice,
-          'Do not read or write agent memory during compaction.',
-          `When ready, call exactly one ${COMPACT_PLAN_TOOL_NAME} tool call by itself. Do not combine ${COMPACT_PLAN_TOOL_NAME} with any other tool call.`,
-        ].join(' '),
-      }];
-      continue;
-    }
-
-    try {
-      compactPlan = validateCompactPlanArgs(result.toolCalls[0].args || {}, candidateItems, {
-        removablePreservedMessages: preservedMessageCandidates,
-        messagePolicy,
-        blockPolicies,
+  try {
+    while (compactRoundsUsed < COMPACT_FLOW_MAX_ROUNDS) {
+      if (isCompactCancelled(operation)) throw new CompactCancelledError();
+      compactRoundsUsed += 1;
+      const result = await llm.chat(nextPromptParts, transientSession, invalidCompactPlanAttempts, {
+        appendMessage: async (message) => {
+          await appendTransientSessionMessage(transientSession, message);
+          mirrorTemporaryCompactMessage(deps, sessionId, message);
+        },
+        notifySessionEvents: false,
+        registerAbortController: false,
+        abortSignal: operation.controller.signal,
+        purpose: 'compact-plan',
+        ...(execution === 'background' ? { compactPlanBackground: true } : {}),
+        snapshotAuthority: 'detached',
       });
-      break;
-    } catch (e) {
-      if (!(e instanceof CompactPlanValidationError)) {
-        throw e;
+      if (isCompactCancelled(operation)) throw new CompactCancelledError();
+
+      const toolCalls = result.toolCalls || [];
+      const call = toolCalls[0];
+      if (repairFile && toolCalls.length === 1 && (call.name === 'edit' || call.name === 'apply_patch')) {
+        try {
+          const controlError = getToolCancellationArgumentError(call);
+          if (controlError) throw new Error(controlError);
+          if (isSingleToolCancellationRequested(call) || isWholeBatchCancellationRequested(toolCalls)) {
+            await appendToolFeedback(call, 'Compact repair canceled.');
+          } else {
+            await repairFile.edit({ ...call, args: stripToolCancellationArguments(call.args) }, transientSession, operation);
+            await appendToolFeedback(call, 'Compact arguments file updated.');
+          }
+          nextPromptParts = [{ system: repairInstructions() }];
+        } catch (error) {
+          await appendToolFeedback(call, `Compact repair failed: ${(error as Error).message}`);
+          nextPromptParts = [{ system: repairInstructions() }];
+        }
+        continue;
+      }
+      const onlyPlanCall = toolCalls.length === 1 && call.name === COMPACT_PLAN_TOOL_NAME;
+      if (!onlyPlanCall) {
+        const invalidToolName = toolCalls.find(call => call.name !== COMPACT_PLAN_TOOL_NAME)?.name || COMPACT_PLAN_TOOL_NAME;
+        logger.warn({ sessionId, invalidToolName, toolCallCount: toolCalls.length, compactRoundsUsed }, 'Layered compact flow rejected a missing or non-plan tool call; retrying with feedback');
+        const invalidToolNotice = toolCalls.length === 0
+          ? `Compact planning must be submitted by calling ${COMPACT_PLAN_TOOL_NAME}; plain text/no tool call cannot complete compaction.`
+          : invalidToolName === COMPACT_PLAN_TOOL_NAME
+          ? `Call ${COMPACT_PLAN_TOOL_NAME} exactly once, by itself.`
+          : `Do not call \`${invalidToolName}\`; ${repairFile ? 'only an exact-file edit or apply_patch repair, or a single plan submission, is accepted' : `the only accepted tool call during compaction is ${COMPACT_PLAN_TOOL_NAME}`}.`;
+        nextPromptParts = [{
+          system: [
+            'COMPACT TOOL CALL INVALID.',
+            invalidToolNotice,
+            'Do not read or write agent memory during compaction.',
+            `When ready, call exactly one ${COMPACT_PLAN_TOOL_NAME} tool call by itself. Do not combine ${COMPACT_PLAN_TOOL_NAME} with any other tool call.`,
+            ...(repairFile ? [repairInstructions()] : []),
+          ].join(' '),
+        }];
+        continue;
       }
 
-      invalidCompactPlanAttempts += 1;
-
-      logger.warn({ sessionId, invalidCompactPlanAttempts, compactRoundsUsed, validationError: e.message }, 'Layered compact plan validation failed; retrying compact flow');
-      nextPromptParts = [{
-        system: buildCompactPlanValidationFeedback(e),
-      }];
+      let fileSubmission = false;
+      let validatingPlan = false;
+      try {
+        if (call.argsParseError) throw new Error('Compact plan arguments must be valid JSON with a top-level object.');
+        let args = call.args || {};
+        // Even an invalid file submission must not replace the pending arguments file.
+        fileSubmission = Object.prototype.hasOwnProperty.call(args, 'argsFilePath');
+        if (compactPlanSubmissionUsesFile(args)) {
+          if (!repairFile) throw new Error('No repair file is pending for this compact operation.');
+          const text = await repairFile.read(args.argsFilePath, transientSession, operation);
+          const parsed = parseFunctionCallArgs(text);
+          if (!text.trim() || parsed.argsParseError) throw new Error('The repair file must contain valid JSON with a top-level object.');
+          if (Object.prototype.hasOwnProperty.call(parsed.args, 'argsFilePath')) throw new Error('The repair file must contain direct plan fields, not argsFilePath.');
+          args = parsed.args;
+        }
+        validatingPlan = true;
+        compactPlan = validateCompactPlanArgs(args, candidateItems, {
+          removablePreservedMessages: preservedMessageCandidates,
+          messagePolicy,
+          blockPolicies,
+        });
+        break;
+      } catch (error) {
+        if (validatingPlan && !(error instanceof CompactPlanValidationError)) throw error;
+        invalidCompactPlanAttempts += 1;
+        if (!repairFile && !fileSubmission) {
+          try { repairFile = await CompactPlanRepairFile.create(call, transientSession, operation); }
+          catch (saveError) {
+            logger.warn({ sessionId, error: (saveError as Error).message }, 'Unable to save compact arguments for file repair');
+          }
+        }
+        const feedback = error instanceof CompactPlanValidationError
+          ? buildCompactPlanValidationFeedback(error)
+          : `COMPACT PLAN INVALID. ${(error as Error).message}`;
+        logger.warn({ sessionId, invalidCompactPlanAttempts, compactRoundsUsed, validationError: (error as Error).message }, 'Layered compact plan validation failed; retrying compact flow');
+        await appendToolFeedback(call, repairFile
+          ? `Compact plan rejected. Repair file: ${JSON.stringify(repairFile.filePath)}.`
+          : 'Compact plan rejected; submit corrected direct plan fields.');
+        nextPromptParts = [{ system: `${feedback} ${repairInstructions()}` }];
+      }
     }
+  } finally {
+    await repairFile?.cleanup();
   }
 
   if (!compactPlan) {
