@@ -1,0 +1,184 @@
+import assert from 'node:assert/strict'
+import { createServer } from 'node:http'
+import { once } from 'node:events'
+import { readFile } from 'node:fs/promises'
+import { writeModelFixture } from './experimentModelFixture.mjs'
+import { createHostFixture, until } from './experimentHostFixture.mjs'
+
+const listToken = 'setup-list-token'
+const testToken = 'setup-test-token'
+const modelsUri = 'inmemory://foxwarm/setup/foxwarm-models.yaml'
+let provider
+const listRequests = []
+const testRequests = []
+const fixture = await createHostFixture('setup-providers')
+
+function sendJson(response, status, body) {
+  response.writeHead(status, { 'content-type': 'application/json' })
+  response.end(JSON.stringify(body))
+}
+
+function sendCompletion(response) {
+  response.writeHead(200, { 'content-type': 'text/event-stream', connection: 'close' })
+  response.write(`data: ${JSON.stringify({
+    type: 'response.completed',
+    response: {
+      output: [{
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'setup test response' }],
+      }],
+    },
+  })}\n\n`)
+  response.end()
+}
+
+async function monacoAction(page, action, payload = {}) {
+  return page.evaluate(async ({ action, payload, uri }) => {
+    const moduleUrl = performance.getEntriesByType('resource')
+      .map(entry => entry.name)
+      .find(name => /(?:\/|^)monaco-editor(?:-[^/]+)?\.js(?:\?|$)/.test(new URL(name).pathname))
+    if (!moduleUrl) throw new Error('Monaco module URL was not loaded')
+    const imported = await import(moduleUrl)
+    const monaco = imported.a ?? imported.default ?? imported
+    const editor = monaco.editor.getEditors().find(candidate => candidate.getModel()?.uri.toString() === uri)
+    if (!editor) throw new Error(`Monaco editor not found: ${uri}`)
+    if (action === 'replace') editor.getModel().setValue(payload.value)
+    if (action === 'position') editor.setPosition({ lineNumber: payload.line, column: payload.column })
+    if (action === 'suggest') {
+      editor.focus()
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+      editor.trigger('phase4b', 'editor.action.triggerSuggest', {})
+    }
+    return editor.getValue()
+  }, { action, payload, uri: modelsUri })
+}
+
+
+try {
+  provider = createServer(async (request, response) => {
+    if (request.method === 'GET' && (request.url === '/models' || request.url?.startsWith('/v1/models?'))) {
+      const anthropic = request.url.startsWith('/v1/models?')
+      assert.equal(request.headers.authorization, anthropic ? undefined : `Bearer ${listToken}`)
+      assert.equal(request.headers['x-api-key'], anthropic ? listToken : undefined)
+      if (anthropic) assert.equal(request.headers['anthropic-version'], '2023-06-01')
+      listRequests.push({ url: request.url, anthropic })
+      return sendJson(response, 200, {
+        data: [
+          { id: 'setup-discovered-model' },
+          { id: 'setup-discovered-model' },
+          { id: '' },
+          { id: 'setup-second-model' },
+        ],
+      })
+    }
+    if (request.method === 'GET' && request.url === '/error-models') {
+      return sendJson(response, 401, { error: `invalid ${listToken}` })
+    }
+    if (request.method === 'POST' && request.url === '/responses') {
+      assert.equal(request.headers.authorization, `Bearer ${testToken}`)
+      let raw = ''
+      for await (const chunk of request) raw += chunk
+      const body = JSON.parse(raw)
+      testRequests.push(body)
+      return sendCompletion(response)
+    }
+    if (request.method === 'POST' && request.url === '/error-responses') {
+      return sendJson(response, 401, { error: `invalid ${testToken}` })
+    }
+    return sendJson(response, 404, { error: 'not found' })
+  })
+  provider.listen(0, '127.0.0.1')
+  await once(provider, 'listening')
+  const providerRoot = `http://127.0.0.1:${provider.address().port}`
+  await writeModelFixture(fixture.data, {
+    default: 'active',
+    providers: {
+      active: {
+        providerType: 'openai-responses',
+        baseUrl: providerRoot,
+        apiKey: testToken,
+        models: ['fixture-model'],
+      },
+    },
+  })
+  await fixture.start()
+
+  const modelsBefore = await readFile(fixture.modelPath, 'utf8')
+  const treeBefore = await fixture.api('GET', '/api/agents/tree')
+  const listed = await fixture.api('POST', '/api/setup/models/list', {
+    providerType: 'openai-responses',
+    baseUrl: providerRoot,
+    apiKey: listToken,
+  })
+  assert.equal(listed.status, 200, JSON.stringify(listed))
+  assert.deepEqual(listed.body.models, ['setup-discovered-model', 'setup-second-model'])
+  const anthropic = await fixture.api('POST', '/api/setup/models/list', {
+    providerType: 'anthropic',
+    baseUrl: providerRoot,
+    apiKey: listToken,
+  })
+  assert.equal(anthropic.status, 200, JSON.stringify(anthropic))
+  assert.equal(listRequests.some(request => request.anthropic), true)
+
+  const tested = await fixture.api('POST', '/api/setup/models/test', {
+    providerKey: 'transient',
+    providerType: 'openai-responses',
+    baseUrl: providerRoot,
+    apiKey: testToken,
+    models: 'fixture-model',
+    testModel: 'fixture-model',
+  })
+  assert.equal(tested.status, 200, JSON.stringify(tested))
+  assert.equal(tested.body.success, true)
+  assert.equal(tested.body.text, 'setup test response')
+  assert.equal(testRequests.length, 1)
+  const modelsAfter = await readFile(fixture.modelPath, 'utf8')
+  assert.equal(modelsAfter, modelsBefore)
+  const treeAfter = await fixture.api('GET', '/api/agents/tree')
+  assert.deepEqual(treeAfter.body, treeBefore.body)
+
+  const listError = await fixture.api('POST', '/api/setup/models/list', {
+    providerType: 'openai-responses',
+    baseUrl: `${providerRoot}/error-models`,
+    apiKey: listToken,
+  })
+  assert.equal(listError.status, 502, JSON.stringify(listError))
+  assert.equal(JSON.stringify(listError.body).includes(listToken), false)
+  const testError = await fixture.api('POST', '/api/setup/models/test', {
+    providerType: 'openai-responses',
+    baseUrl: `${providerRoot}/error-responses`,
+    apiKey: testToken,
+    models: 'fixture-model',
+  })
+  assert.equal(testError.status, 400, JSON.stringify(testError))
+  assert.equal(JSON.stringify(testError.body).includes(testToken), false)
+
+  const page = await fixture.openApp()
+  await page.evaluate(() => { location.hash = 'setup' })
+  await page.waitForSelector('[data-setup-tab="models"]')
+  await page.click('[data-setup-tab="models"]')
+  await page.waitForSelector(`[data-monaco-model-uri="${modelsUri}"][data-editor-ready="true"]`, { timeout: 20000 })
+  const unsaved = `providers:\n  draft:\n    providerType: openai-responses\n    baseUrl: ${providerRoot}\n    apiKey: ${listToken}\n    models:\n      - setup`
+  await monacoAction(page, 'replace', { value: unsaved })
+  await monacoAction(page, 'position', { line: 7, column: 16 })
+  await monacoAction(page, 'suggest')
+  await page.waitForFunction(label => [...document.querySelectorAll('.suggest-widget.visible .monaco-list-row')]
+    .some(row => row.textContent?.includes(label)), { timeout: 15000 }, 'setup-discovered-model')
+  assert(listRequests.filter(request => !request.anthropic).length >= 2)
+  assert.equal(await readFile(fixture.modelPath, 'utf8'), modelsBefore)
+  await page.keyboard.press('Escape')
+
+  console.log(JSON.stringify({
+    result: 'ok',
+    listedModels: listed.body.models,
+    anthropicList: true,
+    oneShotText: tested.body.text,
+    noConfigMutation: modelsAfter === modelsBefore,
+    noCatalogMutation: JSON.stringify(treeAfter.body) === JSON.stringify(treeBefore.body),
+    completion: true,
+  }))
+} finally {
+  await fixture.cleanup()
+  if (provider?.listening) await new Promise(done => provider.close(done))
+}

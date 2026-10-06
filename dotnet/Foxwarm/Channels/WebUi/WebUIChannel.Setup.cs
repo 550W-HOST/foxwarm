@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Foxwarm.Models;
 
 namespace Foxwarm.Channels.WebUi;
 
@@ -71,19 +72,94 @@ internal sealed partial class WebUIChannel
         );
         app.MapPost(
             "/api/setup/models/list",
-            () =>
-                Results.Json(
-                    new { error = "Provider model discovery is not implemented." },
-                    statusCode: 501
-                )
+            async (HttpRequest request, CancellationToken cancellationToken) =>
+            {
+                JsonObject? input = null;
+                try
+                {
+                    input =
+                        await JsonNode.ParseAsync(request.Body) as JsonObject
+                        ?? throw new InvalidDataException("Provider connection must be an object.");
+                    var models = await sessions.ListSetupProviderModelsAsync(
+                        input,
+                        cancellationToken
+                    );
+                    return Results.Ok(
+                        new JsonObject
+                        {
+                            ["models"] = new JsonArray(
+                                models.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()
+                            ),
+                        }
+                    );
+                }
+                catch (SetupProviderRequestException error)
+                {
+                    return Results.Json(
+                        new { error = error.Message },
+                        statusCode: error.StatusCode
+                    );
+                }
+                catch (JsonException error)
+                {
+                    return Results.BadRequest(new { error = error.Message });
+                }
+                catch (InvalidDataException error)
+                {
+                    return Results.BadRequest(new { error = error.Message });
+                }
+            }
         );
         app.MapPost(
             "/api/setup/models/test",
-            () =>
-                Results.Json(
-                    new { error = "Setup provider testing is not implemented." },
-                    statusCode: 501
-                )
+            async (HttpRequest request, CancellationToken cancellationToken) =>
+            {
+                JsonObject? input = null;
+                try
+                {
+                    input =
+                        await JsonNode.ParseAsync(request.Body) as JsonObject
+                        ?? throw new InvalidDataException(
+                            "Setup model test input must be an object."
+                        );
+                    var result = await sessions.TestSetupProviderAsync(input, cancellationToken);
+                    return Results.Ok(
+                        new JsonObject
+                        {
+                            ["success"] = true,
+                            ["text"] = result.AssistantMessage?["parts"] is JsonArray parts
+                                ? string.Join(
+                                    "",
+                                    parts
+                                        .OfType<JsonObject>()
+                                        .Select(part =>
+                                            Sessions.SessionWait.Text(part["text"]) ?? ""
+                                        )
+                                )
+                                : "",
+                            ["usage"] =
+                                result.Usage?.DeepClone()
+                                ?? (
+                                    (result.AssistantMessage?["__meta"] as JsonObject)?[
+                                        "usage"
+                                    ]?.DeepClone()
+                                ),
+                        }
+                    );
+                }
+                catch (SetupProviderRequestException error)
+                {
+                    return Results.BadRequest(
+                        new { success = false, error = SetupProviderRequests.SafeError(error) }
+                    );
+                }
+                catch (Exception error)
+                {
+                    return Results.BadRequest(
+                        new { success = false, error = SetupProviderRequests.SafeError(error) }
+                    );
+                }
+            }
         );
     }
 }

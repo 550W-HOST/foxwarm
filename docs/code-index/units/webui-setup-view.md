@@ -1,6 +1,6 @@
 # Unit: WebUI Setup view
 
-Files: packages/webui/src/components/SetupView.tsx, packages/webui/src/components/WebUiBrandingSettings.tsx, packages/webui/src/setupModels.ts, packages/webui/test/setupModels.test.mjs, packages/webui/test/setupModels.e2e.mjs
+Files: packages/webui/src/components/SetupView.tsx, packages/webui/src/components/WebUiBrandingSettings.tsx, packages/webui/src/setupModels.ts, packages/webui/test/setupModels.test.mjs, packages/webui/test/setupModels.e2e.mjs, packages/webui/test/experimentHostSetupProviders.e2e.mjs
 Secondary files: packages/webui/package.json, packages/webui/src/yamlConfigSchemas.ts, packages/webui/src/components/SimpleCodeEditor.tsx, packages/webui/src/components/ThemeManager.tsx
 
 ## Purpose
