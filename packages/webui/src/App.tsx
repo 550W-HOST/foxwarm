@@ -419,7 +419,7 @@ function makeSetupTab(): WorkbenchTab {
 }
 
 function isRestorableRouteTabId(tabId: string): boolean {
-  return tabId.startsWith('chat:') || tabId === AGENTS_TAB_ID || tabId === SETUP_TAB_ID
+  return tabId.startsWith('chat:') || tabId.startsWith('terminal:') || tabId.startsWith('terminal-draft:') || tabId === AGENTS_TAB_ID || tabId === SETUP_TAB_ID
 }
 
 function App() {
@@ -430,6 +430,7 @@ function App() {
   const [setupOobe, setSetupOobe] = useState(false)
   const [focusModelsRequest, setFocusModelsRequest] = useState(0)
   const [activeTerminals, setActiveTerminals] = useState<TerminalRegistryRecord[]>([])
+  const [activeTerminalsLoaded, setActiveTerminalsLoaded] = useState(false)
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768)
   const [showSessionList, setShowSessionList] = useState<boolean>(() => !window.location.hash)
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -647,6 +648,8 @@ function App() {
     } catch (error) {
       console.error('Failed to fetch terminals:', error)
       setActiveTerminals([])
+    } finally {
+      setActiveTerminalsLoaded(true)
     }
   }
 
@@ -683,6 +686,7 @@ function App() {
   }, [allTabs, sessions])
 
   useEffect(() => {
+    if (!activeTerminalsLoaded) return
     const activeTerminalMap = new Map(activeTerminals.map((terminal) => [terminal.id, terminal]))
     const terminalTabs = allTabs.filter((tab): tab is Extract<WorkbenchTab, { type: 'terminal' }> => tab.type === 'terminal')
     const terminalDraftTabs = terminalTabs.filter((tab) => !tab.terminalId)
@@ -734,7 +738,7 @@ function App() {
       upsertTab(makeTerminalTabFromRecord(terminal), { activate: false })
     })
 
-  }, [activeTerminals, allTabs, upsertTab])
+  }, [activeTerminals, activeTerminalsLoaded, allTabs, upsertTab])
 
   useEffect(() => {
     const trimmedInstanceName = webUiSettings.instanceName.trim()
