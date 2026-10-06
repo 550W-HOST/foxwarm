@@ -1717,11 +1717,11 @@ export function getChannelBySession(sessionId: string): { channelId: string; con
  * @param isChildSession Whether this is a child session (for multi-agent)
  * @returns New session ID
  */
-export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { displayName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { displayName?: string; node?: string; model?: string; effort?: ModelEffort; taskId?: string; sourceOverride?: Session }): Promise<string> {
   return withSessionIdentityLock(() => forkSessionUnlocked(sourceSessionId, suffix, isChildSession, options));
 }
 
-async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { displayName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { displayName?: string; node?: string; model?: string; effort?: ModelEffort; taskId?: string; sourceOverride?: Session }): Promise<string> {
   assertSessionDestructiveMutationAllowed([sourceSessionId], 'receive a new fork session');
   // sourceOverride lets a trusted caller (e.g. the Main management facade)
   // supply a detached read-only snapshot of a worker-owned authority instead
@@ -1816,7 +1816,7 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
   });
 
   const systemMessage = isChildSession
-    ? `You are a child session forked from parent session \`${realSourceSessionId}\`. Your current session ID is \`${newSessionId}\`. ${buildChildCompletionInstruction(realSourceSessionId)}`
+    ? `You are a child session forked from parent session \`${realSourceSessionId}\`. Your current session ID is \`${newSessionId}\`. ${options?.taskId ? buildTaskChildCompletionInstruction(options.taskId) : buildChildCompletionInstruction(realSourceSessionId)}`
     : `Session forked from ${realSourceSessionId} by user command. Your current session ID is \`${newSessionId}\`.`;
 
   appendedForkMessages.push({
@@ -1909,11 +1909,15 @@ export function resolveSpawnedSessionModelEffort(
   return { model: normalized.model, effort: normalized.effort };
 }
 
-export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = false, options?: { agentName?: string; displayName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+function buildTaskChildCompletionInstruction(taskId: string): string {
+  return `This Session is linked to task ${taskId}. When the work is complete, complete the task with the task tool; completion automatically notifies the task creator. Do not send a separate routine completion message.`;
+}
+
+export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = false, options?: { agentName?: string; displayName?: string; node?: string; model?: string; effort?: ModelEffort; taskId?: string; sourceOverride?: Session }): Promise<string> {
   return withSessionIdentityLock(() => createChildSessionUnlocked(parentSessionId, suffix, fork, options));
 }
 
-async function createChildSessionUnlocked(parentSessionId: string, suffix: string, fork: boolean = false, options?: { agentName?: string; displayName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+async function createChildSessionUnlocked(parentSessionId: string, suffix: string, fork: boolean = false, options?: { agentName?: string; displayName?: string; node?: string; model?: string; effort?: ModelEffort; taskId?: string; sourceOverride?: Session }): Promise<string> {
   validateChildSessionSuffix(suffix);
   assertSessionDestructiveMutationAllowed([parentSessionId], 'receive a new child session');
   const parentSession = options?.sourceOverride || await getSessionUnlocked(parentSessionId);
@@ -1988,7 +1992,7 @@ async function createChildSessionUnlocked(parentSessionId: string, suffix: strin
 
     const initialMessage: Message = {
       role: 'user',
-      parts: [systemPart(`${formatSessionIdentityHint({ parentSessionId: realParentSessionId, sessionId: childSessionId, variant: 'new-child', timestamp: Date.now() })}\nYou are a child session (new, empty context). ${buildChildCompletionInstruction(realParentSessionId)}`)],
+      parts: [systemPart(`${formatSessionIdentityHint({ parentSessionId: realParentSessionId, sessionId: childSessionId, variant: 'new-child', timestamp: Date.now() })}\nYou are a child session (new, empty context). ${options?.taskId ? buildTaskChildCompletionInstruction(options.taskId) : buildChildCompletionInstruction(realParentSessionId)}`)],
       __meta: { timestamp: Date.now() }
     };
 

@@ -62,12 +62,13 @@ const baseDefinitions = [
                 type: 'object',
                 additionalProperties: false,
                 properties: {
-                    action: { type: 'string', enum: ['create', 'list', 'get', 'claim', 'update', 'complete', 'cancel'], description: "Task operation to perform." },
+                    action: { type: 'string', enum: ['create', 'list', 'get', 'claim', 'assign', 'update', 'complete', 'cancel'], description: "Task operation to perform." },
                     title: { type: 'string', maxLength: 200, description: "Task title. Required when action is create." },
                     description: { type: 'string', maxLength: 4000, description: "Short problem or scope description for a new task, or replacement description when updating." },
                     parentTaskId: { type: 'string', maxLength: 128, description: "Existing parent task ID for a simple child task. Set only when creating." },
                     taskId: { type: 'string', maxLength: 128, description: "Existing task ID. Required for get, claim, update, complete, and cancel." },
                     status: { type: 'string', enum: ['open', 'active', 'completed', 'cancelled'], description: "For list, filter by task status. For update, set only open or active." },
+                    ownerSessionId: { type: ['string', 'null'], maxLength: 256, description: "Existing Session ID to receive the task, or null to release the current owner." },
                     note: { type: 'string', maxLength: 1000, description: "Short progress note to append when updating a task." },
                     result: { type: 'string', maxLength: 4000, description: "Short completion summary for a completed task." },
                     reason: { type: 'string', maxLength: 1000, description: "Short reason for cancelling a task." },
@@ -286,11 +287,12 @@ Example:
         {
             name: 'create_child_session',
             defaultInject: true,
-            description: "Create a child session under the current or a specified agent. Supply an initial message to start its work. Ask the child to report back with send_to_session; creation alone does not deliver its eventual result.",
+            description: `Create a child Session under the current Session. If taskId is supplied, attach the new Session to that task; when the task-linked child completes, use task(action:"complete", ...) for the completion report instead of sending a separate completion message. Without taskId, preserve the normal completion-report behavior.`,
             parameters: {
                 type: 'object',
                 properties: {
                     agentName: { type: 'string', description: "Existing agent that will own the child. Omit to use this session's agent." },
+                    taskId: { type: 'string', maxLength: 128, description: "Optional existing task ID to attach the new Session to. If the task has no owner, the new Session claims it; if another Session owns it, creation fails." },
                     suffix: { type: 'string', description: "Name for the child. Within the same agent, it replaces a main leaf or is appended to the parent ID. Under a different agent, it becomes that agent's session name. A numeric suffix is added when needed to avoid an existing ID." },
                     displayName: { type: 'string', description: "Display name for the new child session. This does not change its session ID." },
                     fork: { type: 'boolean', description: "Copy the parent's current context into the child. Defaults to false. Context copying is available only when the child belongs to the same agent as the parent.", default: false },

@@ -1222,6 +1222,7 @@ test('defaultInject metadata is the single source of truth for default model inj
 
 test('default model-facing tool names and serialized schema size stay consolidated', () => {
   assert.deepEqual(modelFacingDefinitions.map(def => def.name), [
+    'task',
     'read',
     'write',
     'edit',

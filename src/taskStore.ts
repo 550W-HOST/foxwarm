@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 
-export const TASK_ACTIONS = ['create', 'list', 'get', 'claim', 'update', 'complete', 'cancel'] as const;
+export const TASK_ACTIONS = ['create', 'list', 'get', 'claim', 'assign', 'update', 'complete', 'cancel'] as const;
 export const TASK_STATUSES = ['open', 'active', 'completed', 'cancelled'] as const;
 export const TASK_LIST_LIMIT = 50;
 export const TASK_CHILD_LIMIT = 20;
@@ -22,6 +22,11 @@ export interface TaskRecord {
   updatedAt: number;
   completedAt: number | null;
   cancelledAt: number | null;
+  completionNotificationStatus: string | null;
+}
+
+export class TaskError extends Error {
+  constructor(readonly code: string, message: string, readonly statusCode = 400) { super(message); }
 }
 
 type TaskArgs = Record<string, any>;
@@ -30,6 +35,7 @@ const ACTION_FIELDS: Record<typeof TASK_ACTIONS[number], string[]> = {
   list: ['status'],
   get: ['taskId'],
   claim: ['taskId'],
+  assign: ['taskId', 'ownerSessionId'],
   update: ['taskId', 'description', 'note', 'status'],
   complete: ['taskId', 'result'],
   cancel: ['taskId', 'reason'],
@@ -42,28 +48,32 @@ const TEXT_LIMITS: Record<string, number> = {
 export function validateTaskArgs(args: TaskArgs): void {
   if (!args || typeof args !== 'object' || Array.isArray(args)
     || !TASK_ACTIONS.includes(args.action)) {
-    throw new Error(`task action must be one of: ${TASK_ACTIONS.join(', ')}.`);
+    throw new TaskError('TASK_INVALID_ARGS', `task action must be one of: ${TASK_ACTIONS.join(', ')}.`);
   }
   const allowed = ACTION_FIELDS[args.action as typeof TASK_ACTIONS[number]];
   for (const key of Object.keys(args)) {
-    if (key !== 'action' && !allowed.includes(key)) throw new Error(`${key} is not allowed for task ${args.action}.`);
+    if (key !== 'action' && !allowed.includes(key)) throw new TaskError('TASK_INVALID_ARGS', `${key} is not allowed for task ${args.action}.`);
     if (key in TEXT_LIMITS && (typeof args[key] !== 'string' || args[key].length > TEXT_LIMITS[key])) {
-      throw new Error(`${key} must be a string of at most ${TEXT_LIMITS[key]} characters.`);
+      throw new TaskError('TASK_INVALID_ARGS', `${key} must be a string of at most ${TEXT_LIMITS[key]} characters.`);
     }
   }
   const required = args.action === 'create' ? 'title' : args.action === 'list' ? undefined : 'taskId';
   if (required && (typeof args[required] !== 'string' || !args[required].trim())) {
-    throw new Error(`task ${args.action} requires a non-empty ${required}.`);
+    throw new TaskError('TASK_INVALID_ARGS', `task ${args.action} requires a non-empty ${required}.`);
   }
-  if (args.parentTaskId !== undefined && !args.parentTaskId.trim()) throw new Error('parentTaskId must be non-empty.');
+  if (args.parentTaskId !== undefined && !args.parentTaskId.trim()) throw new TaskError('TASK_INVALID_ARGS', 'parentTaskId must be non-empty.');
   if (Object.prototype.hasOwnProperty.call(args, 'status')) {
     const statuses = args.action === 'update' ? ['open', 'active'] : TASK_STATUSES;
-    if (!statuses.includes(args.status)) throw new Error(`status for task ${args.action} must be one of: ${statuses.join(', ')}.`);
+    if (!statuses.includes(args.status)) throw new TaskError('TASK_INVALID_ARGS', `status for task ${args.action} must be one of: ${statuses.join(', ')}.`);
+  }
+  if (args.action === 'assign' && (!Object.prototype.hasOwnProperty.call(args, 'ownerSessionId')
+    || (args.ownerSessionId !== null && (typeof args.ownerSessionId !== 'string' || !args.ownerSessionId.trim() || args.ownerSessionId.length > 256)))) {
+    throw new TaskError('TASK_INVALID_ARGS', 'task assign requires an existing ownerSessionId or null.');
   }
   if (args.action === 'update' && !['description', 'note', 'status'].some(key => Object.prototype.hasOwnProperty.call(args, key))) {
-    throw new Error('task update requires description, note, or status.');
+    throw new TaskError('TASK_INVALID_ARGS', 'task update requires description, note, or status.');
   }
-  if (Object.prototype.hasOwnProperty.call(args, 'note') && !args.note.trim()) throw new Error('note must be non-empty.');
+  if (Object.prototype.hasOwnProperty.call(args, 'note') && !args.note.trim()) throw new TaskError('TASK_INVALID_ARGS', 'note must be non-empty.');
 }
 
 /** Small independent SQLite store; tasks never write Session state or history. */
@@ -92,6 +102,10 @@ export class TaskStore {
         );
         CREATE INDEX IF NOT EXISTS task_notes_task ON task_notes(taskId, id);
       `);
+      const columns = db.prepare('PRAGMA table_info(tasks)').all() as any[];
+      if (!columns.some(column => column.name === 'completionNotificationStatus')) {
+        db.exec('ALTER TABLE tasks ADD COLUMN completionNotificationStatus TEXT');
+      }
       this.db = db;
       return db;
     } catch (error) {
@@ -105,15 +119,20 @@ export class TaskStore {
     this.db = undefined;
   }
 
-  execute(args: TaskArgs, sessionId: string): any {
+  markCompletionNotification(taskId: string, status: 'sent' | 'failed'): void {
+    this.getDb().prepare("UPDATE tasks SET completionNotificationStatus=? WHERE id=? AND completionNotificationStatus='pending'")
+      .run(status, taskId);
+  }
+
+  execute(args: TaskArgs, sessionId?: string, listLimit = TASK_LIST_LIMIT): any {
     validateTaskArgs(args);
-    if (typeof sessionId !== 'string' || !sessionId.trim()) throw new Error('task requires a current Session.');
+    if (args.action !== 'list' && args.action !== 'get' && (typeof sessionId !== 'string' || !sessionId.trim())) throw new TaskError('TASK_INVALID_ARGS', 'task requires a current Session.');
     const db = this.getDb();
     // A write transaction covers the read, authority check and update, even
     // across independent SQLite connections/processes racing to claim.
     db.exec(args.action === 'list' || args.action === 'get' ? 'BEGIN' : 'BEGIN IMMEDIATE');
     try {
-      const result = this.executeInTransaction(db, args, sessionId);
+      const result = this.executeInTransaction(db, args, sessionId, listLimit);
       db.exec('COMMIT');
       return result;
     } catch (error) {
@@ -122,19 +141,19 @@ export class TaskStore {
     }
   }
 
-  private executeInTransaction(db: DatabaseSync, args: TaskArgs, sessionId: string): any {
+  private executeInTransaction(db: DatabaseSync, args: TaskArgs, sessionId: string, listLimit: number): any {
     if (args.action === 'list') {
       const where = args.status === undefined ? "status IN ('open','active')" : 'status=?';
       const params = args.status === undefined ? [] : [args.status];
       const tasks = db.prepare(`SELECT id,title,status,parentTaskId,createdBySessionId,ownerSessionId,updatedAt
-        FROM tasks WHERE ${where} ORDER BY updatedAt DESC,id LIMIT ?`).all(...params, TASK_LIST_LIMIT);
+        FROM tasks WHERE ${where} ORDER BY updatedAt DESC,id LIMIT ?`).all(...params, Math.max(1, Math.min(TASK_LIST_LIMIT, listLimit)));
       const total = Number(db.prepare(`SELECT COUNT(*) AS count FROM tasks WHERE ${where}`).get(...params).count);
       return { tasks, total, omitted: total - tasks.length };
     }
     const now = Date.now();
     if (args.action === 'create') {
       if (args.parentTaskId && !db.prepare('SELECT id FROM tasks WHERE id=?').get(args.parentTaskId)) {
-        throw new Error(`Parent task ${args.parentTaskId} not found.`);
+        throw new TaskError('TASK_NOT_FOUND', `Parent task ${args.parentTaskId} not found.`, 404);
       }
       // Parent is immutable and can only reference an existing task. A fresh
       // generated ID therefore cannot form a cycle, including self-parenting.
@@ -155,24 +174,28 @@ export class TaskStore {
     }
     const state = `status=${task.status}, owner=${task.ownerSessionId ?? 'unclaimed'}`;
     if (task.status === 'completed' || task.status === 'cancelled') {
-      throw new Error(`Task ${task.id} is terminal (${state}); ${args.action} is not allowed.`);
+      throw new TaskError('TASK_TERMINAL', `Task ${task.id} is terminal (${state}); ${args.action} is not allowed.`, 409);
     }
     if (args.action === 'claim') {
       if (task.ownerSessionId && task.ownerSessionId !== sessionId) {
-        throw new Error(`Task ${task.id} is already claimed by another Session (${state}).`);
+        throw new TaskError('TASK_OWNED', `Task ${task.id} is already claimed by another Session (${state}).`, 409);
       }
       if (!task.ownerSessionId) db.prepare("UPDATE tasks SET ownerSessionId=?,status='active',updatedAt=? WHERE id=?").run(sessionId, now, task.id);
     } else {
-      const permitted = args.action === 'cancel'
+      const permitted = args.action === 'cancel' || args.action === 'assign'
         ? sessionId === task.createdBySessionId || sessionId === task.ownerSessionId
         : sessionId === (task.ownerSessionId ?? task.createdBySessionId);
-      if (!permitted) throw new Error(`Session ${sessionId} cannot ${args.action} task ${task.id} (${state}); ${args.action === 'cancel' ? 'creator or owner' : task.ownerSessionId ? 'owner' : 'creator'} required.`);
-      if (args.action === 'update') {
+      if (!permitted) throw new TaskError('TASK_FORBIDDEN', `Session ${sessionId} cannot ${args.action} task ${task.id} (${state}); ${args.action === 'cancel' || args.action === 'assign' ? 'creator or owner' : task.ownerSessionId ? 'owner' : 'creator'} required.`, 403);
+      if (args.action === 'assign') {
+        db.prepare("UPDATE tasks SET ownerSessionId=?,status=?,updatedAt=? WHERE id=?")
+          .run(args.ownerSessionId, args.ownerSessionId === null ? 'open' : 'active', now, task.id);
+        this.addNote(db, task.id, sessionId, `Owner changed from ${task.ownerSessionId ?? 'unclaimed'} to ${args.ownerSessionId ?? 'unclaimed'}.`, now);
+      } else if (args.action === 'update') {
         db.prepare('UPDATE tasks SET description=?,status=?,updatedAt=? WHERE id=?')
           .run(args.description ?? task.description, args.status ?? task.status, now, task.id);
         if (args.note !== undefined) this.addNote(db, task.id, sessionId, args.note, now);
       } else if (args.action === 'complete') {
-        db.prepare("UPDATE tasks SET status='completed',result=?,completedAt=?,updatedAt=? WHERE id=?")
+        db.prepare("UPDATE tasks SET status='completed',result=?,completedAt=?,updatedAt=?,completionNotificationStatus='pending' WHERE id=?")
           .run(args.result ?? null, now, now, task.id);
       } else if (args.action === 'cancel') {
         db.prepare("UPDATE tasks SET status='cancelled',cancelledAt=?,updatedAt=? WHERE id=?").run(now, now, task.id);
@@ -184,7 +207,7 @@ export class TaskStore {
 
   private requireTask(db: DatabaseSync, taskId: string): TaskRecord {
     const task = db.prepare('SELECT * FROM tasks WHERE id=?').get(taskId) as unknown as TaskRecord;
-    if (!task) throw new Error(`Task ${taskId} not found.`);
+    if (!task) throw new TaskError('TASK_NOT_FOUND', `Task ${taskId} not found.`, 404);
     return task;
   }
 

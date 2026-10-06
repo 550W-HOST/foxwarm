@@ -145,7 +145,7 @@ test('runtime validates action-specific fields, types, required fields, sizes an
     { action: 'update', taskId: 'id', note: '' }, { action: 'list', status: 'claimed' },
     { action: 'complete', taskId: 'id', note: 'Wrong field' }, { action: 'cancel', taskId: 'id', reason: 12 }];
   for (const args of invalid) assert.throws(() => store.execute(args as any, 'coordinator'));
-  assert.throws(() => store.execute({ action: 'list' }, ''), /current Session/);
+  assert.throws(() => store.execute({ action: 'create', title: 'No actor' }, ''), /current Session/);
   assert.throws(() => store.execute({ action: 'get', taskId: 'missing' }, 'coordinator'), /Task missing not found/);
   assert.equal(store.execute({ action: 'list' }, 'coordinator').total, 0);
 });

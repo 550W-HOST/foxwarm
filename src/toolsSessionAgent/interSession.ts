@@ -16,6 +16,7 @@ import {
   isWebUiUnsupportedFileDelivery,
   buildSendFileResult,
 } from './helpers';
+import { taskService } from '../tools/taskTools';
 import * as sessionManager from '../sessionManager';
 import { armMainWaitLiveness, scheduleMainWaitTimeout, validateMainWaitExecIds, validateMainWaitSessions } from '../mainManagementTools';
 import { logger } from '../common';
@@ -28,7 +29,7 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
   await requireNotIsolated(ctx, 'create_child_session');
   validateInterAgentHandoffConfirmationForMode(args, HANDOFF_CONFIRMATION_ENABLED);
   const normalizedArgs = normalizeCreateChildSessionArgs(args);
-  const { agentName, suffix, displayName, fork = false, message, node } = normalizedArgs;
+  const { agentName, suffix, displayName, fork = false, message, node, taskId } = normalizedArgs;
   const afterSend = normalizeAfterSendBehavior(normalizedArgs, 'create_child_session');
   const forced = normalizeForceModel(normalizedArgs, 'create_child_session');
 
@@ -40,8 +41,11 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
   }
 
   const currentSessionId = ctx.sessionId;
-  const childSessionId = await sessionManager.createChildSession(currentSessionId, suffix, fork,
-    { agentName, displayName, node, model: forced.model, effort: forced.effort, sourceOverride: (ctx as any).sourceOverride });
+  const create = () => sessionManager.createChildSession(currentSessionId, suffix, fork,
+    { agentName, displayName, node, taskId, model: forced.model, effort: forced.effort, sourceOverride: (ctx as any).sourceOverride });
+  const childSessionId = taskId
+    ? await taskService.createAttachedChild(taskId, currentSessionId, create)
+    : await create();
 
   if (message) {
     if (afterSend === 'wait' || afterSend === 'finish') {

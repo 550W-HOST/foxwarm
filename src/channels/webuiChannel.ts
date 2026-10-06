@@ -1,3 +1,5 @@
+import { registerWebUiTaskRoutes } from './webuiTasks';
+import { taskService } from '../tools/taskTools';
 /**
  * WebUI Channel - HTTP API for web interface and external trigger
  */
@@ -936,6 +938,7 @@ export class WebUIChannel implements Channel {
   private setupRoutes() {
     // Add routes to HTTP server
     const httpServerInstance = httpServer;
+    if (this.enableWebUI) registerWebUiTaskRoutes(httpServerInstance, taskService);
     this.realtimeHub = new WebUiRealtimeHub({
       checkToken: req => httpServerInstance.checkIncomingToken(req),
       resolveIds: ids => {

@@ -41,6 +41,7 @@ Provides a unified HTTP server with Express, WebSocket support, and instance-tok
 ## Behavior
 
 - Token auth checks the `foxwarm_token` cookie and the `Authorization: Bearer` header against the stored instance secret.
+- Route registration supports GET, POST, PUT, PATCH and DELETE.
 - Routes can opt out of auth via `noAuth: true`.
 - Authenticated route middleware returns 401 for missing or invalid auth.
 - WebSocket upgrade requests are matched by path; unmatched connections are destroyed.
