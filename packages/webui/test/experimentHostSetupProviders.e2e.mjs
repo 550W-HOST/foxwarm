@@ -11,6 +11,8 @@ const modelsUri = 'inmemory://foxwarm/setup/foxwarm-models.yaml'
 let provider
 const listRequests = []
 const testRequests = []
+let listErrorHits = 0
+let testErrorHits = 0
 const fixture = await createHostFixture('setup-providers')
 
 function sendJson(response, status, body) {
@@ -62,6 +64,7 @@ try {
       const overridden = request.headers['x-fixture-mode'] === 'override'
       assert.equal(request.headers.authorization, anthropic ? undefined : `Bearer ${overridden ? 'override-list' : listToken}`)
       assert.equal(request.headers['x-api-key'], anthropic ? listToken : undefined)
+      if (overridden) assert.equal(request.headers['content-type'], 'application/custom')
       if (anthropic) assert.equal(request.headers['anthropic-version'], '2023-06-01')
       listRequests.push({ url: request.url, anthropic })
       return sendJson(response, 200, {
@@ -77,6 +80,7 @@ try {
       })
     }
     if (request.method === 'GET' && request.url === '/error-models/models') {
+      listErrorHits += 1
       return sendJson(response, 401, { error: `invalid ${listToken}` })
     }
     if (request.method === 'GET' && request.url === '/oversized-models/models') {
@@ -94,6 +98,7 @@ try {
       return sendCompletion(response)
     }
     if (request.method === 'POST' && request.url === '/error-responses/responses') {
+      testErrorHits += 1
       return sendJson(response, 401, { error: `invalid ${testToken}` })
     }
     return sendJson(response, 404, { error: 'not found' })
@@ -127,7 +132,7 @@ try {
     providerType: 'openai-responses',
     baseUrl: providerRoot,
     apiKey: listToken,
-    extraHeaders: { Authorization: 'Bearer override-list', 'x-fixture-mode': 'override' },
+    extraHeaders: { Authorization: 'Bearer override-list', 'Content-Type': 'application/custom', 'x-fixture-mode': 'override' },
   })
   assert.equal(overridden.status, 200, JSON.stringify(overridden))
   const anthropic = await fixture.api('POST', '/api/setup/models/list', {
@@ -168,6 +173,7 @@ try {
   })
   assert.equal(listError.status, 502, JSON.stringify(listError))
   assert.equal(JSON.stringify(listError.body).includes(listToken), false)
+  assert.equal(listErrorHits, 1)
   const oversized = await fixture.api('POST', '/api/setup/models/list', {
     providerType: 'openai-responses',
     baseUrl: `${providerRoot}/oversized-models`,
@@ -182,6 +188,7 @@ try {
   })
   assert.equal(testError.status, 400, JSON.stringify(testError))
   assert.equal(JSON.stringify(testError.body).includes(testToken), false)
+  assert.equal(testErrorHits, 1)
 
   const page = await fixture.openApp()
   await page.evaluate(() => { location.hash = 'setup' })

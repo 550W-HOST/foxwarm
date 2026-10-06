@@ -151,16 +151,33 @@ internal static class SetupProviderRequests
             SetHeader(request, "anthropic-version", "2023-06-01");
         }
         AddHeaders(request, model.Configuration["extraHeaders"] as JsonObject);
+        var contentType = (model.Configuration["extraHeaders"] as JsonObject)
+            ?.FirstOrDefault(pair =>
+                pair.Key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase)
+            )
+            .Value;
+        if (contentType is not null)
+        {
+            request.Content = new StringContent(" ");
+            request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(
+                SessionWait.Text(contentType) ?? ""
+            );
+        }
+        using var headerClient = contentType is null
+            ? null
+            : new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        if (contentType is not null)
+            headerClient!.DefaultRequestHeaders.TryAddWithoutValidation(
+                "Content-Type",
+                SessionWait.Text(contentType) ?? ""
+            );
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(ListTimeoutMs);
         HttpResponseMessage response;
         try
         {
-            response = await http.SendAsync(
-                    request,
-                    HttpCompletionOption.ResponseHeadersRead,
-                    timeout.Token
-                )
+            response = await (headerClient ?? http)
+                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -241,30 +258,6 @@ internal static class SetupProviderRequests
         }
     }
 
-    internal static string SafeError(Exception error, ConcreteHostModel? model = null)
-    {
-        var message = error switch
-        {
-            SetupProviderRequestException setup => setup.Message,
-            InvalidDataException => error.Message,
-            ModelPreparationException => error.Message,
-            ModelRequestException => error.Message,
-            _ => "Configured model request failed.",
-        };
-        if (model is null)
-            return message;
-        var secrets = new[] { model.Token }.Concat(
-            (model.Configuration["extraHeaders"] as JsonObject ?? new JsonObject()).Select(pair =>
-                SessionWait.Text(pair.Value) ?? ""
-            )
-        );
-        return secrets.Any(secret =>
-            secret.Length > 0 && message.Contains(secret, StringComparison.Ordinal)
-        )
-            ? "Configured model request failed."
-            : message;
-    }
-
     private static async Task<JsonNode?> ReadBoundedJsonAsync(
         HttpResponseMessage response,
         CancellationToken cancellationToken
@@ -329,8 +322,21 @@ internal static class SetupProviderRequests
 
     private static void SetHeader(HttpRequestMessage request, string name, string value)
     {
+        if (name.Equals("Content-Type", StringComparison.OrdinalIgnoreCase))
+        {
+            request.Content?.Headers.Remove(name);
+            request.Content ??= new StringContent(" ");
+            request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(
+                value
+            );
+            return;
+        }
         request.Headers.Remove(name);
-        request.Headers.TryAddWithoutValidation(name, value);
+        request.Content?.Headers.Remove(name);
+        if (request.Headers.TryAddWithoutValidation(name, value))
+            return;
+        request.Content ??= new ByteArrayContent([]);
+        request.Content.Headers.TryAddWithoutValidation(name, value);
     }
 
     private static void AddOptionalString(

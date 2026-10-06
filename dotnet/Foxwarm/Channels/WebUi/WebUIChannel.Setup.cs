@@ -149,14 +149,20 @@ internal sealed partial class WebUIChannel
                 }
                 catch (SetupProviderRequestException error)
                 {
-                    return Results.BadRequest(
-                        new { success = false, error = SetupProviderRequests.SafeError(error) }
-                    );
+                    return Results.BadRequest(new { success = false, error = error.Message });
                 }
-                catch (Exception error)
+                catch (JsonException error)
+                {
+                    return Results.BadRequest(new { success = false, error = error.Message });
+                }
+                catch (InvalidDataException error)
+                {
+                    return Results.BadRequest(new { success = false, error = error.Message });
+                }
+                catch (Exception)
                 {
                     return Results.BadRequest(
-                        new { success = false, error = SetupProviderRequests.SafeError(error) }
+                        new { success = false, error = "Configured model request failed." }
                     );
                 }
             }

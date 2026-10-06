@@ -107,7 +107,7 @@ internal sealed partial class SessionManager
         {
             throw new SetupProviderRequestException(
                 "request",
-                SetupProviderRequests.SafeError(error, model),
+                ConfiguredModelRequests.SafeError(error, model),
                 400
             );
         }
