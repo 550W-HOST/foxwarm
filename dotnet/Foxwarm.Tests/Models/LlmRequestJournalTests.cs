@@ -56,6 +56,15 @@ public sealed class LlmRequestJournalTests
                 new JsonObject { ["text"] = "ok" },
                 null
             );
+            await store.AppendAttemptStartAsync(
+                first,
+                2,
+                "model-b",
+                "virtual-a",
+                "responses",
+                new JsonObject { ["input"] = messages[0].DeepClone(), ["model"] = "model-b" },
+                "Prompt override"
+            );
             var second = await store.BeginRequestAsync(
                 "session-1",
                 "normal-turn",
@@ -82,7 +91,11 @@ public sealed class LlmRequestJournalTests
                 "Hello NBSP\u00a0😀\uD83D",
                 reconstructed["messages"]![0]!["parts"]![0]!["text"]!.GetValue<string>()
             );
-            Assert.Single(reconstructed["attempts"]!.AsArray());
+            Assert.Equal(2, reconstructed["attempts"]!.AsArray().Count);
+            Assert.Equal(
+                "Prompt override",
+                reconstructed["attempts"]![1]!["systemPrompt"]!.GetValue<string>()
+            );
             var page = await store.ListAsync("session-1", "normal-turn", null, null, 10);
             Assert.Equal(second, page[0]!["requestId"]!.GetValue<string>());
             Assert.Equal(first, page[1]!["requestId"]!.GetValue<string>());
