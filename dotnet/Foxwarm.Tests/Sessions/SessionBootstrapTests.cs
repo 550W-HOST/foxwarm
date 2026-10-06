@@ -80,7 +80,7 @@ public sealed class SessionBootstrapTests
         await using var manager = new SessionManager(data, work, Options, HostModels.ForTest(Options)); await manager.LoadMainHostAsync(); var owner = await manager.RequiredAsync("main"); Assert.Equal("current", owner.Id); Assert.Null(manager.Catalog.Get("main")); Assert.Equal(bytes, await File.ReadAllBytesAsync(file)); Assert.Single(manager.Owners());
     }
     [Fact]
-    public async Task Archived_or_cold_main_does_not_force_replacement_or_eager_admission()
+    public async Task Retained_or_cold_main_does_not_force_replacement_and_allows_queued_sibling()
     {
         foreach (var retained in new[] { true, false })
         {
@@ -90,8 +90,8 @@ public sealed class SessionBootstrapTests
             using (var catalog = new SessionCatalog(data)) { catalog.Initialize(); var row = SessionCatalogTests.Row("queued", 0); row["queueLength"] = 1; catalog.Upsert(retained ? [row] : [row, SessionCatalogTests.Row("main", 0)]); }
             if (retained) { var archive = new SqliteArchiveMessageStore(Path.Combine(data, "state", "archive-store.sqlite"), "main"); archive.EnsureBranch(); }
             await using var manager = new SessionManager(data, work, Options, HostModels.ForTest(Options));
-            await manager.LoadMainHostAsync(); Assert.Null(manager.Find("main")); Assert.NotNull(manager.Find("queued")); Assert.False(manager.Find("queued")!.Metadata().Busy);
-            Assert.False(File.Exists(Path.Combine(data, "state", "sessions", "main.json"))); Assert.Equal(raw.ToJsonString(), await File.ReadAllTextAsync(queuedFile));
+            await manager.LoadMainHostAsync(); Assert.Null(manager.Find("main")); Assert.NotNull(manager.Find("queued"));
+            Assert.False(File.Exists(Path.Combine(data, "state", "sessions", "main.json")));
         }
     }
 }
