@@ -32,7 +32,9 @@ export class TaskService {
     if (args.action === 'complete') {
       // Completion is already durable. Delivery failure must not undo it;
       // retries of complete are terminal-state errors, not repeated sends.
-      try {
+      if (result.task.createdBySessionId === sessionId) {
+        this.store.markCompletionNotification(result.task.id, 'skipped');
+      } else try {
         await this.deps.sendToSession(result.task.createdBySessionId,
           `Task completed: ${result.task.id} — ${result.task.title}${result.task.result ? `\n${result.task.result}` : ''}`, sessionId);
         this.store.markCompletionNotification(result.task.id, 'sent');

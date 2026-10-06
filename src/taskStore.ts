@@ -119,7 +119,7 @@ export class TaskStore {
     this.db = undefined;
   }
 
-  markCompletionNotification(taskId: string, status: 'sent' | 'failed'): void {
+  markCompletionNotification(taskId: string, status: 'sent' | 'failed' | 'skipped'): void {
     this.getDb().prepare("UPDATE tasks SET completionNotificationStatus=? WHERE id=? AND completionNotificationStatus='pending'")
       .run(status, taskId);
   }

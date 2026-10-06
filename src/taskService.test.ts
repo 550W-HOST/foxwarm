@@ -47,13 +47,21 @@ test('completion sends once after commit; delivery failure is a warning and surv
   assert.equal(sends.length, 1);
   fail = true;
   taskId = (await service.execute({ action: 'create', title: 'Notify failure' }, 'creator')).task.id;
-  const failed = await service.execute({ action: 'complete', taskId }, 'creator');
+  await service.execute({ action: 'claim', taskId }, 'first');
+  const failed = await service.execute({ action: 'complete', taskId }, 'first');
   assert.match(failed.warning, /completed.*notification could not be delivered/);
   assert.equal(failed.task.status, 'completed');
   assert.equal(failed.task.completionNotificationStatus, 'failed');
   service.store.close();
   assert.equal(service.get(taskId).task.completionNotificationStatus, 'failed');
   assert.equal(sends.length, 2, 'reopen does not resend completed notifications');
+  taskId = (await service.execute({ action: 'create', title: 'Self work' }, 'creator')).task.id;
+  const self = await service.execute({ action: 'complete', taskId }, 'creator');
+  assert.equal(self.warning, undefined);
+  assert.equal(self.task.completionNotificationStatus, 'skipped');
+  assert.equal(sends.length, 2, 'self completion does not send to self');
+  service.store.close();
+  assert.equal(service.get(taskId).task.completionNotificationStatus, 'skipped');
 });
 
 test('child attachment rejects missing or owned tasks before creation and serializes claim against creation', async t => {
