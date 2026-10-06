@@ -23,6 +23,7 @@ export interface TaskRecord {
   completedAt: number | null;
   cancelledAt: number | null;
   completionNotificationStatus: string | null;
+  assignmentNotificationStatus: string | null;
 }
 
 export class TaskError extends Error {
@@ -35,7 +36,7 @@ const ACTION_FIELDS: Record<typeof TASK_ACTIONS[number], string[]> = {
   list: ['status'],
   get: ['taskId'],
   claim: ['taskId'],
-  assign: ['taskId', 'ownerSessionId'],
+  assign: ['taskId', 'ownerSessionId', 'notifySession'],
   update: ['taskId', 'description', 'note', 'status'],
   complete: ['taskId', 'result'],
   cancel: ['taskId', 'reason'],
@@ -70,6 +71,12 @@ export function validateTaskArgs(args: TaskArgs): void {
     || (args.ownerSessionId !== null && (typeof args.ownerSessionId !== 'string' || !args.ownerSessionId.trim() || args.ownerSessionId.length > 256)))) {
     throw new TaskError('TASK_INVALID_ARGS', 'task assign requires an existing ownerSessionId or null.');
   }
+  if (Object.prototype.hasOwnProperty.call(args, 'notifySession') && typeof args.notifySession !== 'boolean') {
+    throw new TaskError('TASK_INVALID_ARGS', 'notifySession must be a boolean.');
+  }
+  if (args.action === 'assign' && args.ownerSessionId === null && args.notifySession === true) {
+    throw new TaskError('TASK_INVALID_ARGS', 'notifySession requires a non-null ownerSessionId.');
+  }
   if (args.action === 'update' && !['description', 'note', 'status'].some(key => Object.prototype.hasOwnProperty.call(args, key))) {
     throw new TaskError('TASK_INVALID_ARGS', 'task update requires description, note, or status.');
   }
@@ -103,8 +110,8 @@ export class TaskStore {
         CREATE INDEX IF NOT EXISTS task_notes_task ON task_notes(taskId, id);
       `);
       const columns = db.prepare('PRAGMA table_info(tasks)').all() as any[];
-      if (!columns.some(column => column.name === 'completionNotificationStatus')) {
-        db.exec('ALTER TABLE tasks ADD COLUMN completionNotificationStatus TEXT');
+      for (const name of ['completionNotificationStatus', 'assignmentNotificationStatus']) {
+        if (!columns.some(column => column.name === name)) db.exec(`ALTER TABLE tasks ADD COLUMN ${name} TEXT`);
       }
       this.db = db;
       return db;
@@ -122,6 +129,11 @@ export class TaskStore {
   markCompletionNotification(taskId: string, status: 'sent' | 'failed' | 'skipped'): void {
     this.getDb().prepare("UPDATE tasks SET completionNotificationStatus=? WHERE id=? AND completionNotificationStatus='pending'")
       .run(status, taskId);
+  }
+
+  markAssignmentNotification(taskId: string, ownerSessionId: string, status: 'sent' | 'failed' | 'skipped'): void {
+    this.getDb().prepare("UPDATE tasks SET assignmentNotificationStatus=? WHERE id=? AND ownerSessionId=? AND assignmentNotificationStatus='pending'")
+      .run(status, taskId, ownerSessionId);
   }
 
   execute(args: TaskArgs, sessionId?: string, listLimit = TASK_LIST_LIMIT): any {
@@ -187,9 +199,12 @@ export class TaskStore {
         : sessionId === (task.ownerSessionId ?? task.createdBySessionId);
       if (!permitted) throw new TaskError('TASK_FORBIDDEN', `Session ${sessionId} cannot ${args.action} task ${task.id} (${state}); ${args.action === 'cancel' || args.action === 'assign' ? 'creator or owner' : task.ownerSessionId ? 'owner' : 'creator'} required.`, 403);
       if (args.action === 'assign') {
-        db.prepare("UPDATE tasks SET ownerSessionId=?,status=?,updatedAt=? WHERE id=?")
-          .run(args.ownerSessionId, args.ownerSessionId === null ? 'open' : 'active', now, task.id);
-        this.addNote(db, task.id, sessionId, `Owner changed from ${task.ownerSessionId ?? 'unclaimed'} to ${args.ownerSessionId ?? 'unclaimed'}.`, now);
+        const changedOwner = args.ownerSessionId !== task.ownerSessionId;
+        const shouldNotify = args.notifySession === true && (changedOwner || !task.assignmentNotificationStatus || task.assignmentNotificationStatus === 'failed');
+        db.prepare("UPDATE tasks SET ownerSessionId=?,status=?,updatedAt=?,assignmentNotificationStatus=? WHERE id=?")
+          .run(args.ownerSessionId, args.ownerSessionId === null ? 'open' : 'active', now,
+            shouldNotify ? 'pending' : changedOwner ? null : task.assignmentNotificationStatus, task.id);
+        if (changedOwner) this.addNote(db, task.id, sessionId, `Owner changed from ${task.ownerSessionId ?? 'unclaimed'} to ${args.ownerSessionId ?? 'unclaimed'}.`, now);
       } else if (args.action === 'update') {
         db.prepare('UPDATE tasks SET description=?,status=?,updatedAt=? WHERE id=?')
           .run(args.description ?? task.description, args.status ?? task.status, now, task.id);

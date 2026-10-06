@@ -20,6 +20,7 @@ export class TaskService {
 
   async execute(args: Record<string, any>, sessionId: string): Promise<any> {
     validateTaskArgs(args);
+    let notifyAssignment = false;
     const result = await this.exclusive(() => {
       let normalized = args;
       if (args.action === 'assign' && args.ownerSessionId !== null) {
@@ -27,8 +28,26 @@ export class TaskService {
         if (!ownerSessionId) throw new TaskError('TASK_SESSION_NOT_FOUND', 'Target Session was not found.', 404);
         normalized = { ...args, ownerSessionId };
       }
+      if (args.action === 'assign' && args.notifySession === true) {
+        const before = this.store.execute({ action: 'get', taskId: args.taskId }, sessionId).task;
+        notifyAssignment = before.ownerSessionId !== normalized.ownerSessionId
+          || !before.assignmentNotificationStatus || before.assignmentNotificationStatus === 'failed';
+      }
       return this.store.execute(normalized, sessionId);
     });
+    if (notifyAssignment) {
+      const target = result.task.ownerSessionId;
+      if (target === sessionId) this.store.markAssignmentNotification(result.task.id, target, 'skipped');
+      else try {
+        await this.deps.sendToSession(target,
+          `You have been assigned a task: ${result.task.id} — ${result.task.title}\nStatus: ${result.task.status}${result.task.description ? `\n${result.task.description.slice(0, 1000)}` : ''}`, sessionId);
+        this.store.markAssignmentNotification(result.task.id, target, 'sent');
+      } catch {
+        this.store.markAssignmentNotification(result.task.id, target, 'failed');
+        result.warning = 'Task assigned, but the assignment notification could not be delivered.';
+      }
+      result.task = this.store.execute({ action: 'get', taskId: result.task.id }, sessionId).task;
+    }
     if (args.action === 'complete') {
       // Completion is already durable. Delivery failure must not undo it;
       // retries of complete are terminal-state errors, not repeated sends.

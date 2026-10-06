@@ -85,3 +85,36 @@ test('child attachment rejects missing or owned tasks before creation and serial
   await assert.rejects(() => service.createAttachedChild(taskId, 'creator', async () => { effects++; return 'second'; }), /already owned/);
   assert.equal(effects, 1);
 });
+
+test('optional assignment notification is bounded, after commit, deduplicated and never rolls assignment back', async t => {
+  const sends: any[] = [];
+  let fail = false;
+  const service = fixture(t, async (target, message, source) => {
+    sends.push({ target, message, source });
+    assert.equal(service.get(taskId).task.ownerSessionId, target);
+    if (fail) throw new Error('synthetic assignment delivery failure');
+  });
+  const taskId = (await service.execute({ action: 'create', title: 'Notify', description: 'x'.repeat(4000) }, 'creator')).task.id;
+  await service.execute({ action: 'assign', taskId, ownerSessionId: 'first' }, 'creator');
+  assert.equal(sends.length, 0);
+  const notified = await service.execute({ action: 'assign', taskId, ownerSessionId: 'first', notifySession: true }, 'creator');
+  assert.equal(notified.task.assignmentNotificationStatus, 'sent');
+  assert.match(sends[0].message, /You have been assigned a task.*task_.*Notify\nStatus: active/);
+  assert.ok(sends[0].message.length < 1400);
+  await service.execute({ action: 'assign', taskId, ownerSessionId: 'first', notifySession: true }, 'creator');
+  assert.equal(sends.length, 1);
+  service.store.close();
+  await service.execute({ action: 'assign', taskId, ownerSessionId: 'first', notifySession: true }, 'creator');
+  assert.equal(sends.length, 1, 'persisted successful assignment does not resend after restart');
+  await assert.rejects(() => service.execute({ action: 'assign', taskId, ownerSessionId: null, notifySession: true }, 'creator'), /non-null ownerSessionId/);
+  await assert.rejects(() => service.execute({ action: 'assign', taskId, ownerSessionId: 'first', notifySession: 'yes' }, 'creator'), /boolean/);
+  fail = true;
+  const failed = await service.execute({ action: 'assign', taskId, ownerSessionId: 'second', notifySession: true }, 'creator');
+  assert.equal(failed.task.ownerSessionId, 'second');
+  assert.equal(failed.task.assignmentNotificationStatus, 'failed');
+  assert.match(failed.warning, /assigned.*notification could not be delivered/);
+  const self = await service.execute({ action: 'assign', taskId, ownerSessionId: 'creator', notifySession: true }, 'creator');
+  assert.equal(self.task.assignmentNotificationStatus, 'skipped');
+  assert.equal(self.warning, undefined);
+  assert.equal(sends.length, 2);
+});

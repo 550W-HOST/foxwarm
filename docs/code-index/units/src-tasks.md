@@ -45,6 +45,7 @@ Exact tool description:
 | `status` | For list, filter by task status. For update, set only open or active. |
 | `note` | Short progress note to append when updating a task. |
 | `result` | Short completion summary for a completed task. |
+| `notifySession` | When true, notify the assigned Session after the task assignment is committed. |
 | `ownerSessionId` | Existing Session ID to receive the task, or null to release the current owner. |
 | `reason` | Short reason for cancelling a task. |
 
@@ -54,7 +55,7 @@ Exact tool description:
 - `list`: List bounded task summaries, optionally filtered by status. Supports open, active, completed, cancelled.
 - `get`: Inspect one task and its bounded child/note summary. Requires taskId.
 - `claim`: Claim an unowned task for the current Session. A task owned by another Session is not transferred. Same-owner retries return the current task; a fresh claim sets active.
-- `assign`: Assign or transfer a task to an existing Session, or release its owner. Creator or current owner may assign; targets resolve through the real Session catalog. Null releases ownership and sets open; a target sets active. An authored short note records each transfer.
+- `assign`: Assign or transfer a task to an existing Session, or release its owner. Creator or current owner may assign; targets resolve through the real Session catalog. Null releases ownership and sets open; a target sets active. An authored short note records each transfer. Optional notifySession defaults false; true sends a bounded ordinary notification after commit, with pending/sent/failed/skipped state. Release with notification is rejected; self-target is skipped without warning. Successful/pending same-owner retries do not resend, including after reopen; failed delivery may be retried explicitly. Notification failure returns a warning without undoing assignment.
 - `update`: Update an owned or otherwise permitted task description, status, or progress note. Requires at least one change; only the owner, or creator when unclaimed, may update. Status accepts only open/active and never releases ownership.
 - `complete`: Mark a task completed with an optional result summary. Only the owner, or creator when unclaimed, may complete. After commit, the shared service sends a normal inter-session notification to the creator. Delivery failure returns a warning without undoing completion. Self completion records skipped without a redundant self-send or warning. Pending/sent/failed/skipped state survives restart; repeated completion never resends. No background notification retry runs.
 - `cancel`: Cancel a task with an optional reason. Creator or owner may cancel; reason is recorded as an authored note.
