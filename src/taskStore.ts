@@ -50,7 +50,7 @@ const ACTION_FIELDS: Record<typeof TASK_ACTIONS[number], string[]> = {
 };
 const TEXT_LIMITS: Record<string, number> = {
   title: 200, description: 4000, parentTaskId: 128, taskId: 128,
-  note: 1000, result: 4000, reason: 1000,
+  note: 1000, result: 20000, reason: 1000,
 };
 
 export function validateTaskArgs(args: TaskArgs): void {

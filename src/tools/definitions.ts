@@ -71,7 +71,7 @@ const baseDefinitions = [
                     notifySession: { type: 'boolean', description: "When true, send task notifications after the assignment is committed: notify the new owner, and notify the previous owner when ownership changes or is released." },
                     ownerSessionId: { type: ['string', 'null'], maxLength: 256, description: "Existing Session ID to receive the task, or null to release the current owner." },
                     note: { type: 'string', maxLength: 1000, description: "Short progress note to append when updating a task." },
-                    result: { type: 'string', maxLength: 4000, description: "Short completion summary for a completed task." },
+                    result: { type: 'string', maxLength: 20000, description: "Short completion summary for a completed task." },
                     reason: { type: 'string', maxLength: 1000, description: "Short reason for cancelling a task." },
                 },
                 required: ['action'],

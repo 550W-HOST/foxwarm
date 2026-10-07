@@ -66,6 +66,22 @@ test('completion sends once after commit; delivery failure is a warning and surv
   assert.equal(service.get(taskId).task.completionNotificationStatus, 'skipped');
 });
 
+test('completion keeps the full 20000-character result in the creator notification', async t => {
+  const sends: any[] = [];
+  const service = fixture(t, async (target, message, source, options) => {
+    sends.push({ target, message, source, taskNotification: options?.taskNotification });
+  });
+  const taskId = (await service.execute({ action: 'create', title: 'Long completion' }, 'creator')).task.id;
+  await service.execute({ action: 'claim', taskId }, 'owner');
+  const result = 'z'.repeat(20000);
+  const completed = await service.execute({ action: 'complete', taskId, result }, 'owner');
+  assert.equal(completed.task.result, result);
+  assert.equal(service.get(taskId).task.result, result);
+  assert.equal(sends.length, 1);
+  assert.equal(sends[0].message, `Task completed: ${taskId} — Long completion\n${result}`);
+  assert.deepEqual(sends[0].taskNotification, { taskId, event: 'completed' });
+});
+
 test('child attachment assigns or transfers with creator authority and serializes assignment against creation', async t => {
   const service = fixture(t);
   let effects = 0;

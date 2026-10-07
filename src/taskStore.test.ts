@@ -151,6 +151,22 @@ test('runtime validates action-specific fields, types, required fields, sizes an
   assert.equal(store.execute({ action: 'list' }, 'coordinator').total, 0);
 });
 
+test('completion results allow 20000 characters but reject 20001 before changing the task', t => {
+  const store = fixture(t);
+  const task = store.execute({ action: 'create', title: 'Long result' }, 'owner').task;
+  store.execute({ action: 'claim', taskId: task.id }, 'owner');
+  const tooLong = 'x'.repeat(20001);
+  assert.throws(() => store.execute({ action: 'complete', taskId: task.id, result: tooLong }, 'owner'), /result must be a string of at most 20000 characters/);
+  const pending = store.execute({ action: 'get', taskId: task.id }, 'owner').task;
+  assert.equal(pending.status, 'active');
+  assert.equal(pending.result, null);
+  const accepted = 'y'.repeat(20000);
+  store.execute({ action: 'complete', taskId: task.id, result: accepted }, 'owner');
+  const completed = store.execute({ action: 'get', taskId: task.id }, 'owner').task;
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.result, accepted);
+});
+
 test('legacy Goal migration is idempotent, preserves full text and never revives a terminal task', t => {
   const store = fixture(t);
   const goal = 'Preserve the work\n' + 'x'.repeat(8000);
