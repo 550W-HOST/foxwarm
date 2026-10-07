@@ -22,13 +22,14 @@ test('coordinator creates, executor claims and updates, coordinator cannot updat
   assert.equal(created.createdBySessionId, 'coordinator');
   assert.equal(created.ownerSessionId, null);
   assert.equal(created.status, 'open');
-  assert.throws(() => store.execute({ action: 'update', taskId: created.id, note: 'Not mine yet' }, 'executor'), /creator required/);
+  store.execute({ action: 'update', taskId: created.id, note: 'Not mine yet' }, 'executor');
   const claimed = store.execute({ action: 'claim', taskId: created.id }, 'executor').task;
   assert.equal(claimed.ownerSessionId, 'executor');
   assert.equal(claimed.status, 'active');
   assert.deepEqual(store.execute({ action: 'claim', taskId: created.id }, 'executor').task, claimed);
   assert.throws(() => store.execute({ action: 'claim', taskId: created.id }, 'other'), /already claimed.*owner=executor/);
   assert.throws(() => store.execute({ action: 'update', taskId: created.id, description: 'Changed' }, 'coordinator'), /status=active, owner=executor.*owner required/);
+  store.execute({ action: 'update', taskId: created.id, note: 'Coordinator progress' }, 'coordinator');
   assert.throws(() => store.execute({ action: 'complete', taskId: created.id }, 'coordinator'), /owner required/);
   store.execute({ action: 'update', taskId: created.id, description: '', note: 'Parser passes', status: 'open' }, 'executor');
   assert.equal(store.execute({ action: 'get', taskId: created.id }, 'coordinator').task.ownerSessionId, 'executor');
@@ -39,7 +40,9 @@ test('coordinator creates, executor claims and updates, coordinator cannot updat
   assert.ok(completed.completedAt >= created.createdAt);
   const inspected = store.execute({ action: 'get', taskId: created.id }, 'coordinator');
   assert.equal(inspected.task.description, '');
-  assert.deepEqual(inspected.notes.map((note: any) => [note.sessionId, note.text]), [['executor', 'Parser passes']]);
+  assert.deepEqual(inspected.notes.map((note: any) => [note.sessionId, note.text]), [
+    ['executor', 'Not mine yet'], ['coordinator', 'Coordinator progress'], ['executor', 'Parser passes'],
+  ]);
   assert.equal(store.execute({ action: 'list' }, 'coordinator').total, 0);
   assert.equal(store.execute({ action: 'list', status: 'completed' }, 'coordinator').total, 1);
   for (const action of ['claim', 'update', 'complete', 'cancel']) {
@@ -53,6 +56,22 @@ test('coordinator creates, executor claims and updates, coordinator cannot updat
     store.close();
   `], { encoding: 'utf8' }));
   assert.deepEqual(restored, JSON.parse(JSON.stringify(inspected)), 'task and notes survive a fresh process');
+});
+
+test('note-only updates are open to other Sessions while description and status remain owner-controlled', t => {
+  const store = fixture(t);
+  const task = store.execute({ action: 'create', title: 'Shared notes' }, 'creator').task;
+  store.execute({ action: 'claim', taskId: task.id }, 'owner');
+  store.execute({ action: 'update', taskId: task.id, note: 'Reviewer note' }, 'reviewer');
+  assert.throws(() => store.execute({ action: 'update', taskId: task.id, description: 'Reviewer edit', note: 'Mixed update' }, 'reviewer'), /owner required/);
+  assert.throws(() => store.execute({ action: 'update', taskId: task.id, status: 'open', note: 'Mixed update' }, 'reviewer'), /owner required/);
+  store.execute({ action: 'update', taskId: task.id, note: 'Owner note' }, 'owner');
+  assert.deepEqual(store.execute({ action: 'get', taskId: task.id }).notes.map((note: any) => [note.sessionId, note.text]), [
+    ['reviewer', 'Reviewer note'], ['owner', 'Owner note'],
+  ]);
+  const unclaimed = store.execute({ action: 'create', title: 'Unclaimed notes' }, 'creator').task;
+  store.execute({ action: 'update', taskId: unclaimed.id, note: 'Outside note' }, 'reviewer');
+  assert.equal(store.execute({ action: 'get', taskId: unclaimed.id }).notes[0].sessionId, 'reviewer');
 });
 
 test('simultaneous independent SQLite connections have one claim winner', async t => {

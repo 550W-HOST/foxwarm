@@ -16,7 +16,7 @@ test('authenticated task REST separates user actions from Session-targeted tool 
   const notices: any[] = [];
   const service = new TaskService(store, { resolveSessionId: id => sessions.has(id) ? id : undefined,
     resolveSessionAgent: id => sessionAgents.get(id),
-    sendToSession: async (target, message, source) => { notices.push({ target, message, source }); } });
+    sendToSession: async (target, message, source, options) => { notices.push({ target, message, source, taskNotification: options?.taskNotification }); } });
   const server = new HttpServer(0, 'synthetic-task-auth');
   registerWebUiTaskRoutes(server, service);
   await server.start();
@@ -36,7 +36,7 @@ test('authenticated task REST separates user actions from Session-targeted tool 
   assert.equal(created.task.createdByKind, 'user');
   assert.equal(created.task.createdBySessionId, null);
   assert.equal((await request(`/api/tasks/${id}/claim`, 'POST', { sessionId: 'worker' })).status, 200);
-  assert.equal((await request(`/api/tasks/${id}`, 'PATCH', { sessionId: 'other', note: 'No permission' })).status, 403);
+  assert.equal((await request(`/api/tasks/${id}`, 'PATCH', { sessionId: 'other', note: 'Reviewer note' })).status, 200);
   assert.equal((await request(`/api/tasks/${id}`, 'PATCH', { note: 'Owner-targeted update' })).status, 200);
   assert.equal((await request(`/api/tasks/${id}/assign`, 'POST', { ownerSessionId: 'missing' })).status, 404);
   const transferred = await (await request(`/api/tasks/${id}/assign`, 'POST', { ownerSessionId: 'other', notifySession: true })).json() as any;
@@ -46,8 +46,9 @@ test('authenticated task REST separates user actions from Session-targeted tool 
   const finished = await (await request(`/api/tasks/${id}/complete`, 'POST', { result: 'Completed from UI' })).json() as any;
   assert.equal(finished.task.status, 'completed');
   assert.equal(finished.sessionId, 'worker');
-  assert.equal(notices.length, 3);
-  assert.deepEqual(notices.map(notice => [notice.target, notice.source]), [['worker', undefined], ['other', undefined], ['other', undefined]]);
+  assert.equal(notices.length, 4);
+  assert.deepEqual(notices.map(notice => [notice.target, notice.source]), [['worker', 'other'], ['worker', undefined], ['other', undefined], ['other', undefined]]);
+  assert.deepEqual(notices[0].taskNotification, { taskId: id, event: 'note' });
   assert.equal((await request(`/api/tasks/${id}/cancel`, 'POST', {})).status, 409);
   const details = await (await request(`/api/tasks/${id}`)).json() as any;
   assert.equal(details.task.result, 'Completed from UI');
@@ -68,7 +69,7 @@ test('authenticated task REST separates user actions from Session-targeted tool 
   assert.equal(owned.task.ownerSessionId, 'worker');
   assert.equal(owned.task.status, 'active');
   assert.equal(owned.task.assignmentNotificationStatus, 'sent');
-  assert.equal(notices[3].target, 'worker');
+  assert.equal(notices[4].target, 'worker');
   const missing = await request('/api/tasks/missing');
   assert.equal(missing.status, 404);
   assert.equal((await missing.json() as any).code, 'TASK_NOT_FOUND');

@@ -356,7 +356,7 @@ export interface SessionEnqueueOptions {
 export interface SessionDeliveryOptions extends SessionEnqueueOptions {
   taskNotification?: {
     taskId: string;
-    event: 'assigned' | 'commented' | 'completed' | 'transferred' | 'released';
+    event: 'assigned' | 'note' | 'completed' | 'transferred' | 'released';
     recipient?: 'new' | 'previous';
     sourceKind?: 'session' | 'user';
   };

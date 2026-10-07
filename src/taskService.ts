@@ -59,6 +59,20 @@ export class TaskService {
     return { result, newOwnerDelivered };
   }
 
+  private async deliverNoteNotification(result: any, sessionId: string, plan: { owner: string }, note: string, sourceKind?: 'user'): Promise<any> {
+    delete result.commentNotification;
+    try {
+      await this.deps.sendToSession(plan.owner,
+        `Note on task ${result.task.id} — ${result.task.title}\n${note}`,
+        sourceKind === 'user' ? undefined : sessionId,
+        { taskNotification: { taskId: result.task.id, event: 'note', ...(sourceKind ? { sourceKind } : {}) } });
+    } catch {
+      result.warning = 'Note saved, but the owner notification could not be delivered.';
+    }
+    result.task = this.store.execute({ action: 'get', taskId: result.task.id }, sourceKind === 'user' ? undefined : sessionId).task;
+    return result;
+  }
+
   async execute(args: Record<string, any>, sessionId: string, anchorSeq?: number): Promise<any> {
     validateTaskArgs(args);
     sessionId = this.deps.resolveSessionId(sessionId) || sessionId;
@@ -77,6 +91,8 @@ export class TaskService {
     const plan = result.assignmentNotification;
     delete result.assignmentNotification;
     if (plan) result = (await this.deliverAssignmentPlan(result, sessionId, plan)).result;
+    const commentPlan = result.commentNotification;
+    if (commentPlan) result = await this.deliverNoteNotification(result, sessionId, commentPlan, args.note);
     if (args.action === 'complete') {
       // Completion is already durable. Delivery failure must not undo it;
       // retries of complete are terminal-state errors, not repeated sends.
@@ -112,17 +128,8 @@ export class TaskService {
     delete result.assignmentNotification;
     if (assignmentPlan) result = (await this.deliverAssignmentPlan(result, undefined, { ...assignmentPlan, sourceKind: 'user' })).result;
     const commentPlan = result.commentNotification;
-    delete result.commentNotification;
     if (commentPlan) {
-      try {
-        await this.deps.sendToSession(commentPlan.owner,
-          `Comment on task ${result.task.id} — ${result.task.title}\n${normalized.note}`,
-          undefined,
-          { taskNotification: { taskId: result.task.id, event: 'commented', sourceKind: 'user' } });
-      } catch {
-        result.warning = 'Comment saved, but the owner notification could not be delivered.';
-      }
-      result.task = this.store.execute({ action: 'get', taskId: result.task.id }, undefined).task;
+      result = await this.deliverNoteNotification(result, '', commentPlan, normalized.note, 'user');
     }
     return result;
   }

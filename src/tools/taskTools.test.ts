@@ -49,18 +49,19 @@ test('direct, unified and Worker task calls use exact context identity through M
     const claimed = readResult(await call_tool({ source: 'builtin', name: 'task', args: { action: 'claim', taskId } }, ownerCtx));
     assert.equal(claimed.ownerSessionId, owner.id);
     assert.equal(claimed.status, 'active');
-    await assert.rejects(() => task({ action: 'update', taskId, note: 'Creator cannot change ownership' }, creatorCtx), /owner required/);
+    await task({ action: 'update', taskId, note: 'Creator progress note' }, creatorCtx);
     await task({ action: 'update', taskId, note: 'Working' }, ownerCtx);
     assert.equal(JSON.stringify(creator), creatorBefore);
     const result = readResult(await task({ action: 'complete', taskId, result: 'Done' }, ownerCtx));
     assert.equal(result.status, 'completed');
     const inspected = readResult(await task({ action: 'get', taskId }, creatorCtx));
     assert.equal(inspected.task.result, 'Done');
-    assert.equal(inspected.notes[0].sessionId, owner.id);
+    assert.equal(inspected.notes.find((note: any) => note.text === 'Working').sessionId, owner.id);
     assert.equal(JSON.stringify(creator.history), '[]');
     assert.equal(creator.queue.length, 1);
     assert.equal(readResult(await task({ action: 'get', taskId }, ownerCtx)).task.completionNotificationStatus, 'sent');
-    assert.equal(JSON.stringify(owner), ownerBefore);
+    assert.equal(JSON.stringify(owner.history), JSON.stringify(JSON.parse(ownerBefore).history));
+    assert.equal(owner.queue.length, 1, 'the owner receives the note notification through its queue');
     setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
 version: 1
 defaultAction: allow

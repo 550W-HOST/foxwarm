@@ -112,7 +112,7 @@ test('User Task delivery keeps an explicit user source without fabricating a Ses
     getAgentMetadata: () => ({}),
     enqueueSessionItem: async (_id, item) => { enqueued = item; },
   }, target.id, 'User comment.', undefined, {
-    taskNotification: { taskId: 'task_user', event: 'commented', sourceKind: 'user' },
+    taskNotification: { taskId: 'task_user', event: 'note', sourceKind: 'user' },
   });
   const wrapped = parseFoxwarmWrappedContent(enqueued.parts[0].system);
   assert.equal(wrapped.attrs.type, 'task');
