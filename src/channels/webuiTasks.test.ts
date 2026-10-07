@@ -68,7 +68,7 @@ test('authenticated task REST separates user actions from Session-targeted tool 
   assert.equal(owned.task.ownerSessionId, 'worker');
   assert.equal(owned.task.status, 'active');
   assert.equal(owned.task.assignmentNotificationStatus, 'sent');
-  assert.equal(notices[1].target, 'worker');
+  assert.equal(notices[3].target, 'worker');
   const missing = await request('/api/tasks/missing');
   assert.equal(missing.status, 404);
   assert.equal((await missing.json() as any).code, 'TASK_NOT_FOUND');
