@@ -130,7 +130,7 @@ internal sealed class TaskService : IDisposable
         string message,
         bool trigger,
         string field,
-        int? revision,
+        long? revision,
         List<string> warnings
     )
     {
@@ -166,7 +166,8 @@ internal sealed class TaskService : IDisposable
         var description = task["description"]?.GetValue<string>();
         var result = task["result"]?.GetValue<string>();
         var body = includeResult ? result : description;
-        return $"{taskId} — {title}\nStatus: {status}{(string.IsNullOrEmpty(body) ? "" : $"\n{body[..Math.Min(1000, body.Length)]}")}";
+        var limit = includeResult ? 4000 : 1000;
+        return $"{taskId} — {title}\nStatus: {status}{(string.IsNullOrEmpty(body) ? "" : $"\n{body[..Math.Min(limit, body.Length)]}")}";
     }
 
     internal async Task<JsonObject> ExecuteForWebUiAsync(

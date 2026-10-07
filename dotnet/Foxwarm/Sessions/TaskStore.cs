@@ -11,7 +11,7 @@ internal sealed class TaskError(string code, string message, int statusCode = 40
     internal int StatusCode { get; } = statusCode;
 }
 
-internal sealed record TaskAssignmentPlan(int Revision, string? NewOwner, string? PreviousOwner);
+internal sealed record TaskAssignmentPlan(long Revision, string? NewOwner, string? PreviousOwner);
 
 internal sealed record TaskStoreResult(
     JsonObject Payload,
@@ -104,7 +104,12 @@ internal sealed class TaskStore : IDisposable
         }
     }
 
-    internal void MarkNotification(string taskId, string field, string status, int? revision = null)
+    internal void MarkNotification(
+        string taskId,
+        string field,
+        string status,
+        long? revision = null
+    )
     {
         lock (gate)
         {
@@ -266,7 +271,7 @@ internal sealed class TaskStore : IDisposable
                             ? null
                             : Canonical(requestedRaw!);
                     var changed = owner != requested;
-                    var revision = Int(task["assignmentRevision"]) + (changed ? 1 : 0);
+                    var revision = Long(task["assignmentRevision"]) + (changed ? 1 : 0);
                     var previous = changed ? owner : Text(task["previousOwnerSessionId"]);
                     var previousStatus = changed
                         ? null
@@ -299,9 +304,9 @@ internal sealed class TaskStore : IDisposable
                         "previousOwnerNotificationStatus",
                         notifyPrevious ? "pending" : previousStatus,
                         "reminderLastSeq",
-                        changed && requested == actor ? null : task["reminderLastSeq"],
+                        changed ? null : NullableLong(task["reminderLastSeq"]),
                         "reminderMessageCount",
-                        changed ? 0 : task["reminderMessageCount"]
+                        changed ? 0 : Int(task["reminderMessageCount"])
                     );
                     if (changed)
                         AddNote(
@@ -556,6 +561,19 @@ internal sealed class TaskStore : IDisposable
         return value.TryGetValue<double>(out var doubleValue) ? checked((int)doubleValue) : 0;
     }
 
+    private static long Long(JsonNode? node)
+    {
+        if (node is not JsonValue value)
+            return 0;
+        if (value.TryGetValue<long>(out var longValue))
+            return longValue;
+        if (value.TryGetValue<int>(out var integer))
+            return integer;
+        return value.TryGetValue<double>(out var doubleValue) ? checked((long)doubleValue) : 0;
+    }
+
+    private static long? NullableLong(JsonNode? node) => node is null ? null : Long(node);
+
     private SqliteConnection Open()
     {
         if (connection is null)
@@ -651,7 +669,6 @@ internal sealed class TaskStore : IDisposable
         Limit(args, "note", 1000);
         Limit(args, "taskId", 128);
         Limit(args, "parentTaskId", 128);
-        Limit(args, "ownerSessionId", 256);
         if (args.ContainsKey("status"))
         {
             var allowedStatuses =
@@ -681,7 +698,10 @@ internal sealed class TaskStore : IDisposable
         if (
             args.ContainsKey("ownerSessionId")
             && args["ownerSessionId"] is not null
-            && string.IsNullOrWhiteSpace(Text(args["ownerSessionId"]))
+            && (
+                string.IsNullOrWhiteSpace(Text(args["ownerSessionId"]))
+                || Text(args["ownerSessionId"])!.Length > 256
+            )
         )
             throw new TaskError(
                 "TASK_INVALID_ARGS",
