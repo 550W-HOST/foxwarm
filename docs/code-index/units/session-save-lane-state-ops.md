@@ -1,16 +1,18 @@
 # Unit: Session save-lane settings, prompt cache, goals, retry, and compact wake state
 
-Files: `dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Cache.cs`, `dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Compact.cs`, `dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Cwd.cs`, `dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Goal.cs`, `dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Retry.cs`, `dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Settings.cs`
+Files: dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Cache.cs, dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Compact.cs, dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Cwd.cs, dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Retry.cs, dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Settings.cs
+
+Primary source: dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.cs
 
 ## Purpose
 
-Provides narrow save-lane operations for fields that are still part of active Session authority: prompt-cache keys, compact wake records, cwd, goal/interval state, retry notices, model/settings patches, and compact threshold updates.
+Provides narrow save-lane operations for fields that are still part of active Session authority: prompt-cache keys, compact wake records, cwd, retry notices, model/settings patches, compact threshold updates, and strict migration of historical Goal state.
 
 ## Stable methods and callers
 
 - `EnsurePromptCacheKeyAsync` persists a generated/reused prefix key through the lane rather than changing it concurrently with history.
 - `PublishCompactWakeAsync`, `RemoveCompactWakeAsync`, and `ReleaseStandaloneCompactAsync` keep ready/standalone compact markers ordered with ordinary saves.
-- `CommitCwdAsync`, `SetGoalAsync`, `AppendGoalReminderAsync`, `CommitRetryNoticeAsync`, and `CommitSettingsAsync` each stage a narrow authority envelope change and publish only after the store result.
+- `CommitCwdAsync`, `CommitRetryNoticeAsync`, and `CommitSettingsAsync` each stage a narrow authority envelope change and publish only after the store result. `SessionSaveLane` invokes the TaskService legacy-Goal migration hook for strict staged authority writes; invalid truthy Goal values block the write, while valid migration removes the legacy field after the task transaction commits.
 
 Callers: SessionManager settings/goal/timer operations, SessionOwner retry/compaction hooks, and the model request preparation path. Legacy Goal migration or future task-reminder consumers are not inferred from these current field operations.
 

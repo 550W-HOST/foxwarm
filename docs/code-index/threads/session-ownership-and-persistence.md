@@ -22,7 +22,7 @@ HTTP/WebUI or command ingress
 
 ## Active JSON authority
 
-[Session authority JSON](../units/session-authority-json.md) owns the current active `history` array and queue, message counters, wait declaration, busy/stopping state, model/settings fields, memory snapshot, goal fields supported by this host, and other validated semantic state. `SessionAuthorityDocument` rejects unsupported worker/frontier/catalog-only shapes instead of silently accepting them. `PersistentSessionAuthorityStore.ToAuthority` removes catalog-only fields and rebuilds the persisted `history`/queue from the snapshot before validation.
+[Session authority JSON](../units/session-authority-json.md) owns the current active `history` array and queue, message counters, wait declaration, busy/stopping state, model/settings fields, memory snapshot, persisted child-handoff boundary, and other validated semantic state. Legacy Goal values are read-compatible migration inputs; production Goal writers/reminders are retired and a valid legacy Goal is migrated during the owning strict save path. `SessionAuthorityDocument` rejects unsupported worker/frontier/catalog-only shapes instead of silently accepting them. `PersistentSessionAuthorityStore.ToAuthority` removes catalog-only fields and rebuilds the persisted `history`/queue from the snapshot before validation.
 
 If the authority file is missing while Archive rows exist, `PersistentSessionAuthorityStore.LoadAsync` throws an integrity error: Archive is not a substitute source for active Session history. If no authority and no Archive rows exist, the store returns `null`; the caller then decides whether this is a permitted new lifetime. `SessionManager.Admission` rejects an already catalog-registered/member lifetime with `Cataloged Session authority is missing` and preserves existing identity reservations rather than creating an empty Session.
 
@@ -43,7 +43,7 @@ Stop/dequeue has an intentional immediate path: `SessionControl.StopAsync` reach
 5. A failure after rename is `AuthorityCommittedException`: the JSON authority is committed, hot state is published, and callers must treat the operation as committed even if directory sync or catalog projection failed.
 6. A catalog projection failure is also reported after JSON commit. The owner keeps the newer semantic snapshot and the catalog remains an older projection until a later strict save republishes it.
 
-The representative evidence is `PersistentSessionTurnTests.AuthorityFailurePublishesOnlyPostRenameCommit`, `ArchiveConflictDoesNotPublishOrDeletePreexistingRow`, `ExactArchiveReplayIsNotDeletedWhenAuthorityPrecommitFails`, and `PersistencePrimitiveTests.AtomicWriter*`.
+Canonical append also applies consumed queue-item child-handoff transitions to the staged authority snapshot; passive/unconsumed queue items do not change that boundary. Trusted send/task receipts resolve the boundary through a strict SaveLane operation before the tool-result history row is appended. The representative evidence is `PersistentSessionTurnTests.AuthorityFailurePublishesOnlyPostRenameCommit`, `ArchiveConflictDoesNotPublishOrDeletePreexistingRow`, `ExactArchiveReplayIsNotDeletedWhenAuthorityPrecommitFails`, and `PersistencePrimitiveTests.AtomicWriter*`.
 
 ## Compaction, fork, and clear
 
@@ -76,4 +76,4 @@ Identity move and Archive reservation code use [Archive identity](../units/archi
 
 ## Current boundary
 
-The .NET source contains task-service APIs and ordinary wait/task persistence, but future child-handoff receipts, legacy Goal migration/retirement, and request-local task-reminder consumers are not asserted by this thread. Existing `OpenAIRequestText` child-reminder compatibility handling is not evidence that a persisted handoff receipt consumer exists.
+The .NET source contains Main-local task service APIs, attached-child binding, persisted child-handoff boundary state, valid legacy Goal migration on strict saves, request-local task context, and compaction progress checkpoint calls. Request context is model-request-only and does not append history or wake a Session. Existing `OpenAIRequestText` child-reminder compatibility handling is separate from the persisted boundary state.

@@ -19,7 +19,7 @@ Callers: `SessionManager.Tasks/Timers`, `WebUIChannel.Tasks`, timer/task tools, 
 
 The turn host also marks a terminal tool batch in `ChatResult`; `LocalSessionTurnHost` returns `Terminal=true` and `SessionTurnRunner` exits the outer provider loop before later passive-only follow-up admission can start another provider turn. Runnable/release boundaries still decide whether a later active item should run.
 
-Task authority/service/API/UI work is present in this baseline, but later legacy Goal/child-task migration, request-local task reminders, `create_child_session.taskId` attachment, and child-handoff send/completion receipts are not asserted as implemented consumers. Timer due calculation is persisted and restart-aware; a timer enqueue still follows queue admission semantics and must not be represented as a completed model turn.
+Task authority/service/API/UI work is present in this baseline, but later legacy Goal/child-task migration, request-Task progress is consumed as request-only context for normal model requests and checkpointed with `consume=false` before compaction removes history. `create_child_session.taskId` preflights and binds a newly created child before initial delivery. Persisted child-handoff boundaries resolve only from consumed canonical queue items or trusted parent-send/attached-task receipts; arbitrary tool/script output is not a receipt. Timer due calculation is persisted and restart-aware; a timer enqueue still follows queue admission semantics and must not be represented as a completed model turn.
 
 ## Tests
 

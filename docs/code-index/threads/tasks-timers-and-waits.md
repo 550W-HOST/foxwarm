@@ -21,9 +21,9 @@ Strict wait/task transitions publish after their store result and preserve commi
 
 ## Current behavior and implementation boundary
 
-The task service anchors reminder progress to live Session message sequence: tool calls use `source.Entry.Snapshot().NextMessageSeq - 1`; API calls read the persisted Session authority next-message anchor without hydrating a cold catalog member. `TaskStore` updates anchor/reset fields on create, claim/self-assignment, open/active, and reset paths. A terminal tool batch marks `ChatResult.Terminal`; `LocalSessionTurnHost` stops the outer provider loop and `SessionTurnRunner` handles later runnable/release work without opening a passive-only extra provider turn.
+The task service anchors reminder progress to live Session message sequence: tool calls use `source.Entry.Snapshot().NextMessageSeq - 1`; API calls read the persisted Session authority next-message anchor without hydrating a cold catalog member. `TaskStore` updates anchor/reset fields on create, claim/self-assignment, open/active, and reset paths. Legacy Goal values migrate during the owning strict save path; malformed truthy Goal values fail that authority write. `create_child_session.taskId` performs task preflight, real child creation, and child binding before initial delivery. Request-only Task context is consumed per normal provider request/retry, while compaction checkpoints progress without prompt/history/wake rows.
 
-Legacy Goal migration/retirement, request-local task reminders beyond the accepted anchor fields, `create_child_session.taskId` attachment, and creator-send/attached-child completion receipts remain unimplemented consumers. Existing child-reminder text handling is not a persisted receipt implementation.
+A consumed canonical queue item updates persisted `childHandoffState`; passive/unconsumed queue items do not. Trusted successful parent sends and attached-task completion resolve that boundary before the tool result row is appended. A terminal tool batch marks `ChatResult.Terminal`; `LocalSessionTurnHost` stops the outer provider loop and `SessionTurnRunner` handles later runnable/release work without opening a passive-only extra provider turn.
 
 ## Canonical units and tests
 

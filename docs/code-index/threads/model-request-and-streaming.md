@@ -6,6 +6,7 @@
 SessionTurnRunner / LocalSessionTurnHost
   -> SessionChatService.ChatCoreAsync
   -> ModelRequestOwner.RequestAsync + ConfiguredModelRequests
+     (normal canonical requests may refresh request-only Task context before retries)
   -> concrete provider transport (HTTP/SSE or Responses WebSocket)
   -> ChatResult/stream result
   -> LocalSessionTurnHost tool loop or canonical assistant append
@@ -15,7 +16,7 @@ SessionTurnRunner / LocalSessionTurnHost
 - **Producer:** `LocalSessionTurnHost` supplies the exact Session snapshot/history, request scope, Agent memory, model settings, and tool definitions. It owns the outer tool loop, strict assistant/tool message pairs, retry safe point, and `SessionToolExecutor` batch calls.
 - **Owner:** `SessionChatService.ChatCoreAsync` selects route context and delegates provider-neutral request work to `ModelRequestOwner.RequestAsync`/`ConfiguredModelRequests`; concrete provider units own wire serialization/transport. `SessionChatService` does not own the tool-call loop.
 - **Durable boundaries:** `LlmRequestJournalStore.BeginRequestAsync` first persists a neutral manifest after `RequestHistoryRepair.SelectAndRepair` visibility/repair and before concrete model filtering/image hydration. Later, after the concrete semantic wire payload is formed and immediately before transport, `AppendAttemptStartAsync` persists concrete model/provider/attempt/effective-prompt metadata plus a payload digest; it does not store the hydrated wire body, base64 image data, auth headers, or WebSocket suffix. Canonical assistant/tool messages enter active JSON/Archive only through `LocalSessionTurnHost` and `SessionSaveLane.CommitCanonicalAppendAsync`.
-- **Consumers:** `LocalSessionTurnHost` executes returned tool calls through `SessionToolExecutor`, appends strict assistant/tool pairs, and decides whether to continue/terminal-stop; WebUI realtime receives deltas/events; DevTools reads journal/response fixtures.
+- **Consumers:** `LocalSessionTurnHost` executes returned tool calls through `SessionToolExecutor`, appends strict assistant/tool pairs, and decides whether to continue/terminal-stop; WebUI realtime receives deltas/events; DevTools reads journal/response fixtures. Normal canonical requests receive request-only Task context from `SessionChatService`; this context is not appended to active history or queue.
 
 ## Provider preparation and transport order
 
@@ -29,7 +30,7 @@ Same-model missing generated blob and other local preparation/persistence/hydrat
 
 ## Retry and journal ordering
 
-`LocalSessionTurnHost.PrepareRetryAsync` reaches the save-lane safe point, drains leading queue inputs, and reports whether committed context changed. Normal provider retry applies backoff and preserves the outer retry budget. If committed context changes, `ModelRequestOwner` starts a new journal logical request ID for the changed semantic context; unchanged-input failover keeps the same ID; a later leaf prompt override remains on that ID. Retry does not reset the outer budget.
+`LocalSessionTurnHost.PrepareRetryAsync` reaches the save-lane safe point, drains leading queue inputs, and reports whether committed context changed. Normal provider retry applies backoff and preserves the outer retry budget. `SessionChatService` refreshes request-only Task context at the same retry safe point; if it changes, `ModelRequestOwner` starts a new journal logical request ID for the changed semantic context. Unchanged-input failover keeps the same ID, and a later leaf prompt override remains on that ID. Retry does not reset the outer budget.
 
 Attempt-start persistence is required before provider transport; failure to make it durable is `LlmJournalPreparationException` and prevents sending that attempt. Result-write failure after a successful provider result is diagnostic-only: the result is returned and provider retry is not duplicated. Journal records are not active Session authority or child-handoff receipts.
 
