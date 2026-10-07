@@ -15,7 +15,20 @@ let heldDetails = []
 let holdDetails = false
 let onListsHeld
 let onDetailsHeld
+let heldComments = []
+let holdComments = false
+let onCommentsHeld
 const requests = []
+
+function readBody(request) {
+  return new Promise(resolve => {
+    let raw = ''
+    request.on('data', chunk => { raw += chunk })
+    request.on('end', () => {
+      try { resolve(raw ? JSON.parse(raw) : null) } catch { resolve(null) }
+    })
+  })
+}
 
 function json(response, body, status = 200) {
   response.writeHead(status, { 'Content-Type': 'application/json' })
@@ -41,8 +54,9 @@ before(async () => {
     bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false,
     define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent',
   })
-  server = createServer((request, response) => {
+  server = createServer(async (request, response) => {
     const url = new URL(request.url, 'http://fixture')
+    const body = request.method === 'POST' ? await readBody(request) : null
     if (url.pathname === '/prefix/ui/api/session-list/search') {
       return json(response, { sessions: [
         { id: 'worker/main', agent: 'worker', displayName: 'Worker' },
@@ -50,19 +64,27 @@ before(async () => {
       ] })
     }
     if (url.pathname === '/prefix/ui/api/session-list/by-id') {
-      return json(response, { results: [{ requestedId: 'worker/main', session: { id: 'worker/main', agent: 'worker', displayName: 'Worker' } }] })
+      const ids = Array.isArray(body?.ids) ? body.ids : []
+      const sessions = new Map([
+        ['worker/main', { id: 'worker/main', agent: 'worker', displayName: 'Worker' }],
+        ['other/main', { id: 'other/main', agent: 'other', displayName: 'Other' }],
+      ])
+      return json(response, { results: ids.map(requestedId => ({ requestedId, session: sessions.get(requestedId) || null })) })
     }
     if (url.pathname === '/prefix/ui/api/tasks' && request.method === 'POST') {
-      requests.push({ pathname: url.pathname, method: request.method, action: 'create' })
-      return json(response, { task: { ...task('open'), id: 'task-user', title: 'Created from WebUI', createdByKind: 'user', createdBySessionId: null, ownerSessionId: 'worker/main' } }, 201)
+      requests.push({ pathname: url.pathname, method: request.method, action: 'create', body })
+      return json(response, { task: { ...task('open'), id: 'task-user', title: 'Created from WebUI', createdByKind: 'user', createdBySessionId: null, ownerSessionId: body?.ownerSessionId ? 'worker/canonical' : null }, warning: body?.notifySession ? 'Task assigned, but the new-owner notification could not be delivered.' : undefined }, 201)
     }
     if (url.pathname.endsWith('/comments') && request.method === 'POST') {
-      requests.push({ pathname: url.pathname, method: request.method, action: 'comment' })
-      return json(response, { task: task('active') })
+      requests.push({ pathname: url.pathname, method: request.method, action: 'comment', body })
+      const reply = () => json(response, { task: task('active'), warning: body?.notifySession ? 'Comment saved, but the owner notification could not be delivered.' : undefined })
+      if (holdComments) { heldComments.push(reply); onCommentsHeld?.() }
+      else reply()
+      return
     }
     if (url.pathname.endsWith('/assign') && request.method === 'POST') {
-      requests.push({ pathname: url.pathname, method: request.method, action: 'assign' })
-      return json(response, { task: { ...task('active'), ownerSessionId: 'worker/main' } })
+      requests.push({ pathname: url.pathname, method: request.method, action: 'assign', body })
+      return json(response, { task: { ...task('active'), ownerSessionId: body?.ownerSessionId || null }, warning: body?.notifySession ? 'Task assigned, but the owner notification could not be delivered.' : undefined })
     }
     if (url.pathname === '/prefix/ui/api/tasks') {
       requests.push({ pathname: url.pathname, method: request.method, status: url.searchParams.get('status'), limit: url.searchParams.get('limit') })
@@ -92,6 +114,7 @@ before(async () => {
 after(async () => {
   heldLists.splice(0).forEach(reply => reply())
   heldDetails.splice(0).forEach(reply => reply())
+  heldComments.splice(0).forEach(reply => reply())
   await browser?.close()
   if (server) await new Promise(resolve => server.close(resolve))
 })
@@ -216,6 +239,31 @@ test('narrow screens show and close details over a long Board without leaving th
   mode = 'normal'
 })
 
+test('comment drafts and delayed responses stay attached to their selected task', async () => {
+  await page.setViewport({ width: 1400, height: 900 })
+  await click('Table')
+  await click('Refresh')
+  await page.waitForSelector('[data-task-row="task-active"]')
+  await page.click('[data-task-row="task-active"] button')
+  await page.waitForSelector('[data-task-details] textarea')
+  await page.locator('[data-task-details] textarea').fill('Comment for active')
+  holdComments = true
+  const commentsHeld = new Promise(resolve => { onCommentsHeld = resolve })
+  await page.click('[data-task-details] button[type="submit"]')
+  await commentsHeld
+  await page.click('[data-task-row="task-open"] button')
+  await page.waitForFunction(() => document.querySelector('[data-task-details] h4')?.textContent === 'open task')
+  await page.waitForSelector('[data-task-details] textarea')
+  assert.equal(await page.$eval('[data-task-details] textarea', element => element.value), '')
+  await page.locator('[data-task-details] textarea').fill('Comment for open')
+  holdComments = false
+  heldComments.splice(0).forEach(reply => reply())
+  await new Promise(resolve => setTimeout(resolve, 50))
+  assert.equal(await page.$eval('[data-task-details] textarea', element => element.value), 'Comment for open')
+  onCommentsHeld = undefined
+  await page.click('[aria-label="Close task details"]')
+})
+
 test('WebUI creates, comments, and changes task owners through user routes', async () => {
   await page.setViewport({ width: 1400, height: 900 })
   await click('Table')
@@ -230,19 +278,54 @@ test('WebUI creates, comments, and changes task owners through user routes', asy
   await page.$eval('[aria-labelledby="new-task-title"]', form => form.requestSubmit())
   await page.waitForSelector('[aria-labelledby="new-task-title"]', { hidden: true })
   const userCreate = requests.find(request => request.action === 'create')
-  assert.ok(userCreate)
+  assert.deepEqual(userCreate, {
+    pathname: '/prefix/ui/api/tasks', method: 'POST', action: 'create',
+    body: { title: 'Created from WebUI', ownerSessionId: 'worker/main', notifySession: true },
+  })
+  assert.equal(await page.$eval('[data-task-warning]', node => node.textContent), 'Task assigned, but the new-owner notification could not be delivered.')
+  assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_tasks_last_owner_v1')), 'worker/canonical')
+  await click('New task')
+  const staleOwnerInput = page.locator('[aria-labelledby="new-task-title"] [data-session-selector-input]')
+  await staleOwnerInput.fill('missing')
+  await page.waitForSelector('[aria-labelledby="new-task-title"] [data-session-selector-options]')
+  const createCount = requests.filter(request => request.action === 'create').length
+  await staleOwnerInput.click()
+  await page.keyboard.press('Enter')
+  assert.equal(requests.filter(request => request.action === 'create').length, createCount)
+  await staleOwnerInput.fill('worker')
+  await page.waitForSelector('[data-session-option="worker/main"]')
+  await staleOwnerInput.click()
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('Enter')
+  assert.ok(await page.$('[aria-labelledby="new-task-title"]'))
+  await page.click('[aria-labelledby="new-task-title"] [data-session-selector] button')
+  await page.locator('[aria-labelledby="new-task-title"] input').fill('Created without stale owner')
+  await page.$eval('[aria-labelledby="new-task-title"]', form => form.requestSubmit())
+  await page.waitForSelector('[aria-labelledby="new-task-title"]', { hidden: true })
+  const noStaleOwnerCreate = requests.filter(request => request.action === 'create').at(-1)
+  assert.deepEqual(noStaleOwnerCreate.body, { title: 'Created without stale owner', notifySession: true })
+  assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_tasks_last_owner_v1')), null)
   await page.click('[data-task-row="task-active"] button')
   await page.waitForSelector('[data-task-details] textarea')
   const comment = page.locator('[data-task-details] textarea')
   await comment.fill('User comment')
   await page.click('[data-task-details] button[type="submit"]')
-  await page.waitForFunction(() => document.querySelector('[data-task-details] textarea')?.value === '')
+  await page.waitForFunction(() => !document.querySelector('[data-task-details] textarea') || document.querySelector('[data-task-details] textarea')?.value === '')
+  const userComment = requests.filter(request => request.action === 'comment').at(-1)
+  assert.deepEqual(userComment, {
+    pathname: '/prefix/ui/api/tasks/task-active/comments', method: 'POST', action: 'comment',
+    body: { note: 'User comment', notifySession: true },
+  })
+  assert.equal(await page.$eval('[data-task-warning]', node => node.textContent), 'Comment saved, but the owner notification could not be delivered.')
   await page.click('[data-task-details] [data-session-selector-input]')
-  await page.locator('[data-task-details] [data-session-selector-input]').fill('other')
-  await page.waitForSelector('[data-session-option="other/main"]')
-  await page.click('[data-session-option="other/main"]')
+  await page.click('[data-task-details] [data-session-selector] button')
   await page.click('[data-task-owner-save]')
-  await page.waitForFunction(() => (document.querySelector('[data-task-owner-save]'))?.hasAttribute('disabled'))
-  assert.ok(requests.some(request => request.action === 'comment'))
-  assert.ok(requests.some(request => request.action === 'assign'))
+  await page.waitForFunction(() => document.querySelector('[data-task-warning]')?.textContent === 'Task assigned, but the owner notification could not be delivered.')
+  const userAssign = requests.filter(request => request.action === 'assign').at(-1)
+  assert.deepEqual(userAssign, {
+    pathname: '/prefix/ui/api/tasks/task-active/assign', method: 'POST', action: 'assign',
+    body: { ownerSessionId: null, notifySession: true },
+  })
+  assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_tasks_last_owner_v1')), null)
+  assert.equal(await page.$eval('[data-task-warning]', node => node.textContent), 'Task assigned, but the owner notification could not be delivered.')
 })

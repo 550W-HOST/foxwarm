@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, ClipboardList, X } from 'lucide-react'
 import { makeApiUrl } from '../config'
 import { WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
@@ -35,6 +35,7 @@ type TaskDetails = {
   notes: (TaskAuthor & { text: string; createdAt: number })[]
   notesOmitted: number
 }
+type TaskWriteResult = { task: TaskSummary; warning?: string }
 
 const LAST_TASK_OWNER_KEY = 'foxwarm_tasks_last_owner_v1'
 const readLastTaskOwner = (): string | null => {
@@ -93,6 +94,7 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
   const [createNotify, setCreateNotify] = useState(true)
   const [createSaving, setCreateSaving] = useState(false)
   const [createError, setCreateError] = useState('')
+  const [taskWarning, setTaskWarning] = useState('')
   const [comment, setComment] = useState('')
   const [commentNotify, setCommentNotify] = useState(true)
   const [commentSaving, setCommentSaving] = useState(false)
@@ -104,6 +106,7 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
   const [agentFilter, setAgentFilter] = useState('')
   const [agentRelation, setAgentRelation] = useState<typeof AGENT_RELATIONS[number]>('ownerOrCreator')
   const [isNarrow, setIsNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 1024)
+  const commentRequest = useRef(0)
 
   useEffect(() => {
     const handleResize = () => setIsNarrow(window.innerWidth < 1024)
@@ -167,8 +170,14 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
   useEffect(() => {
     setOwnerDraft(details?.task.ownerSessionId || null)
     setOwnerError('')
-    setCommentError('')
   }, [details?.task.id, details?.task.ownerSessionId])
+
+  useEffect(() => {
+    commentRequest.current += 1
+    setComment('')
+    setCommentError('')
+    setCommentSaving(false)
+  }, [selectedId])
 
   const submitCreate = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -179,17 +188,18 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
     }
     setCreateSaving(true)
     try {
-      const result = await writeTask<{ task: TaskSummary }>('/tasks', {
+      const result = await writeTask<TaskWriteResult>('/tasks', {
         title: createTitle.trim(),
         ...(createDescription ? { description: createDescription } : {}),
         ...(createOwner ? { ownerSessionId: createOwner } : {}),
         notifySession: createNotify,
       })
-      if (createOwner) writeLastTaskOwner(createOwner)
+      writeLastTaskOwner(result.task.ownerSessionId || null)
+      setTaskWarning(result.warning || '')
       setCreateOpen(false)
       setCreateTitle('')
       setCreateDescription('')
-      setCreateOwner(readLastTaskOwner())
+      setCreateOwner(result.task.ownerSessionId || null)
       setSelectedId(result.task.id)
       setRefresh(value => value + 1)
     } catch (cause) {
@@ -201,32 +211,40 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
 
   const submitComment = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (!selectedId || !comment.trim()) return
+    const taskId = selectedId
+    const text = comment.trim()
+    if (!taskId || !text) return
+    const requestId = ++commentRequest.current
     setCommentSaving(true)
     setCommentError('')
     try {
-      await writeTask(`/tasks/${encodeURIComponent(selectedId)}/comments`, { note: comment.trim(), notifySession: commentNotify })
+      const result = await writeTask<TaskWriteResult>(`/tasks/${encodeURIComponent(taskId)}/comments`, { note: text, notifySession: commentNotify })
+      if (commentRequest.current !== requestId || selectedId !== taskId) return
       setComment('')
+      setTaskWarning(result.warning || '')
       setRefresh(value => value + 1)
     } catch (cause) {
-      setCommentError(cause instanceof Error ? cause.message : 'Unable to save comment.')
+      if (commentRequest.current === requestId && selectedId === taskId) setCommentError(cause instanceof Error ? cause.message : 'Unable to save comment.')
     } finally {
-      setCommentSaving(false)
+      if (commentRequest.current === requestId && selectedId === taskId) setCommentSaving(false)
     }
   }
 
   const submitOwner = async () => {
-    if (!selectedId) return
+    const taskId = selectedId
+    if (!taskId) return
     setOwnerSaving(true)
     setOwnerError('')
     try {
-      await writeTask(`/tasks/${encodeURIComponent(selectedId)}/assign`, { ownerSessionId: ownerDraft, notifySession: ownerNotify })
-      if (ownerDraft) writeLastTaskOwner(ownerDraft)
+      const result = await writeTask<TaskWriteResult>(`/tasks/${encodeURIComponent(taskId)}/assign`, { ownerSessionId: ownerDraft, notifySession: ownerNotify })
+      writeLastTaskOwner(result.task.ownerSessionId || null)
+      setTaskWarning(result.warning || '')
+      if (selectedId !== taskId) return
       setRefresh(value => value + 1)
     } catch (cause) {
-      setOwnerError(cause instanceof Error ? cause.message : 'Unable to change owner.')
+      if (selectedId === taskId) setOwnerError(cause instanceof Error ? cause.message : 'Unable to change owner.')
     } finally {
-      setOwnerSaving(false)
+      if (selectedId === taskId) setOwnerSaving(false)
     }
   }
 
@@ -234,11 +252,12 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
     <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-fw-border bg-fw-surface p-3">
       {tabHeader ? <WorkbenchTabClose className={buttonClass} iconClassName="h-4 w-4" /> : onBack && <button type="button" className={buttonClass} onClick={onBack} aria-label="Back"><ArrowLeft className="h-4 w-4" /></button>}
       <h2 className="mr-2 flex items-center gap-2 text-sm font-semibold"><WorkbenchTabIcon className="inline-flex items-center"><ClipboardList className="h-4 w-4" /></WorkbenchTabIcon>Tasks</h2>
-      <button type="button" className={buttonClass} onClick={() => { setCreateError(''); setCreateOwner(readLastTaskOwner()); setCreateOpen(true) }}>New task</button>
+      <button type="button" className={buttonClass} onClick={() => { setCreateError(''); setTaskWarning(''); setCreateOwner(readLastTaskOwner()); setCreateOpen(true) }}>New task</button>
       <div role="group" aria-label="Task view" className="flex gap-1">
         {(['table', 'board'] as const).map(mode => <button key={mode} type="button" aria-pressed={view === mode} onClick={() => setView(mode)} className={`${buttonClass} ${view === mode ? 'bg-fw-accent-surface text-fw-accent' : ''}`}>{mode === 'table' ? 'Table' : 'Board'}</button>)}
       </div>
       <button type="button" className={buttonClass} disabled={loading || (detailsLoading && !!selectedId)} onClick={() => setRefresh(value => value + 1)}>Refresh</button>
+      {taskWarning && <p role="alert" data-task-warning className="basis-full text-xs text-fw-danger sm:basis-auto">{taskWarning}</p>}
       <div className="flex min-w-0 basis-full flex-wrap items-center gap-2 border-t border-fw-border pt-3 sm:basis-auto sm:border-t-0 sm:pt-0" data-task-filters>
         <label className="flex items-center gap-2 text-xs text-fw-text-muted" htmlFor="task-agent-filter">
           <span className="whitespace-nowrap">Agent</span>
