@@ -1,19 +1,21 @@
-# Unit: Shared file, exec, and output primitives
+# Unit: Shared file and local execution primitives
 
-Files: `packages/shared/src/boundedTextExcerpt.ts`, `packages/shared/src/execCwd.ts`, `packages/shared/src/fileOperations.ts`, `packages/shared/src/fileToolCore.ts`, `packages/shared/src/fileToolCore.test.ts`, `packages/shared/src/outputTruncation.ts`, `packages/shared/src/outputTruncation.test.ts`, `packages/shared/src/persistentExec.ts`, `packages/shared/src/persistentExec.test.ts`, `packages/shared/src/processOperations.ts`, `packages/shared/src/toolResponseFormatting.ts`, `packages/shared/src/toolResponseFormatting.test.ts`
+Files: `packages/shared/src/execCwd.ts`, `packages/shared/src/fileOperations.ts`, `packages/shared/src/fileToolCore.ts`, `packages/shared/src/fileToolCore.test.ts`, `packages/shared/src/toolResponseFormatting.ts`, `packages/shared/src/toolResponseFormatting.test.ts`
 
 ## Purpose
 
-Provides shared bounded file operations, cwd normalization, persistent/parallel exec support, process lifecycle helpers, output truncation, and tool-response formatting consumed by Node packages and compatibility callers.
+Composes canonical file/read/write/edit/patch and cwd validation tools from target-local filesystem primitives, plus structured tool-response formatting. Persistent exec and bounded excerpting have dedicated units.
 
 ## Stable symbols and callers
 
-`fileToolCore`; `fileOperations`; `persistentExec`; `execCwd`; `outputTruncation`; `boundedTextExcerpt`; `toolResponseFormatting`; `processOperations`.
+`nativeFileOperations`; `readWholeFile`; `readFileToolPath`; `writeFileToolPath`; `findWriteParentIssue`; `formatWriteParentIssueMessage`; `resolveValidatedExecCwd`; `toolResponseFormatting`; and Node tool wrappers `read`, `write`, `edit`, `apply_patch`, `exec`, `get_default_cwd`.
 
-## Behavior and side effects
+## File/cwd contracts
 
-These are protocol-adjacent primitives, not authorization owners. They preserve bounded output and explicit process/file failure shapes; caller-side isolation and authorization remain in the Main or Node host. Tests cover retries, truncation boundaries, cwd semantics, and persistent process lifecycle.
+`ExactLineScanner`/`readFileToolPath` preserve LF/CRLF/bare-CR boundary metadata, exact requested line ranges, directory pagination, image detection, and bounded large-file output; callers must not normalize away requested boundary information. `writeFileToolPath` attempts the real write first and only then enriches missing/non-directory parent failures; `createDirs` is explicit. `resolveValidatedExecCwd` validates normalized target cwd before process launch and does not invent a fallback outside the caller’s namespace.
+
+`FileOperations` is the target-local stat/ranged-read/list/write/mkdir/remove seam. It does not grant authorization or isolation: Main/Node callers provide path namespace, owner, and capability context. Response formatters preserve structured multi-key outputs while applying bounded model/UI presentation only at the caller-selected boundary.
 
 ## Tests
 
-The paired shared tests listed above; CLI Node PTY/process tests; .NET local-tool contracts are indexed separately.
+`packages/shared/src/fileToolCore.test.ts`; CLI/Node file-operation tests; tool-response formatting and cwd tests.

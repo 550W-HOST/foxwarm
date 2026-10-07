@@ -12,13 +12,13 @@ Builds provider-neutral request history, handles HTTP/SSE primitives, repairs re
 - `RequestHistoryRepair` repairs provider retry inputs at the supported safe point; it does not rebuild a missing Session authority.
 - `OpenAIHttp`, `ProviderHttpRequest`, and `OpenAISseReader` own request headers/body/status/SSE parsing and preserve provider error/stream boundaries.
 - `OpenAIRequestText` extracts model-visible request text and recognizes only supported historical compatibility strings; it is not a child-handoff receipt consumer.
-- `ProviderImageParts` adapts canonical image refs/inline data; `SessionChatService` composes provider calls, retries, and tool results behind `IChatService`.
+- `ProviderImageParts` adapts canonical image refs/inline data; `SessionChatService.ChatAsync`/`ChatCoreAsync` supplies prompt/cache/model request orchestration behind `IChatService`, while `LocalSessionTurnHost` owns the tool loop.
 
-Callers: `LocalSessionTurnHost`, model-specific services, retry preparation, image pipeline, and `LlmRequestJournal` qualification.
+Callers: `LocalSessionTurnHost`, model-specific services, retry preparation, image pipeline, and `LlmRequestJournalStore` qualification.
 
 ## Contract and side effects
 
-Provider input is derived from Session state and request scope. Neutral refs-only history is repaired/visibility-filtered before concrete leaf filtering and image hydration. Local preparation, persistent/missing generated-image, and all-images-fail errors occur before provider transport and are non-retryable/non-countable; provider transport failures alone enter normal backoff/retry/health handling. Retry repair preserves the safe point, logical request identity, and attempt attribution; canonical Session messages remain owned by Session persistence.
+Provider input is derived from Session state and request scope. The neutral repaired/visibility-filtered manifest precedes concrete leaf filtering and image hydration. Same-model missing-generated-blob and other local preparation/persistence failures happen before provider send and do not enter provider retry/health. The `all-images-fail` condition is produced while processing provider output/generated-image results; it is non-retryable/non-countable but is not a send-preparation failure. Provider transport failures alone enter normal backoff/retry/health handling. Retry repair preserves the safe point, logical request identity, and attempt attribution; canonical Session messages remain owned by Session persistence.
 
 ## Tests
 

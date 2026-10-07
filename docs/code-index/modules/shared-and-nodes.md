@@ -5,7 +5,9 @@ TypeScript protocol and execution packages that remain real boundaries while the
 ## Units
 
 - [Shared Node protocol and capability shapes](../units/shared-node-protocol.md)
-- [Shared file, exec, and output primitives](../units/shared-local-execution.md)
+- [Shared file and local execution primitives](../units/shared-local-execution.md)
+- [Shared persistent exec lifecycle](../units/shared-persistent-exec.md)
+- [Shared output truncation and bounded excerpts](../units/shared-output-truncation.md)
 - [Shared patches, config schemas, markup, and metadata](../units/shared-patches-and-config.md)
 - [Shared Code helper IPC and VS Code service](../units/shared-code-ipc.md)
 - [Authenticated CLI Node client, TUI, master proxy, PTY service, and process lifecycle](../units/shared-and-nodes-cli-node.md)

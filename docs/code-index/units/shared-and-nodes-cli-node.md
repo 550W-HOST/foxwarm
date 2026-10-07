@@ -4,16 +4,20 @@ Files: `packages/cli-node/src/client.ts`, `packages/cli-node/src/masterProxy.ts`
 
 ## Purpose
 
-Runs an authenticated operator/remote Node client, optional TUI, Main proxy transport, PTY service, process-title lifecycle, and session-event acknowledgement handling.
+Runs an authenticated remote/operator Node client, Main proxy transport, optional TUI, PTY service, process-title lifecycle, and Session-event acknowledgement handling.
 
 ## Stable symbols and callers
 
-`client.ts` is the CLI Node entry/client; `masterProxy.ts` adapts remote calls to the shared Node protocol; `nodePtyService.ts` owns target-platform PTY requests; `tui.ts` is the operator surface. Protocol compatibility and event ack tests are the external-boundary evidence.
+`NodeClient.connect`, `disconnect`, `startLocalTriggerServer`, `sendSessionEvent`, `listBoundSessions`, `getSessionHistory`, and `sendSessionMessage` own the client API; `masterProxy` adapts authenticated remote calls; `NodePtyService`/`loadNodePtyService` own optional target PTY; `tui.ts` owns operator auto-approval/interception.
 
-## Behavior and side effects
+## Behavior and external contracts
 
-The CLI Node is a remote execution environment, not Session authority. Authentication, node identity, capability negotiation, PTY lifetime, and event acknowledgements remain transport contracts. The .NET host index does not claim that every CLI-node route is already wired into the .NET Main.
+Pairing sends `pair_request`, persists approved credentials, then reconnects authenticated before `node_register`. Heartbeat sends ping every 30 seconds, expects pong within 10 seconds, and reconnects after 5 seconds. Explicit negotiated protocol compatibility is checked before persistent-exec recovery; absent response retains legacy generation behavior, while incompatible targets stay visible for diagnosis but cannot dispatch.
+
+Session events carry an explicit acknowledgement boundary: accepted/rejected/disconnected/missing-ACK outcomes determine whether the sender removes or retains a completion-notification record. Background persistent-exec tracking is retained/retried until the shared 24-hour tracking-only expiry; expiry does not kill processes or delete artifacts.
+
+The client is a remote execution environment, not Session authority. File transfer uses shared helpers; PTY availability is optional and does not remove file/model/session capabilities. PTY terminal `code` access uses capability-bound local helper IPC. External-owner tool calls remain separate from Session/Agent fields and are rejected before effect when malformed or mixed.
 
 ## Tests
 
-The paired CLI tests listed in `Files:` plus package build entry points in `packages/cli-node/package.json`.
+`packages/cli-node/src/nodeProtocolCompatibility.test.ts`; `sessionEventAck.test.ts`; `nodePtyService.test.ts`; `masterProxy.test.ts`; `processTitle.test.ts`.

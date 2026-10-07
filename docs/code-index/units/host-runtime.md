@@ -8,7 +8,7 @@ Composes the .NET executable, captures environment/configuration, builds ASP.NET
 
 ## Stable methods and callers
 
-- `Program` resolves data/workspace roots, captures `HttpServerSettings`, constructs `SessionManager`, `TerminalRegistry`, `SessionRuntime`, `MessageRouter`, `HttpServer`, and `WebUIChannel`, then loads Main state before serving.
+- `Program.cs` is the executable entry that resolves data/workspace roots, captures `HttpServerSettings`, constructs `SessionManager`, `TerminalRegistry`, `SessionRuntime`, `MessageRouter`, `HttpServer`, and `WebUIChannel`, then loads Main state before serving.
 - `HttpServer` owns prefix normalization, origin checks, token/cookie auth, static WebUI entry, `/health`, `/admin/shutdown`, and registration of Code/WebUI routes.
 - `HttpServerSettings.CaptureAsync`/`Enabled` determine port/address/token/WebUI mode; `ConfigurationYaml` parses source-compatible YAML; `Skills` enumerates configured Agent skills.
 

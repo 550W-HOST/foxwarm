@@ -9,12 +9,12 @@ Plans and sends Responses requests, collects event streams, executes supported h
 ## Stable methods and callers
 
 - `ResponsesRequestPlan` derives request JSON, previous-response/state handles, tool definitions, image parts, and journal-safe request text.
-- `OpenAIResponsesClient.SendAsync` owns HTTP response status/error handling and returns a streaming/non-streaming attempt result.
-- `ResponsesStreaming` parses response events, records output text/reasoning/tool calls/usage, and stops on terminal/error events.
+- `OpenAIResponsesClient.ExecuteAsync` owns HTTP response status/error handling and returns a streaming/non-streaming attempt result.
+- `ResponsesEventAccumulator`/`ResponsesSseCollector.CollectAsync` parse response events, record output text/reasoning/tool calls/usage, and stop on terminal/error events.
 - `HostedResponsesTools` exposes provider-hosted search/hosted tools as definitions/results; it does not grant local filesystem or Session authority.
 - `ResponsesWsChatService`, `ResponsesWsResource`, `ResponsesWsState`, and `ResponsesWsTransport` own connection lease, handshake, resumable state, close/error, and resource disposal for WebSocket turns.
 
-Callers: `SessionChatService`, `ModelRouting`, `UnifiedTools`, image transport, and request journal. The turn host decides when a provider result becomes canonical Session history.
+Callers: `SessionChatService`, `ModelRequestOwner`, model routing, image transport, and `LlmRequestJournalStore`. The turn host decides when a provider result becomes canonical Session history.
 
 ## Contract and side effects
 

@@ -4,18 +4,18 @@ Files: `packages/webui/src/architectureOperations.ts`, `packages/webui/src/bound
 
 ## Purpose
 
-Maintains bounded session list/replay, sidebar/architecture navigation, session drag/presentation state, search/debug surfaces, and idle attention.
+Maintains bounded Session list/replay, sidebar/architecture navigation, search/debug surfaces, drag/presentation state, idle attention, and node indicators.
 
 ## Stable symbols and callers
 
-`SessionListCore`; `SessionList`; `ArchitectureView`; bounded list/replay helpers; sidebar presentation state.
-
-Callers and boundary: `App`/`Sidebar`; bounded session and architecture APIs from `WebUIChannel`.
+`SessionListCore`; `SessionList`; `ArchitectureView`; `boundedSessionList`; `boundedSessionReplay`; `sessionListRefresh`; density/drag/presentation helpers; idle notification/attention helpers. Callers are `App`/`Sidebar` and the bounded catalog/architecture APIs from `WebUIChannel`.
 
 ## Behavior and side effects
 
-`SessionListCore` merges cursor pages, refresh revisions, drag/presentation updates, and idle attention; `ArchitectureView` uses bounded parent/child/agent queries. Sidebar collapse/search/debug components only change browser navigation/presentation; they never infer active history from a list row or Archive.
+Root, expanded-child, exact-row, and search windows use cursor/revision/generation gates; stale responses cannot overwrite a newer list snapshot. Sidebar rows remain bounded and presentation-oriented; active history is fetched through Chat/replay routes and is never rebuilt from a list row or Archive. Architecture view requests bounded parent/child/agent summaries and preserves operational topology rather than pretending every catalog row is an active owner.
+
+Density and node indicators remain presentation contracts: list density is browser-local, while node indicators report the selected/available target without reassigning an unavailable remote ID to Master. Idle notifications/watchers observe accepted list snapshots and create only the latest visible-page notification per canonical Session. The collapsed desktop rail owns a separate 20-root controller only while conditionally mounted; expanded desktop/mobile surfaces create no hidden duplicate controller or logical realtime subscription.
 
 ## Tests
 
-Bounded list, session-list, sidebar lifecycle, architecture, drag, history-search, and debug tests.
+Bounded list/replay, session-list density/drag, sidebar/architecture, history-search, idle notification, and debug-surface browser tests.

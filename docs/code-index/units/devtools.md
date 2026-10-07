@@ -1,6 +1,6 @@
 # Unit: .NET developer tools
 
-Files: `dotnet/Foxwarm.DevTools/`
+Files: `dotnet/Foxwarm.DevTools/ConditionalMemoryCommand.cs`, `dotnet/Foxwarm.DevTools/JournalCommand.cs`, `dotnet/Foxwarm.DevTools/Program.cs`, `dotnet/Foxwarm.DevTools/ResponsesRequestCommand.cs`, `dotnet/Foxwarm.DevTools/ResponsesStreamCommand.cs`, `dotnet/Foxwarm.DevTools/SessionRestartCommand.cs`
 
 ## Purpose
 

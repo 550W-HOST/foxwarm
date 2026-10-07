@@ -4,18 +4,20 @@ Files: `packages/webui/src/components/ChatTimeline.tsx`, `packages/webui/src/com
 
 ## Purpose
 
-Renders canonical message parts, context blocks, reasoning, images, tool executions, Markdown/mermaid policy, and search cards.
+Renders canonical message parts, context blocks, reasoning, images, tool executions, Markdown/mermaid policy, hosted web-search activity, and bounded timeline/viewport state.
 
 ## Stable symbols and callers
 
-`ChatTimeline`; `timelineRows`; `ToolTimelineItems`; `markdownRenderer`; `mermaidPolicy`; message-part cards.
-
-Callers and boundary: `Chat`; session replay/realtime payloads; shared tool rendering helpers.
+`ChatTimeline`; `timelineRows`; `ToolTimelineItems`; `markdownRenderer`; `mermaidPolicy`; `ModelThreadCard`; `SpecialBlock`; `WebSearchCard`; context scrollbar/overflow helpers. Callers are `Chat`, session replay/realtime payloads, and shared tool-rendering helpers.
 
 ## Behavior and side effects
 
-`ChatTimeline` consumes bounded replay and realtime rows; `timelineRows` preserves assistant/tool/reasoning/context ordering. Tool/image/context cards render typed payloads, while Markdown/mermaid/syntax helpers apply safe rendering policy and truncation. A streamed row can be provisional until the host sends the committed revision.
+`timelineRows.ts` is the canonical row derivation boundary: it decides grouping, summary tags, aggregate usage/timing, and row identity; non-groupable rows keep `group: null`. Tool, Reasoning, heavy System/Event, and CTX-BLOCK cards share the compact 18px header rhythm while retaining distinct semantic tone/surface allocation. A persisted user-role event wrapper belongs to an existing tool run; it does not create a standalone run.
+
+Horizontal overflow is owned by the native outer Chat message scroller. Message content, model/tool/system cards, fenced code, tables, and context blocks remain shrinkable; tables may scroll in their own box and code wraps without silently hiding content. Viewport restoration anchors only rendered top-level committed rows, excluding queued/archive previews and synthetic streaming rows.
+
+Hosted Responses `web_search_call` cards render only proven persisted action shapes in original model-part order. They are reasoning-like model artifacts, not Foxwarm tool invocations: unknown/malformed hosted items stay hidden in rendered mode while JSON view retains original metadata, and the separate Sources/URL annotation surface remains independent.
 
 ## Tests
 
-Markdown, special-block, overflow, timeline, tool-card, and message rendering tests.
+Timeline/message rendering, special-block, tool-card, Markdown/mermaid, overflow, and hosted-response/WebSearch browser tests.

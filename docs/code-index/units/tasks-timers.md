@@ -10,8 +10,8 @@ Persists current task authority/notifications, parses cron schedules, and schedu
 
 - `TaskStore.Execute` owns task records, owner/assignee, parent linkage, status/result/description, notification state, and durable CRUD. The accepted 7A task delta adds an optional live `anchorSeq` to create/claim/self-assignment/open/active/reset updates so reminder progress is anchored to the source Session message sequence.
 - `TaskService.ExecuteAsync` resolves a live actor anchor when available; tool execution passes `source.Entry.Snapshot().NextMessageSeq - 1`, while the HTTP/API path reads the persisted Session authority anchor and does not hydrate a cold catalog member. Notifications remain service-owned; it does not infer future child-handoff receipts from generic Session send APIs.
-- `MainTimers.Crud` creates/updates/cancels timer records; `MainTimers.Store` persists them; `MainTimers.Scheduler` computes due times, catches up/retries according to schedule policy, and enqueues the declared Session operation.
-- `CronFields`, `CronLocalDate`, `CronSchedule`, and `TimerArguments` own parsing/next-occurrence semantics and argument validation.
+- `MainTimers.CreateAsync`, `UpdateAsync`, `MainTimers.Store.LoadAsync`, and the scheduler’s `RunClockAsync` create/update/load and deliver timer records; delivery enqueues the declared Session operation after due-time/schedule validation.
+- `CronFields`, `CronLocalDate`, `CronSchedule`, and `TimerArguments.Normalize` own parsing/next-occurrence semantics and argument validation.
 
 Callers: `SessionManager.Tasks/Timers`, `WebUIChannel.Tasks`, timer/task tools, process startup, and WebUI TasksView.
 

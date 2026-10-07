@@ -4,22 +4,28 @@ Files: `dotnet/Foxwarm/ContextPreviewRenderer.Message.cs`, `dotnet/Foxwarm/Conte
 
 ## Purpose
 
-Plans context compaction, repairs bounded plan files, commits new immutable Archive blocks/messages together with a replacement active JSON history, and exposes exact Archive navigation/control tools.
+Plans context compaction, repairs bounded plan files, commits new immutable Archive blocks/messages with replacement active JSON history, and exposes exact capped Archive navigation/control tools.
 
 ## Stable methods and callers
 
-- `SessionCompactor.StartManualAsync`, `PlanAsync`, and plan/repair helpers select candidates from the current owner snapshot and produce a bounded `CompactPlan`.
-- `SessionCompactor.CommitAsync` and `SessionSaveLane.CommitCompactionAsync` stage the new history plus Archive rows; `PersistentSessionAuthorityStore.CommitCompactionAsync` writes blocks/messages before active JSON and rolls back only inserted rows on pre-rename failure.
-- `ArchiveContextReader.Expand`, `ArchiveRecallTool`, and `ArchiveControlTools` read committed local/effective lineage and expose bounded exact navigation without mutating Archive rows.
-- `ContextBlockExpansion` and `ContextPreviewRenderer` render committed block references into model-visible context while retaining source ranges and identity.
+- `SessionCompactor.StartManualAsync`, `AutoAfterTurnAsync`, `ApplyCompletedAsync`, `SafePointAsync`, `StopAsync`, and `DrainAsync` own one transient per-Session operation, phase publication, cancellation, ready-wake application, and shutdown draining.
+- `SessionCompactor.PlanAsync`/`CommitAsync` and `SessionSaveLane.CommitCompactionAsync` stage the compact snapshot, recorded concrete memory identity, Archive rows, and active history; `PersistentSessionAuthorityStore.CommitCompactionAsync` writes Archive blocks/messages before active JSON and compensates only rows inserted before a failed rename.
+- `SessionSaveLane.PublishCompactWakeAsync`, `RemoveCompactWakeAsync`, and `ReleaseStandaloneCompactAsync` order ready/standalone wake state. `QueueItem.CompactOwner` is in-process ownership only; JSON carries the source compact-commit marker, not a resumable background job.
+- `ArchiveContextReader.Expand`, `ArchiveRecallTool`, `ArchiveControlTools`, `ContextBlockExpansion`, and `ContextPreviewRenderer` read committed local/effective lineage, exact ranges, block children, and source-labeled previews without mutating Archive rows.
 
-Callers: `SessionOwner`, model prompt construction, `/compact`/stop controls, `SessionManager`, and WebUI context views.
+Callers: `SessionOwner`/turn safe points, model prompt construction, `/compact` and stop controls, `SessionManager`, and WebUI context views.
 
-## Contract and side effects
+## Safe-point and phase contract
 
-The active per-Session JSON/history remains the only source for the next live turn. Compaction can replace/prune active history and queue-related prompt state, but immutable Archive rows and branch lineage are not rewritten or used to reconstruct a missing active authority file. A ready compact commit and its wake marker are ordered through the save lane; cancellation before publication leaves the prior active history and only compensates rows inserted by the cancelled attempt.
+A compaction operation captures admission mode and exact operation identity. Async planning publishes `ready` before wake insertion; applying a ready result occurs at a turn-host safe point before consuming the full visible ordinary batch, after complete tool pairing, before provider request construction, and during passive Stop finalization. Safe-point cancellation must not split a model/tool pair, inject fake input, cancel a declared wait, or replace a foreground draft with a background result. Standalone awaited Stop is a no-op for a held background planner; shutdown requests both cancellation paths and drains their independent lifetimes.
 
-Plan repair reads/writes a bounded raw file and validates candidate ranges before admission. Archive recall is read-only and applies lineage fork caps, so late parent/child rows cannot leak into a descendant view.
+The compact commit refreshes memory using the recorded live concrete model identity. The active per-Session JSON/history remains the only source for the next live turn. Compaction may replace/prune active history and queue-related prompt state, but immutable Archive rows and branch lineage are not rewritten or used to reconstruct missing active authority. Pre-rename failure leaves prior authority and rolls back only newly staged rows; post-rename failure retains/publishes committed history/memory/version and is classified committed/too-late.
+
+Plan submission uses the bounded `submit_compact_plan` shape with direct fields or operation-local `argsFilePath`; invalid direct input preserves raw provider argument text, while success/cancel/error/exhaustion paths clean up the transient repair directory. The plan artifact is not Session/Archive history and is never resumed after restart.
+
+## Recall and lineage contract
+
+`ArchiveRecallTool` accepts only the supported selector subset (overview/help, frontier blocks, exact `B#N`/`block#N`, `msg:B#N`, and normalized `msg#A-B` ranges). `ArchiveContextReader` uses exact SQL ranges/child IDs and cumulative branch caps; it does not add hidden pages, whole-history prefixes, semantic archived-only target resolution, Vector search, or active-history reconstruction. Missing targets do not create Sessions, databases, or branch reservations. Context previews preserve distinct source/active budgets and include headers/source labels within the total budget.
 
 ## Tests
 

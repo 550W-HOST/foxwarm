@@ -4,18 +4,18 @@ Files: `packages/webui/src/components/ThemeManager.tsx`, `packages/webui/src/the
 
 ## Purpose
 
-Defines persisted theme selection, runtime style application, integrations, manifest, and built-in theme catalog.
+Defines the built-in/manifest theme catalog, browser-local selection, runtime CSS token application, and integrations for Markdown, Code, thread cards, and controls.
 
 ## Stable symbols and callers
 
-`ThemeManager`; `theme/runtime`; `theme/storage`; `theme/manifest`; built-in theme modules.
-
-Callers and boundary: App shell and Markdown/rendering integration.
+`ThemeManager`; `theme/manifest`; `theme/runtime`; `theme/storage`; `theme/integrations`; `useTheme`; built-in theme modules. App initializes this runtime before ordinary React surfaces; Markdown/timeline/Code consume integration tokens.
 
 ## Behavior and side effects
 
-`ThemeManager` loads the manifest/built-in theme catalog, applies runtime CSS variables, persists selected theme, and exposes integration tokens to Markdown/Code surfaces. Storage failures fall back to a built-in theme; theme state never changes Session authority.
+Manifest parsing accepts only the supported theme shape and safe token/reference values; malformed or unavailable manifest entries fall back to built-ins. Runtime application and built-in definitions share the same token semantics so light/dark/theme variants do not drift from integration surfaces. Selection/storage is browser-local and survives reload without becoming Session/catalog authority.
+
+Theme controls expose the current catalog/selection and preserve local ownership; server branding is separate. Final surfaces allocate distinct semantic tones for standard/console thread cards, System, Tool, Reasoning, CTX-BLOCK, WebSearch, Markdown, and Code without letting a global color remap collapse their readability contracts.
 
 ## Tests
 
-Theme system and theme Markdown style tests.
+Theme manifest/storage/runtime, built-in theme, Markdown integration, and thread-card styling browser tests.

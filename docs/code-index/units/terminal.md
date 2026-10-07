@@ -12,7 +12,7 @@ Owns local PTY registry, native process/session lifecycle, terminal client proto
 - `TerminalNative` starts the platform PTY/process, reads/writes bounded frames, handles resize/close/exit, and disposes process resources.
 - `TerminalClient` validates client messages/acks and maps them to registry/native operations; `CodeHelperServer` serves the shared Code helper IPC endpoint with auth/path checks.
 
-Callers: `Program`/`HttpServer`, `WebUIChannel.Terminal`, Code workbench routes, React terminal/workbench units, and shared Code IPC. Terminal process state is not Session history authority.
+Callers: host `Program.cs`/`HttpServer`, `WebUIChannel.Terminal`, Code workbench routes, React terminal/workbench units, and shared Code IPC. Terminal process state is not Session history authority.
 
 ## Contract and side effects
 

@@ -4,16 +4,20 @@ Files: `packages/shared/src/applyPatch.ts`, `packages/shared/src/applyPatch.test
 
 ## Purpose
 
-Owns shared patch application, configuration-schema exports, Foxwarm markup parsing/formatting, Git commit metadata, and token-count helpers used by WebUI, Code, and Node packages.
+Owns shared patch parsing/application, configuration-schema exports, Foxwarm markup escaping, Git commit metadata, WebUI tool-rendering helpers, and token-count utilities consumed by WebUI, Code, Node packages, and compatibility callers.
 
 ## Stable symbols and callers
 
-`applyPatch`; `configSchemas`; `foxwarmMarkup`; `gitCommitDetails`; `tokenCount`. WebUI editor/commit markers and Code workbench consume the stable data shapes; the .NET host has separate server-side Code services.
+`extractPatchEnvelope`, `parseApplyPatchInput`, `applyUpdatePatch`, `buildAddedFileContent`, `countApplyPatchOperationLines`, and `formatApplyPatchOperationSummary` own the patch envelope/chunk/count/summary contract. `configSchemas`, `foxwarmMarkup`, `gitCommitDetails`, `parseSessionLinkText`, `shouldUseStreamingToolPlaceholder`, and `tokenCount` provide shared data/format helpers.
 
-## Behavior and side effects
+## Patch behavior
 
-Patch and metadata helpers preserve bounded, explicit errors and do not grant filesystem or Git authority by themselves. Keep protocol-visible formatting compatible when changing these functions.
+Patch processing normalizes CRLF to LF, restores the original line-ending style, accepts explicit or bare envelopes, uses `@@` anchors with trimmed fuzz fallback, validates non-overlapping chunks, and leaves file I/O to callers. Successful add/update summaries include Git-style inserted/deleted counts derived from patch content; context/headers do not count, delete summaries remain deletions. This per-operation summary is shared by Main and Node tool paths.
+
+## Other boundaries
+
+Markup helpers distinguish flattened attribute escaping from nested text that preserves line boundaries; WebUI session-link parsing links only approved session/source attributes; config/metadata helpers do not grant filesystem or Git authority. Protocol-visible formatting remains compatible across .NET/TypeScript/Node callers.
 
 ## Tests
 
-`applyPatch.test.ts`; `gitCommitDetails.test.ts`; WebUI rendering and workbench tests.
+`packages/shared/src/applyPatch.test.ts`; `gitCommitDetails.test.ts`; `webuiToolRendering.test.ts`; Node/Code workbench integration tests.

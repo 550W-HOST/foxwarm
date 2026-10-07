@@ -8,7 +8,7 @@ Serializes canonical Session messages, tool calls, images, and system content fo
 
 ## Stable methods and callers
 
-`AnthropicCanonicalConverter`/`CompletionsCanonicalConverter` map canonical roles/content/tool records; request serializers build provider JSON and headers; `AnthropicMessagesService`/`CompletionsChatService` execute attempts; `CompletionsStreaming` merges SSE deltas, usage, stop reasons, and tool-call fragments.
+`AnthropicCanonicalConverter`/`CompletionsCanonicalConverter` map canonical roles/content/tool records; request serializers build provider JSON and headers; `AnthropicMessagesService`/`CompletionsChatService` execute attempts; `CompletionsEventAccumulator` and `CompletionsSseCollector` merge SSE deltas, usage, stop reasons, and tool-call fragments.
 
 Callers: `SessionChatService`, `ConfiguredModelRequests`, `SessionOwner` turn host, and retry/journal preparation. Tool calls return through `UnifiedTools` only after the stream result is committed to the turn path.
 
@@ -18,4 +18,4 @@ Provider-specific omissions/normalizations are confined to the adapter; canonica
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Models/AnthropicTests.cs`; `CompletionsTests.cs`; `CompletionsTests.cs; ResponsesStreamingTests.cs`; image/tool serialization tests.
+`dotnet/Foxwarm.Tests/Models/AnthropicTests.cs`; `CompletionsTests.cs`; `ResponsesStreamingTests.cs`; image/tool serialization tests.

@@ -4,18 +4,18 @@ Files: `packages/webui/src/commitMarker.ts`, `packages/webui/src/components/Code
 
 ## Purpose
 
-Connects workbench tabs to Code/VS Code Web, diff/editor views, commit markers, and launch/download helpers.
+Connects workbench tab/pane state to Code/VS Code Web, diff/editor views, typed commit markers, and deployment-relative launch/download helpers.
 
 ## Stable symbols and callers
 
-`WorkbenchLayout`; `WorkbenchTabs`; `VscodeWebFrameHost`; `CodeLaunchButton`; commit marker cards.
-
-Callers and boundary: Host `CodeWorkbench` routes; `packages/vscode-web` assets.
+`WorkbenchLayout`; `WorkbenchTabs`; `WorkbenchPane`; `VscodeWebFrameHost`; `CodeLaunchButton`; `commitMarker`; `vscodeWeb`; workbench store/types/utils. Callers are App shell, Code host routes, Chat commit-marker cards, and terminal/session navigation.
 
 ## Behavior and side effects
 
-`WorkbenchLayout` and `WorkbenchTabs` coordinate Code panes and VS Code Web frame lifecycle; `CodeLaunchButton` chooses the deployment-relative host target. Diff/editor and commit-marker components render bounded Code/Git payloads and keep pending launch/commit UI separate from host-side filesystem/Git effects.
+Workbench keeps Chat, Terminal, Agents, Setup, Tasks, and Code tabs in split-pane/store state. Closing an active tab advances to the store-selected fallback before hydration can recreate it; popout removes the source tab only after a window handle exists and does not invoke resource close. Code’s embedded frame is persistent for its visible tab, created only when displayed and destroyed when the last embedded tab closes; standalone URLs carry deployment-relative node/path/workspace targets.
+
+`VscodeWebFrameHost` uses the nonce/source/channel/version bridge contract owned by the app shell. File-open requests become typed node/path/cwd selections, and controlled editor selection preserves explicit line/range state instead of letting unrelated parent rerenders reset the user selection. Commit markers are inert unless strict parser/route shape passes; malformed or user-authored marker text remains ordinary text. Diff/commit UI renders bounded Git payloads and does not perform filesystem/Git effects itself.
 
 ## Tests
 
-Code-frame, workbench, VS Code Web, and commit-marker tests.
+Workbench/pane/tab, Code frame/launch, commit marker, diff/editor selection, and VS Code Web browser tests.
