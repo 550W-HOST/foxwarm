@@ -40,7 +40,7 @@ export async function tool_create_timer(args: ToolArgs, ctx: ToolContext) {
     model: targetSession.model,
   });
 
-  return formatTimerSummary(timer);
+  return formatTimerSummary(timer, { includeMessage: false });
 }
 
 export async function tool_list_timers(args: ToolArgs, ctx: ToolContext) {
@@ -97,7 +97,7 @@ export async function tool_update_timer(args: ToolArgs, ctx: ToolContext) {
     agentName: args.agentName,
   });
 
-  return formatTimerUpdateSummary(timer);
+  return formatTimerUpdateSummary(timer, { includeMessage: false });
 }
 
 export async function tool_delete_timer(args: ToolArgs, ctx: ToolContext) {

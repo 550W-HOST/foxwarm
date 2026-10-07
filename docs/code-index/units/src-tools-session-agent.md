@@ -11,6 +11,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 - `tool_create_child_session`, `tool_send_to_session`, `tool_wait`, `tool_submit_compact_plan`, `tool_send_to_channel`, `tool_send_file` — inter-session communication
 - `tool_get_session_messages`, `tool_get_archived_messages`, `tool_get_archived_blocks`, `tool_recall` — archive/recall
 - `tool_create_timer`, `tool_list_timers`, `tool_update_timer`, `tool_delete_timer` — timer management
+  `create_timer` and `update_timer` retain schedule/mode/target/next-run information but omit the message body from their successful model-facing receipts. `list_timers` remains the detail query and includes message text; timer firing still delivers the persisted message.
 - `tool_create_agent`, `tool_list_agents`, `tool_set_agent_inherit`, `tool_set_agent_isolated`, `tool_move_session`, `tool_create_session` — agent/session management
 - `tool_skill` — skill list/load actions
 - `tool_set_session_compact_threshold`, `tool_set_session_child_model`, `tool_refresh_session_snapshot` — settings
@@ -29,8 +30,8 @@ Compact-threshold settings, child-model settings, snapshot refresh, and current 
 | `normalizePositivePreviewLength` | Coerces preview length to positive integer or fallback |
 | `assertPreviewRequestWithinLimit` | Throws if combined preview budget exceeds char limit |
 | `formatTimerTimestamp` | Formats a timer timestamp as ISO string or 'n/a' |
-| `formatTimerSummary` | Builds a human-readable timer creation summary |
-| `formatTimerUpdateSummary` | Builds a human-readable timer update summary |
+| `formatTimerSummary` | Builds a human-readable timer creation summary, optionally omitting the message for mutation receipts |
+| `formatTimerUpdateSummary` | Builds a human-readable timer update summary, optionally omitting the message for mutation receipts |
 | `expandHomePath` | Expands `~` prefix to OS home directory |
 | `resolveAgentPath` | Resolves relative file path against agent or session CWD |
 | `detectMimeType` | Returns MIME type based on file extension |
