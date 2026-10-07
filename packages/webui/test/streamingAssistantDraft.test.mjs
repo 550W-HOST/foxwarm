@@ -47,6 +47,37 @@ test('legacy cumulative events remain compatible', () => {
   assert.equal(draft.toolCalls[0].name, 'exec')
 })
 
+test('ordered text reasoning and image status parts render without preview payloads', () => {
+  let draft = applyModelStreamEvent(null, {
+    type: 'model-stream-reset', streamVersion: 2, streamId: 'image-live', sequence: 1,
+  })
+  draft = applyModelStreamEvent(draft, {
+    type: 'model-stream-update', streamVersion: 2, streamId: 'image-live', sequence: 2,
+    partDeltas: [
+      { outputIndex: 0, kind: 'reasoning', summaryIndex: 0, added: true, textDelta: { offset: 0, text: 'thinking' } },
+      { outputIndex: 1, kind: 'text', contentIndex: 0, phase: 'commentary', added: true, textDelta: { offset: 0, text: 'hello' } },
+      { outputIndex: 2, kind: 'image-generation', added: true, status: 'in_progress' },
+    ],
+  })
+  let message = buildStreamingAssistantMessage(draft)
+  assert.deepEqual(message.parts, [
+    { thinking: 'thinking' },
+    { text: 'hello', phase: 'commentary' },
+    { system: 'Generating image…' },
+  ])
+  draft = applyModelStreamEvent(draft, {
+    type: 'model-stream-update', streamVersion: 2, streamId: 'image-live', sequence: 3,
+    partDeltas: [
+      { outputIndex: 2, kind: 'image-generation', status: 'completed' },
+      { outputIndex: 1, kind: 'text', contentIndex: 0, phase: 'commentary', textDelta: { offset: 5, text: ' world' } },
+    ],
+  })
+  message = buildStreamingAssistantMessage(draft)
+  assert.equal(message.parts[1].text, 'hello world')
+  assert.deepEqual(message.parts[2], { system: 'Image ready' })
+  assert.equal(JSON.stringify(message).includes('preview'), false)
+})
+
 test('midstream delta subscription is marked incomplete instead of presented as a full prefix', () => {
   const draft = applyModelStreamEvent(null, {
     type: 'model-stream-update', streamVersion: 2, streamId: 's', sequence: 4,
