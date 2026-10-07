@@ -18,6 +18,8 @@ let onDetailsHeld
 let heldComments = []
 let holdComments = false
 let onCommentsHeld
+let heldSearches = []
+let holdOtherSearch = false
 const requests = []
 
 function readBody(request) {
@@ -58,10 +60,15 @@ before(async () => {
     const url = new URL(request.url, 'http://fixture')
     const body = request.method === 'POST' ? await readBody(request) : null
     if (url.pathname === '/prefix/ui/api/session-list/search') {
-      return json(response, { sessions: [
+      const q = (url.searchParams.get('q') || '').toLowerCase()
+      const sessions = [
         { id: 'worker/main', agent: 'worker', displayName: 'Worker' },
         { id: 'other/main', agent: 'other', displayName: 'Other' },
-      ] })
+      ].filter(session => `${session.id} ${session.agent} ${session.displayName}`.toLowerCase().includes(q))
+      const reply = () => json(response, { sessions })
+      if (holdOtherSearch && q === 'other') heldSearches.push(reply)
+      else return reply()
+      return
     }
     if (url.pathname === '/prefix/ui/api/session-list/by-id') {
       const ids = Array.isArray(body?.ids) ? body.ids : []
@@ -115,6 +122,7 @@ after(async () => {
   heldLists.splice(0).forEach(reply => reply())
   heldDetails.splice(0).forEach(reply => reply())
   heldComments.splice(0).forEach(reply => reply())
+  heldSearches.splice(0).forEach(reply => reply())
   await browser?.close()
   if (server) await new Promise(resolve => server.close(resolve))
 })
@@ -285,6 +293,20 @@ test('WebUI creates, comments, and changes task owners through user routes', asy
   assert.equal(await page.$eval('[data-task-warning]', node => node.textContent), 'Task assigned, but the new-owner notification could not be delivered.')
   assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_tasks_last_owner_v1')), 'worker/canonical')
   await click('New task')
+  const querySelector = page.locator('[aria-labelledby="new-task-title"] [data-session-selector-input]')
+  await querySelector.fill('worker')
+  await page.waitForSelector('[data-session-option="worker/main"]')
+  holdOtherSearch = true
+  await querySelector.fill('other')
+  await page.waitForFunction(() => document.querySelector('[aria-labelledby="new-task-title"] [data-session-selector-input]')?.value === 'other')
+  await querySelector.click()
+  await page.keyboard.press('Enter')
+  assert.equal(await page.$('[data-session-option="worker/main"]'), null)
+  assert.equal(await page.$eval('[aria-labelledby="new-task-title"] [data-session-selector-input]', input => input.value), 'other')
+  holdOtherSearch = false
+  heldSearches.splice(0).forEach(reply => reply())
+  await click('Cancel')
+  await click('New task')
   const staleOwnerInput = page.locator('[aria-labelledby="new-task-title"] [data-session-selector-input]')
   await staleOwnerInput.fill('missing')
   await page.waitForSelector('[aria-labelledby="new-task-title"] [data-session-selector-options]')
@@ -327,5 +349,9 @@ test('WebUI creates, comments, and changes task owners through user routes', asy
     body: { ownerSessionId: null, notifySession: true },
   })
   assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_tasks_last_owner_v1')), null)
-  assert.equal(await page.$eval('[data-task-warning]', node => node.textContent), 'Task assigned, but the owner notification could not be delivered.')
+  await page.setViewport({ width: 390, height: 844 })
+  await page.waitForSelector('[data-task-warning="detail"]')
+  assert.equal(await page.$eval('[data-task-warning="detail"]', node => node.textContent), 'Task assigned, but the owner notification could not be delivered.')
+  await page.click('[aria-label="Close task details"]')
+  await page.setViewport({ width: 1400, height: 900 })
 })

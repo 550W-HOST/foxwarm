@@ -219,14 +219,14 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
     setCommentError('')
     try {
       const result = await writeTask<TaskWriteResult>(`/tasks/${encodeURIComponent(taskId)}/comments`, { note: text, notifySession: commentNotify })
-      if (commentRequest.current !== requestId || selectedId !== taskId) return
+      if (commentRequest.current !== requestId) return
       setComment('')
       setTaskWarning(result.warning || '')
       setRefresh(value => value + 1)
     } catch (cause) {
-      if (commentRequest.current === requestId && selectedId === taskId) setCommentError(cause instanceof Error ? cause.message : 'Unable to save comment.')
+      if (commentRequest.current === requestId) setCommentError(cause instanceof Error ? cause.message : 'Unable to save comment.')
     } finally {
-      if (commentRequest.current === requestId && selectedId === taskId) setCommentSaving(false)
+      if (commentRequest.current === requestId) setCommentSaving(false)
     }
   }
 
@@ -239,12 +239,11 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
       const result = await writeTask<TaskWriteResult>(`/tasks/${encodeURIComponent(taskId)}/assign`, { ownerSessionId: ownerDraft, notifySession: ownerNotify })
       writeLastTaskOwner(result.task.ownerSessionId || null)
       setTaskWarning(result.warning || '')
-      if (selectedId !== taskId) return
       setRefresh(value => value + 1)
     } catch (cause) {
-      if (selectedId === taskId) setOwnerError(cause instanceof Error ? cause.message : 'Unable to change owner.')
+      setOwnerError(cause instanceof Error ? cause.message : 'Unable to change owner.')
     } finally {
-      if (selectedId === taskId) setOwnerSaving(false)
+      setOwnerSaving(false)
     }
   }
 
@@ -257,7 +256,7 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
         {(['table', 'board'] as const).map(mode => <button key={mode} type="button" aria-pressed={view === mode} onClick={() => setView(mode)} className={`${buttonClass} ${view === mode ? 'bg-fw-accent-surface text-fw-accent' : ''}`}>{mode === 'table' ? 'Table' : 'Board'}</button>)}
       </div>
       <button type="button" className={buttonClass} disabled={loading || (detailsLoading && !!selectedId)} onClick={() => setRefresh(value => value + 1)}>Refresh</button>
-      {taskWarning && <p role="alert" data-task-warning className="basis-full text-xs text-fw-danger sm:basis-auto">{taskWarning}</p>}
+      {taskWarning && <p role="alert" data-task-warning="header" className="hidden basis-full text-xs text-fw-danger lg:block sm:basis-auto">{taskWarning}</p>}
       <div className="flex min-w-0 basis-full flex-wrap items-center gap-2 border-t border-fw-border pt-3 sm:basis-auto sm:border-t-0 sm:pt-0" data-task-filters>
         <label className="flex items-center gap-2 text-xs text-fw-text-muted" htmlFor="task-agent-filter">
           <span className="whitespace-nowrap">Agent</span>
@@ -315,6 +314,7 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
       </div>
       {selectedId && <aside data-task-details {...(isNarrow ? { role: 'dialog', 'aria-modal': 'true' } : {})} aria-label="Task details" aria-busy={detailsLoading} className="fixed inset-0 z-20 min-w-0 overflow-auto border-t border-fw-border bg-fw-surface p-4 lg:relative lg:inset-auto lg:z-auto lg:h-full lg:w-96 lg:shrink-0 lg:border-l lg:border-t-0">
         <div className="mb-4 flex items-center justify-between gap-2"><h3 className="text-sm font-semibold">Task details</h3><button type="button" className={buttonClass} aria-label="Close task details" onClick={() => setSelectedId(null)}><X className="h-4 w-4" /></button></div>
+        {taskWarning && <p role="alert" data-task-warning="detail" className="mb-4 rounded border border-fw-danger/40 bg-fw-danger/10 p-2 text-xs text-fw-danger lg:hidden">{taskWarning}</p>}
         {detailsLoading ? <p role="status" className="text-sm text-fw-text-muted">Loading task details…</p>
           : detailsError ? <p role="alert" className="text-sm text-fw-danger">{detailsError}</p>
           : details && <>

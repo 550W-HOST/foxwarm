@@ -69,15 +69,16 @@ export default function SessionSelector({ value, onChange, allowUnassigned = fal
 
   useEffect(() => {
     const normalized = query.trim()
+    setOptions([])
+    setHighlightedIndex(-1)
+    setError('')
     if (!normalized) {
-      setOptions([])
       setLoading(false)
       return
     }
+    setLoading(true)
     const controller = new AbortController()
     const timer = window.setTimeout(() => {
-      setLoading(true)
-      setError('')
       const params = new URLSearchParams({ q: normalized, limit: '50' })
       void readJson<SessionSearchResponse>(`/session-list/search?${params}`, controller.signal).then(payload => {
         if (!controller.signal.aborted) setOptions(payload.sessions || [])
