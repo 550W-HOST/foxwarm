@@ -98,4 +98,3 @@ Optional remote and compatibility components:
 - **Current gap:** .NET Vector admission/search is disabled or explicitly unsupported (`WebUIChannel.History` returns `VECTOR_DISABLED`; identity-move/configuration paths do not make Vector a runtime capability). The TypeScript Vector implementation remains a compatibility/reference boundary only.
 - **Current gap:** remote Node and Worker packages exist, but their full owner/runtime path is not claimed as connected to the .NET Main owner chain.
 - **Unconfirmed:** which remaining TypeScript Main routes and channel adapters will be retired versus retained as compatibility services after the .NET Main reaches production parity.
-- **Unconfirmed:** the schedule and API shape for the later child-handoff receipt/legacy task migration work; current source does not make those future consumers part of the .NET contract.
