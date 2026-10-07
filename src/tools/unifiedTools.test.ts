@@ -1146,7 +1146,7 @@ test('session parent updates work through direct and unified builtin dispatch', 
   await sessionManager.loadSessions();
   const parentId = `unified_session_parent_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const childId = `unified_session_child_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const parent = await sessionManager.getSession(parentId);
+  await sessionManager.getSession(parentId);
   const child = await sessionManager.getSession(childId);
   const ctx: any = { sessionId: childId, session: child };
   try {
