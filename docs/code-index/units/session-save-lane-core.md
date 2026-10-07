@@ -1,0 +1,23 @@
+# Unit: Session save-lane core
+
+Files: `dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.cs`
+
+## Purpose
+
+Serializes all persistence operations for one `SessionEntry` through a task tail. It is the owner-side ordering boundary, not a second state authority.
+
+## Stable methods and callers
+
+- `SaveStrictAsync` and `SaveBestEffortAsync` persist ordinary snapshots with distinct failure semantics.
+- `CommitCanonicalAppendAsync` stages canonical history and delegates Archive-first publication to `PersistentSessionAuthorityStore`.
+- `CommitCompactionAsync` stages compacted history/blocks and delegates the same durable ordering while optionally refreshing the memory snapshot.
+- `CommitMemorySnapshotAsync`, `CommitDisplayNameAsync`, `CommitInterSessionAsync`, and `CommitBackgroundExecCompletionAsync` make specialized state changes join the same tail.
+- `MutateIdentityAsync` and `RetireAsync` ensure identity changes/store close cannot overlap an earlier write.
+
+## Contract and side effects
+
+`EnqueueOperationAsync` waits for the prior task but catches a prior failure before running the next operation, so a failed best-effort write does not poison strict persistence. Publication depends on the operation kind: strict canonical/compaction/setting paths publish after the store result, while ordinary queue admission in `SessionSaveLane.Wait.cs` intentionally updates hot queue state before attempting its `SaveKind.BestEffort` write; a best-effort failure is recorded and the hot input remains queued even though the caller must not claim durable completion. `AuthorityCommittedException` publishes staged strict state because the JSON rename already occurred. A retired lane rejects new operations and closes the store after its predecessor drains.
+
+## Tests
+
+`dotnet/Foxwarm.Tests/Sessions/PersistentSessionTurnTests.cs`; `RetryInputSafePointTests.cs`; `SessionCwdCommitTests.cs`; `SessionPresentationTests.cs`.
