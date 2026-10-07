@@ -3,10 +3,19 @@ import { ArrowLeft, ClipboardList, X } from 'lucide-react'
 import { makeApiUrl } from '../config'
 import { WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import SessionSelector from './SessionSelector'
+import { copyTextToClipboard } from './chatShared'
 
 const STATUSES = ['open', 'active', 'completed', 'cancelled'] as const
+type TaskStatus = typeof STATUSES[number]
 const STATUS_LABELS = { open: 'Open', active: 'Active', completed: 'Completed', cancelled: 'Cancelled' }
 const LIST_LIMIT = 50
+const TASK_SCOPES = ['work', 'all', 'history'] as const
+const TASK_SCOPE_LABELS = { work: 'Work', all: 'All', history: 'History' } as const
+const TASK_SCOPE_STATUSES: Record<'work' | 'all' | 'history', readonly TaskStatus[]> = {
+  work: ['open', 'active'],
+  all: STATUSES,
+  history: ['completed', 'cancelled'],
+} as const
 const AGENT_RELATIONS = ['ownerOrCreator', 'owner', 'creator'] as const
 const AGENT_RELATION_LABELS = {
   ownerOrCreator: 'Owner or Created by',
@@ -36,6 +45,7 @@ type TaskDetails = {
   notesOmitted: number
 }
 type TaskWriteResult = { task: TaskSummary; warning?: string }
+type TaskScope = typeof TASK_SCOPES[number]
 
 const LAST_TASK_OWNER_KEY = 'foxwarm_tasks_last_owner_v1'
 const readLastTaskOwner = (): string | null => {
@@ -72,15 +82,30 @@ async function writeTask<T>(path: string, body: Record<string, unknown>): Promis
 }
 
 const formatTime = (value: number) => new Date(value).toLocaleString()
-const creatorLabel = (task: Pick<TaskSummary, 'createdByKind' | 'createdBySessionId'>) => task.createdByKind === 'user' ? 'User' : task.createdBySessionId || 'Unknown'
 const buttonClass = 'rounded border border-fw-border px-2 py-1.5 text-xs text-fw-text hover:bg-fw-hover disabled:opacity-40'
 
-export default function TasksView({ onBack }: { onBack?: () => void }) {
+const compactSessionLabel = (sessionId: string, agent?: string | null) => {
+  const parts = sessionId.split('/').filter(Boolean)
+  const leaf = parts[parts.length - 1] || sessionId
+  const prefix = agent || parts.slice(0, -1).join('/')
+  return prefix && prefix !== leaf ? `${prefix} · ${leaf}` : leaf
+}
+
+function SessionReference({ sessionId, agent, compact = true, onOpenSession }: { sessionId: string; agent?: string | null; compact?: boolean; onOpenSession?: (sessionId: string) => void }) {
+  const label = compact ? compactSessionLabel(sessionId, agent) : sessionId
+  return <span data-session-reference={sessionId} className="inline-flex min-w-0 max-w-full items-center gap-1 align-middle" title={sessionId}>
+    {onOpenSession ? <button type="button" data-session-open={sessionId} className="min-w-0 truncate text-left text-fw-accent hover:underline" onClick={event => { event.stopPropagation(); onOpenSession(sessionId) }} aria-label={`Open Session ${sessionId}`}>{label}</button> : <span className="min-w-0 truncate">{label}</span>}
+    <button type="button" data-session-copy={sessionId} className="shrink-0 px-0.5 text-[10px] text-fw-text-muted hover:text-fw-text" title={`Copy Session ID ${sessionId}`} aria-label={`Copy Session ID ${sessionId}`} onClick={event => { event.stopPropagation(); void copyTextToClipboard(sessionId) }}>Copy</button>
+  </span>
+}
+
+export default function TasksView({ onBack, onOpenSession }: { onBack?: () => void; onOpenSession?: (sessionId: string) => void }) {
   const tabHeader = useWorkbenchTabHeader()
   const [view, setView] = useState<'table' | 'board'>('table')
+  const [scope, setScope] = useState<TaskScope>('work')
   const [refresh, setRefresh] = useState(0)
   const [tasks, setTasks] = useState<TaskSummary[]>([])
-  const [omitted, setOmitted] = useState(0)
+  const [omittedByStatus, setOmittedByStatus] = useState<Record<typeof STATUSES[number], number>>({ open: 0, active: 0, completed: 0, cancelled: 0 })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -114,19 +139,22 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
-  const agentOptions = useMemo(() => [...new Set(tasks.flatMap(task => [task.ownerAgent, task.createdByAgent]
-    .filter((agent): agent is string => !!agent)))].sort((a, b) => a.localeCompare(b)), [tasks])
+  const scopedStatuses = TASK_SCOPE_STATUSES[scope]
+  const scopedTasks = useMemo(() => tasks.filter(task => scopedStatuses.includes(task.status)), [scopedStatuses, tasks])
+  const scopedOmitted = useMemo(() => scopedStatuses.reduce((total, status) => total + (omittedByStatus[status] || 0), 0), [omittedByStatus, scopedStatuses])
+  const agentOptions = useMemo(() => [...new Set(scopedTasks.flatMap(task => [task.ownerAgent, task.createdByAgent]
+    .filter((agent): agent is string => !!agent)))].sort((a, b) => a.localeCompare(b)), [scopedTasks])
   const visibleTasks = useMemo(() => {
-    if (!agentFilter) return tasks
-    return tasks.filter(task => {
+    if (!agentFilter) return scopedTasks
+    return scopedTasks.filter(task => {
       const owner = task.ownerAgent
       const creator = task.createdByAgent
       if (agentRelation === 'owner') return owner === agentFilter
       if (agentRelation === 'creator') return creator === agentFilter
       return owner === agentFilter || creator === agentFilter
     })
-  }, [agentFilter, agentRelation, tasks])
-  const filteredOut = tasks.length - visibleTasks.length
+  }, [agentFilter, agentRelation, scopedTasks])
+  const filteredOut = scopedTasks.length - visibleTasks.length
 
   useEffect(() => {
     const controller = new AbortController()
@@ -142,7 +170,7 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
     })).then(windows => {
       if (controller.signal.aborted) return
       setTasks(windows.flatMap(window => window.tasks).sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id)))
-      setOmitted(windows.reduce((count, window) => count + window.omitted, 0))
+      setOmittedByStatus(Object.fromEntries(STATUSES.map((status, index) => [status, windows[index].omitted])) as Record<typeof STATUSES[number], number>)
     }).catch(cause => {
       if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Unable to load tasks.')
     }).finally(() => {
@@ -252,6 +280,9 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
       {tabHeader ? <WorkbenchTabClose className={buttonClass} iconClassName="h-4 w-4" /> : onBack && <button type="button" className={buttonClass} onClick={onBack} aria-label="Back"><ArrowLeft className="h-4 w-4" /></button>}
       <h2 className="mr-2 flex items-center gap-2 text-sm font-semibold"><WorkbenchTabIcon className="inline-flex items-center"><ClipboardList className="h-4 w-4" /></WorkbenchTabIcon>Tasks</h2>
       <button type="button" className={buttonClass} onClick={() => { setCreateError(''); setTaskWarning(''); setCreateOwner(readLastTaskOwner()); setCreateOpen(true) }}>New task</button>
+      <div role="group" aria-label="Task scope" className="flex gap-1" data-task-scopes>
+        {TASK_SCOPES.map(nextScope => <button key={nextScope} type="button" data-task-scope={nextScope} aria-pressed={scope === nextScope} onClick={() => setScope(nextScope)} className={`${buttonClass} ${scope === nextScope ? 'bg-fw-accent-surface text-fw-accent' : ''}`}>{TASK_SCOPE_LABELS[nextScope]}</button>)}
+      </div>
       <div role="group" aria-label="Task view" className="flex gap-1">
         {(['table', 'board'] as const).map(mode => <button key={mode} type="button" aria-pressed={view === mode} onClick={() => setView(mode)} className={`${buttonClass} ${view === mode ? 'bg-fw-accent-surface text-fw-accent' : ''}`}>{mode === 'table' ? 'Table' : 'Board'}</button>)}
       </div>
@@ -278,7 +309,12 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
         {loading ? <p role="status" className="text-sm text-fw-text-muted">Loading tasks…</p>
           : error ? <p role="alert" className="text-sm text-fw-danger">{error}</p>
           : <>
-            {(omitted > 0 || filteredOut > 0) && <p className="mb-3 text-xs text-fw-text-muted">{visibleTasks.length} tasks shown{filteredOut > 0 && <> · {filteredOut} hidden by the Agent filter</>}{omitted > 0 && <> · {omitted} more tasks not loaded</>}</p>}
+            <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fw-text-muted" data-task-summary>
+              <strong className="font-medium text-fw-text">{visibleTasks.length} {visibleTasks.length === 1 ? 'task' : 'tasks'} loaded</strong>
+              <span>{TASK_SCOPE_LABELS[scope]}</span>
+              <span className="flex flex-wrap gap-x-2" data-task-status-counts>{scopedStatuses.map(status => <span key={status}>{STATUS_LABELS[status]} {scopedTasks.filter(task => task.status === status).length}</span>)}</span>
+            </div>
+            {(filteredOut > 0 || scopedOmitted > 0) && <p className="mb-3 text-xs text-fw-text-muted" data-task-secondary-summary>{filteredOut > 0 && <>Agent filter hides {filteredOut} loaded {filteredOut === 1 ? 'task' : 'tasks'}.</>}{filteredOut > 0 && scopedOmitted > 0 && ' '}{scopedOmitted > 0 && <>Additional tasks not loaded: {scopedOmitted}.</>}</p>}
             {view === 'table' ? visibleTasks.length === 0 ? <p className="text-sm text-fw-text-muted">{agentFilter ? 'No tasks match this Agent filter' : 'No tasks'}</p> : <div className="overflow-x-auto">
               <table className="min-w-[64rem] w-full text-left text-sm">
                 <thead className="text-xs text-fw-text-muted"><tr>
@@ -291,22 +327,22 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
                 <tbody>{visibleTasks.map(task => <tr key={task.id} data-task-row={task.id} className="border-b border-fw-border">
                   <td className="min-w-[18rem] px-3 py-2"><button type="button" onClick={() => setSelectedId(task.id)} className="break-words text-left text-fw-accent hover:underline">{task.title}</button></td>
                   <td className="min-w-[8rem] whitespace-nowrap px-3 py-2">{STATUS_LABELS[task.status]}</td>
-                  <td className="min-w-[16rem] whitespace-nowrap px-3 py-2">{task.ownerSessionId || 'Unassigned'}</td>
-                  <td className="min-w-[16rem] whitespace-nowrap px-3 py-2">{creatorLabel(task)}</td>
+                  <td className="min-w-[16rem] whitespace-nowrap px-3 py-2">{task.ownerSessionId ? <SessionReference sessionId={task.ownerSessionId} agent={task.ownerAgent} onOpenSession={onOpenSession} /> : 'Unassigned'}</td>
+                  <td className="min-w-[16rem] whitespace-nowrap px-3 py-2">{task.createdByKind === 'user' ? 'User' : task.createdBySessionId ? <SessionReference sessionId={task.createdBySessionId} agent={task.createdByAgent} onOpenSession={onOpenSession} /> : 'Unknown'}</td>
                   <td className="min-w-[13rem] whitespace-nowrap px-3 py-2"><time dateTime={new Date(task.updatedAt).toISOString()}>{formatTime(task.updatedAt)}</time></td>
                 </tr>)}</tbody>
               </table>
-            </div> : <div data-task-board className="grid min-w-[760px] grid-cols-4 items-start gap-3">
-              {STATUSES.map(status => {
+            </div> : <div data-task-board data-task-board-scope={scope} className={`grid items-start gap-3 ${scope === 'all' ? 'min-w-[760px] grid-cols-4' : 'min-w-[480px] grid-cols-2'}`}>
+              {scopedStatuses.map(status => {
                 const column = visibleTasks.filter(task => task.status === status)
                 return <section key={status} data-task-column={status} aria-label={STATUS_LABELS[status]} className="min-w-0 rounded border border-fw-border bg-fw-surface p-3">
                   <h3 className="mb-3 text-sm font-semibold">{STATUS_LABELS[status]} <span className="text-fw-text-muted">{column.length}</span></h3>
-                  {column.length === 0 ? <p className="text-xs text-fw-text-muted">No tasks in this column</p> : <div className="space-y-2">{column.map(task => <button key={task.id} type="button" data-task-card={task.id} onClick={() => setSelectedId(task.id)} className="block w-full rounded border border-fw-border bg-fw-canvas p-3 text-left hover:bg-fw-hover">
+                  {column.length === 0 ? <p className="text-xs text-fw-text-muted">No tasks in this column</p> : <div className="space-y-2">{column.map(task => <div key={task.id} data-task-card={task.id} role="button" tabIndex={0} onClick={() => setSelectedId(task.id)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedId(task.id) } }} className="block w-full rounded border border-fw-border bg-fw-canvas p-3 text-left hover:bg-fw-hover">
                     <span className="mb-2 block break-words text-sm font-medium">{task.title}</span>
                     <span className="block break-all text-xs text-fw-text-muted">{task.id}</span>
-                    <span className="mt-2 block break-all text-xs">{task.ownerSessionId || 'Unassigned'}</span>
+                    <span className="mt-2 block min-w-0 truncate text-xs">{task.ownerSessionId ? <SessionReference sessionId={task.ownerSessionId} agent={task.ownerAgent} onOpenSession={onOpenSession} /> : 'Unassigned'}</span>
                     <time className="mt-1 block text-xs text-fw-text-muted" dateTime={new Date(task.updatedAt).toISOString()}>{formatTime(task.updatedAt)}</time>
-                  </button>)}</div>}
+                  </div>)}</div>}
                 </section>
               })}
             </div>}
@@ -325,11 +361,11 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
                 ['Status', STATUS_LABELS[details.task.status]],
                 ['Description', details.task.description || 'No description'],
                 ['Parent', details.task.parentTaskId || 'None'],
-                ['Owner', details.task.ownerSessionId || 'Unassigned'],
-                ['Created by', creatorLabel(details.task)],
+                ['Owner', details.task.ownerSessionId ? <SessionReference sessionId={details.task.ownerSessionId} agent={details.task.ownerAgent} compact={false} onOpenSession={onOpenSession} /> : 'Unassigned'],
+                ['Created by', details.task.createdByKind === 'user' ? 'User' : details.task.createdBySessionId ? <SessionReference sessionId={details.task.createdBySessionId} agent={details.task.createdByAgent} compact={false} onOpenSession={onOpenSession} /> : 'Unknown'],
                 ['Updated', formatTime(details.task.updatedAt)],
                 ['Result', details.task.result || 'No result'],
-              ].map(([label, value]) => <div key={label}><dt className="mb-1 text-xs text-fw-text-muted">{label}</dt><dd className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{value}</dd></div>)}
+                ].map(([label, value]) => <div key={String(label)}><dt className="mb-1 text-xs text-fw-text-muted">{label}</dt><dd className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{value}</dd></div>)}
             </dl>
             <section className="mt-5 rounded border border-fw-border p-3">
               <h4 className="mb-2 text-sm font-semibold">Owner</h4>

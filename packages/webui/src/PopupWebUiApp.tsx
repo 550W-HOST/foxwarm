@@ -106,7 +106,7 @@ export default function PopupWebUiApp({ target }: { target: FoxwarmPopupTarget }
   } else if (target.kind === 'terminal') {
     content = <TerminalView initialTerminalId={target.terminalId} />
   } else if (target.kind === 'tasks') {
-    content = <Suspense fallback={<PopupLeafFallback label="Tasks" />}><TasksView /></Suspense>
+    content = <Suspense fallback={<PopupLeafFallback label="Tasks" />}><TasksView onOpenSession={(sessionId) => navigate({ kind: 'chat', sessionId })} /></Suspense>
   } else if (target.kind === 'logs') {
     content = <Suspense fallback={<PopupLeafFallback label="Logs" />}><LogsView /></Suspense>
   } else if (target.kind === 'search') {

@@ -1490,7 +1490,7 @@ function App() {
       )
     }
 
-    if (tab.type === 'tasks') return <Suspense fallback={<LazyViewFallback label="Loading tasks…" />}><TasksView onBack={onBack} /></Suspense>
+    if (tab.type === 'tasks') return <Suspense fallback={<LazyViewFallback label="Loading tasks…" />}><TasksView onBack={onBack} onOpenSession={openChatTab} /></Suspense>
 
     if (tab.type === 'logs') return <Suspense fallback={<LazyViewFallback label="Loading logs…" />}><LogsView onBack={onBack} /></Suspense>
 
