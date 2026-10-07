@@ -338,9 +338,14 @@ export async function sendToSession(
         event: options.taskNotification.event,
         sourceSessionId,
         time,
-        hint: options.taskNotification.recipient === 'new'
-          ? 'Task assignment from Foxwarm, not direct user input. Complete this task with the task tool when the assigned work is finished; completion automatically notifies the task creator. Do not send a separate routine completion message.'
-          : 'task notification from Foxwarm; not direct user input',
+        ...(options.taskNotification.sourceKind === 'user' ? { sourceKind: 'user' } : {}),
+        hint: options.taskNotification.sourceKind === 'user'
+          ? options.taskNotification.recipient === 'new'
+            ? 'Task notification from the user through Tasks. Complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report.'
+            : 'Task notification from the user through Tasks.'
+          : options.taskNotification.recipient === 'new'
+            ? 'Task assignment from Foxwarm, not direct user input. Complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report.'
+            : 'task notification from Foxwarm; not direct user input',
       }, message || '')
       : sourceSessionId
       ? formatFoxwarmMessage({

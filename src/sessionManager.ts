@@ -1910,7 +1910,7 @@ export function resolveSpawnedSessionModelEffort(
 }
 
 function buildTaskChildCompletionInstruction(taskId: string): string {
-  return `This Session is linked to task ${taskId}. When the work is complete, complete the task with the task tool; completion automatically notifies the task creator. Do not send a separate routine completion message.`;
+  return `This Session is linked to task ${taskId}. Complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report.`;
 }
 
 export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = false, options?: { agentName?: string; displayName?: string; node?: string; model?: string; effort?: ModelEffort; taskId?: string; sourceOverride?: Session }): Promise<string> {

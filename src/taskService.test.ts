@@ -29,6 +29,31 @@ test('assign transfer and release use creator/owner authority and existing Sessi
   await assert.rejects(() => service.execute({ action: 'assign', taskId }, 'creator'), /ownerSessionId or null/);
 });
 
+test('user task actions preserve user source metadata and skip completion delivery without a Session creator', async t => {
+  const sends: any[] = [];
+  const service = fixture(t, async (target, message, source, options) => {
+    sends.push({ target, message, source, taskNotification: options?.taskNotification });
+  });
+  const created = await service.executeAsUser({ action: 'create', title: 'User task', ownerSessionId: 'first', notifySession: true });
+  assert.equal(created.task.createdByKind, 'user');
+  assert.equal(created.task.createdBySessionId, null);
+  assert.equal(sends[0].target, 'first');
+  assert.equal(sends[0].source, undefined);
+  assert.deepEqual(sends[0].taskNotification, { taskId: created.task.id, event: 'assigned', recipient: 'new', sourceKind: 'user' });
+  const comment = await service.executeAsUser({ action: 'comment', taskId: created.task.id, note: 'A user comment' });
+  assert.equal(comment.warning, undefined);
+  assert.equal(sends[1].source, undefined);
+  assert.deepEqual(sends[1].taskNotification, { taskId: created.task.id, event: 'commented', sourceKind: 'user' });
+  const assigned = await service.executeAsUser({ action: 'assign', taskId: created.task.id, ownerSessionId: 'second', notifySession: true });
+  assert.equal(assigned.task.ownerSessionId, 'second');
+  assert.deepEqual(sends.slice(2).map(item => [item.target, item.source, item.taskNotification]), [
+    ['first', undefined, { taskId: created.task.id, event: 'transferred', recipient: 'previous', sourceKind: 'user' }],
+    ['second', undefined, { taskId: created.task.id, event: 'transferred', recipient: 'new', sourceKind: 'user' }],
+  ]);
+  await service.execute({ action: 'complete', taskId: created.task.id }, 'second');
+  assert.equal(service.get(created.task.id).task.completionNotificationStatus, 'skipped');
+});
+
 test('completion sends once after commit; delivery failure is a warning and survives store reopen', async t => {
   const sends: any[] = [];
   const service = fixture(t, async (target, message, source, options) => {

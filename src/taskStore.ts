@@ -9,13 +9,15 @@ export const TASK_LIST_LIMIT = 50;
 export const TASK_CHILD_LIMIT = 20;
 export const TASK_NOTE_LIMIT = 10;
 export type TaskStatus = typeof TASK_STATUSES[number];
+export type TaskActorKind = 'session' | 'user';
 export interface TaskRecord {
   id: string;
   title: string;
   description: string | null;
   status: TaskStatus;
   parentTaskId: string | null;
-  createdBySessionId: string;
+  createdByKind: TaskActorKind;
+  createdBySessionId: string | null;
   ownerSessionId: string | null;
   result: string | null;
   createdAt: number;
@@ -38,6 +40,7 @@ export class TaskError extends Error {
 }
 
 type TaskArgs = Record<string, any>;
+type TaskActor = { kind: 'user' } | { kind: 'session'; sessionId: string };
 const ACTION_FIELDS: Record<typeof TASK_ACTIONS[number], string[]> = {
   create: ['title', 'description', 'parentTaskId', 'ownerSessionId', 'notifySession'],
   list: ['status'],
@@ -90,6 +93,7 @@ export function validateTaskArgs(args: TaskArgs): void {
   if (Object.prototype.hasOwnProperty.call(args, 'note') && !args.note.trim()) throw new TaskError('TASK_INVALID_ARGS', 'note must be non-empty.');
 }
 
+
 function generateTaskId(): string {
   return `task_${randomBytes(6).toString('hex')}`;
 }
@@ -125,6 +129,18 @@ export class TaskStore {
       .run(task.createdBySessionId, task.ownerSessionId, task.attachedSessionId, task.previousOwnerSessionId, task.id);
   }
 
+  private addNote(db: DatabaseSync, taskId: string, author: { kind: TaskActorKind; sessionId?: string }, text: string, now: number): void {
+    db.prepare('INSERT INTO task_notes (taskId,authorKind,sessionId,text,createdAt) VALUES (?,?,?,?,?)')
+      .run(taskId, author.kind, author.kind === 'session' ? this.canonicalId(author.sessionId || '') : null, text, now);
+  }
+
+  private projectNoteAuthor(note: any): any {
+    return {
+      authorKind: note.authorKind === 'user' ? 'user' : 'session',
+      sessionId: note.authorKind === 'session' && note.sessionId !== null ? this.canonicalId(note.sessionId as string) : null,
+    };
+  }
+
   private getDb(): DatabaseSync {
     if (this.db) return this.db;
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
@@ -134,7 +150,8 @@ export class TaskStore {
         CREATE TABLE IF NOT EXISTS tasks (
           id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT,
           status TEXT NOT NULL CHECK(status IN ('open','active','completed','cancelled')),
-          parentTaskId TEXT REFERENCES tasks(id), createdBySessionId TEXT NOT NULL,
+          parentTaskId TEXT REFERENCES tasks(id), createdByKind TEXT NOT NULL DEFAULT 'session' CHECK(createdByKind IN ('session','user')),
+          createdBySessionId TEXT,
           ownerSessionId TEXT, result TEXT, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL,
           completedAt INTEGER, cancelledAt INTEGER
         );
@@ -142,7 +159,8 @@ export class TaskStore {
         CREATE INDEX IF NOT EXISTS tasks_parent ON tasks(parentTaskId, createdAt);
         CREATE TABLE IF NOT EXISTS task_notes (
           id INTEGER PRIMARY KEY, taskId TEXT NOT NULL REFERENCES tasks(id),
-          sessionId TEXT NOT NULL, text TEXT NOT NULL, createdAt INTEGER NOT NULL
+          authorKind TEXT NOT NULL DEFAULT 'session' CHECK(authorKind IN ('session','user')),
+          sessionId TEXT, text TEXT NOT NULL, createdAt INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS task_notes_task ON task_notes(taskId, id);
       `);
@@ -150,11 +168,58 @@ export class TaskStore {
       for (const [name, type] of [['completionNotificationStatus', 'TEXT'], ['assignmentNotificationStatus', 'TEXT'], ['previousOwnerSessionId', 'TEXT'], ['previousOwnerNotificationStatus', 'TEXT'], ['assignmentRevision', 'INTEGER NOT NULL DEFAULT 0'], ['attachedSessionId', 'TEXT'], ['legacyGoalSessionId', 'TEXT'], ['reminderLastSeq', 'INTEGER'], ['reminderMessageCount', 'INTEGER NOT NULL DEFAULT 0']]) {
         if (!columns.some(column => column.name === name)) db.exec(`ALTER TABLE tasks ADD COLUMN ${name} ${type}`);
       }
+      this.migrateActorColumns(db, columns);
       db.exec('CREATE UNIQUE INDEX IF NOT EXISTS tasks_legacy_goal ON tasks(legacyGoalSessionId); CREATE INDEX IF NOT EXISTS tasks_self_owned ON tasks(createdBySessionId,ownerSessionId,status,createdAt,id)');
       this.db = db;
       return db;
     } catch (error) {
       db.close();
+      throw error;
+    }
+  }
+
+  private migrateActorColumns(db: DatabaseSync, taskColumns: any[]): void {
+    const noteColumns = db.prepare('PRAGMA table_info(task_notes)').all() as any[];
+    if (taskColumns.some(column => column.name === 'createdByKind') && noteColumns.some(column => column.name === 'authorKind')) return;
+
+    db.exec('PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE;');
+    try {
+      db.exec('DROP INDEX IF EXISTS tasks_status; DROP INDEX IF EXISTS tasks_parent; DROP INDEX IF EXISTS tasks_legacy_goal; DROP INDEX IF EXISTS tasks_self_owned; DROP INDEX IF EXISTS task_notes_task;');
+      db.exec(`ALTER TABLE tasks RENAME TO tasks_actor_legacy;
+        ALTER TABLE task_notes RENAME TO task_notes_actor_legacy;
+        CREATE TABLE tasks (
+          id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT,
+          status TEXT NOT NULL CHECK(status IN ('open','active','completed','cancelled')),
+          parentTaskId TEXT REFERENCES tasks(id), createdByKind TEXT NOT NULL DEFAULT 'session' CHECK(createdByKind IN ('session','user')),
+          createdBySessionId TEXT,
+          ownerSessionId TEXT, result TEXT, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL,
+          completedAt INTEGER, cancelledAt INTEGER,
+          completionNotificationStatus TEXT, assignmentNotificationStatus TEXT,
+          previousOwnerSessionId TEXT, previousOwnerNotificationStatus TEXT,
+          assignmentRevision INTEGER NOT NULL DEFAULT 0, attachedSessionId TEXT,
+          legacyGoalSessionId TEXT, reminderLastSeq INTEGER, reminderMessageCount INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO tasks (id,title,description,status,parentTaskId,createdByKind,createdBySessionId,ownerSessionId,result,createdAt,updatedAt,
+          completedAt,cancelledAt,completionNotificationStatus,assignmentNotificationStatus,previousOwnerSessionId,previousOwnerNotificationStatus,
+          assignmentRevision,attachedSessionId,legacyGoalSessionId,reminderLastSeq,reminderMessageCount)
+          SELECT id,title,description,status,parentTaskId,'session',createdBySessionId,ownerSessionId,result,createdAt,updatedAt,
+            completedAt,cancelledAt,completionNotificationStatus,assignmentNotificationStatus,previousOwnerSessionId,previousOwnerNotificationStatus,
+            assignmentRevision,attachedSessionId,legacyGoalSessionId,reminderLastSeq,reminderMessageCount FROM tasks_actor_legacy;
+        CREATE TABLE task_notes (
+          id INTEGER PRIMARY KEY, taskId TEXT NOT NULL REFERENCES tasks(id),
+          authorKind TEXT NOT NULL DEFAULT 'session' CHECK(authorKind IN ('session','user')),
+          sessionId TEXT, text TEXT NOT NULL, createdAt INTEGER NOT NULL
+        );
+        INSERT INTO task_notes (id,taskId,authorKind,sessionId,text,createdAt)
+          SELECT id,taskId,'session',sessionId,text,createdAt FROM task_notes_actor_legacy;
+        DROP TABLE task_notes_actor_legacy;
+        DROP TABLE tasks_actor_legacy;
+        CREATE INDEX tasks_status ON tasks(status, updatedAt);
+        CREATE INDEX tasks_parent ON tasks(parentTaskId, createdAt);
+        CREATE INDEX task_notes_task ON task_notes(taskId, id);`);
+      db.exec('COMMIT; PRAGMA foreign_keys=ON;');
+    } catch (error) {
+      try { db.exec('ROLLBACK; PRAGMA foreign_keys=ON;'); } catch {}
       throw error;
     }
   }
@@ -195,12 +260,34 @@ export class TaskStore {
     if (args.action !== 'list' && args.action !== 'get' && (typeof sessionId !== 'string' || !sessionId.trim())) throw new TaskError('TASK_INVALID_ARGS', 'task requires a current Session.');
     if (sessionId !== undefined) sessionId = this.canonicalId(sessionId);
     if (args.ownerSessionId !== undefined && args.ownerSessionId !== null) args = { ...args, ownerSessionId: this.canonicalId(args.ownerSessionId) };
+    return this.executeWithActor(args, { kind: 'session', sessionId }, listLimit, anchorSeq);
+  }
+
+  /** User authority is supplied only by the authenticated Tasks route. */
+  executeAsUser(args: TaskArgs): any {
+    args = args.notifySession === undefined ? { ...args, notifySession: true } : args;
+    if (args.action === 'comment') {
+      const { notifySession, ...comment } = args;
+      // Reuse the existing note and task-ID bounds without extending the tool schema.
+      validateTaskArgs({ ...comment, action: 'update' });
+      if (typeof args.note !== 'string' || !args.note.trim()) throw new TaskError('TASK_INVALID_ARGS', 'A comment requires a non-empty note.');
+      if (notifySession !== undefined && typeof notifySession !== 'boolean') throw new TaskError('TASK_INVALID_ARGS', 'notifySession must be a boolean.');
+      if (Object.keys(args).some(key => !['action', 'taskId', 'note', 'notifySession'].includes(key))) throw new TaskError('TASK_INVALID_ARGS', 'Comments accept note and notifySession only.');
+    } else {
+      if (!['create', 'assign'].includes(args.action)) throw new TaskError('TASK_INVALID_ARGS', 'Invalid user task operation.');
+      validateTaskArgs(args);
+    }
+    if (args.ownerSessionId !== undefined && args.ownerSessionId !== null) args = { ...args, ownerSessionId: this.canonicalId(args.ownerSessionId) };
+    return this.executeWithActor(args, { kind: 'user' });
+  }
+
+  private executeWithActor(args: TaskArgs, actor: TaskActor, listLimit = TASK_LIST_LIMIT, anchorSeq?: number): any {
     const db = this.getDb();
     // A write transaction covers the read, authority check and update, even
     // across independent SQLite connections/processes racing to claim.
     db.exec(args.action === 'list' || args.action === 'get' ? 'BEGIN' : 'BEGIN IMMEDIATE');
     try {
-      const result = this.executeInTransaction(db, args, sessionId, listLimit, anchorSeq);
+      const result = this.executeInTransaction(db, args, actor, listLimit, anchorSeq);
       db.exec('COMMIT');
       if (result.task) {
         const { legacyGoalSessionId, reminderLastSeq, reminderMessageCount, assignmentRevision, ...visibleTask } = result.task;
@@ -214,11 +301,12 @@ export class TaskStore {
     }
   }
 
-  private executeInTransaction(db: DatabaseSync, args: TaskArgs, sessionId: string, listLimit: number, anchorSeq?: number): any {
+  private executeInTransaction(db: DatabaseSync, args: TaskArgs, actor: TaskActor, listLimit: number, anchorSeq?: number): any {
+    const sessionId = actor.kind === 'session' ? actor.sessionId : null;
     if (args.action === 'list') {
       const where = args.status === undefined ? "status IN ('open','active')" : 'status=?';
       const params = args.status === undefined ? [] : [args.status];
-      const tasks = db.prepare(`SELECT id,title,status,parentTaskId,createdBySessionId,ownerSessionId,updatedAt
+      const tasks = db.prepare(`SELECT id,title,status,parentTaskId,createdByKind,createdBySessionId,ownerSessionId,updatedAt
         FROM tasks WHERE ${where} ORDER BY updatedAt DESC,id LIMIT ?`).all(...params, Math.max(1, Math.min(TASK_LIST_LIMIT, listLimit)));
       const total = Number(db.prepare(`SELECT COUNT(*) AS count FROM tasks WHERE ${where}`).get(...params).count);
       return { tasks: tasks.map(task => this.canonicalTask(task)), total, omitted: total - tasks.length };
@@ -233,9 +321,9 @@ export class TaskStore {
       const id = generateTaskId();
       const owner = args.ownerSessionId ?? null;
       const notify = owner !== null && args.notifySession === true;
-      db.prepare(`INSERT INTO tasks (id,title,description,status,parentTaskId,createdBySessionId,ownerSessionId,createdAt,updatedAt,
-        assignmentRevision,assignmentNotificationStatus,reminderLastSeq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
-        .run(id, args.title, args.description ?? null, owner ? 'active' : 'open', args.parentTaskId ?? null, sessionId, owner,
+      db.prepare(`INSERT INTO tasks (id,title,description,status,parentTaskId,createdByKind,createdBySessionId,ownerSessionId,createdAt,updatedAt,
+        assignmentRevision,assignmentNotificationStatus,reminderLastSeq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(id, args.title, args.description ?? null, owner ? 'active' : 'open', args.parentTaskId ?? null, actor.kind, sessionId, owner,
           now, now, owner ? 1 : 0, notify ? 'pending' : null, owner === sessionId ? anchorSeq ?? null : null);
       return { task: this.requireTask(db, id), ...(notify ? { assignmentNotification: { revision: 1, newOwner: owner } } : {}) };
     }
@@ -244,10 +332,18 @@ export class TaskStore {
       const children = db.prepare(`SELECT id,title,status,ownerSessionId FROM tasks WHERE parentTaskId=?
         ORDER BY createdAt,id LIMIT ?`).all(task.id, TASK_CHILD_LIMIT);
       const childCount = Number(db.prepare('SELECT COUNT(*) AS count FROM tasks WHERE parentTaskId=?').get(task.id).count);
-      const notes = db.prepare(`SELECT sessionId,text,createdAt FROM task_notes WHERE taskId=?
+      const notes = db.prepare(`SELECT authorKind,sessionId,text,createdAt FROM task_notes WHERE taskId=?
         ORDER BY id DESC LIMIT ?`).all(task.id, TASK_NOTE_LIMIT).reverse();
       const noteCount = Number(db.prepare('SELECT COUNT(*) AS count FROM task_notes WHERE taskId=?').get(task.id).count);
-      return { task, children: children.map(child => this.canonicalTask(child)), childrenOmitted: childCount - children.length, notes: notes.map(note => ({ ...note, sessionId: this.canonicalId(note.sessionId as string) })), notesOmitted: noteCount - notes.length };
+      return { task, children: children.map(child => this.canonicalTask(child)), childrenOmitted: childCount - children.length,
+        notes: notes.map(note => ({ ...this.projectNoteAuthor(note), text: note.text, createdAt: note.createdAt })), notesOmitted: noteCount - notes.length };
+    }
+    if (args.action === 'comment') {
+      this.writeReferences(db, task);
+      this.addNote(db, task.id, actor, args.note, now);
+      db.prepare('UPDATE tasks SET updatedAt=? WHERE id=?').run(now, task.id);
+      return { task: this.requireTask(db, task.id),
+        ...(args.notifySession !== false && task.ownerSessionId ? { commentNotification: { owner: task.ownerSessionId } } : {}) };
     }
     const state = `status=${task.status}, owner=${task.ownerSessionId ?? 'unclaimed'}`;
     if (task.status === 'completed' || task.status === 'cancelled') {
@@ -265,7 +361,7 @@ export class TaskStore {
       const permitted = args.action === 'cancel' || args.action === 'assign'
         ? sessionId === task.createdBySessionId || sessionId === task.ownerSessionId
         : sessionId === (task.ownerSessionId ?? task.createdBySessionId);
-      if (!permitted) throw new TaskError('TASK_FORBIDDEN', `Session ${sessionId} cannot ${args.action} task ${task.id} (${state}); ${args.action === 'cancel' || args.action === 'assign' ? 'creator or owner' : task.ownerSessionId ? 'owner' : 'creator'} required.`, 403);
+      if (actor.kind !== 'user' && !permitted) throw new TaskError('TASK_FORBIDDEN', `Session ${sessionId} cannot ${args.action} task ${task.id} (${state}); ${args.action === 'cancel' || args.action === 'assign' ? 'creator or owner' : task.ownerSessionId ? 'owner' : 'creator'} required.`, 403);
       this.writeReferences(db, task);
       if (args.action === 'assign') {
         const changedOwner = task.ownerSessionId !== args.ownerSessionId;
@@ -283,23 +379,24 @@ export class TaskStore {
         assignmentNotification = { revision, newOwner: notifyNew ? args.ownerSessionId : undefined, previousOwner: notifyPrevious ? previousOwner : undefined };
         if (changedOwner) db.prepare('UPDATE tasks SET reminderLastSeq=?,reminderMessageCount=0 WHERE id=?')
           .run(args.ownerSessionId === sessionId ? anchorSeq ?? null : null, task.id);
-        if (changedOwner) this.addNote(db, task.id, sessionId, `Owner changed from ${task.ownerSessionId ?? 'unclaimed'} to ${args.ownerSessionId ?? 'unclaimed'}.`, now);
+        if (changedOwner) this.addNote(db, task.id, actor, `Owner changed from ${task.ownerSessionId ?? 'unclaimed'} to ${args.ownerSessionId ?? 'unclaimed'}.`, now);
       } else if (args.action === 'update') {
         db.prepare('UPDATE tasks SET description=?,status=?,updatedAt=? WHERE id=?')
           .run(args.description ?? task.description, args.status ?? task.status, now, task.id);
         if (args.status === 'active' && task.status !== 'active') db.prepare('UPDATE tasks SET reminderLastSeq=?,reminderMessageCount=0 WHERE id=?')
           .run(anchorSeq ?? null, task.id);
-        if (args.note !== undefined) this.addNote(db, task.id, sessionId, args.note, now);
+        if (args.note !== undefined) this.addNote(db, task.id, actor, args.note, now);
       } else if (args.action === 'complete') {
         db.prepare("UPDATE tasks SET status='completed',result=?,completedAt=?,updatedAt=?,completionNotificationStatus='pending' WHERE id=?")
           .run(args.result ?? null, now, now, task.id);
       } else if (args.action === 'cancel') {
         db.prepare("UPDATE tasks SET status='cancelled',cancelledAt=?,updatedAt=? WHERE id=?").run(now, now, task.id);
-        if (args.reason !== undefined) this.addNote(db, task.id, sessionId, args.reason, now);
+        if (args.reason !== undefined) this.addNote(db, task.id, actor, args.reason, now);
       }
     }
     return { task: this.requireTask(db, task.id), ...(assignmentNotification ? { assignmentNotification } : {}) };
   }
+
 
   attachChild(taskId: string, childSessionId: string): void {
     childSessionId = this.canonicalId(childSessionId);
@@ -309,7 +406,7 @@ export class TaskStore {
       const task = this.requireTask(db, taskId);
       if (task.ownerSessionId !== childSessionId) throw new TaskError('TASK_OWNED', `Task ${task.id} is not owned by child Session ${childSessionId}.`, 409);
       db.prepare('UPDATE tasks SET attachedSessionId=? WHERE id=?').run(childSessionId, taskId);
-      this.addNote(db, taskId, childSessionId, `Attached new Session ${childSessionId}.`, Date.now());
+      this.addNote(db, taskId, { kind: 'session', sessionId: childSessionId }, `Attached new Session ${childSessionId}.`, Date.now());
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
   }
@@ -374,7 +471,4 @@ export class TaskStore {
     return this.canonicalTask(task);
   }
 
-  private addNote(db: DatabaseSync, taskId: string, sessionId: string, text: string, now: number): void {
-    db.prepare('INSERT INTO task_notes (taskId,sessionId,text,createdAt) VALUES (?,?,?,?)').run(taskId, this.canonicalId(sessionId), text, now);
-  }
 }
