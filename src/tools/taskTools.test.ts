@@ -9,6 +9,7 @@ import { BUILTIN_TOOL_PLACEMENTS } from './placement';
 import * as sessionManager from '../sessionManager';
 import { task, callTool, call_tool, modelFacingDefinitions, create_child_session } from '../tools';
 import { resetMainManagementToolsForTests, shutdownMainManagementTools } from '../mainManagementTools';
+import { tool_create_child_session as directCreateChildSession } from '../toolsSessionAgent/interSession';
 import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from '../toolAuthorization';
 import { parseFoxwarmWrappedContent } from '../utils/promptWrappers';
 
@@ -132,6 +133,27 @@ test('create_child_session taskId assigns or transfers the real child before del
     for (const id of children) await sessionManager.deleteSession(id);
     await sessionManager.deleteSession(parent.id);
     await sessionManager.deleteSession(outsider.id);
+  }
+});
+
+test('create_child_session does not enter wait when task assignment delivery fails', async () => {
+  const parent = await sessionManager.getSession(`task_delivery_failure_${Date.now()}_parent`);
+  const service = taskService as any;
+  const original = service.createAttachedChild;
+  service.createAttachedChild = async () => ({
+    childSessionId: 'delivery-failure-child',
+    assignmentDelivered: false,
+    warning: 'Task assigned, but the new owner notification could not be delivered.',
+  });
+  try {
+    const result: any = await directCreateChildSession({ suffix: 'executor', taskId: 'task_delivery_failure', afterSend: 'wait' }, { sessionId: parent.id, session: parent });
+    const output = typeof result === 'string' ? result : result.output;
+    assert.match(output, /task assignment delivery failed/);
+    assert.match(output, /new owner notification could not be delivered/);
+    assert.equal(typeof result === 'string' ? undefined : result.__toolPostAction, undefined);
+  } finally {
+    service.createAttachedChild = original;
+    await sessionManager.deleteSession(parent.id);
   }
 });
 

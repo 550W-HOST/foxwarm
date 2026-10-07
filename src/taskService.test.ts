@@ -80,15 +80,50 @@ test('child attachment assigns or transfers with creator authority and serialize
   await enteredPromise;
   const competingClaim = service.execute({ action: 'claim', taskId }, 'first');
   finish();
-  assert.equal(await creating, 'child');
+  assert.deepEqual(await creating, { childSessionId: 'child', assignmentDelivered: true });
   await assert.rejects(() => competingClaim, /already claimed/);
   assert.equal(service.get(taskId).task.ownerSessionId, 'child');
   assert(service.get(taskId).notes.some((note: any) => /Attached new Session child/.test(note.text)));
   const transferred = await service.createAttachedChild(taskId, 'creator', async () => { effects++; return 'second'; });
-  assert.equal(transferred, 'second');
+  assert.deepEqual(transferred, { childSessionId: 'second', assignmentDelivered: true });
   assert.equal(service.get(taskId).task.ownerSessionId, 'second');
   assert.equal(service.get(taskId).task.attachedSessionId, 'second');
   assert.equal(effects, 2);
+});
+
+test('child assignment preserves delivery failure results without pretending the task was delivered', async t => {
+  const sends: any[] = [];
+  const service = fixture(t, async (target, _message, _source, options) => {
+    sends.push({ target, trigger: options?.trigger !== false });
+    if (target === 'child') throw new Error('child delivery failed');
+  });
+  const taskId = (await service.execute({ action: 'create', title: 'Delivery failure' }, 'creator')).task.id;
+  const result = await service.createAttachedChild(taskId, 'creator', async () => 'child');
+  assert.deepEqual(result, {
+    childSessionId: 'child',
+    assignmentDelivered: false,
+    warning: 'Task assigned, but the new owner notification could not be delivered.',
+  });
+  assert.deepEqual(sends, [{ target: 'child', trigger: true }]);
+  assert.equal(service.get(taskId).task.ownerSessionId, 'child');
+});
+
+test('child assignment reports passive previous-owner delivery failure while preserving child delivery', async t => {
+  const sends: any[] = [];
+  const service = fixture(t, async (target, _message, _source, options) => {
+    sends.push({ target, trigger: options?.trigger !== false });
+    if (target === 'first') throw new Error('previous delivery failed');
+  });
+  const taskId = (await service.execute({ action: 'create', title: 'Previous delivery failure' }, 'creator')).task.id;
+  await service.execute({ action: 'assign', taskId, ownerSessionId: 'first' }, 'creator');
+  const result = await service.createAttachedChild(taskId, 'creator', async () => 'child');
+  assert.deepEqual(result, {
+    childSessionId: 'child',
+    assignmentDelivered: true,
+    warning: 'Task assigned, but the previous owner notification could not be delivered.',
+  });
+  assert.deepEqual(sends, [{ target: 'first', trigger: false }, { target: 'child', trigger: true }]);
+  assert.equal(service.get(taskId).task.ownerSessionId, 'child');
 });
 
 test('assignment notices commit before previous/new delivery, preserve independent status and skip successful repeats', async t => {

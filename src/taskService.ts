@@ -20,13 +20,17 @@ export class TaskService {
     try { return await operation(); } finally { release!(); }
   }
 
-  private async deliverAssignmentPlan(result: any, sessionId: string, plan: { revision: number; newOwner?: string; previousOwner?: string }, additionalMessage?: string): Promise<any> {
+  private async deliverAssignmentPlan(result: any, sessionId: string, plan: { revision: number; newOwner?: string; previousOwner?: string }, additionalMessage?: string): Promise<{ result: any; newOwnerDelivered: boolean }> {
     const failedRecipients: string[] = [];
+    let newOwnerDelivered = !plan.newOwner;
     for (const [recipient, plannedTarget] of [['previous', plan.previousOwner], ['new', plan.newOwner]] as const) {
       if (!plannedTarget) continue;
       const target = this.deps.resolveSessionId(plannedTarget) || plannedTarget;
       sessionId = this.deps.resolveSessionId(sessionId) || sessionId;
-      if (target === sessionId) this.store.markAssignmentNotification(result.task.id, plan.revision, recipient, 'skipped');
+      if (target === sessionId) {
+        this.store.markAssignmentNotification(result.task.id, plan.revision, recipient, 'skipped');
+        if (recipient === 'new') newOwnerDelivered = true;
+      }
       else try {
         const description = recipient === 'new'
           ? this.store.readStoredDescription(result.task.id)
@@ -43,6 +47,7 @@ export class TaskService {
           taskNotification: { taskId: result.task.id, event, recipient },
         });
         this.store.markAssignmentNotification(result.task.id, plan.revision, recipient, 'sent');
+        if (recipient === 'new') newOwnerDelivered = true;
       } catch {
         this.store.markAssignmentNotification(result.task.id, plan.revision, recipient, 'failed');
         failedRecipients.push(recipient === 'previous' ? 'previous owner' : 'new owner');
@@ -50,7 +55,7 @@ export class TaskService {
     }
     if (failedRecipients.length) result.warning = `Task assigned, but the ${failedRecipients.join(' and ')} notification could not be delivered.`;
     result.task = this.store.execute({ action: 'get', taskId: result.task.id }, sessionId).task;
-    return result;
+    return { result, newOwnerDelivered };
   }
 
   async execute(args: Record<string, any>, sessionId: string, anchorSeq?: number): Promise<any> {
@@ -70,7 +75,7 @@ export class TaskService {
     });
     const plan = result.assignmentNotification;
     delete result.assignmentNotification;
-    if (plan) result = await this.deliverAssignmentPlan(result, sessionId, plan);
+    if (plan) result = (await this.deliverAssignmentPlan(result, sessionId, plan)).result;
     if (args.action === 'complete') {
       // Completion is already durable. Delivery failure must not undo it;
       // retries of complete are terminal-state errors, not repeated sends.
@@ -114,9 +119,9 @@ export class TaskService {
     return this.store.execute({ action: 'get', taskId }, undefined);
   }
 
-  async createAttachedChild(taskId: string, sourceSessionId: string, create: () => Promise<string>, additionalMessage?: string): Promise<string> {
+  async createAttachedChild(taskId: string, sourceSessionId: string, create: () => Promise<string>, additionalMessage?: string): Promise<{ childSessionId: string; assignmentDelivered: boolean; warning?: string }> {
     const source = this.deps.resolveSessionId(sourceSessionId) || sourceSessionId;
-    const { childSessionId, result } = await this.exclusive(async () => {
+    const attached = await this.exclusive(async () => {
       const task = this.store.execute({ action: 'get', taskId }, source).task;
       if (task.status === 'completed' || task.status === 'cancelled') throw new TaskError('TASK_TERMINAL', 'A terminal task cannot be attached to a new Session.', 409);
       if (task.createdBySessionId !== source && task.ownerSessionId !== source) {
@@ -129,11 +134,15 @@ export class TaskService {
       this.store.attachChild(taskId, childSessionId);
       return { childSessionId, result: { ...result, assignmentNotification: plan } };
     });
+    let { childSessionId, result } = attached;
+    let assignmentDelivered = true;
     if (result.assignmentNotification) {
       const plan = result.assignmentNotification;
       delete result.assignmentNotification;
-      await this.deliverAssignmentPlan(result, source, plan, additionalMessage);
+      const delivered = await this.deliverAssignmentPlan(result, source, plan, additionalMessage);
+      assignmentDelivered = delivered.newOwnerDelivered;
+      result = delivered.result;
     }
-    return childSessionId;
+    return { childSessionId, assignmentDelivered, ...(result.warning ? { warning: result.warning } : {}) };
   }
 }
