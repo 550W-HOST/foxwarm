@@ -32,6 +32,31 @@ public sealed class SessionIdentityInterleavingTests
     }
 
     [Fact]
+    public async Task Concurrent_parent_updates_reconcile_hot_authority_with_catalog()
+    {
+        using var temp = new TempDirectory();
+        await using var manager = Manager(temp.Path);
+        await manager.LoadAsync();
+        var parent = await manager.CreateNamedAsync("main", "parent", null, null);
+        var child = await manager.CreateNamedAsync("main", "child", null, null);
+
+        var updates = Enumerable
+            .Range(0, 200)
+            .Select(index =>
+                Task.Run(() =>
+                    manager.ChangePresentation(catalog =>
+                        catalog.SetParent("child", index % 2 == 0 ? parent.Id : null)
+                    )
+                )
+            )
+            .ToArray();
+        await Task.WhenAll(updates);
+
+        var catalogParent = SessionCatalog.Text(manager.Catalog.Get("child")!["parentSessionId"]);
+        Assert.Equal(catalogParent, child.Metadata().ParentSessionId);
+    }
+
+    [Fact]
     public async Task Ordered_accepted_canonical_save_precedes_move_and_later_save_uses_current_binding()
     {
         using var temp = new TempDirectory();

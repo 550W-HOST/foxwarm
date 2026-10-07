@@ -25,7 +25,10 @@ internal sealed record CompactPlan(
     IReadOnlyList<CompactOperation> Operations,
     IReadOnlySet<long> Preserve,
     IReadOnlySet<long> Remove
-);
+)
+{
+    internal CompactionPlannerDebug? Planner { get; init; }
+}
 
 internal sealed class CompactPlanInvalidException(string message) : Exception(message);
 

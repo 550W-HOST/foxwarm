@@ -1671,6 +1671,7 @@ public sealed class LlmRequestJournalStore : IDisposable
             foreach (var part in parts.OfType<JsonObject>())
                 (part["functionResponse"] as JsonObject)?.Remove("__meta");
         clone.Remove("modelVisible");
+        clone.Remove("compaction");
         return clone;
     }
 

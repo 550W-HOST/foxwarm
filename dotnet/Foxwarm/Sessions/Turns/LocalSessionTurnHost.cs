@@ -249,8 +249,11 @@ public sealed partial class LocalSessionTurnHost
     }
 
     private string? ParentSessionId() =>
-        parentSessionResolver?.Invoke()
-        ?? entry.WithState(state => SessionWait.Text(state.AuthorityEnvelope["parentSessionId"]));
+        parentSessionResolver is { } resolver
+            ? resolver()
+            : entry.WithState(state =>
+                SessionWait.Text(state.AuthorityEnvelope["parentSessionId"])
+            );
 
     private async Task<bool> PrepareRetryAsync(CancellationToken token)
     {

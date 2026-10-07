@@ -58,6 +58,77 @@ public sealed class LlmRequestJournalQualificationTests
     }
 
     [Fact]
+    public async Task Compaction_diagnostic_is_kept_out_of_request_journal_and_concrete_provider_body()
+    {
+        var root = Path.Combine(
+            Path.GetTempPath(),
+            "foxwarm-journal-compaction-" + Guid.NewGuid().ToString("N")
+        );
+        try
+        {
+            using var journal = new LlmRequestJournalStore(root);
+            var recorder = new RecordingHandler();
+            using var client = new HttpClient(recorder);
+            var owner = new ModelRequestOwner(
+                client,
+                new ResponsesClientOptions(
+                    new Uri("http://localhost"),
+                    "model",
+                    "model",
+                    "token",
+                    "",
+                    50
+                ),
+                new ModelRouting(),
+                journal: journal
+            );
+            var history = new[]
+            {
+                new JsonObject
+                {
+                    ["role"] = "user",
+                    ["parts"] = new JsonArray(new JsonObject { ["text"] = "after compact" }),
+                    ["compaction"] = new JsonObject
+                    {
+                        ["planner"] = new JsonObject
+                        {
+                            ["steps"] = 1,
+                            ["toolCalls"] = new JsonArray("submit_compact_plan"),
+                            ["messages"] = new JsonArray(),
+                        },
+                    },
+                },
+            };
+            await owner.RequestAsync(
+                "session",
+                Catalog("anthropic"),
+                "model",
+                null,
+                "cache",
+                "turn",
+                history,
+                (_, _) => Task.FromResult("prompt"),
+                null,
+                null,
+                null,
+                null,
+                CancellationToken.None
+            );
+            var listed = await journal.ListAsync("session", "low-level", null, null, 10);
+            var request = await journal.ReconstructAsync(
+                listed[0]!["requestId"]!.GetValue<string>()
+            );
+            Assert.DoesNotContain("compaction", request.ToJsonString());
+            Assert.DoesNotContain("compaction", recorder.LastBody!);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public async Task Owner_journals_repaired_visible_history_and_source_result_shape()
     {
         var root = Path.Combine(
@@ -325,6 +396,25 @@ public sealed class LlmRequestJournalQualificationTests
             return Task.FromResult(
                 new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(response) }
             );
+        }
+    }
+
+    private sealed class RecordingHandler : HttpMessageHandler
+    {
+        internal string? LastBody { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            LastBody = await request.Content!.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}"
+                ),
+            };
         }
     }
 

@@ -417,14 +417,20 @@ internal sealed partial class SessionManager
         var owner = Find(id);
         if (owner is null)
             return;
-        var parent = SessionCatalog.Text(Catalog.Get(id)?["parentSessionId"]);
-        owner.Entry.WithState(state =>
+        while (true)
         {
-            if (parent is null)
-                state.AuthorityEnvelope.Remove("parentSessionId");
-            else
-                state.AuthorityEnvelope["parentSessionId"] = parent;
-        });
+            var revision = Catalog.Revision;
+            var parent = SessionCatalog.Text(Catalog.Get(id)?["parentSessionId"]);
+            owner.Entry.WithState(state =>
+            {
+                if (parent is null)
+                    state.AuthorityEnvelope.Remove("parentSessionId");
+                else
+                    state.AuthorityEnvelope["parentSessionId"] = parent;
+            });
+            if (revision == Catalog.Revision)
+                return;
+        }
     }
 
     internal void ReplyToCommand(string id, string text)

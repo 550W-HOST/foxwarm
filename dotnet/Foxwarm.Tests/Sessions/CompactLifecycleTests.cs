@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Foxwarm;
+using Foxwarm.Images;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
 using Microsoft.Data.Sqlite;
@@ -246,10 +247,46 @@ public sealed class CompactLifecycleTests
         Assert.Single(manager.Catalog.List());
         Assert.Single(owner.Archive.ReadBlocks());
         Assert.True(owner.Entry.Snapshot().History.Count < before);
+        var completion = Assert.Single(
+            owner.Entry.Snapshot().History,
+            row => row["compaction"]?["planner"] is JsonObject
+        );
+        var planner = completion["compaction"]!["planner"]!.AsObject();
+        Assert.Equal(8, planner["steps"]!.GetValue<int>());
+        Assert.Equal(
+            new[]
+            {
+                "submit_compact_plan",
+                "submit_compact_plan",
+                "submit_compact_plan",
+                "edit",
+                "edit",
+                "edit",
+                "apply_patch",
+                "submit_compact_plan",
+            },
+            planner["toolCalls"]!.AsArray().Select(item => item!.GetValue<string>())
+        );
+        Assert.All(
+            planner["messages"]!.AsArray(),
+            message => Assert.Null(message?["__meta"]?["seq"])
+        );
+        var completionWithoutDiagnostics = (JsonObject)completion.DeepClone();
+        completionWithoutDiagnostics.Remove("compaction");
+        Assert.Equal(
+            ImageTokenEstimate.Message(completionWithoutDiagnostics),
+            ImageTokenEstimate.Message(completion)
+        );
+        var archivedCompletion = Assert.Single(
+            owner.Archive.ReadMessages(),
+            row => row.Message["compaction"]?["planner"] is JsonObject
+        );
+        Assert.Equal(completion.ToJsonString(), archivedCompletion.Message.ToJsonString());
         Assert.DoesNotContain(
             owner.Entry.Snapshot().History,
             row =>
-                row.ToJsonString()
+                row["compaction"] is null
+                && row.ToJsonString()
                     .Contains("Compact arguments file updated", StringComparison.Ordinal)
         );
         Assert.Empty(

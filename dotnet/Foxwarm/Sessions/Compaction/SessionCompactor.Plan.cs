@@ -22,6 +22,9 @@ internal sealed partial class SessionCompactor
             .History.Take(Math.Max(0, candidates.Split))
             .Select(row => (JsonObject)row.DeepClone())
             .ToList();
+        var plannerHistoryStart = detached.Count;
+        var plannerToolCalls = new List<string>();
+        JsonObject? plannerUsage = null;
         var prompt = CompactPrompt.Build(candidates, guidance);
         var promptSnapshot =
             snapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.GetValue<string>() ?? "";
@@ -121,6 +124,10 @@ internal sealed partial class SessionCompactor
                         .Where(call => call is not null)
                         .ToArray()
                     ?? [];
+                plannerToolCalls.AddRange(calls.Select(call => call!["name"]!.GetValue<string>()));
+                var usage = result.Usage ?? assistant?["__meta"]?["usage"] as JsonObject;
+                if (usage is not null)
+                    plannerUsage = CompactionPlannerDebug.AddUsage(plannerUsage, usage);
                 var wrongName = calls
                     .FirstOrDefault(call =>
                         call?["name"]?.GetValue<string>() != "submit_compact_plan"
@@ -246,7 +253,21 @@ internal sealed partial class SessionCompactor
                             );
                         args = parsed;
                     }
-                    return CompactPlanValidator.Validate(args, candidates);
+                    var plan = CompactPlanValidator.Validate(args, candidates);
+                    var messages = new JsonArray();
+                    foreach (var message in detached.Skip(plannerHistoryStart))
+                    {
+                        messages.Add(message.DeepClone());
+                    }
+                    return plan with
+                    {
+                        Planner = new CompactionPlannerDebug(
+                            round + 1,
+                            plannerToolCalls.ToArray(),
+                            plannerUsage,
+                            messages
+                        ),
+                    };
                 }
                 catch (CompactPlanInvalidException error)
                 {

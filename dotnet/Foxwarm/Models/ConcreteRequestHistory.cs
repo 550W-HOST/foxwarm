@@ -27,6 +27,7 @@ internal static class ConcreteRequestHistory
                 source = null;
             var message = (JsonObject)original.DeepClone();
             message.Remove("__meta");
+            message.Remove("compaction");
             foreach (var part in (message["parts"] as JsonArray ?? []).OfType<JsonObject>())
                 if (part["functionResponse"] is JsonObject response)
                     response.Remove("__meta");

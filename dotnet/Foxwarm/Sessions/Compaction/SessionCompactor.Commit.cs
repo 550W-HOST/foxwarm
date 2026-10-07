@@ -107,6 +107,8 @@ internal sealed partial class SessionCompactor
             ),
             ["__meta"] = new JsonObject { ["seq"] = live.NextMessageSeq, ["timestamp"] = now },
         };
+        if (plan.Planner is not null)
+            completion["compaction"] = new JsonObject { ["planner"] = plan.Planner.ToJson() };
         history.Add(completion);
         var envelope = (JsonObject)live.AuthorityEnvelope.DeepClone();
         envelope["nextBlockId"] = nextBlockId;
