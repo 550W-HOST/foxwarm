@@ -266,6 +266,12 @@ internal sealed class ResponsesWsTransport(
                     deadline.CancelAfter(timeout);
                 callbacks.OnMeaningfulProgress?.Invoke();
             },
+            OnImageGenerationActivity = () =>
+            {
+                if (effective is int timeout)
+                    deadline.CancelAfter(timeout);
+                callbacks.OnImageGenerationActivity?.Invoke();
+            },
             OnSafetyBuffering = value =>
             {
                 effective = Math.Max(effective ?? 60000, 600000);

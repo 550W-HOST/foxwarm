@@ -37,6 +37,7 @@ public sealed class ResponsesStreamCallbacks
 {
     public Action<ResponsesStreamProgress>? OnProgress { get; init; }
     public Action? OnMeaningfulProgress { get; init; }
+    public Action? OnImageGenerationActivity { get; init; }
     public Action<JsonObject>? OnSafetyBuffering { get; init; }
     public Action<string>? OnDecodedChunk { get; init; }
     public Action<string>? OnSseBlock { get; init; }
@@ -123,8 +124,27 @@ public sealed class ResponsesEventAccumulator
                 {
                     callbacks?.OnMeaningfulProgress?.Invoke();
                     EnsureOutputItem(outputIndex.Value, lifecycleItem);
+                    if (String(lifecycleItem, "type") == "image_generation_call")
+                        callbacks?.OnImageGenerationActivity?.Invoke();
                     EmitProgress();
                 }
+                return;
+            case "response.image_generation_call.in_progress":
+            case "response.image_generation_call.generating":
+            case "response.image_generation_call.completed":
+            case "response.image_generation_call.partial_image":
+                callbacks?.OnImageGenerationActivity?.Invoke();
+                if (outputIndex is not null)
+                    EnsureOutputItem(
+                        outputIndex.Value,
+                        new JsonObject
+                        {
+                            ["type"] = "image_generation_call",
+                            ["status"] = type is "response.image_generation_call.completed"
+                                ? "completed"
+                                : "in_progress",
+                        }
+                    );
                 return;
             case "response.content_part.added":
             case "response.content_part.done":

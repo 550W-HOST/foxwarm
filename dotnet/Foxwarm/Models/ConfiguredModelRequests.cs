@@ -11,7 +11,8 @@ internal static class ConfiguredModelRequests
         string effort,
         string instructions,
         string cacheKey,
-        string turnId
+        string turnId,
+        string purpose = "normal-turn"
     )
     {
         if (model.IsVirtual)
@@ -19,24 +20,17 @@ internal static class ConfiguredModelRequests
                 "Selected model executor is not implemented: " + model.ProviderType + "."
             );
         var responses = model.ProviderType is "openai" or "openai-responses" or "openai-ws";
-        if (
+        var imageEnabled =
             model.Configuration["imageGeneration"]?["enabled"] is JsonValue image
             && image.TryGetValue<bool>(out var generate)
-            && generate
-        )
+            && generate;
+        if (imageEnabled && !responses)
             throw new InvalidDataException(
-                "Selected model enables unimplemented image generation."
+                "Image generation requires the OpenAI Responses protocol."
             );
+        var featurePurpose = purpose is "compact-plan" or "background" or "setup-test";
         if (responses)
         {
-            if (
-                model.Configuration["webSearch"]?["enabled"] is JsonValue web
-                && web.TryGetValue<bool>(out var search)
-                && search
-            )
-                throw new InvalidDataException(
-                    "Selected model enables unimplemented Responses web search."
-                );
             if (
                 model.Configuration["keepReasoningOnError"] is JsonValue keep
                 && keep.TryGetValue<bool>(out var recovery)
@@ -46,6 +40,10 @@ internal static class ConfiguredModelRequests
                     "Responses keepReasoningOnError recovery is not implemented."
                 );
             var extra = model.Configuration["extraFields"] as JsonObject;
+            if (imageEnabled && extra?["tools"] is JsonArray)
+                throw new InvalidDataException(
+                    "imageGeneration cannot replace extraFields.tools; configure hosted tools with imageGeneration."
+                );
             if (
                 extra?["tools"] is JsonArray tools
                 && tools
@@ -57,6 +55,7 @@ internal static class ConfiguredModelRequests
                 );
             if (
                 extra?["tool_choice"] is JsonObject choice
+                && !imageEnabled
                 && SessionWait.Text(choice["type"]) == "image_generation"
             )
                 throw new InvalidDataException(
@@ -105,6 +104,10 @@ internal static class ConfiguredModelRequests
                 model.Configuration["disallowEmptyResponse"] is JsonValue flag
                 && flag.TryGetValue<bool>(out var forbid)
                 && forbid,
+            WebSearch = featurePurpose ? null : model.Configuration["webSearch"] as JsonObject,
+            ImageGeneration = featurePurpose
+                ? null
+                : model.Configuration["imageGeneration"] as JsonObject,
         };
     }
 

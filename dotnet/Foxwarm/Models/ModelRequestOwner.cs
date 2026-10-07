@@ -152,8 +152,10 @@ internal sealed class ModelRequestOwner(
                 effort,
                 instructions,
                 providerCache,
-                turnId
+                turnId,
+                journalPurpose
             );
+            options = options with { Images = images };
             if (journal is not null && journalRequestId is null)
             {
                 journalRequestId = await journal.BeginRequestAsync(

@@ -39,6 +39,11 @@ internal static class OpenAIHttp
                 if (effectiveInactivity is int timeout)
                     activity.CancelAfter(timeout);
             },
+            OnImageGenerationActivity = () =>
+            {
+                if (effectiveInactivity is int timeout)
+                    activity.CancelAfter(timeout);
+            },
             OnSafetyBuffering = _ =>
             {
                 effectiveInactivity = Math.Max(effectiveInactivity ?? 60000, 600000);

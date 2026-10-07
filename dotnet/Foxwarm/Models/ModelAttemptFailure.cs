@@ -24,6 +24,9 @@ internal sealed class ModelAttemptFailure(
     internal static ModelAttemptFailure Empty() =>
         new("Selected model disallows an empty completed response.", "response-error", true, true);
 
+    internal static ModelAttemptFailure GeneratedImageFailure(string message) =>
+        new(message, "response-error", false, false);
+
     internal static ModelAttemptFailure Http(int status, string body)
     {
         var (retryable, countable) = ClassifyHttp(status, body);

@@ -25,6 +25,9 @@ public sealed record ResponsesClientOptions(
 {
     internal string? ProviderPromptCacheKey { get; init; }
     internal Func<JsonNode, Task>? JournalAttemptStart { get; init; }
+    internal JsonObject? WebSearch { get; init; }
+    internal JsonObject? ImageGeneration { get; init; }
+    internal Foxwarm.Images.ImageBlobStore? Images { get; init; }
     public Uri ResponsesUri =>
         new($"{BaseUri.ToString().TrimEnd('/')}/responses", UriKind.Absolute);
 }
@@ -56,6 +59,12 @@ public static partial class ResponsesRequestSerializer
     public static JsonArray ConvertHistory(
         IReadOnlyList<JsonObject> history,
         string concreteModelId
+    ) => ConvertHistoryWithImages(history, concreteModelId, null);
+
+    internal static JsonArray ConvertHistoryWithImages(
+        IReadOnlyList<JsonObject> history,
+        string concreteModelId,
+        Foxwarm.Images.ImageBlobStore? images = null
     )
     {
         var input = new JsonArray();
@@ -124,6 +133,55 @@ public static partial class ResponsesRequestSerializer
                 }
 
                 var providerMeta = part["providerMeta"] as JsonObject;
+                var outputItem = providerMeta?["openaiResponses"]?["outputItem"] as JsonObject;
+                var sourceModelId = String(
+                    providerMeta?["openaiResponses"] as JsonObject,
+                    "sourceModelId"
+                );
+                if (
+                    role == "assistant"
+                    && outputItem is not null
+                    && sourceModelId == concreteModelId
+                )
+                {
+                    if (HostedResponsesTools.IsGeneratedImage(outputItem))
+                    {
+                        if (images is null || part["inlineDataRef"] is not JsonObject reference)
+                            throw new ModelPreparationException(
+                                "Generated image bytes are unavailable for native replay."
+                            );
+                        var bytes = images.ReadAsync(reference).GetAwaiter().GetResult();
+                        Flush();
+                        input.Add(HostedResponsesTools.BuildReplayItem(outputItem, bytes));
+                        PrepareAssistant(part);
+                        content.Add(
+                            new JsonObject
+                            {
+                                ["type"] = "output_text",
+                                ["text"] = HostedResponsesTools.Guidance(part),
+                            }
+                        );
+                        continue;
+                    }
+                    Flush();
+                    input.Add(outputItem.DeepClone());
+                }
+                else if (
+                    role == "assistant"
+                    && outputItem is not null
+                    && HostedResponsesTools.IsGeneratedImage(outputItem)
+                )
+                {
+                    PrepareAssistant(part);
+                    content.Add(
+                        new JsonObject
+                        {
+                            ["type"] = "output_text",
+                            ["text"] = HostedResponsesTools.Placeholder(part),
+                        }
+                    );
+                    continue;
+                }
                 var summaries = providerMeta?["thinkingSummaries"] as JsonArray;
                 var encryptedThinking = String(providerMeta, "encryptedThinking");
                 if (summaries is not null || !string.IsNullOrEmpty(encryptedThinking))
@@ -220,6 +278,27 @@ public static partial class ResponsesRequestSerializer
         int maxOutputTokens,
         JsonArray? tools = null,
         string? effort = null
+    ) =>
+        BuildRequestWithImages(
+            history,
+            requestModel,
+            concreteModelId,
+            instructions,
+            maxOutputTokens,
+            tools,
+            effort,
+            null
+        );
+
+    internal static JsonObject BuildRequestWithImages(
+        IReadOnlyList<JsonObject> history,
+        string requestModel,
+        string concreteModelId,
+        string instructions,
+        int maxOutputTokens,
+        JsonArray? tools = null,
+        string? effort = null,
+        Foxwarm.Images.ImageBlobStore? images = null
     )
     {
         if (maxOutputTokens <= 0)
@@ -228,7 +307,7 @@ public static partial class ResponsesRequestSerializer
         {
             ["model"] = requestModel,
             ["instructions"] = instructions,
-            ["input"] = ConvertHistory(history, concreteModelId),
+            ["input"] = ConvertHistoryWithImages(history, concreteModelId, images),
             ["tools"] = tools is null ? BuildToolDefinitions() : tools.DeepClone(),
             ["tool_choice"] = "auto",
             ["parallel_tool_calls"] = true,
@@ -456,8 +535,8 @@ public static partial class ResponsesRequestSerializer
         foreach (var property in new[] { "functionResponse" })
             if (part[property] is not null)
                 throw new UnsupportedResponsesFeatureException($"message part {property}");
-        if (part["providerMeta"]?["openaiResponses"]?["outputItem"] is not null)
-            throw new UnsupportedResponsesFeatureException("native Responses output-item replay");
+        if (part["providerMeta"]?["openaiResponses"]?["outputItem"] is JsonObject)
+            return;
     }
 
     private static string FormatSystemPartForModel(string system) =>
@@ -507,7 +586,9 @@ public static class ResponsesCanonicalConverter
         JsonObject response,
         string concreteModelId,
         long completedAt,
-        double durationMs
+        double durationMs,
+        IReadOnlyDictionary<int, JsonObject>? generatedParts = null,
+        IReadOnlyList<string>? generatedFailures = null
     )
     {
         var parts = new JsonArray();
@@ -516,6 +597,30 @@ public static class ResponsesCanonicalConverter
             if (node is not JsonObject item)
                 continue;
             var type = String(item, "type");
+            var outputIndex = response["output"] is JsonArray all ? all.IndexOf(node) : -1;
+            if (type == "image_generation_call")
+            {
+                if (generatedParts?.TryGetValue(outputIndex, out var generated) == true)
+                    parts.Add(generated.DeepClone());
+                continue;
+            }
+            if (type == "web_search_call")
+            {
+                parts.Add(
+                    new JsonObject
+                    {
+                        ["providerMeta"] = new JsonObject
+                        {
+                            ["openaiResponses"] = new JsonObject
+                            {
+                                ["sourceModelId"] = concreteModelId,
+                                ["outputItem"] = item.DeepClone(),
+                            },
+                        },
+                    }
+                );
+                continue;
+            }
             if (type == "reasoning")
             {
                 var summaryTexts = new List<string>();
@@ -609,6 +714,16 @@ public static class ResponsesCanonicalConverter
                 $"Responses output item {type ?? "unknown"}"
             );
         }
+        if (generatedFailures is { Count: > 0 } && generatedParts is { Count: > 0 })
+            parts.Add(
+                new JsonObject
+                {
+                    ["text"] =
+                        "[image generation did not produce a usable image: "
+                        + HostedResponsesTools.FailureNote(generatedFailures)
+                        + "]",
+                }
+            );
         if (parts.Count == 0)
             return null;
         var meta = new JsonObject
@@ -860,14 +975,48 @@ public sealed class ResponsesChatService : IChatService
                 cancellationToken
             )
             .ConfigureAwait(false);
+        GeneratedImageNormalization? generated = null;
+        if (options.Images is not null && completed.Payload["output"] is JsonArray output)
+        {
+            generated = await HostedResponsesTools.ExternalizeAsync(
+                output,
+                options.Images,
+                options.ConcreteModelId,
+                cancellationToken
+            );
+            var hasImageFailure = generated.Failures.Count > 0;
+            if (generated.SuccessfulCount == 0 && hasImageFailure && !HasOtherUsableOutput(output))
+                throw ModelAttemptFailure.GeneratedImageFailure(
+                    HostedResponsesTools.FailureNote(generated.Failures)
+                );
+        }
         var assistant = ResponsesCanonicalConverter.ConvertAssistant(
             completed.Payload,
             options.ConcreteModelId,
             completed.CompletedAt,
-            completed.DurationMs
+            completed.DurationMs,
+            generated?.Parts,
+            generated?.Failures
         );
         if (options.DisallowEmptyResponse && !OpenAIHttp.HasMeaningfulAssistant(assistant))
             throw ModelAttemptFailure.Empty();
         return new ChatResult(assistant);
     }
+
+    private static bool HasOtherUsableOutput(JsonArray output) =>
+        output
+            .OfType<JsonObject>()
+            .Any(item =>
+                HostedResponsesTools.IsGeneratedImage(item) == false
+                && (
+                    SessionWait.Text(item["type"]) == "function_call"
+                    || SessionWait.Text(item["type"]) == "message"
+                        && (item["content"] as JsonArray)
+                            ?.OfType<JsonObject>()
+                            .Any(content =>
+                                SessionWait.Text(content["text"]) is { Length: > 0 }
+                                || SessionWait.Text(content["refusal"]) is { Length: > 0 }
+                            ) == true
+                )
+            );
 }

@@ -70,7 +70,8 @@ internal sealed partial class SessionManager
             model.DefaultEffort ?? "high",
             "",
             "setup-model-test",
-            "setup-model-test"
+            "setup-model-test",
+            "setup-test"
         );
         var setupHistory = new[]
         {

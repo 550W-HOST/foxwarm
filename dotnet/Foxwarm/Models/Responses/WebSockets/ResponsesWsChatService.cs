@@ -74,11 +74,31 @@ internal sealed class ResponsesWsChatService(
                         : "low-level"
                 )
                 .ConfigureAwait(false);
+            GeneratedImageNormalization? generated = null;
+            if (options.Images is not null && pending.Response["output"] is JsonArray output)
+            {
+                generated = await HostedResponsesTools.ExternalizeAsync(
+                    output,
+                    options.Images,
+                    options.ConcreteModelId,
+                    token
+                );
+                if (
+                    generated.SuccessfulCount == 0
+                    && generated.Failures.Count > 0
+                    && !HasOtherUsableOutput(output)
+                )
+                    throw ModelAttemptFailure.GeneratedImageFailure(
+                        HostedResponsesTools.FailureNote(generated.Failures)
+                    );
+            }
             var assistant = ResponsesCanonicalConverter.ConvertAssistant(
                 pending.Response,
                 options.ConcreteModelId,
                 DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                Stopwatch.GetElapsedTime(started).TotalMilliseconds
+                Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                generated?.Parts,
+                generated?.Failures
             );
             if (options.DisallowEmptyResponse && !OpenAIHttp.HasMeaningfulAssistant(assistant))
                 throw ModelAttemptFailure.Empty();
@@ -141,4 +161,21 @@ internal sealed class ResponsesWsChatService(
                 await transport.DisposeAsync().ConfigureAwait(false);
         }
     }
+
+    private static bool HasOtherUsableOutput(JsonArray output) =>
+        output
+            .OfType<JsonObject>()
+            .Any(item =>
+                !HostedResponsesTools.IsGeneratedImage(item)
+                && (
+                    SessionWait.Text(item["type"]) == "function_call"
+                    || SessionWait.Text(item["type"]) == "message"
+                        && (item["content"] as JsonArray)
+                            ?.OfType<JsonObject>()
+                            .Any(content =>
+                                SessionWait.Text(content["text"]) is { Length: > 0 }
+                                || SessionWait.Text(content["refusal"]) is { Length: > 0 }
+                            ) == true
+                )
+            );
 }
