@@ -159,6 +159,15 @@ function readStr(state: ParserState, prefix: string): string {
   return '';
 }
 
+// Match Codex's final seek_sequence pass without changing inserted content.
+function normalizeMatchLine(value: string): string {
+  return value.trim()
+    .replace(/[\u2010-\u2015\u2212]/g, '-')
+    .replace(/[\u2018-\u201B]/g, "'")
+    .replace(/[\u201C-\u201F]/g, '"')
+    .replace(/[\u00A0\u2002-\u200A\u202F\u205F\u3000]/g, ' ');
+}
+
 function advanceCursorToAnchor(anchor: string, inputLines: string[], cursor: number, parser: ParserState): number {
   let found = false;
 
@@ -178,6 +187,16 @@ function advanceCursorToAnchor(anchor: string, inputLines: string[], cursor: num
         cursor = i + 1;
         parser.fuzz += 1;
         found = true;
+        break;
+      }
+    }
+  }
+
+  if (!found && !inputLines.slice(0, cursor).some(line => normalizeMatchLine(line) === normalizeMatchLine(anchor))) {
+    for (let i = cursor; i < inputLines.length; i += 1) {
+      if (normalizeMatchLine(inputLines[i]) === normalizeMatchLine(anchor)) {
+        cursor = i + 1;
+        parser.fuzz += 1000;
         break;
       }
     }
@@ -301,6 +320,12 @@ function findContextCore(lines: string[], context: string[], start: number): { n
     }
   }
 
+  for (let i = start; i < lines.length; i += 1) {
+    if (equalsSlice(lines, context, i, normalizeMatchLine)) {
+      return { newIndex: i, fuzz: 1000 };
+    }
+  }
+
   return { newIndex: -1, fuzz: 0 };
 }
 
@@ -315,6 +340,78 @@ function findContext(lines: string[], context: string[], start: number, eof: boo
   }
 
   return findContextCore(lines, context, start);
+}
+
+const MAX_CONTEXT_ERROR_LENGTH = 1600;
+const MAX_CONTEXT_ERROR_LINE_LENGTH = 240;
+const MAX_DIAGNOSTIC_SNIPPET_LENGTH = 160;
+const CONTEXT_PREVIEW_LINES = 3;
+
+function diagnosticSnippet(value: string, offset = 0): string {
+  const from = Math.max(0, offset - 60);
+  const excerpt = value.slice(from, from + 120);
+  const quoted = JSON.stringify(`${from > 0 ? '…' : ''}${excerpt}${from + excerpt.length < value.length ? '…' : ''}`);
+  return quoted.length <= MAX_DIAGNOSTIC_SNIPPET_LENGTH
+    ? quoted
+    : `${quoted.slice(0, MAX_DIAGNOSTIC_SNIPPET_LENGTH - 1)}…`;
+}
+
+// Diagnostic candidates never participate in patch matching. Only report a
+// location when the first nonblank context line (or its long prefix) is unique.
+function findDiagnosticCandidate(lines: string[], context: string[], start: number): number | undefined {
+  const offset = context.findIndex(line => normalizeMatchLine(line) !== '');
+  if (offset === -1) return undefined;
+  const expected = normalizeMatchLine(context[offset]);
+  for (const prefixOnly of [false, true]) {
+    if (prefixOnly && expected.length < 32) return undefined;
+    let candidate: number | undefined;
+    for (let i = start + offset; i < lines.length; i += 1) {
+      const actual = normalizeMatchLine(lines[i]);
+      const matches = prefixOnly ? actual.startsWith(expected.slice(0, 32)) : actual === expected;
+      if (!matches) continue;
+      if (candidate !== undefined) return undefined;
+      candidate = i - offset;
+    }
+    if (candidate !== undefined) return candidate;
+  }
+  return undefined;
+}
+
+function formatContextMismatch(lines: string[], context: string[], start: number, eof: boolean, filePath: string): string {
+  const characters = context.reduce((total, line) => total + line.length, Math.max(0, context.length - 1));
+  const details = [
+    `Could not match ${eof ? 'EOF' : 'patch'} context while patching ${diagnosticSnippet(filePath)} starting at line ${start + 1}.`,
+    `Expected context: ${context.length} lines, ${characters} characters; file: ${lines.length} lines.`,
+  ];
+  const candidate = findDiagnosticCandidate(lines, context, start);
+  if (candidate !== undefined) {
+    const mismatch = context.findIndex((line, i) =>
+      lines[candidate + i] === undefined || normalizeMatchLine(line) !== normalizeMatchLine(lines[candidate + i]));
+    const actual = lines[candidate + mismatch];
+    const expected = context[mismatch];
+    const normalizedExpected = normalizeMatchLine(expected);
+    const normalizedActual = actual === undefined ? '' : normalizeMatchLine(actual);
+    let column = 0;
+    while (column < normalizedExpected.length && column < normalizedActual.length && normalizedExpected[column] === normalizedActual[column]) {
+      column += 1;
+    }
+    details.push(
+      `Candidate starts at file line ${candidate + 1}; first mismatch at file line ${candidate + mismatch + 1} (context line ${mismatch + 1}).`,
+      `Expected: ${diagnosticSnippet(expected.trim(), column)}`,
+      `Actual: ${actual === undefined ? '<end of file>' : diagnosticSnippet(actual.trim(), column)}`,
+    );
+  } else {
+    details.push('No unique candidate location; limited preview:');
+    for (let i = 0; i < Math.min(CONTEXT_PREVIEW_LINES, context.length); i += 1) {
+      details.push(`Expected ${i + 1}: ${diagnosticSnippet(context[i])}`);
+    }
+    for (let i = start; i < Math.min(start + CONTEXT_PREVIEW_LINES, lines.length); i += 1) {
+      details.push(`Actual file line ${i + 1}: ${diagnosticSnippet(lines[i])}`);
+    }
+  }
+  return details.map(line => line.length > MAX_CONTEXT_ERROR_LINE_LENGTH
+    ? `${line.slice(0, MAX_CONTEXT_ERROR_LINE_LENGTH - 1)}…`
+    : line).join('\n').slice(0, MAX_CONTEXT_ERROR_LENGTH);
 }
 
 function parseUpdateDiff(lines: string[], input: string, filePath: string): { chunks: ApplyPatchChunk[]; fuzz: number } {
@@ -341,14 +438,10 @@ function parseUpdateDiff(lines: string[], input: string, filePath: string): { ch
     }
 
     const { nextContext, sectionChunks, endIndex, eof } = readSection(parser.lines, parser.index, filePath);
-    const nextContextText = nextContext.join('\n');
     const { newIndex, fuzz } = findContext(inputLines, nextContext, cursor, eof);
 
     if (newIndex === -1) {
-      if (eof) {
-        throw new Error(`Could not match EOF context while patching ${filePath} starting at line ${cursor + 1}:\n${nextContextText}`);
-      }
-      throw new Error(`Could not match patch context while patching ${filePath} starting at line ${cursor + 1}:\n${nextContextText}`);
+      throw new Error(formatContextMismatch(inputLines, nextContext, cursor, eof, filePath));
     }
 
     parser.fuzz += fuzz;

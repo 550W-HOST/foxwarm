@@ -132,6 +132,7 @@ Non-image file reads above 1 MiB must not full-read or decode their source befor
   inbound descriptors cannot point at a partially written destination.
 - Exec cwd validation produces concise error messages preserving the failure reason, cwd source, raw cwd, and resolved cwd
 - Output exceeding `INLINE_OUTPUT_LIMIT` (10K chars) is truncated with a pointer to the log file
+- Node patch matching and bounded context errors follow [D-apply-patch-context-matching](./shared-apply-patch.md#d-apply-patch-context-matching); filesystem tests verify that a failed near match neither changes that file nor rolls back earlier successful Unicode edits.
 - Node `apply_patch` success and partial-failure summaries use the shared per-operation formatter, including per-file add/update counts; the count contract is canonical in [D-apply-patch-change-counts](./shared-apply-patch.md#d-apply-patch-change-counts).
 - `parseSessionLinkText` preserves all surrounding text while linking legacy session references and only the `sourceSessionId` value inside an opening `<foxwarm-message type="inter-agent" ...>` tag. It does not link arbitrary XML attributes or direct channel wrappers.
 

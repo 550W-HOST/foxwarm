@@ -103,3 +103,39 @@ test('backend partial failure includes counts for operations already applied', a
     await fs.remove(baseDir);
   }
 });
+
+test('backend Unicode patching retains per-file partial success when a later near match fails', async () => {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-apply-patch-matching-'));
+  const good = 'section “target”\r\nold';
+  const bad = `Log($"${'x'.repeat(2000)}{Render(value)}");`;
+  try {
+    await fs.writeFile(path.join(baseDir, 'good.cs'), good);
+    await fs.writeFile(path.join(baseDir, 'bad.cs'), bad);
+    await assert.rejects(() => applyPatchOperations([
+      '*** Begin Patch',
+      '*** Update File: good.cs',
+      '@@ section "target"',
+      '-old',
+      '+new “literal”',
+      '*** Update File: bad.cs',
+      '@@',
+      `-${bad.replace('Render(value)', 'Render(value')}`,
+      '+replacement',
+      '*** Add File: skipped.txt',
+      '+skipped',
+      '*** End Patch',
+    ].join('\n'), filePath => ({ fullPath: path.join(baseDir, filePath), displayPath: filePath })), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.ok(error.message.length < 2000);
+      assert.match(error.message, /first mismatch at file line 1/);
+      assert.match(error.message, /- Updated good\.cs \(\+1 -1\)/);
+      assert.match(error.message, /1 remaining operation\(s\) were not applied/);
+      return true;
+    });
+    assert.equal(await fs.readFile(path.join(baseDir, 'good.cs'), 'utf8'), 'section “target”\r\nnew “literal”');
+    assert.equal(await fs.readFile(path.join(baseDir, 'bad.cs'), 'utf8'), bad);
+    assert.equal(await fs.pathExists(path.join(baseDir, 'skipped.txt')), false);
+  } finally {
+    await fs.remove(baseDir);
+  }
+});

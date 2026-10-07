@@ -534,3 +534,41 @@ test('node startup recovery delivers a current completion and prunes an expired 
     await fs.remove(root);
   }
 });
+
+test('node apply_patch retains Unicode edits and partial success when a later near match fails', async () => {
+  const agentName = uniqueAgent('node_apply_patch_matching');
+  const baseDir = getNodeAgentDir(agentName);
+  const good = 'section “target”\r\nold';
+  const bad = `Log($"${'x'.repeat(2000)}{Render(value)}");`;
+  try {
+    await fs.ensureDir(baseDir);
+    await fs.writeFile(path.join(baseDir, 'good.cs'), good);
+    await fs.writeFile(path.join(baseDir, 'bad.cs'), bad);
+    await assert.rejects(() => apply_patch({ input: [
+      '*** Begin Patch',
+      '*** Update File: good.cs',
+      '@@ section "target"',
+      '-old',
+      '+new “literal”',
+      '*** Update File: bad.cs',
+      '@@',
+      `-${bad.replace('Render(value)', 'Render(value')}`,
+      '+replacement',
+      '*** Add File: skipped.txt',
+      '+skipped',
+      '*** End Patch',
+    ].join('\n') }, { session: { agent: agentName } }), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.ok(error.message.length < 2000);
+      assert.match(error.message, /first mismatch at file line 1/);
+      assert.match(error.message, /- Updated good\.cs \(\+1 -1\)/);
+      assert.match(error.message, /1 remaining operation\(s\) were not applied/);
+      return true;
+    });
+    assert.equal(await fs.readFile(path.join(baseDir, 'good.cs'), 'utf8'), 'section “target”\r\nnew “literal”');
+    assert.equal(await fs.readFile(path.join(baseDir, 'bad.cs'), 'utf8'), bad);
+    assert.equal(await fs.pathExists(path.join(baseDir, 'skipped.txt')), false);
+  } finally {
+    await cleanupAgent(agentName);
+  }
+});

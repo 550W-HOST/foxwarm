@@ -1,6 +1,7 @@
 # Unit: shared-apply-patch
 
 Files: packages/shared/src/applyPatch.ts, packages/shared/src/applyPatch.test.ts
+Secondary test reference: src/applyPatch.test.ts
 
 ## Purpose
 
@@ -18,27 +19,33 @@ Parses and applies text-based patch operations (update, add, delete) to file con
 
 ## Function Index
 
-| Function | Lines (approx) | Description |
-|----------|----------------|-------------|
-| `isFileHeader(line)` | ~30 | Checks if a line is a file action header |
-| `normalizeNewlines(text)` | ~34 | Converts CRLF to LF |
-| `extractPatchEnvelope(input)` | ~38–62 | Extracts and validates patch begin/end markers |
-| `parseApplyPatchInput(input)` | ~64–107 | Parses envelope into structured file operations |
-| `parseUpdateSection(lines, filePath)` | ~109–120 | Validates update section has changed lines |
-| `parseAddSection(lines, filePath)` | ~122–134 | Strips `+` prefixes from add-file lines |
-| `getLineEnding(text)` | ~136 | Detects original line ending style |
-| `restoreLineEndings(text, lineEnding)` | ~140 | Restores CRLF if original used it |
-| `isDone(state, prefixes)` | ~144 | Checks if parser reached a terminator |
-| `readStr(state, prefix)` | ~149 | Reads and consumes a prefixed line from parser state |
-| `advanceCursorToAnchor(anchor, inputLines, cursor, parser)` | ~157 | Scans forward for an anchor line, with fuzz fallback |
-| `readSection(lines, startIndex, filePath)` | ~178 | Reads a diff section into context and chunks |
-| `findContext(inputLines, context, start, eof)` | (truncated) | Locates context lines in original file with fuzz matching |
-| `parseUpdateDiff(lines, input, filePath)` | (truncated) | Orchestrates anchor/section parsing into positioned chunks |
-| `applyChunks(input, chunks, filePath)` | (truncated) | Splices insert/delete chunks into original lines |
-| `applyUpdatePatch(content, lines, filePath)` | (truncated) | Top-level update: normalize, parse, apply, restore endings |
-| `buildAddedFileContent(lines)` | (truncated) | Joins lines for newly added files |
-| `countApplyPatchOperationLines(operation)` | ~424 | Counts changed content lines while excluding headers, anchors, and context |
-| `formatApplyPatchOperationSummary(operation, displayPath?)` | ~442 | Formats Added/Updated/Deleted per-file result lines |
+| Function | Description |
+|----------|-------------|
+| `isFileHeader(line)` | Checks known file action prefixes |
+| `normalizeNewlines(text)` | Converts CRLF to LF |
+| `extractPatchEnvelope(input)` | Extracts the patch envelope or wraps a bare patch |
+| `parseApplyPatchInput(input)` | Parses file operations |
+| `parseUpdateSection(lines, filePath)` | Validates update sections contain changed lines |
+| `parseAddSection(lines, filePath)` | Strips add-file content prefixes |
+| `getLineEnding(text)` | Detects original line ending style |
+| `restoreLineEndings(text, lineEnding)` | Restores CRLF when needed |
+| `isDone(state, prefixes)` | Checks parser termination |
+| `readStr(state, prefix)` | Consumes a prefixed parser line |
+| `normalizeMatchLine(value)` | Trims and maps the supported Unicode punctuation/spaces for matching only |
+| `advanceCursorToAnchor(anchor, inputLines, cursor, parser)` | Navigates anchors with exact, trim, then Unicode fallback |
+| `readSection(lines, startIndex, filePath)` | Reads contiguous context and edit chunks |
+| `equalsSlice(source, target, start, mapFn)` | Compares a contiguous line sequence using one normalization pass |
+| `findContextCore(lines, context, start)` | Searches in exact, trimEnd, trim, then Unicode order |
+| `findContext(lines, context, start, eof)` | Prefers end-of-file context before the existing forward-search fallback |
+| `diagnosticSnippet(value, offset)` | Produces a bounded, escaped excerpt near a differing character |
+| `findDiagnosticCandidate(lines, context, start)` | Finds a unique first nonblank context line or long-prefix candidate for diagnostics only |
+| `formatContextMismatch(lines, context, start, eof, filePath)` | Reports context size and a local mismatch or limited preview within output limits |
+| `parseUpdateDiff(lines, input, filePath)` | Positions chunks using anchors and context matching |
+| `applyChunks(input, chunks, filePath)` | Splices edit chunks and rejects overlaps |
+| `applyUpdatePatch(content, lines, filePath)` | Normalizes, applies chunks, and restores line endings |
+| `buildAddedFileContent(lines)` | Joins add-file content lines |
+| `countApplyPatchOperationLines(operation)` | Counts inserted/deleted patch content lines |
+| `formatApplyPatchOperationSummary(operation, displayPath?)` | Formats per-file success summaries |
 
 ## Dependencies
 
@@ -48,7 +55,7 @@ None — this module is self-contained with no imports from other project module
 
 - Normalizes line endings to LF for processing, restores original endings on output.
 - Patch envelope extraction supports both explicit `*** Begin Patch / *** End Patch` wrappers and bare patches starting with a file header.
-- Update diffs use `@@` anchors to locate positions in the original file, with a fuzz mechanism that falls back to trimmed matching when exact matches fail.
+- Update diffs use `@@` anchors and contiguous context sequences with whitespace and Unicode fallbacks; see [D-apply-patch-context-matching](#d-apply-patch-context-matching).
 - Chunks track original line indices for deletions and insertions; `applyChunks` validates no overlapping or out-of-bounds chunks.
 - Per-file success summaries report `Added path (+N)` and `Updated path (+N -M)`; delete summaries retain `Deleted path`.
 - Throws descriptive errors on malformed input, missing context matches, or structural violations.
@@ -62,3 +69,21 @@ This is a shared utility consumed by other packages that need to apply text patc
 ### D-apply-patch-change-counts
 
 Successful add and update operations include compact Git-style line counts in each file summary. Counts come from parsed patch content: add-file content lines count as additions, and only `+`/`-` update lines count as additions/deletions, excluding file headers, hunk anchors, and context. Multiple hunks aggregate per operation. Updated files always show both sides, including zero, while added files show additions only and deleted-file output remains unchanged. The same formatter is shared by master and node execution so normal success and already-applied partial-failure summaries stay aligned.
+
+### D-apply-patch-context-matching
+
+[2026-10-07] Main and shared Node context matching first search exact lines, then trailing-whitespace-trimmed lines, then fully trimmed lines. Only after all three fail, trim and map:
+
+- U+2010–U+2015 and U+2212 to ASCII hyphen.
+- U+2018–U+201B to single quote, and U+201C–U+201F to double quote.
+- U+00A0, U+2002–U+200A, U+202F, U+205F, U+3000 to ordinary space.
+
+Anchors also gain this final Unicode fallback after their existing exact/trim behavior. Normalization locates existing content only; it does not rewrite retained context or inserted text. Existing anchor reuse, missing-anchor fallback, EOF preference, line endings, and per-file partial-success semantics remain unchanged.
+
+Context-match error diagnostics are limited to 1,600 characters overall and 240 characters per line, with escaped snippets limited to 160 characters. A unique match for the first nonblank context line (or its first 32 characters for a long line) may identify a candidate and the first inconsistent Expected/Actual line; snippets focus near the differing character. Ambiguous or unlocated context gets at most three expected and three actual preview lines plus context size.
+
+These candidates are diagnostic only and never authorize patch application; missing punctuation and omitted intervening lines still fail. No complete-context log is written. These limits cover the context error; caller-owned already-applied summaries remain intact.
+
+## Tests
+
+The local test file covers operation counts. Cross-engine behavioral fixtures are in `src/applyPatch.test.ts`; Node filesystem tests in `packages/shared/src/nodeTools.test.ts` verify Unicode edits, unchanged failed files, skipped subsequent operations, and already-applied summaries.
