@@ -63,7 +63,7 @@ before(async () => {
   server = createServer((_req,res)=>{res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body,#root{margin:0;height:100%;overflow:hidden}</style></head><body><div id="root"></div><script>${bundle.outputFiles[0].text}</script></body></html>`)})
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
   browser = await puppeteer.launch({browser:firefox?'firefox':'chrome',executablePath:firefox?(process.env.FOXWARM_E2E_FIREFOX||'/usr/bin/firefox'):(process.env.FOXWARM_E2E_CHROMIUM||'/usr/bin/chromium'),headless:true,args:firefox?[]:['--no-sandbox','--disable-setuid-sandbox']})
-  page=await browser.newPage();if(!firefox) await page.setViewport({width:1100,height:760});await page.goto(`http://127.0.0.1:${server.address().port}`,{waitUntil:'load'});await page.waitForSelector('button[aria-label="Find in chat"]')
+  page=await browser.newPage();if(!firefox) await page.setViewport({width:1100,height:760});await page.goto(`http://127.0.0.1:${server.address().port}`,{waitUntil:'load'});await page.evaluate(()=>localStorage.clear());await page.waitForSelector('button[aria-label="Find in chat"]')
 })
 after(async()=>{await browser?.close();await new Promise(resolve=>server?.close(resolve))})
 
@@ -113,6 +113,73 @@ test('standalone Chat captures Ctrl/Cmd+F but leaves extended find combinations 
   })
   assert.deepEqual(ignored,[false,false,false])
   assert.equal(await page.$('[data-chat-search]'),null)
+})
+
+test('Ctrl/Cmd+F captures text and composer selections, and search history navigates without recording prefixes',async()=>{
+  await page.evaluate(()=>localStorage.clear())
+  await page.evaluate(() => {
+    const target = [...document.querySelectorAll('[data-search-surface="model"]')].find(element => element.textContent?.includes('Earlier ordinary message 4'))
+    if (!target) throw new Error('selection target not found')
+    const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT)
+    let node
+    while ((node = walker.nextNode()) && !node.textContent?.includes('Earlier ordinary message 4')) {}
+    if (!node) throw new Error('selection text not found')
+    const text = node.textContent
+    const start = text.indexOf('Earlier ordinary message 4')
+    const range = document.createRange();range.setStart(node, start);range.setEnd(node, start + 'Earlier ordinary message 4'.length)
+    const selection = window.getSelection();selection.removeAllRanges();selection.addRange(range)
+  })
+  await page.keyboard.down('Control');await page.keyboard.press('f');await page.keyboard.up('Control')
+  await page.waitForSelector('[data-chat-search] input[aria-label="Search messages"]')
+  assert.equal(await page.$eval('[data-chat-search] input',input=>input.value),'Earlier ordinary message 4')
+  await page.click('[aria-label="Close search"]')
+
+  const editor = '[contenteditable="true"]'
+  await page.focus(editor);await page.keyboard.type('composer selection')
+  await page.evaluate(selector => {
+    const target = document.querySelector(selector)
+    if (!target) throw new Error('composer not found')
+    const node = target.firstChild
+    if (!node) throw new Error('composer text not found')
+    const range = document.createRange();range.selectNodeContents(target)
+    const selection = window.getSelection();selection.removeAllRanges();selection.addRange(range)
+  }, editor)
+  await page.keyboard.down('Control');await page.keyboard.press('f');await page.keyboard.up('Control')
+  await page.waitForFunction(()=>document.querySelector('[data-chat-search] input')?.value==='composer selection')
+  await page.click('[aria-label="Close search"]')
+
+  await page.click('button[aria-label="Find in chat"]')
+  await page.type('[data-chat-search] input[aria-label="Search messages"]','second complete query')
+  await page.click('[aria-label="Close search"]')
+  await page.click('button[aria-label="Find in chat"]')
+  const input = '[data-chat-search] input[aria-label="Search messages"]'
+  await page.keyboard.press('ArrowUp')
+  assert.equal(await page.$eval(input,input=>input.value),'second complete query')
+  await page.keyboard.press('ArrowUp')
+  assert.equal(await page.$eval(input,input=>input.value),'composer selection')
+  await page.keyboard.press('ArrowDown')
+  assert.equal(await page.$eval(input,input=>input.value),'second complete query')
+  await page.keyboard.press('ArrowDown')
+  assert.equal(await page.$eval(input,input=>input.value),'')
+  await page.click('[aria-label="Close search"]')
+})
+
+test('Search history arrows do not take over while an IME composition is active',async()=>{
+  await page.evaluate(()=>localStorage.clear())
+  await page.click('button[aria-label="Find in chat"]')
+  const input = '[data-chat-search] input[aria-label="Search messages"]'
+  await page.type(input,'ime complete query')
+  await page.click('[aria-label="Close search"]')
+  await page.click('button[aria-label="Find in chat"]')
+  const composing = await page.$eval(input,input=>{
+    const event = new KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true,cancelable:true,isComposing:true})
+    const dispatched = input.dispatchEvent(event)
+    return {dispatched,value:input.value,defaultPrevented:event.defaultPrevented}
+  })
+  assert.deepEqual(composing,{dispatched:true,value:'',defaultPrevented:false})
+  await page.keyboard.press('ArrowUp')
+  assert.equal(await page.$eval(input,input=>input.value),'ime complete query')
+  await page.click('[aria-label="Close search"]')
 })
 
 test('finds already-loaded older unmounted rows, read results, reasoning, rendered Markdown and CTX summary without Archive',async()=>{

@@ -56,6 +56,42 @@ function getAsrStreamUrl() {
 const ASR_CONTEXT_MAX_CHARS = 2400
 const ASR_CONTEXT_MAX_MESSAGES = 8
 const DEFAULT_VISIBLE_TIMELINE_MESSAGES = 100
+const SEARCH_HISTORY_STORAGE_KEY = 'foxwarm.chat.search-history'
+const SEARCH_HISTORY_LIMIT = 20
+
+function readSearchHistory(): string[] {
+  try {
+    const raw = window.localStorage.getItem(SEARCH_HISTORY_STORAGE_KEY)
+    if (!raw) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((value): value is string => typeof value === 'string' && value.trim().length > 0).slice(0, SEARCH_HISTORY_LIMIT)
+  } catch {
+    return []
+  }
+}
+
+function writeSearchHistory(history: string[]): void {
+  try {
+    window.localStorage.setItem(SEARCH_HISTORY_STORAGE_KEY, JSON.stringify(history))
+  } catch {
+    // Browser storage can be unavailable or full; Search remains usable in memory.
+  }
+}
+
+function getSelectedFindText(): string | null {
+  const activeElement = document.activeElement
+  if (activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement) {
+    const start = activeElement.selectionStart
+    const end = activeElement.selectionEnd
+    if (start !== null && end !== null && start !== end) return activeElement.value.slice(start, end)
+  }
+
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null
+  const text = selection.toString()
+  return text || null
+}
 
 type HistoryResponse = {
   session?: SessionListRecord
@@ -238,6 +274,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   const [searchNavigation, setSearchNavigation] = useState(0)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const searchAppliedNavigationRef = useRef(0)
+  const searchHistoryRef = useRef<string[]>([])
+  const searchHistoryIndexRef = useRef<number | null>(null)
+  const searchHistoryDraftRef = useRef('')
   const searchHighlightName = `foxwarm-chat-search-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
   const [historyLoaded, setHistoryLoaded] = useState(false)
   const [isFullHistoryLoaded, setIsFullHistoryLoaded] = useState(false)
@@ -1578,6 +1617,19 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   const currentSearchIndex = searchMatches.findIndex(match => match.id === searchMatchId)
   const selectedSearchMatch = searchMatches[currentSearchIndex >= 0 ? currentSearchIndex : 0] || null
 
+  const loadSearchHistory = useCallback(() => {
+    const history = readSearchHistory()
+    searchHistoryRef.current = history
+    return history
+  }, [])
+
+  const recordSearchHistory = useCallback((query: string) => {
+    if (!query.trim()) return
+    const history = [query, ...searchHistoryRef.current.filter(item => item !== query)].slice(0, SEARCH_HISTORY_LIMIT)
+    searchHistoryRef.current = history
+    writeSearchHistory(history)
+  }, [])
+
   const streamingAssistantMessage = useMemo(() => (
     buildStreamingAssistantMessage(streamingAssistantDraft)
   ), [streamingAssistantDraft])
@@ -1598,11 +1650,41 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   }, [leaveBottomFollow, messages.length, showFullTimeline])
 
   const closeSearch = useCallback(() => {
+    recordSearchHistory(searchQuery)
     setSearchOpen(false)
     setSearchQuery('')
     setSearchMatchId(null)
+    searchHistoryIndexRef.current = null
+    searchHistoryDraftRef.current = ''
     lastSearchQueryRef.current = ''
-  }, [])
+  }, [recordSearchHistory, searchQuery])
+
+  const navigateSearchHistory = useCallback((direction: -1 | 1): boolean => {
+    const history = searchHistoryRef.current
+    const currentIndex = searchHistoryIndexRef.current
+    if (!history.length) return false
+
+    if (direction < 0) {
+      if (currentIndex === null) searchHistoryDraftRef.current = searchQuery
+      const nextIndex = currentIndex === null ? 0 : Math.min(currentIndex + 1, history.length - 1)
+      searchHistoryIndexRef.current = nextIndex
+      setSearchQuery(history[nextIndex])
+      setSearchMatchId(null)
+      return true
+    }
+
+    if (currentIndex === null) return false
+    if (currentIndex === 0) {
+      searchHistoryIndexRef.current = null
+      setSearchQuery(searchHistoryDraftRef.current)
+    } else {
+      const nextIndex = currentIndex - 1
+      searchHistoryIndexRef.current = nextIndex
+      setSearchQuery(history[nextIndex])
+    }
+    setSearchMatchId(null)
+    return true
+  }, [searchQuery])
 
   const stepSearch = useCallback((direction: -1 | 1) => {
     if (!searchMatches.length) return
@@ -1628,19 +1710,27 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
 
   useEffect(() => { if (searchOpen) { searchInputRef.current?.focus(); searchInputRef.current?.select() } }, [searchOpen])
 
-  const activateSearch = useCallback(() => {
+  const activateSearch = useCallback((selectedText?: string | null) => {
+    loadSearchHistory()
     setSearchOpen(true)
+    if (selectedText && selectedText.trim()) {
+      setSearchQuery(selectedText)
+      setSearchMatchId(null)
+      searchHistoryIndexRef.current = null
+      searchHistoryDraftRef.current = ''
+    }
     searchInputRef.current?.focus()
     searchInputRef.current?.select()
-  }, [])
+  }, [loadSearchHistory])
 
   useEffect(() => {
     if (!searchShortcutActive) return
     const onFindShortcut = (event: KeyboardEvent) => {
       if (event.key.toLowerCase() !== 'f' || !(event.ctrlKey || event.metaKey)
         || event.altKey || event.shiftKey || event.isComposing) return
+      const selectedText = getSelectedFindText()
       event.preventDefault()
-      activateSearch()
+      activateSearch(selectedText)
     }
     window.addEventListener('keydown', onFindShortcut)
     return () => window.removeEventListener('keydown', onFindShortcut)
@@ -1649,6 +1739,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     setSearchOpen(false)
     setSearchQuery('')
     setSearchMatchId(null)
+    searchHistoryIndexRef.current = null
+    searchHistoryDraftRef.current = ''
     lastSearchQueryRef.current = ''
   }, [sessionId])
 
@@ -2103,10 +2195,23 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
             <input
               ref={searchInputRef}
               value={searchQuery}
-              onChange={event => setSearchQuery(event.target.value)}
+              onChange={event => {
+                setSearchQuery(event.target.value)
+                searchHistoryIndexRef.current = null
+                searchHistoryDraftRef.current = ''
+              }}
               onKeyDown={event => {
                 if (event.key === 'Escape') { event.preventDefault(); closeSearch() }
-                if (event.key === 'Enter') { event.preventDefault(); stepSearch(event.shiftKey ? -1 : 1) }
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  recordSearchHistory(searchQuery)
+                  searchHistoryIndexRef.current = null
+                  searchHistoryDraftRef.current = ''
+                  stepSearch(event.shiftKey ? -1 : 1)
+                }
+                if (!event.nativeEvent.isComposing && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+                  if (navigateSearchHistory(event.key === 'ArrowUp' ? -1 : 1)) event.preventDefault()
+                }
               }}
               type="search"
               aria-label="Search messages"
@@ -2122,7 +2227,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         ) : undefined}
         actions={(
           <>
-            <button type="button" onClick={activateSearch} aria-label="Find in chat" title="Find in chat" className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover">
+            <button type="button" onClick={() => activateSearch()} aria-label="Find in chat" title="Find in chat" className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover">
               <Search className="h-4 w-4" /><span className="foxwarm-chat-sm-label">Find</span>
             </button>
             {onOpenCode && (
