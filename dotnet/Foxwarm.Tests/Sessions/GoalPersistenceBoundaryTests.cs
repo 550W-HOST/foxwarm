@@ -28,18 +28,17 @@ public sealed class GoalPersistenceBoundaryTests
         var owner = await manager.CreateNamedAsync("main", "goal-owner", null, null);
         owner.Entry.WithState(state => state.AuthorityEnvelope["goalState"] = Goal("ship it"));
 
-        await owner.Entry.SaveLane.SaveStrictAsync();
-        Assert.Null(owner.Entry.Snapshot().AuthorityEnvelope["goalState"]);
-        Assert.Null(
-            (await owner.AuthorityStore.LoadAsync(owner.Id))!.AuthorityEnvelope["goalState"]
-        );
-        Assert.Equal(1, CountTasks(data));
-
         await manager.MoveIdentityAsync(
             owner,
             new JsonObject { ["newSessionId"] = "goal-owner-moved" }
         );
         var moved = await manager.RequiredAsync("goal-owner-moved");
+        Assert.Null(moved.Entry.Snapshot().AuthorityEnvelope["goalState"]);
+        Assert.Null(
+            (await moved.AuthorityStore.LoadAsync(moved.Id))!.AuthorityEnvelope["goalState"]
+        );
+        Assert.Equal(1, CountTasks(data));
+
         await moved.Entry.SaveLane.SaveStrictAsync();
         Assert.Equal(1, CountTasks(data));
     }
