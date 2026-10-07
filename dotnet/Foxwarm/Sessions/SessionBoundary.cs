@@ -50,11 +50,11 @@ internal static class SessionBoundary
         && state["resolved"]?.GetValue<bool>() != true;
 
     internal static bool IsNoAction(string? text) =>
-        !string.IsNullOrWhiteSpace(text)
+        text is not null
+        && SessionGoal.Trim(text) is { Length: > 0 } trimmed
         && (
-            text.Trim().Equals("NO_ACTION", StringComparison.Ordinal)
-            || text.Trim().Equals("[NO_ACTION]", StringComparison.Ordinal)
-            || text.TrimEnd().EndsWith("[NO_ACTION]", StringComparison.Ordinal)
+            trimmed.Equals("NO_ACTION", StringComparison.Ordinal)
+            || trimmed.EndsWith("[NO_ACTION]", StringComparison.Ordinal)
         );
 
     internal static string ChildReminder(string parentSessionId) =>

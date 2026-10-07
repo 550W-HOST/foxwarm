@@ -193,19 +193,7 @@ public sealed partial class LocalSessionTurnHost
                                 || parent is not null && receipt.SuccessfulSendTarget == parent
                             );
                         if (validReceipt)
-                        {
-                            try
-                            {
-                                await entry.SaveLane.ResolveChildHandoffAsync().ConfigureAwait(false);
-                            }
-                            catch (IOException error)
-                            {
-                                // The task/send effect is already durable. Do not turn its
-                                // truthful tool result into tool_error when this later owner
-                                // boundary publication fails.
-                                entry.RecordBestEffortFailure(error);
-                            }
-                        }
+                            await entry.SaveLane.ResolveChildHandoffAsync().ConfigureAwait(false);
                     }
 
                     if (
