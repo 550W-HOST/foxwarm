@@ -23,6 +23,14 @@ The manifest phase is neutral refs-only input after repair/visibility and before
 
 Successful provider result write failure is diagnostic-only: `ModelRequestOwner` warns and returns the result without duplicating provider retry. Journal records never reconstruct missing active Session JSON or authorize replay.
 
+## Stored format, reconstruction, and migration
+
+The independent SQLite journal uses WAL/FULL durability and immediate write transactions; it is not an Archive dual-write. Content-addressed objects hold neutral messages, prompts, schemas, and results. Request manifests use checkpoints and bounded deltas with a maximum delta depth of eight. Reads reconstruct references and distinguish corrupt records from supported `legacy-partial` results. List pagination orders by the stable `(createdAt, requestId)` cursor rather than a timestamp alone.
+
+The journal-local JSON codec preserves the compatible key ordering, finite binary64 number rendering, lowercase control escapes, Unicode, and lone-surrogate behavior used for object identity and exported records. It does not change the general application JSON codec. Import/read/CLI paths must not pass strings through a lossy conversion before validation or output.
+
+Legacy JSONL import validates the versioned record shapes, object hashes/kinds, manifests, attempt references, and conflicts. It performs bounded first-pass writes and a full-file read-only verification before committing completed import authority and moving the source to its backup. UTF-8 framing and byte offsets matter: invalid, conflicting, or incomplete input must retain the source and must not be declared fully imported. Existing SQLite authority and the atomic old attempt-start prompt-column upgrade remain separate startup checks. Explicit JSONL export reads a consistent SQLite snapshot; ordinary requests do not maintain a second JSONL authority.
+
 ## Tests
 
 `dotnet/Foxwarm.Tests/Models/LlmRequestJournalTests.cs`; `LlmRequestJournalQualificationTests.cs`; `RequestHistoryRepairTests.cs`; `ResponsesClientTests.cs`; DevTools journal fixtures.

@@ -9,7 +9,7 @@ Runs Main-local Monty ToolScript slices, routes the supported host calls, persis
 ## Stable methods and callers
 
 - `MainToolScript.ExecuteAsync` admits one operation while shutdown is open; `StartAsync`, `ContinueAsync`, `RequiredAsync`, `CancelAsync`, `BeginShutdown`, `DrainAsync`, and `DisposeAsync` own start/continue/read/cancel/process-lifecycle behavior.
-- `MainToolScript.Execution.RunAsync` drives one configured worker or snapshot continuation; `MainToolScript.HostCalls.HostCallAsync` admits `call_tool`, `ask_agent`, and `request_model_without_context`, records subcalls, and returns progress/results through `ToolScriptContext`.
+- `MainToolScript.RunAsync` (the Execution partial) drives one configured worker or snapshot continuation; `MainToolScript.HostCallAsync` (the HostCalls partial) admits `call_tool`, `ask_agent`, and `request_model_without_context`, records subcalls, and returns progress/results through `ToolScriptContext`.
 - `MontyWorker.ConfigureAsync`, `TurnAsync`, `Kill`, and `DisposeAsync` own the native Linux x64 Monty 0.0.19 subprocess protocol and watchdog; waiting runs retain snapshots rather than a live worker.
 - `MontyFrameBudget.Parse`/`Preflight` inspect the fixed protobuf envelope before generated materialization: each frame is capped at 256 MiB and protocol nesting at depth 100.
 - `ToolScriptDataBudget.Charge`, `Retain`, `JsonPreflight`, `ParseJson`, `JsonValue`, and `ReadRecordAsync` charge conservative per-activity materialization; `ToolScriptStdout.Append` enforces the cumulative 64 MiB UTF-8 stdout limit. `ToolScriptBudgetBuffer` charges incremental JSON tokens while serializing opaque values.
