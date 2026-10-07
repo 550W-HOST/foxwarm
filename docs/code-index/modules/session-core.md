@@ -27,6 +27,7 @@ Canonical image references in live history, queues, archives, and forks are owne
 - [src-managed-sessions](../units/src-managed-sessions.md) — exclusive leases, inbox interception, step execution, and controller wakeup.
 - [src-session-goal](../units/src-session-goal.md) — long-horizon goal persistence and bounded reminders.
 - C# `Sessions/TaskStore.cs` and `Sessions/TaskService.cs` — Main-local lazy task SQLite authority, strict action transitions, bounded projections, canonical Session-ID references, and post-commit notification delivery. Deferred Goal/child/reminder consumers remain outside Phase 7A.
+- [.NET Main task authority](../units/dotnet-tasks.md) — task storage, service/notification semantics, authenticated API and model-facing callers.
 
 Active history transformation, compaction, archive-store, and vector retrieval are owned by [session context](./session-context.md).
 

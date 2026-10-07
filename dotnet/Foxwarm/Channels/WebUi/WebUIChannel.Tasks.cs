@@ -6,6 +6,12 @@ namespace Foxwarm.Channels.WebUi;
 
 internal sealed partial class WebUIChannel
 {
+    private static IResult TaskErrorResult(TaskError error) =>
+        Results.Json(
+            new { code = error.Code, error = error.Message },
+            statusCode: error.StatusCode
+        );
+
     private void RegisterTaskRoutes(WebApplication app)
     {
         app.MapGet(
@@ -14,18 +20,20 @@ internal sealed partial class WebUIChannel
             {
                 try
                 {
+                    foreach (var key in request.Query.Keys)
+                        if (key is not ("status" or "limit"))
+                            throw new TaskError("TASK_INVALID_ARGS", "Invalid task query.");
                     var args = new JsonObject { ["action"] = "list" };
                     if (request.Query.TryGetValue("status", out var status))
                         args["status"] = status.ToString();
-                    var limit = 50;
-                    if (
-                        request.Query.TryGetValue("limit", out var rawLimit)
-                        && !int.TryParse(rawLimit.ToString(), out limit)
-                    )
-                        throw new TaskError(
-                            "TASK_INVALID_ARGS",
-                            "limit must be an integer from 1 to 50."
-                        );
+                    int? limit = null;
+                    if (request.Query.TryGetValue("limit", out var rawLimit))
+                    {
+                        var raw = rawLimit.ToString();
+                        if (!System.Text.RegularExpressions.Regex.IsMatch(raw, "^[1-9]\\d*$"))
+                            throw new TaskError("TASK_INVALID_ARGS", "Invalid task query.");
+                        limit = int.TryParse(raw, out var parsed) ? parsed : 51;
+                    }
                     return Results.Ok(
                         sessions
                             .Tasks.ExecuteForWebUiAsync(args, null, limit)
@@ -35,12 +43,9 @@ internal sealed partial class WebUIChannel
                 }
                 catch (TaskError error)
                 {
-                    return Results.Json(
-                        new { code = error.Code, error = error.Message },
-                        statusCode: error.StatusCode
-                    );
+                    return TaskErrorResult(error);
                 }
-                catch (Exception)
+                catch
                 {
                     return Results.Json(
                         new { code = "TASK_READ_FAILED", error = "Tasks could not be loaded." },
@@ -49,12 +54,18 @@ internal sealed partial class WebUIChannel
                 }
             }
         );
+
         app.MapGet(
             "/api/tasks/{id}",
-            (string id) =>
+            (HttpRequest request, string id) =>
             {
                 try
                 {
+                    if (request.Query.Count > 0)
+                        throw new TaskError(
+                            "TASK_INVALID_ARGS",
+                            "Task details do not accept query parameters."
+                        );
                     var result = sessions
                         .Tasks.ExecuteForWebUiAsync(
                             new JsonObject { ["action"] = "get", ["taskId"] = id },
@@ -66,12 +77,9 @@ internal sealed partial class WebUIChannel
                 }
                 catch (TaskError error)
                 {
-                    return Results.Json(
-                        new { code = error.Code, error = error.Message },
-                        statusCode: error.StatusCode
-                    );
+                    return TaskErrorResult(error);
                 }
-                catch (Exception)
+                catch
                 {
                     return Results.Json(
                         new { code = "TASK_READ_FAILED", error = "Tasks could not be loaded." },
@@ -80,6 +88,7 @@ internal sealed partial class WebUIChannel
                 }
             }
         );
+
         MapTaskWrite(app, "/api/tasks", "create", false, 201);
         MapTaskWrite(app, "/api/tasks/{id}/claim", "claim", true, 200);
         MapTaskWrite(app, "/api/tasks/{id}/assign", "assign", true, 200);
@@ -101,19 +110,32 @@ internal sealed partial class WebUIChannel
         {
             try
             {
+                if (context.Request.Query.Count > 0)
+                    throw new TaskError(
+                        "TASK_INVALID_ARGS",
+                        "Task operations do not accept query parameters."
+                    );
                 var body =
                     await JsonNode.ParseAsync(context.Request.Body) as JsonObject
                     ?? throw new TaskError(
                         "TASK_INVALID_ARGS",
                         "Task operations require a JSON object body."
                     );
-                var target = body["sessionId"]?.GetValue<string>();
-                if (target is not null && (target.Length == 0 || target.Length > 256))
-                    throw new TaskError(
-                        "TASK_INVALID_ARGS",
-                        "sessionId must identify an existing Session."
-                    );
-                body.Remove("sessionId");
+                string? target = null;
+                if (body.ContainsKey("sessionId"))
+                {
+                    if (
+                        body["sessionId"] is not JsonValue value
+                        || !value.TryGetValue<string>(out target)
+                        || string.IsNullOrWhiteSpace(target)
+                        || target.Length > 256
+                    )
+                        throw new TaskError(
+                            "TASK_INVALID_ARGS",
+                            "sessionId must identify an existing Session."
+                        );
+                    body.Remove("sessionId");
+                }
                 if (body.ContainsKey("action") || body.ContainsKey("taskId"))
                     throw new TaskError(
                         "TASK_INVALID_ARGS",
@@ -128,27 +150,23 @@ internal sealed partial class WebUIChannel
             }
             catch (TaskError error)
             {
-                await Results
-                    .Json(
-                        new { code = error.Code, error = error.Message },
-                        statusCode: error.StatusCode
+                await TaskErrorResult(error).ExecuteAsync(context);
+            }
+            catch (JsonException)
+            {
+                await TaskErrorResult(
+                        new TaskError(
+                            "TASK_INVALID_ARGS",
+                            "Task operations require a JSON object body."
+                        )
                     )
                     .ExecuteAsync(context);
             }
-            catch (JsonException error)
+            catch
             {
                 await Results
                     .Json(
-                        new { code = "TASK_INVALID_ARGS", error = error.Message },
-                        statusCode: 400
-                    )
-                    .ExecuteAsync(context);
-            }
-            catch (Exception error)
-            {
-                await Results
-                    .Json(
-                        new { code = "TASK_WRITE_FAILED", error = error.Message },
+                        new { code = "TASK_WRITE_FAILED", error = "Task operation failed." },
                         statusCode: 500
                     )
                     .ExecuteAsync(context);

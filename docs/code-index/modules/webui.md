@@ -15,6 +15,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 - [webui-chat-shared](../units/webui-chat-shared.md), [timeline](../units/webui-chat-timeline.md), [pasted text](../units/webui-pasted-text.md), [tool timeline](../units/webui-tool-timeline.md) — sanitized rendering, user pasted-text previews, and progress/tool cards.
 - [webui-workbench](../units/webui-workbench.md) — persisted tab/pane layout and compatibility normalization.
 - [webui-setup-view](../units/webui-setup-view.md), [webui-settings](../units/webui-settings.md), [settings menu](../units/webui-settings-menu.md).
+- [webui-tasks](../units/webui-tasks.md) — bounded read-only Tasks singleton, Table/Board/detail views and refresh cancellation.
 - [webui-theme-system](../units/webui-theme-system.md) — versioned portable manifests, built-ins, browser-local registry/selection, semantic runtime, Setup management, and renderer adapters.
 - [webui-terminal](../units/webui-terminal.md) — xterm browser client.
 - [webui-editor](../units/webui-editor.md), [small components](../units/webui-small-components.md).

@@ -99,6 +99,12 @@ public sealed partial class LocalSessionTurnHost
                 meta["toolScriptSubCalls"] = scriptCalls.DeepClone();
                 response["__meta"] = meta;
             }
+            if (result.ToolPostAction is { } postAction)
+            {
+                var meta = response["__meta"] as JsonObject ?? new JsonObject();
+                meta["toolPostAction"] = postAction.DeepClone();
+                response["__meta"] = meta;
+            }
             var wrapper = new JsonObject
             {
                 ["role"] = "tool",

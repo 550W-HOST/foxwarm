@@ -82,7 +82,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         Tasks = new TaskService(
             this,
             this.root,
-            id => SessionCatalog.Text(Catalog.Resolve(id)["sessionId"])
+            id => ResolveTaskSessionId(id),
+            id => TaskSessionAliases(id)
         );
         Catalog.Changed += () => TopologyChanged?.Invoke();
         Catalog.BeforePresentationMutation = BeginCatalogMutation;
@@ -209,6 +210,21 @@ internal sealed partial class SessionManager : IAsyncDisposable
         waitTimeouts = new SessionWaitTimeouts(this);
         waitLiveness = new WaitLiveness(this);
     }
+
+    internal string? ResolveTaskSessionId(string requested)
+    {
+        var resolution = Catalog.Resolve(requested);
+        return SessionCatalog.Text(resolution["sessionId"]);
+    }
+
+    internal IReadOnlyList<string> TaskSessionAliases(string id) =>
+        Catalog.Get(id)?["aliases"] is JsonArray aliases
+            ? aliases
+                .Select(SessionCatalog.Text)
+                .Where(value => value is not null)
+                .Cast<string>()
+                .ToArray()
+            : [];
 
     public Task LoadAsync() => LoadOwnersAsync(startMainServices: false);
 

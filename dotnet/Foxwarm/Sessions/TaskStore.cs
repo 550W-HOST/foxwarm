@@ -44,11 +44,13 @@ internal sealed class TaskStore : IDisposable
     internal TaskStoreResult Execute(JsonObject args, string? actor, int? httpLimit = null)
     {
         Validate(args, httpLimit);
+        var action = Text(args["action"]);
+        if (action is not ("list" or "get") && string.IsNullOrEmpty(actor))
+            throw new TaskError("TASK_INVALID_ARGS", "task requires a current Session.");
         lock (gate)
         {
             var db = Open();
-            var read = Text(args["action"]) is "list" or "get";
-            db.Open();
+            var read = action is "list" or "get";
             if (read)
             {
                 using var tx = db.BeginTransaction(System.Data.IsolationLevel.Serializable);
@@ -67,10 +69,6 @@ internal sealed class TaskStore : IDisposable
                     catch { }
                     throw;
                 }
-                finally
-                {
-                    db.Close();
-                }
             }
             db.ExecuteNonQuery("BEGIN IMMEDIATE");
             try
@@ -88,10 +86,6 @@ internal sealed class TaskStore : IDisposable
                 catch { }
                 throw;
             }
-            finally
-            {
-                db.Close();
-            }
         }
     }
 
@@ -103,18 +97,10 @@ internal sealed class TaskStore : IDisposable
         lock (gate)
         {
             var db = Open();
-            db.Open();
-            try
-            {
-                var row = Read(db, id);
-                return row is null
-                    ? null
-                    : Text(row["ownerSessionId"]) ?? Text(row["createdBySessionId"]);
-            }
-            finally
-            {
-                db.Close();
-            }
+            var row = Read(db, id);
+            return row is null
+                ? null
+                : Canonical(Text(row["ownerSessionId"]) ?? Text(row["createdBySessionId"]));
         }
     }
 
@@ -123,8 +109,6 @@ internal sealed class TaskStore : IDisposable
         lock (gate)
         {
             var db = Open();
-            db.Open();
-            using var tx = db.BeginTransaction();
             db.ExecuteNonQuery("BEGIN IMMEDIATE");
             try
             {
@@ -138,20 +122,16 @@ internal sealed class TaskStore : IDisposable
                 if (revision is not null)
                     cmd.Parameters.AddWithValue("$revision", revision.Value);
                 cmd.ExecuteNonQuery();
-                tx.Commit();
+                db.ExecuteNonQuery("COMMIT");
             }
             catch
             {
                 try
                 {
-                    tx.Rollback();
+                    db.ExecuteNonQuery("ROLLBACK");
                 }
                 catch { }
                 throw;
-            }
-            finally
-            {
-                db.Close();
             }
         }
     }
@@ -170,10 +150,11 @@ internal sealed class TaskStore : IDisposable
             var where = status is null ? "status IN ('open','active')" : "status=$status";
             var rows = Query(
                 db,
-                $"SELECT * FROM tasks WHERE {where} ORDER BY updatedAt DESC,id LIMIT $limit",
+                $"SELECT id,title,status,parentTaskId,createdBySessionId,ownerSessionId,updatedAt FROM tasks WHERE {where} ORDER BY updatedAt DESC,id LIMIT $limit",
                 status,
                 Math.Min(ListLimit, Math.Max(1, limit))
             );
+            rows = rows.Select(CanonicalReferences).ToList();
             var total = ScalarInt(db, $"SELECT COUNT(*) FROM tasks WHERE {where}", status);
             return new(
                 TaskJson(
@@ -224,7 +205,7 @@ internal sealed class TaskStore : IDisposable
         actor = Canonical(
             actor ?? throw new TaskError("TASK_INVALID_ARGS", "task requires a current Session.")
         );
-        var owner = Text(task["ownerSessionId"]);
+        var owner = Canonical(Text(task["ownerSessionId"]));
         var creator = Canonical(Text(task["createdBySessionId"])!);
         TaskAssignmentPlan? plan = null;
         var completed = false;
@@ -275,15 +256,19 @@ internal sealed class TaskStore : IDisposable
                     var changed = owner != requested;
                     var revision = Int(task["assignmentRevision"]) + (changed ? 1 : 0);
                     var previous = changed ? owner : Text(task["previousOwnerSessionId"]);
+                    var previousStatus = changed
+                        ? null
+                        : Text(task["previousOwnerNotificationStatus"]);
+                    var newStatus = changed ? null : Text(task["assignmentNotificationStatus"]);
                     var notifyNew =
                         args["notifySession"]?.GetValue<bool>() == true
                         && requested is not null
-                        && (!Text(task["assignmentNotificationStatus"]).IsIn("failed", "sent"));
+                        && (newStatus is null or "failed");
                     var notifyPrevious =
                         args["notifySession"]?.GetValue<bool>() == true
                         && previous is not null
                         && previous != requested
-                        && (changed || Text(task["previousOwnerNotificationStatus"]) == "failed");
+                        && (changed || previousStatus == "failed");
                     Update(
                         db,
                         taskId,
@@ -298,10 +283,22 @@ internal sealed class TaskStore : IDisposable
                         "previousOwnerSessionId",
                         previous,
                         "assignmentNotificationStatus",
-                        notifyNew ? "pending" : Text(task["assignmentNotificationStatus"]),
+                        notifyNew ? "pending" : newStatus,
                         "previousOwnerNotificationStatus",
-                        notifyPrevious ? "pending" : Text(task["previousOwnerNotificationStatus"])
+                        notifyPrevious ? "pending" : previousStatus,
+                        "reminderLastSeq",
+                        changed && requested == actor ? null : task["reminderLastSeq"],
+                        "reminderMessageCount",
+                        changed ? 0 : task["reminderMessageCount"]
                     );
+                    if (changed)
+                        AddNote(
+                            db,
+                            taskId,
+                            actor!,
+                            $"Owner changed from {owner ?? "unclaimed"} to {requested ?? "unclaimed"}.",
+                            now2
+                        );
                     plan = new(
                         revision,
                         notifyNew ? requested : null,
@@ -320,7 +317,7 @@ internal sealed class TaskStore : IDisposable
                         now2
                     );
                     if (args["note"] is not null)
-                        AddNote(db, taskId, actor, Text(args["note"])!, now2);
+                        AddNote(db, taskId, actor!, Text(args["note"])!, now2);
                     break;
                 case "complete":
                     Update(
@@ -351,13 +348,11 @@ internal sealed class TaskStore : IDisposable
                         now2
                     );
                     if (args["reason"] is not null)
-                        AddNote(db, taskId, actor, Text(args["reason"])!, now2);
+                        AddNote(db, taskId, actor!, Text(args["reason"])!, now2);
                     break;
             }
         }
         var payload = new JsonObject { ["task"] = Public(db, taskId) };
-        if (plan is not null)
-            payload["assignmentNotificationStatus"] = "pending";
         return new(TaskJson(payload), plan, completed);
     }
 
@@ -385,6 +380,8 @@ internal sealed class TaskStore : IDisposable
             id
         );
         notes.Reverse();
+        notes = notes.Select(CanonicalReferences).ToList();
+        children = children.Select(CanonicalReferences).ToList();
         var noteCount = ScalarInt(db, "SELECT COUNT(*) FROM task_notes WHERE taskId=$id", null, id);
         return new JsonObject
         {
@@ -410,10 +407,9 @@ internal sealed class TaskStore : IDisposable
             }
         )
             row.Remove(key);
-        foreach (var key in row.Select(x => x.Key).ToArray())
-            if (key is "description" && row[key]?.GetValue<string>() is { Length: > 4000 } text)
-                row[key] = text[..3999] + "…";
-        return row;
+        if (Text(row["description"]) is { Length: > 4000 } description)
+            row["description"] = description[..3999] + "…";
+        return CanonicalReferences(row);
     }
 
     private JsonObject? Read(SqliteConnection db, string id)
@@ -432,6 +428,22 @@ internal sealed class TaskStore : IDisposable
             row[reader.GetName(i)] = reader.IsDBNull(i)
                 ? null
                 : JsonValue.Create(reader.GetValue(i));
+        return row;
+    }
+
+    private JsonObject CanonicalReferences(JsonObject row)
+    {
+        foreach (
+            var key in new[]
+            {
+                "createdBySessionId",
+                "ownerSessionId",
+                "attachedSessionId",
+                "previousOwnerSessionId",
+            }
+        )
+            if (Text(row[key]) is { } value)
+                row[key] = Canonical(value);
         return row;
     }
 
@@ -500,7 +512,6 @@ internal sealed class TaskStore : IDisposable
             sets.Add($"{key}=$p{i}");
             Add(cmd, $"$p{i}", values[i + 1]);
         }
-        sets.Add("id=id");
         cmd.CommandText = $"UPDATE tasks SET {string.Join(',', sets)} WHERE id=$id";
         Add(cmd, "$id", id);
         cmd.ExecuteNonQuery();
@@ -509,11 +520,11 @@ internal sealed class TaskStore : IDisposable
     private static void Add(SqliteCommand cmd, string name, object? value) =>
         cmd.Parameters.AddWithValue(name, value ?? DBNull.Value);
 
-    private string Canonical(string id) => resolveAlias(id) ?? id;
+    private string? Canonical(string? id) => id is null ? null : resolveAlias(id) ?? id;
 
     private IReadOnlyList<string> References(string id) =>
-        new[] { Canonical(id) }
-            .Concat(aliases(Canonical(id)))
+        new[] { Canonical(id) ?? id }
+            .Concat(aliases(Canonical(id) ?? id))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
 
@@ -522,8 +533,16 @@ internal sealed class TaskStore : IDisposable
     private static string? Text(JsonNode? node) =>
         node is JsonValue v && v.TryGetValue<string>(out var text) ? text : null;
 
-    private static int Int(JsonNode? node) =>
-        node is JsonValue v && v.TryGetValue<int>(out var value) ? value : 0;
+    private static int Int(JsonNode? node)
+    {
+        if (node is not JsonValue value)
+            return 0;
+        if (value.TryGetValue<int>(out var integer))
+            return integer;
+        if (value.TryGetValue<long>(out var longValue))
+            return checked((int)longValue);
+        return value.TryGetValue<double>(out var doubleValue) ? checked((int)doubleValue) : 0;
+    }
 
     private SqliteConnection Open()
     {
@@ -533,7 +552,6 @@ internal sealed class TaskStore : IDisposable
             connection = new SqliteConnection($"Data Source={path};Cache=Shared");
             connection.Open();
             Initialize(connection);
-            connection.Close();
         }
         return connection;
     }
@@ -541,7 +559,9 @@ internal sealed class TaskStore : IDisposable
     private static void Initialize(SqliteConnection db)
     {
         db.ExecuteNonQuery(
-            "PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY,title TEXT NOT NULL,description TEXT,status TEXT NOT NULL CHECK(status IN ('open','active','completed','cancelled')),parentTaskId TEXT REFERENCES tasks(id),createdBySessionId TEXT NOT NULL,ownerSessionId TEXT,result TEXT,createdAt INTEGER NOT NULL,updatedAt INTEGER NOT NULL,completedAt INTEGER,cancelledAt INTEGER,completionNotificationStatus TEXT,assignmentNotificationStatus TEXT,previousOwnerSessionId TEXT,previousOwnerNotificationStatus TEXT,assignmentRevision INTEGER NOT NULL DEFAULT 0,attachedSessionId TEXT,legacyGoalSessionId TEXT,reminderLastSeq INTEGER,reminderMessageCount INTEGER NOT NULL DEFAULT 0); CREATE INDEX IF NOT EXISTS tasks_status ON tasks(status,updatedAt); CREATE INDEX IF NOT EXISTS tasks_parent ON tasks(parentTaskId,createdAt); CREATE INDEX IF NOT EXISTS tasks_self_owned ON tasks(createdBySessionId,ownerSessionId,status,createdAt,id); CREATE TABLE IF NOT EXISTS task_notes(id INTEGER PRIMARY KEY,taskId TEXT NOT NULL REFERENCES tasks(id),sessionId TEXT NOT NULL,text TEXT NOT NULL,createdAt INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS task_notes_task ON task_notes(taskId,id); CREATE UNIQUE INDEX IF NOT EXISTS tasks_legacy_goal ON tasks(legacyGoalSessionId);"
+            "PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; "
+                + "CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY,title TEXT NOT NULL,description TEXT,status TEXT NOT NULL CHECK(status IN ('open','active','completed','cancelled')),parentTaskId TEXT REFERENCES tasks(id),createdBySessionId TEXT NOT NULL,ownerSessionId TEXT,result TEXT,createdAt INTEGER NOT NULL,updatedAt INTEGER NOT NULL,completedAt INTEGER,cancelledAt INTEGER); "
+                + "CREATE TABLE IF NOT EXISTS task_notes(id INTEGER PRIMARY KEY,taskId TEXT NOT NULL REFERENCES tasks(id),sessionId TEXT NOT NULL,text TEXT NOT NULL,createdAt INTEGER NOT NULL);"
         );
         foreach (
             var column in new[]
@@ -568,6 +588,13 @@ internal sealed class TaskStore : IDisposable
             if (!found)
                 db.ExecuteNonQuery($"ALTER TABLE tasks ADD COLUMN {column.Item1} {column.Item2}");
         }
+        db.ExecuteNonQuery(
+            "CREATE INDEX IF NOT EXISTS tasks_status ON tasks(status,updatedAt); "
+                + "CREATE INDEX IF NOT EXISTS tasks_parent ON tasks(parentTaskId,createdAt); "
+                + "CREATE INDEX IF NOT EXISTS tasks_self_owned ON tasks(createdBySessionId,ownerSessionId,status,createdAt,id); "
+                + "CREATE INDEX IF NOT EXISTS task_notes_task ON task_notes(taskId,id); "
+                + "CREATE UNIQUE INDEX IF NOT EXISTS tasks_legacy_goal ON tasks(legacyGoalSessionId);"
+        );
     }
 
     public void Dispose()

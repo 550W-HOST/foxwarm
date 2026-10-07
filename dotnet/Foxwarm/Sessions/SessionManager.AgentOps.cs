@@ -255,7 +255,8 @@ internal sealed partial class SessionManager
         SessionOwner source,
         string requestedTarget,
         string message,
-        JsonObject? toolArgs = null
+        JsonObject? toolArgs = null,
+        bool trigger = true
     )
     {
         var targetId = ResolveSessionReference(source, requestedTarget);
@@ -312,7 +313,8 @@ internal sealed partial class SessionManager
             throw;
         }
         if (
-            Accepting
+            trigger
+            && Accepting
             && target.Entry.WithState(state =>
                 !state.Busy && !state.Stopping && state.Queue.Count > 0
             )
