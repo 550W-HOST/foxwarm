@@ -33,6 +33,7 @@ public sealed record ResponsesStreamPart(
     int? ContentIndex = null,
     int? SummaryIndex = null,
     string? Text = null,
+    string? Phase = null,
     string? Status = null
 );
 
@@ -477,26 +478,60 @@ public sealed class ResponsesEventAccumulator
                 String(x.Value, "arguments")
             ))
             .ToList();
-        var parts = outputItems
-            .OrderBy(x => x.Key)
-            .Select(x =>
+        var parts = new List<ResponsesStreamPart>();
+        foreach (var pair in outputItems.OrderBy(x => x.Key))
+        {
+            var outputIndex = pair.Key;
+            var item = pair.Value;
+            switch (String(item, "type"))
             {
-                var item = x.Value;
-                var kind = String(item, "type") switch
-                {
-                    "image_generation_call" => "image-generation",
-                    "function_call" => "tool-call",
-                    "reasoning" => "reasoning",
-                    "message" => "message",
-                    _ => null,
-                };
-                return kind is null
-                    ? null
-                    : new ResponsesStreamPart(x.Key, kind, Status: String(item, "status"));
-            })
-            .OfType<ResponsesStreamPart>()
-            .ToList()
-            .AsReadOnly();
+                case "reasoning":
+                    foreach (
+                        var summary in summaryParts
+                            .Where(value =>
+                                value.Key.Output == outputIndex && value.Value.Length > 0
+                            )
+                            .OrderBy(value => value.Key.Summary)
+                    )
+                        parts.Add(
+                            new(
+                                outputIndex,
+                                "reasoning",
+                                SummaryIndex: summary.Key.Summary,
+                                Text: summary.Value
+                            )
+                        );
+                    break;
+                case "message" when item["content"] is JsonArray content:
+                    for (var contentIndex = 0; contentIndex < content.Count; contentIndex++)
+                    {
+                        if (content[contentIndex] is not JsonObject contentPart)
+                            continue;
+                        var type = String(contentPart, "type");
+                        if (type is not ("output_text" or "refusal"))
+                            continue;
+                        parts.Add(
+                            new(
+                                outputIndex,
+                                "text",
+                                ContentIndex: contentIndex,
+                                Text: String(
+                                    contentPart,
+                                    type == "output_text" ? "text" : "refusal"
+                                ),
+                                Phase: String(item, "phase")
+                            )
+                        );
+                    }
+                    break;
+                case "function_call":
+                    parts.Add(new(outputIndex, "tool-call"));
+                    break;
+                case "image_generation_call":
+                    parts.Add(new(outputIndex, "image-generation", Status: String(item, "status")));
+                    break;
+            }
+        }
         return new ResponsesStreamProgress(reasoning, text, calls.AsReadOnly(), parts);
     }
 

@@ -105,7 +105,6 @@ internal sealed partial class SessionOwner
                 ["text"] = "",
                 ["reasoning"] = "",
                 ["toolCalls"] = new JsonArray(),
-                ["parts"] = new JsonArray(),
             };
             payload = new JsonObject
             {
@@ -132,6 +131,7 @@ internal sealed partial class SessionOwner
                 return;
             var previousText = draft["text"]?.GetValue<string>() ?? "";
             var previousReasoning = draft["reasoning"]?.GetValue<string>() ?? "";
+            var hasParts = progress.Parts is not null || draft["parts"] is JsonArray;
             var previousParts = (draft["parts"] as JsonArray ?? new JsonArray())
                 .OfType<JsonObject>()
                 .ToDictionary(PartKey);
@@ -192,6 +192,8 @@ internal sealed partial class SessionOwner
                     delta["contentIndex"] = part.ContentIndex;
                 if (part.SummaryIndex is not null)
                     delta["summaryIndex"] = part.SummaryIndex;
+                if (part.Phase is not null)
+                    delta["phase"] = part.Phase;
                 if (old is null)
                     delta["added"] = true;
                 if (part.Status is not null && part.Status != old?["status"]?.GetValue<string>())
@@ -225,7 +227,8 @@ internal sealed partial class SessionOwner
             draft["text"] = progress.Text;
             draft["reasoning"] = progress.Reasoning;
             draft["toolCalls"] = newCalls;
-            draft["parts"] = newParts;
+            if (hasParts)
+                draft["parts"] = newParts;
             var update = new JsonObject
             {
                 ["type"] = "model-stream-update",
@@ -281,6 +284,8 @@ internal sealed partial class SessionOwner
             result["contentIndex"] = part.ContentIndex;
         if (part.SummaryIndex is not null)
             result["summaryIndex"] = part.SummaryIndex;
+        if (part.Phase is not null)
+            result["phase"] = part.Phase;
         if (part.Text is not null)
             result["text"] = part.Text;
         if (part.Status is not null)
