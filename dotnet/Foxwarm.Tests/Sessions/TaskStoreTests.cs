@@ -7,6 +7,59 @@ namespace Foxwarm.Tests;
 public sealed class TaskStoreTests
 {
     [Fact]
+    public void LegacyGoalMigrationIsIdempotentAndContextCheckpointIsBounded()
+    {
+        using var temp = new TempDirectory();
+        using var store = new TaskStore(temp.Path, id => id, _ => []);
+        var goal = new string('g', 4000) + "-tail";
+        store.MigrateLegacyGoal("main", goal, 12);
+        store.MigrateLegacyGoal("main", goal, 12);
+        var listed = store.Execute(new JsonObject { ["action"] = "list" }, "main");
+        Assert.Single(listed.Payload["tasks"]!.AsArray());
+        var loaded = store.Execute(
+            new JsonObject
+            {
+                ["action"] = "get",
+                ["taskId"] = listed.Payload["tasks"]![0]!["id"]!.GetValue<string>(),
+            },
+            "main"
+        );
+        Assert.Equal(4000, loaded.Payload["task"]!["description"]!.GetValue<string>().Length);
+        using var db = new SqliteConnection(
+            $"Data Source={Path.Combine(temp.Path, "state", "tasks.sqlite")}"
+        );
+        db.Open();
+        using var command = db.CreateCommand();
+        command.CommandText = "SELECT description FROM tasks";
+        Assert.Equal(goal, command.ExecuteScalar()?.ToString());
+        var context = store.TaskContext(
+            "main",
+            Enumerable.Range(13, 40).Select(value => (long)value).ToArray(),
+            false,
+            []
+        );
+        Assert.Empty(context);
+    }
+
+    [Fact]
+    public void AttachedChildClaimsAndBindsUnownedTask()
+    {
+        using var temp = new TempDirectory();
+        using var store = new TaskStore(temp.Path, id => id, _ => []);
+        var created = store.Execute(
+            new JsonObject { ["action"] = "create", ["title"] = "child" },
+            "parent"
+        );
+        var id = created.Payload["task"]!["id"]!.GetValue<string>();
+        store.BindChild(id, "child", 7);
+        var task = store
+            .Execute(new JsonObject { ["action"] = "get", ["taskId"] = id }, null)
+            .Payload["task"]!;
+        Assert.Equal("child", task["ownerSessionId"]!.GetValue<string>());
+        Assert.Equal("child", task["attachedSessionId"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void CreateClaimUpdateAndTerminalCompletionAreDurable()
     {
         using var temp = new TempDirectory();
