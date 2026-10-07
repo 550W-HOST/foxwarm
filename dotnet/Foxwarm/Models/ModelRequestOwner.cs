@@ -162,7 +162,7 @@ internal sealed class ModelRequestOwner(
                     journalIteration,
                     instructions,
                     requestDefaults.Tools ?? new JsonArray(),
-                    history,
+                    RequestHistoryRepair.SelectAndRepair(history),
                     captured.RouteKey,
                     cacheKey,
                     cancellationToken
@@ -233,12 +233,10 @@ internal sealed class ModelRequestOwner(
                     try
                     {
                         await journal
-                            .AppendAttemptResultAsync(
+                            .AppendChatResultAsync(
                                 currentJournalRequestId,
                                 currentJournalAttempt,
-                                "success",
-                                result.AssistantMessage,
-                                null,
+                                result,
                                 cancellationToken
                             )
                             .ConfigureAwait(false);
@@ -458,6 +456,10 @@ internal sealed class ModelRequestOwner(
                     token
                 )
                 .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception error)
         {

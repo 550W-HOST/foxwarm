@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -81,7 +82,11 @@ public sealed class LlmRequestJournalStore : IDisposable
             );
             var toolId = PutObject(connection, transaction, "tool-schema", toolDefinitions);
             var canonicalMessages = messages
-                .Where(message => message["modelVisible"]?.GetValue<bool>() != false)
+                .Where(message =>
+                    message["modelVisible"] is not JsonValue visibility
+                    || !visibility.TryGetValue<bool>(out var visible)
+                    || visible
+                )
                 .Select(CanonicalMessage)
                 .ToArray();
             var messageIds = canonicalMessages
@@ -243,6 +248,21 @@ public sealed class LlmRequestJournalStore : IDisposable
         }
     }
 
+    public Task AppendChatResultAsync(
+        string requestId,
+        int attempt,
+        ChatResult result,
+        CancellationToken token = default
+    ) =>
+        AppendAttemptResultAsync(
+            requestId,
+            attempt,
+            "success",
+            ToSourceResult(result),
+            null,
+            token
+        );
+
     public async Task<JsonObject> ReconstructAsync(
         string requestId,
         CancellationToken token = default
@@ -253,7 +273,19 @@ public sealed class LlmRequestJournalStore : IDisposable
         {
             using var connection = Open();
             EnsureSchema(connection);
-            return Reconstruct(connection, requestId);
+            try
+            {
+                return Reconstruct(connection, requestId);
+            }
+            catch (Exception error)
+            {
+                return new JsonObject
+                {
+                    ["requestId"] = requestId,
+                    ["completeness"] = "corrupt",
+                    ["errors"] = new JsonArray(error.Message),
+                };
+            }
         }
         finally
         {
@@ -323,30 +355,14 @@ public sealed class LlmRequestJournalStore : IDisposable
             var imported = ReadImportOffset(connection, fullPath);
             if (imported > sourceLength)
                 imported = 0;
-            using var stream = new FileStream(
-                fullPath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read,
-                8192,
-                true
-            );
-            stream.Position = imported;
-            using var reader = new StreamReader(
-                stream,
-                new UTF8Encoding(false, true),
-                detectEncodingFromByteOrderMarks: false
-            );
             long completeOffset = imported;
             using var transaction = connection.BeginTransaction(deferred: false);
             var requestIds = new HashSet<string>(StringComparer.Ordinal);
-            while (true)
+            await foreach (var item in ReadJsonlLinesAsync(fullPath, imported, token))
             {
                 token.ThrowIfCancellationRequested();
-                var line = await reader.ReadLineAsync(token).ConfigureAwait(false);
-                if (line is null)
-                    break;
-                completeOffset += Encoding.UTF8.GetByteCount(line) + 1;
+                var line = item.Line;
+                completeOffset = item.EndOffset;
                 if (line.Length == 0)
                     continue;
                 using var document = JsonDocument.Parse(line);
@@ -370,13 +386,19 @@ public sealed class LlmRequestJournalStore : IDisposable
                 state.ExecuteNonQuery();
             }
             transaction.Commit();
-            var backupDirectory = Path.Combine(root, "state", "migration-backup", MigrationId);
-            Directory.CreateDirectory(backupDirectory);
+            var stateRoot = Path.Combine(root, "state");
+            var relative = Path.GetRelativePath(stateRoot, fullPath);
+            if (relative.StartsWith("..", StringComparison.Ordinal))
+                relative = Path.GetFileName(fullPath);
             var backupPath = Path.Combine(
-                backupDirectory,
-                Path.GetFileName(fullPath) + "." + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                stateRoot,
+                "migration-backup",
+                MigrationId,
+                relative + "." + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             );
+            Directory.CreateDirectory(Path.GetDirectoryName(backupPath)!);
             File.Move(fullPath, backupPath);
+            SyncDirectory(Path.GetDirectoryName(backupPath)!);
             return sourceHash;
         }
         finally
@@ -501,6 +523,7 @@ public sealed class LlmRequestJournalStore : IDisposable
             writer.Dispose();
             snapshot.Commit();
             File.Move(temp, outputPath, true);
+            SyncDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
         }
         finally
         {
@@ -515,6 +538,80 @@ public sealed class LlmRequestJournalStore : IDisposable
             disposed = true;
             gate.Dispose();
         }
+    }
+
+    private static void SyncDirectory(string directory)
+    {
+        try
+        {
+            using var handle = new FileStream(
+                directory,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite
+            );
+            handle.Flush(true);
+        }
+        catch (Exception error)
+            when (error
+                    is IOException
+                        or UnauthorizedAccessException
+                        or PlatformNotSupportedException
+            )
+        {
+            System.Diagnostics.Trace.TraceWarning(
+                "LLM journal directory durability was unavailable: {0}",
+                error.Message
+            );
+        }
+    }
+
+    private static async IAsyncEnumerable<(string Line, long EndOffset)> ReadJsonlLinesAsync(
+        string path,
+        long startOffset,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token
+    )
+    {
+        await using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            8192,
+            true
+        );
+        stream.Position = startOffset;
+        var buffer = new byte[8192];
+        var line = new List<byte>();
+        var offset = startOffset;
+        while (true)
+        {
+            var count = await stream.ReadAsync(buffer, token).ConfigureAwait(false);
+            if (count == 0)
+                break;
+            for (var index = 0; index < count; index++)
+            {
+                var value = buffer[index];
+                offset++;
+                if (value == (byte)'\n')
+                {
+                    if (line.Count > 0 && line[^1] == (byte)'\r')
+                        line.RemoveAt(line.Count - 1);
+                    yield return (new UTF8Encoding(false, true).GetString(line.ToArray()), offset);
+                    line.Clear();
+                }
+                else
+                {
+                    line.Add(value);
+                    if (line.Count > 64 * 1024 * 1024)
+                        throw new InvalidDataException(
+                            "Legacy LLM request journal line exceeds the bounded import size."
+                        );
+                }
+            }
+        }
+        if (line.Count > 0)
+            yield return (new UTF8Encoding(false, true).GetString(line.ToArray()), offset);
     }
 
     private static long ReadImportOffset(SqliteConnection connection, string sourcePath)
@@ -566,6 +663,23 @@ public sealed class LlmRequestJournalStore : IDisposable
                 Add(command, "$payload", payload);
                 Add(command, "$created", record.GetProperty("createdAt").GetInt64());
                 command.ExecuteNonQuery();
+                using (var verify = connection.CreateCommand())
+                {
+                    verify.Transaction = transaction;
+                    verify.CommandText =
+                        "SELECT object_kind,payload,created_at FROM llm_journal_objects WHERE object_id=$id";
+                    Add(verify, "$id", objectId);
+                    using var existing = verify.ExecuteReader();
+                    if (
+                        !existing.Read()
+                        || existing.GetString(0) != objectKind
+                        || existing.GetString(1) != payload
+                        || existing.GetInt64(2) != record.GetProperty("createdAt").GetInt64()
+                    )
+                        throw new InvalidDataException(
+                            "Legacy object conflicts with SQLite authority."
+                        );
+                }
                 break;
             case "request":
                 var requestId =
@@ -733,6 +847,21 @@ public sealed class LlmRequestJournalStore : IDisposable
             CREATE TABLE IF NOT EXISTS llm_journal_import_state(source_path TEXT PRIMARY KEY,imported_size INTEGER NOT NULL,updated_at INTEGER NOT NULL);
             """;
         command.ExecuteNonQuery();
+        using var columns = connection.CreateCommand();
+        columns.CommandText = "PRAGMA table_info(llm_journal_attempt_starts)";
+        using var reader = columns.ExecuteReader();
+        var hasPrompt = false;
+        while (reader.Read())
+            if (reader.GetString(1) == "prompt_object_id")
+                hasPrompt = true;
+        reader.Close();
+        if (!hasPrompt)
+        {
+            using var alter = connection.CreateCommand();
+            alter.CommandText =
+                "ALTER TABLE llm_journal_attempt_starts ADD COLUMN prompt_object_id TEXT";
+            alter.ExecuteNonQuery();
+        }
     }
 
     private static string PutObject(
@@ -826,7 +955,7 @@ public sealed class LlmRequestJournalStore : IDisposable
     {
         using var command = connection.CreateCommand();
         command.CommandText =
-            "SELECT session_id,purpose,iteration,prompt_object_id,tool_schema_object_id,requested_model_key,prompt_cache_key_hash,message_count FROM llm_journal_requests WHERE request_id=$id";
+            "SELECT session_id,purpose,iteration,created_at,prompt_object_id,tool_schema_object_id,requested_model_key,prompt_cache_key_hash,message_count FROM llm_journal_requests WHERE request_id=$id";
         Add(command, "$id", requestId);
         using var reader = command.ExecuteReader();
         if (!reader.Read())
@@ -834,15 +963,22 @@ public sealed class LlmRequestJournalStore : IDisposable
             {
                 ["requestId"] = requestId,
                 ["completeness"] = "legacy-partial",
+                ["missing"] = new JsonArray(
+                    "request-manifest",
+                    "system-prompt",
+                    "tool-schema",
+                    "canonical-messages"
+                ),
             };
         var session = reader.IsDBNull(0) ? null : reader.GetString(0);
         var purpose = reader.GetString(1);
         var iteration = reader.GetInt32(2);
-        var promptId = reader.GetString(3);
-        var schemaId = reader.GetString(4);
-        var requested = reader.GetString(5);
-        var cache = reader.GetString(6);
-        var count = reader.GetInt32(7);
+        var createdAt = reader.GetInt64(3);
+        var promptId = reader.GetString(4);
+        var schemaId = reader.GetString(5);
+        var requested = reader.GetString(6);
+        var cache = reader.GetString(7);
+        var count = reader.GetInt32(8);
         reader.Close();
         var ids = ReconstructIds(connection, null, requestId);
         if (ids.Count != count)
@@ -865,59 +1001,65 @@ public sealed class LlmRequestJournalStore : IDisposable
                     );
                 using var resultCommand = connection.CreateCommand();
                 resultCommand.CommandText =
-                    "SELECT outcome,result_json,error_json,completed_at FROM llm_journal_attempt_results WHERE request_id=$id AND attempt=$attempt ORDER BY completed_at DESC LIMIT 1";
+                    "SELECT event_id,outcome,result_json,error_json,completed_at FROM llm_journal_attempt_results WHERE request_id=$id AND attempt=$attempt ORDER BY completed_at DESC LIMIT 1";
                 Add(resultCommand, "$id", requestId);
                 Add(resultCommand, "$attempt", attempt);
                 using var resultReader = resultCommand.ExecuteReader();
                 JsonObject? result = null;
                 if (resultReader.Read())
                 {
-                    var outcome = resultReader.GetString(0);
+                    var outcome = resultReader.GetString(1);
                     if (outcome is not ("success" or "failure" or "abort"))
                         throw new InvalidDataException(
                             "Journal has an invalid attempt result outcome."
                         );
-                    if (outcome == "success" && resultReader.IsDBNull(1))
+                    if (outcome == "success" && resultReader.IsDBNull(2))
                         throw new InvalidDataException(
                             "Journal success result is missing payload."
                         );
-                    if (outcome != "success" && resultReader.IsDBNull(2))
+                    if (outcome != "success" && resultReader.IsDBNull(3))
                         throw new InvalidDataException("Journal failure result is missing error.");
                     result = new JsonObject
                     {
-                        ["outcome"] = outcome,
-                        ["completedAt"] = resultReader.GetInt64(3),
-                        ["result"] = resultReader.IsDBNull(1)
-                            ? null
-                            : Codec.Parse(resultReader.GetString(1)),
-                        ["error"] = resultReader.IsDBNull(2)
-                            ? null
-                            : Codec.Parse(resultReader.GetString(2)),
-                    };
-                }
-                attempts.Add(
-                    new JsonObject
-                    {
-                        ["eventId"] = startReader.GetString(0),
+                        ["v"] = 1,
+                        ["kind"] = "attempt-result",
+                        ["eventId"] = resultReader.GetString(0),
+                        ["requestId"] = requestId,
                         ["attempt"] = attempt,
-                        ["startedAt"] = startReader.GetInt64(2),
-                        ["concreteModelId"] = startReader.GetString(3),
-                        ["virtualModelKey"] = startReader.IsDBNull(4)
-                            ? null
-                            : startReader.GetString(4),
-                        ["providerType"] = startReader.GetString(5),
-                        ["semanticPayloadSha256"] = startReader.GetString(6),
-                        ["promptObjectId"] = startReader.IsDBNull(7)
-                            ? null
-                            : startReader.GetString(7),
-                        ["systemPrompt"] = startReader.IsDBNull(7)
-                            ? systemPrompt.DeepClone()
-                            : Codec.Parse(
-                                ReadObject(connection, startReader.GetString(7), "prompt")
-                            ),
-                        ["result"] = result,
-                    }
-                );
+                        ["completedAt"] = resultReader.GetInt64(4),
+                        ["outcome"] = outcome,
+                    };
+                    if (!resultReader.IsDBNull(2))
+                        result["result"] = Codec.Parse(resultReader.GetString(2));
+                    if (!resultReader.IsDBNull(3))
+                        result["error"] = Codec.Parse(resultReader.GetString(3));
+                }
+                var start = new JsonObject
+                {
+                    ["v"] = 1,
+                    ["kind"] = "attempt-start",
+                    ["eventId"] = startReader.GetString(0),
+                    ["requestId"] = requestId,
+                    ["attempt"] = attempt,
+                    ["startedAt"] = startReader.GetInt64(2),
+                    ["concreteModelId"] = startReader.GetString(3),
+                    ["providerType"] = startReader.GetString(5),
+                    ["semanticPayloadSha256"] = startReader.GetString(6),
+                };
+                if (!startReader.IsDBNull(4))
+                    start["virtualModelKey"] = startReader.GetString(4);
+                if (!startReader.IsDBNull(7))
+                    start["promptObjectId"] = startReader.GetString(7);
+                var attemptRecord = new JsonObject
+                {
+                    ["start"] = start,
+                    ["systemPrompt"] = startReader.IsDBNull(7)
+                        ? systemPrompt.DeepClone()
+                        : Codec.Parse(ReadObject(connection, startReader.GetString(7), "prompt")),
+                };
+                if (result is not null)
+                    attemptRecord["result"] = result;
+                attempts.Add(attemptRecord);
             }
         }
         using (var results = connection.CreateCommand())
@@ -947,6 +1089,7 @@ public sealed class LlmRequestJournalStore : IDisposable
             ["sessionId"] = session,
             ["purpose"] = purpose,
             ["iteration"] = iteration,
+            ["createdAt"] = createdAt,
             ["requestedModelKey"] = requested,
             ["promptCacheKeyHash"] = cache,
             ["systemPrompt"] = systemPrompt,
@@ -1056,8 +1199,49 @@ public sealed class LlmRequestJournalStore : IDisposable
         }
         else
             clone.Remove("__meta");
+        if (clone["parts"] is JsonArray parts)
+            foreach (var part in parts.OfType<JsonObject>())
+                (part["functionResponse"] as JsonObject)?.Remove("__meta");
         clone.Remove("modelVisible");
         return clone;
+    }
+
+    private static JsonObject ToSourceResult(ChatResult result)
+    {
+        var assistant = result.AssistantMessage;
+        var parts = assistant?["parts"] as JsonArray;
+        var text = string.Concat(
+            parts
+                ?.OfType<JsonObject>()
+                .Where(part => part["text"] is JsonValue)
+                .Select(part => part["text"]!.GetValue<string>())
+                ?? []
+        );
+        var source = new JsonObject { ["text"] = text };
+        var modelId = SessionWait.Text(assistant?["__meta"]?["modelId"]);
+        if (modelId is not null)
+            source["modelId"] = modelId;
+        if (result.JournalRequestId is not null)
+            source["llmRequestId"] = result.JournalRequestId;
+        if (result.JournalAttempt is not null)
+            source["llmAttempt"] = result.JournalAttempt.Value;
+        if (result.Usage is not null)
+            source["usage"] = result.Usage.DeepClone();
+        if (parts is not null)
+            source["allParts"] = parts.DeepClone();
+        var calls = parts
+            ?.OfType<JsonObject>()
+            .Select(part => part["functionCall"])
+            .OfType<JsonObject>()
+            .Select(call => call.DeepClone())
+            .ToArray();
+        if (calls is { Length: > 0 })
+            source["toolCalls"] = new JsonArray(calls);
+        if (assistant?["providerMeta"] is JsonObject providerMeta)
+            source["providerMeta"] = providerMeta.DeepClone();
+        if (assistant?["__meta"]?["llmRequestTiming"] is JsonObject timing)
+            source["previousLlmRequest"] = timing.DeepClone();
+        return source;
     }
 
     private static object? ReadScalar(
@@ -1153,12 +1337,87 @@ public sealed class LlmRequestJournalStore : IDisposable
                 builder.Append(flag ? "true" : "false");
                 return;
             }
-            if (value is JsonValue numeric && numeric.TryGetValue<double>(out var doubleValue))
+            if (value is JsonValue numeric)
             {
-                builder.Append(EcmaNumber.Format(doubleValue));
+                builder.Append(FormatNumber(numeric));
                 return;
             }
             builder.Append(json);
+        }
+
+        private static string FormatNumber(JsonValue value)
+        {
+            if (
+                value.TryGetValue<JsonElement>(out var element)
+                && element.ValueKind == JsonValueKind.Number
+            )
+            {
+                var raw = element.GetRawText();
+                var number = element.GetDouble();
+                ValidateRawNumber(raw, number);
+                return EcmaNumber.Format(number);
+            }
+            if (value.TryGetValue<double>(out var doubleValue))
+                return EcmaNumber.Format(doubleValue);
+            if (value.TryGetValue<float>(out var floatValue))
+                return EcmaNumber.Format(floatValue);
+            if (value.TryGetValue<long>(out var signed))
+                return FormatInteger(signed);
+            if (value.TryGetValue<ulong>(out var unsigned))
+                return FormatInteger(unsigned);
+            if (value.TryGetValue<int>(out var integer))
+                return FormatInteger(integer);
+            if (value.TryGetValue<uint>(out var unsignedInteger))
+                return FormatInteger(unsignedInteger);
+            if (value.TryGetValue<short>(out var shortValue))
+                return FormatInteger(shortValue);
+            if (value.TryGetValue<ushort>(out var unsignedShort))
+                return FormatInteger(unsignedShort);
+            if (value.TryGetValue<byte>(out var byteValue))
+                return FormatInteger(byteValue);
+            if (value.TryGetValue<sbyte>(out var signedByte))
+                return FormatInteger(signedByte);
+            if (value.TryGetValue<decimal>(out _))
+                throw new UnsupportedSessionAuthorityException(
+                    "CLR decimal journal values are unsupported; use a finite binary64 number."
+                );
+            throw new InvalidDataException("Unsupported journal JSON number.");
+        }
+
+        private static string FormatInteger<T>(T value)
+            where T : IBinaryInteger<T>
+        {
+            var integer = BigInteger.Parse(
+                value.ToString(null, CultureInfo.InvariantCulture),
+                CultureInfo.InvariantCulture
+            );
+            var number = (double)integer;
+            if (!double.IsFinite(number) || new BigInteger(number) != integer)
+                throw new UnsupportedSessionAuthorityException(
+                    $"Journal integer {integer} is not exactly representable as an ECMAScript Number."
+                );
+            return EcmaNumber.Format(number);
+        }
+
+        private static void ValidateRawNumber(string raw, double number)
+        {
+            if (!double.IsFinite(number))
+                throw new InvalidDataException(
+                    "Journal JSON numbers must be finite binary64 values."
+                );
+            if (
+                raw.IndexOfAny(['.', 'e', 'E']) < 0
+                && BigInteger.TryParse(
+                    raw,
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out var integer
+                )
+                && new BigInteger(number) != integer
+            )
+                throw new UnsupportedSessionAuthorityException(
+                    $"Journal integer {raw} is not exactly representable as an ECMAScript Number."
+                );
         }
 
         private static IEnumerable<KeyValuePair<string, JsonNode?>> Ordered(JsonObject obj) =>
@@ -1302,17 +1561,61 @@ public sealed class LlmRequestJournalStore : IDisposable
             private JsonNode Number()
             {
                 var start = offset;
-                while (!End && ",]} \n\r\t".IndexOf(text[offset]) < 0)
+                if (Consume('-')) { }
+                if (End)
+                    throw new InvalidDataException("Invalid journal JSON number.");
+                if (Consume('0'))
+                {
+                    if (!End && char.IsDigit(text[offset]))
+                        throw new InvalidDataException("Invalid journal JSON number.");
+                }
+                else
+                {
+                    if (End || text[offset] is < '1' or > '9')
+                        throw new InvalidDataException("Invalid journal JSON number.");
+                    while (!End && char.IsDigit(text[offset]))
+                        offset++;
+                }
+                if (Consume('.'))
+                {
+                    if (End || !char.IsDigit(text[offset]))
+                        throw new InvalidDataException("Invalid journal JSON number.");
+                    while (!End && char.IsDigit(text[offset]))
+                        offset++;
+                }
+                if (!End && text[offset] is 'e' or 'E')
+                {
                     offset++;
+                    if (!End && text[offset] is '+' or '-')
+                        offset++;
+                    if (End || !char.IsDigit(text[offset]))
+                        throw new InvalidDataException("Invalid journal JSON number.");
+                    while (!End && char.IsDigit(text[offset]))
+                        offset++;
+                }
+                if (
+                    !End
+                    && text[offset]
+                        is not ','
+                            and not ']'
+                            and not '}'
+                            and not ' '
+                            and not '\n'
+                            and not '\r'
+                            and not '\t'
+                )
+                    throw new InvalidDataException("Invalid journal JSON number.");
+                var raw = text[start..offset];
                 if (
                     !double.TryParse(
-                        text[start..offset],
+                        raw,
                         NumberStyles.Float,
                         CultureInfo.InvariantCulture,
                         out var value
                     ) || !double.IsFinite(value)
                 )
                     throw new InvalidDataException("Invalid journal JSON number.");
+                ValidateRawNumber(raw, value);
                 return JsonValue.Create(value)!;
             }
 

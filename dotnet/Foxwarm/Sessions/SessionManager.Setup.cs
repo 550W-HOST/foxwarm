@@ -91,10 +91,12 @@ internal sealed partial class SessionManager
             "setup-model-test",
             cancellationToken
         );
+        var attemptStarted = false;
         options = options with
         {
-            JournalAttemptStart = payload =>
-                Journal.AppendAttemptStartAsync(
+            JournalAttemptStart = async payload =>
+            {
+                await Journal.AppendAttemptStartAsync(
                     requestId,
                     1,
                     model.Key,
@@ -103,7 +105,9 @@ internal sealed partial class SessionManager
                     payload,
                     "",
                     cancellationToken
-                ),
+                );
+                attemptStarted = true;
+            },
         };
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(30));
@@ -119,35 +123,63 @@ internal sealed partial class SessionManager
             var result = await service.ChatAsync("setup-model-test", setupHistory, timeout.Token);
             try
             {
-                await Journal.AppendAttemptResultAsync(
-                    requestId,
-                    1,
-                    "success",
-                    result.AssistantMessage,
-                    null,
-                    timeout.Token
+                await Journal.AppendChatResultAsync(requestId, 1, result, timeout.Token);
+            }
+            catch (Exception journalError)
+            {
+                System.Diagnostics.Trace.TraceWarning(
+                    "LLM journal setup result persistence failed: {0}",
+                    journalError.Message
                 );
             }
-            catch { }
             return result;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            if (attemptStarted)
+                try
+                {
+                    await Journal.AppendAttemptResultAsync(
+                        requestId,
+                        1,
+                        "abort",
+                        null,
+                        new JsonObject { ["kind"] = "abort", ["message"] = "Request cancelled." }
+                    );
+                }
+                catch (Exception journalError)
+                {
+                    System.Diagnostics.Trace.TraceWarning(
+                        "LLM journal setup cancellation persistence failed: {0}",
+                        journalError.Message
+                    );
+                }
+            throw;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            try
-            {
-                await Journal.AppendAttemptResultAsync(
-                    requestId,
-                    1,
-                    "abort",
-                    null,
-                    new JsonObject
-                    {
-                        ["kind"] = "timeout",
-                        ["message"] = "Configured model request timed out.",
-                    }
-                );
-            }
-            catch { }
+            if (attemptStarted)
+                try
+                {
+                    await Journal.AppendAttemptResultAsync(
+                        requestId,
+                        1,
+                        "abort",
+                        null,
+                        new JsonObject
+                        {
+                            ["kind"] = "timeout",
+                            ["message"] = "Configured model request timed out.",
+                        }
+                    );
+                }
+                catch (Exception journalError)
+                {
+                    System.Diagnostics.Trace.TraceWarning(
+                        "LLM journal setup timeout persistence failed: {0}",
+                        journalError.Message
+                    );
+                }
             throw new SetupProviderRequestException(
                 "timeout",
                 "Configured model request timed out.",
@@ -156,17 +188,24 @@ internal sealed partial class SessionManager
         }
         catch (Exception error)
         {
-            try
-            {
-                await Journal.AppendAttemptResultAsync(
-                    requestId,
-                    1,
-                    "failure",
-                    null,
-                    new JsonObject { ["kind"] = "request-error", ["message"] = error.Message }
-                );
-            }
-            catch { }
+            if (attemptStarted)
+                try
+                {
+                    await Journal.AppendAttemptResultAsync(
+                        requestId,
+                        1,
+                        "failure",
+                        null,
+                        new JsonObject { ["kind"] = "request-error", ["message"] = error.Message }
+                    );
+                }
+                catch (Exception journalError)
+                {
+                    System.Diagnostics.Trace.TraceWarning(
+                        "LLM journal setup failure persistence failed: {0}",
+                        journalError.Message
+                    );
+                }
             throw new SetupProviderRequestException(
                 "request",
                 ConfiguredModelRequests.SafeError(error, model),
