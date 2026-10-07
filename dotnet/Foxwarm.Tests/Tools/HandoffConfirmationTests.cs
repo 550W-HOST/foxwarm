@@ -8,6 +8,15 @@ namespace Foxwarm.Tests;
 
 public sealed class HandoffConfirmationTests
 {
+    [Fact]
+    public void NoActionSignalUsesAnyTextPartAndAcceptsLegacyAndBracketedMarkers()
+    {
+        Assert.True(SessionBoundary.IsNoAction("NO_ACTION"));
+        Assert.True(SessionBoundary.IsNoAction("[NO_ACTION]"));
+        Assert.True(SessionBoundary.IsNoAction("summary\n[NO_ACTION]"));
+        Assert.False(SessionBoundary.IsNoAction("summary only"));
+    }
+
     private static JsonObject Obj(string raw) => JsonNode.Parse(raw)!.AsObject();
 
     private static string Review(

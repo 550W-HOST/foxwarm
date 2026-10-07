@@ -53,6 +53,7 @@ internal static class SessionBoundary
         !string.IsNullOrWhiteSpace(text)
         && (
             text.Trim().Equals("NO_ACTION", StringComparison.Ordinal)
+            || text.Trim().Equals("[NO_ACTION]", StringComparison.Ordinal)
             || text.TrimEnd().EndsWith("[NO_ACTION]", StringComparison.Ordinal)
         );
 
@@ -89,7 +90,7 @@ internal static class SessionBoundary
         string? taskId = null
     ) =>
         taskId is not null
-            ? $"When you finish, use task({{action: \"complete\", taskId: \"{Escape(taskId)}\", result: \"...\"}}) for the completion report instead of sending a separate completion message. This completes the linked task and ends the turn idle. If no report or parent action is needed, end your final message with `[NO_ACTION]`."
+            ? $"This Session is linked to task {Escape(taskId)}. When the work is complete, complete the task with the task tool; completion automatically notifies the task creator. Do not send a separate routine completion message."
             : $"When you finish, explicitly call send_to_session({{sessionId: `{parent}`, message: \"...\", afterSend: \"finish\"{(handoffConfirmation ? HandoffConfirmation.GuidanceArgument : "")}}}).{(handoffConfirmation ? HandoffConfirmation.Guidance : "")} This sends the final report and ends the turn idle without creating a wait. Use afterSend: \"wait\" only when you genuinely require a later reply from the parent; do not add a separate wait call. If no report or parent action is needed, end your final message with `[NO_ACTION]`.";
 
     internal static string ManualForkNotice(string parent, string child, string? initialMessage)

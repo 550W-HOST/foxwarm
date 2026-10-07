@@ -128,7 +128,6 @@ internal sealed class TaskService : IDisposable
             try
             {
                 store.BindChild(taskId, child.Id);
-                await child.Entry.SaveLane.MarkChildHandoffRequiredAsync().ConfigureAwait(false);
             }
             catch (Exception error)
             {

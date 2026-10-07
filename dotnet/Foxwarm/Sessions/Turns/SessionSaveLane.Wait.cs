@@ -121,12 +121,19 @@ public sealed partial class SessionSaveLane
                 entry.WithState(Publish); // Ordinary input stays hot even when its save attempt fails.
                 var priorTimerScope = TimerQueueScope.Value;
                 TimerQueueScope.Value = timer;
+                SessionSnapshot? persisted = null;
                 try
                 {
-                    var persisted = await PrepareGoalOnlyAsync(entry.SnapshotForPersistence())
+                    persisted = await PrepareGoalOnlyAsync(entry.SnapshotForPersistence())
                         .ConfigureAwait(false);
                     await store.CommitAsync(persisted, kind);
                     PublishGoalOnly(persisted);
+                }
+                catch (AuthorityCommittedException error)
+                {
+                    if (persisted is not null)
+                        PublishGoalOnly(persisted);
+                    entry.RecordBestEffortFailure(error);
                 }
                 catch (Exception error)
                 {

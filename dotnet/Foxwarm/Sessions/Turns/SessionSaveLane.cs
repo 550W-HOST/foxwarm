@@ -222,36 +222,6 @@ public sealed partial class SessionSaveLane
             PublishGoalOnly(staged);
         });
 
-    internal Task MarkChildHandoffRequiredAsync() =>
-        EnqueueOperationAsync(async () =>
-        {
-            var snapshot = entry.Snapshot();
-            var envelope = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();
-            envelope["childHandoffState"] = new JsonObject
-            {
-                ["boundary"] = "report-required",
-                ["resolved"] = false,
-            };
-            var staged = await PrepareGoalOnlyAsync(snapshot with { AuthorityEnvelope = envelope })
-                .ConfigureAwait(false);
-            void Publish(SessionState state) =>
-                state.AuthorityEnvelope["childHandoffState"] = envelope[
-                    "childHandoffState"
-                ]!.DeepClone();
-            try
-            {
-                await store.CommitAsync(staged, SaveKind.Strict).ConfigureAwait(false);
-            }
-            catch (AuthorityCommittedException)
-            {
-                entry.WithState(Publish);
-                PublishGoalOnly(staged);
-                throw;
-            }
-            entry.WithState(Publish);
-            PublishGoalOnly(staged);
-        });
-
     internal Task QueueChildReminderAsync(string parentSessionId) =>
         AdmitAsync(
             new QueueItem(

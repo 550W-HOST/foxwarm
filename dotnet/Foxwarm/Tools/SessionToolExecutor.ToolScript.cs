@@ -51,9 +51,9 @@ internal sealed partial class SessionToolExecutor
                         currentToken
                     );
                     if (
-                        execution.Receipt
-                            is { CompletedTaskId: not null, AttachedSessionId: var attached }
-                        && attached == hosted.Id
+                        execution.Receipt is not null
+                        && resolved.Name == "task"
+                        && SessionWait.Text(resolved.Args["action"]) == "complete"
                         && rootCall is not null
                     )
                         rootCall.Receipt = execution.Receipt;

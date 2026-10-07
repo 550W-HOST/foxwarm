@@ -266,11 +266,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         if (!snapshot.AuthorityEnvelope.TryGetPropertyValue("goalState", out var rawGoal))
             return snapshot;
         if (rawGoal is null || IsFalsyGoal(rawGoal))
-        {
-            var cleared = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();
-            cleared.Remove("goalState");
-            return snapshot with { AuthorityEnvelope = cleared };
-        }
+            return snapshot;
         if (rawGoal is not JsonObject goalState)
             throw new InvalidDataException("Session authority goalState must be an object.");
         if (

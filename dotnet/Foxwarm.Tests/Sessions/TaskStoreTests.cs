@@ -60,6 +60,47 @@ public sealed class TaskStoreTests
     }
 
     [Fact]
+    public void TaskContextResetsNullAnchorAndCanonicalizesStoredReferences()
+    {
+        using var temp = new TempDirectory();
+        using var store = new TaskStore(
+            temp.Path,
+            id => id == "old" ? "main" : id,
+            id => id == "main" ? ["old"] : []
+        );
+        var created = store.Execute(
+            new JsonObject { ["action"] = "create", ["title"] = "progress" },
+            "main"
+        );
+        var id = created.Payload["task"]!["id"]!.GetValue<string>();
+        using (var db = new SqliteConnection($"Data Source={Path.Combine(temp.Path, "state", "tasks.sqlite")}"))
+        {
+            db.Open();
+            using var command = db.CreateCommand();
+            command.CommandText =
+                "UPDATE tasks SET createdBySessionId='old',ownerSessionId='old',attachedSessionId='old',previousOwnerSessionId='old',reminderLastSeq=NULL,reminderMessageCount=30 WHERE id=$id";
+            command.Parameters.AddWithValue("$id", id);
+            command.ExecuteNonQuery();
+        }
+
+        Assert.Empty(store.TaskContext("main", [1, 2], false, [])!["tasks"]!.AsArray());
+        using var verify = new SqliteConnection($"Data Source={Path.Combine(temp.Path, "state", "tasks.sqlite")}");
+        verify.Open();
+        using var read = verify.CreateCommand();
+        read.CommandText =
+            "SELECT createdBySessionId,ownerSessionId,attachedSessionId,previousOwnerSessionId,reminderLastSeq,reminderMessageCount FROM tasks WHERE id=$id";
+        read.Parameters.AddWithValue("$id", id);
+        using var row = read.ExecuteReader();
+        Assert.True(row.Read());
+        Assert.Equal("main", row.GetString(0));
+        Assert.Equal("main", row.GetString(1));
+        Assert.Equal("main", row.GetString(2));
+        Assert.Equal("main", row.GetString(3));
+        Assert.Equal(2L, row.GetInt64(4));
+        Assert.Equal(0L, row.GetInt64(5));
+    }
+
+    [Fact]
     public void CreateClaimUpdateAndTerminalCompletionAreDurable()
     {
         using var temp = new TempDirectory();

@@ -156,13 +156,21 @@ internal sealed class TaskStore : IDisposable
                 }
                 else if (Read(db, existing) is { } existingRow)
                 {
+                    var creator = Canonical(Text(existingRow["createdBySessionId"]));
+                    var owner = Canonical(Text(existingRow["ownerSessionId"]));
+                    var attached = Canonical(Text(existingRow["attachedSessionId"]));
+                    var previousOwner = Canonical(Text(existingRow["previousOwnerSessionId"]));
                     Update(
                         db,
                         existing,
                         "createdBySessionId",
-                        Canonical(Text(existingRow["createdBySessionId"])),
+                        creator,
                         "ownerSessionId",
-                        Canonical(Text(existingRow["ownerSessionId"])),
+                        owner,
+                        "attachedSessionId",
+                        attached,
+                        "previousOwnerSessionId",
+                        previousOwner,
                         "legacyGoalSessionId",
                         Canonical(Text(existingRow["legacyGoalSessionId"]))
                     );
@@ -195,7 +203,8 @@ internal sealed class TaskStore : IDisposable
                 var status = Text(task["status"]);
                 if (status is "completed" or "cancelled")
                     throw new TaskError("TASK_TERMINAL", $"Task {taskId} is terminal.", 409);
-                if (Text(task["ownerSessionId"]) is { } owner)
+                var owner = Canonical(Text(task["ownerSessionId"]));
+                if (owner is not null)
                     throw new TaskError(
                         "TASK_OWNED",
                         $"Task {taskId} is already claimed by another Session ({owner}).",
@@ -205,10 +214,14 @@ internal sealed class TaskStore : IDisposable
                 Update(
                     db,
                     taskId,
+                    "createdBySessionId",
+                    Canonical(Text(task["createdBySessionId"])),
                     "ownerSessionId",
                     Canonical(childSessionId),
                     "attachedSessionId",
                     Canonical(childSessionId),
+                    "previousOwnerSessionId",
+                    Canonical(Text(task["previousOwnerSessionId"])),
                     "status",
                     "active",
                     "updatedAt",
@@ -272,9 +285,13 @@ internal sealed class TaskStore : IDisposable
                         || !references.Contains(owner)
                     )
                         continue;
+                    var attached = Canonical(Text(row["attachedSessionId"]));
+                    var previousOwner = Canonical(Text(row["previousOwnerSessionId"]));
                     if (
                         creator != Text(row["createdBySessionId"])
                         || owner != Text(row["ownerSessionId"])
+                        || attached != Text(row["attachedSessionId"])
+                        || previousOwner != Text(row["previousOwnerSessionId"])
                     )
                         Update(
                             db,
@@ -282,7 +299,11 @@ internal sealed class TaskStore : IDisposable
                             "createdBySessionId",
                             creator,
                             "ownerSessionId",
-                            owner
+                            owner,
+                            "attachedSessionId",
+                            attached,
+                            "previousOwnerSessionId",
+                            previousOwner
                         );
                     long lastSeq = 0;
                     var hasLast =

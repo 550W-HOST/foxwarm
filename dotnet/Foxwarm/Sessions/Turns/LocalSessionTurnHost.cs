@@ -147,26 +147,10 @@ public sealed partial class LocalSessionTurnHost
                         var parent = entry.WithState(state =>
                             SessionWait.Text(state.AuthorityEnvelope["parentSessionId"])
                         );
-                        var alreadyReminded = entry.WithState(state =>
-                            state
-                                .History.TakeLast(2)
-                                .Any(row =>
-                                    row["parts"] is JsonArray rowParts
-                                    && rowParts.Any(part =>
-                                        SessionWait
-                                            .Text(part?["system"])
-                                            ?.Contains(
-                                                "kind=\"child-reminder\"",
-                                                StringComparison.Ordinal
-                                            ) == true
-                                    )
-                                )
-                        );
                         if (
                             !hasLeadingQueue
                             && parent is not null
                             && SessionBoundary.NeedsChildHandoff(entry.Snapshot().AuthorityEnvelope)
-                            && !alreadyReminded
                             && !noAction
                             && !finalText.TrimStart().StartsWith("Error:", StringComparison.Ordinal)
                         )
@@ -209,7 +193,19 @@ public sealed partial class LocalSessionTurnHost
                                 || parent is not null && receipt.SuccessfulSendTarget == parent
                             );
                         if (validReceipt)
-                            await entry.SaveLane.ResolveChildHandoffAsync().ConfigureAwait(false);
+                        {
+                            try
+                            {
+                                await entry.SaveLane.ResolveChildHandoffAsync().ConfigureAwait(false);
+                            }
+                            catch (IOException error)
+                            {
+                                // The task/send effect is already durable. Do not turn its
+                                // truthful tool result into tool_error when this later owner
+                                // boundary publication fails.
+                                entry.RecordBestEffortFailure(error);
+                            }
+                        }
                     }
 
                     if (

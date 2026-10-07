@@ -174,20 +174,21 @@ internal sealed partial class SessionManager
                     var taskId = OptionalString(args, "taskId");
                     var initialMessage = OptionalString(args, "message");
                     SessionOwner child;
+                    var delivered = false;
                     if (taskId is null)
                     {
-                        child = (
-                            await CreateChildAsync(
-                                source,
-                                RequiredString(args, "suffix"),
-                                OptionalString(args, "agentName"),
-                                OptionalString(args, "displayName"),
-                                initialMessage,
-                                forceModel,
-                                OptionalBool(args, "fork") ?? false,
-                                taskId
-                            )
-                        ).Child;
+                        var created = await CreateChildAsync(
+                            source,
+                            RequiredString(args, "suffix"),
+                            OptionalString(args, "agentName"),
+                            OptionalString(args, "displayName"),
+                            initialMessage,
+                            forceModel,
+                            OptionalBool(args, "fork") ?? false,
+                            taskId
+                        );
+                        child = created.Child;
+                        delivered = created.Delivered;
                     }
                     else
                     {
@@ -208,7 +209,6 @@ internal sealed partial class SessionManager
                                 ).Child
                         );
                     }
-                    var delivered = false;
                     if (taskId is not null && initialMessage is not null)
                     {
                         try
@@ -217,11 +217,14 @@ internal sealed partial class SessionManager
                         }
                         catch (Exception error)
                         {
+                            var committed = error is AuthorityCommittedException;
                             throw new CommittedSessionCreationException(
                                 child.Id,
-                                $"Child Session '{child.Id}' was committed but its initial message was not delivered: {error.Message}",
+                                committed
+                                    ? $"Child Session '{child.Id}' and its initial message were committed, but delivery durability failed: {error.Message}"
+                                    : $"Child Session '{child.Id}' was committed but its initial message was not delivered: {error.Message}",
                                 error,
-                                error is AuthorityCommittedException
+                                committed
                             );
                         }
                         delivered = true;

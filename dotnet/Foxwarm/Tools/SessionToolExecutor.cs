@@ -316,7 +316,6 @@ internal sealed partial class SessionToolExecutor(
             && SessionWait.Text(task["attachedSessionId"]) == Hosted.Id
         )
         {
-            await Hosted.Entry.SaveLane.ResolveChildHandoffAsync().ConfigureAwait(false);
             invocation.Value!.Receipt = new TurnToolReceipt(
                 null,
                 SessionWait.Text(task["id"]),

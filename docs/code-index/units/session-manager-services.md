@@ -12,7 +12,7 @@ Task methods resolve target/actor and pass live/persisted anchor sequence to `Ta
 
 ## Contract and side effects
 
-Task/timer API/UI is implemented; child task-id attachment, child-handoff receipts, legacy Goal migration, and request-local reminder consumers remain absent. Timer enqueue follows best-effort admission semantics. ToolScript host effects still pass authorization/save-lane boundaries; run records are not handoff receipts.
+Task/timer API/UI is implemented, including task-id child attachment, owner-save legacy Goal migration, request-local reminders, compaction checkpoints, and typed child-handoff receipts. Timer enqueue follows best-effort admission semantics. ToolScript host effects still pass authorization/save-lane boundaries; run records are not handoff receipts, while a linked task completion callback is forwarded only within the current foreground/continued execution slice.
 
 ## Tests
 
