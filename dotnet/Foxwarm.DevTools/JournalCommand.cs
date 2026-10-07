@@ -21,11 +21,10 @@ internal static class JournalCommand
                 Console.WriteLine(JsonSerializer.Serialize(new { exported = args[2] }));
                 break;
             case "import" when args.Length == 3:
-                var hash = await store.Value.MigrateLegacyAsync(args[2]);
-                await store.Value.MarkSqliteAuthorityAsync(LlmRequestJournalStore.MigrationId);
-                Console.WriteLine(
-                    JsonSerializer.Serialize(new { imported = hash, authority = true })
-                );
+                var imported = await store.Value.MigrateLegacyAsync(args[2]);
+                if (imported)
+                    await store.Value.MarkSqliteAuthorityAsync(LlmRequestJournalStore.MigrationId);
+                Console.WriteLine(JsonSerializer.Serialize(new { imported, authority = imported }));
                 break;
             case "reconstruct" when args.Length == 3:
                 Console.WriteLine((await store.Value.ReconstructAsync(args[2])).ToJsonString());

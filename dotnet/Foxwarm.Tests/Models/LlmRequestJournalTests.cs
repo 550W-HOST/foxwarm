@@ -103,7 +103,7 @@ public sealed class LlmRequestJournalTests
             await store.ExportJsonlAsync(export);
             Assert.True(File.Exists(export));
             using var imported = new LlmRequestJournalStore(importedRoot);
-            Assert.NotNull(await imported.MigrateLegacyAsync(export));
+            Assert.True(await imported.MigrateLegacyAsync(export));
             await imported.MarkSqliteAuthorityAsync(LlmRequestJournalStore.MigrationId);
             Assert.True(await imported.HasSqliteAuthorityAsync(LlmRequestJournalStore.MigrationId));
             var importedRequest = await imported.ReconstructAsync(first);

@@ -338,17 +338,14 @@ public sealed class LlmRequestJournalStore : IDisposable
         }
     }
 
-    public async Task<string?> MigrateLegacyAsync(
-        string sourcePath,
-        CancellationToken token = default
-    )
+    public async Task<bool> MigrateLegacyAsync(string sourcePath, CancellationToken token = default)
     {
         var fullPath = Path.GetFullPath(sourcePath);
         await gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
             if (!File.Exists(fullPath))
-                return null;
+                return false;
             using var connection = Open();
             EnsureSchema(connection);
             var sourceLength = new FileInfo(fullPath).Length;
@@ -370,11 +367,6 @@ public sealed class LlmRequestJournalStore : IDisposable
             }
             foreach (var requestId in requestIds)
                 ValidateRequestManifest(connection, transaction, requestId);
-            var sourceHash =
-                "sha256:"
-                + Convert
-                    .ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(fullPath, token)))
-                    .ToLowerInvariant();
             using (var state = connection.CreateCommand())
             {
                 state.Transaction = transaction;
@@ -399,7 +391,7 @@ public sealed class LlmRequestJournalStore : IDisposable
             Directory.CreateDirectory(Path.GetDirectoryName(backupPath)!);
             File.Move(fullPath, backupPath);
             SyncDirectory(Path.GetDirectoryName(backupPath)!);
-            return sourceHash;
+            return true;
         }
         finally
         {
@@ -603,10 +595,6 @@ public sealed class LlmRequestJournalStore : IDisposable
                 else
                 {
                     line.Add(value);
-                    if (line.Count > 64 * 1024 * 1024)
-                        throw new InvalidDataException(
-                            "Legacy LLM request journal line exceeds the bounded import size."
-                        );
                 }
             }
         }
@@ -703,6 +691,7 @@ public sealed class LlmRequestJournalStore : IDisposable
                 Add(command, "$appended", RawArray(record, "appendedMessageObjectIds"));
                 Add(command, "$depth", record.GetProperty("deltaDepth").GetInt32());
                 command.ExecuteNonQuery();
+                VerifyLegacyRequestConflict(connection, transaction, record, requestId);
                 requestIds.Add(requestId);
                 break;
             case "attempt-start":
@@ -718,6 +707,7 @@ public sealed class LlmRequestJournalStore : IDisposable
                 Add(command, "$hash", record.GetProperty("semanticPayloadSha256").GetString());
                 Add(command, "$prompt", OptionalString(record, "promptObjectId"));
                 command.ExecuteNonQuery();
+                VerifyLegacyAttemptStartConflict(connection, transaction, record);
                 requestIds.Add(record.GetProperty("requestId").GetString()!);
                 break;
             case "attempt-result":
@@ -731,6 +721,7 @@ public sealed class LlmRequestJournalStore : IDisposable
                 Add(command, "$result", RawJson(record, "result"));
                 Add(command, "$error", RawJson(record, "error"));
                 command.ExecuteNonQuery();
+                VerifyLegacyAttemptResultConflict(connection, transaction, record);
                 requestIds.Add(record.GetProperty("requestId").GetString()!);
                 break;
             default:
@@ -756,10 +747,26 @@ public sealed class LlmRequestJournalStore : IDisposable
         var schema = reader.GetString(1);
         var count = reader.GetInt32(2);
         reader.Close();
-        _ = ReadObject(connection, prompt, "prompt");
-        _ = ReadObject(connection, schema, "tool-schema");
-        if (ReconstructIds(connection, transaction, requestId).Count != count)
+        if (
+            Codec.Parse(ReadObject(connection, prompt, "prompt")) is not JsonValue promptValue
+            || !promptValue.TryGetValue<string>(out _)
+        )
+            throw new InvalidDataException("Legacy prompt object has invalid payload.");
+        if (Codec.Parse(ReadObject(connection, schema, "tool-schema")) is not JsonArray)
+            throw new InvalidDataException("Legacy tool-schema object has invalid payload.");
+        var messageIds = ReconstructIds(connection, transaction, requestId);
+        if (messageIds.Count != count)
             throw new InvalidDataException("Legacy request message count mismatch.");
+        foreach (var messageId in messageIds)
+        {
+            if (
+                Codec.Parse(ReadObject(connection, messageId, "message")) is not JsonObject message
+                || message["role"] is not JsonValue role
+                || !role.TryGetValue<string>(out _)
+                || message["parts"] is not JsonArray
+            )
+                throw new InvalidDataException("Legacy message object has invalid payload.");
+        }
         using var starts = connection.CreateCommand();
         starts.Transaction = transaction;
         starts.CommandText =
@@ -782,11 +789,20 @@ public sealed class LlmRequestJournalStore : IDisposable
                 throw new InvalidDataException(
                     "Legacy request attempt 1 prompt differs from request prompt."
                 );
+            if (!startReader.IsDBNull(1))
+            {
+                if (
+                    Codec.Parse(ReadObject(connection, startReader.GetString(1), "prompt"))
+                        is not JsonValue overridePrompt
+                    || !overridePrompt.TryGetValue<string>(out _)
+                )
+                    throw new InvalidDataException("Legacy attempt prompt override is invalid.");
+            }
         }
         using var results = connection.CreateCommand();
         results.Transaction = transaction;
         results.CommandText =
-            "SELECT attempt,outcome FROM llm_journal_attempt_results WHERE request_id=$id";
+            "SELECT attempt,outcome,result_json,error_json FROM llm_journal_attempt_results WHERE request_id=$id";
         Add(results, "$id", requestId);
         using var resultReader = results.ExecuteReader();
         while (resultReader.Read())
@@ -797,8 +813,124 @@ public sealed class LlmRequestJournalStore : IDisposable
                 throw new InvalidDataException(
                     "Legacy request has an orphaned or invalid attempt result."
                 );
+            if (
+                outcome == "success" && resultReader.IsDBNull(2)
+                || outcome != "success" && resultReader.IsDBNull(3)
+            )
+                throw new InvalidDataException("Legacy attempt result payload is missing.");
+            if (
+                !resultReader.IsDBNull(2)
+                && Codec.Parse(resultReader.GetString(2)) is not JsonObject
+            )
+                throw new InvalidDataException("Legacy success result payload is invalid.");
+            if (
+                !resultReader.IsDBNull(3)
+                && Codec.Parse(resultReader.GetString(3)) is not JsonObject
+            )
+                throw new InvalidDataException("Legacy attempt error payload is invalid.");
         }
     }
+
+    private static void VerifyLegacyRequestConflict(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        JsonElement record,
+        string requestId
+    )
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            "SELECT session_id,purpose,iteration,created_at,prompt_object_id,tool_schema_object_id,requested_model_key,prompt_cache_key_hash,message_count,checkpoint_message_ids_json,base_request_id,common_prefix_length,appended_message_ids_json,delta_depth FROM llm_journal_requests WHERE request_id=$id";
+        Add(command, "$id", requestId);
+        using var row = command.ExecuteReader();
+        if (
+            !row.Read()
+            || OptionalReaderString(row, 0) != OptionalString(record, "sessionId")
+            || row.GetString(1) != record.GetProperty("purpose").GetString()
+            || row.GetInt32(2) != record.GetProperty("iteration").GetInt32()
+            || row.GetInt64(3) != record.GetProperty("createdAt").GetInt64()
+            || row.GetString(4) != record.GetProperty("promptObjectId").GetString()
+            || row.GetString(5) != record.GetProperty("toolSchemaObjectId").GetString()
+            || row.GetString(6) != record.GetProperty("requestedModelKey").GetString()
+            || row.GetString(7) != record.GetProperty("promptCacheKeyHash").GetString()
+            || row.GetInt32(8) != record.GetProperty("messageCount").GetInt32()
+            || OptionalReaderJson(row, 9)
+                != CanonicalOptionalJson(record, "checkpointMessageObjectIds")
+            || OptionalReaderString(row, 10) != OptionalString(record, "baseRequestId")
+            || OptionalReaderInt(row, 11) != OptionalInt(record, "commonPrefixLength")
+            || OptionalReaderJson(row, 12)
+                != CanonicalOptionalJson(record, "appendedMessageObjectIds")
+            || row.GetInt32(13) != record.GetProperty("deltaDepth").GetInt32()
+        )
+            throw new InvalidDataException("Legacy request conflicts with SQLite authority.");
+    }
+
+    private static void VerifyLegacyAttemptStartConflict(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        JsonElement record
+    )
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            "SELECT request_id,attempt,started_at,concrete_model_id,virtual_model_key,provider_type,semantic_payload_sha256,prompt_object_id FROM llm_journal_attempt_starts WHERE event_id=$id";
+        Add(command, "$id", record.GetProperty("eventId").GetString());
+        using var row = command.ExecuteReader();
+        if (
+            !row.Read()
+            || row.GetString(0) != record.GetProperty("requestId").GetString()
+            || row.GetInt32(1) != record.GetProperty("attempt").GetInt32()
+            || row.GetInt64(2) != record.GetProperty("startedAt").GetInt64()
+            || row.GetString(3) != record.GetProperty("concreteModelId").GetString()
+            || OptionalReaderString(row, 4) != OptionalString(record, "virtualModelKey")
+            || row.GetString(5) != record.GetProperty("providerType").GetString()
+            || row.GetString(6) != record.GetProperty("semanticPayloadSha256").GetString()
+            || OptionalReaderString(row, 7) != OptionalString(record, "promptObjectId")
+        )
+            throw new InvalidDataException("Legacy attempt-start conflicts with SQLite authority.");
+    }
+
+    private static void VerifyLegacyAttemptResultConflict(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        JsonElement record
+    )
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            "SELECT request_id,attempt,completed_at,outcome,result_json,error_json FROM llm_journal_attempt_results WHERE event_id=$id";
+        Add(command, "$id", record.GetProperty("eventId").GetString());
+        using var row = command.ExecuteReader();
+        if (
+            !row.Read()
+            || row.GetString(0) != record.GetProperty("requestId").GetString()
+            || row.GetInt32(1) != record.GetProperty("attempt").GetInt32()
+            || row.GetInt64(2) != record.GetProperty("completedAt").GetInt64()
+            || row.GetString(3) != record.GetProperty("outcome").GetString()
+            || OptionalReaderJson(row, 4) != CanonicalOptionalJson(record, "result")
+            || OptionalReaderJson(row, 5) != CanonicalOptionalJson(record, "error")
+        )
+            throw new InvalidDataException(
+                "Legacy attempt-result conflicts with SQLite authority."
+            );
+    }
+
+    private static string? OptionalReaderString(SqliteDataReader reader, int index) =>
+        reader.IsDBNull(index) ? null : reader.GetString(index);
+
+    private static int? OptionalReaderInt(SqliteDataReader reader, int index) =>
+        reader.IsDBNull(index) ? null : reader.GetInt32(index);
+
+    private static string? OptionalReaderJson(SqliteDataReader reader, int index) =>
+        reader.IsDBNull(index) ? null : Codec.Write(Codec.Parse(reader.GetString(index)));
+
+    private static string? CanonicalOptionalJson(JsonElement record, string name) =>
+        record.TryGetProperty(name, out var value) && value.ValueKind != JsonValueKind.Null
+            ? Codec.Write(Codec.Parse(value.GetRawText()))
+            : null;
 
     private static string? OptionalString(JsonElement element, string name) =>
         element.TryGetProperty(name, out var value) && value.ValueKind != JsonValueKind.Null
