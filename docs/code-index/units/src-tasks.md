@@ -29,7 +29,7 @@ Implements a small persistent task list shared by Sessions. A coordinator create
 
 The Main-owned store opens `state/tasks.sqlite` lazily under the configured data root, using the existing `node:sqlite` API. Its `tasks` table stores task fields, ownership and timestamps; `task_notes` stores append-only progress/cancellation notes with author and timestamp. Tasks never enter Session history or Archive. WAL and a five-second busy timeout permit independent connections; a write transaction holds the lock across the read, authorization check and mutation, preventing two concurrent claim winners. Read transactions keep bounded rows and their omission counts consistent.
 
-New IDs use `task_` plus 12 lowercase random hex characters from six cryptographic random bytes (17 characters total). Ordinary create and legacy Goal migration share the same local generator; SQLite’s primary key prevents overwriting a collision. Existing UUID task IDs remain readable and usable, including persisted parent references; there is no ID migration or truncation. Titles allow 200 characters; descriptions allow 4,000, results 20,000, and notes/reasons 1,000; task-ID inputs allow 128. `list` returns at most 50 summaries, total and omitted counts, defaulting to open/active tasks. Claimed tasks normally become active, but ownership is independent of open/active status. The authenticated WebUI list route may add nullable `createdByAgent` and `ownerAgent` metadata resolved from the existing Session catalog; it never derives an Agent from a Session ID string. `get` returns the task, up to 20 immediate child summaries and the latest 10 notes in chronological order, with omitted counts. Full descriptions/results are not duplicated in list/child summaries. Notes remain persisted even when omitted from output. Tasks and notes record an explicit actor kind (`session` or `user`); Session rows retain nullable canonical Session IDs, while WebUI user rows use `user` with no fabricated Session ID. Opening an older database rebuilds the two actor-bearing tables transactionally, preserving task/note rows and the existing indexes while projecting legacy rows as Session-authored.
+New IDs use `task_` plus 12 lowercase random hex characters from six cryptographic random bytes (17 characters total). Ordinary create and legacy Goal migration share the same local generator; SQLite’s primary key prevents overwriting a collision. Existing UUID task IDs remain readable and usable, including persisted parent references; there is no ID migration or truncation. Titles allow 200 characters; descriptions and results allow 20,000, and notes/reasons 1,000; task-ID inputs allow 128. For long description or result updates, model callers should use ToolScript to compose the operation rather than regenerating duplicate content. `list` returns at most 50 summaries, total and omitted counts, defaulting to open/active tasks. Claimed tasks normally become active, but ownership is independent of open/active status. The authenticated WebUI list route may add nullable `createdByAgent` and `ownerAgent` metadata resolved from the existing Session catalog; it never derives an Agent from a Session ID string. `get` returns the task, up to 20 immediate child summaries and the latest 10 notes in chronological order, with omitted counts. Full descriptions/results are not duplicated in list/child summaries. Notes remain persisted even when omitted from output. Tasks and notes record an explicit actor kind (`session` or `user`); Session rows retain nullable canonical Session IDs, while WebUI user rows use `user` with no fabricated Session ID. Opening an older database rebuilds the two actor-bearing tables transactionally, preserving task/note rows and the existing indexes while projecting legacy rows as Session-authored.
 
 ## Session identity aliases
 
@@ -43,20 +43,20 @@ One builtin `task` is default-injected through the existing per-Session authoriz
 
 Exact tool description:
 
-> Create and track a small task shared by Foxwarm Sessions. Use one action at a time to create, list, inspect, claim, update, complete, or cancel a task. The current Session is recorded automatically; do not provide another Session identity.
+> Create and track a small task shared by Foxwarm Sessions. Use one action at a time to create, list, inspect, claim, update, complete, or cancel a task. The current Session is recorded automatically as the creator and actor; do not use ownerSessionId to identify the caller. When creating a task, you may set ownerSessionId to assign it immediately; use assign only to transfer or release an existing task owner.
 
 | Parameter | Exact model-facing description |
 |-----------|--------------------------------|
 | `action` | Task operation to perform. |
 | `title` | Task title. Required when action is create. |
-| `description` | Short problem or scope description for a new task, or replacement description when updating. |
+| `description` | Problem or scope description for a new task, or replacement description when updating. For long description or result text, use ToolScript to compose the operation so you do not regenerate duplicate content. |
 | `parentTaskId` | Existing parent task ID for a simple child task. Set only when creating. |
 | `taskId` | Existing task ID. Required for get, claim, update, complete, and cancel. |
 | `status` | For list, filter by task status. For update, set only open or active. |
 | `note` | Short progress note to append when updating a task. |
-| `result` | Short completion summary for a completed task. |
+| `result` | Completion summary for a completed task. For long description or result text, use ToolScript to compose the operation so you do not regenerate duplicate content. |
 | `notifySession` | When true, send task notifications after the assignment is committed: notify the new owner, and notify the previous owner when ownership changes or is released. |
-| `ownerSessionId` | Existing Session ID to receive the task, or null to release the current owner. |
+| `ownerSessionId` | For create, the optional existing Session ID to receive the new task. For assign, the existing Session ID to receive the task, or null to release the current owner. |
 | `reason` | Short reason for cancelling a task. |
 
 ### Actions

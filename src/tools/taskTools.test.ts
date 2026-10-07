@@ -97,7 +97,7 @@ test('create_child_session taskId assigns or transfers the real child before del
     assert.ok(sessionManager.getSessionCatalog(childId));
     const child = await sessionManager.getExistingSession(childId);
     assert.match(child.history[0].parts[0].system, /This Session is linked to task task_/);
-    assert.match(child.history[0].parts[0].system, /Do not send a separate routine completion message/);
+    assert.match(child.history[0].parts[0].system, /do not send a separate routine completion report/);
     assert.equal(child.queue.length, 1);
     const assignment = parseFoxwarmWrappedContent(child.queue[0].parts?.[0].system || '');
     assert.equal(assignment.attrs.type, 'task');

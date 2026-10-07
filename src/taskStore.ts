@@ -52,7 +52,7 @@ const ACTION_FIELDS: Record<typeof TASK_ACTIONS[number], string[]> = {
   cancel: ['taskId', 'reason'],
 };
 const TEXT_LIMITS: Record<string, number> = {
-  title: 200, description: 4000, parentTaskId: 128, taskId: 128,
+  title: 200, description: 20000, parentTaskId: 128, taskId: 128,
   note: 1000, result: 20000, reason: 1000,
 };
 
@@ -292,7 +292,7 @@ export class TaskStore {
       if (result.task) {
         const { legacyGoalSessionId, reminderLastSeq, reminderMessageCount, assignmentRevision, ...visibleTask } = result.task;
         result.task = visibleTask;
-        if (result.task.description?.length > 4000) result.task.description = result.task.description.slice(0, 3999) + '…';
+        if (result.task.description?.length > 20000) result.task.description = result.task.description.slice(0, 19999) + '…';
       }
       return result;
     } catch (error) {

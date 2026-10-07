@@ -204,8 +204,11 @@ test('actor-column migration preserves legacy tasks and notes as Session-authore
   assert.ok(columns.some(column => column.name === 'createdByKind'));
 });
 
-test('completion results allow 20000 characters but reject 20001 before changing the task', t => {
+test('task descriptions and completion results allow 20000 characters but reject 20001 before changing the task', t => {
   const store = fixture(t);
+  const created = store.execute({ action: 'create', title: 'Long description', description: 'd'.repeat(20000) }, 'owner').task;
+  assert.equal(created.description?.length, 20000);
+  assert.throws(() => store.execute({ action: 'create', title: 'Too long description', description: 'd'.repeat(20001) }, 'owner'), /description must be a string of at most 20000 characters/);
   const task = store.execute({ action: 'create', title: 'Long result' }, 'owner').task;
   store.execute({ action: 'claim', taskId: task.id }, 'owner');
   const tooLong = 'x'.repeat(20001);
@@ -229,7 +232,7 @@ test('legacy Goal migration is idempotent, preserves full text and never revives
   assert.equal(first.createdBySessionId, 'legacy-owner');
   assert.equal(first.status, 'active');
   assert.equal(first.description, goal);
-  assert.equal(store.execute({ action: 'get', taskId: first.id }).task.description.length, 4000);
+  assert.equal(store.execute({ action: 'get', taskId: first.id }).task.description.length, goal.length);
   store.execute({ action: 'update', taskId: first.id, note: 'Progress' }, 'legacy-owner');
   assert.equal(store.migrateLegacyGoal('legacy-owner', goal, 0).description, goal, 'note updates do not overwrite full legacy text');
   store.close();
