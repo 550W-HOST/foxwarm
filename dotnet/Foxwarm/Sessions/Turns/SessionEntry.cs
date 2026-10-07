@@ -61,10 +61,14 @@ public sealed class SessionEntry
         Volatile.Read(ref lastBackgroundProcessorFailure);
     public Action<SessionSnapshot>? Committed { get; set; }
 
-    public SessionEntry(SessionState state, ISessionAuthorityStore store)
+    public SessionEntry(
+        SessionState state,
+        ISessionAuthorityStore store,
+        Func<SessionSnapshot, Task<SessionSnapshot>>? migrateGoal = null
+    )
     {
         State = state;
-        SaveLane = new SessionSaveLane(this, store);
+        SaveLane = new SessionSaveLane(this, store, migrateGoal);
     }
 
     public SessionSnapshot Snapshot()

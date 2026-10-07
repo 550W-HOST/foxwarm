@@ -12,6 +12,7 @@ public sealed partial class SessionSaveLane
     internal static bool IsSnapshotCommit => SnapshotCommitScope.Value;
     private readonly SessionEntry entry;
     private readonly ISessionAuthorityStore store;
+    private readonly Func<SessionSnapshot, Task<SessionSnapshot>>? migrateGoal;
     private readonly object laneGate = new();
     private Task tail = Task.CompletedTask;
     private bool retired;
@@ -43,10 +44,38 @@ public sealed partial class SessionSaveLane
         return current;
     }
 
-    internal SessionSaveLane(SessionEntry entry, ISessionAuthorityStore store)
+    internal SessionSaveLane(
+        SessionEntry entry,
+        ISessionAuthorityStore store,
+        Func<SessionSnapshot, Task<SessionSnapshot>>? migrateGoal = null
+    )
     {
         this.entry = entry;
         this.store = store;
+        this.migrateGoal = migrateGoal;
+    }
+
+    private async Task<(SessionSnapshot Snapshot, Action<SessionState> Publish)> PrepareGoalAsync(
+        SessionSnapshot snapshot,
+        Action<SessionState> publish
+    )
+    {
+        if (migrateGoal is null || snapshot.AuthorityEnvelope["goalState"] is null)
+            return (snapshot, publish);
+        var migrated = await migrateGoal(snapshot).ConfigureAwait(false);
+        return (
+            migrated,
+            state =>
+            {
+                publish(state);
+                if (migrated.AuthorityEnvelope["goalState"] is null)
+                    state.AuthorityEnvelope.Remove("goalState");
+                else
+                    state.AuthorityEnvelope["goalState"] = migrated.AuthorityEnvelope[
+                        "goalState"
+                    ]!.DeepClone();
+            }
+        );
     }
 
     // Identity IO joins the existing ordered save lane, never the short state or registry gate.
@@ -85,17 +114,18 @@ public sealed partial class SessionSaveLane
                 else
                     state.AuthorityEnvelope["displayName"] = name;
             }
+            var prepared = await PrepareGoalAsync(staged, Publish).ConfigureAwait(false);
             try
             {
-                await store.CommitAsync(staged, SaveKind.Strict);
+                await store.CommitAsync(prepared.Snapshot, SaveKind.Strict);
             }
             catch (AuthorityCommittedException)
             {
-                entry.WithState(Publish);
+                entry.WithState(prepared.Publish);
                 entry.InvokeCommitted(entry.Snapshot());
                 throw;
             }
-            entry.WithState(Publish);
+            entry.WithState(prepared.Publish);
             entry.InvokeCommitted(entry.Snapshot());
         });
         return result;
@@ -149,6 +179,34 @@ public sealed partial class SessionSaveLane
     /// <summary>Strictly admit one source-bearing inter-Session item.</summary>
     public Task CommitInterSessionAsync(QueueItem item) => AdmitAsync(item, SaveKind.Strict);
 
+    internal Task ResolveChildHandoffAsync() =>
+        EnqueueOperationAsync(async () =>
+        {
+            var snapshot = entry.Snapshot();
+            var envelope = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();
+            if (!SessionBoundary.ResolveChildHandoff(envelope))
+                return;
+            var staged = snapshot with { AuthorityEnvelope = envelope };
+            try
+            {
+                await store.CommitAsync(staged, SaveKind.Strict).ConfigureAwait(false);
+            }
+            catch (AuthorityCommittedException)
+            {
+                entry.WithState(state =>
+                    state.AuthorityEnvelope["childHandoffState"] = envelope[
+                        "childHandoffState"
+                    ]!.DeepClone()
+                );
+                throw;
+            }
+            entry.WithState(state =>
+                state.AuthorityEnvelope["childHandoffState"] = envelope[
+                    "childHandoffState"
+                ]!.DeepClone()
+            );
+        });
+
     public Task<bool> CommitBackgroundExecCompletionAsync(string execId, string message) =>
         AdmitWithReceiptAsync(
             new QueueItem(
@@ -180,6 +238,13 @@ public sealed partial class SessionSaveLane
         EnqueueOperationAsync(async () =>
         {
             var operation = entry.WithState(prepare);
+            var prepared = await PrepareGoalAsync(operation.StagedSnapshot, operation.Publish)
+                .ConfigureAwait(false);
+            operation = operation with
+            {
+                StagedSnapshot = prepared.Snapshot,
+                Publish = prepared.Publish,
+            };
             try
             {
                 if (store is ICanonicalAppendAuthorityStore canonical)
@@ -248,9 +313,13 @@ public sealed partial class SessionSaveLane
                     },
                 };
             }
-            var previousScope = GoalCommitScope.Value;
-            GoalCommitScope.Value =
-                operation.StagedSnapshot.AuthorityEnvelope["goalState"] is JsonObject;
+            var preparedGoal = await PrepareGoalAsync(operation.StagedSnapshot, operation.Publish)
+                .ConfigureAwait(false);
+            operation = operation with
+            {
+                StagedSnapshot = preparedGoal.Snapshot,
+                Publish = preparedGoal.Publish,
+            };
             try
             {
                 if (store is not ICompactionAuthorityStore compact)
@@ -270,10 +339,6 @@ public sealed partial class SessionSaveLane
                 entry.InvokeCommitted(entry.Snapshot());
                 throw;
             }
-            finally
-            {
-                GoalCommitScope.Value = previousScope;
-            }
             entry.WithState(operation.Publish);
             entry.InvokeCommitted(entry.Snapshot());
         });
@@ -282,7 +347,12 @@ public sealed partial class SessionSaveLane
         EnqueueOperationAsync(async () =>
         {
             var snapshot = entry.SnapshotForPersistence();
-            await store.CommitAsync(snapshot, kind, cancellationToken).ConfigureAwait(false);
+            var prepared = await PrepareGoalAsync(snapshot, _ => { }).ConfigureAwait(false);
+            await store
+                .CommitAsync(prepared.Snapshot, kind, cancellationToken)
+                .ConfigureAwait(false);
+            if (prepared.Snapshot.AuthorityEnvelope["goalState"] is null)
+                entry.WithState(state => state.AuthorityEnvelope.Remove("goalState"));
         });
 
     private Task EnqueueOperationAsync(Func<Task> operation)

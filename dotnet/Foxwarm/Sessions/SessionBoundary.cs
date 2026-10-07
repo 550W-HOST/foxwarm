@@ -1,10 +1,61 @@
 using System.Globalization;
+using System.Text.Json.Nodes;
 using Foxwarm.Tools;
 
 namespace Foxwarm.Sessions;
 
 internal static class SessionBoundary
 {
+    internal static bool ApplyChildHandoff(JsonObject envelope, QueueItem item)
+    {
+        if (item.Type == QueueItemType.User)
+        {
+            envelope["childHandoffState"] = new JsonObject
+            {
+                ["boundary"] = "direct-user",
+                ["resolved"] = true,
+            };
+            return true;
+        }
+        if (
+            item.Type == QueueItemType.Intersession
+            && item.SourceSessionRelation is "parent" or "other"
+        )
+        {
+            envelope["childHandoffState"] = new JsonObject
+            {
+                ["boundary"] = "report-required",
+                ["resolved"] = false,
+            };
+            return true;
+        }
+        return false;
+    }
+
+    internal static bool ResolveChildHandoff(JsonObject envelope)
+    {
+        if (
+            envelope["childHandoffState"] is not JsonObject state
+            || state["boundary"]?.GetValue<string>() != "report-required"
+            || state["resolved"]?.GetValue<bool>() == true
+        )
+            return false;
+        state["resolved"] = true;
+        return true;
+    }
+
+    internal static bool NeedsChildHandoff(JsonObject envelope) =>
+        envelope["childHandoffState"] is JsonObject state
+        && state["boundary"]?.GetValue<string>() == "report-required"
+        && state["resolved"]?.GetValue<bool>() != true;
+
+    internal static bool IsNoAction(string? text) =>
+        !string.IsNullOrWhiteSpace(text)
+        && (
+            text.Trim().Equals("NO_ACTION", StringComparison.Ordinal)
+            || text.TrimEnd().EndsWith("[NO_ACTION]", StringComparison.Ordinal)
+        );
+
     private static string Escape(string value) =>
         value
             .Replace("&", "&amp;", StringComparison.Ordinal)

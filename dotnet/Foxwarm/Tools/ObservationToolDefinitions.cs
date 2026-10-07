@@ -112,18 +112,5 @@ internal static class ObservationToolDefinitions
                 },
                 "sessionId"
             ),
-            Definition(
-                "set_goal",
-                "Keep a goal reminder in this session during substantial work that may span compaction. Use it when this session will perform the work over many steps, not for short tasks or work mostly delegated to children. The reminder survives compaction and applies only to this session.",
-                new JsonObject
-                {
-                    ["goal"] = Field("string", "Goal to remember. An empty string clears it."),
-                    ["remindEvery"] = Field(
-                        "number",
-                        "Number of subsequent non-reminder messages between reminders. Omit to keep the current interval, or use the default of 20 if none is set."
-                    ),
-                    ["clear"] = Field("boolean", "Remove the current goal reminder."),
-                }
-            ),
         ];
 }

@@ -47,6 +47,7 @@ public sealed partial class SessionSaveLane
             var captured = entry.Snapshot();
             var targetEnvelope = (JsonObject)captured.AuthorityEnvelope.DeepClone();
             targetEnvelope["nextBlockId"] = next;
+            targetEnvelope.Remove("childHandoffState");
             result = captured with { AuthorityEnvelope = targetEnvelope };
         });
         return result!;

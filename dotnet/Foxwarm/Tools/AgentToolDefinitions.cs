@@ -201,12 +201,15 @@ internal static class AgentToolDefinitions
             ),
             Tool(
                 "create_child_session",
-                "Create a child session under the current or a specified agent. Supply an initial message to start its work. Ask the child to report back with send_to_session; creation alone does not deliver its eventual result.",
+                "Create a child Session under the current Session. If taskId is supplied, attach the new Session to that task; when the task-linked child completes, use task(action:\"complete\", ...) for the completion report instead of sending a separate completion message. Without taskId, preserve the normal completion-report behavior.",
                 Parameters(
                     new JsonObject
                     {
                         ["agentName"] = String(
                             "Existing agent that will own the child. Omit to use this session's agent."
+                        ),
+                        ["taskId"] = String(
+                            "Optional existing task ID to attach the new Session to. If the task has no owner, the new Session claims it; if another Session owns it, creation fails."
                         ),
                         ["suffix"] = String(
                             "Name used to form the child's Session ID. A numeric suffix is added when needed to avoid an existing ID."

@@ -65,7 +65,8 @@ internal sealed class ModelRequestOwner(
         Func<CancellationToken, Task<IReadOnlyList<JsonObject>?>>? prepareRetry = null,
         string journalPurpose = "low-level",
         int journalIteration = 0,
-        Action<string>? journalRequestStarted = null
+        Action<string>? journalRequestStarted = null,
+        Func<Task<IReadOnlyList<JsonObject>>>? requestContext = null
     ) =>
         RequestAsync(
             sessionId,
@@ -84,7 +85,8 @@ internal sealed class ModelRequestOwner(
             prepareRetry,
             journalPurpose,
             journalIteration,
-            journalRequestStarted
+            journalRequestStarted,
+            requestContext
         );
 
     internal async Task<ChatResult> RequestAsync(
@@ -104,7 +106,8 @@ internal sealed class ModelRequestOwner(
         Func<CancellationToken, Task<IReadOnlyList<JsonObject>?>>? prepareRetry = null,
         string journalPurpose = "low-level",
         int journalIteration = 0,
-        Action<string>? journalRequestStarted = null
+        Action<string>? journalRequestStarted = null,
+        Func<Task<IReadOnlyList<JsonObject>>>? requestContext = null
     )
     {
         var catalog = captured.Catalog;
@@ -115,6 +118,10 @@ internal sealed class ModelRequestOwner(
         long? requestStarted = null;
         string? journalRequestId = null;
         var journalAttempt = 0;
+        var retainedContext = requestContext is null
+            ? Array.Empty<JsonObject>()
+            : (await requestContext().ConfigureAwait(false)).ToArray();
+        history = history.Concat(retainedContext).ToArray();
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -423,10 +430,27 @@ internal sealed class ModelRequestOwner(
                 cancellationToken.ThrowIfCancellationRequested();
                 if (updated is not null)
                 {
-                    history = updated;
+                    history = updated.Concat(retainedContext).ToArray();
                     requestStarted = null;
                     journalRequestId = null;
                     journalAttempt = 0;
+                }
+                if (requestContext is not null)
+                {
+                    var nextContext = (await requestContext().ConfigureAwait(false)).ToArray();
+                    var changed =
+                        retainedContext.Length != nextContext.Length
+                        || retainedContext
+                            .Zip(nextContext)
+                            .Any(pair => !JsonNode.DeepEquals(pair.First, pair.Second));
+                    if (changed)
+                    {
+                        retainedContext = nextContext;
+                        history = history.Concat(retainedContext).ToArray();
+                        requestStarted = null;
+                        journalRequestId = null;
+                        journalAttempt = 0;
+                    }
                 }
             }
         }

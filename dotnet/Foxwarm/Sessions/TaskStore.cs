@@ -115,6 +115,196 @@ internal sealed class TaskStore : IDisposable
         }
     }
 
+    internal void MigrateLegacyGoal(string sessionId, string goal, long anchorSeq)
+    {
+        lock (gate)
+        {
+            var db = Open();
+            db.ExecuteNonQuery("BEGIN IMMEDIATE");
+            try
+            {
+                var references = References(sessionId);
+                var placeholders = string.Join(',', references.Select((_, index) => "$r" + index));
+                using var find = db.CreateCommand();
+                find.CommandText =
+                    $"SELECT id FROM tasks WHERE legacyGoalSessionId IN ({placeholders}) ORDER BY createdAt,id LIMIT 1";
+                for (var index = 0; index < references.Count; index++)
+                    Add(find, "$r" + index, references[index]);
+                var existing = find.ExecuteScalar()?.ToString();
+                if (existing is null)
+                {
+                    var id = "task_" + Guid.NewGuid().ToString("N");
+                    var now = Now();
+                    using var insert = db.CreateCommand();
+                    insert.CommandText =
+                        "INSERT INTO tasks(id,title,description,status,createdBySessionId,ownerSessionId,createdAt,updatedAt,legacyGoalSessionId,reminderLastSeq) VALUES($id,$title,$description,'active',$creator,$owner,$now,$now,$legacy,$anchor)";
+                    Add(insert, "$id", id);
+                    Add(
+                        insert,
+                        "$title",
+                        goal.Trim().Split('\n')[0][
+                            ..Math.Min(200, goal.Trim().Split('\n')[0].Length)
+                        ]
+                    );
+                    Add(insert, "$description", goal);
+                    Add(insert, "$creator", Canonical(sessionId));
+                    Add(insert, "$owner", Canonical(sessionId));
+                    Add(insert, "$now", now);
+                    Add(insert, "$legacy", sessionId);
+                    Add(insert, "$anchor", anchorSeq);
+                    insert.ExecuteNonQuery();
+                }
+                db.ExecuteNonQuery("COMMIT");
+            }
+            catch
+            {
+                try
+                {
+                    db.ExecuteNonQuery("ROLLBACK");
+                }
+                catch { }
+                throw;
+            }
+        }
+    }
+
+    internal void BindChild(string taskId, string childSessionId, long anchorSeq)
+    {
+        lock (gate)
+        {
+            var db = Open();
+            db.ExecuteNonQuery("BEGIN IMMEDIATE");
+            try
+            {
+                var task =
+                    Read(db, taskId)
+                    ?? throw new TaskError("TASK_NOT_FOUND", $"Task {taskId} not found.", 404);
+                var status = Text(task["status"]);
+                if (status is "completed" or "cancelled")
+                    throw new TaskError("TASK_TERMINAL", $"Task {taskId} is terminal.", 409);
+                if (Text(task["ownerSessionId"]) is { } owner)
+                    throw new TaskError(
+                        "TASK_OWNED",
+                        $"Task {taskId} is already claimed by another Session ({owner}).",
+                        409
+                    );
+                var now = Now();
+                Update(
+                    db,
+                    taskId,
+                    "ownerSessionId",
+                    Canonical(childSessionId),
+                    "attachedSessionId",
+                    Canonical(childSessionId),
+                    "status",
+                    "active",
+                    "updatedAt",
+                    now,
+                    "reminderLastSeq",
+                    anchorSeq,
+                    "reminderMessageCount",
+                    0
+                );
+                AddNote(
+                    db,
+                    taskId,
+                    childSessionId,
+                    $"Attached new Session {Canonical(childSessionId)}.",
+                    now
+                );
+                db.ExecuteNonQuery("COMMIT");
+            }
+            catch
+            {
+                try
+                {
+                    db.ExecuteNonQuery("ROLLBACK");
+                }
+                catch { }
+                throw;
+            }
+        }
+    }
+
+    internal JsonArray TaskContext(
+        string sessionId,
+        IReadOnlyList<long> sequences,
+        bool consume,
+        IReadOnlyList<string> retained
+    )
+    {
+        lock (gate)
+        {
+            var db = Open();
+            db.ExecuteNonQuery("BEGIN IMMEDIATE");
+            try
+            {
+                var references = References(sessionId);
+                var result = new JsonArray();
+                using var cmd = db.CreateCommand();
+                cmd.CommandText = "SELECT * FROM tasks WHERE status='active' ORDER BY createdAt,id";
+                using var reader = cmd.ExecuteReader();
+                var rows = new List<JsonObject>();
+                while (reader.Read())
+                    rows.Add(Row(reader));
+                var latest = sequences.Count == 0 ? 0 : sequences.Max();
+                foreach (var row in rows)
+                {
+                    var creator = Canonical(Text(row["createdBySessionId"]));
+                    var owner = Canonical(Text(row["ownerSessionId"]));
+                    if (
+                        creator is null
+                        || owner is null
+                        || !references.Contains(creator)
+                        || !references.Contains(owner)
+                    )
+                        continue;
+                    var last =
+                        row["reminderLastSeq"] is JsonValue lastValue
+                        && lastValue.TryGetValue<long>(out var lastSeq)
+                            ? lastSeq
+                            : 0;
+                    var count = Int(row["reminderMessageCount"]);
+                    count = Math.Min(30, count + sequences.Count(seq => seq > last));
+                    var due = count >= 30;
+                    var id = Text(row["id"])!;
+                    if (consume && (due || retained.Contains(id)))
+                    {
+                        result.Add(
+                            new JsonObject
+                            {
+                                ["id"] = id,
+                                ["title"] = Text(row["title"]),
+                                ["status"] = Text(row["status"]),
+                            }
+                        );
+                        if (due)
+                            count = 0;
+                    }
+                    Update(
+                        db,
+                        id,
+                        "reminderLastSeq",
+                        Math.Max(latest, last),
+                        "reminderMessageCount",
+                        count
+                    );
+                }
+                db.ExecuteNonQuery("COMMIT");
+                return result;
+            }
+            catch
+            {
+                try
+                {
+                    db.ExecuteNonQuery("ROLLBACK");
+                }
+                catch { }
+                throw;
+            }
+        }
+    }
+
     internal void MarkNotification(
         string taskId,
         string field,

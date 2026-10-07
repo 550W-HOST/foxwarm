@@ -11,7 +11,8 @@ internal sealed class SessionChatService(
     HostModels models,
     AgentMemory memory,
     Action<string, ResponsesStreamProgress> progress,
-    Func<JsonArray>? definitions = null
+    Func<JsonArray>? definitions = null,
+    TaskService? tasks = null
 ) : ISessionChatService
 {
     public Task<ChatResult> ChatAsync(
@@ -47,6 +48,47 @@ internal sealed class SessionChatService(
         var cacheKey = await hosted.Entry.SaveLane.EnsurePromptCacheKeyAsync();
         var notice = new ModelRetryNotice(hosted);
         var attempts = 0;
+        var retainedTaskIds = new List<string>();
+        async Task<IReadOnlyList<JsonObject>> RequestContext()
+        {
+            var visible = history
+                .Where(row =>
+                    row["__meta"]?["goalReminder"] is null && row["__meta"]?["contextBlock"] is null
+                )
+                .Select(row => row["__meta"]?["seq"])
+                .OfType<JsonValue>()
+                .Select(value => value.TryGetValue<long>(out var seq) ? seq : 0)
+                .Where(seq => seq > 0)
+                .Distinct()
+                .OrderBy(seq => seq)
+                .TakeLast(30)
+                .ToArray();
+            if (tasks is null)
+                return [];
+            var current = tasks.TaskContext(hosted.Id, visible, true, retainedTaskIds);
+            retainedTaskIds = current.Select(item => item!["id"]!.GetValue<string>()).ToList();
+            if (current.Count == 0)
+                return [];
+            var lines = current.Select(item =>
+                $"{item!["id"]!.GetValue<string>()} — {item["title"]!.GetValue<string>()} ({item["status"]!.GetValue<string>()})"
+            );
+            return
+            [
+                new JsonObject
+                {
+                    ["role"] = "user",
+                    ["parts"] = new JsonArray(
+                        new JsonObject
+                        {
+                            ["system"] =
+                                "<foxwarm-system kind=\"task-reminder\">Continue the active tasks:\n"
+                                + string.Join('\n', lines)
+                                + "</foxwarm-system>",
+                        }
+                    ),
+                },
+            ];
+        }
         async Task<string> Prompt(ConcreteHostModel leaf, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
@@ -103,7 +145,8 @@ internal sealed class SessionChatService(
                     },
                 "normal-turn",
                 0,
-                id => hosted.BeginDraft(id)
+                id => hosted.BeginDraft(id),
+                RequestContext
             );
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

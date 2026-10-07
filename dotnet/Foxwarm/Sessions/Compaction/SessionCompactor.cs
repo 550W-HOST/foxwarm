@@ -514,6 +514,25 @@ internal sealed partial class SessionCompactor
         }
     }
 
+    private void CheckpointTaskProgress(SessionSnapshot snapshot)
+    {
+        if (sessions is null)
+            return;
+        var sequences = snapshot
+            .History.Where(row =>
+                row["__meta"]?["goalReminder"] is null && row["__meta"]?["contextBlock"] is null
+            )
+            .Select(row => row["__meta"]?["seq"])
+            .OfType<JsonValue>()
+            .Select(value => value.TryGetValue<long>(out var seq) ? seq : 0)
+            .Where(seq => seq > 0)
+            .Distinct()
+            .OrderBy(seq => seq)
+            .TakeLast(30)
+            .ToArray();
+        sessions.Tasks.TaskContext(snapshot.Id, sequences, false, []);
+    }
+
     private async Task PlanAndApplyAwaitedAsync(CompactRun run, string? guidance)
     {
         await PreparePlanAsync(run, guidance);
@@ -524,6 +543,7 @@ internal sealed partial class SessionCompactor
     private async Task ApplyAsync(CompactRun run)
     {
         run.Cancellation.Token.ThrowIfCancellationRequested();
+        CheckpointTaskProgress(run.Snapshot);
         lock (gate)
             run.Phase = "committing";
         try

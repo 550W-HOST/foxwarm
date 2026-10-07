@@ -274,9 +274,27 @@ public sealed class SessionAuthorityDocument
         )
             throw new InvalidDataException("Session authority aliases must be nonempty strings.");
         SessionGoal.Validate(root);
-        foreach (
-            var unsupported in new[] { "indexingState", "childHandoffState", "contextFrontier" }
-        )
+        if (root["childHandoffState"] is JsonObject handoff)
+        {
+            var boundary = RequiredString(
+                handoff,
+                "boundary",
+                "Session authority childHandoffState"
+            );
+            if (boundary is not ("direct-user" or "report-required"))
+                throw new InvalidDataException(
+                    "Session authority childHandoffState.boundary is invalid."
+                );
+            if (handoff["resolved"] is not JsonValue resolved || !resolved.TryGetValue<bool>(out _))
+                throw new InvalidDataException(
+                    "Session authority childHandoffState.resolved must be boolean."
+                );
+        }
+        else if (root.ContainsKey("childHandoffState"))
+            throw new InvalidDataException(
+                "Session authority childHandoffState must be an object."
+            );
+        foreach (var unsupported in new[] { "indexingState", "contextFrontier" })
             if (root.ContainsKey(unsupported))
                 throw new UnsupportedSessionAuthorityException(
                     $"Session authority {unsupported} is unsupported by Slice C1."

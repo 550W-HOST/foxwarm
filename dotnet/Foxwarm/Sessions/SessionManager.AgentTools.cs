@@ -108,7 +108,6 @@ internal sealed partial class SessionManager
                     return (await CompactSessionAsync(source, args), false);
                 case "session":
                 case "get_session_messages":
-                case "set_goal":
                     return (await ObserveAsync(source, name, args), false);
                 case "skill":
                     return (await SkillAsync(source, args), false);
@@ -158,6 +157,7 @@ internal sealed partial class SessionManager
                             "afterSend",
                             "forceModel",
                             "fork",
+                            "taskId",
                             "confirmation",
                         ],
                         ["suffix"]
@@ -171,15 +171,46 @@ internal sealed partial class SessionManager
                         throw new InvalidDataException(
                             "create_child_session with afterSend=wait requires a nonempty initial message."
                         );
-                    var (child, delivered) = await CreateChildAsync(
-                        source,
-                        RequiredString(args, "suffix"),
-                        OptionalString(args, "agentName"),
-                        OptionalString(args, "displayName"),
-                        OptionalString(args, "message"),
-                        forceModel,
-                        OptionalBool(args, "fork") ?? false
-                    );
+                    var taskId = OptionalString(args, "taskId");
+                    SessionOwner child;
+                    if (taskId is null)
+                    {
+                        child = (
+                            await CreateChildAsync(
+                                source,
+                                RequiredString(args, "suffix"),
+                                OptionalString(args, "agentName"),
+                                OptionalString(args, "displayName"),
+                                null,
+                                forceModel,
+                                OptionalBool(args, "fork") ?? false
+                            )
+                        ).Child;
+                    }
+                    else
+                    {
+                        child = await Tasks.CreateAttachedChildAsync(
+                            taskId,
+                            async () =>
+                                (
+                                    await CreateChildAsync(
+                                        source,
+                                        RequiredString(args, "suffix"),
+                                        OptionalString(args, "agentName"),
+                                        OptionalString(args, "displayName"),
+                                        null,
+                                        forceModel,
+                                        OptionalBool(args, "fork") ?? false
+                                    )
+                                ).Child
+                        );
+                    }
+                    var delivered = false;
+                    if (OptionalString(args, "message") is { } initialMessage)
+                    {
+                        await SendAsync(source, child.Id, initialMessage);
+                        delivered = true;
+                    }
                     return (
                         Output(
                             $"Created child Session {child.Id} under Agent {child.Agent}; "

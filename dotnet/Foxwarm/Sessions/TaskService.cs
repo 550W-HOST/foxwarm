@@ -8,6 +8,7 @@ internal sealed class TaskService : IDisposable
     private readonly SessionManager manager;
     private readonly Func<string, string?> resolveSessionId;
     private readonly Func<string, long?> anchorSeq;
+    private readonly SemaphoreSlim childLane = new(1, 1);
 
     internal TaskService(
         SessionManager manager,
@@ -71,6 +72,52 @@ internal sealed class TaskService : IDisposable
                 )
                 .Payload["task"]!.DeepClone();
         return result;
+    }
+
+    internal Task MigrateLegacyGoalAsync(string sessionId, string goal, long anchorSeq)
+    {
+        store.MigrateLegacyGoal(sessionId, goal, anchorSeq);
+        return Task.CompletedTask;
+    }
+
+    internal JsonArray TaskContext(
+        string sessionId,
+        IReadOnlyList<long> sequences,
+        bool consume,
+        IReadOnlyList<string> retained
+    ) => store.TaskContext(sessionId, sequences, consume, retained);
+
+    internal async Task<SessionOwner> CreateAttachedChildAsync(
+        string taskId,
+        Func<Task<SessionOwner>> create
+    )
+    {
+        await childLane.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var task = store
+                .Execute(new JsonObject { ["action"] = "get", ["taskId"] = taskId }, null)
+                .Payload["task"]!.AsObject();
+            if (Text(task["status"]) is "completed" or "cancelled")
+                throw new TaskError("TASK_TERMINAL", $"Task {taskId} is terminal.", 409);
+            if (Text(task["ownerSessionId"]) is { } owner)
+                throw new TaskError(
+                    "TASK_OWNED",
+                    $"Task {taskId} is already claimed by another Session ({owner}).",
+                    409
+                );
+            var child = await create().ConfigureAwait(false);
+            store.BindChild(
+                taskId,
+                child.Id,
+                Math.Max(0, child.Entry.Snapshot().NextMessageSeq - 1)
+            );
+            return child;
+        }
+        finally
+        {
+            childLane.Release();
+        }
     }
 
     private async Task DeliverAssignmentAsync(

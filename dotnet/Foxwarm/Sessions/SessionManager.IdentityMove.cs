@@ -426,6 +426,7 @@ internal sealed partial class SessionManager
             await owner.Entry.SaveLane.MutateIdentityAsync(async () =>
             {
                 owner.Entry.RequireIdentityAuthority();
+                await PrepareLegacyGoalBeforeIdentityAsync(owner);
                 await IdentityStageAsync(operation, "before-mutation");
                 mutated = true;
                 details["stage"] = "paths";

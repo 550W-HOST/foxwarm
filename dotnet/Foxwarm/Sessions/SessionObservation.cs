@@ -117,26 +117,6 @@ internal sealed partial class SessionManager
 {
     internal async Task<JsonObject> ObserveAsync(SessionOwner source, string name, JsonObject args)
     {
-        if (name == "set_goal")
-        {
-            Keys(args, ["goal", "remindEvery", "clear"], []);
-            var clear = OptionalBool(args, "clear") == true;
-            string? goal = null;
-            if (!clear)
-            {
-                if (SessionWait.Text(args["goal"]) is not string text)
-                    throw new InvalidDataException("goal must be a string.");
-                goal = SessionGoal.Trim(text);
-                if (goal.Length == 0)
-                    goal = null;
-            }
-            await source.Entry.SaveLane.SetGoalAsync(
-                goal,
-                args["remindEvery"],
-                args.ContainsKey("remindEvery")
-            );
-            return Output("ok");
-        }
         if (name == "get_session_messages")
         {
             Keys(

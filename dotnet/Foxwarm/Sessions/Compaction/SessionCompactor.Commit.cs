@@ -107,28 +107,9 @@ internal sealed partial class SessionCompactor
             ),
             ["__meta"] = new JsonObject { ["seq"] = live.NextMessageSeq, ["timestamp"] = now },
         };
-        var liveGoal = live.AuthorityEnvelope["goalState"] as JsonObject;
-        var hasGoal =
-            SessionWait.Text(liveGoal?["goal"]) is string goalText
-            && SessionGoal.Trim(goalText).Length > 0;
-        if (hasGoal)
-        {
-            ((JsonArray)completion["parts"]!).Add(
-                new JsonObject
-                {
-                    ["system"] = SessionGoal.Format(SessionWait.Text(liveGoal!["goal"])!),
-                }
-            );
-            var completionMeta = (JsonObject)completion["__meta"]!;
-            completionMeta["goalReminder"] = true;
-            completionMeta["goalReminderKind"] = "compact-completion";
-            completionMeta["goalAnchorSeq"] = live.NextMessageSeq;
-        }
         history.Add(completion);
         var envelope = (JsonObject)live.AuthorityEnvelope.DeepClone();
         envelope["nextBlockId"] = nextBlockId;
-        if (hasGoal)
-            ((JsonObject)envelope["goalState"]!)["anchorSeq"] = live.NextMessageSeq;
         var meta = (JsonObject)live.Meta.DeepClone();
         meta["messageCount"] = history.Count;
         var staged = live.Snapshot() with
@@ -150,8 +131,6 @@ internal sealed partial class SessionCompactor
                 previousNext + 1,
                 nextBlockId
             );
-            if (hasGoal && state.AuthorityEnvelope["goalState"] is JsonObject currentGoal)
-                currentGoal["anchorSeq"] = previousNext;
         }
         return new CompactionPreparation(
             staged,

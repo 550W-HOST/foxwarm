@@ -253,6 +253,41 @@ internal sealed partial class SessionManager : IAsyncDisposable
         return live is { } next ? next - 1 : null;
     }
 
+    private async Task<SessionSnapshot> MigrateGoalSnapshotAsync(SessionSnapshot snapshot)
+    {
+        if (snapshot.AuthorityEnvelope["goalState"] is not JsonObject goalState)
+            return snapshot;
+        if (
+            goalState["goal"] is not JsonValue goalValue
+            || !goalValue.TryGetValue<string>(out var goal)
+        )
+            throw new InvalidDataException(
+                "Session authority goalState must contain a goal string."
+            );
+        var envelope = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();
+        envelope.Remove("goalState");
+        if (string.IsNullOrWhiteSpace(goal))
+            return snapshot with { AuthorityEnvelope = envelope };
+        var anchor =
+            goalState["anchorSeq"] is JsonValue anchorValue
+            && anchorValue.TryGetValue<long>(out var storedAnchor)
+            && storedAnchor >= 0
+                ? storedAnchor
+                : Math.Max(0, snapshot.NextMessageSeq - 1);
+        await Tasks.MigrateLegacyGoalAsync(snapshot.Id, goal, anchor).ConfigureAwait(false);
+        return snapshot with { AuthorityEnvelope = envelope };
+    }
+
+    internal async Task PrepareLegacyGoalBeforeIdentityAsync(SessionOwner owner)
+    {
+        var snapshot = owner.Entry.Snapshot();
+        if (snapshot.AuthorityEnvelope["goalState"] is null)
+            return;
+        var migrated = await MigrateGoalSnapshotAsync(snapshot).ConfigureAwait(false);
+        await owner.AuthorityStore.CommitAsync(migrated, SaveKind.Strict).ConfigureAwait(false);
+        owner.Entry.WithState(state => state.AuthorityEnvelope.Remove("goalState"));
+    }
+
     public Task LoadAsync() => LoadOwnersAsync(startMainServices: false);
 
     private async Task LoadOwnersAsync(bool startMainServices)
@@ -449,7 +484,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
                     new JsonObject { ["text"] = update.Text, ["reasoning"] = update.Reasoning }
                 );
             },
-            () => ModelDefinitions(hosted)
+            () => ModelDefinitions(hosted),
+            Tasks
         );
         var registry = new SessionRegistry(
             store,
@@ -459,7 +495,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 hosted,
                 this,
                 tools
-            )
+            ),
+            migrateGoal: MigrateGoalSnapshotAsync
         );
         hosted.Registry = registry;
         hosted.Compactor = new SessionCompactor(

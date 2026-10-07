@@ -59,15 +59,18 @@ public sealed class SessionRegistry
     private readonly SessionTurnRunner runner;
     private readonly SessionIngress ingress;
     private readonly SessionControl control;
+    private readonly Func<SessionSnapshot, Task<SessionSnapshot>>? migrateGoal;
 
     public SessionRegistry(
         ISessionAuthorityStore store,
         IChatService chat,
         ITurnToolExecutor? tools = null,
         int maxToolIterations = 500,
-        Func<long>? clock = null
+        Func<long>? clock = null,
+        Func<SessionSnapshot, Task<SessionSnapshot>>? migrateGoal = null
     )
     {
+        this.migrateGoal = migrateGoal;
         Store = store;
         hosts = new LocalSessionTurnHostFactory(
             store,
@@ -118,7 +121,7 @@ public sealed class SessionRegistry
         var state = new SessionState(sessionId);
         if (snapshot is not null)
             Restore(state, snapshot);
-        var entry = new SessionEntry(state, Store);
+        var entry = new SessionEntry(state, Store, migrateGoal);
         if (!entries.TryAdd(sessionId, entry))
             throw new InvalidOperationException($"Session '{sessionId}' already exists.");
         return entry;

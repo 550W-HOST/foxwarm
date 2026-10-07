@@ -101,10 +101,6 @@ public sealed partial class LocalSessionTurnHost
                 registered.Token.ThrowIfCancellationRequested();
                 await SafePointAsync().ConfigureAwait(false);
                 registered.Token.ThrowIfCancellationRequested();
-                await entry
-                    .SaveLane.AppendGoalReminderAsync(registered.Token)
-                    .ConfigureAwait(false);
-                registered.Token.ThrowIfCancellationRequested();
                 var history = entry.WithState(state =>
                     state.History.Select(m => (JsonObject)m.DeepClone()).ToArray()
                 );
@@ -133,6 +129,17 @@ public sealed partial class LocalSessionTurnHost
                     var calls = ExtractFunctionCalls(assistant);
                     if (calls.Count == 0)
                     {
+                        var noAction = SessionBoundary.IsNoAction(
+                            assistant["parts"]
+                                ?.AsArray()
+                                .FirstOrDefault(part => SessionWait.Text(part?["text"]) is not null)
+                                ?["text"]?.GetValue<string>()
+                        );
+                        var hasLeadingQueue = entry.WithState(state =>
+                            state.Queue.Any(SessionCompactor.Ordinary)
+                        );
+                        if (!hasLeadingQueue && noAction)
+                            await entry.SaveLane.ResolveChildHandoffAsync().ConfigureAwait(false);
                         if (
                             !entry.WithState(state =>
                                 !state.Stopping
@@ -155,6 +162,12 @@ public sealed partial class LocalSessionTurnHost
                             registered.Token
                         )
                         .ConfigureAwait(false);
+
+                    if (
+                        tools is SessionToolExecutor receiptTools
+                        && receiptTools.ConsumeReceipts().Count > 0
+                    )
+                        await entry.SaveLane.ResolveChildHandoffAsync().ConfigureAwait(false);
 
                     if (
                         toolParts.FirstOrDefault()?["functionResponse"] is JsonObject firstResponse
@@ -441,6 +454,9 @@ public sealed partial class LocalSessionTurnHost
             .Select(item => item.CloneItem())
             .ToArray();
         var stagedMeta = (JsonObject)state.Meta.DeepClone();
+        var stagedEnvelope = (JsonObject)state.AuthorityEnvelope.DeepClone();
+        foreach (var item in selectedItems)
+            SessionBoundary.ApplyChildHandoff(stagedEnvelope, item);
         JsonNode? previousLastMessageTime = state.Meta["lastMessageTime"]?.DeepClone();
         var hadLastMessageTime = state.Meta.ContainsKey("lastMessageTime");
         if (updateLastMessageTime)
@@ -457,7 +473,7 @@ public sealed partial class LocalSessionTurnHost
             stagedMeta,
             nextSeq,
             stagedHistoryVersion,
-            (JsonObject)state.AuthorityEnvelope.DeepClone()
+            stagedEnvelope
         );
 
         return new CanonicalAppendPreparation(
@@ -485,6 +501,12 @@ public sealed partial class LocalSessionTurnHost
                 live.NextMessageSeq = nextSeq;
                 live.HistoryVersion = stagedHistoryVersion;
                 live.Meta["messageCount"] = live.History.Count;
+                if (stagedEnvelope["childHandoffState"] is null)
+                    live.AuthorityEnvelope.Remove("childHandoffState");
+                else
+                    live.AuthorityEnvelope["childHandoffState"] = stagedEnvelope[
+                        "childHandoffState"
+                    ]!.DeepClone();
                 if (
                     updateLastMessageTime
                     && live.Meta.ContainsKey("lastMessageTime") == hadLastMessageTime

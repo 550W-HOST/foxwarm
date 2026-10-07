@@ -710,28 +710,6 @@ internal sealed partial class SessionManager
                         }
                     }
                 }
-                if (SessionSaveLane.IsGoalCommit)
-                {
-                    var suffix =
-                        stage == AtomicJsonWriteStage.BeforeRename ? ".goal-before-rename"
-                        : stage == AtomicJsonWriteStage.AfterRenameBeforeDirectorySync
-                            ? ".goal-after-rename"
-                        : null;
-                    if (suffix is not null)
-                    {
-                        var goalMarker = Path.Combine(
-                            root,
-                            "state",
-                            "experiment-faults",
-                            SessionIdentity.ExecDirectorySegment(store?.SessionId ?? id) + suffix
-                        );
-                        if (File.Exists(goalMarker))
-                        {
-                            File.Delete(goalMarker);
-                            throw new IOException("Injected experimental goal commit failure.");
-                        }
-                    }
-                }
                 if (SessionSaveLane.IsWaitCommit)
                 {
                     var suffix =

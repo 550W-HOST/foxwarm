@@ -12,6 +12,7 @@ internal sealed partial class SessionToolExecutor(
 {
     private int finishPending;
     private int policyUnavailable;
+    private readonly List<TurnToolReceipt> turnReceipts = [];
     public bool PolicyUnavailable => Volatile.Read(ref policyUnavailable) != 0;
     internal WorkspaceTools? Files =>
         invocation.Value?.Files
@@ -128,12 +129,29 @@ internal sealed partial class SessionToolExecutor(
         try
         {
             var response = await ExecuteCoreAsync(call, token);
+            if (
+                SessionWait.Text(call["name"]) == "send_to_session"
+                && response["error"] is null
+                && call["args"] is JsonObject sendArgs
+                && SessionWait.Text(sendArgs["sessionId"]) is string requested
+            )
+            {
+                var parent = hosted.Metadata().ParentSessionId;
+                if (
+                    parent is not null
+                    && sessions.ResolveSessionReference(hosted, requested) == parent
+                )
+                    current.Receipt = new TurnToolReceipt(parent, null, null);
+            }
+            if (current.Receipt is not null)
+                turnReceipts.Add(current.Receipt);
             return new(
                 response,
                 current.Timing,
                 response["error"] is null ? current.ResolvedPaths : null,
                 current.DeferredCwd,
-                current.ToolScriptSubCalls
+                current.ToolScriptSubCalls,
+                current.Receipt
             );
         }
         finally
@@ -149,6 +167,14 @@ internal sealed partial class SessionToolExecutor(
         Interlocked.Exchange(ref finishPending, 0);
         explicitWaitIds.Clear();
         handoffTargets.Clear();
+        turnReceipts.Clear();
+    }
+
+    internal IReadOnlyList<TurnToolReceipt> ConsumeReceipts()
+    {
+        var receipts = turnReceipts.ToArray();
+        turnReceipts.Clear();
+        return receipts;
     }
 
     public bool ConsumeFinishAfterBatch() => Interlocked.Exchange(ref finishPending, 0) == 1;
@@ -291,6 +317,22 @@ internal sealed partial class SessionToolExecutor(
                 throw;
             return UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message);
         }
+    }
+
+    private async Task<JsonObject> ExecuteTaskAsync(JsonObject args, CancellationToken token)
+    {
+        var response = await Manager.Tasks.ExecuteForToolAsync(Hosted, args).ConfigureAwait(false);
+        if (
+            SessionWait.Text(args["action"]) == "complete"
+            && response["task"] is JsonObject task
+            && SessionWait.Text(task["attachedSessionId"]) == Hosted.Id
+        )
+            invocation.Value!.Receipt = new TurnToolReceipt(
+                null,
+                SessionWait.Text(task["id"]),
+                Hosted.Id
+            );
+        return response;
     }
 
     private async Task<JsonObject> ExecuteExecAsync(JsonObject args, CancellationToken token)
@@ -443,8 +485,7 @@ internal sealed partial class SessionToolExecutor(
                     "submit_compact_plan is available only to the dedicated compactor."
                 )
             );
-        handlers["task"] = async (owner, args, _) =>
-            await owner.Manager.Tasks.ExecuteForToolAsync(owner.Hosted, args);
+        handlers["task"] = (owner, args, token) => owner.ExecuteTaskAsync(args, token);
         foreach (
             var name in new[]
             {
@@ -459,7 +500,6 @@ internal sealed partial class SessionToolExecutor(
                 "set_agent_inherit",
                 "session",
                 "get_session_messages",
-                "set_goal",
                 "set_session_child_model",
                 "set_session_compact_threshold",
                 "compact_session",
@@ -582,7 +622,14 @@ internal sealed record TurnToolExecution(
     JsonObject? Timing = null,
     JsonArray? ResolvedPaths = null,
     string? DeferredCwd = null,
-    JsonArray? ToolScriptSubCalls = null
+    JsonArray? ToolScriptSubCalls = null,
+    TurnToolReceipt? Receipt = null
+);
+
+internal sealed record TurnToolReceipt(
+    string? SuccessfulSendTarget,
+    string? CompletedTaskId,
+    string? AttachedSessionId
 );
 
 internal sealed class TurnToolInvocation(string callId)
@@ -594,4 +641,5 @@ internal sealed class TurnToolInvocation(string callId)
     internal JsonArray? ResolvedPaths { get; set; }
     internal string? DeferredCwd { get; set; }
     internal JsonArray? ToolScriptSubCalls { get; set; }
+    internal TurnToolReceipt? Receipt { get; set; }
 }
