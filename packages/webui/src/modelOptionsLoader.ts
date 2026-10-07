@@ -1,6 +1,12 @@
 export type LatestRequestGate = ReturnType<typeof createLatestRequestGate>
 
 const pageRequestCache = new Map<string, Promise<unknown>>()
+export const MODEL_OPTIONS_CHANGED_EVENT = 'foxwarm:models-changed'
+
+export function refreshModelOptions(): void {
+  pageRequestCache.delete('webui:models')
+  window.dispatchEvent(new Event(MODEL_OPTIONS_CHANGED_EVENT))
+}
 
 export function loadPageOnce<T>(key: string, request: () => Promise<T>): Promise<T> {
   const existing = pageRequestCache.get(key)
