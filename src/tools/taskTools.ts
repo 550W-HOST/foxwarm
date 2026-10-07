@@ -11,6 +11,7 @@ export const taskService = new TaskService(new TaskStore(path.join(STATE_DIR, 't
   sessionAliases: id => sessionManager.getSessionCatalog(id)?.aliases || [],
 }), {
   resolveSessionId: id => sessionManager.getSessionCatalog(id)?.id,
+  resolveSessionAgent: id => sessionManager.getSessionCatalog(id)?.agent,
   readSessionMessageSeq: async id => {
     const state = await readSessionHistorySnapshot(id);
     return typeof state?.nextMessageSeq === 'number' ? Math.max(0, state.nextMessageSeq - 1) : undefined;
