@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 
 export const TASK_ACTIONS = ['create', 'list', 'get', 'claim', 'assign', 'update', 'complete', 'cancel'] as const;
@@ -88,6 +88,10 @@ export function validateTaskArgs(args: TaskArgs): void {
     throw new TaskError('TASK_INVALID_ARGS', 'task update requires description, note, or status.');
   }
   if (Object.prototype.hasOwnProperty.call(args, 'note') && !args.note.trim()) throw new TaskError('TASK_INVALID_ARGS', 'note must be non-empty.');
+}
+
+function generateTaskId(): string {
+  return `task_${randomBytes(6).toString('hex')}`;
 }
 
 /** Small independent SQLite store; tasks never write Session state or history. */
@@ -219,7 +223,7 @@ export class TaskStore {
       }
       // Parent is immutable and can only reference an existing task. A fresh
       // generated ID therefore cannot form a cycle, including self-parenting.
-      const id = `task_${randomUUID()}`;
+      const id = generateTaskId();
       const owner = args.ownerSessionId ?? null;
       const notify = owner !== null && args.notifySession === true;
       db.prepare(`INSERT INTO tasks (id,title,description,status,parentTaskId,createdBySessionId,ownerSessionId,createdAt,updatedAt,
@@ -316,7 +320,7 @@ export class TaskStore {
       if (task) { task = this.canonicalTask(task); this.writeReferences(db, task); }
       if (!task) {
         const now = Date.now();
-        const id = `task_${randomUUID()}`;
+        const id = generateTaskId();
         const title = goal.trim().split('\n')[0].slice(0, 200) || 'Migrated task';
         db.prepare(`INSERT INTO tasks (id,title,description,status,createdBySessionId,ownerSessionId,createdAt,updatedAt,
           legacyGoalSessionId,reminderLastSeq) VALUES (?,?,?,'active',?,?,?,?,?,?)`)

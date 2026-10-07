@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
+import { DatabaseSync } from 'node:sqlite';
 import { TaskStore, TASK_CHILD_LIMIT, TASK_LIST_LIMIT, TASK_NOTE_LIMIT } from './taskStore';
 
 function fixture(t: any): TaskStore {
@@ -17,7 +18,7 @@ function fixture(t: any): TaskStore {
 test('coordinator creates, executor claims and updates, coordinator cannot update or complete the owned task', t => {
   const store = fixture(t);
   const created = store.execute({ action: 'create', title: 'Implement parser', description: 'Parse one format.' }, 'coordinator').task;
-  assert.match(created.id, /^task_/);
+  assert.match(created.id, /^task_[0-9a-f]{12}$/);
   assert.equal(created.createdBySessionId, 'coordinator');
   assert.equal(created.ownerSessionId, null);
   assert.equal(created.status, 'open');
@@ -154,6 +155,7 @@ test('legacy Goal migration is idempotent, preserves full text and never revives
   const store = fixture(t);
   const goal = 'Preserve the work\n' + 'x'.repeat(8000);
   const first = store.migrateLegacyGoal('legacy-owner', goal, 0);
+  assert.match(first.id, /^task_[0-9a-f]{12}$/);
   assert.equal(first.ownerSessionId, 'legacy-owner');
   assert.equal(first.createdBySessionId, 'legacy-owner');
   assert.equal(first.status, 'active');
@@ -191,4 +193,28 @@ test('fixed 30-message reminders are persisted, deduplicated and preserve progre
   store.execute({ action: 'complete', taskId: self.id }, 'owner');
   assert.deepEqual(store.taskContext('owner', seqs(30, 61), true, [self.id]), []);
   assert.throws(() => store.execute({ action: 'update', taskId: delegated.id, reminderEvery: 30 }, 'owner'), /not allowed/);
+});
+
+test('persisted UUID task IDs remain usable with new short-ID child references', t => {
+  const store = fixture(t);
+  // Open the current schema, then seed a record in the historical persisted format.
+  store.execute({ action: 'list' });
+  const historicalId = 'task_550e8400-e29b-41d4-a716-446655440000';
+  const db = new DatabaseSync(store.filePath);
+  try {
+    db.prepare(`INSERT INTO tasks (id,title,description,status,createdBySessionId,createdAt,updatedAt)
+      VALUES (?,?,?,'open',?,?,?)`).run(historicalId, 'Historical task', 'Full persisted description', 'owner', 1, 1);
+  } finally { db.close(); }
+  store.close();
+  assert.equal(store.execute({ action: 'get', taskId: historicalId }).task.description, 'Full persisted description');
+  store.execute({ action: 'update', taskId: historicalId, note: 'Progress with the old ID' }, 'owner');
+  const child = store.execute({ action: 'create', title: 'New short child', parentTaskId: historicalId }, 'owner').task;
+  assert.match(child.id, /^task_[0-9a-f]{12}$/);
+  assert.equal(child.parentTaskId, historicalId);
+  const parent = store.execute({ action: 'get', taskId: historicalId });
+  assert.equal(parent.task.id, historicalId);
+  assert.equal(parent.notes[0].text, 'Progress with the old ID');
+  assert.equal(parent.children[0].id, child.id);
+  store.execute({ action: 'complete', taskId: historicalId }, 'owner');
+  assert.equal(store.execute({ action: 'get', taskId: child.id }).task.parentTaskId, historicalId);
 });
