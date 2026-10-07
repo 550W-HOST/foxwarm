@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Tests;
 
@@ -85,6 +86,43 @@ public sealed class TaskStoreTests
         {
             return false;
         }
+    }
+
+    [Fact]
+    public void OpensOldSchemaAndWritesCanonicalReferencesReadableBySourceShape()
+    {
+        using var temp = new TempDirectory();
+        var path = System.IO.Path.Combine(temp.Path, "state", "tasks.sqlite");
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+        using (var db = new SqliteConnection($"Data Source={path}"))
+        {
+            db.Open();
+            using var command = db.CreateCommand();
+            command.CommandText =
+                "CREATE TABLE tasks(id TEXT PRIMARY KEY,title TEXT NOT NULL,description TEXT,status TEXT NOT NULL,parentTaskId TEXT,createdBySessionId TEXT NOT NULL,ownerSessionId TEXT,result TEXT,createdAt INTEGER NOT NULL,updatedAt INTEGER NOT NULL,completedAt INTEGER,cancelledAt INTEGER); INSERT INTO tasks VALUES('task_old','legacy',NULL,'open',NULL,'old',NULL,NULL,1,1,NULL,NULL); CREATE TABLE task_notes(id INTEGER PRIMARY KEY,taskId TEXT NOT NULL,sessionId TEXT NOT NULL,text TEXT NOT NULL,createdAt INTEGER NOT NULL);";
+            command.ExecuteNonQuery();
+        }
+        using var store = new TaskStore(
+            temp.Path,
+            id => id == "old" ? "main" : id,
+            id => id == "main" ? ["old"] : []
+        );
+        var before = store.Execute(
+            new JsonObject { ["action"] = "get", ["taskId"] = "task_old" },
+            null
+        );
+        Assert.Equal("main", before.Payload["task"]!["createdBySessionId"]!.GetValue<string>());
+        store.Execute(new JsonObject { ["action"] = "claim", ["taskId"] = "task_old" }, "old");
+        using var sourceShape = new SqliteConnection($"Data Source={path}");
+        sourceShape.Open();
+        using var read = sourceShape.CreateCommand();
+        read.CommandText =
+            "SELECT createdBySessionId,ownerSessionId,assignmentRevision FROM tasks WHERE id='task_old'";
+        using var row = read.ExecuteReader();
+        Assert.True(row.Read());
+        Assert.Equal("main", row.GetString(0));
+        Assert.Equal("main", row.GetString(1));
+        Assert.Equal(0L, row.GetInt64(2));
     }
 
     private sealed class TempDirectory : IDisposable

@@ -34,9 +34,8 @@ internal sealed partial class SessionManager
             owner.Entry.EndHistoryMutation(!busy);
             if (
                 Accepting
-                && owner.Entry.WithState(state =>
-                    !state.Busy && !state.Stopping && state.Queue.Any(SessionCompactor.Ordinary)
-                )
+                && !owner.Entry.WithState(state => state.Busy || state.Stopping)
+                && owner.Registry.HasRunnableWork(owner.Entry)
             )
                 _ = owner.StartProcessing();
         }

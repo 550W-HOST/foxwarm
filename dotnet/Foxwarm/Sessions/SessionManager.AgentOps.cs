@@ -295,7 +295,8 @@ internal sealed partial class SessionManager
             QueueItemType.Intersession,
             [new JsonObject { ["system"] = wrapper }],
             SourceSessionId: source.Id,
-            SourceSessionRelation: relation
+            SourceSessionRelation: relation,
+            Trigger: trigger
         );
         try
         {
@@ -304,10 +305,10 @@ internal sealed partial class SessionManager
         catch (AuthorityCommittedException)
         {
             if (
-                Accepting
-                && target.Entry.WithState(state =>
-                    !state.Busy && !state.Stopping && state.Queue.Count > 0
-                )
+                item.Trigger
+                && Accepting
+                && !target.Entry.WithState(state => state.Busy || state.Stopping)
+                && target.Registry.HasRunnableWork(target.Entry)
             )
                 target.Registry.Trigger(target.Id);
             throw;
@@ -315,9 +316,8 @@ internal sealed partial class SessionManager
         if (
             trigger
             && Accepting
-            && target.Entry.WithState(state =>
-                !state.Busy && !state.Stopping && state.Queue.Count > 0
-            )
+            && !target.Entry.WithState(state => state.Busy || state.Stopping)
+            && target.Registry.HasRunnableWork(target.Entry)
         )
             target.Registry.Trigger(target.Id);
         return target.Id;

@@ -31,6 +31,7 @@ test('parses only versioned single-leaf popup targets', () => {
     kind: 'terminal', terminalId: 'term-1', title: 'Shell',
   })
   assert.deepEqual(parseFoxwarmPopupTarget(`?foxwarmPopup=agents&foxwarmPopupVersion=${FOXWARM_POPUP_VERSION}`), { kind: 'agents' })
+  assert.deepEqual(parseFoxwarmPopupTarget(`?foxwarmPopup=tasks&foxwarmPopupVersion=${FOXWARM_POPUP_VERSION}`), { kind: 'tasks' })
   assert.deepEqual(parseFoxwarmPopupTarget(`?foxwarmPopup=setup&foxwarmPopupVersion=${FOXWARM_POPUP_VERSION}`), { kind: 'setup' })
   assert.equal(parseFoxwarmPopupTarget('?foxwarmPopup=chat&sessionId=agent/task'), null)
   assert.equal(parseFoxwarmPopupTarget(`?foxwarmPopup=chat&foxwarmPopupVersion=${FOXWARM_POPUP_VERSION}&sessionId=`), null)

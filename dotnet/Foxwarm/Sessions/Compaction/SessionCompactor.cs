@@ -288,9 +288,8 @@ internal sealed partial class SessionCompactor
             await FinishAsync(run);
             hosted.PublishStateChanged();
             if (
-                hosted.Entry.WithState(state =>
-                    !state.Busy && !state.Stopping && state.Queue.Any(Ordinary)
-                )
+                !hosted.Entry.WithState(state => state.Busy || state.Stopping)
+                && hosted.Registry.HasRunnableWork(hosted.Entry)
             )
                 _ = hosted.StartProcessing();
         }
@@ -455,7 +454,11 @@ internal sealed partial class SessionCompactor
             }
             if (finish)
                 await FinishAsync(run);
-            else if (wake && hosted.Entry.WithState(state => !state.Busy && !state.Stopping))
+            else if (
+                wake
+                && !hosted.Entry.WithState(state => state.Busy || state.Stopping)
+                && hosted.Registry.HasRunnableWork(hosted.Entry)
+            )
                 _ = hosted.StartProcessing();
         }
     }

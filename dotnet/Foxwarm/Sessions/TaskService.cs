@@ -1,4 +1,3 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Foxwarm.Sessions;
@@ -27,6 +26,7 @@ internal sealed class TaskService : IDisposable
         int? httpLimit = null
     )
     {
+        TaskStore.Validate(args, httpLimit);
         var action = Text(args["action"]);
         if (actor is null && action is not ("list" or "get"))
             actor = store.DefaultActor(args);
@@ -115,7 +115,7 @@ internal sealed class TaskService : IDisposable
             taskId,
             actor,
             creator,
-            $"Task completed: {Summary(taskId)}",
+            $"Task completed: {Summary(taskId, includeResult: true)}",
             true,
             "completionNotificationStatus",
             null,
@@ -156,7 +156,7 @@ internal sealed class TaskService : IDisposable
         }
     }
 
-    private string Summary(string taskId)
+    private string Summary(string taskId, bool includeResult = false)
     {
         var task = store
             .Execute(new JsonObject { ["action"] = "get", ["taskId"] = taskId }, null)
@@ -164,7 +164,9 @@ internal sealed class TaskService : IDisposable
         var title = task["title"]?.GetValue<string>() ?? taskId;
         var status = task["status"]?.GetValue<string>() ?? "unknown";
         var description = task["description"]?.GetValue<string>();
-        return $"{taskId} — {title}\nStatus: {status}{(string.IsNullOrEmpty(description) ? "" : $"\n{description[..Math.Min(1000, description.Length)]}")}";
+        var result = task["result"]?.GetValue<string>();
+        var body = includeResult ? result : description;
+        return $"{taskId} — {title}\nStatus: {status}{(string.IsNullOrEmpty(body) ? "" : $"\n{body[..Math.Min(1000, body.Length)]}")}";
     }
 
     internal async Task<JsonObject> ExecuteForWebUiAsync(
@@ -192,21 +194,8 @@ internal sealed class TaskService : IDisposable
         return result;
     }
 
-    internal async Task<JsonObject> ExecuteForToolAsync(SessionOwner source, JsonObject args)
-    {
-        var result = (await ExecuteAsync(args, source.Id)).Payload;
-        var output = new JsonObject { ["output"] = JsonSerializer.Serialize(result) };
-        if (
-            Text(args["action"]) == "complete"
-            && result["task"]?["completionNotificationStatus"]?.GetValue<string>() == "sent"
-        )
-            output["__toolPostAction"] = new JsonObject
-            {
-                ["successfulSendToSessionTarget"] = result["task"]
-                    ?["createdBySessionId"]?.DeepClone(),
-            };
-        return output;
-    }
+    internal async Task<JsonObject> ExecuteForToolAsync(SessionOwner source, JsonObject args) =>
+        (await ExecuteAsync(args, source.Id)).Payload;
 
     public void Dispose() => store.Dispose();
 

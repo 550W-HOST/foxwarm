@@ -43,7 +43,7 @@ public sealed class SessionControl
         var count = snapshot.Queue.Count(SessionCompactor.Ordinary);
         if (count == 0)
             return new(0, false, false);
-        if (!snapshot.Busy)
+        if (!snapshot.Busy && registry.HasRunnableWork(entry))
         {
             registry.Trigger(sessionId);
             return new(count, false, false);

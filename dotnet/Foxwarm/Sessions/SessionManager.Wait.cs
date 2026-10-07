@@ -163,9 +163,8 @@ internal sealed partial class SessionManager
         {
             if (
                 Accepting
-                && owner.Entry.WithState(state =>
-                    !state.Busy && !state.Stopping && state.Queue.Count > 0
-                )
+                && !owner.Entry.WithState(state => state.Busy || state.Stopping)
+                && owner.Registry.HasRunnableWork(owner.Entry)
             )
                 _ = owner.StartProcessing();
             throw;
@@ -173,9 +172,8 @@ internal sealed partial class SessionManager
         if (
             Accepting
             && admitted
-            && owner.Entry.WithState(state =>
-                !state.Busy && !state.Stopping && state.Queue.Count > 0
-            )
+            && !owner.Entry.WithState(state => state.Busy || state.Stopping)
+            && owner.Registry.HasRunnableWork(owner.Entry)
         )
             _ = owner.StartProcessing();
     }

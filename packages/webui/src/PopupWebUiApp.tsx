@@ -9,6 +9,7 @@ import { useTheme } from './theme/useTheme'
 import { makeVscodeWebUrl, type CodeCommitTarget } from './vscodeWeb'
 
 const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
+const TasksView = lazy(() => import('./components/TasksView'))
 const SetupView = lazy(() => import('./components/SetupView'))
 
 type WebUiSettings = { instanceName: string; tabIcon: string }
@@ -35,7 +36,7 @@ export default function PopupWebUiApp({ target }: { target: FoxwarmPopupTarget }
   }, [])
 
   useEffect(() => {
-    document.title = `${'title' in target && target.title ? target.title : target.kind === 'agents' ? 'Agents' : target.kind === 'setup' ? 'Setup' : target.kind === 'terminal' ? 'Terminal' : 'Chat'} · Foxwarm`
+    document.title = `${'title' in target && target.title ? target.title : target.kind === 'agents' ? 'Agents' : target.kind === 'tasks' ? 'Tasks' : target.kind === 'setup' ? 'Setup' : target.kind === 'terminal' ? 'Terminal' : 'Chat'} · Foxwarm`
   }, [target])
 
   useEffect(() => {
@@ -102,6 +103,8 @@ export default function PopupWebUiApp({ target }: { target: FoxwarmPopupTarget }
     )
   } else if (target.kind === 'terminal') {
     content = <TerminalView initialTerminalId={target.terminalId} />
+  } else if (target.kind === 'tasks') {
+    content = <Suspense fallback={<PopupLeafFallback label="Tasks" />}><TasksView /></Suspense>
   } else if (target.kind === 'agents') {
     content = (
       <Suspense fallback={<PopupLeafFallback label="Agents" />}>

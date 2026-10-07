@@ -150,18 +150,16 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 {
                     if (
                         Accepting
-                        && current.Entry.WithState(state =>
-                            !state.Busy && !state.Stopping && state.Queue.Count > 0
-                        )
+                        && !current.Entry.WithState(state => state.Busy || state.Stopping)
+                        && current.Registry.HasRunnableWork(current.Entry)
                     )
                         current.Registry.Trigger(sessionId);
                     throw;
                 }
                 if (
                     Accepting
-                    && current.Entry.WithState(state =>
-                        !state.Busy && !state.Stopping && state.Queue.Count > 0
-                    )
+                    && !current.Entry.WithState(state => state.Busy || state.Stopping)
+                    && current.Registry.HasRunnableWork(current.Entry)
                 )
                     current.Registry.Trigger(sessionId);
             },
@@ -256,7 +254,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             await StartMainServicesAsync();
         executor.StartReconciliation();
         foreach (var owner in sessions.Values)
-            if (owner.Entry.WithState(state => state.Queue.Any(SessionCompactor.Ordinary)))
+            if (owner.Registry.HasRunnableWork(owner.Entry))
                 _ = owner.StartProcessing();
     }
 

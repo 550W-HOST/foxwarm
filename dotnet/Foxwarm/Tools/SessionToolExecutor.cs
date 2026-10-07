@@ -128,20 +128,12 @@ internal sealed partial class SessionToolExecutor(
         try
         {
             var response = await ExecuteCoreAsync(call, token);
-            JsonObject? postAction = null;
-            if (
-                response.Remove("__toolPostAction", out var rawPostAction)
-                && rawPostAction is JsonObject post
-            )
-                postAction = post;
-            current.ToolPostAction = postAction;
             return new(
                 response,
                 current.Timing,
                 response["error"] is null ? current.ResolvedPaths : null,
                 current.DeferredCwd,
-                current.ToolScriptSubCalls,
-                current.ToolPostAction
+                current.ToolScriptSubCalls
             );
         }
         finally
@@ -243,6 +235,10 @@ internal sealed partial class SessionToolExecutor(
                     };
                 hosted.EndTool();
             }
+        }
+        catch (TaskError error)
+        {
+            return UnsupportedTurnToolExecutor.ToolError(error.Code, error.Message);
         }
         catch (ToolAuthorizationUnavailableException error)
         {
@@ -586,8 +582,7 @@ internal sealed record TurnToolExecution(
     JsonObject? Timing = null,
     JsonArray? ResolvedPaths = null,
     string? DeferredCwd = null,
-    JsonArray? ToolScriptSubCalls = null,
-    JsonObject? ToolPostAction = null
+    JsonArray? ToolScriptSubCalls = null
 );
 
 internal sealed class TurnToolInvocation(string callId)
@@ -599,5 +594,4 @@ internal sealed class TurnToolInvocation(string callId)
     internal JsonArray? ResolvedPaths { get; set; }
     internal string? DeferredCwd { get; set; }
     internal JsonArray? ToolScriptSubCalls { get; set; }
-    internal JsonObject? ToolPostAction { get; set; }
 }

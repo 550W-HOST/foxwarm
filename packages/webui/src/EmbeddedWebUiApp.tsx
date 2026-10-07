@@ -14,6 +14,7 @@ import { useBoundedSessionList } from './boundedSessionList'
 import { useTheme } from './theme/useTheme'
 import { parseWebUiNodeTargets, getNodeTargetAvailability, type WebUiNodeTarget } from './nodeTargets'
 import { useChatPreferences } from './chatPreferences'
+import { makeFoxwarmPopupUrl } from './popupWebUi'
 
 const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
 const SetupView = lazy(() => import('./components/SetupView'))
@@ -135,6 +136,11 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
               <GlobalUiSettingsMenu
                 menuAlign="end"
                 onOpenSetup={openSetup}
+                onOpenTasks={() => {
+                  const popup = window.open(makeFoxwarmPopupUrl(window.location.href, { kind: 'tasks' }).toString(), '_blank', 'popup')
+                  if (!popup) window.alert('Allow popups to open tasks in a new window.')
+                  else { try { popup.opener = null } catch {} }
+                }}
                 setupActive={activeTarget?.kind === 'setup'}
               />
             </div>

@@ -385,6 +385,9 @@ public sealed class PersistentSessionAuthorityStore
         var result = item.OpenFields is null
             ? new JsonObject()
             : (JsonObject)item.OpenFields.DeepClone();
+        result.Remove("trigger");
+        if (!item.Trigger)
+            result["trigger"] = false;
         result["type"] = item.Type switch
         {
             QueueItemType.User => "user",
@@ -463,7 +466,11 @@ public sealed class PersistentSessionAuthorityStore
             OptionalString(value, "clientMessageId"),
             OptionalString(value, "sourceSessionId"),
             OptionalString(value, "sourceSessionRelation"),
-            (JsonObject)value.DeepClone()
+            (JsonObject)value.DeepClone(),
+            value["trigger"] is JsonValue trigger
+            && trigger.TryGetValue<bool>(out var shouldTrigger)
+                ? shouldTrigger
+                : true
         );
     }
 

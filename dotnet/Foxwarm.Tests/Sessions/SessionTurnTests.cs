@@ -88,6 +88,38 @@ public sealed class SessionTurnTests
     }
 
     [Fact]
+    public async Task PassiveInterSessionQueuePersistsWithoutWakeUntilOrdinaryInputArrives()
+    {
+        var store = new InMemorySessionAuthorityStore();
+        var chat = new ControlledChat();
+        var registry = NewRegistry(store, chat, out var entry);
+        var triggers = 0;
+        registry.TriggerOverride = _ =>
+        {
+            Interlocked.Increment(ref triggers);
+            return Task.CompletedTask;
+        };
+        await entry.SaveLane.CommitInterSessionAsync(
+            new QueueItem(
+                QueueItemType.Intersession,
+                [new JsonObject { ["system"] = "passive" }],
+                SourceSessionId: "source",
+                Trigger: false
+            )
+        );
+
+        Assert.Equal(0, triggers);
+        Assert.False(registry.HasRunnableWork(entry));
+        var cold = new SessionRegistry(store, chat);
+        var reloaded = await cold.LoadOrAddAsync("s");
+        Assert.False(cold.HasRunnableWork(reloaded));
+        Assert.False(reloaded.Snapshot().Queue.Single().Trigger);
+
+        await cold.Ingress.EnqueueAsync("s", QueueItem.UserText("ordinary"));
+        Assert.True(cold.HasRunnableWork(reloaded));
+    }
+
+    [Fact]
     public async Task SourceBlindPrefixCommitsDifferentSourcesAsSeparateRowsInOneTurn()
     {
         var store = new InMemorySessionAuthorityStore();

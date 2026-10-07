@@ -5,7 +5,7 @@ using Microsoft.Data.Sqlite;
 namespace Foxwarm.Sessions;
 
 internal sealed class TaskError(string code, string message, int statusCode = 400)
-    : Exception(message)
+    : InvalidOperationException(message)
 {
     internal string Code { get; } = code;
     internal int StatusCode { get; } = statusCode;
@@ -207,6 +207,18 @@ internal sealed class TaskStore : IDisposable
         );
         var owner = Canonical(Text(task["ownerSessionId"]));
         var creator = Canonical(Text(task["createdBySessionId"])!);
+        Update(
+            db,
+            taskId,
+            "createdBySessionId",
+            creator,
+            "ownerSessionId",
+            owner,
+            "attachedSessionId",
+            Canonical(Text(task["attachedSessionId"])),
+            "previousOwnerSessionId",
+            Canonical(Text(task["previousOwnerSessionId"]))
+        );
         TaskAssignmentPlan? plan = null;
         var completed = false;
         var now2 = Now();
@@ -606,7 +618,7 @@ internal sealed class TaskStore : IDisposable
         }
     }
 
-    private static void Validate(JsonObject args, int? httpLimit)
+    internal static void Validate(JsonObject args, int? httpLimit)
     {
         var action = Text(args["action"]);
         if (

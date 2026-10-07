@@ -40,7 +40,8 @@ public sealed record QueueItem(
     string? ClientMessageId = null,
     string? SourceSessionId = null,
     string? SourceSessionRelation = null,
-    JsonObject? OpenFields = null
+    JsonObject? OpenFields = null,
+    bool Trigger = true
 )
 {
     // An owner wake is opaque on disk; this exact identity survives only runtime clones.

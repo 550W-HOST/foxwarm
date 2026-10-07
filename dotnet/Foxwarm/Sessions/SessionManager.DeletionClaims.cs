@@ -270,9 +270,8 @@ internal sealed partial class SessionManager
                 Accepting
                 && Find(id) is { } owner
                 && !owner.Entry.Retired
-                && owner.Entry.WithState(state =>
-                    !state.Busy && !state.Stopping && state.Queue.Any(SessionCompactor.Ordinary)
-                )
+                && !owner.Entry.WithState(state => state.Busy || state.Stopping)
+                && owner.Registry.HasRunnableWork(owner.Entry)
             )
                 _ = owner.StartProcessing();
     }

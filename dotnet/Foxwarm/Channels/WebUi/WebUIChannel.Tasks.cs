@@ -166,7 +166,7 @@ internal sealed partial class WebUIChannel
             {
                 await Results
                     .Json(
-                        new { code = "TASK_WRITE_FAILED", error = "Task operation failed." },
+                        new { code = "TASK_READ_FAILED", error = "Tasks could not be loaded." },
                         statusCode: 500
                     )
                     .ExecuteAsync(context);
