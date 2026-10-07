@@ -12,8 +12,10 @@ test('authenticated task REST uses real selected Session targets and shared acti
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-webui-tasks-'));
   const store = new TaskStore(path.join(root, 'tasks.sqlite'));
   const sessions = new Set(['creator', 'worker', 'other']);
+  const sessionAgents = new Map([['creator', 'coordinator'], ['worker', 'executor'], ['other', 'reviewer']]);
   const notices: any[] = [];
   const service = new TaskService(store, { resolveSessionId: id => sessions.has(id) ? id : undefined,
+    resolveSessionAgent: id => sessionAgents.get(id),
     sendToSession: async (target, message, source) => { notices.push({ target, message, source }); } });
   const server = new HttpServer(0, 'synthetic-task-auth');
   registerWebUiTaskRoutes(server, service);
@@ -53,6 +55,10 @@ test('authenticated task REST uses real selected Session targets and shared acti
   const details = await (await request(`/api/tasks/${id}`)).json() as any;
   assert.equal(details.task.result, 'Completed from UI');
   assert.ok(details.notes.length > 0);
+  const listed = await (await request('/api/tasks?status=completed')).json() as any;
+  assert.deepEqual(listed.tasks[0], { id, title: 'UI task', status: 'completed', parentTaskId: null,
+    ownerSessionId: 'worker', createdBySessionId: 'creator', updatedAt: listed.tasks[0].updatedAt,
+    createdByAgent: 'coordinator', ownerAgent: 'executor' });
   assert.equal((await (await request('/api/tasks')).json() as any).tasks.length, 0);
   assert.equal((await (await request('/api/tasks?status=completed&limit=1')).json() as any).tasks.length, 1);
   for (const query of ['limit=0', 'limit=100', 'status=claimed', 'unknown=1', 'status=open&status=active']) {

@@ -8,6 +8,7 @@ export class TaskService {
   private lane: Promise<void> = Promise.resolve();
   constructor(readonly store: TaskStore, private readonly deps: {
     resolveSessionId: (id: string) => string | undefined;
+    resolveSessionAgent?: (id: string) => string | undefined;
     readSessionMessageSeq?: (id: string) => Promise<number | undefined>;
     sendToSession: (target: string, message: string, source: string, options?: SessionDeliveryOptions) => Promise<unknown>;
   }) {}
@@ -100,11 +101,20 @@ export class TaskService {
   }
 
   /** Read-only callers do not need a Session actor. */
-  list(status?: string, limit?: number): any {
+  list(status?: string, limit?: number, includeSessionAgents = false): any {
     if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 50)) {
       throw new TaskError('TASK_INVALID_ARGS', 'limit must be an integer from 1 to 50.');
     }
-    return this.store.execute({ action: 'list', ...(status === undefined ? {} : { status }) }, undefined, limit);
+    const result = this.store.execute({ action: 'list', ...(status === undefined ? {} : { status }) }, undefined, limit);
+    if (!includeSessionAgents || !this.deps.resolveSessionAgent) return result;
+    return {
+      ...result,
+      tasks: result.tasks.map((task: any) => ({
+        ...task,
+        createdByAgent: this.deps.resolveSessionAgent!(task.createdBySessionId) || null,
+        ownerAgent: task.ownerSessionId ? this.deps.resolveSessionAgent!(task.ownerSessionId) || null : null,
+      })),
+    };
   }
 
   get(taskId: string): any {

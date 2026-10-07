@@ -15,7 +15,7 @@ export function registerWebUiTaskRoutes(server: HttpServer, service: TaskService
         throw new TaskError('TASK_INVALID_ARGS', 'Invalid task query.');
       }
       res.json(service.list(req.query.status as string | undefined,
-        req.query.limit === undefined ? undefined : Number(req.query.limit)));
+        req.query.limit === undefined ? undefined : Number(req.query.limit), true));
     } catch (error) { failure(res, error); }
   } });
   server.addRoute({ path: '/api/tasks/:id', method: 'GET', handler: async (req, res) => {

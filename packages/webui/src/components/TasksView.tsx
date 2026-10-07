@@ -19,7 +19,9 @@ type TaskSummary = {
   status: typeof STATUSES[number]
   parentTaskId: string | null
   ownerSessionId: string | null
+  ownerAgent?: string | null
   createdBySessionId: string
+  createdByAgent?: string | null
   updatedAt: number
 }
 type TaskList = { tasks: TaskSummary[]; omitted: number }
@@ -55,15 +57,21 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
   const [detailsError, setDetailsError] = useState('')
   const [agentFilter, setAgentFilter] = useState('')
   const [agentRelation, setAgentRelation] = useState<typeof AGENT_RELATIONS[number]>('ownerOrCreator')
+  const [isNarrow, setIsNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 1024)
 
-  const agentOptions = useMemo(() => [...new Set(tasks.flatMap(task => [task.ownerSessionId, task.createdBySessionId]
-    .filter((sessionId): sessionId is string => !!sessionId)
-    .map(sessionId => sessionId.includes('/') ? sessionId.slice(0, sessionId.indexOf('/')) : sessionId)))].sort((a, b) => a.localeCompare(b)), [tasks])
+  useEffect(() => {
+    const handleResize = () => setIsNarrow(window.innerWidth < 1024)
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  const agentOptions = useMemo(() => [...new Set(tasks.flatMap(task => [task.ownerAgent, task.createdByAgent]
+    .filter((agent): agent is string => !!agent)))].sort((a, b) => a.localeCompare(b)), [tasks])
   const visibleTasks = useMemo(() => {
     if (!agentFilter) return tasks
     return tasks.filter(task => {
-      const owner = task.ownerSessionId?.split('/')[0]
-      const creator = task.createdBySessionId.split('/')[0]
+      const owner = task.ownerAgent
+      const creator = task.createdByAgent
       if (agentRelation === 'owner') return owner === agentFilter
       if (agentRelation === 'creator') return creator === agentFilter
       return owner === agentFilter || creator === agentFilter
@@ -120,7 +128,7 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
       <button type="button" className={buttonClass} disabled={loading || (detailsLoading && !!selectedId)} onClick={() => setRefresh(value => value + 1)}>Refresh</button>
       <div className="flex min-w-0 basis-full flex-wrap items-center gap-2 border-t border-fw-border pt-3 sm:basis-auto sm:border-t-0 sm:pt-0" data-task-filters>
         <label className="flex items-center gap-2 text-xs text-fw-text-muted" htmlFor="task-agent-filter">
-          <span className="whitespace-nowrap">Agent filter ({AGENT_RELATION_LABELS[agentRelation]})</span>
+          <span className="whitespace-nowrap">Agent</span>
           <select id="task-agent-filter" data-task-agent-filter value={agentFilter} onChange={event => setAgentFilter(event.target.value)} className="min-w-40 max-w-full rounded border border-fw-border bg-fw-canvas px-2 py-1.5 text-xs text-fw-text">
             <option value="">All agents</option>
             {agentOptions.map(agent => <option key={agent} value={agent}>{agent}</option>)}
@@ -173,7 +181,7 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
             </div>}
           </>}
       </div>
-      {selectedId && <aside data-task-details role="dialog" aria-modal="true" aria-label="Task details" aria-busy={detailsLoading} className="fixed inset-0 z-20 min-w-0 overflow-auto border-t border-fw-border bg-fw-surface p-4 lg:relative lg:inset-auto lg:z-auto lg:h-full lg:w-96 lg:shrink-0 lg:border-l lg:border-t-0">
+      {selectedId && <aside data-task-details {...(isNarrow ? { role: 'dialog', 'aria-modal': 'true' } : {})} aria-label="Task details" aria-busy={detailsLoading} className="fixed inset-0 z-20 min-w-0 overflow-auto border-t border-fw-border bg-fw-surface p-4 lg:relative lg:inset-auto lg:z-auto lg:h-full lg:w-96 lg:shrink-0 lg:border-l lg:border-t-0">
         <div className="mb-4 flex items-center justify-between gap-2"><h3 className="text-sm font-semibold">Task details</h3><button type="button" className={buttonClass} aria-label="Close task details" onClick={() => setSelectedId(null)}><X className="h-4 w-4" /></button></div>
         {detailsLoading ? <p role="status" className="text-sm text-fw-text-muted">Loading task details…</p>
           : detailsError ? <p role="alert" className="text-sm text-fw-danger">{detailsError}</p>
