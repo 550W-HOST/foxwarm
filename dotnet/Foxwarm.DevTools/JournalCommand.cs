@@ -12,43 +12,36 @@ internal static class JournalCommand
                 "Usage: journal ROOT <export OUTPUT|import JSONL|reconstruct REQUEST_ID|list>"
             );
         var root = args[0];
-        await using var store = new AsyncDisposableStore(new LlmRequestJournalStore(root));
-        await store.Value.InitializeAsync();
+        using var store = new LlmRequestJournalStore(root);
+        await store.InitializeAsync();
         switch (args[1])
         {
             case "export" when args.Length == 3:
-                await store.Value.ExportJsonlAsync(args[2]);
+                await store.ExportJsonlAsync(args[2]);
                 Console.WriteLine(JsonSerializer.Serialize(new { exported = args[2] }));
                 break;
             case "import" when args.Length == 3:
-                var imported = await store.Value.MigrateLegacyAsync(args[2]);
+                var imported = await store.MigrateLegacyAsync(args[2]);
                 if (imported)
-                    await store.Value.MarkSqliteAuthorityAsync(LlmRequestJournalStore.MigrationId);
+                    await store.MarkSqliteAuthorityAsync(LlmRequestJournalStore.MigrationId);
                 Console.WriteLine(JsonSerializer.Serialize(new { imported, authority = imported }));
                 break;
             case "reconstruct" when args.Length == 3:
-                Console.WriteLine((await store.Value.ReconstructAsync(args[2])).ToJsonString());
+                Console.WriteLine(
+                    LlmRequestJournalStore.EncodeCli(await store.ReconstructAsync(args[2]))
+                );
                 break;
             case "list" when args.Length == 2:
                 Console.WriteLine(
-                    (await store.Value.ListAsync(null, null, null, null, 100)).ToJsonString()
+                    LlmRequestJournalStore.EncodeCli(
+                        await store.ListAsync(null, null, null, null, 100)
+                    )
                 );
                 break;
             default:
                 throw new ArgumentException(
                     "Usage: journal ROOT <export OUTPUT|import JSONL|reconstruct REQUEST_ID|list>"
                 );
-        }
-    }
-
-    private sealed class AsyncDisposableStore(LlmRequestJournalStore value) : IAsyncDisposable
-    {
-        internal LlmRequestJournalStore Value { get; } = value;
-
-        public ValueTask DisposeAsync()
-        {
-            Value.Dispose();
-            return ValueTask.CompletedTask;
         }
     }
 }

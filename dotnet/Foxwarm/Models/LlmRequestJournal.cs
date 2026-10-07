@@ -293,6 +293,8 @@ public sealed class LlmRequestJournalStore : IDisposable
         }
     }
 
+    public static string EncodeCli(JsonNode node) => Codec.Write(node);
+
     public async Task<JsonArray> ListAsync(
         string? sessionId,
         string? purpose,
@@ -341,6 +343,7 @@ public sealed class LlmRequestJournalStore : IDisposable
     public async Task<bool> MigrateLegacyAsync(string sourcePath, CancellationToken token = default)
     {
         var fullPath = Path.GetFullPath(sourcePath);
+        SqliteTransaction? transaction = null;
         await gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
@@ -353,7 +356,7 @@ public sealed class LlmRequestJournalStore : IDisposable
             if (imported > sourceLength)
                 imported = 0;
             long completeOffset = imported;
-            var transaction = connection.BeginTransaction(deferred: false);
+            transaction = connection.BeginTransaction(deferred: false);
             var requestIds = new HashSet<string>(StringComparer.Ordinal);
             var recordsInBatch = 0;
             await foreach (var item in ReadJsonlLinesAsync(fullPath, imported, token))
@@ -382,12 +385,16 @@ public sealed class LlmRequestJournalStore : IDisposable
                 if (item.Line.Length == 0)
                     continue;
                 using var document = JsonDocument.Parse(item.Line);
-                InsertLegacyRecord(
-                    connection,
-                    transaction,
-                    document.RootElement,
-                    verificationRequestIds
-                );
+                VerifyLegacyRecord(connection, transaction, document.RootElement);
+                if (
+                    document.RootElement.GetProperty("kind").GetString()
+                    is "request"
+                        or "attempt-start"
+                        or "attempt-result"
+                )
+                    verificationRequestIds.Add(
+                        document.RootElement.GetProperty("requestId").GetString()!
+                    );
             }
             foreach (var requestId in verificationRequestIds)
                 ValidateRequestManifest(connection, transaction, requestId);
@@ -417,6 +424,11 @@ public sealed class LlmRequestJournalStore : IDisposable
             File.Move(fullPath, backupPath);
             SyncDirectory(Path.GetDirectoryName(backupPath)!);
             return true;
+        }
+        catch
+        {
+            transaction?.Dispose();
+            throw;
         }
         finally
         {
@@ -676,23 +688,7 @@ public sealed class LlmRequestJournalStore : IDisposable
                 Add(command, "$payload", payload);
                 Add(command, "$created", record.GetProperty("createdAt").GetInt64());
                 command.ExecuteNonQuery();
-                using (var verify = connection.CreateCommand())
-                {
-                    verify.Transaction = transaction;
-                    verify.CommandText =
-                        "SELECT object_kind,payload,created_at FROM llm_journal_objects WHERE object_id=$id";
-                    Add(verify, "$id", objectId);
-                    using var existing = verify.ExecuteReader();
-                    if (
-                        !existing.Read()
-                        || existing.GetString(0) != objectKind
-                        || existing.GetString(1) != payload
-                        || existing.GetInt64(2) != record.GetProperty("createdAt").GetInt64()
-                    )
-                        throw new InvalidDataException(
-                            "Legacy object conflicts with SQLite authority."
-                        );
-                }
+                VerifyLegacyObjectConflict(connection, transaction, record);
                 break;
             case "request":
                 var requestId =
@@ -856,6 +852,58 @@ public sealed class LlmRequestJournalStore : IDisposable
         }
     }
 
+    private static void VerifyLegacyObjectConflict(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        JsonElement record
+    )
+    {
+        var objectId = record.GetProperty("objectId").GetString();
+        using var verify = connection.CreateCommand();
+        verify.Transaction = transaction;
+        verify.CommandText =
+            "SELECT object_kind,payload,created_at FROM llm_journal_objects WHERE object_id=$id";
+        Add(verify, "$id", objectId);
+        using var existing = verify.ExecuteReader();
+        if (
+            !existing.Read()
+            || existing.GetString(0) != record.GetProperty("objectKind").GetString()
+            || existing.GetString(1) != record.GetProperty("payload").GetString()
+            || existing.GetInt64(2) != record.GetProperty("createdAt").GetInt64()
+        )
+            throw new InvalidDataException("Legacy object conflicts with SQLite authority.");
+    }
+
+    private static void VerifyLegacyRecord(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        JsonElement record
+    )
+    {
+        switch (record.GetProperty("kind").GetString())
+        {
+            case "object":
+                VerifyLegacyObjectConflict(connection, transaction, record);
+                break;
+            case "request":
+                VerifyLegacyRequestConflict(
+                    connection,
+                    transaction,
+                    record,
+                    record.GetProperty("requestId").GetString()!
+                );
+                break;
+            case "attempt-start":
+                VerifyLegacyAttemptStartConflict(connection, transaction, record);
+                break;
+            case "attempt-result":
+                VerifyLegacyAttemptResultConflict(connection, transaction, record);
+                break;
+            default:
+                throw new InvalidDataException("Legacy journal record kind is unsupported.");
+        }
+    }
+
     private static void VerifyLegacyRequestConflict(
         SqliteConnection connection,
         SqliteTransaction transaction,
@@ -993,7 +1041,9 @@ public sealed class LlmRequestJournalStore : IDisposable
 
     private static void EnsureSchema(SqliteConnection connection)
     {
+        using var schema = connection.BeginTransaction(deferred: false);
         using var command = connection.CreateCommand();
+        command.Transaction = schema;
         command.CommandText = """
             CREATE TABLE IF NOT EXISTS llm_journal_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS llm_journal_objects(object_id TEXT PRIMARY KEY,object_kind TEXT NOT NULL,payload TEXT NOT NULL,created_at INTEGER NOT NULL);
@@ -1005,6 +1055,7 @@ public sealed class LlmRequestJournalStore : IDisposable
             """;
         command.ExecuteNonQuery();
         using var columns = connection.CreateCommand();
+        columns.Transaction = schema;
         columns.CommandText = "PRAGMA table_info(llm_journal_attempt_starts)";
         using var reader = columns.ExecuteReader();
         var hasPrompt = false;
@@ -1015,10 +1066,12 @@ public sealed class LlmRequestJournalStore : IDisposable
         if (!hasPrompt)
         {
             using var alter = connection.CreateCommand();
+            alter.Transaction = schema;
             alter.CommandText =
                 "ALTER TABLE llm_journal_attempt_starts ADD COLUMN prompt_object_id TEXT";
             alter.ExecuteNonQuery();
         }
+        schema.Commit();
     }
 
     private static string PutObject(
