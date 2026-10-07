@@ -1,6 +1,6 @@
 export type SessionLinkSegment =
   | { type: 'text'; text: string }
-  | { type: 'session-link'; text: string; sessionId: string; kind: 'sessionId' | 'session' | 'child-created' | 'inter-agent-source' }
+  | { type: 'session-link'; text: string; sessionId: string; kind: 'sessionId' | 'session' | 'child-created' | 'inter-agent-source' | 'session-field' }
 
 type SessionLinkMatch = {
   start: number
@@ -11,8 +11,32 @@ type SessionLinkMatch = {
 }
 
 const LEGACY_SESSION_LINK_PATTERN = /(sessionId:\s*`([^`]+)`|session\s*`([^`]+)`|Child session created:\s*`([^`]+)`)/g
-const INTER_AGENT_OPENING_TAG_PATTERN = /<foxwarm-message\b([^>]*)>/gi
-const XML_ATTRIBUTE_PATTERN = /([a-zA-Z_:][a-zA-Z0-9_.:-]*)\s*=\s*"([^"]*)"/g
+const SESSION_REFERENCE_FIELDS = [
+  'sessionId',
+  'sourceSessionId',
+  'targetSessionId',
+  'parentSessionId',
+  'currentSessionId',
+  'childSessionId',
+  'replyTargetSessionId',
+  'managedSessionId',
+  'createdBySessionId',
+  'ownerSessionId',
+  'previousOwnerSessionId',
+  'attachedSessionId',
+] as const
+const SESSION_REFERENCE_FIELD_PATTERN = SESSION_REFERENCE_FIELDS.join('|')
+const SESSION_FIELD_PATTERN = new RegExp(
+  `(?<![\\w.:-])["']?(${SESSION_REFERENCE_FIELD_PATTERN})["']?\\s*[:=]\\s*(?:"([^"\\r\\n]*)"|'([^'\\r\\n]*)'|\x60([^\x60\\r\\n]*)\x60|([^\\s,;<>}\\]"'\x60]+))`,
+  'g',
+)
+const SESSION_ALIAS_VALUES = new Set(['<main>', '<parent>'])
+
+const isLinkableSessionId = (value: string): boolean => {
+  const normalized = value.trim()
+  return normalized.length > 0
+    && !SESSION_ALIAS_VALUES.has(normalized)
+}
 
 const getLegacySessionLinkMatches = (text: string): SessionLinkMatch[] => {
   const matches: SessionLinkMatch[] = []
@@ -22,6 +46,7 @@ const getLegacySessionLinkMatches = (text: string): SessionLinkMatch[] => {
   while ((match = LEGACY_SESSION_LINK_PATTERN.exec(text)) !== null) {
     const fullMatch = match[0]
     const sessionId = match[2] || match[3] || match[4]
+    if (!isLinkableSessionId(sessionId)) continue
     const kind = fullMatch.startsWith('sessionId:')
       ? 'sessionId'
       : fullMatch.startsWith('Child session created:')
@@ -38,38 +63,24 @@ const getLegacySessionLinkMatches = (text: string): SessionLinkMatch[] => {
   return matches
 }
 
-const getInterAgentSourceLinkMatches = (text: string): SessionLinkMatch[] => {
+const getSessionFieldLinkMatches = (text: string): SessionLinkMatch[] => {
   const matches: SessionLinkMatch[] = []
-  let tagMatch: RegExpExecArray | null
-  INTER_AGENT_OPENING_TAG_PATTERN.lastIndex = 0
+  let match: RegExpExecArray | null
+  SESSION_FIELD_PATTERN.lastIndex = 0
 
-  while ((tagMatch = INTER_AGENT_OPENING_TAG_PATTERN.exec(text)) !== null) {
-    const attributesText = tagMatch[1] || ''
-    const attributesOffset = tagMatch[0].length - attributesText.length - 1
-    let type: string | null = null
-    let source: { value: string; start: number } | null = null
-    let attributeMatch: RegExpExecArray | null
-    XML_ATTRIBUTE_PATTERN.lastIndex = 0
-
-    while ((attributeMatch = XML_ATTRIBUTE_PATTERN.exec(attributesText)) !== null) {
-      const name = attributeMatch[1]
-      const value = attributeMatch[2]
-      if (name === 'type') type = value
-      if (name === 'sourceSessionId' && value) {
-        const valueOffset = attributeMatch[0].indexOf('"') + 1
-        source = { value, start: tagMatch.index + attributesOffset + attributeMatch.index + valueOffset }
-      }
-    }
-
-    if (type === 'inter-agent' && source) {
-      matches.push({
-        start: tagMatch.index,
-        end: source.start + source.value.length,
-        text: text.slice(tagMatch.index, source.start),
-        sessionId: source.value,
-        kind: 'inter-agent-source',
-      })
-    }
+  while ((match = SESSION_FIELD_PATTERN.exec(text)) !== null) {
+    const fieldName = match[1]
+    const sessionId = match[2] ?? match[3] ?? match[4] ?? match[5] ?? ''
+    if (!isLinkableSessionId(sessionId)) continue
+    if (match[5] !== undefined && ['null', 'undefined', 'true', 'false'].includes(sessionId)) continue
+    const valueStart = match.index + match[0].length - sessionId.length - (match[5] === undefined ? 1 : 0)
+    matches.push({
+      start: match.index,
+      end: valueStart + sessionId.length,
+      text: text.slice(match.index, valueStart),
+      sessionId,
+      kind: fieldName === 'sourceSessionId' ? 'inter-agent-source' : 'session-field',
+    })
   }
 
   return matches
@@ -78,7 +89,7 @@ const getInterAgentSourceLinkMatches = (text: string): SessionLinkMatch[] => {
 export function parseSessionLinkText(text: string): SessionLinkSegment[] {
   const segments: SessionLinkSegment[] = []
   let lastIndex = 0
-  const matches = [...getLegacySessionLinkMatches(text), ...getInterAgentSourceLinkMatches(text)]
+  const matches = [...getLegacySessionLinkMatches(text), ...getSessionFieldLinkMatches(text)]
     .sort((left, right) => left.start - right.start)
 
   for (const match of matches) {

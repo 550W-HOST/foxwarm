@@ -84,7 +84,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 | `formatStructuredValue(value)` | ~20 | Formats a value as YAML or string |
 | `formatToolResponsePayload(response)` | ~32 | Formats tool response, unwrapping single `output` key |
 | `formatCompactObjectPreview(response)` | ~42 | Formats compact preview of single-key objects |
-| `parseSessionLinkText(text)` | (webuiToolRendering.ts) | Parses legacy session references plus inter-agent XML source attributes into link/text segments |
+| `parseSessionLinkText(text)` | (webuiToolRendering.ts) | Parses legacy session references plus recognized Session reference fields in XML attributes and JSON/YAML-shaped text into link/text segments |
 | `shouldUseStreamingToolPlaceholder(options)` | (webuiToolRendering.ts) | Detects synthetic streaming tool calls whose args should not be parsed yet |
 
 ## Dependencies
@@ -136,7 +136,7 @@ Non-image file reads above 1 MiB must not full-read or decode their source befor
 - Output exceeding `INLINE_OUTPUT_LIMIT` (10K chars) is truncated with a pointer to the log file
 - Node patch matching and bounded context errors follow [D-apply-patch-context-matching](./shared-apply-patch.md#d-apply-patch-context-matching); filesystem tests verify that a failed near match neither changes that file nor rolls back earlier successful Unicode edits.
 - Node `apply_patch` success and partial-failure summaries use the shared per-operation formatter, including per-file add/update counts; the count contract is canonical in [D-apply-patch-change-counts](./shared-apply-patch.md#d-apply-patch-change-counts).
-- `parseSessionLinkText` preserves all surrounding text while linking legacy session references and only the `sourceSessionId` value inside an opening `<foxwarm-message type="inter-agent" ...>` tag. It does not link arbitrary XML attributes or direct channel wrappers.
+- `parseSessionLinkText` preserves surrounding text while linking legacy references and recognized public Session fields without message-type branches. The field-name and alias contract is canonical in [D-webui-session-field-links](./webui-chat-shared.md#d-webui-session-field-links).
 
 ## Integration
 

@@ -49,7 +49,7 @@ async function buildFixtureBundle() {
     const cases = {
       event: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="event" type="wait-timeout">\\nwait timeout reached for sessionId: \`child/session\`\\n</foxwarm-system>' }, { inlineData: image }], __meta: { seq: 1 } }] },
       interAgent: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-message type="inter-agent" sourceSessionId="parent/child">\\n' + interAgentBody + '\\n</foxwarm-message>' }], __meta: { seq: 2 } }] },
-      task: { messages: [{ role: 'user', parts: [{ system: '<foxwarm-message type="task" taskId="task_fixture" event="completed" sourceSessionId="worker/session" hint="task notification from Foxwarm; not direct user input">\\nTask completed: task_fixture\\n</foxwarm-message>' }], __meta: { seq: 26 } }] },
+      task: { messages: [{ role: 'user', parts: [{ system: '<foxwarm-message type="task" taskId="task_fixture" event="completed" sourceSessionId="worker/session" hint="task notification from Foxwarm; not direct user input">\\nTask completed: task_fixture\\n{"createdBySessionId":"creator/session","ownerSessionId":"worker/session","previousOwnerSessionId":"old/session","attachedSessionId":"worker/session"}\\n</foxwarm-message>' }], __meta: { seq: 26 } }] },
       sessionBoundary: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="session-boundary" event="new-child">\\nboundary body\\n</foxwarm-system>' }], __meta: { seq: 21 } }] },
       goalReminder: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="goal-reminder">\\nremember this goal\\n</foxwarm-system>' }], __meta: { seq: 22 } }] },
       systemPrompt: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="system-prompt">\\nprompt body\\n</foxwarm-system>' }], __meta: { seq: 23 } }] },
@@ -209,6 +209,17 @@ test('heavy system and non-channel messages use kind-tagged thread cards while d
   await page.click('#interAgent .foxwarm-system-message-preview a')
   assert.match(page.url(), /#session\/parent%2Fchild$/)
   assert.equal(await page.$eval('#interAgent [data-system-message-card] button', button => button.getAttribute('aria-expanded')), 'false', 'preview link navigation does not expand the card')
+  await page.click('#task [data-system-message-card] button')
+  assert.deepEqual(await page.$$eval('#task .foxwarm-system-message-body a', links => links.map(link => link.getAttribute('href'))), [
+    '#session/worker%2Fsession',
+    '#session/creator%2Fsession',
+    '#session/worker%2Fsession',
+    '#session/old%2Fsession',
+    '#session/worker%2Fsession',
+  ], 'Task metadata fields and source attributes use the shared Session link renderer')
+  await page.click('#task .foxwarm-system-message-body a')
+  assert.match(page.url(), /#session\/worker%2Fsession$/)
+  assert.equal(await page.$eval('#task [data-system-message-card] button', button => button.getAttribute('aria-expanded')), 'true', 'Task source link navigation preserves the expanded card')
   assert.equal(await page.$$('#event img').then(nodes => nodes.length), 1, 'event image remains rendered')
 })
 
