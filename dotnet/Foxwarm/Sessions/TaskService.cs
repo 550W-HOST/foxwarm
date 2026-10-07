@@ -324,7 +324,10 @@ internal sealed class TaskService : IDisposable
             : task["description"]?.GetValue<string>();
         var result = task["result"]?.GetValue<string>();
         var body = includeResult ? result : description;
-        var limit = includeResult ? 4000 : 1000;
+        var limit =
+            fullDescription ? int.MaxValue
+            : includeResult ? 4000
+            : 1000;
         return $"{taskId} — {title}\nStatus: {status}{(string.IsNullOrEmpty(body) ? "" : $"\n{body[..Math.Min(limit, body.Length)]}")}";
     }
 

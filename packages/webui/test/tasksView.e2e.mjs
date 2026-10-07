@@ -7,7 +7,7 @@ import puppeteer from 'puppeteer-core'
 
 const statuses = ['open', 'active', 'completed', 'cancelled']
 const timestamp = 1_780_000_000_000
-const task = status => ({ id: `task-${status}`, title: `${status} task`, status, parentTaskId: null, ownerSessionId: status === 'open' ? null : 'worker/main', createdBySessionId: 'creator/main', updatedAt: timestamp })
+const task = (status, index) => ({ id: `task-${status}${index === undefined ? '' : `-${index}`}`, title: `${status} task${index === undefined ? '' : ` ${index}`}`, status, parentTaskId: null, ownerSessionId: status === 'open' ? null : 'worker/main', ownerAgent: status === 'open' ? null : 'worker', createdBySessionId: 'creator/main', createdByAgent: 'creator', updatedAt: timestamp + (index || 0) })
 let browser, page, server, fixtureUrl
 let mode = 'normal'
 let heldLists = []
@@ -22,7 +22,8 @@ function json(response, body, status = 200) {
   response.end(JSON.stringify(body))
 }
 function details(id) {
-  const selected = task(id.replace('task-', ''))
+  const match = id.match(/^task-(open|active|completed|cancelled)(?:-(\d+))?$/)
+  const selected = match ? task(match[1], match[2] ? Number(match[2]) : undefined) : task('open')
   return {
     task: { ...selected, description: 'A small task\nwith a clear scope.', parentTaskId: 'task-parent', result: 'The result is ready.' },
     children: [{ id: 'task-open', title: 'Child task', status: 'open', ownerSessionId: null }], childrenOmitted: 2,
@@ -45,7 +46,8 @@ before(async () => {
     if (url.pathname === '/prefix/ui/api/tasks') {
       requests.push({ pathname: url.pathname, method: request.method, status: url.searchParams.get('status'), limit: url.searchParams.get('limit') })
       const status = url.searchParams.get('status')
-      const reply = () => mode === 'error' ? json(response, { error: 'Tasks are temporarily unavailable.' }, 503) : json(response, { tasks: mode === 'empty' ? [] : [task(status)], omitted: mode === 'empty' ? 0 : 1 })
+      const list = mode === 'long-list' ? Array.from({ length: 25 }, (_, index) => task(status, index + 1)) : [task(status)]
+      const reply = () => mode === 'error' ? json(response, { error: 'Tasks are temporarily unavailable.' }, 503) : json(response, { tasks: mode === 'empty' ? [] : list, omitted: mode === 'empty' ? 0 : 1 })
       if (mode === 'loading') { heldLists.push(reply); if (heldLists.length === 4) onListsHeld?.() }
       else reply()
       return
@@ -86,7 +88,17 @@ test('Tasks reads bounded status windows, switches Table/Board, and shows bounde
   assert.deepEqual(await page.$$eval('thead th', rows => rows.map(row => row.textContent)), ['Title', 'Status', 'Owner', 'Created by', 'Updated'])
   assert.equal(await page.$$eval('[data-task-row]', rows => rows.length), 4)
   assert.match(await page.$eval('[data-task-row="task-open"]', row => row.textContent), /Unassigned.*creator\/main/)
+  assert.deepEqual(await page.$eval('[data-task-row="task-active"] td:nth-child(3)', cell => ({ whiteSpace: getComputedStyle(cell).whiteSpace, wideEnough: cell.getBoundingClientRect().width >= 256 })), { whiteSpace: 'nowrap', wideEnough: true })
   assert.match(await page.$eval('[data-tasks-view]', element => element.textContent), /4 tasks shown · 4 more tasks/)
+  assert.match(await page.$eval('[data-task-filters]', element => element.textContent), /Agent.*Relationship/)
+  assert.deepEqual(await page.$$eval('[data-task-agent-filter] option', options => options.map(option => option.value)), ['', 'creator', 'worker'])
+  await page.select('[data-task-agent-filter]', 'worker')
+  assert.equal(await page.$$eval('[data-task-row]', rows => rows.length), 3)
+  await page.select('[data-task-agent-relation]', 'creator')
+  assert.equal(await page.$$eval('[data-task-row]', rows => rows.length), 0)
+  await page.select('[data-task-agent-relation]', 'owner')
+  assert.match(await page.$eval('[data-tasks-view]', element => element.textContent), /3 tasks shown · 1 hidden by the Agent filter · 4 more tasks not loaded/)
+  await page.select('[data-task-agent-filter]', '')
   assert.deepEqual(requests.filter(request => request.status).map(request => [request.status, request.limit]), statuses.map(status => [status, '50']))
   assert.ok(requests.every(request => request.method === 'GET' && request.pathname.startsWith('/prefix/ui/api/tasks')))
   await click('Board')
@@ -96,10 +108,13 @@ test('Tasks reads bounded status windows, switches Table/Board, and shows bounde
     assert.match(await page.$eval(`[data-task-card="task-${status}"]`, card => card.textContent), new RegExp(`task-${status}`))
   }
   await page.click('[data-task-card="task-completed"]')
-  await page.waitForSelector('[data-task-details][aria-busy="false"]')
+  await page.waitForFunction(() => document.querySelector('[data-task-details] h4')?.textContent === 'completed task')
   assert.match(await page.$eval('[data-task-details]', detail => detail.textContent), /Task details.*completed task.*Description.*A small task.*Parent.*task-parent.*Owner.*worker\/main.*Result.*The result is ready\..*2 more child tasks.*3 more notes/s)
+  assert.deepEqual(await page.$eval('[data-task-details]', detail => ({ role: detail.getAttribute('role'), ariaModal: detail.getAttribute('aria-modal') })), { role: null, ariaModal: null })
   assert.equal(await page.$$eval('[data-task-details] li', items => items.filter(item => item.textContent.includes('Note ')).length), 10)
   await page.setViewport({ width: 390, height: 844 })
+  assert.deepEqual(await page.$eval('[data-task-details]', detail => ({ role: detail.getAttribute('role'), ariaModal: detail.getAttribute('aria-modal') })), { role: 'dialog', ariaModal: 'true' })
+  assert.equal(await page.$eval('[data-task-details]', detail => getComputedStyle(detail).position), 'fixed', 'Mobile task details stay directly visible as an overlay')
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Board scroll stays inside Tasks on a narrow viewport')
   assert.ok(await page.$eval('[data-task-board]', board => board.getBoundingClientRect().height > 0), 'Board remains reachable above details')
   await page.setViewport({ width: 1400, height: 900 })
@@ -156,4 +171,24 @@ test('changing selected task while a detail read is pending never restores stale
   heldDetails.splice(0).forEach(reply => reply())
   await page.waitForFunction(() => document.querySelector('[data-task-details][aria-busy="false"] h4')?.textContent === 'active task')
   assert.equal(await page.$eval('[data-task-details] h4', heading => heading.textContent), 'active task')
+  await page.click('[aria-label="Close task details"]')
+})
+
+test('narrow screens show and close details over a long Board without leaving the click position', async () => {
+  mode = 'long-list'
+  await page.setViewport({ width: 1400, height: 900 })
+  await click('Refresh')
+  await page.waitForSelector('[data-task-card="task-cancelled-25"]')
+  await page.setViewport({ width: 390, height: 844 })
+  await page.click('[data-task-card="task-cancelled-25"]')
+  await page.waitForFunction(() => document.querySelector('[data-task-details] h4')?.textContent === 'cancelled task 25')
+  const detailsMetrics = await page.$eval('[data-task-details]', detail => {
+    const rect = detail.getBoundingClientRect()
+    return { top: rect.top, bottom: rect.bottom, height: rect.height, title: detail.querySelector('h4')?.textContent }
+  })
+  assert.equal(detailsMetrics.title, 'cancelled task 25')
+  assert.ok(detailsMetrics.top >= 0 && detailsMetrics.bottom <= 844 && detailsMetrics.height >= 800, 'Mobile details are visible in the viewport')
+  await page.click('[aria-label="Close task details"]')
+  assert.equal(await page.$('[data-task-details]'), null)
+  mode = 'normal'
 })

@@ -161,6 +161,43 @@ public sealed class TaskStoreTests
     }
 
     [Fact]
+    public void AssignmentAndNotificationArgumentsMatchSourceValidation()
+    {
+        using var temp = new TempDirectory();
+        using var store = new TaskStore(temp.Path, id => id, _ => []);
+
+        foreach (JsonNode? invalid in new JsonNode?[] { null, new JsonObject(), new JsonArray() })
+        {
+            Assert.Throws<TaskError>(() =>
+                store.Execute(
+                    new JsonObject
+                    {
+                        ["action"] = "create",
+                        ["title"] = "invalid notify",
+                        ["notifySession"] = invalid,
+                    },
+                    "creator"
+                )
+            );
+        }
+
+        var created = store.Execute(
+            new JsonObject { ["action"] = "create", ["title"] = "assignment" },
+            "creator"
+        );
+        var id = created.Payload["task"]!["id"]!.GetValue<string>();
+        Assert.Throws<TaskError>(() =>
+            store.Execute(new JsonObject { ["action"] = "assign", ["taskId"] = id }, "creator")
+        );
+        Assert.Equal(
+            "open",
+            store.Execute(new JsonObject { ["action"] = "get", ["taskId"] = id }, null).Payload[
+                "task"
+            ]!["status"]!.GetValue<string>()
+        );
+    }
+
+    [Fact]
     public async Task IndependentConnectionsAllowOnlyOneSuccessfulClaim()
     {
         using var temp = new TempDirectory();

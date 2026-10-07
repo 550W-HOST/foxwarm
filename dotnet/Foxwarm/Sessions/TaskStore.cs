@@ -979,6 +979,11 @@ internal sealed class TaskStore : IDisposable
             && string.IsNullOrWhiteSpace(Text(args["taskId"]))
         )
             throw new TaskError("TASK_INVALID_ARGS", $"task {action} requires a non-empty taskId.");
+        if (action == "assign" && !args.ContainsKey("ownerSessionId"))
+            throw new TaskError(
+                "TASK_INVALID_ARGS",
+                "task assign requires ownerSessionId, which may be null to release ownership."
+            );
         if (
             args.ContainsKey("ownerSessionId")
             && args["ownerSessionId"] is not null
@@ -991,7 +996,10 @@ internal sealed class TaskStore : IDisposable
                 "TASK_INVALID_ARGS",
                 "task assign requires an existing ownerSessionId or null."
             );
-        if (args["notifySession"] is JsonValue notify && !notify.TryGetValue<bool>(out _))
+        if (
+            args.ContainsKey("notifySession")
+            && (args["notifySession"] is not JsonValue notify || !notify.TryGetValue<bool>(out _))
+        )
             throw new TaskError("TASK_INVALID_ARGS", "notifySession must be a boolean.");
         if (
             action == "update"

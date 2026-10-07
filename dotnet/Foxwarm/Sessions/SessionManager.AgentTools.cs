@@ -228,7 +228,7 @@ internal sealed partial class SessionManager
                                             ? "initial message delivered to its queue."
                                             : "no initial message was supplied."
                                 ),
-                            taskId is not null && delivered && after == "wait" ? child.Id : null
+                            delivered && after == "wait" ? child.Id : null
                         ),
                         taskId is null ? after == "finish" : delivered && after == "finish"
                     );
