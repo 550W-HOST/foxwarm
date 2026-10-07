@@ -43,6 +43,27 @@ before(async () => {
   })
   server = createServer((request, response) => {
     const url = new URL(request.url, 'http://fixture')
+    if (url.pathname === '/prefix/ui/api/session-list/search') {
+      return json(response, { sessions: [
+        { id: 'worker/main', agent: 'worker', displayName: 'Worker' },
+        { id: 'other/main', agent: 'other', displayName: 'Other' },
+      ] })
+    }
+    if (url.pathname === '/prefix/ui/api/session-list/by-id') {
+      return json(response, { results: [{ requestedId: 'worker/main', session: { id: 'worker/main', agent: 'worker', displayName: 'Worker' } }] })
+    }
+    if (url.pathname === '/prefix/ui/api/tasks' && request.method === 'POST') {
+      requests.push({ pathname: url.pathname, method: request.method, action: 'create' })
+      return json(response, { task: { ...task('open'), id: 'task-user', title: 'Created from WebUI', createdByKind: 'user', createdBySessionId: null, ownerSessionId: 'worker/main' } }, 201)
+    }
+    if (url.pathname.endsWith('/comments') && request.method === 'POST') {
+      requests.push({ pathname: url.pathname, method: request.method, action: 'comment' })
+      return json(response, { task: task('active') })
+    }
+    if (url.pathname.endsWith('/assign') && request.method === 'POST') {
+      requests.push({ pathname: url.pathname, method: request.method, action: 'assign' })
+      return json(response, { task: { ...task('active'), ownerSessionId: 'worker/main' } })
+    }
     if (url.pathname === '/prefix/ui/api/tasks') {
       requests.push({ pathname: url.pathname, method: request.method, status: url.searchParams.get('status'), limit: url.searchParams.get('limit') })
       const status = url.searchParams.get('status')
@@ -113,6 +134,8 @@ test('Tasks reads bounded status windows, switches Table/Board, and shows bounde
   assert.deepEqual(await page.$eval('[data-task-details]', detail => ({ role: detail.getAttribute('role'), ariaModal: detail.getAttribute('aria-modal') })), { role: null, ariaModal: null })
   assert.equal(await page.$$eval('[data-task-details] li', items => items.filter(item => item.textContent.includes('Note ')).length), 10)
   await page.setViewport({ width: 390, height: 844 })
+  await page.waitForFunction(() => window.innerWidth < 1024)
+  await page.waitForFunction(() => document.querySelector('[data-task-details]')?.getAttribute('role') === 'dialog')
   assert.deepEqual(await page.$eval('[data-task-details]', detail => ({ role: detail.getAttribute('role'), ariaModal: detail.getAttribute('aria-modal') })), { role: 'dialog', ariaModal: 'true' })
   assert.equal(await page.$eval('[data-task-details]', detail => getComputedStyle(detail).position), 'fixed', 'Mobile task details stay directly visible as an overlay')
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Board scroll stays inside Tasks on a narrow viewport')
@@ -191,4 +214,35 @@ test('narrow screens show and close details over a long Board without leaving th
   await page.click('[aria-label="Close task details"]')
   assert.equal(await page.$('[data-task-details]'), null)
   mode = 'normal'
+})
+
+test('WebUI creates, comments, and changes task owners through user routes', async () => {
+  await page.setViewport({ width: 1400, height: 900 })
+  await click('Table')
+  await click('Refresh')
+  await page.waitForSelector('[data-task-row="task-open"]')
+  await click('New task')
+  await page.locator('[aria-labelledby="new-task-title"] input').fill('Created from WebUI')
+  const selector = page.locator('[aria-labelledby="new-task-title"] [data-session-selector-input]')
+  await selector.fill('worker')
+  await page.waitForSelector('[data-session-option="worker/main"]')
+  await page.click('[data-session-option="worker/main"]')
+  await page.$eval('[aria-labelledby="new-task-title"]', form => form.requestSubmit())
+  await page.waitForSelector('[aria-labelledby="new-task-title"]', { hidden: true })
+  const userCreate = requests.find(request => request.action === 'create')
+  assert.ok(userCreate)
+  await page.click('[data-task-row="task-active"] button')
+  await page.waitForSelector('[data-task-details] textarea')
+  const comment = page.locator('[data-task-details] textarea')
+  await comment.fill('User comment')
+  await page.click('[data-task-details] button[type="submit"]')
+  await page.waitForFunction(() => document.querySelector('[data-task-details] textarea')?.value === '')
+  await page.click('[data-task-details] [data-session-selector-input]')
+  await page.locator('[data-task-details] [data-session-selector-input]').fill('other')
+  await page.waitForSelector('[data-session-option="other/main"]')
+  await page.click('[data-session-option="other/main"]')
+  await page.click('[data-task-owner-save]')
+  await page.waitForFunction(() => (document.querySelector('[data-task-owner-save]'))?.hasAttribute('disabled'))
+  assert.ok(requests.some(request => request.action === 'comment'))
+  assert.ok(requests.some(request => request.action === 'assign'))
 })
