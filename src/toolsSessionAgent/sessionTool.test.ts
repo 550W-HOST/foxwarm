@@ -61,6 +61,7 @@ test('session status action reports current identity, usage, cwd, node, compact 
         }],
       },
     ];
+    parent.persistentMemorySnapshot = 'target persistent memory context';
     parent.stats.lastUsage = { cachedTokens: 3, inputTokens: 4, outputTokens: 5 };
     await sessionManager.saveSession(parentSessionId);
     const session = await ensureSession(sessionId);
@@ -101,6 +102,11 @@ test('session status action reports current identity, usage, cwd, node, compact 
     assert.match(targetStatus, /token estimate: ~[1-9][0-9,]* /);
     assert.match(targetStatus, /last usage: cached=3, input=4, output=5, total=12/);
     assert.match(targetStatus, /Images: 1/);
+    const ownTargetStatus = String(await tool_session({ action: 'status' }, { sessionId: parentSessionId, session: parent }));
+    assert.equal(
+      /token estimate: ~([\d,]+)/.exec(ownTargetStatus)?.[1],
+      /token estimate: ~([\d,]+)/.exec(targetStatus)?.[1],
+    );
     const aliasStatus = String(await tool_session({ action: 'status', sessionId: parentAlias }, { sessionId, session }));
     assert.ok(aliasStatus.includes(`session id: \`${parentSessionId}\``));
     const missingId = makeSessionId('session_status_missing');

@@ -116,7 +116,12 @@ function normalizeNonEmptyString(value: unknown, field: 'waitId'): string {
   return value.trim();
 }
 
-async function invokeAllowedOperation(operation: MainManagementToolOperation, args: ToolArgs, ctx: ToolContext): Promise<unknown> {
+async function invokeAllowedOperation(
+  operation: MainManagementToolOperation,
+  args: ToolArgs,
+  ctx: ToolContext,
+  readSessionHistory?: (sessionId: string) => Promise<SessionRuntimeHistoryDto | null>,
+): Promise<unknown> {
   // Read module exports at call time so established test/runtime replacement
   // seams are not frozen when the service is initialized.
   switch (operation) {
@@ -129,7 +134,7 @@ async function invokeAllowedOperation(operation: MainManagementToolOperation, ar
     case 'update_timer': return timerTools.tool_update_timer(args, ctx);
     case 'delete_timer': return timerTools.tool_delete_timer(args, ctx);
     case 'session_list': return buildSessionListOutput(args, ctx.sessionId);
-    case 'session_status': return sessionCrudTools.statusSessionForManagement(args, ctx.sessionId);
+    case 'session_status': return sessionCrudTools.statusSessionForManagement(args, ctx.sessionId, readSessionHistory);
     case 'session_update_display_name': return sessionCrudTools.tool_session(args, ctx);
     case 'session_update_parent': return sessionCrudTools.updateSessionParent(args, ctx.sessionId);
     case 'get_archived_messages': return archiveRecallTools.tool_get_archived_messages(args, ctx);
@@ -321,6 +326,7 @@ export function createMainManagementToolServiceHandler(options: {
             sessionId: sourceSessionId,
             ...(operation === 'send_to_session' ? { captureSuccessfulSendToSessionTarget: true } : {}),
           },
+        options.readSessionHistory,
       ) };
     },
     async scheduleWaitTimeout(input) {

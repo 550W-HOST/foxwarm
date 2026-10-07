@@ -413,6 +413,41 @@ rules:
   );
 });
 
+test('isolated session status stays owner-local while parent updates retain the existing boundary', async () => {
+  await sessionManager.loadSessions();
+  const agentName = `isolated_status_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const sessionId = `${agentName}/main`;
+  const sessionAlias = `${agentName}/alias`;
+  const targetId = `${agentName}/other`;
+  const session = await sessionManager.getSession(sessionId);
+  await sessionManager.getSession(targetId);
+  session.agent = agentName;
+  session.aliases = [sessionAlias];
+  await sessionManager.saveSession(sessionId);
+  await sessionManager.setAgentMetadata(agentName, { isolated: true, isolatedNode: 'remote-a', toolRules: [] });
+  const ctx: any = { sessionId, session };
+  try {
+    assert.match(String(await tools.callTool('session', { action: 'status' }, ctx)), new RegExp(sessionId));
+    assert.match(String(await tools.callTool('session', { action: 'status', sessionId: sessionAlias }, ctx)), new RegExp(sessionId));
+    await assert.rejects(
+      () => tools.callTool('session', { action: 'status', sessionId: targetId }, ctx),
+      /only use session status for its current session/i,
+    );
+    await assert.rejects(
+      () => tools.call_tool({ source: 'builtin', name: 'session', args: { action: 'status', sessionId: targetId } }, ctx),
+      /only use session status for its current session/i,
+    );
+    await assert.rejects(
+      () => tools.callTool('session', { action: 'update-parent', parentSessionId: null }, ctx),
+      /cannot use builtin capability `session`|isolated session cannot use session parent update/i,
+    );
+  } finally {
+    await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
+    await sessionManager.deleteSession(targetId).catch(() => {});
+    await sessionManager.deleteSession(sessionId).catch(() => {});
+  }
+});
+
 test('direct and unified Node calls share the same generic resolved identity', async () => {
   setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
 version: 1

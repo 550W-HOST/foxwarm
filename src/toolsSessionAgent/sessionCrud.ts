@@ -1,11 +1,12 @@
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
 import { COMPACT_KEEP_PERCENT } from '../config';
-import { requireNotIsolated } from '../isolatedCheck';
+import { checkSessionStatusPermissionForSession, requireNotIsolated } from '../isolatedCheck';
 import { executeMainManagementTool } from '../mainManagementTools';
 import { ToolArgs, ToolContext } from './helpers';
 import { buildSessionListOutput, buildSessionStatusInfo, formatSessionStatus } from '../sessionStatus';
 import { deleteSessionLifecycle } from '../sessionDeletion';
+import type { SessionRuntimeHistoryDto } from '../sessionRuntimeService';
 
 export async function tool_session(args: ToolArgs = {}, ctx?: ToolContext) {
   const action = typeof args.action === 'string' && args.action.trim()
@@ -26,6 +27,7 @@ export async function tool_session(args: ToolArgs = {}, ctx?: ToolContext) {
   }
 
   if (action === 'update-parent') {
+    await requireNotIsolated(ctx || {}, 'session parent update');
     if (ctx?.sessionPlacement === 'session-worker') return executeMainManagementTool('session_update_parent', args, ctx);
     return updateSessionParent(args, ctx?.sessionId);
   }
@@ -45,6 +47,10 @@ export async function tool_session(args: ToolArgs = {}, ctx?: ToolContext) {
   const currentSession = ctx?.session;
   const isCurrentSession = requestedSessionId === targetSessionId
     || !!currentSession?.aliases?.includes(requestedSessionId);
+  checkSessionStatusPermissionForSession(
+    currentSession || sessionManager.getSessionCatalog(targetSessionId),
+    requestedSessionId,
+  );
   if (ctx?.sessionPlacement === 'session-worker' && !isCurrentSession) {
     return executeMainManagementTool('session_status', { ...args, sessionId: requestedSessionId }, ctx);
   }
@@ -63,6 +69,7 @@ export async function tool_session(args: ToolArgs = {}, ctx?: ToolContext) {
     targetHistory.session,
     false,
     targetHistory.messages,
+    targetHistory.persistentMemorySnapshot,
   ));
 }
 
@@ -128,6 +135,7 @@ async function updateSessionDisplayName(args: ToolArgs, ctx?: ToolContext) {
 }
 
 export async function updateSessionParent(args: ToolArgs, sourceSessionId?: string) {
+  await requireNotIsolated(sourceSessionId || {}, 'session parent update');
   const targetSessionId = typeof args.sessionId === 'string' && args.sessionId.trim()
     ? args.sessionId.trim()
     : sourceSessionId;
@@ -153,11 +161,16 @@ export async function updateSessionParent(args: ToolArgs, sourceSessionId?: stri
   };
 }
 
-export async function statusSessionForManagement(args: ToolArgs, sourceSessionId: string) {
+export async function statusSessionForManagement(
+  args: ToolArgs,
+  sourceSessionId: string,
+  readSessionHistory: (sessionId: string) => Promise<SessionRuntimeHistoryDto | null> = sessionRuntime.getHistory,
+) {
   const requestedSessionId = typeof args.sessionId === 'string' && args.sessionId.trim()
     ? args.sessionId.trim()
     : sourceSessionId;
-  const targetHistory = await sessionRuntime.getHistory(requestedSessionId);
+  checkSessionStatusPermissionForSession(sessionManager.getSessionCatalog(sourceSessionId), requestedSessionId);
+  const targetHistory = await readSessionHistory(requestedSessionId);
   if (!targetHistory) {
     throw new Error(`Session \`${requestedSessionId}\` not found.`);
   }
@@ -166,6 +179,7 @@ export async function statusSessionForManagement(args: ToolArgs, sourceSessionId
     targetHistory.session,
     false,
     targetHistory.messages,
+    targetHistory.persistentMemorySnapshot,
   ));
 }
 

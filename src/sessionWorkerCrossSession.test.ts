@@ -10,6 +10,7 @@ import { getSessionHistoryFilePath, serializeSessionHistoryPayload } from './ses
 import { SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
+import { buildSessionRuntimeSessionDto } from './sessionRuntimeService';
 import type { Session } from './types';
 import { createNodeRegistryStore, createPendingPairing, resetNodeRegistryForTests, setNodeRegistryStoreForTests } from './nodes/registry';
 import * as nodeTools from './tools/nodeTools';
@@ -316,6 +317,7 @@ test('real Worker calls cross-session recall, agent creation, and node bootstrap
   const agentName = `mcagent_${Date.now()}`;
   const createdSessionId = `${agentName}/created`;
   const approvedNodeId = `mc-node-${Date.now()}`;
+  let targetPath = '';
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-main-tools-'));
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
   setNodeRegistryStoreForTests(createNodeRegistryStore(path.join(root, 'nodes.json')));
@@ -334,7 +336,22 @@ test('real Worker calls cross-session recall, agent creation, and node bootstrap
   ];
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
-    workerEnv: { FOXWARM_DATA_DIR: root, FOXWARM_TEST_MAIN_TOOLS: JSON.stringify(calls) },
+    workerEnv: {
+      FOXWARM_DATA_DIR: root,
+      FOXWARM_TEST_MAIN_TOOLS_BY_SESSION: JSON.stringify({ [sourceId]: calls }),
+    },
+    readSessionHistory: async sessionId => {
+      if (sessionId !== targetId || !targetPath) return null;
+      const authority = await fs.readJson(targetPath) as Session;
+      authority.id = sessionId;
+      return {
+        session: buildSessionRuntimeSessionDto(authority),
+        messages: authority.history,
+        queue: authority.queue || [],
+        persistentMemorySnapshot: authority.persistentMemorySnapshot || '',
+        latestSeq: Math.max(0, (authority.nextMessageSeq || 1) - 1),
+      };
+    },
   });
   const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, id => sessionManager.getAllSessions().has(id));
   const sourcePath = path.join(root, 'state', 'sessions', `${sourceId}.json`);
@@ -344,12 +361,18 @@ test('real Worker calls cross-session recall, agent creation, and node bootstrap
     await supervisor.reconcileStartupOwnerships();
     const source = baseSession(sourceId); source.model = 'openai/gpt-5.6-sol';
     const sourceStub = baseSession(sourceId); sourceStub.model = 'stale-main-model';
-    const target = baseSession(targetId);
-    sessionManager.getAllSessions().set(sourceId, sourceStub); sessionManager.getAllSessions().set(targetId, target);
+    const targetAuthority = baseSession(targetId);
+    targetAuthority.history = [{ role: 'user', parts: [{ text: 'worker target status context' }] }];
+    const targetStub = baseSession(targetId);
+    sessionManager.getAllSessions().set(sourceId, sourceStub); sessionManager.getAllSessions().set(targetId, targetStub);
+    targetPath = path.join(root, 'state', 'sessions', `${targetId}.json`);
     await fs.outputJson(sourcePath, serializeSessionHistoryPayload(source));
     await fs.outputJson(getSessionHistoryFilePath(sourceId), serializeSessionHistoryPayload(source));
-    await fs.outputJson(getSessionHistoryFilePath(targetId), serializeSessionHistoryPayload(target));
+    await fs.outputJson(targetPath, serializeSessionHistoryPayload(targetAuthority));
+    await fs.outputJson(getSessionHistoryFilePath(targetId), serializeSessionHistoryPayload(targetAuthority));
     sessionManager.setSessionWorkerEnqueueSink(async (id, item) => { await ingress.enqueueEnsuringWorker(id, item); });
+    await ingress.submitEnsuringWorker(targetId, { type: 'user', parts: [{ text: 'target owner seed' }] });
+    await waitFor(() => !!supervisor.getStatus(targetId)?.ready);
     await ingress.submitEnsuringWorker(sourceId, { type: 'user', parts: [{ text: 'exercise main-owned tools' }] });
     const authority = await fs.readJson(sourcePath);
     const text = JSON.stringify(authority.history);
@@ -357,11 +380,16 @@ test('real Worker calls cross-session recall, agent creation, and node bootstrap
     assert.match(text, /No archived messages matched/);
     assert.match(text, /No archived blocks found/);
     assert.match(text, new RegExp('session id: `' + targetId + '`'));
+    assert.match(text, new RegExp('messages: 3'));
     assert.ok(text.includes(agentName) && text.includes('created successfully'));
     assert.ok(text.includes(createdSessionId) && text.includes('created under agent'));
     const createdSession = await sessionManager.getSession(createdSessionId);
     assert.equal(createdSession.model, source.model, 'new session inherits the detached Worker authority model, not the stale Main stub');
     assert.equal(sessionManager.getAllSessions().get(targetId)?.parentSessionId, sourceId);
+    assert.equal(sessionManager.getAllSessions().get(targetId)?.history.length, 0, 'Main does not hydrate the Worker target authority');
+    await ingress.submitEnsuringWorker(targetId, { type: 'user', parts: [{ text: 'target owner save after parent update' }] });
+    await waitFor(async () => (await fs.readJson(targetPath)).history.some((message: any) => JSON.stringify(message).includes('target owner save after parent update')));
+    assert.equal(sessionManager.getAllSessions().get(targetId)?.parentSessionId, sourceId, 'owner save preserves the Main-owned parent relation');
     assert.equal(createdSession.effort, 'none', 'effort-only forceModel applies against the detached Worker authority model');
     assert.match(text, /disposable-bootstrap-fixture/);
     assert.match(text, new RegExp(pending.id));

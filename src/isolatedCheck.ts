@@ -270,6 +270,14 @@ export function requireNotIsolatedForSession(session: Session | undefined, opera
   }
 }
 
+/** Keep status read-only for isolated callers and limited to their exact owner. */
+export function checkSessionStatusPermissionForSession(session: Session | undefined, targetSessionId?: string): void {
+  if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
+  const requested = targetSessionId || session?.id;
+  if (requested === session?.id || (session?.aliases || []).includes(requested || '')) return;
+  throw new Error('Isolated session can only use session status for its current session.');
+}
+
 /**
  * Allow selected archive-inspection tools for isolated sessions, but only when
  * they target sessions under the same agent. This keeps the permission narrow:
