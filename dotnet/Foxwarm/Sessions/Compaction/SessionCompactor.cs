@@ -515,20 +515,7 @@ internal sealed partial class SessionCompactor
     }
 
     internal static long[] OrdinaryVisibleSequences(SessionSnapshot snapshot) =>
-        snapshot
-            .History.Where(row =>
-                CanonicalMessage.FromNode(row).IsModelVisible
-                && row["__meta"]?["goalReminder"] is null
-                && row["__meta"]?["contextBlock"] is null
-            )
-            .Select(row => row["__meta"]?["seq"])
-            .OfType<JsonValue>()
-            .Select(value => value.TryGetValue<long>(out var seq) ? seq : 0)
-            .Where(seq => seq > 0)
-            .Distinct()
-            .OrderBy(seq => seq)
-            .TakeLast(30)
-            .ToArray();
+        TaskProgress.Sequences(snapshot);
 
     private void CheckpointTaskProgress(SessionSnapshot snapshot)
     {
@@ -553,6 +540,7 @@ internal sealed partial class SessionCompactor
         try
         {
             long archiveMaximum = 0;
+            CheckpointTaskProgress(run.Snapshot);
             await hosted.Entry.SaveLane.CommitCompactionAsync(
                 state =>
                 {
@@ -560,7 +548,6 @@ internal sealed partial class SessionCompactor
                         throw new CompactionSnapshotIncompatibleException(
                             "Compaction was planned for a previous Session identity."
                         );
-                    CheckpointTaskProgress(state.Snapshot());
                     return PrepareCompact(
                         state,
                         run.Snapshot,

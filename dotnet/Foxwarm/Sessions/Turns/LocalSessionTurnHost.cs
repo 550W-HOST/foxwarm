@@ -129,17 +129,50 @@ public sealed partial class LocalSessionTurnHost
                     var calls = ExtractFunctionCalls(assistant);
                     if (calls.Count == 0)
                     {
-                        var noAction = SessionBoundary.IsNoAction(
-                            assistant["parts"]
-                                ?.AsArray()
-                                .FirstOrDefault(part => SessionWait.Text(part?["text"]) is not null)
-                                ?["text"]?.GetValue<string>()
+                        var parts = assistant["parts"]?.AsArray() ?? [];
+                        var noAction = parts.Any(part =>
+                            SessionBoundary.IsNoAction(SessionWait.Text(part?["text"]))
+                        );
+                        var finalText = string.Join(
+                            "",
+                            parts
+                                .Select(part => SessionWait.Text(part?["text"]))
+                                .Where(text => text is not null)
                         );
                         var hasLeadingQueue = entry.WithState(state =>
                             state.Queue.Any(SessionCompactor.Ordinary)
                         );
                         if (!hasLeadingQueue && noAction)
                             await entry.SaveLane.ResolveChildHandoffAsync().ConfigureAwait(false);
+                        var parent = entry.WithState(state =>
+                            SessionWait.Text(state.AuthorityEnvelope["parentSessionId"])
+                        );
+                        var alreadyReminded = entry.WithState(state =>
+                            state
+                                .History.TakeLast(2)
+                                .Any(row =>
+                                    row["parts"] is JsonArray rowParts
+                                    && rowParts.Any(part =>
+                                        SessionWait
+                                            .Text(part?["system"])
+                                            ?.Contains(
+                                                "kind=\"child-reminder\"",
+                                                StringComparison.Ordinal
+                                            ) == true
+                                    )
+                                )
+                        );
+                        if (
+                            !hasLeadingQueue
+                            && parent is not null
+                            && SessionBoundary.NeedsChildHandoff(entry.Snapshot().AuthorityEnvelope)
+                            && !alreadyReminded
+                            && !noAction
+                            && !finalText.TrimStart().StartsWith("Error:", StringComparison.Ordinal)
+                        )
+                            await entry
+                                .SaveLane.QueueChildReminderAsync(parent)
+                                .ConfigureAwait(false);
                         if (
                             !entry.WithState(state =>
                                 !state.Stopping
@@ -163,11 +196,21 @@ public sealed partial class LocalSessionTurnHost
                         )
                         .ConfigureAwait(false);
 
-                    if (
-                        tools is SessionToolExecutor receiptTools
-                        && receiptTools.ConsumeReceipts().Count > 0
-                    )
-                        await entry.SaveLane.ResolveChildHandoffAsync().ConfigureAwait(false);
+                    if (tools is SessionToolExecutor receiptTools)
+                    {
+                        var parent = SessionWait.Text(
+                            entry.Snapshot().AuthorityEnvelope["parentSessionId"]
+                        );
+                        var validReceipt = receiptTools
+                            .ConsumeReceipts()
+                            .Any(receipt =>
+                                receipt.AttachedSessionId == entry.Snapshot().Id
+                                    && receipt.CompletedTaskId is not null
+                                || parent is not null && receipt.SuccessfulSendTarget == parent
+                            );
+                        if (validReceipt)
+                            await entry.SaveLane.ResolveChildHandoffAsync().ConfigureAwait(false);
+                    }
 
                     if (
                         toolParts.FirstOrDefault()?["functionResponse"] is JsonObject firstResponse

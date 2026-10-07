@@ -15,7 +15,6 @@ internal sealed partial class SessionManager
     {
         var previous = semanticCaller.Value;
         semanticCaller.Value = cancellationToken;
-        successfulSendReceipt.Value = null;
         try
         {
             return await ExecuteAgentToolCoreAsync(source, name, args);
@@ -173,6 +172,7 @@ internal sealed partial class SessionManager
                             "create_child_session with afterSend=wait requires a nonempty initial message."
                         );
                     var taskId = OptionalString(args, "taskId");
+                    var initialMessage = OptionalString(args, "message");
                     SessionOwner child;
                     if (taskId is null)
                     {
@@ -182,7 +182,7 @@ internal sealed partial class SessionManager
                                 RequiredString(args, "suffix"),
                                 OptionalString(args, "agentName"),
                                 OptionalString(args, "displayName"),
-                                null,
+                                initialMessage,
                                 forceModel,
                                 OptionalBool(args, "fork") ?? false,
                                 taskId
@@ -209,9 +209,21 @@ internal sealed partial class SessionManager
                         );
                     }
                     var delivered = false;
-                    if (OptionalString(args, "message") is { } initialMessage)
+                    if (taskId is not null && initialMessage is not null)
                     {
-                        await SendAsync(source, child.Id, initialMessage);
+                        try
+                        {
+                            await SendAsync(source, child.Id, initialMessage);
+                        }
+                        catch (Exception error)
+                        {
+                            throw new CommittedSessionCreationException(
+                                child.Id,
+                                $"Child Session '{child.Id}' was committed but its initial message was not delivered: {error.Message}",
+                                error,
+                                error is AuthorityCommittedException
+                            );
+                        }
                         delivered = true;
                     }
                     return (

@@ -163,6 +163,7 @@ public sealed partial class SessionSaveLane
                 envelope["persistentMemorySnapshot"] = snapshot;
                 return next with { AuthorityEnvelope = envelope };
             });
+            staged = await PrepareGoalOnlyAsync(staged).ConfigureAwait(false);
             void Publish(SessionState state) =>
                 state.AuthorityEnvelope["persistentMemorySnapshot"] = snapshot;
             var previousScope = SnapshotCommitScope.Value;
@@ -174,6 +175,7 @@ public sealed partial class SessionSaveLane
             catch (AuthorityCommittedException)
             {
                 entry.WithState(Publish);
+                PublishGoalOnly(staged);
                 entry.InvokeCommitted(entry.Snapshot());
                 throw;
             }
@@ -182,6 +184,7 @@ public sealed partial class SessionSaveLane
                 SnapshotCommitScope.Value = previousScope;
             }
             entry.WithState(Publish);
+            PublishGoalOnly(staged);
             entry.InvokeCommitted(entry.Snapshot());
         });
 
@@ -196,6 +199,7 @@ public sealed partial class SessionSaveLane
             if (!SessionBoundary.ResolveChildHandoff(envelope))
                 return;
             var staged = snapshot with { AuthorityEnvelope = envelope };
+            staged = await PrepareGoalOnlyAsync(staged).ConfigureAwait(false);
             try
             {
                 await store.CommitAsync(staged, SaveKind.Strict).ConfigureAwait(false);
@@ -207,6 +211,7 @@ public sealed partial class SessionSaveLane
                         "childHandoffState"
                     ]!.DeepClone()
                 );
+                PublishGoalOnly(staged);
                 throw;
             }
             entry.WithState(state =>
@@ -214,6 +219,37 @@ public sealed partial class SessionSaveLane
                     "childHandoffState"
                 ]!.DeepClone()
             );
+            PublishGoalOnly(staged);
+        });
+
+    internal Task MarkChildHandoffRequiredAsync() =>
+        EnqueueOperationAsync(async () =>
+        {
+            var snapshot = entry.Snapshot();
+            var envelope = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();
+            envelope["childHandoffState"] = new JsonObject
+            {
+                ["boundary"] = "report-required",
+                ["resolved"] = false,
+            };
+            var staged = await PrepareGoalOnlyAsync(snapshot with { AuthorityEnvelope = envelope })
+                .ConfigureAwait(false);
+            void Publish(SessionState state) =>
+                state.AuthorityEnvelope["childHandoffState"] = envelope[
+                    "childHandoffState"
+                ]!.DeepClone();
+            try
+            {
+                await store.CommitAsync(staged, SaveKind.Strict).ConfigureAwait(false);
+            }
+            catch (AuthorityCommittedException)
+            {
+                entry.WithState(Publish);
+                PublishGoalOnly(staged);
+                throw;
+            }
+            entry.WithState(Publish);
+            PublishGoalOnly(staged);
         });
 
     internal Task QueueChildReminderAsync(string parentSessionId) =>

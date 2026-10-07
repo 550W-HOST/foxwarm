@@ -28,11 +28,20 @@ internal sealed partial class SessionManager
     private readonly CancellationTokenSource admissionStop = new();
     private volatile bool servicesReady;
     private readonly AsyncLocal<CancellationToken?> semanticCaller = new();
-    private readonly AsyncLocal<string?> successfulSendReceipt = new();
+
+    private sealed class SendReceiptBox
+    {
+        internal string? Target { get; set; }
+    }
+
+    private readonly AsyncLocal<SendReceiptBox?> successfulSendReceipt = new();
+
+    internal void BeginSuccessfulSendReceipt() =>
+        successfulSendReceipt.Value = new SendReceiptBox();
 
     internal string? ConsumeSuccessfulSendReceipt()
     {
-        var value = successfulSendReceipt.Value;
+        var value = successfulSendReceipt.Value?.Target;
         successfulSendReceipt.Value = null;
         return value;
     }

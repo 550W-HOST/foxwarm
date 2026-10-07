@@ -146,7 +146,14 @@ internal sealed partial class SessionManager
         try
         {
             if (fork)
-                child = await ForkLockedAsync(parent, suffix, true, displayName, forceModel);
+                child = await ForkLockedAsync(
+                    parent,
+                    suffix,
+                    true,
+                    displayName,
+                    forceModel,
+                    taskId
+                );
             else
             {
                 var parentId = parent.Id;
@@ -321,8 +328,8 @@ internal sealed partial class SessionManager
             && target.Registry.HasRunnableWork(target.Entry)
         )
             target.Registry.Trigger(target.Id);
-        if (relation == "parent")
-            successfulSendReceipt.Value = target.Id;
+        if (relation == "direct-child" && successfulSendReceipt.Value is { } receipt)
+            receipt.Target = target.Id;
         return target.Id;
     }
 

@@ -51,21 +51,7 @@ internal sealed class SessionChatService(
         var retainedTaskIds = new List<string>();
         async Task<IReadOnlyList<JsonObject>> RequestContext()
         {
-            var visible = hosted
-                .Entry.Snapshot()
-                .History.Where(row =>
-                    CanonicalMessage.FromNode(row).IsModelVisible
-                    && row["__meta"]?["goalReminder"] is null
-                    && row["__meta"]?["contextBlock"] is null
-                )
-                .Select(row => row["__meta"]?["seq"])
-                .OfType<JsonValue>()
-                .Select(value => value.TryGetValue<long>(out var seq) ? seq : 0)
-                .Where(seq => seq > 0)
-                .Distinct()
-                .OrderBy(seq => seq)
-                .TakeLast(30)
-                .ToArray();
+            var visible = TaskProgress.Sequences(hosted.Entry.Snapshot());
             if (tasks is null)
                 return [];
             var context = tasks.TaskContext(hosted.Id, visible, true, retainedTaskIds);
@@ -76,6 +62,8 @@ internal sealed class SessionChatService(
             var lines = current.Select(item =>
                 $"{item!["id"]!.GetValue<string>()} — {item["title"]!.GetValue<string>()} ({item["status"]!.GetValue<string>()})"
             );
+            var omitted = context["omitted"]?.GetValue<int>() ?? 0;
+            var omittedText = omitted > 0 ? $"\n{omitted} more tasks." : "";
             return
             [
                 new JsonObject
@@ -87,6 +75,7 @@ internal sealed class SessionChatService(
                             ["system"] =
                                 "<foxwarm-system kind=\"task-reminder\">Continue the active tasks:\n"
                                 + string.Join('\n', lines)
+                                + omittedText
                                 + "</foxwarm-system>",
                         }
                     ),

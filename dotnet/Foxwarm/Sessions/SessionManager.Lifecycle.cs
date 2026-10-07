@@ -72,7 +72,8 @@ internal sealed partial class SessionManager
         string suffix,
         bool childMode,
         string? displayName,
-        JsonObject? forceModel
+        JsonObject? forceModel,
+        string? taskId = null
     )
     {
         if (!Accepting)
@@ -209,7 +210,8 @@ internal sealed partial class SessionManager
                                 ? $"You are a child session forked from parent session `{parent.Id}`. Your current session ID is `{id}`. "
                                     + SessionBoundary.Completion(
                                         parent.Id,
-                                        HandoffConfirmationEnabled
+                                        HandoffConfirmationEnabled,
+                                        taskId
                                     )
                                 : $"Session forked from {parent.Id} by user command. Your current session ID is `{id}`."
                         )

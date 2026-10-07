@@ -315,11 +315,14 @@ internal sealed partial class SessionToolExecutor(
             && response["task"] is JsonObject task
             && SessionWait.Text(task["attachedSessionId"]) == Hosted.Id
         )
+        {
+            await Hosted.Entry.SaveLane.ResolveChildHandoffAsync().ConfigureAwait(false);
             invocation.Value!.Receipt = new TurnToolReceipt(
                 null,
                 SessionWait.Text(task["id"]),
                 Hosted.Id
             );
+        }
         else if (completionTarget is not null)
             invocation.Value!.Receipt = new TurnToolReceipt(completionTarget, null, null);
         return response;
@@ -410,6 +413,7 @@ internal sealed partial class SessionToolExecutor(
         CancellationToken cancellationToken
     )
     {
+        sessions.BeginSuccessfulSendReceipt();
         var (response, finish) = await sessions.ExecuteAgentToolAsync(
             hosted,
             name,

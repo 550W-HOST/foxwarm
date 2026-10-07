@@ -125,7 +125,19 @@ internal sealed class TaskService : IDisposable
                     409
                 );
             var child = await create().ConfigureAwait(false);
-            store.BindChild(taskId, child.Id);
+            try
+            {
+                store.BindChild(taskId, child.Id);
+                await child.Entry.SaveLane.MarkChildHandoffRequiredAsync().ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
+                throw new CommittedSessionCreationException(
+                    child.Id,
+                    $"Child Session '{child.Id}' was committed but task attachment was not durable: {error.Message}",
+                    error
+                );
+            }
             return child;
         }
         finally

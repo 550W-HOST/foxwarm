@@ -253,11 +253,25 @@ internal sealed partial class SessionManager : IAsyncDisposable
         return live is { } next ? next - 1 : null;
     }
 
+    private static bool IsFalsyGoal(JsonNode value) =>
+        value is JsonValue scalar
+        && (
+            scalar.TryGetValue<bool>(out var boolean) && !boolean
+            || scalar.TryGetValue<double>(out var number) && number == 0
+            || scalar.TryGetValue<string>(out var text) && text.Length == 0
+        );
+
     private async Task<SessionSnapshot> MigrateGoalSnapshotAsync(SessionSnapshot snapshot)
     {
-        if (!snapshot.AuthorityEnvelope.ContainsKey("goalState"))
+        if (!snapshot.AuthorityEnvelope.TryGetPropertyValue("goalState", out var rawGoal))
             return snapshot;
-        if (snapshot.AuthorityEnvelope["goalState"] is not JsonObject goalState)
+        if (rawGoal is null || IsFalsyGoal(rawGoal))
+        {
+            var cleared = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();
+            cleared.Remove("goalState");
+            return snapshot with { AuthorityEnvelope = cleared };
+        }
+        if (rawGoal is not JsonObject goalState)
             throw new InvalidDataException("Session authority goalState must be an object.");
         if (
             goalState["goal"] is not JsonValue goalValue
@@ -286,7 +300,15 @@ internal sealed partial class SessionManager : IAsyncDisposable
         if (snapshot.AuthorityEnvelope["goalState"] is null)
             return;
         var migrated = await MigrateGoalSnapshotAsync(snapshot).ConfigureAwait(false);
-        await owner.AuthorityStore.CommitAsync(migrated, SaveKind.Strict).ConfigureAwait(false);
+        try
+        {
+            await owner.AuthorityStore.CommitAsync(migrated, SaveKind.Strict).ConfigureAwait(false);
+        }
+        catch (AuthorityCommittedException)
+        {
+            owner.Entry.WithState(state => state.AuthorityEnvelope.Remove("goalState"));
+            throw;
+        }
         owner.Entry.WithState(state => state.AuthorityEnvelope.Remove("goalState"));
     }
 

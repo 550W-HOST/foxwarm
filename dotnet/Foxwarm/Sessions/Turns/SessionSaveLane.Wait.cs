@@ -31,6 +31,7 @@ public sealed partial class SessionSaveLane
         {
             WaitCommitScope.Value = previous;
         }
+        PublishGoalOnly(staged);
     }
 
     // All wait/queue mutations share the existing ordered save lane. Stop retains its immediate state/CTS path.
@@ -122,7 +123,10 @@ public sealed partial class SessionSaveLane
                 TimerQueueScope.Value = timer;
                 try
                 {
-                    await store.CommitAsync(entry.SnapshotForPersistence(), kind);
+                    var persisted = await PrepareGoalOnlyAsync(entry.SnapshotForPersistence())
+                        .ConfigureAwait(false);
+                    await store.CommitAsync(persisted, kind);
+                    PublishGoalOnly(persisted);
                 }
                 catch (Exception error)
                 {

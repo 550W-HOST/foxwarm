@@ -50,7 +50,12 @@ internal sealed partial class SessionToolExecutor
                         },
                         currentToken
                     );
-                    if (execution.Receipt is not null && rootCall is not null)
+                    if (
+                        execution.Receipt
+                            is { CompletedTaskId: not null, AttachedSessionId: var attached }
+                        && attached == hosted.Id
+                        && rootCall is not null
+                    )
                         rootCall.Receipt = execution.Receipt;
                     if (PolicyUnavailable)
                         throw new ToolScriptHostFatalException(
