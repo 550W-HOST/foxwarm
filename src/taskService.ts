@@ -121,4 +121,14 @@ export class TaskService {
       return childSessionId;
     });
   }
+
+  async deliverAttachedChildAssignment(taskId: string, childSessionId: string, sourceSessionId: string, additionalMessage?: string): Promise<void> {
+    const task = this.store.execute({ action: 'get', taskId }, sourceSessionId).task;
+    const description = this.store.readStoredDescription(taskId);
+    const summary = `${task.id} — ${task.title}\nStatus: ${task.status}${description ? `\n${description}` : ''}`;
+    const message = `You have been assigned a task: ${summary}${additionalMessage ? `\n\nAdditional instruction:\n${additionalMessage}` : ''}`;
+    await this.deps.sendToSession(childSessionId, message, sourceSessionId, {
+      taskNotification: { taskId: task.id, event: 'assigned', recipient: 'new' },
+    });
+  }
 }

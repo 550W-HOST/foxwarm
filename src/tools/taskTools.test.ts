@@ -10,6 +10,7 @@ import * as sessionManager from '../sessionManager';
 import { task, callTool, call_tool, modelFacingDefinitions, create_child_session } from '../tools';
 import { resetMainManagementToolsForTests, shutdownMainManagementTools } from '../mainManagementTools';
 import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from '../toolAuthorization';
+import { parseFoxwarmWrappedContent } from '../utils/promptWrappers';
 
 const readResult = (result: { output: string }): any => JSON.parse(result.output);
 
@@ -86,15 +87,22 @@ test('create_child_session taskId binds the real child before delivery and rejec
   const ctx: any = { sessionId: parent.id, session: parent, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} };
   const children: string[] = [];
   try {
-    const taskId = readResult(await task({ action: 'create', title: 'Child work' }, ctx)).taskId;
-    const result = await create_child_session({ suffix: 'executor', taskId }, ctx);
-    const childId = String(result).match(/`([^`]+)`/)![1];
+    const taskId = readResult(await task({ action: 'create', title: 'Child work', description: 'Complete the full child task description.' }, ctx)).taskId;
+    const result: any = await create_child_session({ suffix: 'executor', taskId, message: 'Use the approved implementation path.', afterSend: 'wait' }, ctx);
+    const childId = String(result.output ?? result).match(/`([^`]+)`/)![1];
+    assert.deepEqual(result.__toolPostAction, { waitForReply: true, successfulSendToSessionTarget: childId });
     children.push(childId);
     assert.ok(sessionManager.getSessionCatalog(childId));
     const child = await sessionManager.getExistingSession(childId);
     assert.match(child.history[0].parts[0].system, /This Session is linked to task task_/);
     assert.match(child.history[0].parts[0].system, /Do not send a separate routine completion message/);
-    assert.equal(child.queue.length, 0);
+    assert.equal(child.queue.length, 1);
+    const assignment = parseFoxwarmWrappedContent(child.queue[0].parts?.[0].system || '');
+    assert.equal(assignment.attrs.type, 'task');
+    assert.equal(assignment.attrs.taskId, taskId);
+    assert.match(assignment.content, /Complete the full child task description\./);
+    assert.match(assignment.content, /Use the approved implementation path\./);
+    assert.doesNotMatch(assignment.content, /inter-agent/);
     assert.equal(readResult(await task({ action: 'get', taskId }, ctx)).task.ownerSessionId, childId);
     assert.match(readResult(await task({ action: 'get', taskId }, ctx)).notes[0].text, new RegExp(childId));
     const count = sessionManager.getAllSessions().size;
@@ -149,7 +157,7 @@ test('real Session moves preserve task owner/creator/attached identities, notifi
     assert.equal(taskService.list().tasks.find((entry: any) => entry.id === taskId).ownerSessionId, child.id);
     assert.equal(refs(taskId).ownerSessionId, oldChild, 'ordinary bounded reads do not rewrite persisted references');
     await task({ action: 'assign', taskId: selfId, ownerSessionId: oldChild, notifySession: true }, currentCtx);
-    assert.equal(child.queue.length, 0, 'same canonical owner notification is skipped without a self-send');
+    assert.equal(child.queue.length, 1, 'same canonical owner notification is skipped without a self-send');
     const reminders = taskService.store.taskContext(child.id, [anchor + 30], true);
     assert(reminders.some(entry => entry.id === selfId), 'canonical owner query finds old IDs and retained progress');
     assert.equal(refs(selfId).createdBySessionId, child.id);
@@ -161,8 +169,8 @@ test('real Session moves preserve task owner/creator/attached identities, notifi
     assert.equal(transfer.previousOwnerSessionId, child.id);
     assert.equal(transfer.assignmentNotificationStatus, 'skipped');
     assert.equal(transfer.previousOwnerNotificationStatus, 'sent');
-    assert.equal(child.queue.length, 1);
-    assert.equal((child.queue[0] as any).trigger, false, 'previous moved owner receives only passive ingress');
+    assert.equal(child.queue.length, 2);
+    assert.equal((child.queue[1] as any).trigger, false, 'previous moved owner receives only passive ingress');
     const completed = await executeTools([{ id: 'complete-renamed-child', name: 'call_tool', args: {
       toolId: 'builtin:task', args: { action: 'complete', taskId, result: 'Done after rename' },
     } }], currentCtx, child);
@@ -193,18 +201,19 @@ test('actual Task notices classify assignment/transfer/release/completion separa
   sessionManager.setSessionTriggerCallback(id => { triggered.push(id); });
   try {
     const taskId = readResult(await task({ action: 'create', title: 'Task notifications', ownerSessionId: first.id, notifySession: true }, { sessionId: creator.id })).taskId;
-    const notice = (session: typeof creator, index: number, event: string): void => {
+    const notice = (session: typeof creator, index: number, event: string, assignment = false): void => {
       const text = session.queue[index].parts[0].system;
       assert.match(text, /^<foxwarm-message type="task"/);
       assert.match(text, new RegExp(`taskId="${taskId}" event="${event}"`));
-      assert.match(text, /hint="task notification from Foxwarm; not direct user input"/);
+      if (assignment) assert.match(text, /Task assignment from Foxwarm/);
+      else assert.match(text, /hint="task notification from Foxwarm; not direct user input"/);
       assert.doesNotMatch(text, /replyTargetSessionId|replyVia|type="inter-agent"/);
     };
-    notice(first, 0, 'assigned');
+    notice(first, 0, 'assigned', true);
     assert.deepEqual(triggered, [first.id]);
     await task({ action: 'assign', taskId, ownerSessionId: second.id, notifySession: true }, { sessionId: creator.id });
     notice(first, 1, 'transferred');
-    notice(second, 0, 'transferred');
+    notice(second, 0, 'transferred', true);
     assert.equal(first.queue[1].trigger, false);
     assert.deepEqual(triggered, [first.id, second.id], 'previous recipient admission does not wake it');
     await task({ action: 'assign', taskId, ownerSessionId: null, notifySession: true }, { sessionId: creator.id });
