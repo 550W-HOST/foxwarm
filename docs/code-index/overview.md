@@ -1,88 +1,101 @@
-# Foxwarm Code Index
+# Overview
 
-See [README.md](./README.md) for governance, canonical ownership, and publication rules.
+Foxwarm is an AI agent system with a .NET Main host, browser WebUI, model adapters, durable Session state, local tools, optional remote Nodes, and compatibility packages that are still being retired or replaced. The .NET solution is the active Main architecture being developed in this branch. The intended end state is a .NET Main with the existing platform packages connected to its public contracts; the repository still contains TypeScript Main source, root TypeScript CLI/build/start entries, and remote-platform implementations, so this index does not describe those components as deleted, fully integrated, or already switched over.
 
-## Overview
+## Start here
 
-Foxwarm is a multi-channel AI agent system that connects LLM providers to users through messaging adapters, terminal interfaces, and a browser UI. A master process owns sessions, context management, tool dispatch, and channel routing. Generic Nodes provide execution environments; production providers cover the colocated master, authenticated remote Nodes, and optional startup-configured executable sandbox Nodes with provider-neutral lifecycle support when implemented.
+1. `dotnet/Foxwarm/Program.cs` starts the local host and composes configuration, Sessions, terminals, routing, HTTP, and WebUI.
+2. [Session ownership](./threads/session-ownership-and-persistence.md) traces the normal ingress-to-JSON/Archive/catalog path and its failure classes.
+3. [Session authority](./units/session-authority-json.md), [save lane](./units/session-save-lane-core.md), and [catalog projection](./units/session-catalog-projection.md) are the first source pages for persistence changes.
+4. [Model requests](./threads/model-request-and-streaming.md) covers routing, provider wire formats, streaming, retries, images, and the request journal.
+5. [WebUI boundary](./threads/dotnet-webui-boundary.md) traces HTTP authentication, route registration, realtime events, uploads, Code, and PTY access.
+6. [Tool dispatch](./threads/tools-permissions-and-exec.md) traces discovery, authorization, local file/exec tools, and the remaining Node boundary.
 
-The system uses a queue-driven session loop: inbound events are normalized by channels, routed to a session, processed serially, sent to an LLM, and continued through tool calls until a final response is broadcast. Long sessions remain usable through layered context compaction, archival, and semantic recall.
+## .NET solution
 
-## Architecture
+`dotnet/Foxwarm.sln` contains three projects: `Foxwarm` (the host executable), `Foxwarm.DevTools` (developer-facing request/journal probes), and `Foxwarm.Tests` (xUnit coverage of the host contracts). The host targets .NET 10 and embeds/serves selected WebUI and VS Code Web assets through its project file.
+
+## Runtime shape
 
 ```text
-Channels (messaging adapters, TUI, WebUI)
-        |
-        v
-Message Router -> commands and side requests
-        |
-        v
-Session Core (queue, lifecycle, persistence)
-        |-- LLM providers and streaming
-        |-- Tool dispatch and isolation checks
-        |-- Context compaction, archive, and recall
-        `-- ToolScript automation
+packages/webui (React/Vite assets)
+             |
+             v
+.NET HttpServer -> WebUIChannel / Code / Terminal routes
+             |
+             v
+MessageRouter -> SessionRuntime -> SessionOwner / SessionTurnRunner
+                                  |             |
+                                  |             +-- model routing, provider clients, retries, journal
+                                  |             +-- unified tools, authorization, ToolScript, MCP
+                                  |             +-- compaction, Archive, Agent memory
+                                  `-- Session catalog and authority persistence
 
-Infrastructure (HTTP, config, timers, skills, terminal routing)
-        |
-Nodes, providers, and authenticated CLI Node runtime
+Current non-.NET/unsupported boundaries:
+  Vector-backed admission/search remains disabled or unsupported in the .NET host;
+  remote Node and Worker implementations remain in TypeScript/Python packages and
+  are not claimed as wired into this .NET owner chain.
+
+Optional remote and compatibility components:
+  CLI Node, browser extension, Android Node, sandbox runtime, VS Code Web assets,
+  shared TypeScript protocols/utilities, and the older TypeScript Main source tree.
 ```
 
-## Project-wide principles
+## Project-wide contracts
 
-- **Channel abstraction:** platform adapters translate native protocols into one internal channel contract.
-- **Serialized session work:** each session processes queued work in order and prevents concurrent turn loops.
-- **Layered context:** archived raw messages and hierarchical summaries preserve recall while controlling model context size.
-- **Unified tool resolution:** builtins, MCP tools, and node tools share discovery and dispatch surfaces; isolation checks remain enforced at execution boundaries.
-- **Distributed execution:** Nodes expose environment capabilities through Main-owned provider resolution without becoming the source of session state; authenticated remote transport and the bounded executable protocol are provider implementations.
-- **Indexed Main catalog:** identity/topology/list projections use the narrow Main-owned catalog boundary defined by [D-main-catalog-indexed-boundary](./threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary).
-- **Sandboxed automation:** ToolScript runs in a constrained VM and can suspend at safe host-call boundaries.
-- **Source-first documentation:** this index is a public-safe active map; source and tests remain authoritative.
+- **Serialized Session ownership:** one Session owner controls turn admission, mutable history, and save ordering; callers use runtime/manager APIs rather than mutating persisted authority directly.
+- **Split authority boundary:** the per-Session JSON authority owns active `history`, queue, wait, busy/stopping, settings, and related semantic state; Main-owned catalog SQLite owns identity, topology, aliases, presentation, and bounded runtime summaries. Catalog summaries do not replace JSON history/queue authority.
+- **Immutable Archive boundary:** Archive rows and lineage are durable audit/context records written through ordered save paths; missing active JSON is an integrity error, not a reason to rebuild Session history from Archive.
+- **Archive-to-JSON ordering:** canonical append and compaction write validated Archive rows before the atomic JSON authority publication, roll back only rows inserted by the failed pre-rename attempt, and classify post-rename failures as committed.
+- **Normal authentication:** HTTP and WebUI ingress are authenticated by the host before state-changing routes or static application content are served.
+- **Model attempt provenance:** concrete model selection, retries, streaming completion, images, and journal records remain attributable to an attempt and its request scope.
+- **Tool boundary:** all tool paths resolve through the unified tool registry and authorization evaluation; local capabilities and optional remote Node capabilities are not interchangeable claims.
+- **Durable asynchronous state:** waits, timers, compaction, task service state, request journals, and relevant notifications are represented by persisted records or explicit lifecycle APIs where the current implementation supports them.
+- **Compatibility is explicit:** TypeScript packages and old persisted readers remain mapped only where they still define a real boundary or migration input.
 
-## Technology map
-
-- Runtime: Node.js and TypeScript
-- LLM providers: OpenAI-compatible APIs and Anthropic
-- HTTP/WebSocket: Express and `ws`
-- Frontend: React 18 and ReactDOM, Monaco, and xterm.js
-- Storage: JSON/JSONL, SQLite, and LanceDB
-- Automation: Puppeteer, MCP, ToolScript, and optional `node-pty`
-- Configuration: YAML with targeted legacy-data readers
-
-## Module index
+## .NET modules
 
 | Module | Responsibility |
 |---|---|
-| [browser-node](./modules/browser-node.md) | Browser-extension node tools and per-tab/domain permission policy |
-| [limited .NET host](./units/dotnet.md) | Manual Message/Responses HTTP and stateful WebSocket/Chat Completions/Session ports plus an independent localhost WebUI channel using the original App/Sidebar/Workbench, canonical models/virtual routing and ordinary attempts, layered compaction, trusted local development tools and bounded Agents/inherited knowledge/skills/fresh-child handoff, Session observation/interval goals/exact Archive navigation and bounded local file workflows and ordinary future-child/compact settings, unified concrete-tool discovery/dispatch and official-SDK outbound MCP, explicit Continue, declared collaboration waits and async/awaited ready-first compaction, canonical fork/clear and capped Archive lineage, Main-owned persisted catalog, typed indexed metadata queries, unique async semantic admission and selective validated restart; no production runtime integration |
-| [channels](./modules/channels.md) | Channel abstraction and concrete platform adapters |
-| [cli-node](./modules/cli-node.md) | Remote node client, tool execution, and operator TUI |
-| [infrastructure](./modules/infrastructure.md) | Bootstrap, HTTP, configuration, utilities, skills, timers, and terminals |
-| [llm](./modules/llm.md) | Provider requests, prompt snapshots, streaming, retries, and MCP client |
-| [message-routing](./modules/message-routing.md) | Inbound routing, commands, queue processing, and turn orchestration |
-| [nodes](./modules/nodes.md) | Generic Node descriptors/providers plus authenticated remote pairing, transport, and services |
-| [scripting](./modules/scripting.md) | ToolScript execution, persistence, suspension, and managed orchestration |
-| [session-context](./modules/session-context.md) | Compaction, layered active history, archive, vector indexing, and recall |
-| [session-core](./modules/session-core.md) | Session lifecycle, persistence, relations, channels, goals, and managed sessions |
-| [shared-utilities](./modules/shared-utilities.md) | Cross-package patch, file, execution, formatting, and node-service utilities |
-| [tools-and-permissions](./modules/tools-and-permissions.md) | Tool registry, dispatch, isolation checks, browser, file, and exec tools |
-| [webui](./modules/webui.md) | Browser UI, chat, workbench, setup, terminal, and Code integration |
-| [project website](./modules/website.md) | Static homepage, focused user docs, installer downloads, and Pages artifact deployment |
+| [Host and ingress](./modules/dotnet-host.md) | Process startup, configuration, HTTP/auth middleware, message routing, skills, and ASR proxy. |
+| [Sessions](./modules/dotnet-sessions.md) | Session identity, ownership, lifecycle, manager operations, catalog, persistence, and turn execution. |
+| [Context and memory](./modules/dotnet-context.md) | Canonical messages, compaction, Archive lineage, recall, conditional memory, and Agent knowledge. |
+| [Models](./modules/dotnet-models.md) | Configuration, routing, provider adapters, streaming, images, retries, and request journaling. |
+| [Tools and permissions](./modules/dotnet-tools.md) | Tool registry, authorization, local file/exec workflows, settings, waits, and MCP-facing tool contracts. |
+| [ToolScript](./modules/dotnet-toolscript.md) | Monty execution, host calls, budgets, persistence, and ownership. |
+| [WebUI channel](./modules/dotnet-webui.md) | ASP.NET route registration, WebUI DTOs, realtime events, uploads, tasks, relations, history, and terminal access. |
+| [Code and terminal](./modules/dotnet-code-terminal.md) | Code workbench/file/Git services, Code helper IPC, and native/managed terminal sessions. |
+| [Tasks and timers](./modules/dotnet-tasks-timers.md) | Task authority/service, cron parsing, timer persistence, and scheduling. |
+| [Images](./modules/dotnet-images.md) | Blob storage, codecs, transport conversion, provider deduplication, and token estimates. |
+| [MCP](./modules/dotnet-mcp.md) | Official SDK client connections, configuration, pooling, and outbound server calls. |
 
-## Thread index
+## Remaining repository components
 
-| Thread | Flow |
+| Component | Current role and status |
 |---|---|
-| [Code integration](./threads/code-integration.md) | Optional official workbench, WebUI bridge, remote services, terminals, and read-only SCM |
-| [context compaction and recall](./threads/context-compaction-and-recall.md) | Context budgeting, summarization, archival, and retrieval |
-| [image blob lifecycle](./threads/image-blob-lifecycle.md) | Canonical image persistence, provider hydration, tools, and authenticated browser URLs |
-| [canonical LLM request journal](./threads/llm-request-journal.md) | Content-addressed provider-neutral inputs, attempt provenance, reconstruction, and training boundary |
-| [conditional memory snapshots](./threads/conditional-memory-snapshots.md) | Concrete-model memory filtering, snapshot identity, reuse, refresh, and detached ownership |
-| [message processing pipeline](./threads/message-processing-pipeline.md) | Inbound message through LLM/tool loop to final broadcast |
-| [Main catalog storage and indexed queries](./threads/main-catalog-storage-and-indexed-queries.md) | Main-owned identity/topology catalog, migration, indexed access, and bounded list boundaries |
-| [model routing](./threads/model-routing.md) | Concrete/virtual selection, prefix hashing, failover health, attempts, and attribution |
-| [node communication](./threads/node-communication.md) | Pairing, authentication, remote execution, services, and transfer |
-| [process topology and RPC](./threads/process-topology-and-rpc.md) | Configurable local/child service placement and transport-neutral async contracts |
-| [session lifecycle](./threads/session-lifecycle.md) | Creation, persistence, compaction, fork lineage, recovery, and deletion |
-| [streaming pipeline](./threads/streaming-pipeline.md) | Provider deltas through session streams to WebUI rendering |
-| [tool dispatch](./threads/tool-dispatch.md) | Builtin, MCP, and node tool resolution with isolation enforcement |
+| [React WebUI](./modules/webui.md) | Current browser client. The .NET host serves its built assets when configured; route and payload compatibility is shared across the boundary. |
+| [Shared and Nodes](./modules/shared-and-nodes.md) | TypeScript protocol/utilities plus CLI, browser, Android, and sandbox Node implementations. These remain real execution components while the .NET Main migration proceeds. |
+| [TypeScript compatibility source](./modules/typescript-compatibility.md) | Older Main implementation and migration readers. It is not the active .NET architecture, but selected files still explain persisted or external compatibility. |
+| [VS Code Web and website](./modules/adjacent-products.md) | Code workbench assets, static site, installer/docs surface, and related build boundaries. |
+
+## Cross-module threads
+
+| Thread | Contract |
+|---|---|
+| [Session ownership and persistence](./threads/session-ownership-and-persistence.md) | Admission, serialized turns, save lanes, authority documents, catalog publication, restart, fork/clear, and deletion. |
+| [Model request and streaming](./threads/model-request-and-streaming.md) | Selection, provider serialization, streaming, retries, image hydration, and journal qualification. |
+| [Context archive and compaction](./threads/context-archive-and-compaction.md) | Active history, immutable Archive identity, compaction plans, recall, and conditional memory. |
+| [Tools, permissions, and exec](./threads/tools-permissions-and-exec.md) | Discovery, authorization, local tools, bounded output, file delivery, and Node capability boundaries. |
+| [ToolScript execution](./threads/toolscript-execution.md) | Script admission, Monty worker lifecycle, host calls, budgets, records, and ownership. |
+| [.NET WebUI boundary](./threads/dotnet-webui-boundary.md) | HTTP auth, route contracts, realtime streams, uploads, Code, terminals, and React client integration. |
+| [Catalog and indexed queries](./threads/catalog-and-indexed-queries.md) | Main-owned projections, query limits, migrations, and authority boundaries. |
+| [Images and attachments](./threads/images-and-attachments.md) | Ingress, canonical blobs, provider forms, transport conversion, and delivery. |
+| [Tasks, timers, and waits](./threads/tasks-timers-and-waits.md) | Task service, timer scheduler, Session waits, and UI/API exposure. |
+| [Remote Node compatibility](./threads/remote-node-compatibility.md) | Remaining TypeScript Node protocols and the current .NET integration boundary. |
+
+## Current gaps and open questions
+
+- **Current gap:** .NET Vector admission/search is disabled or explicitly unsupported (`WebUIChannel.History` returns `VECTOR_DISABLED`; identity-move/configuration paths do not make Vector a runtime capability). The TypeScript Vector implementation remains a compatibility/reference boundary only.
+- **Current gap:** remote Node and Worker packages exist, but their full owner/runtime path is not claimed as connected to the .NET Main owner chain.
+- **Unconfirmed:** which remaining TypeScript Main routes and channel adapters will be retired versus retained as compatibility services after the .NET Main reaches production parity.
+- **Unconfirmed:** the schedule and API shape for the later child-handoff receipt/legacy task migration work; current source does not make those future consumers part of the .NET contract.
