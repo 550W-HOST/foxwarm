@@ -7,7 +7,7 @@ import type { Session } from './types';
 import { canonicalPotentialPathSync, resolveAgentPath } from './utils/pathResolve';
 import { RpcError } from './rpc';
 import { resolveNodeTransferPath } from './nodeFileTransfer';
-import { parseApplyPatchInput } from './applyPatch';
+import { parseApplyPatchInput } from '../packages/shared/dist/applyPatch';
 import { requireVerifiedMcpInboundExternalId, type VerifiedMcpInboundPrincipal } from './mcpInboundConfig';
 
 export const TOOL_AUTH_CONFIG_PATH = path.join(STATE_DIR, 'tool-authorization.yaml');

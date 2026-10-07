@@ -1,7 +1,6 @@
 # Unit: shared-apply-patch
 
 Files: packages/shared/src/applyPatch.ts, packages/shared/src/applyPatch.test.ts
-Secondary test reference: src/applyPatch.test.ts
 
 ## Purpose
 
@@ -58,11 +57,11 @@ None — this module is self-contained with no imports from other project module
 - Update diffs use `@@` anchors and contiguous context sequences with whitespace and Unicode fallbacks; see [D-apply-patch-context-matching](#d-apply-patch-context-matching).
 - Chunks track original line indices for deletions and insertions; `applyChunks` validates no overlapping or out-of-bounds chunks.
 - Per-file success summaries report `Added path (+N)` and `Updated path (+N -M)`; delete summaries retain `Deleted path`.
-- Throws descriptive errors on malformed input, missing context matches, or structural violations.
+- Malformed input retains its specific failure reason and, where useful, one short format hint rather than a repeated full patch example. Context-match errors use bounded local diagnostics.
 
 ## Integration
 
-This is a shared utility consumed by other packages that need to apply text patches to file contents (e.g., tool implementations that handle `apply_patch` operations from an LLM). It provides the parsing and application logic while leaving file I/O to callers.
+This is the sole pure patch engine. `fileToolCore.applyPatchOperations` consumes it for Main file/memory, native CLI Node, and primitive Provider execution. Main authorization and external inbound path facts use the same parser before effects. Compact repair uses the parser and update transform directly while retaining its held-file-descriptor and exact invocation-owned path checks. Environment and authority boundaries remain outside this module; see [D-shared-package-boundary](../modules/shared-utilities.md#d-shared-package-boundary).
 
 ## Design Decisions
 
@@ -86,4 +85,6 @@ These candidates are diagnostic only and never authorize patch application; miss
 
 ## Tests
 
-The local test file covers operation counts. Cross-engine behavioral fixtures are in `src/applyPatch.test.ts`; Node filesystem tests in `packages/shared/src/nodeTools.test.ts` verify Unicode edits, unchanged failed files, skipped subsequent operations, and already-applied summaries.
+`applyPatch.test.ts` owns the single parser/matcher suite: operation counts, supported Unicode mappings and stricter-pass precedence, anchor/EOF behavior, CRLF/final-newline preservation, malformed envelopes, basic/multiple hunks, blank context, and bounded diagnostics for missing punctuation or noncontiguous context. No separate Main-engine test or standalone algorithm selftest remains.
+
+Main filesystem tests in `src/tools/applyPatchOutput.test.ts` go through canonical `callTool`; Node wrapper tests cover partial effects and injected primitives. `src/nodeExecution.test.ts` covers provider-owned opaque parent paths, and compact repair, memory/path, authorization, metadata, and paired CLI transport tests retain their respective integration boundaries.

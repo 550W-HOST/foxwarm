@@ -17,7 +17,7 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 - [src-permissions](../units/src-permissions.md) — exact persisted agent tool-rule validation/matching and default isolated fallback behavior.
 - [src-tool-authorization](../units/src-tool-authorization.md) — generic ordered runtime policy, cached strict loading, canonical request matching, and atomic replacement.
 - [src-isolated-check](../units/src-isolated-check.md) — current isolated-session tool, path, channel, timer, and archive checks.
-- [src-apply-patch](../units/src-apply-patch.md) — structured patch parsing and application.
+- [shared-apply-patch](../units/shared-apply-patch.md) — sole structured patch parser/matcher; Main wrappers and authorization consume shared directly.
 - [src-browser](../units/src-browser.md) — Puppeteer browser manager.
 - [src-exec-manager](../units/src-exec-manager.md) — persistent command execution integration.
 

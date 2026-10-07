@@ -21,7 +21,7 @@ Durable JSON semantics are canonical in [src-utils](../units/src-utils.md#d-disk
 
 - `nodeTools`, `CLI_NODE_CAPABILITIES`.
 - `CURRENT_NODE_PROTOCOL_RANGE`, `resolveAdvertisedNodeProtocol()`, and `negotiateNodeProtocol()`.
-- shared low-level native file/process backends, file read/write semantic core, and node transfer/path helpers.
+- shared low-level native file/process backends, file read/write/patch semantic core, and node transfer/path helpers.
 - patch parsing/content-application functions plus per-operation change-count summaries.
 - `PersistentExecManager` and shared timeout/cwd resolution.
 - `truncateOutputForDisplay`.
@@ -32,10 +32,10 @@ Durable JSON semantics are canonical in [src-utils](../units/src-utils.md#d-disk
 
 ## Invariants
 
-- Patch matching normalizes LF internally, restores original line endings, and refuses ambiguous exact replacements.
+- Patch matching normalizes LF internally and restores original line endings; exact edit replacement rejects multiple occurrences.
 - Master and node patch results share per-file add/update counts; the exact counting and display contract is canonical in [D-apply-patch-change-counts](../units/shared-apply-patch.md#d-apply-patch-change-counts).
 - Write refuses overwrite by default and creates parents only with `createDirs=true`; it attempts the real write before enriching parent errors.
-- Master and node wrappers reuse shared file/cwd/timeout semantics rather than independently approximating them; local target-specific system calls sit behind the small file/process contracts described by the canonical unit/thread decisions.
+- Main and Node read/write/patch wrappers reuse shared semantics; local target-specific system calls sit behind the small file/process contracts. Exact edit replacement remains a separate implementation in the two existing wrappers. The implementation ownership rule is canonical in [D-shared-package-boundary](#d-shared-package-boundary).
 - Exec cwd expands home, must exist, and must be a directory before spawn.
 - Finite exec timeouts above the runtime maximum clamp with a separate warning; invalid/below-minimum values reject.
 - Persistent exec owns atomic status/log/cwd metadata, can reconcile registry awareness after restart, and uses bounded binary-safe excerpts for oversized logs; canonical details: [D-persistent-exec-bounded-log-excerpts](../units/shared-persistent-exec.md#d-persistent-exec-bounded-log-excerpts).
@@ -65,7 +65,11 @@ When output overflows, shorten extreme individual lines and omit whole middle li
 
 ### D-shared-package-boundary
 
-Keep the shared package as the parity boundary for root, CLI node, WebUI helpers, and tests; do not duplicate an implementation to avoid a build dependency.
+[2026-10-07] `packages/shared` is the canonical implementation boundary for behavior used by both Main and Node runtimes. Shared parsers, text transformations, and target-local operation orchestration belong in this package, not in parallel Main/Node copies. Consumers import the shared implementation directly; do not introduce forwarding compatibility modules or duplicate code to avoid the root build dependency.
+
+Wrappers retain only environment-specific roots/namespaces, permission and ownership checks, transport, interactive approval, and result/presentation metadata. The patch parser/matcher is `packages/shared/src/applyPatch.ts`; the file patch executor is `packages/shared/src/fileToolCore.ts` over `FileOperations`, including provider-owned asynchronous parents. Main file/memory, native CLI, and primitive Provider calls use these same implementations. Compact repair reuses pure patch semantics while retaining its exact pending-file descriptor boundary.
+
+This ownership rule is not a claim that all historical implementations have already converged: existing exact edit replacement remains separate and requires its own assessment. Current file composition is mapped by [D-dispatch-shared-file-semantics](../threads/tool-dispatch.md#d-dispatch-shared-file-semantics).
 
 ## Canonical cross-module ownership
 

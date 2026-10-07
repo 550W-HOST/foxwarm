@@ -11,7 +11,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 
 - `nodeTools` — aggregated object of all node tool functions (read, write, edit, apply_patch, exec, get_default_cwd, browse_*)
 - `read`, `write`, `edit`, `apply_patch`, `exec`, `get_default_cwd` — file and shell tool functions
-- `readFileToolPath`, `writeFileToolPath`, `readDirectoryListing`, `findWriteParentIssue`, `formatWriteParentIssueMessage` — shared file read/write core used by both master-side and node-side wrappers
+- `readFileToolPath`, `writeFileToolPath`, `applyPatchOperations`, `readDirectoryListing`, `findWriteParentIssue`, `formatWriteParentIssueMessage` — shared file read/write/patch core used by Main and Node wrappers
 - `FileOperations`, `nativeFileOperations`, `readWholeFile`, `fileOperationPathExists` — low-level target-local stat/ranged-read/list/write/mkdir/remove contract, native implementation, and composition helpers
 - `NodeToolContext.resolveFilePath` / async-capable `dirnameFilePath` — optional target-namespace path seam used by primitive Node providers so Core can compose canonical file tools while the provider owns its namespace parent relation
 - `NodeToolContext.externalOwner` / `externalExecManager` — disjoint authenticated CLI execution context, never an Agent fallback or fabricated Session. Its pre-reserved real ID, completion capability, cwd and foreground/background callbacks keep output in the external Node namespace.
@@ -56,7 +56,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 | `read(args, ctx)` | ~107 | Tool: reads a file or directory |
 | `write(args, ctx)` | ~112 | Tool: writes content to a file; requires existing parent dirs unless `createDirs=true` |
 | `edit(args, ctx)` | ~120 | Tool: replaces exact text in a file |
-| `applyPatchOperations(input, resolveOperationPath)` | ~127 | Applies multi-file patch operations (add/update) |
+| `applyPatchOperations(input, resolveOperationPath, fileOperations, dirname)` (fileToolCore) | shared executor | Applies add/update/delete operations sequentially with partial-success summaries and an optional asynchronous target-owned parent |
 | `apply_patch(args, ctx)` | ~155 | Tool: applies OpenAI-style patch envelopes |
 | `exec(args, ctx)` | ~160 | Tool: executes shell commands with timeout and background support |
 | `get_default_cwd(args, ctx)` | ~230 | Tool: returns the default working directory |
@@ -89,8 +89,8 @@ Provides shared file system tools, shell execution, browser automation, and util
 
 ## Dependencies
 
-- `./applyPatch` — `applyUpdatePatch`, `buildAddedFileContent`, `parseApplyPatchInput`
-- `./fileToolCore` — shared read/write core also used by master-side wrappers
+- `./applyPatch` — pure parser/matcher and summaries consumed by the filesystem patch executor
+- `./fileToolCore` — shared read/write/patch core also used directly by Main file and memory wrappers
 - `./fileOperations` — injected low-level target-local file primitives; production root and CLI Node callers use the native implementation
 - `./nodeFileTransfer` — `detectTransferMimeType`, `getNodeAgentDir`, `resolveNodePath`
 - `./persistentExec` — `PersistentExecManager`, timeout constants, exec types
@@ -98,6 +98,8 @@ Provides shared file system tools, shell execution, browser automation, and util
 - `packages/shared/src/agentPathVariables.ts` expands only exact leading `$fw_agentdir`/`$fw_tmp` with the actual native Agent root; primitive/external contexts reject leading tokens without a root. `packages/shared/src/resolvedPathMetadata.ts` carries only first-party CLI successful file paths to the dispatch extractor. Canonical contract: [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch.md#d-dispatch-native-agent-paths-and-code-targets).
 
 ## Behavior
+
+- Main and Node call the same `fileToolCore.applyPatchOperations` directly after environment-specific path/authority handling, preserving provider-owned asynchronous parents and sequential partial effects. Package ownership is canonical in [D-shared-package-boundary](../modules/shared-utilities.md#d-shared-package-boundary).
 
 - `NodeToolContext.programmatic` selects script-only read/exec data before producer work. Exact fields, byte budget, native shapes and capability gaps are canonical in [D-dispatch-programmatic-tool-data](../threads/tool-dispatch.md#d-dispatch-programmatic-tool-data).
 

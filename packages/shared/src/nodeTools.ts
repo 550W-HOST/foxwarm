@@ -2,11 +2,9 @@ import crypto from 'crypto';
 import fs from 'fs-extra';
 import type { Dirent } from 'node:fs';
 import path from 'path';
-import { applyUpdatePatch, buildAddedFileContent, formatApplyPatchOperationSummary, parseApplyPatchInput } from './applyPatch';
 import { getNodeAgentDir, resolveNodePath } from './nodeFileTransfer';
-import { readFileToolPath, writeFileToolPath } from './fileToolCore';
+import { applyPatchOperations, readFileToolPath, writeFileToolPath } from './fileToolCore';
 import {
-  fileOperationPathExists,
   nativeFileOperations,
   readWholeFile,
   type FileOperations,
@@ -107,45 +105,6 @@ export async function edit(args: ToolArgs, ctx: NodeToolContext = {}) {
   await operations.write(fullPath, applyExactReplacement(content, oldText, newText, 'oldText'), 'w');
   ctx.onResolvedPaths?.([{ raw: filePath, resolved: fullPath }]);
   return 'File edited successfully';
-}
-
-async function applyPatchOperations(
-  input: string,
-  resolveOperationPath: (filePath: string) => { fullPath: string; displayPath: string },
-  fileOperations: FileOperations,
-  dirname: (filePath: string) => string | Promise<string> = path.dirname,
-): Promise<string> {
-  const operations = parseApplyPatchInput(input);
-  const summaries: string[] = [];
-  for (let idx = 0; idx < operations.length; idx++) {
-    const operation = operations[idx];
-    const { fullPath, displayPath } = resolveOperationPath(operation.filePath);
-    try {
-      if (operation.action === 'update') {
-        if (!await fileOperationPathExists(fileOperations, fullPath)) throw new Error(`Cannot update missing file: ${displayPath}`);
-        const content = (await readWholeFile(fileOperations, fullPath)).toString('utf8');
-        await fileOperations.write(fullPath, applyUpdatePatch(content, operation.lines, displayPath), 'w');
-        summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
-      } else if (operation.action === 'add') {
-        if (await fileOperationPathExists(fileOperations, fullPath)) throw new Error(`Cannot add file that already exists: ${displayPath}`);
-        await fileOperations.mkdir(await dirname(fullPath));
-        await fileOperations.write(fullPath, buildAddedFileContent(operation.lines), 'w');
-        summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
-      } else {
-        if (!await fileOperationPathExists(fileOperations, fullPath)) throw new Error(`Cannot delete missing file: ${displayPath}`);
-        await fileOperations.remove(fullPath);
-        summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
-      }
-    } catch (err) {
-      const succeeded = summaries.length > 0
-        ? `\nOperations already applied (these changes are already on disk):\n${summaries.map(line => `- ${line}`).join('\n')}\n`
-        : '';
-      const remaining = operations.length - idx - 1;
-      const remainingHint = remaining > 0 ? `\n${remaining} remaining operation(s) were not applied.` : '';
-      throw new Error(`${(err as Error).message}${succeeded}${remainingHint}`);
-    }
-  }
-  return `Patch applied successfully.\n${summaries.map(line => `- ${line}`).join('\n')}`;
 }
 
 export async function apply_patch(args: ToolArgs, ctx: NodeToolContext = {}) {

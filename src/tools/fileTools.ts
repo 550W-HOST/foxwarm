@@ -1,3 +1,4 @@
+import { applyPatchOperations } from '../../packages/shared/dist/fileToolCore';
 import {
     ToolArgs,
     ToolContext,
@@ -5,7 +6,6 @@ import {
     readResolvedPath,
     writeResolvedPath,
     editResolvedPath,
-    applyPatchOperations,
     enforceIsolatedPathAccess,
     shouldEnforceIsolatedMasterPathAccess,
     deletePendingWriteRef,

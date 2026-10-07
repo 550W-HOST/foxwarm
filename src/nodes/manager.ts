@@ -602,13 +602,6 @@ export class NodesManager {
     request.reject(new NodeServiceRequestError(payload.code || 'NodeServiceError', payload.message || 'Node service failed.', payload.statusCode || 500));
   }
 
-  /**
-   * Execute a tool on a specific node
-   */
-  async executeNodeTool(nodeId: string, toolName: string, args: Record<string, any>, sessionId: string): Promise<any> {
-    return await this.executeTool(nodeId, toolName, args, sessionId);
-  }
-
   supportsExternalOwner(nodeId: string): boolean {
     const node = this.nodes.get(nodeId);
     return !!node?.ws && node.protocolCompatibility.negotiated === 3
@@ -716,11 +709,6 @@ export class NodesManager {
     
     if (!node.tools.has(toolName)) {
       throw new Error(`Tool \`${toolName}\` not available on node \`${nodeId}\``);
-    }
-    
-    // If master node, execute locally
-    if (nodeId === 'master') {
-      return await this.executeToolLocally(toolName, args, sessionId);
     }
     
     const sourceSessionId = session.id;
@@ -1241,40 +1229,6 @@ export class NodesManager {
     const definitions = toolsModule.definitions;
     
     return definitions.find((d: any) => d.name === toolName);
-  }
-
-  /**
-   * Execute a tool locally (on master node)
-   */
-  async executeToolLocally(toolName: string, args: Record<string, any>, sessionId: string): Promise<any> {
-    // Keep lazy require here to avoid a real circular dependency:
-    // tools -> nodesManager -> tools.
-    const toolsModule = require('../tools');
-    const tool = toolsModule[toolName];
-    const runtimeNodeId = typeof args?.__runtimeNodeId === 'string' && args.__runtimeNodeId.trim().length > 0
-      ? args.__runtimeNodeId.trim()
-      : 'master';
-    const toolArgs = { ...(args || {}) };
-    delete toolArgs.__runtimeNodeId;
-    
-    if (!tool) {
-      throw new Error(`Tool \`${toolName}\` not found`);
-    }
-    
-    const ctx = {
-      sessionId,
-      session: await sessionManager.getSession(sessionId),
-      runtimeNodeId,
-      broadcast: async (text: string) => {
-        // Broadcast via session
-        const session = await sessionManager.getSession(sessionId);
-        if (session.broadcast) {
-          session.broadcast(text);
-        }
-      }
-    };
-    
-    return await tool(toolArgs, ctx);
   }
 }
 

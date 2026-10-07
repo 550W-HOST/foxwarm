@@ -3,7 +3,7 @@ import { open, mkdir, mkdtemp, realpath, lstat, unlink, rmdir, type FileHandle }
 import path from 'node:path';
 import { getAgentDir } from '../config';
 import { checkToolPermissionForSession } from '../isolatedCheck';
-import { applyUpdatePatch, parseApplyPatchInput } from '../applyPatch';
+import { applyUpdatePatch, parseApplyPatchInput } from '../../packages/shared/dist/applyPatch';
 import { applyExactReplacement } from '../tools/helpers';
 import type { FunctionCall, Session } from '../types';
 

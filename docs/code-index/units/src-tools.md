@@ -42,7 +42,6 @@ Implements the core tool registry and execution layer for the agent system. Defi
 | `writeResolvedPath` | Master wrapper around shared `writeFileToolPath`; writes content with overwrite and parent-directory checks |
 | `editResolvedPath` | Applies exact text replacement in a file |
 | `deleteResolvedPath` | Deletes a file (refuses directories) |
-| `applyPatchOperations` | Applies structured patch (add/update/delete) operations |
 | `applyExactReplacement` | Single-match regex replacement with validation |
 
 ### tools/fileTools.ts — File read/write/edit/patch/delete
@@ -147,7 +146,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - `./nodes/manager` — `nodesManager` for remote node orchestration
 - `./nodes/bootstrapInfo` — Node pairing/bootstrap utilities
 - `./execManager` — Persistent command execution lifecycle
-- `./applyPatch` — Structured file patch application
+- `packages/shared` — sole pure patch parser/matcher and filesystem patch executor; file/memory wrappers import the shared implementation directly
 - `../../packages/shared/dist/fileToolCore` — shared read/write file tool core reused by master and node wrappers
 - `../../packages/shared/dist/fileOperations` — native low-level file backend and injectable `FileOperations` contract
 - `./session/compactPlan` — `COMPACT_PLAN_TOOL_DEFINITION`
@@ -188,7 +187,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - **First-party schema copy**: Builtin definitions and generated cancellation/handoff fields use concise caller-oriented descriptions that explain purpose, supported inputs, defaults, path placement, and observable results without changing tool identity or schema constraints. Editorial wording is not unit-locked; tests retain schema shape, bounds, ordering, protocol constants, search behavior through synthetic fixtures, and runtime effects instead of snapshotting first-party prose. Third-party MCP and custom Node descriptions remain provider-owned.
 - **Intentional creation overrides**: `create_child_session` and `create_session` expose only optional strict `forceModel: { modelId?, effort? }`; removed top-level `model`/`effort` keys fail across direct, unified, ToolScript, and Worker/Main-management dispatch. Omission or an empty object keeps inheritance/default behavior. The parameter description reserves overrides for an explicit user request for the current task or Session; this is caller guidance, not an additional runtime validation or permission gate. The existing `set_session_child_model` schema continues to own future-child model/effort inspection and mutation. Canonical semantics: [D-model-routing-effort](../threads/model-routing.md#d-model-routing-effort).
 - **Memory operations**: Read/write/edit/delete/patch operations target per-agent memory directories. These file CRUD operations do not automatically update the session-archive vector index.
-- **Patch matching**: Master patch operations preserve already-written files when a later context mismatch fails; Unicode matching and bounded context-error diagnostics follow [D-apply-patch-context-matching](./shared-apply-patch.md#d-apply-patch-context-matching). `applyPatchOutput.test.ts` exercises the filesystem boundary.
+- **Patch matching**: Main file and memory wrappers call the shared file-core patch executor after their own path/authority handling; it preserves already-written files when a later context mismatch fails; Unicode matching and bounded context-error diagnostics follow [D-apply-patch-context-matching](./shared-apply-patch.md#d-apply-patch-context-matching). `applyPatchOutput.test.ts` exercises canonical `callTool`, authorization, native paths, and filesystem effects.
 - **Patch result summaries**: Master file and memory patch wrappers use the shared per-operation formatter for per-file add/update counts, including operations listed after a partial failure; the count contract is canonical in [D-apply-patch-change-counts](./shared-apply-patch.md#d-apply-patch-change-counts).
 
 ## Integration

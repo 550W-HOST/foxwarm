@@ -4,8 +4,6 @@ import path from 'path';
 import * as sessionManager from '../sessionManager';
 import { WORKSPACE_DIR, getAgentMemoryDir } from '../config';
 import { checkPathAccess } from '../isolatedCheck';
-import { applyUpdatePatch, buildAddedFileContent, parseApplyPatchInput } from '../applyPatch';
-import { formatApplyPatchOperationSummary } from '../../packages/shared/dist/applyPatch';
 import { expandHomePath, resolveAgentPath } from '../utils/pathResolve';
 import {
     findWriteParentIssue,
@@ -19,7 +17,6 @@ import type { ToolScriptSubCall, LinkedTaskCompletion } from '../types';
 import type { ExecRuntime } from '../execManager';
 import type { ResolvedToolPath } from '../../packages/shared/dist/resolvedPathMetadata';
 import {
-    fileOperationPathExists,
     nativeFileOperations,
     readWholeFile,
     type FileOperations,
@@ -230,57 +227,6 @@ export async function deleteResolvedPath(fullPath: string, displayPath: string) 
     }
 
     await fs.remove(fullPath);
-}
-
-export async function applyPatchOperations(input: string, resolveOperationPath: (filePath: string) => {
-    fullPath: string;
-    displayPath: string;
-}, fileOperations: FileOperations = nativeFileOperations): Promise<string> {
-    const operations = parseApplyPatchInput(input);
-    const summaries: string[] = [];
-
-    for (let idx = 0; idx < operations.length; idx++) {
-        const operation = operations[idx];
-        const { fullPath, displayPath } = resolveOperationPath(operation.filePath);
-
-        try {
-            if (operation.action === 'update') {
-                if (!await fileOperationPathExists(fileOperations, fullPath)) {
-                    throw new Error(`Cannot update missing file: ${displayPath}`);
-                }
-                const content = (await readWholeFile(fileOperations, fullPath)).toString('utf8');
-                const updatedContent = applyUpdatePatch(content, operation.lines, displayPath);
-                await fileOperations.write(fullPath, updatedContent, 'w');
-                summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
-                continue;
-            }
-
-            if (operation.action === 'add') {
-                if (await fileOperationPathExists(fileOperations, fullPath)) {
-                    throw new Error(`Cannot add file that already exists: ${displayPath}`);
-                }
-                await fileOperations.mkdir(path.dirname(fullPath));
-                await fileOperations.write(fullPath, buildAddedFileContent(operation.lines), 'w');
-                summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
-                continue;
-            }
-
-            if (!await fileOperationPathExists(fileOperations, fullPath)) {
-                throw new Error(`Cannot delete missing file: ${displayPath}`);
-            }
-            await fileOperations.remove(fullPath);
-            summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
-        } catch (err) {
-            const succeeded = summaries.length > 0
-                ? `\nOperations already applied (these changes are already on disk):\n${summaries.map(line => `- ${line}`).join('\n')}\n`
-                : '';
-            const remaining = operations.length - idx - 1;
-            const remainingHint = remaining > 0 ? `\n${remaining} remaining operation(s) were not applied.` : '';
-            throw new Error(`${(err as Error).message}${succeeded}${remainingHint}`);
-        }
-    }
-
-    return `Patch applied successfully.\n${summaries.map(line => `- ${line}`).join('\n')}`;
 }
 
 export function enforceIsolatedPathAccess(ctx: ToolContext | undefined, fullPath: string, agentName: string) {

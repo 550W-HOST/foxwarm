@@ -23,18 +23,7 @@ interface ParserState {
 const END_PATCH = '*** End Patch';
 const END_FILE = '*** End of File';
 
-const FORMAT_HINT = `Expected apply_patch format:
-*** Begin Patch
-*** Update File: <path>
-@@ optional anchor
- context line (prefix with space)
--line to delete
-+line to insert
-*** Add File: <path>
-+new file content line
-*** Delete File: <path>
-*** End Patch
-For Update File: context lines start with space, deletions with '-', insertions with '+'. Use '@@' to start a new section. See the apply_patch tool description for full details.`;
+const FORMAT_HINT = "Use *** Begin Patch / *** End Patch with file action headers; prefix update lines with space/-/+ and add lines with +; use @@ between update sections.";
 
 const FILE_HEADER_PREFIXES = [
   '*** Update File: ',
@@ -260,7 +249,7 @@ function readSection(lines: string[], startIndex: number, filePath: string): {
     } else if (line[0] === ' ') {
       mode = 'keep';
     } else {
-      throw new Error(`Invalid apply_patch input for ${filePath}: invalid line: ${line}. Each line must start with ' ' (context), '-' (delete), or '+' (insert).\n${FORMAT_HINT}`);
+      throw new Error(`Invalid apply_patch input for ${filePath}: invalid line: ${line}\n${FORMAT_HINT}`);
     }
 
     line = line.slice(1);
