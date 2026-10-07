@@ -92,6 +92,17 @@ export class CompactPlanRepairFile {
     return Buffer.concat(chunks).toString('utf8');
   }
 
+  async preview(session: Session, operation: object): Promise<string> {
+    const text = await this.read(this.filePath, session, operation);
+    const budget = 1000;
+    if (text.length <= budget) return `Current file (complete):\n\`\`\`json\n${text}\n\`\`\``;
+    return [
+      `Beginning of current file:\n\`\`\`json\n${text.slice(0, budget / 2)}\n\`\`\``,
+      '[Middle of current file omitted.]',
+      `End of current file:\n\`\`\`json\n${text.slice(-budget / 2)}\n\`\`\``,
+    ].join('\n');
+  }
+
   async edit(call: FunctionCall, session: Session, operation: object): Promise<void> {
     if (call.argsParseError) throw new Error('Repair tool arguments must be valid JSON.');
     const args = call.args || {};

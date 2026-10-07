@@ -2032,7 +2032,7 @@ test('clear, reload and later compact keep block identities and new fork caps wi
 });
 
 function repairPathFromFeedback(parts: MessagePart[] | null): string {
-  const match = flattenPrompt(parts).match(/Repair the JSON arguments in ("(?:[^"\\]|\\.)*")/);
+  const match = flattenPrompt(parts).match(/Repair file: ("(?:[^"\\]|\\.)*")/);
   assert(match, 'feedback identifies the operation repair file');
   return JSON.parse(match[1]);
 }
@@ -2059,6 +2059,7 @@ test('malformed raw compact arguments retain one file through JSON and range ret
         assert.deepEqual(await fs.readdir(path.dirname(filePath)), ['plan.json']);
         const expected = round <= 3 ? raw : round <= 5 ? validJson : validJson.replace('999', '2');
         assert.deepEqual(await fs.readFile(filePath), Buffer.from(expected));
+        assert(flattenPrompt(parts).endsWith(`\`\`\`json\n${expected}\n\`\`\``), 'repair feedback shows the current file verbatim after both edits and failed calls');
         const responses = active.history.flatMap(message => message.parts).filter(part => part.functionResponse?.name === 'submit_compact_plan');
         assert(responses.length > 0);
         assert(!JSON.stringify(responses).includes(raw), 'tool feedback does not duplicate malformed raw JSON');
@@ -2071,9 +2072,10 @@ test('malformed raw compact arguments retain one file through JSON and range ret
         case 4: toolCall = { name: 'submit_compact_plan', args: { argsFilePath: filePath } }; break;
         case 5: toolCall = { name: 'apply_patch', args: { input: `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-      "sourceEnd": 999,\n+      "sourceEnd": 2,\n*** End Patch` } }; break;
         case 6: toolCall = { name: 'exec', args: { command: 'must never execute' } }; break;
-        case 7: toolCall = { name: 'write_memory', args: { filePath: 'must-not-exist.md', content: 'must not write' } }; break;
-        case 8: toolCall = { name: 'submit_compact_plan', args: { argsFilePath: path.join(path.dirname(filePath), 'other.json') } }; break;
-        case 9: toolCall = { name: 'submit_compact_plan', args: { argsFilePath: filePath, replaceAsBlocks: [] } }; break;
+        case 7: toolCall = { name: 'read', args: { filePath } }; break;
+        case 8: toolCall = { name: 'write_memory', args: { filePath: 'must-not-exist.md', content: 'must not write' } }; break;
+        case 9: toolCall = { name: 'submit_compact_plan', args: { argsFilePath: path.join(path.dirname(filePath), 'other.json') } }; break;
+        case 10: toolCall = { name: 'submit_compact_plan', args: { argsFilePath: filePath, replaceAsBlocks: [] } }; break;
         default: toolCall = { name: 'submit_compact_plan', args: { argsFilePath: filePath } };
       }
       toolCall.id = `file-round-${round}`;
@@ -2086,20 +2088,21 @@ test('malformed raw compact arguments retain one file through JSON and range ret
       return { text: '', toolCalls, allParts };
     };
     await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0.5 }, 'await');
-    assert.equal(round, 10);
+    assert.equal(round, 11);
     assert.equal(await fs.pathExists(filePath), false);
     assert.equal(await fs.pathExists(path.dirname(filePath)), false);
     assert(session.history.some(message => message.parts.some(part => (part.text || '').includes('repaired raw résumé 🦊'))));
     const planner = session.history.at(-1)!.compaction?.planner;
     assert(planner);
-    assert.equal(planner.steps, 10);
+    assert.equal(planner.steps, 11);
     assert.deepEqual(planner.toolCalls, [
       'submit_compact_plan', 'submit_compact_plan', 'edit', 'submit_compact_plan', 'apply_patch',
-      'exec', 'read', 'write_memory', 'submit_compact_plan', 'submit_compact_plan', 'submit_compact_plan',
+      'exec', 'read', 'read', 'write_memory', 'submit_compact_plan', 'submit_compact_plan', 'submit_compact_plan',
     ]);
     assert.equal(planner.usage, undefined, 'missing provider usage is not fabricated');
-    assert.equal(planner.messages.filter(message => message.role === 'model').length, 10);
-    assert.equal(planner.messages.filter(message => message.role === 'user').length, 10);
+    assert.equal(planner.messages.filter(message => message.role === 'model').length, 11);
+    assert.equal(planner.messages.filter(message => message.role === 'user').length, 11);
+    assert(planner.messages.some(message => flattenPrompt(message.parts).includes('Do not call `read`')), 'even read of the pending file is rejected');
     assert.equal(planner.messages.filter(message => message.role === 'tool').length, 7);
     assert.equal(planner.messages[1].parts[0].functionCall?.rawArgsText, raw);
     assert(JSON.stringify(planner).includes(filePath));
@@ -2118,7 +2121,7 @@ test('valid raw compact JSON with invalid endpoints is saved without reserializa
   const { parseFunctionCallArgs } = await import('../toolCallArgs');
   const session = await makeCompactableSession(archive, makeSessionId('compact_valid_raw_repair'));
   const originalChat = llm.chat;
-  const raw = ' { "replaceAsBlocks" : [{"level":1,"sourceKind":"message","sourceStart":1,"sourceEnd":99,"summary":"exact raw repair"}] }\r\n';
+  const raw = '{"replaceAsBlocks":[{"level":1,"sourceKind":"message","sourceStart":1,"sourceEnd":99,"summary":"exact raw repair"}],"preserveMessages":[]}\r\n';
   let filePath = '';
   let round = 0;
   try {
@@ -2130,6 +2133,8 @@ test('valid raw compact JSON with invalid endpoints is saved without reserializa
         const currentPath = repairPathFromFeedback(parts);
         if (filePath) assert.equal(currentPath, filePath);
         filePath = currentPath;
+        const expected = round <= 4 ? raw : raw.replace('"sourceEnd":99', '"sourceEnd":2');
+        assert(flattenPrompt(parts).endsWith(`\`\`\`json\n${expected}\n\`\`\``), 'minified arguments keep actual spacing and the complete parameter object in feedback');
         if (round <= 4) {
           assert.deepEqual(await fs.readFile(filePath), Buffer.from(raw));
           toolCall = { name: 'edit', args: { filePath, oldText: '"sourceEnd":99', newText: '"sourceEnd":2', ...(round === 2 ? { __cancelTool: true } : round === 3 ? { __cancelTool: false } : {}) } };

@@ -30,12 +30,14 @@ test('raw text is retained verbatim; exact master edits honor isolated Agent and
   const [, , , metadata] = await loaded;
   try {
     assert.equal(await file.read(file.filePath, session, operation), ' {"replaceAsBlocks": [] }\r\n');
+    assert.equal(await file.preview(session, operation), 'Current file (complete):\n```json\n {"replaceAsBlocks": [] }\r\n\n```');
     assert.equal(file.structuredFallback, false);
     assert.equal((await fs.stat(file.filePath)).mode & 0o777, 0o600);
     assert.equal((await fs.stat(path.dirname(file.filePath))).mode & 0o777, 0o700);
     metadata.installAgentMetadataSnapshotForWorker(session.agent, { isolated: true, isolatedNode: 'remote-node' });
     await file.edit(edit(file.filePath), session, operation);
     assert.match(await file.read(file.filePath, session, operation), /\[1\]/);
+    assert.equal(await file.preview(session, operation), 'Current file (complete):\n```json\n {"replaceAsBlocks": [1] }\r\n\n```');
     policy.setToolAuthorizationPolicyForTests({ version: 1, defaultAction: 'allow', rules: [{
       id: 'deny-master-edit', enabled: true, action: 'deny', match: { tool: { source: 'node', name: 'edit' }, targetNode: 'master' },
     }] });
@@ -49,6 +51,19 @@ test('raw text is retained verbatim; exact master edits honor isolated Agent and
     policy.setToolAuthorizationPolicyForTests(undefined);
     await file.cleanup();
   }
+});
+
+test('long repair previews show bounded verbatim head and tail without modifying the file', async () => {
+  const raw = '{"replaceAsBlocks":[{"summary":"' + 'synthetic middle '.repeat(200) + '\\n\\\"quoted\\\""}],"preserveMessages":[12]}\r\n';
+  const { file, session, operation } = await fixture(raw);
+  try {
+    const preview = await file.preview(session, operation);
+    const excerpts = [...preview.matchAll(/```json\n([\s\S]*?)\n```/g)].map(match => match[1]);
+    assert.deepEqual(excerpts, [raw.slice(0, 500), raw.slice(-500)]);
+    assert.equal(excerpts.join('').length, 1000);
+    assert.match(preview, /\n\[Middle of current file omitted\.\]\n/);
+    assert.equal(await file.read(file.filePath, session, operation), raw);
+  } finally { await file.cleanup(); }
 });
 
 test('only the current exact path, Session object and operation can read or edit; patches cannot add/delete/mix targets', async () => {

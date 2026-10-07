@@ -1168,15 +1168,18 @@ async function runCompactJob(
     await appendTransientSessionMessage(transientSession, message);
     mirrorTemporaryCompactMessage(deps, sessionId, message);
   };
-  const repairInstructions = () => repairFile
+  const repairInstructions = async () => repairFile
     ? [
-      `Repair the JSON arguments in ${JSON.stringify(repairFile.filePath)} using edit or apply_patch (one update only).`,
-      `Then call ${COMPACT_PLAN_TOOL_NAME} by itself with {"argsFilePath":${JSON.stringify(repairFile.filePath)}}.`,
-      'Only this exact file is available for repair; ordinary tool permissions still apply.',
       repairFile.structuredFallback
-        ? "This file was saved by serializing the provider's structured arguments."
-        : 'This file was saved from the original provider arguments.',
-    ].join(' ')
+        ? 'The provider did not supply raw argument text. This file was created by JSON-serializing the complete argument values of your rejected submit_compact_plan tool call; it is not a verbatim copy of generated text.'
+        : 'This file was created from the complete arguments text of your rejected submit_compact_plan tool call, copied exactly as generated. It contains the parameters you passed to that tool, not the tool response or only the replaceAsBlocks array.',
+      `Repair file: ${JSON.stringify(repairFile.filePath)}.`,
+      'Any successful edits are retained in this same file. The excerpts below show its current contents without reformatting.',
+      'Do not call read: it is unavailable and unnecessary here. Use your rejected tool call and these excerpts; match the file\'s actual whitespace and escaping rather than guessing them.',
+      'Repair the file into one JSON object containing the direct submit_compact_plan parameters. Do not add a tool name, call ID, or args wrapper. Use edit or apply_patch on this exact file only; a patch may contain only one Update File operation.',
+      `Then call ${COMPACT_PLAN_TOOL_NAME} by itself with {"argsFilePath":${JSON.stringify(repairFile.filePath)}}.`,
+      await repairFile.preview(transientSession, operation),
+    ].join('\n')
     : `Submit corrected direct plan fields with ${COMPACT_PLAN_TOOL_NAME}.`;
 
   try {
@@ -1221,11 +1224,10 @@ async function runCompactJob(
             await repairFile.edit({ ...call, args: stripToolCancellationArguments(call.args) }, transientSession, operation);
             await appendToolFeedback(call, 'Compact arguments file updated.');
           }
-          nextPromptParts = [{ system: repairInstructions() }];
         } catch (error) {
           await appendToolFeedback(call, `Compact repair failed: ${(error as Error).message}`);
-          nextPromptParts = [{ system: repairInstructions() }];
         }
+        nextPromptParts = [{ system: await repairInstructions() }];
         continue;
       }
       const onlyPlanCall = toolCalls.length === 1 && call.name === COMPACT_PLAN_TOOL_NAME;
@@ -1243,7 +1245,7 @@ async function runCompactJob(
             invalidToolNotice,
             'Do not read or write agent memory during compaction.',
             `When ready, call exactly one ${COMPACT_PLAN_TOOL_NAME} tool call by itself. Do not combine ${COMPACT_PLAN_TOOL_NAME} with any other tool call.`,
-            ...(repairFile ? [repairInstructions()] : []),
+            ...(repairFile ? [await repairInstructions()] : []),
           ].join(' '),
         }];
         continue;
@@ -1287,7 +1289,7 @@ async function runCompactJob(
         await appendToolFeedback(call, repairFile
           ? `Compact plan rejected. Repair file: ${JSON.stringify(repairFile.filePath)}.`
           : 'Compact plan rejected; submit corrected direct plan fields.');
-        nextPromptParts = [{ system: `${feedback} ${repairInstructions()}` }];
+        nextPromptParts = [{ system: `${feedback} ${await repairInstructions()}` }];
       }
     }
   } finally {
