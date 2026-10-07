@@ -76,6 +76,13 @@ test('shared write contentRef retry hints are executable and JSON-escape actual 
   );
 });
 
+test('read and edit report a missing or blank filePath before path resolution', async () => {
+  for (const args of [{}, { filePath: '' }]) {
+    await assert.rejects(() => read(args as any), { message: 'read requires filePath.' });
+    await assert.rejects(() => edit({ ...args, oldText: 'old', newText: 'new' } as any), { message: 'edit requires filePath.' });
+  }
+});
+
 test('shared exec timeout resolution clamps only oversized finite values', () => {
   assert.deepEqual(resolveExecTimeoutSeconds(undefined), { requestedSeconds: 15, effectiveSeconds: 15 });
   assert.deepEqual(resolveExecTimeoutSeconds(60), { requestedSeconds: 60, effectiveSeconds: 60 });

@@ -34,6 +34,13 @@ export type ProgrammaticFileReadResult = {
 
 export type FileToolReadResult = string | FileToolInlineImageResult | ProgrammaticFileReadResult;
 
+export function requireToolFilePath(filePath: unknown, toolName: string): string {
+  if (typeof filePath !== 'string' || !filePath.trim()) {
+    throw new Error(`${toolName} requires filePath.`);
+  }
+  return filePath;
+}
+
 export type WriteParentIssue = {
   path: string;
   reason: 'missing' | 'not-directory';

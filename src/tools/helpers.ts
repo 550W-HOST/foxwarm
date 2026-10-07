@@ -9,6 +9,7 @@ import {
     findWriteParentIssue,
     formatWriteContentRefRetryHint,
     formatWriteParentIssueMessage,
+    requireToolFilePath,
     readFileToolPath,
     writeFileToolPath,
     type WriteParentIssue,
@@ -23,7 +24,7 @@ import {
 } from '../../packages/shared/dist/fileOperations';
 
 export { expandHomePath, resolveAgentPath };
-export { findWriteParentIssue, formatWriteContentRefRetryHint, formatWriteParentIssueMessage, type WriteParentIssue };
+export { findWriteParentIssue, formatWriteContentRefRetryHint, formatWriteParentIssueMessage, requireToolFilePath, type WriteParentIssue };
 
 // Tool context type
 export interface ToolContext {

@@ -6,6 +6,7 @@ import {
     readResolvedPath,
     writeResolvedPath,
     editResolvedPath,
+    requireToolFilePath,
     enforceIsolatedPathAccess,
     shouldEnforceIsolatedMasterPathAccess,
     deletePendingWriteRef,
@@ -19,7 +20,8 @@ import { nativeFileOperations } from '../../packages/shared/dist/fileOperations'
 import type { ResolvedToolPath } from '../../packages/shared/dist/resolvedPathMetadata';
 
 export async function tool_read(args: ToolArgs, ctx: ToolContext) {
-    const { filePath, startLine, endLine } = args;
+    const filePath = requireToolFilePath(args.filePath, 'read');
+    const { startLine, endLine } = args;
     const agentName = ctx.session?.agent || 'main';
     const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
     enforceIsolatedPathAccess(ctx, fullPath, agentName);
@@ -84,7 +86,8 @@ export async function tool_write(args: ToolArgs, ctx: ToolContext) {
 }
 
 export async function tool_edit(args: ToolArgs, ctx: ToolContext) {
-    const { filePath, oldText, newText } = args;
+    const filePath = requireToolFilePath(args.filePath, 'edit');
+    const { oldText, newText } = args;
     const agentName = ctx.session?.agent || 'main';
     const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
     enforceIsolatedPathAccess(ctx, fullPath, agentName);

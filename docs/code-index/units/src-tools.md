@@ -1,6 +1,6 @@
 # Unit: src-tools
 
-Files: src/tools.ts (facade), src/toolCallControls.ts, src/toolCallControls.test.ts, src/tools/resolvedTools.ts, src/tools/placement.ts, src/tools/helpers.ts, src/tools/fileTools.ts, src/tools/memoryTools.ts, src/tools/execTools.ts, src/tools/imageTools.ts, src/tools/browserTools.ts, src/tools/mcpTools.ts, src/tools/nodeTools.ts, src/tools/vectorTools.ts, src/tools/unifiedSearch.ts, src/tools/definitions.ts, src/tools/placement.test.ts, src/tools/agentPathMetadata.test.ts, src/utils/pathResolve.test.ts, src/tools/applyPatchOutput.test.ts, src/utils/pathResolve.ts
+Files: src/tools.ts (facade), src/toolCallControls.ts, src/toolCallControls.test.ts, src/tools/resolvedTools.ts, src/tools/placement.ts, src/tools/helpers.ts, src/tools/fileTools.ts, src/tools/fileTools.test.ts, src/tools/memoryTools.ts, src/tools/execTools.ts, src/tools/imageTools.ts, src/tools/browserTools.ts, src/tools/mcpTools.ts, src/tools/nodeTools.ts, src/tools/vectorTools.ts, src/tools/unifiedSearch.ts, src/tools/definitions.ts, src/tools/placement.test.ts, src/tools/agentPathMetadata.test.ts, src/utils/pathResolve.test.ts, src/tools/applyPatchOutput.test.ts, src/utils/pathResolve.ts
 Secondary files: src/tools/toolAuthorizationTools.ts, src/handoffConfirmationEnabled.test.ts, src/tools/unifiedTools.test.ts, src/sessionWorkerToolPlacement.test.ts
 
 ## Purpose
@@ -161,7 +161,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 
 ## Behavior
 
-- **File access control**: File wrappers resolve targets with `resolveAgentPath`, then enforce `checkPathAccess` before I/O.
+- **File access control**: File wrappers resolve targets with `resolveAgentPath`, then enforce `checkPathAccess` before I/O. The `read` and `edit` wrappers first use shared `requireToolFilePath` validation for missing or blank paths; errors match the [Node wrappers](./shared-node-tools.md#behavior).
 - **Shared read/write core**: After master-specific path resolution, isolation checks, and `contentRef` handling, `readResolvedPath` / `writeResolvedPath` delegate file/directory/image read and write-parent semantics to `packages/shared/src/fileToolCore.ts`. Main explicitly selects the native low-level backend unless an internal exact ToolContext supplies another backend; public tool names, schemas, path policy, and output/error contracts are unchanged.
 - **Read range placeholders**: `startLine` / `endLine` values of `0` are treated as omitted for file and directory reads, so provider-emitted optional numeric placeholders do not produce empty reads.
 - **Exact line reads and metadata footer**: Master `read` inherits the shared LF/CRLF/bare-CR physical-line scanner and exact selected-terminator contract from `fileToolCore`. Empty files have zero lines and trailing terminators do not create virtual EOF lines. Ordinary whole/range text reads always append exact line count plus `File size: N bytes.`; selected final nonterminated lines add one tool LF before `---` and state `File has no trailing newline.`. Large reads retain bounded safeguards and expose exact total lines only when the necessary scan reaches EOF. Canonical decision: [D-file-read-exact-lines-and-footer](./shared-node-tools.md#d-file-read-exact-lines-and-footer).

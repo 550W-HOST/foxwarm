@@ -3,7 +3,7 @@ import fs from 'fs-extra';
 import type { Dirent } from 'node:fs';
 import path from 'path';
 import { getNodeAgentDir, resolveNodePath } from './nodeFileTransfer';
-import { applyPatchOperations, readFileToolPath, writeFileToolPath } from './fileToolCore';
+import { applyPatchOperations, readFileToolPath, requireToolFilePath, writeFileToolPath } from './fileToolCore';
 import {
   nativeFileOperations,
   readWholeFile,
@@ -75,7 +75,8 @@ async function dirnameToolPath(filePath: string, ctx: NodeToolContext): Promise<
 }
 
 export async function read(args: ToolArgs, ctx: NodeToolContext = {}) {
-  const { filePath, startLine, endLine } = args;
+  const filePath = requireToolFilePath(args.filePath, 'read');
+  const { startLine, endLine } = args;
   const fullPath = resolveToolPath(filePath, ctx);
   const result = await readFileToolPath(fullPath, filePath, startLine, endLine, ctx.fileOperations, ctx.programmatic === true);
   ctx.onResolvedPaths?.([{ raw: filePath, resolved: fullPath }]);
@@ -97,7 +98,8 @@ export async function write(args: ToolArgs, ctx: NodeToolContext = {}) {
 }
 
 export async function edit(args: ToolArgs, ctx: NodeToolContext = {}) {
-  const { filePath, oldText, newText } = args;
+  const filePath = requireToolFilePath(args.filePath, 'edit');
+  const { oldText, newText } = args;
   if (typeof oldText !== 'string' || typeof newText !== 'string') throw new Error('Edit tool requires oldText and newText. Use apply_patch for patch-style edits.');
   const fullPath = resolveToolPath(filePath, ctx);
   const operations = ctx.fileOperations || nativeFileOperations;
