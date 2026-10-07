@@ -486,23 +486,51 @@ public sealed class ResponsesEventAccumulator
             switch (String(item, "type"))
             {
                 case "reasoning":
-                    foreach (
-                        var summary in summaryParts
-                            .Where(value =>
-                                value.Key.Output == outputIndex && value.Value.Length > 0
-                            )
-                            .OrderBy(value => value.Key.Summary)
+                    var streamed = summaryParts
+                        .Where(value => value.Key.Output == outputIndex)
+                        .OrderBy(value => value.Key.Summary)
+                        .Select(value => (Index: value.Key.Summary, Text: value.Value))
+                        .ToArray();
+                    if (streamed.Length > 0)
+                    {
+                        foreach (var summary in streamed)
+                            parts.Add(
+                                new(
+                                    outputIndex,
+                                    "reasoning",
+                                    SummaryIndex: summary.Index,
+                                    Text: summary.Text
+                                )
+                            );
+                    }
+                    else if (item["summary"] is JsonArray summary)
+                    {
+                        for (var summaryIndex = 0; summaryIndex < summary.Count; summaryIndex++)
+                        {
+                            if (summary[summaryIndex] is not JsonObject summaryPart)
+                                continue;
+                            var fallbackText = String(summaryPart, "text");
+                            if (fallbackText is not null)
+                                parts.Add(
+                                    new(
+                                        outputIndex,
+                                        "reasoning",
+                                        SummaryIndex: summaryIndex,
+                                        Text: fallbackText
+                                    )
+                                );
+                        }
+                    }
+                    if (
+                        !parts.Any(part =>
+                            part.OutputIndex == outputIndex && part.Kind == "reasoning"
+                        )
                     )
-                        parts.Add(
-                            new(
-                                outputIndex,
-                                "reasoning",
-                                SummaryIndex: summary.Key.Summary,
-                                Text: summary.Value
-                            )
-                        );
+                        parts.Add(new(outputIndex, "reasoning"));
                     break;
-                case "message" when item["content"] is JsonArray content:
+                case "message"
+                    when String(item, "role") == "assistant"
+                        && item["content"] is JsonArray content:
                     for (var contentIndex = 0; contentIndex < content.Count; contentIndex++)
                     {
                         if (content[contentIndex] is not JsonObject contentPart)
@@ -510,6 +538,9 @@ public sealed class ResponsesEventAccumulator
                         var type = String(contentPart, "type");
                         if (type is not ("output_text" or "refusal"))
                             continue;
+                        var phase = String(item, "phase") is "commentary" or "final_answer"
+                            ? String(item, "phase")
+                            : null;
                         parts.Add(
                             new(
                                 outputIndex,
@@ -519,7 +550,7 @@ public sealed class ResponsesEventAccumulator
                                     contentPart,
                                     type == "output_text" ? "text" : "refusal"
                                 ),
-                                Phase: String(item, "phase")
+                                Phase: phase
                             )
                         );
                     }
