@@ -152,10 +152,10 @@ public static partial class ResponsesRequestSerializer
                             throw new ModelPreparationException(
                                 "Generated image bytes are unavailable for native replay."
                             );
-                        var imageId = String(part["imageMeta"] as JsonObject, "imageId");
+                        var blobId = String(reference, "blobId");
                         var bytes =
-                            imageId is not null
-                            && replayBytes?.TryGetValue(imageId, out var replay) == true
+                            blobId is not null
+                            && replayBytes?.TryGetValue(blobId, out var replay) == true
                                 ? replay
                             : part["inlineData"] is JsonObject inline
                                 ? ImageBlobStore.InlineBytes(inline)

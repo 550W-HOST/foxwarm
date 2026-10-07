@@ -29,7 +29,7 @@ internal static class OpenAIRequestText
         return value[start..];
     }
 
-    private static bool IsWhitespace(char character) =>
+    internal static bool IsWhitespace(char character) =>
         character
             is '\u0009'
                 or '\u000A'

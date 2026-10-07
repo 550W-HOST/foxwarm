@@ -150,7 +150,8 @@ internal static class HostedResponsesTools
                 };
                 usedBytes += bytes.Length;
                 success++;
-                replayBytes[imageId] = bytes;
+                if (Text(reference["blobId"]) is string blobId)
+                    replayBytes[blobId] = bytes;
             }
             catch (OperationCanceledException)
             {
@@ -248,7 +249,9 @@ internal static class HostedResponsesTools
 
     private static byte[] DecodeBase64(string value, int maxBytes)
     {
-        var compact = new string(value.Where(character => !IsEcmaWhitespace(character)).ToArray());
+        var compact = new string(
+            value.Where(character => !OpenAIRequestText.IsWhitespace(character)).ToArray()
+        );
         if (compact.Length == 0 || compact.Any(character => !IsBase64Ascii(character)))
             throw new InvalidDataException("image result contained invalid base64.");
         var firstPadding = compact.IndexOf('=');
@@ -298,9 +301,6 @@ internal static class HostedResponsesTools
             : trimmed;
     }
 
-    private static bool IsEcmaWhitespace(char value) =>
-        value is '\t' or '\n' or '\f' or '\r' or ' ';
-
     private static bool IsBase64Ascii(char value) =>
         value is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '+' or '/' or '=';
 
@@ -317,8 +317,16 @@ internal static class HostedResponsesTools
     private static string? Text(JsonNode? node) =>
         node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
 
-    private static string? Number(JsonNode? node) =>
-        node is JsonValue value && value.TryGetValue<double>(out var number)
-            ? number.ToString("0", System.Globalization.CultureInfo.InvariantCulture)
-            : null;
+    private static string? Number(JsonNode? node)
+    {
+        if (node is not JsonValue value)
+            return null;
+        if (value.TryGetValue<int>(out var integer))
+            return integer.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (value.TryGetValue<long>(out var longValue))
+            return longValue.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (value.TryGetValue<double>(out var number))
+            return number.ToString("0", System.Globalization.CultureInfo.InvariantCulture);
+        return null;
+    }
 }

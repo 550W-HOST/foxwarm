@@ -92,7 +92,7 @@ public sealed class HostedResponsesToolsTests
                 ["type"] = "image_generation_call",
                 ["id"] = "unicode-space",
                 ["status"] = "completed",
-                ["result"] = Convert.ToBase64String(png).Insert(4, "\u00a0"),
+                ["result"] = Convert.ToBase64String(png).Insert(4, "\u0085"),
             }
         );
         var normalized = await HostedResponsesTools.ExternalizeAsync(
@@ -409,8 +409,19 @@ public sealed class HostedResponsesToolsTests
                 },
             },
         };
-        var hydrated = await store.HydrateAsync(
+        var prepared = ConcreteRequestHistory.PrepareRequest(
             [new JsonObject { ["role"] = "model", ["parts"] = new JsonArray(part) }],
+            "completions/target"
+        );
+        Assert.NotNull(prepared[0]["parts"]![0]!["providerMeta"]);
+        Assert.Equal(
+            "openai/source",
+            prepared[0]["parts"]![0]!["providerMeta"]!["openaiResponses"]![
+                "sourceModelId"
+            ]!.GetValue<string>()
+        );
+        var hydrated = await store.HydrateAsync(
+            prepared,
             "completions",
             concreteModelId: "completions/target"
         );
@@ -424,6 +435,106 @@ public sealed class HostedResponsesToolsTests
             wire,
             node => node?["content"]?.ToJsonString().Contains("ig_foreign") == true
         );
+    }
+
+    [Fact]
+    public async Task Model_request_owner_foreign_missing_generated_blob_reaches_provider_with_placeholder()
+    {
+        using var temp = new TempDirectory();
+        var handler = new SingleResponseHandler(
+            new JsonObject
+            {
+                ["output"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["type"] = "message",
+                        ["role"] = "assistant",
+                        ["content"] = new JsonArray
+                        {
+                            new JsonObject { ["type"] = "output_text", ["text"] = "foreign-done" },
+                        },
+                    },
+                },
+            }
+        );
+        using var http = new HttpClient(handler);
+        var catalog = HostModels.Parse(
+            JsonNode
+                .Parse(
+                    """{"default":"a","providers":{"a":{"providerType":"openai-responses","baseUrl":"http://localhost/a","models":["m"]},"b":{"providerType":"openai-responses","baseUrl":"http://localhost/b","models":["m"]}}}"""
+                )!
+                .AsObject(),
+            new JsonObject()
+        );
+        var owner = new ModelRequestOwner(
+            http,
+            new(new Uri("http://localhost"), "m", "a/m", "", "", 1000),
+            new ModelRouting(),
+            images: new ImageBlobStore(temp.Path)
+        );
+        var history = new[]
+        {
+            new JsonObject
+            {
+                ["role"] = "model",
+                ["parts"] = new JsonArray(
+                    new JsonObject
+                    {
+                        ["inlineDataRef"] = new JsonObject
+                        {
+                            ["blobId"] = new string('f', 64) + ".png",
+                            ["imageId"] = "ig_foreign",
+                            ["mimeType"] = "image/png",
+                            ["byteLength"] = 1,
+                            ["sha256"] = new string('f', 64),
+                        },
+                        ["imageMeta"] = new JsonObject
+                        {
+                            ["imageId"] = "ig_foreign",
+                            ["origin"] = "generated",
+                            ["mimeType"] = "image/png",
+                        },
+                        ["providerMeta"] = new JsonObject
+                        {
+                            ["openaiResponses"] = new JsonObject
+                            {
+                                ["sourceModelId"] = "a/m",
+                                ["outputItem"] = new JsonObject
+                                {
+                                    ["type"] = "image_generation_call",
+                                    ["id"] = "foreign",
+                                    ["status"] = "completed",
+                                },
+                            },
+                        },
+                    }
+                ),
+                ["__meta"] = new JsonObject { ["modelId"] = "a/m" },
+            },
+        };
+        var result = await owner.RequestAsync(
+            "session",
+            catalog,
+            "b",
+            null,
+            "cache",
+            "turn",
+            history,
+            (_, _) => Task.FromResult(""),
+            null,
+            null,
+            null,
+            null,
+            CancellationToken.None
+        );
+        Assert.Equal(
+            "foreign-done",
+            result.AssistantMessage!["parts"]![0]!["text"]!.GetValue<string>()
+        );
+        Assert.Equal(1, handler.Calls);
+        Assert.Contains("current model does not receive its image content", handler.LastBody);
+        Assert.DoesNotContain(new string('f', 64), handler.LastBody);
     }
 
     private sealed class TempDirectory : IDisposable
@@ -446,6 +557,7 @@ public sealed class HostedResponsesToolsTests
     private sealed class SingleResponseHandler(JsonObject response) : HttpMessageHandler
     {
         internal int Calls { get; private set; }
+        internal string LastBody { get; private set; } = "";
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -453,6 +565,7 @@ public sealed class HostedResponsesToolsTests
         )
         {
             Calls++;
+            LastBody = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult() ?? "";
             var body =
                 "data: "
                 + new JsonObject

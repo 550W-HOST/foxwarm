@@ -105,6 +105,7 @@ internal sealed partial class SessionOwner
                 ["text"] = "",
                 ["reasoning"] = "",
                 ["toolCalls"] = new JsonArray(),
+                ["parts"] = new JsonArray(),
             };
             payload = new JsonObject
             {
@@ -131,8 +132,13 @@ internal sealed partial class SessionOwner
                 return;
             var previousText = draft["text"]?.GetValue<string>() ?? "";
             var previousReasoning = draft["reasoning"]?.GetValue<string>() ?? "";
+            var previousParts = (draft["parts"] as JsonArray ?? new JsonArray())
+                .OfType<JsonObject>()
+                .ToDictionary(PartKey);
             var newCalls = new JsonArray();
             var deltas = new JsonArray();
+            var newParts = new JsonArray();
+            var partDeltas = new JsonArray();
             var oldCalls = (draft["toolCalls"] as JsonArray ?? new JsonArray())
                 .OfType<JsonObject>()
                 .ToDictionary(item => item["index"]!.GetValue<int>());
@@ -169,10 +175,43 @@ internal sealed partial class SessionOwner
                     deltas.Add(delta);
                 }
             }
+            foreach (var part in progress.Parts ?? [])
+            {
+                var next = PartObject(part);
+                newParts.Add(next);
+                var key = PartKey(next);
+                previousParts.TryGetValue(key, out var old);
+                var oldText = old?["text"]?.GetValue<string>() ?? "";
+                var nextText = next["text"]?.GetValue<string>() ?? "";
+                var delta = new JsonObject
+                {
+                    ["outputIndex"] = part.OutputIndex,
+                    ["kind"] = part.Kind,
+                };
+                if (part.ContentIndex is not null)
+                    delta["contentIndex"] = part.ContentIndex;
+                if (part.SummaryIndex is not null)
+                    delta["summaryIndex"] = part.SummaryIndex;
+                if (old is null)
+                    delta["added"] = true;
+                if (part.Status is not null && part.Status != old?["status"]?.GetValue<string>())
+                    delta["status"] = part.Status;
+                if (part.Text is not null && oldText != nextText)
+                    delta["textDelta"] = Delta(oldText, nextText);
+                if (
+                    old is null
+                    || delta.Count
+                        > 2
+                            + (part.ContentIndex is null ? 0 : 1)
+                            + (part.SummaryIndex is null ? 0 : 1)
+                )
+                    partDeltas.Add(delta);
+            }
             var changed =
                 previousText != progress.Text
                 || previousReasoning != progress.Reasoning
-                || deltas.Count > 0;
+                || deltas.Count > 0
+                || partDeltas.Count > 0;
             if (!changed)
                 return;
             var textDelta =
@@ -186,6 +225,7 @@ internal sealed partial class SessionOwner
             draft["text"] = progress.Text;
             draft["reasoning"] = progress.Reasoning;
             draft["toolCalls"] = newCalls;
+            draft["parts"] = newParts;
             var update = new JsonObject
             {
                 ["type"] = "model-stream-update",
@@ -203,6 +243,8 @@ internal sealed partial class SessionOwner
                 update["reasoningDelta"] = reasoningDelta;
             if (deltas.Count > 0)
                 update["toolCallDeltas"] = deltas;
+            if (partDeltas.Count > 0)
+                update["partDeltas"] = partDeltas;
             envelope = update;
         }
         Emit(SessionEventKind.ModelStream, envelope);
@@ -216,6 +258,35 @@ internal sealed partial class SessionOwner
                 ? newText[oldText.Length..]
                 : newText,
         };
+
+    private static string PartKey(JsonObject part) =>
+        string.Join(
+            ":",
+            part["outputIndex"]?.GetValue<int>(),
+            part["kind"]?.GetValue<string>(),
+            part["contentIndex"]
+                ?.GetValue<int>()
+                .ToString(System.Globalization.CultureInfo.InvariantCulture)
+                ?? "",
+            part["summaryIndex"]
+                ?.GetValue<int>()
+                .ToString(System.Globalization.CultureInfo.InvariantCulture)
+                ?? ""
+        );
+
+    private static JsonObject PartObject(ResponsesStreamPart part)
+    {
+        var result = new JsonObject { ["outputIndex"] = part.OutputIndex, ["kind"] = part.Kind };
+        if (part.ContentIndex is not null)
+            result["contentIndex"] = part.ContentIndex;
+        if (part.SummaryIndex is not null)
+            result["summaryIndex"] = part.SummaryIndex;
+        if (part.Text is not null)
+            result["text"] = part.Text;
+        if (part.Status is not null)
+            result["status"] = part.Status;
+        return result;
+    }
 
     public void ClearCommittedDraft(JsonObject message)
     {

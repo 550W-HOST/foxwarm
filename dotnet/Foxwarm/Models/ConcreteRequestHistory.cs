@@ -44,16 +44,15 @@ internal static class ConcreteRequestHistory
                 copy.Remove("thinking");
                 if (copy["providerMeta"] is JsonObject metadata)
                 {
+                    var generatedOutput = metadata["openaiResponses"]?["outputItem"] as JsonObject;
+                    var preserveGenerated =
+                        SessionWait.Text(generatedOutput?["type"]) == "image_generation_call";
                     foreach (
-                        var key in new[]
-                        {
-                            "thinkingSummaries",
-                            "encryptedThinking",
-                            "signature",
-                            "openaiResponses",
-                        }
+                        var key in new[] { "thinkingSummaries", "encryptedThinking", "signature" }
                     )
                         metadata.Remove(key);
+                    if (!preserveGenerated)
+                        metadata.Remove("openaiResponses");
                     if (metadata.Count == 0)
                         copy.Remove("providerMeta");
                 }
