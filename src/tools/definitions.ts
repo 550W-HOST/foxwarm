@@ -288,17 +288,17 @@ Example:
         {
             name: 'create_child_session',
             defaultInject: true,
-            description: `Create a child Session under the current Session. If taskId is supplied, attach the new Session to that task; when the task-linked child completes, use task(action:"complete", ...) for the completion report instead of sending a separate completion message. Without taskId, preserve the normal completion-report behavior.`,
+            description: `Create a child Session under the current Session. With taskId, the child claims the task, receives its full description and any message as one assignment, and starts work. Task completion notifies the task creator; do not send a separate routine completion report. Without taskId, message is optional and normal completion reporting applies.`,
             parameters: {
                 type: 'object',
                 properties: {
                     agentName: { type: 'string', description: "Existing agent that will own the child. Omit to use this session's agent." },
-                    taskId: { type: 'string', maxLength: 128, description: "Optional existing task ID to attach the new Session to. If the task has no owner, the new Session claims it; if another Session owns it, creation fails." },
+                    taskId: { type: 'string', maxLength: 128, description: "Existing unowned task to assign to the new Session. The child receives the full task description and starts work. Creation fails if the task is owned or terminal." },
                     suffix: { type: 'string', description: "Name for the child. Within the same agent, it replaces a main leaf or is appended to the parent ID. Under a different agent, it becomes that agent's session name. A numeric suffix is added when needed to avoid an existing ID." },
                     displayName: { type: 'string', description: "Display name for the new child session. This does not change its session ID." },
                     fork: { type: 'boolean', description: "Copy the parent's current context into the child. Defaults to false. Context copying is available only when the child belongs to the same agent as the parent.", default: false },
-                    message: { type: 'string', description: "Initial task or message to send immediately after creation. Omit to create the child without starting a turn." },
-                    afterSend: { type: 'string', enum: ['continue', 'finish', 'wait'], description: "What this session does after creation and any initial delivery: continue (default), finish the turn without waiting, or wait for a reply. The wait option requires a nonempty initial message; other incoming activity can also resume the session." },
+                    message: { type: 'string', description: "Optional initial instruction. With taskId, add only information not already in the task; it is delivered with the assignment." },
+                    afterSend: { type: 'string', enum: ['continue', 'finish', 'wait'], description: "What this session does after creation and any initial delivery: continue (default), finish the turn without waiting, or wait for a reply. Waiting requires taskId or a nonempty message; other incoming activity can also resume the session." },
                     node: { type: 'string', description: "Node for the new child session. Omit to inherit the parent's current Node. An isolated target agent uses its bound Node." },
                     forceModel: FORCE_MODEL_SCHEMA,
                 },

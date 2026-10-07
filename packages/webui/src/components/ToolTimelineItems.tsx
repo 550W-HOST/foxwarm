@@ -61,7 +61,7 @@ export const getToolCallSearchText = (call: FunctionCall): string => {
   }
   if (call.name === 'exec') return String(args.command || '')
   if (call.name === 'send_to_session') return [args.sessionId, typeof args.message === 'string' ? args.message : formatCompactObjectPreview(args.message)].join('\u0000')
-  if (call.name === 'create_child_session') return [args.suffix, args.message].filter(value => typeof value === 'string').join('\u0000')
+  if (call.name === 'create_child_session') return [args.suffix, args.taskId, args.agentName, args.displayName, args.node, args.afterSend, typeof args.forceModel === 'object' ? formatCompactObjectPreview(args.forceModel) : args.forceModel, args.message].filter(value => typeof value === 'string').join('\u0000')
   return formatCompactObjectPreview(call.name === 'session' ? call.args || { action: 'status' } : call.args)
 }
 
@@ -355,11 +355,12 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
     const suffix = typeof call.args.suffix === 'string' && call.args.suffix.trim() ? call.args.suffix.trim() : '[auto]'
     const mode = call.args.fork ? 'fork' : 'new'
     const hasInitialMessage = typeof call.args.message === 'string' && call.args.message.trim().length > 0
+    const taskId = typeof call.args.taskId === 'string' && call.args.taskId.trim() ? call.args.taskId.trim() : undefined
     return (
-      <span className="flex items-center gap-1 min-w-0" title={`create ${mode} child session ${suffix}${hasInitialMessage ? ' with initial message' : ''}`}>
+      <span className="flex items-center gap-1 min-w-0" title={`create ${mode} child session ${suffix}${taskId ? ` for task ${taskId}` : ''}${hasInitialMessage ? ' with initial message' : ''}`}>
         <span className="shrink-0 text-fw-text-muted">child</span>
         <span className="truncate font-mono">{suffix}</span>
-        <span className="shrink-0 text-fw-text-muted">({mode}{hasInitialMessage ? ', message' : ''})</span>
+        <span className="shrink-0 text-fw-text-muted">({mode}{taskId ? ', task' : ''}{hasInitialMessage ? ', message' : ''})</span>
       </span>
     )
   }
@@ -479,9 +480,18 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     const suffix = typeof call.args.suffix === 'string' && call.args.suffix.trim() ? call.args.suffix.trim() : '[auto]'
     const mode = call.args.fork ? 'forked from parent' : 'new session'
     const initialMessage = typeof call.args.message === 'string' ? call.args.message : ''
+    const optionalFields = ([
+      ['Task ID', call.args.taskId],
+      ['Agent', call.args.agentName],
+      ['Display name', call.args.displayName],
+      ['Node', call.args.node],
+      ['Force model', call.args.forceModel],
+      ['After send', call.args.afterSend],
+    ] as Array<[string, unknown]>).filter(([, value]) => value !== undefined && value !== null && value !== '')
     return (
       <div className="space-y-1">
         <div className="whitespace-pre-wrap break-all"><span className="mr-1 text-fw-text-muted">Child suffix</span><span className="font-mono">{suffix}</span><span className="ml-1 text-fw-text-muted">({mode})</span></div>
+        {optionalFields.map(([label, value]) => <div key={label} className="whitespace-pre-wrap break-all"><span className="mr-1 text-fw-text-muted">{label}:</span>{typeof value === 'string' ? value : formatCompactObjectPreview(value)}</div>)}
         {initialMessage && <div className="whitespace-pre-wrap break-all"><span className="mr-1 text-fw-text-muted">Initial message:</span>{initialMessage}</div>}
       </div>
     )

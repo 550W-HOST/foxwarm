@@ -36,7 +36,7 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
   if (!ctx || !ctx.sessionId) {
     throw new Error('Cannot create child session: missing context');
   }
-  if (afterSend === 'wait' && (typeof message !== 'string' || !message.trim())) {
+  if (afterSend === 'wait' && !taskId && (typeof message !== 'string' || !message.trim())) {
     throw new Error('create_child_session with afterSend="wait" requires a non-empty initial message.');
   }
 
@@ -46,6 +46,17 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
   const childSessionId = taskId
     ? await taskService.createAttachedChild(taskId, currentSessionId, create)
     : await create();
+
+  if (taskId) {
+    await taskService.deliverAttachedChildAssignment(taskId, childSessionId, currentSessionId, message);
+    const output = `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'}). Task assignment sent.`;
+    if (afterSend === 'wait') {
+      return { output, __toolPostAction: { waitForReply: true, successfulSendToSessionTarget: childSessionId } };
+    }
+    return afterSend === 'finish'
+      ? { ...buildEndTurnResult(), output, __toolPostAction: { finishAfterSend: true } }
+      : output;
+  }
 
   if (message) {
     if (afterSend === 'wait' || afterSend === 'finish') {

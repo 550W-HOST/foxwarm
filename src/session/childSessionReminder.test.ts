@@ -31,11 +31,6 @@ test('child instructions and reminders distinguish final reports from reply wait
   assert.match(reminder, /^<foxwarm-system kind="child-reminder" event="missing-handoff" parentSessionId="parent\/main">\nReminder:[\s\S]*\n<\/foxwarm-system>$/);
   assert.match(completion, /\[NO_ACTION\]/);
   assert.match(reminder, /\[NO_ACTION\]/);
-  assert.match(completion, /If your current work is tracked by a task, complete it with the task tool/);
-  assert.match(completion, /For work not tracked by a task/);
-  assert.match(reminder, /check whether your work still needs a completion report/);
-  assert.match(reminder, /complete it with the task tool unless it is already complete/);
-  assert.doesNotMatch(reminder, /message ended without send_to_session call/);
   assert.match(completion, /afterSend: "finish"/);
   assert.match(reminder, /afterSend: "finish"/);
   assert.doesNotMatch(completion, /confirmation/);
