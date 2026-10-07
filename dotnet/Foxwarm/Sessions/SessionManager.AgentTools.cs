@@ -164,17 +164,19 @@ internal sealed partial class SessionManager
                     );
                     var forceModel = OptionalForceModel(args);
                     var after = AfterSend(args);
+                    var taskId = OptionalString(args, "taskId");
                     if (
                         after == "wait"
+                        && taskId is null
                         && string.IsNullOrWhiteSpace(OptionalString(args, "message"))
                     )
                         throw new InvalidDataException(
                             "create_child_session with afterSend=wait requires a nonempty initial message."
                         );
-                    var taskId = OptionalString(args, "taskId");
                     var initialMessage = OptionalString(args, "message");
                     SessionOwner child;
                     var delivered = false;
+                    string? assignmentWarning = null;
                     if (taskId is null)
                     {
                         var created = await CreateChildAsync(
@@ -192,8 +194,9 @@ internal sealed partial class SessionManager
                     }
                     else
                     {
-                        child = await Tasks.CreateAttachedChildAsync(
+                        var attached = await Tasks.CreateAttachedChildAsync(
                             taskId,
+                            source.Id,
                             async () =>
                                 (
                                     await CreateChildAsync(
@@ -206,40 +209,28 @@ internal sealed partial class SessionManager
                                         OptionalBool(args, "fork") ?? false,
                                         taskId
                                     )
-                                ).Child
+                                ).Child,
+                            initialMessage
                         );
-                    }
-                    if (taskId is not null && initialMessage is not null)
-                    {
-                        try
-                        {
-                            await SendAsync(source, child.Id, initialMessage);
-                        }
-                        catch (Exception error)
-                        {
-                            var committed = error is AuthorityCommittedException;
-                            throw new CommittedSessionCreationException(
-                                child.Id,
-                                committed
-                                    ? $"Child Session '{child.Id}' and its initial message were committed, but delivery durability failed: {error.Message}"
-                                    : $"Child Session '{child.Id}' was committed but its initial message was not delivered: {error.Message}",
-                                error,
-                                committed
-                            );
-                        }
-                        delivered = true;
+                        child = attached.Child;
+                        delivered = attached.AssignmentDelivered;
+                        assignmentWarning = attached.Warning;
                     }
                     return (
                         Output(
                             $"Created child Session {child.Id} under Agent {child.Agent}; "
                                 + (
-                                    delivered
-                                        ? "initial message delivered to its queue."
-                                        : "no initial message was supplied."
+                                    taskId is not null
+                                        ? delivered
+                                            ? $"task assignment delivered{(assignmentWarning is null ? "." : $" with warning: {assignmentWarning}")}"
+                                            : $"task assignment delivery failed{(assignmentWarning is null ? "." : $": {assignmentWarning}")}"
+                                        : delivered
+                                            ? "initial message delivered to its queue."
+                                            : "no initial message was supplied."
                                 ),
-                            after == "wait" ? child.Id : null
+                            taskId is not null && delivered && after == "wait" ? child.Id : null
                         ),
-                        after == "finish"
+                        taskId is null ? after == "finish" : delivered && after == "finish"
                     );
                 }
                 case "send_to_session":

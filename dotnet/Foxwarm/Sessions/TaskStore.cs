@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using Microsoft.Data.Sqlite;
 
@@ -133,7 +134,7 @@ internal sealed class TaskStore : IDisposable
                 var existing = find.ExecuteScalar()?.ToString();
                 if (existing is null)
                 {
-                    var id = "task_" + Guid.NewGuid().ToString("N");
+                    var id = NewTaskId();
                     var now = Now();
                     using var insert = db.CreateCommand();
                     insert.CommandText =
@@ -189,7 +190,22 @@ internal sealed class TaskStore : IDisposable
         }
     }
 
-    internal void BindChild(string taskId, string childSessionId)
+    internal string? ReadStoredDescription(string taskId)
+    {
+        lock (gate)
+        {
+            var db = Open();
+            using var command = db.CreateCommand();
+            command.CommandText = "SELECT description FROM tasks WHERE id=$id";
+            Add(command, "$id", taskId);
+            var value = command.ExecuteScalar();
+            if (value is null or DBNull)
+                return null;
+            return value.ToString();
+        }
+    }
+
+    internal void AttachChild(string taskId, string childSessionId)
     {
         lock (gate)
         {
@@ -204,10 +220,10 @@ internal sealed class TaskStore : IDisposable
                 if (status is "completed" or "cancelled")
                     throw new TaskError("TASK_TERMINAL", $"Task {taskId} is terminal.", 409);
                 var owner = Canonical(Text(task["ownerSessionId"]));
-                if (owner is not null)
+                if (owner != Canonical(childSessionId))
                     throw new TaskError(
                         "TASK_OWNED",
-                        $"Task {taskId} is already claimed by another Session ({owner}).",
+                        $"Task {taskId} is not owned by child Session {Canonical(childSessionId)}.",
                         409
                     );
                 var now = Now();
@@ -216,20 +232,12 @@ internal sealed class TaskStore : IDisposable
                     taskId,
                     "createdBySessionId",
                     Canonical(Text(task["createdBySessionId"])),
-                    "ownerSessionId",
-                    Canonical(childSessionId),
                     "attachedSessionId",
                     Canonical(childSessionId),
                     "previousOwnerSessionId",
                     Canonical(Text(task["previousOwnerSessionId"])),
-                    "status",
-                    "active",
                     "updatedAt",
-                    now,
-                    "reminderLastSeq",
-                    null,
-                    "reminderMessageCount",
-                    0
+                    now
                 );
                 AddNote(
                     db,
@@ -431,19 +439,33 @@ internal sealed class TaskStore : IDisposable
             var parent = Text(args["parentTaskId"]);
             if (parent is not null && !Exists(db, parent))
                 throw new TaskError("TASK_NOT_FOUND", $"Task {parent} not found.", 404);
-            var id = "task_" + Guid.NewGuid().ToString("N");
+            var id = NewTaskId();
+            var requestedOwner =
+                args.ContainsKey("ownerSessionId") && args["ownerSessionId"] is null
+                    ? null
+                    : Canonical(Text(args["ownerSessionId"]));
+            var notifyNew =
+                requestedOwner is not null && args["notifySession"]?.GetValue<bool>() == true;
             var now = Now();
             using var cmd = db.CreateCommand();
             cmd.CommandText =
-                "INSERT INTO tasks(id,title,description,status,parentTaskId,createdBySessionId,createdAt,updatedAt) VALUES($id,$title,$description,'open',$parent,$creator,$now,$now)";
+                "INSERT INTO tasks(id,title,description,status,parentTaskId,createdBySessionId,ownerSessionId,createdAt,updatedAt,assignmentRevision,assignmentNotificationStatus,reminderLastSeq) VALUES($id,$title,$description,$status,$parent,$creator,$owner,$now,$now,$revision,$notification,$anchor)";
             Add(cmd, "$id", id);
             Add(cmd, "$title", Text(args["title"])!);
             Add(cmd, "$description", Text(args["description"]));
             Add(cmd, "$parent", parent);
             Add(cmd, "$creator", Canonical(actor!));
+            Add(cmd, "$owner", requestedOwner);
             Add(cmd, "$now", now);
+            Add(cmd, "$status", requestedOwner is null ? "open" : "active");
+            Add(cmd, "$revision", requestedOwner is null ? 0 : 1);
+            Add(cmd, "$notification", notifyNew ? "pending" : null);
+            Add(cmd, "$anchor", requestedOwner == Canonical(actor!) ? anchorSeq : null);
             cmd.ExecuteNonQuery();
-            return new(TaskJson(new JsonObject { ["task"] = Public(db, id) }));
+            return new(
+                TaskJson(new JsonObject { ["task"] = Public(db, id) }),
+                notifyNew ? new TaskAssignmentPlan(1, requestedOwner, null) : null
+            );
         }
         if (taskId is null)
             throw new TaskError("TASK_INVALID_ARGS", $"task {action} requires a non-empty taskId.");
@@ -806,6 +828,9 @@ internal sealed class TaskStore : IDisposable
 
     private static long Now() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
+    private static string NewTaskId() =>
+        "task_" + Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant();
+
     private static string? Text(JsonNode? node) =>
         node is JsonValue v && v.TryGetValue<string>(out var text) ? text : null;
 
@@ -985,7 +1010,12 @@ internal sealed class TaskStore : IDisposable
     private static bool Allowed(string action, string key) =>
         action switch
         {
-            "create" => key is "title" or "description" or "parentTaskId",
+            "create" => key
+                is "title"
+                    or "description"
+                    or "parentTaskId"
+                    or "ownerSessionId"
+                    or "notifySession",
             "list" => key is "status",
             "get" or "claim" => key is "taskId",
             "assign" => key is "taskId" or "ownerSessionId" or "notifySession",

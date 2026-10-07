@@ -201,7 +201,7 @@ internal static class AgentToolDefinitions
             ),
             Tool(
                 "create_child_session",
-                "Create a child Session under the current Session. If taskId is supplied, attach the new Session to that task; when the task-linked child completes, use task(action:\"complete\", ...) for the completion report instead of sending a separate completion message. Without taskId, preserve the normal completion-report behavior.",
+                "Create a child Session under the current Session. With taskId, assign or transfer the task to the child, deliver its full description and any message as one assignment, and start work. Task completion notifies the task creator; do not send a separate routine completion report. Without taskId, message is optional and normal completion reporting applies.",
                 Parameters(
                     new JsonObject
                     {
@@ -209,7 +209,7 @@ internal static class AgentToolDefinitions
                             "Existing agent that will own the child. Omit to use this session's agent."
                         ),
                         ["taskId"] = String(
-                            "Optional existing task ID to attach the new Session to. If the task has no owner, the new Session claims it; if another Session owns it, creation fails."
+                            "Existing task to assign or transfer to the new Session. The child receives the full task description and starts work. Completed or cancelled tasks cannot be assigned."
                         ),
                         ["suffix"] = String(
                             "Name used to form the child's Session ID. A numeric suffix is added when needed to avoid an existing ID."
@@ -225,10 +225,10 @@ internal static class AgentToolDefinitions
                             "Display name for the new child session. This does not change its session ID."
                         ),
                         ["message"] = String(
-                            "Initial task or message to send immediately after creation. Omit to create the child without starting a turn."
+                            "Optional initial instruction. With taskId, add only information not already in the task; it is delivered with the assignment."
                         ),
                         ["afterSend"] = Choice(
-                            "What this session does after creation and any initial delivery: continue (default), finish the turn without waiting, or wait for a reply. The wait option requires a nonempty initial message; other incoming activity can also resume the session.",
+                            "What this session does after creation and any initial delivery: continue (default), finish the turn without waiting, or wait for a reply. Waiting requires taskId or a nonempty message; other incoming activity can also resume the session.",
                             "continue",
                             "finish",
                             "wait"

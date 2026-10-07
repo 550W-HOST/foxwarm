@@ -264,7 +264,8 @@ internal sealed partial class SessionManager
         string requestedTarget,
         string message,
         JsonObject? toolArgs = null,
-        bool trigger = true
+        bool trigger = true,
+        JsonObject? taskNotification = null
     )
     {
         var targetId = ResolveSessionReference(source, requestedTarget);
@@ -282,7 +283,8 @@ internal sealed partial class SessionManager
         if (!accepting)
             throw new InvalidOperationException("Host is shutting down.");
         var relation =
-            source.Entry.Snapshot().AuthorityEnvelope["parentSessionId"]?.GetValue<string>()
+            taskNotification is not null ? null
+            : source.Entry.Snapshot().AuthorityEnvelope["parentSessionId"]?.GetValue<string>()
             == target.Id
                 ? "direct-child"
             : target.Entry.Snapshot().AuthorityEnvelope["parentSessionId"]?.GetValue<string>()
@@ -293,12 +295,23 @@ internal sealed partial class SessionManager
         var offset = now.ToString("zzz", CultureInfo.InvariantCulture)
             .Replace(":", "", StringComparison.Ordinal);
         var time = now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + " " + offset;
-        var wrapper =
-            $"<foxwarm-message type=\"inter-agent\" sourceSessionId=\"{Escape(source.Id)}\" "
-            + $"replyTargetSessionId=\"{Escape(source.Id)}\" replyVia=\"send_to_session\" time=\"{Escape(time)}\" "
-            + "hint=\"inter-agent message from another session, not direct end-user input\">\n"
-            + message
-            + "\n</foxwarm-message>";
+        var taskId = taskNotification?["taskId"]?.GetValue<string>() ?? "";
+        if (taskId.Length > 128)
+            taskId = taskId[..128];
+        var taskEvent = taskNotification?["event"]?.GetValue<string>() ?? "";
+        var taskHint =
+            taskNotification?["recipient"]?.GetValue<string>() == "new"
+                ? "Task assignment from Foxwarm, not direct user input. Complete this task with the task tool when the assigned work is finished; completion automatically notifies the task creator. Do not send a separate routine completion message."
+                : "task notification from Foxwarm; not direct user input";
+        var wrapper = taskNotification is null
+            ? $"<foxwarm-message type=\"inter-agent\" sourceSessionId=\"{Escape(source.Id)}\" "
+                + $"replyTargetSessionId=\"{Escape(source.Id)}\" replyVia=\"send_to_session\" time=\"{Escape(time)}\" "
+                + "hint=\"inter-agent message from another session, not direct end-user input\">\n"
+                + message
+                + "\n</foxwarm-message>"
+            : $"<foxwarm-message type=\"task\" taskId=\"{Escape(taskId)}\" event=\"{Escape(taskEvent)}\" sourceSessionId=\"{Escape(source.Id)}\" time=\"{Escape(time)}\" hint=\"{Escape(taskHint)}\">\n"
+                + message
+                + "\n</foxwarm-message>";
         var item = new QueueItem(
             QueueItemType.Intersession,
             [new JsonObject { ["system"] = wrapper }],

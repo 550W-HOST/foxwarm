@@ -18,6 +18,8 @@ Horizontal overflow is owned by the native outer Chat message scroller. Message 
 
 Hosted Responses `web_search_call` cards render only proven persisted action shapes in original model-part order. They are reasoning-like model artifacts, not Foxwarm tool invocations: unknown/malformed hosted items stay hidden in rendered mode while JSON view retains original metadata, and the separate Sources/URL annotation surface remains independent.
 
+`ToolTimelineItems` includes task-linked child-session arguments in compact search/detail cards (task, Agent, display name, node, force-model, and after-send fields) without changing execution semantics.
+
 ## Tests
 
 Timeline/message rendering, special-block, tool-card, Markdown/mermaid, overflow, and hosted-response/WebSearch browser tests.

@@ -155,7 +155,11 @@ public sealed partial class LocalSessionTurnHost
                             && !finalText.TrimStart().StartsWith("Error:", StringComparison.Ordinal)
                         )
                             await entry
-                                .SaveLane.QueueChildReminderAsync(parent)
+                                .SaveLane.QueueChildReminderAsync(
+                                    parent,
+                                    tools is SessionToolExecutor toolMode
+                                        && toolMode.HandoffConfirmationEnabled
+                                )
                                 .ConfigureAwait(false);
                         if (
                             !entry.WithState(state =>

@@ -222,11 +222,22 @@ public sealed partial class SessionSaveLane
             PublishGoalOnly(staged);
         });
 
-    internal Task QueueChildReminderAsync(string parentSessionId) =>
+    internal Task QueueChildReminderAsync(
+        string parentSessionId,
+        bool handoffConfirmation = false
+    ) =>
         AdmitAsync(
             new QueueItem(
                 QueueItemType.Background,
-                [new JsonObject { ["system"] = SessionBoundary.ChildReminder(parentSessionId) }],
+                [
+                    new JsonObject
+                    {
+                        ["system"] = SessionBoundary.ChildReminder(
+                            parentSessionId,
+                            handoffConfirmation
+                        ),
+                    },
+                ],
                 SourceSessionRelation: "other",
                 Trigger: false
             ),

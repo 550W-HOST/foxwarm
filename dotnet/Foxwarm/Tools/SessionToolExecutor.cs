@@ -310,6 +310,19 @@ internal sealed partial class SessionToolExecutor(
         var (response, completionTarget) = await Manager
             .Tasks.ExecuteForToolWithReceiptAsync(Hosted, args)
             .ConfigureAwait(false);
+        var action = SessionWait.Text(args["action"]);
+        var visible =
+            action is "create" or "claim" or "assign" or "update" or "complete" or "cancel"
+            && response["task"] is JsonObject taskResult
+                ? new JsonObject
+                {
+                    ["taskId"] = SessionWait.Text(taskResult["id"]),
+                    ["status"] = SessionWait.Text(taskResult["status"]),
+                    ["ownerSessionId"] = taskResult["ownerSessionId"]?.DeepClone(),
+                }
+                : response;
+        if (response["warning"] is JsonNode warning)
+            visible["warning"] = warning.DeepClone();
         if (
             SessionWait.Text(args["action"]) == "complete"
             && response["task"] is JsonObject task
@@ -324,7 +337,7 @@ internal sealed partial class SessionToolExecutor(
         }
         else if (completionTarget is not null)
             invocation.Value!.Receipt = new TurnToolReceipt(completionTarget, null, null);
-        return response;
+        return visible;
     }
 
     private async Task<JsonObject> ExecuteExecAsync(JsonObject args, CancellationToken token)

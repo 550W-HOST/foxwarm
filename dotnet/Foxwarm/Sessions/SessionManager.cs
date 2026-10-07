@@ -84,7 +84,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             this.root,
             id => ResolveTaskSessionId(id),
             id => TaskSessionAliases(id),
-            id => TaskAnchorSeq(id)
+            id => TaskAnchorSeq(id),
+            id => Find(id)?.Agent
         );
         Catalog.Changed += () => TopologyChanged?.Invoke();
         Catalog.BeforePresentationMutation = BeginCatalogMutation;

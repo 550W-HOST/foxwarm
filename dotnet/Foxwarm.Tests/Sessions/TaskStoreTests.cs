@@ -42,7 +42,7 @@ public sealed class TaskStoreTests
     }
 
     [Fact]
-    public void AttachedChildClaimsAndBindsUnownedTask()
+    public void AttachedChildRequiresCommittedOwnerAndBindsTask()
     {
         using var temp = new TempDirectory();
         using var store = new TaskStore(temp.Path, id => id, _ => []);
@@ -51,7 +51,16 @@ public sealed class TaskStoreTests
             "parent"
         );
         var id = created.Payload["task"]!["id"]!.GetValue<string>();
-        store.BindChild(id, "child");
+        store.Execute(
+            new JsonObject
+            {
+                ["action"] = "assign",
+                ["taskId"] = id,
+                ["ownerSessionId"] = "child",
+            },
+            "parent"
+        );
+        store.AttachChild(id, "child");
         var task = store
             .Execute(new JsonObject { ["action"] = "get", ["taskId"] = id }, null)
             .Payload["task"]!;

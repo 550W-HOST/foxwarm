@@ -8,7 +8,10 @@ internal sealed partial class SessionManager
         string sourceId,
         string targetId,
         string message,
-        bool trigger
+        bool trigger,
+        string taskId,
+        string eventName,
+        string recipient
     )
     {
         var source = await RequiredAsync(sourceId);
@@ -17,7 +20,13 @@ internal sealed partial class SessionManager
             targetId,
             message,
             new JsonObject { ["sessionId"] = targetId, ["message"] = message },
-            trigger
+            trigger,
+            new JsonObject
+            {
+                ["taskId"] = taskId,
+                ["event"] = eventName,
+                ["recipient"] = recipient,
+            }
         );
     }
 }
