@@ -12,7 +12,7 @@ Relations delegate bounded parent/child/agent/tree queries to `SessionCatalog`/`
 
 ## Contract and side effects
 
-Task UI/API work is current 7A behavior, while child task-id attachment, handoff receipts, legacy Goal migration, and request-local reminder consumers remain absent. Ordinary Session queue acceptance retains best-effort semantics. Relation mutations use Main identity/topology ownership and cannot bypass Session deletion/identity gates.
+Task UI/API work is implemented, while child task-id attachment, handoff receipts, legacy Goal migration, and request-local reminder consumers remain absent. Ordinary Session queue acceptance retains best-effort semantics. Relation mutations use Main identity/topology ownership and cannot bypass Session deletion/identity gates.
 
 ## Tests
 

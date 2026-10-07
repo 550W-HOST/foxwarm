@@ -8,7 +8,7 @@ The xUnit project is the executable contract map for the .NET host: channels/rou
 
 ## Stable navigation
 
-Use the test namespace/directory matching the owning module, then follow the production unit and thread. High-value persistence tests include `PersistentSessionTurnTests`, `SessionCatalogPublicationTests`, `PersistencePrimitiveTests`, `ArchiveLineageTests`, `SessionIdentityRecoveryTests`, and `CommittedArchiveBoundaryTests`; accepted 7A behavior is covered by task anchor/terminal-loop tests in the later source delta.
+Use the test namespace/directory matching the owning module, then follow the production unit and thread. High-value persistence tests include `PersistentSessionTurnTests`, `SessionCatalogPublicationTests`, `PersistencePrimitiveTests`, `ArchiveLineageTests`, `SessionIdentityRecoveryTests`, and `CommittedArchiveBoundaryTests`; TaskStoreTests and SessionTurnTests cover Task anchors and terminal-loop behavior.
 
 ## Contract boundary
 

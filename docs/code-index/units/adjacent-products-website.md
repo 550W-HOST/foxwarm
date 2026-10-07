@@ -12,7 +12,7 @@ Start at the website app entry and page/component folders, then follow package l
 
 ## Contract and side effects
 
-Website copy must not claim that the root launcher has switched to .NET, remote Nodes are fully integrated, or Vector/7B behavior exists merely because related documentation/assets are present. Download/install links are external product boundaries and should remain deployment-relative/configured.
+Website copy must not claim that the root launcher has switched to .NET, remote Nodes are fully integrated, or Vector and deferred Task consumers exist merely because related documentation/assets are present. Download/install links are external product boundaries and should remain deployment-relative/configured.
 
 ## Tests
 
