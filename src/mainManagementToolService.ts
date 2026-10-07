@@ -76,7 +76,7 @@ export type MigrateLegacyGoalRequest = { sourceSessionId: string; goal: string; 
 export type TaskContextRequest = { sourceSessionId: string; sequences: number[]; consume: boolean; retainedTaskIds?: string[] };
 export type TaskContextResponse = { tasks: { id: string; title: string; status: string }[]; omitted: number };
 
-export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 13, {
+export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 14, {
   migrateLegacyGoal: rpcMethod<MigrateLegacyGoalRequest, { taskId: string }>(),
   taskContext: rpcMethod<TaskContextRequest, TaskContextResponse>(),
   execute: rpcMethod<MainManagementToolRequest, MainManagementToolResponse>(),

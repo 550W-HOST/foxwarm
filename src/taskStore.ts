@@ -172,6 +172,13 @@ export class TaskStore {
     this.markNotification(taskId, recipient === 'new' ? 'assignmentNotificationStatus' : 'previousOwnerNotificationStatus', status, revision);
   }
 
+  /** Internal delivery read: keep public TaskStore projections bounded. */
+  readStoredDescription(taskId: string): string | null {
+    const row = this.getDb().prepare('SELECT description FROM tasks WHERE id=?').get(taskId) as { description?: unknown } | undefined;
+    if (!row) throw new TaskError('TASK_NOT_FOUND', `Task ${taskId} was not found.`, 404);
+    return typeof row.description === 'string' ? row.description : null;
+  }
+
   private markNotification(taskId: string, field: 'completionNotificationStatus' | 'assignmentNotificationStatus' | 'previousOwnerNotificationStatus', status: string, revision?: number): void {
     const db = this.getDb();
     db.exec('BEGIN IMMEDIATE');

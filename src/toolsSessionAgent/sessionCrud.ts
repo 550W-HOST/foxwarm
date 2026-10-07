@@ -53,12 +53,17 @@ export async function tool_session(args: ToolArgs = {}, ctx?: ToolContext) {
     return formatSessionStatus(await buildSessionStatusInfo(targetSessionId, currentSession, ctx?.sessionPlacement === 'session-worker'));
   }
 
-  const target = await sessionRuntime.getSession(requestedSessionId);
-  if (!target) {
+  const targetHistory = await sessionRuntime.getHistory(requestedSessionId);
+  if (!targetHistory) {
     throw new Error(`Session \`${requestedSessionId}\` not found.`);
   }
 
-  return formatSessionStatus(await buildSessionStatusInfo(target.id, target));
+  return formatSessionStatus(await buildSessionStatusInfo(
+    targetHistory.session.id,
+    targetHistory.session,
+    false,
+    targetHistory.messages,
+  ));
 }
 
 export async function tool_delete_session(args: ToolArgs, ctx: ToolContext) {
@@ -152,11 +157,16 @@ export async function statusSessionForManagement(args: ToolArgs, sourceSessionId
   const requestedSessionId = typeof args.sessionId === 'string' && args.sessionId.trim()
     ? args.sessionId.trim()
     : sourceSessionId;
-  const target = await sessionRuntime.getSession(requestedSessionId);
-  if (!target) {
+  const targetHistory = await sessionRuntime.getHistory(requestedSessionId);
+  if (!targetHistory) {
     throw new Error(`Session \`${requestedSessionId}\` not found.`);
   }
-  return formatSessionStatus(await buildSessionStatusInfo(target.id, target));
+  return formatSessionStatus(await buildSessionStatusInfo(
+    targetHistory.session.id,
+    targetHistory.session,
+    false,
+    targetHistory.messages,
+  ));
 }
 
 export async function tool_stop_session(args: ToolArgs, ctx?: ToolContext) {

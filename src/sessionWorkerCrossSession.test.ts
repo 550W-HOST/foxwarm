@@ -324,6 +324,8 @@ test('real Worker calls cross-session recall, agent creation, and node bootstrap
     { name: 'recall', args: { sessionId: targetId, target: 'overview', previewLength: 1000 } },
     { name: 'get_archived_messages', args: { sessionId: targetId } },
     { name: 'get_archived_blocks', args: { sessionId: targetId } },
+    { name: 'session', args: { action: 'status', sessionId: targetId } },
+    { name: 'session', args: { action: 'update-parent', sessionId: targetId, parentSessionId: sourceId } },
     { name: 'create_agent', args: { agentName, createMainSession: false } },
     { name: 'create_session', args: { agentName, sessionName: 'created', forceModel: { effort: 'none' } } },
     { name: 'node_bootstrap_info', args: {} },
@@ -354,10 +356,12 @@ test('real Worker calls cross-session recall, agent creation, and node bootstrap
     assert.match(text, new RegExp(`Recall overview for session .${targetId}`));
     assert.match(text, /No archived messages matched/);
     assert.match(text, /No archived blocks found/);
+    assert.match(text, new RegExp('session id: `' + targetId + '`'));
     assert.ok(text.includes(agentName) && text.includes('created successfully'));
     assert.ok(text.includes(createdSessionId) && text.includes('created under agent'));
     const createdSession = await sessionManager.getSession(createdSessionId);
     assert.equal(createdSession.model, source.model, 'new session inherits the detached Worker authority model, not the stale Main stub');
+    assert.equal(sessionManager.getAllSessions().get(targetId)?.parentSessionId, sourceId);
     assert.equal(createdSession.effort, 'none', 'effort-only forceModel applies against the detached Worker authority model');
     assert.match(text, /disposable-bootstrap-fixture/);
     assert.match(text, new RegExp(pending.id));

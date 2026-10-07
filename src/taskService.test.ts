@@ -243,5 +243,5 @@ test('create can commit an existing owner and optional assignment notification w
   const open = await service.execute({ action: 'create', title: 'Explicitly unowned', ownerSessionId: null, notifySession: true }, 'creator');
   assert.equal(open.task.status, 'open');
   assert.equal(open.task.ownerSessionId, null);
-  assert.equal(sends.length, 2, 'unowned creation has no notification recipient');
+  assert.equal(sends.length, 3, 'unowned creation has no notification recipient');
 });

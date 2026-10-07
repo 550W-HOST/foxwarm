@@ -392,6 +392,27 @@ rules:
   assert.equal(evaluateToolAuthorizationSync(buildToolAuthorizationRequest({ session, tool: { source: 'builtin', name: 'wait' } })).action, 'allow');
 });
 
+test('generic policy deny covers session parent updates through direct and unified callers', async () => {
+  setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
+version: 1
+defaultAction: allow
+rules:
+- id: deny-session-management
+  match: { agent: plain, tool: { source: builtin, name: session } }
+  action: deny
+`));
+  const session: any = { id: 'plain/session-parent-policy', agent: 'plain', currentNode: 'master' };
+  const ctx: any = { sessionId: session.id, session };
+  await assert.rejects(
+    () => tools.callTool('session', { action: 'update-parent', parentSessionId: null }, ctx),
+    /denies builtin capability/i,
+  );
+  await assert.rejects(
+    () => tools.call_tool({ source: 'builtin', name: 'session', args: { action: 'update-parent', parentSessionId: null } }, ctx),
+    /denies builtin capability/i,
+  );
+});
+
 test('direct and unified Node calls share the same generic resolved identity', async () => {
   setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
 version: 1

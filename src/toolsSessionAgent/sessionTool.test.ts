@@ -37,9 +37,32 @@ test('session status action reports current identity, usage, cwd, node, compact 
   const parentSessionId = makeSessionId('session_status_parent');
   const sessionId = makeSessionId('session_status_current');
   const childSessionId = `${sessionId}_child`;
+  const parentAlias = `${parentSessionId}_alias`;
 
   try {
-    await ensureSession(parentSessionId);
+    const parent = await ensureSession(parentSessionId);
+    parent.aliases = [parentAlias];
+    sessionManager.updateAliasCache([parentAlias], parentSessionId);
+    parent.history = [
+      { role: 'user', parts: [{ text: 'target status history' }] },
+      {
+        role: 'tool',
+        parts: [{
+          functionResponse: {
+            tool_use_id: 'status-image',
+            name: 'browse_get',
+            response: {
+              inlineData: {
+                mimeType: 'image/png',
+                data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlqVZsAAAAASUVORK5CYII=',
+              },
+            },
+          },
+        }],
+      },
+    ];
+    parent.stats.lastUsage = { cachedTokens: 3, inputTokens: 4, outputTokens: 5 };
+    await sessionManager.saveSession(parentSessionId);
     const session = await ensureSession(sessionId);
     session.parentSessionId = parentSessionId;
     session.displayName = 'Status Test';
@@ -75,6 +98,11 @@ test('session status action reports current identity, usage, cwd, node, compact 
     const targetStatus = String(await tool_session({ action: 'status', sessionId: parentSessionId }, { sessionId, session }));
     assert.ok(targetStatus.includes(`session id: \`${parentSessionId}\``));
     assert.ok(!targetStatus.includes(`session id: \`${sessionId}\``));
+    assert.match(targetStatus, /token estimate: ~[1-9][0-9,]* /);
+    assert.match(targetStatus, /last usage: cached=3, input=4, output=5, total=12/);
+    assert.match(targetStatus, /Images: 1/);
+    const aliasStatus = String(await tool_session({ action: 'status', sessionId: parentAlias }, { sessionId, session }));
+    assert.ok(aliasStatus.includes(`session id: \`${parentSessionId}\``));
     const missingId = makeSessionId('session_status_missing');
     await assert.rejects(
       tool_session({ action: 'status', sessionId: missingId }, { sessionId, session }),
@@ -201,16 +229,28 @@ test('session update-parent requires an explicit parent and returns the committe
 
     await assert.rejects(() => tool_session({ action: 'update-parent' }, ctx), /parentSessionId is required/);
     await assert.rejects(() => tool_session({ action: 'update-parent', parentSessionId: '' }, ctx), /non-empty session ID or null/);
+    await assert.rejects(() => tool_session({ action: 'update-parent', parentSessionId: makeSessionId('session_parent_update_missing') }, ctx), /not found/);
+    await assert.rejects(() => tool_session({ action: 'update-parent', parentSessionId: childId }, ctx), /own parent/);
 
     const attached = await tool_session({ action: 'update-parent', parentSessionId: parentId }, ctx) as any;
     assert.deepEqual(attached, { sessionId: childId, previousParentSessionId: null, parentSessionId: parentId });
     assert.equal((await sessionManager.getExistingSession(childId))?.parentSessionId, parentId);
+    await assert.rejects(
+      () => tool_session({ action: 'update-parent', sessionId: parentId, parentSessionId: childId }, ctx),
+      /parent cycle/,
+    );
+    assert.equal((await sessionManager.getExistingSession(parentId))?.parentSessionId, undefined);
 
     const moved = await tool_session({ action: 'update-parent', parentSessionId: otherParentId }, ctx) as any;
     assert.deepEqual(moved, { sessionId: childId, previousParentSessionId: parentId, parentSessionId: otherParentId });
     const detached = await tool_session({ action: 'update-parent', parentSessionId: null }, ctx) as any;
     assert.deepEqual(detached, { sessionId: childId, previousParentSessionId: otherParentId, parentSessionId: null });
     assert.equal((await sessionManager.getExistingSession(childId))?.parentSessionId, undefined);
+
+    child.busy = true;
+    const busyMove = await tool_session({ action: 'update-parent', parentSessionId: otherParentId }, ctx) as any;
+    assert.deepEqual(busyMove, { sessionId: childId, previousParentSessionId: null, parentSessionId: otherParentId });
+    child.busy = false;
   } finally {
     for (const id of [childId, otherParentId, parentId]) await sessionManager.deleteSession(id).catch(() => {});
   }

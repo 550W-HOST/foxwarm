@@ -45,7 +45,10 @@ export class TaskService {
         sessionId = this.deps.resolveSessionId(sessionId) || sessionId;
         if (target === sessionId) this.store.markAssignmentNotification(result.task.id, plan.revision, recipient, 'skipped');
         else try {
-          const summary = `${result.task.id} — ${result.task.title}\nStatus: ${result.task.status}${result.task.description ? `\n${result.task.description}` : ''}`;
+          const description = recipient === 'new'
+            ? this.store.readStoredDescription(result.task.id)
+            : result.task.description;
+          const summary = `${result.task.id} — ${result.task.title}\nStatus: ${result.task.status}${description ? `\n${description}` : ''}`;
           const message = recipient === 'previous'
             ? `Task ownership ${result.task.ownerSessionId ? `transferred to ${result.task.ownerSessionId}` : 'released'}: ${summary.slice(0, 1000)}`
             : `You have been assigned a task: ${summary}`;

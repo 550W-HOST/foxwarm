@@ -1142,6 +1142,30 @@ test('renamed snapshot refresh works through direct unified and ToolScript paths
   }
 });
 
+test('session parent updates work through direct and unified builtin dispatch', async () => {
+  await sessionManager.loadSessions();
+  const parentId = `unified_session_parent_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const childId = `unified_session_child_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const parent = await sessionManager.getSession(parentId);
+  const child = await sessionManager.getSession(childId);
+  const ctx: any = { sessionId: childId, session: child };
+  try {
+    assert.deepEqual(await tools.session({ action: 'update-parent', parentSessionId: parentId }, ctx), {
+      sessionId: childId,
+      previousParentSessionId: null,
+      parentSessionId: parentId,
+    });
+    assert.deepEqual(await call_tool({ source: 'builtin', name: 'session', args: { action: 'update-parent', parentSessionId: null } }, ctx), {
+      sessionId: childId,
+      previousParentSessionId: parentId,
+      parentSessionId: null,
+    });
+  } finally {
+    await sessionManager.deleteSession(childId).catch(() => {});
+    await sessionManager.deleteSession(parentId).catch(() => {});
+  }
+});
+
 test('recall model-facing schema separates target/vector retrieval from literal result post-filtering', () => {
   const recallDef = definitions.find(def => def.name === 'recall');
   assert.ok(recallDef);
