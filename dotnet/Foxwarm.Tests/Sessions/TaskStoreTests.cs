@@ -73,18 +73,24 @@ public sealed class TaskStoreTests
             "main"
         );
         var id = created.Payload["task"]!["id"]!.GetValue<string>();
-        using (var db = new SqliteConnection($"Data Source={Path.Combine(temp.Path, "state", "tasks.sqlite")}"))
+        using (
+            var db = new SqliteConnection(
+                $"Data Source={Path.Combine(temp.Path, "state", "tasks.sqlite")}"
+            )
+        )
         {
             db.Open();
             using var command = db.CreateCommand();
             command.CommandText =
-                "UPDATE tasks SET createdBySessionId='old',ownerSessionId='old',attachedSessionId='old',previousOwnerSessionId='old',reminderLastSeq=NULL,reminderMessageCount=30 WHERE id=$id";
+                "UPDATE tasks SET createdBySessionId='old',ownerSessionId='old',attachedSessionId='old',previousOwnerSessionId='old',status='active',reminderLastSeq=NULL,reminderMessageCount=30 WHERE id=$id";
             command.Parameters.AddWithValue("$id", id);
             command.ExecuteNonQuery();
         }
 
         Assert.Empty(store.TaskContext("main", [1, 2], false, [])!["tasks"]!.AsArray());
-        using var verify = new SqliteConnection($"Data Source={Path.Combine(temp.Path, "state", "tasks.sqlite")}");
+        using var verify = new SqliteConnection(
+            $"Data Source={Path.Combine(temp.Path, "state", "tasks.sqlite")}"
+        );
         verify.Open();
         using var read = verify.CreateCommand();
         read.CommandText =
