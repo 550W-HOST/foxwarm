@@ -16,6 +16,7 @@ public sealed class LocalSessionTurnHostFactory
     private readonly Func<SessionEntry, Task>? safePoint;
     private readonly Func<SessionEntry, ChatResult, Task>? automaticCompact;
     private readonly Func<SessionEntry, Task>? retrySafePoint;
+    private readonly Func<SessionEntry, string?>? parentSessionResolver;
 
     public LocalSessionTurnHostFactory(
         ISessionAuthorityStore store,
@@ -25,7 +26,8 @@ public sealed class LocalSessionTurnHostFactory
         Func<long>? clock = null,
         Func<SessionEntry, Task>? safePoint = null,
         Func<SessionEntry, ChatResult, Task>? automaticCompact = null,
-        Func<SessionEntry, Task>? retrySafePoint = null
+        Func<SessionEntry, Task>? retrySafePoint = null,
+        Func<SessionEntry, string?>? parentSessionResolver = null
     )
     {
         this.store = store;
@@ -36,6 +38,7 @@ public sealed class LocalSessionTurnHostFactory
         this.safePoint = safePoint;
         this.automaticCompact = automaticCompact;
         this.retrySafePoint = retrySafePoint;
+        this.parentSessionResolver = parentSessionResolver;
     }
 
     public LocalSessionTurnHost For(SessionEntry entry) =>
@@ -48,7 +51,8 @@ public sealed class LocalSessionTurnHostFactory
             clock,
             () => safePoint?.Invoke(entry) ?? Task.CompletedTask,
             result => automaticCompact?.Invoke(entry, result) ?? Task.CompletedTask,
-            () => retrySafePoint?.Invoke(entry) ?? safePoint?.Invoke(entry) ?? Task.CompletedTask
+            () => retrySafePoint?.Invoke(entry) ?? safePoint?.Invoke(entry) ?? Task.CompletedTask,
+            parentSessionResolver is null ? null : () => parentSessionResolver(entry)
         );
 }
 
@@ -67,7 +71,8 @@ public sealed class SessionRegistry
         ITurnToolExecutor? tools = null,
         int maxToolIterations = 500,
         Func<long>? clock = null,
-        Func<SessionSnapshot, Task<SessionSnapshot>>? migrateGoal = null
+        Func<SessionSnapshot, Task<SessionSnapshot>>? migrateGoal = null,
+        Func<SessionEntry, string?>? parentSessionResolver = null
     )
     {
         this.migrateGoal = migrateGoal;
@@ -85,7 +90,8 @@ public sealed class SessionRegistry
             entry =>
                 OnRetrySafePoint?.Invoke(entry)
                 ?? OnSafePoint?.Invoke(entry)
-                ?? entry.SaveLane.RemoveCompactWakeAsync(staleOnly: true)
+                ?? entry.SaveLane.RemoveCompactWakeAsync(staleOnly: true),
+            parentSessionResolver
         );
         runner = new SessionTurnRunner(this, hosts);
         ingress = new SessionIngress(this);

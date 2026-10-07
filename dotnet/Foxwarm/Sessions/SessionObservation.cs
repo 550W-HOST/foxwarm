@@ -197,8 +197,8 @@ internal sealed partial class SessionManager
                 throw new InvalidDataException(
                     "Isolated session cannot use session parent update tool."
                 );
-            var requestedTarget = OptionalString(args, "sessionId");
-            var targetId = string.IsNullOrWhiteSpace(requestedTarget) ? source.Id : requestedTarget;
+            var requestedTarget = OptionalSessionReference(args);
+            var targetId = requestedTarget ?? source.Id;
             if (!args.ContainsKey("parentSessionId"))
                 throw new InvalidDataException(
                     "parentSessionId is required for action=\"update-parent\" and must be a non-empty session ID or null."
@@ -213,7 +213,9 @@ internal sealed partial class SessionManager
                     );
                 requestedParent = SessionGoal.Trim(requestedParent);
             }
-            var change = ChangePresentation(catalog => catalog.SetParent(targetId, requestedParent));
+            var change = ChangePresentation(catalog =>
+                catalog.SetParent(targetId, requestedParent)
+            );
             return new JsonObject
             {
                 ["sessionId"] = change.Result["childSessionId"]?.DeepClone(),
@@ -260,17 +262,16 @@ internal sealed partial class SessionManager
             throw new InvalidDataException(
                 "session.action must be \"status\", \"list\", \"update-display-name\", or \"update-parent\"."
             );
-        var requestedStatusId = OptionalString(args, "sessionId");
-        requestedStatusId = string.IsNullOrWhiteSpace(requestedStatusId)
-            ? source.Id
-            : SessionGoal.Trim(requestedStatusId);
+        var requestedStatusId = OptionalSessionReference(args) ?? source.Id;
         if (AgentIsolated(source.Agent) && !IsCurrentSessionReference(source, requestedStatusId))
             throw new InvalidDataException(
                 "Isolated session can only use session status for its current session."
             );
-        var statusTarget = await GetExistingAsync(requestedStatusId);
+        var statusTarget = IsCurrentSessionReference(source, requestedStatusId)
+            ? source
+            : await GetExistingAsync(requestedStatusId);
         if (statusTarget is null)
-            return Output($"Session `{requestedStatusId}` not found.");
+            throw new InvalidDataException($"Session `{requestedStatusId}` not found.");
         var currentCwd = statusTarget.Entry.WithState(state =>
             SessionWait.Text(state.AuthorityEnvelope["cwd"])
         );
@@ -315,6 +316,14 @@ internal sealed partial class SessionManager
             && aliases.OfType<JsonNode>().Select(SessionCatalog.Text).Contains(requested);
     }
 
+    private static string? OptionalSessionReference(JsonObject args)
+    {
+        if (args["sessionId"] is not JsonValue value || !value.TryGetValue<string>(out var raw))
+            return null;
+        var trimmed = SessionGoal.Trim(raw);
+        return trimmed.Length == 0 ? null : trimmed;
+    }
+
     private (long Total, JsonObject[] Page) CatalogMetadataOffset(
         int start,
         int count,
@@ -325,8 +334,8 @@ internal sealed partial class SessionManager
         var local = LocalProjections();
         var persistedLocal = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
         foreach (var chunk in local.Select(row => SessionCatalog.Text(row["id"])!).Chunk(200))
-            foreach (var row in Catalog.GetMany(chunk))
-                persistedLocal[SessionCatalog.Text(row["id"])!] = row;
+        foreach (var row in Catalog.GetMany(chunk))
+            persistedLocal[SessionCatalog.Text(row["id"])!] = row;
         bool Scope(JsonObject row) =>
             (agent is null || SessionCatalog.Text(row["agent"]) == agent)
             && (parent is null || SessionCatalog.Text(row["parentSessionId"]) == parent);

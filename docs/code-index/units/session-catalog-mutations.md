@@ -17,7 +17,7 @@ Callers: `SessionManager` lifecycle/identity/deletion methods, `SessionObservati
 
 ## Contract and side effects
 
-This unit cannot reconstruct active history, authorize a Session mutation, or bypass the exact owner. Its SQLite writes update the Main projection only. Presentation changes can race a semantic JSON save; the catalog mutation's transaction and `PublishAuthority` overlay rules determine which Main-owned fields remain visible, while the authority store remains the source for semantic fields. Parent presentation changes synchronize any live owner’s cached parent field before state-change notification so routing and status do not retain an older hot parent shadow.
+This unit cannot reconstruct active history, authorize a Session mutation, or bypass the exact owner. Its SQLite writes update the Main projection only. Presentation changes can race a semantic JSON save; the catalog mutation's transaction and `PublishAuthority` overlay rules determine which Main-owned fields remain visible, while the authority store remains the source for semantic fields. Parent presentation changes synchronize any live owner’s cached parent field before state-change notification. Routing and turn-reminder consumers read the catalog-overlay metadata resolver rather than treating that cache as a second parent authority, so a concurrent presentation update cannot leave those supported paths using an older hot parent shadow.
 
 ## Tests
 

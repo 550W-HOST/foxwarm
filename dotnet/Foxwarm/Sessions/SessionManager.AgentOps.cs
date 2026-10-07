@@ -282,14 +282,12 @@ internal sealed partial class SessionManager
             throw new InvalidDataException("A Session cannot send to itself.");
         if (!accepting)
             throw new InvalidOperationException("Host is shutting down.");
+        var sourceParent = source.Metadata().ParentSessionId;
+        var targetParent = target.Metadata().ParentSessionId;
         var relation =
             taskNotification is not null ? null
-            : source.Entry.Snapshot().AuthorityEnvelope["parentSessionId"]?.GetValue<string>()
-            == target.Id
-                ? "direct-child"
-            : target.Entry.Snapshot().AuthorityEnvelope["parentSessionId"]?.GetValue<string>()
-            == source.Id
-                ? "parent"
+            : sourceParent == target.Id ? "direct-child"
+            : targetParent == source.Id ? "parent"
             : "other";
         var now = DateTimeOffset.Now;
         var offset = now.ToString("zzz", CultureInfo.InvariantCulture)

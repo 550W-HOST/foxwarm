@@ -15,6 +15,7 @@ public sealed partial class LocalSessionTurnHost
     private readonly ITurnToolExecutor tools;
     private readonly int maxToolIterations;
     private readonly Func<long> clock;
+    private readonly Func<string?>? parentSessionResolver;
     private int releaseCommits;
     private readonly Func<Task>? safePoint;
     private readonly Func<ChatResult, Task>? automaticCompact;
@@ -29,7 +30,8 @@ public sealed partial class LocalSessionTurnHost
         Func<long>? clock = null,
         Func<Task>? safePoint = null,
         Func<ChatResult, Task>? automaticCompact = null,
-        Func<Task>? retrySafePoint = null
+        Func<Task>? retrySafePoint = null,
+        Func<string?>? parentSessionResolver = null
     )
     {
         this.entry = entry;
@@ -41,6 +43,7 @@ public sealed partial class LocalSessionTurnHost
                 ? maxToolIterations
                 : throw new ArgumentOutOfRangeException(nameof(maxToolIterations));
         this.clock = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        this.parentSessionResolver = parentSessionResolver;
         this.safePoint = safePoint;
         this.automaticCompact = automaticCompact;
         this.retrySafePoint = retrySafePoint;
@@ -144,9 +147,7 @@ public sealed partial class LocalSessionTurnHost
                         );
                         if (!hasLeadingQueue && noAction)
                             await entry.SaveLane.ResolveChildHandoffAsync().ConfigureAwait(false);
-                        var parent = entry.WithState(state =>
-                            SessionWait.Text(state.AuthorityEnvelope["parentSessionId"])
-                        );
+                        var parent = ParentSessionId();
                         if (
                             !hasLeadingQueue
                             && parent is not null
@@ -186,9 +187,7 @@ public sealed partial class LocalSessionTurnHost
 
                     if (tools is SessionToolExecutor receiptTools)
                     {
-                        var parent = SessionWait.Text(
-                            entry.Snapshot().AuthorityEnvelope["parentSessionId"]
-                        );
+                        var parent = ParentSessionId();
                         var validReceipt = receiptTools
                             .ConsumeReceipts()
                             .Any(receipt =>
@@ -248,6 +247,10 @@ public sealed partial class LocalSessionTurnHost
                 requestCts.Dispose();
         }
     }
+
+    private string? ParentSessionId() =>
+        parentSessionResolver?.Invoke()
+        ?? entry.WithState(state => SessionWait.Text(state.AuthorityEnvelope["parentSessionId"]));
 
     private async Task<bool> PrepareRetryAsync(CancellationToken token)
     {

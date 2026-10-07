@@ -266,8 +266,8 @@ internal sealed partial class SessionManager
     {
         var all = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
         foreach (var chunk in ids.Distinct(StringComparer.Ordinal).Chunk(200))
-            foreach (var row in Catalog.GetMany(chunk))
-                all[SessionCatalog.Text(row["id"])!] = row;
+        foreach (var row in Catalog.GetMany(chunk))
+            all[SessionCatalog.Text(row["id"])!] = row;
         var current = LocalProjections();
         var currentMain = new Dictionary<string, JsonObject>(all, StringComparer.Ordinal);
         if (includeLocal)
@@ -277,8 +277,8 @@ internal sealed partial class SessionManager
                     .Where(id => !currentMain.ContainsKey(id))
                     .Chunk(200)
             )
-                foreach (var row in Catalog.GetMany(chunk))
-                    currentMain[SessionCatalog.Text(row["id"])!] = row;
+            foreach (var row in Catalog.GetMany(chunk))
+                currentMain[SessionCatalog.Text(row["id"])!] = row;
         foreach (var local in current)
         {
             var id = SessionCatalog.Text(local["id"])!;

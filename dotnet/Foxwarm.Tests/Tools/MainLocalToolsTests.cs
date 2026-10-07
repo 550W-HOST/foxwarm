@@ -856,22 +856,33 @@ public sealed class MainLocalToolsTests
             {
                 ["source"] = "builtin",
                 ["name"] = "session",
-                ["args"] = new JsonObject
-                {
-                    ["action"] = "status",
-                    ["sessionId"] = target.Id,
-                },
+                ["args"] = new JsonObject { ["action"] = "status", ["sessionId"] = target.Id },
             }
         );
         Assert.True(Error(unified) is null, unified.ToJsonString());
         Assert.Contains($"session id: `{target.Id}`", unified["output"]!.GetValue<string>());
 
+        var previousSourceId = f.Owner.Id;
+        await f.Manager.MoveIdentityAsync(
+            f.Owner,
+            new JsonObject { ["newSessionId"] = "tools-renamed" }
+        );
+        var aliasStatus = await f.Call(
+            "session",
+            new JsonObject { ["action"] = "status", ["sessionId"] = $"  {previousSourceId}  " }
+        );
+        Assert.True(Error(aliasStatus) is null, aliasStatus.ToJsonString());
+        Assert.Contains($"session id: `{f.Owner.Id}`", aliasStatus["output"]!.GetValue<string>());
+
         var missing = await f.Call(
             "session",
             new JsonObject { ["action"] = "status", ["sessionId"] = "missing-target" }
         );
-        Assert.Null(Error(missing));
-        Assert.Contains("Session `missing-target` not found.", missing["output"]!.GetValue<string>());
+        Assert.Equal("agent_tool_error", Error(missing));
+        Assert.Contains(
+            "Session `missing-target` not found.",
+            missing["error"]!["message"]!.GetValue<string>()
+        );
         Assert.Equal(before, f.Manager.Owners().Count());
     }
 
@@ -887,17 +898,23 @@ public sealed class MainLocalToolsTests
             new JsonObject
             {
                 ["action"] = "update-parent",
-                ["sessionId"] = child.Id,
-                ["parentSessionId"] = parent.Id,
+                ["sessionId"] = $"  {child.Id}  ",
+                ["parentSessionId"] = $"  {parent.Id}  ",
             }
         );
         Assert.True(Error(attached) is null, attached.ToJsonString());
         Assert.Equal(child.Id, attached["sessionId"]!.GetValue<string>());
         Assert.Equal(parent.Id, attached["parentSessionId"]!.GetValue<string>());
         Assert.Null(attached["previousParentSessionId"]);
-        Assert.Equal(parent.Id, f.Manager.Catalog.Get(child.Id)!["parentSessionId"]!.GetValue<string>());
+        Assert.Equal(
+            parent.Id,
+            f.Manager.Catalog.Get(child.Id)!["parentSessionId"]!.GetValue<string>()
+        );
         Assert.Equal(parent.Id, child.Metadata().ParentSessionId);
-        Assert.Equal(parent.Id, child.Entry.Snapshot().AuthorityEnvelope["parentSessionId"]!.GetValue<string>());
+        Assert.Equal(
+            parent.Id,
+            child.Entry.Snapshot().AuthorityEnvelope["parentSessionId"]!.GetValue<string>()
+        );
         await f.Manager.SendAsync(parent, child.Id, "routing probe", trigger: false);
         Assert.Equal("parent", child.Entry.Snapshot().Queue[^1].SourceSessionRelation);
 
@@ -951,6 +968,195 @@ public sealed class MainLocalToolsTests
         );
         Assert.Equal("agent_tool_error", Error(cycle));
         Assert.Contains("cycle", cycle["error"]!["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Real_model_turn_qualifies_targeted_status_parent_attach_routing_restart_and_detach()
+    {
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        var work = Path.Combine(temp.Path, "work");
+        var finalResponseSent = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        await using var peer = new ScriptedResponsesSequenceServer(
+            3,
+            async (index, stream, _) =>
+            {
+                var output = index switch
+                {
+                    0 => new JsonArray(
+                        FunctionCall(
+                            "status-target",
+                            "session",
+                            new JsonObject { ["action"] = "status", ["sessionId"] = "  target  " }
+                        )
+                    ),
+                    1 => new JsonArray(
+                        FunctionCall(
+                            "attach-child",
+                            "session",
+                            new JsonObject
+                            {
+                                ["action"] = "update-parent",
+                                ["sessionId"] = "  child  ",
+                                ["parentSessionId"] = "  parent  ",
+                            }
+                        )
+                    ),
+                    _ => new JsonArray(new JsonObject { ["type"] = "text", ["text"] = "done" }),
+                };
+                var payload = new JsonObject
+                {
+                    ["type"] = "response.completed",
+                    ["response"] = new JsonObject
+                    {
+                        ["id"] = $"response-{index}",
+                        ["output"] = output,
+                    },
+                };
+                await LoopbackResponsesServer.WriteResponseAsync(
+                    stream,
+                    200,
+                    "text/event-stream",
+                    Encoding.UTF8.GetBytes("data: " + payload.ToJsonString() + "\n\n")
+                );
+                if (index == 2)
+                    finalResponseSent.TrySetResult(true);
+            }
+        );
+        var options = new ResponsesClientOptions(peer.BaseUri, "wire", "wire", "", "", 20000);
+        var models = HostModels.Parse(
+            JsonNode
+                .Parse(
+                    $"{{\"default\":\"a\",\"providers\":{{\"a\":{{\"providerType\":\"openai-responses\",\"baseUrl\":\"{peer.BaseUri}\",\"models\":[\"wire\"]}},\"b\":{{\"providerType\":\"openai-responses\",\"baseUrl\":\"{peer.BaseUri}\",\"models\":[\"wire-b\"]}}}}}}"
+                )!
+                .AsObject(),
+            new JsonObject()
+        );
+        await using var manager = new SessionManager(data, work, options, models);
+        await manager.LoadMainHostAsync();
+        var source = await manager.CreateNamedAsync(
+            "main",
+            "source",
+            null,
+            new JsonObject { ["modelId"] = "a" }
+        );
+        var target = await manager.CreateNamedAsync(
+            "main",
+            "target",
+            null,
+            new JsonObject { ["modelId"] = "b" }
+        );
+        var parent = await manager.CreateNamedAsync("main", "parent", null, null);
+        var child = await manager.CreateNamedAsync("main", "child", null, null);
+        await manager.CreateChildAsync(target, "recent", null, null, null, null, false);
+        source.Entry.WithState(state =>
+        {
+            state.AuthorityEnvelope["cwd"] = "/source/cwd";
+            state.AuthorityEnvelope["persistentMemorySnapshot"] = "source memory";
+            state.History.Add(
+                new JsonObject
+                {
+                    ["role"] = "user",
+                    ["parts"] = new JsonArray(new JsonObject { ["text"] = "source history" }),
+                    ["__meta"] = new JsonObject { ["seq"] = 1L, ["timestamp"] = 1L },
+                }
+            );
+            state.NextMessageSeq = 2;
+            state.Meta["messageCount"] = state.History.Count;
+        });
+        target.Entry.WithState(state =>
+        {
+            state.AuthorityEnvelope["cwd"] = "/target/cwd";
+            state.AuthorityEnvelope["persistentMemorySnapshot"] = new string('x', 4000);
+            state.History.Add(
+                new JsonObject
+                {
+                    ["role"] = "user",
+                    ["parts"] = new JsonArray(new JsonObject { ["text"] = "target history" }),
+                    ["__meta"] = new JsonObject { ["seq"] = 1L, ["timestamp"] = 1L },
+                }
+            );
+            state.NextMessageSeq = 2;
+            state.Meta["messageCount"] = state.History.Count;
+        });
+        var sourceEstimate = source.ContextSummary().Estimate;
+        var targetEstimate = target.ContextSummary().Estimate;
+        Assert.NotEqual(sourceEstimate, targetEstimate);
+
+        await source.Registry.Ingress.EnqueueAsync(source.Id, QueueItem.UserText("inspect"));
+        CapturedHttpRequest firstRequest;
+        try
+        {
+            firstRequest = await peer.RequestAt(0).WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (TimeoutException error)
+        {
+            throw new InvalidOperationException(
+                "The scripted model did not receive the initial turn: "
+                    + System.Text.Json.JsonSerializer.Serialize(source.State()),
+                error
+            );
+        }
+        Assert.Contains("inspect", firstRequest.Body);
+        var statusRequest = await peer.RequestAt(1).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Contains("/target/cwd", statusRequest.Body);
+        Assert.Contains($"token estimate: ~{targetEstimate}", statusRequest.Body);
+        Assert.Contains("Recent child sessions", statusRequest.Body);
+
+        var attachRequest = await peer.RequestAt(2).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Contains(parent.Id, attachRequest.Body);
+        Assert.Contains(child.Id, attachRequest.Body);
+
+        await using var coldAttached = new SessionManager(data, work, options, models);
+        await coldAttached.LoadAsync();
+        Assert.Equal(
+            parent.Id,
+            coldAttached.Catalog.Get(child.Id)!["parentSessionId"]!.GetValue<string>()
+        );
+        Assert.Equal(
+            parent.Id,
+            (await coldAttached.RequiredAsync(child.Id)).Metadata().ParentSessionId
+        );
+
+        var routing = await manager.SendAsync(parent, child.Id, "attached routing", trigger: false);
+        Assert.Equal(child.Id, routing);
+        Assert.True(
+            child.Entry.Snapshot().Queue[^1].SourceSessionRelation == "parent",
+            $"relation={child.Entry.Snapshot().Queue[^1].SourceSessionRelation}; childParent={child.Metadata().ParentSessionId}; source={parent.Id}"
+        );
+
+        await finalResponseSent.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await source.DrainForegroundAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(
+            parent.Id,
+            manager.Catalog.Get(child.Id)!["parentSessionId"]!.GetValue<string>()
+        );
+        var calls = source
+            .History()
+            .SelectMany(row => (row["parts"] as JsonArray ?? []).OfType<JsonObject>())
+            .SelectMany(part => new[] { part["functionCall"], part["functionResponse"] })
+            .OfType<JsonObject>()
+            .ToArray();
+        Assert.Contains(calls, call => SessionWait.Text(call["name"]) == "session");
+        Assert.Contains(source.History(), row => row["role"]?.GetValue<string>() == "tool");
+
+        Assert.Equal("b", coldAttached.Catalog.Get(target.Id)!["model"]!.GetValue<string>());
+
+        var detached = await manager.ExecuteAgentToolAsync(
+            source,
+            "session",
+            new JsonObject
+            {
+                ["action"] = "update-parent",
+                ["sessionId"] = child.Id,
+                ["parentSessionId"] = null,
+            }
+        );
+        Assert.Null(detached.Response["error"]);
+        Assert.Null(manager.Catalog.Get(child.Id)!["parentSessionId"]);
     }
 
     [Fact]

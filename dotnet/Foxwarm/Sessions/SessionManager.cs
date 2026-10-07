@@ -517,7 +517,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 this,
                 tools
             ),
-            migrateGoal: MigrateGoalSnapshotAsync
+            migrateGoal: MigrateGoalSnapshotAsync,
+            parentSessionResolver: _ => hosted.Metadata().ParentSessionId
         );
         hosted.Registry = registry;
         hosted.Compactor = new SessionCompactor(
