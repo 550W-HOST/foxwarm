@@ -1,6 +1,6 @@
 export type SessionLinkSegment =
   | { type: 'text'; text: string }
-  | { type: 'session-link'; text: string; sessionId: string; kind: 'sessionId' | 'session' | 'child-created' | 'inter-agent-source' | 'session-field' }
+  | { type: 'session-link'; text: string; sessionId: string; kind: 'sessionId' | 'session' | 'child-created' | 'session-field' }
 
 type SessionLinkMatch = {
   start: number
@@ -69,7 +69,6 @@ const getSessionFieldLinkMatches = (text: string): SessionLinkMatch[] => {
   SESSION_FIELD_PATTERN.lastIndex = 0
 
   while ((match = SESSION_FIELD_PATTERN.exec(text)) !== null) {
-    const fieldName = match[1]
     const sessionId = match[2] ?? match[3] ?? match[4] ?? match[5] ?? ''
     if (!isLinkableSessionId(sessionId)) continue
     if (match[5] !== undefined && ['null', 'undefined', 'true', 'false'].includes(sessionId)) continue
@@ -79,7 +78,7 @@ const getSessionFieldLinkMatches = (text: string): SessionLinkMatch[] => {
       end: valueStart + sessionId.length,
       text: text.slice(match.index, valueStart),
       sessionId,
-      kind: fieldName === 'sourceSessionId' ? 'inter-agent-source' : 'session-field',
+      kind: 'session-field',
     })
   }
 

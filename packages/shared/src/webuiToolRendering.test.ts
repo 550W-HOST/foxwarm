@@ -22,20 +22,20 @@ test('parseSessionLinkText links recognized Session fields in metadata attribute
   const canonical = parseSessionLinkText('<foxwarm-message type="inter-agent" sourceSessionId="agent/child" source="parent">\nbody')
   assert.deepEqual(canonical, [
     { type: 'text', text: '<foxwarm-message type="inter-agent" ' },
-    { type: 'session-link', text: 'sourceSessionId="', sessionId: 'agent/child', kind: 'inter-agent-source' },
+    { type: 'session-link', text: 'sourceSessionId="', sessionId: 'agent/child', kind: 'session-field' },
     { type: 'text', text: '" source="parent">\nbody' },
   ])
 
   const reordered = parseSessionLinkText('before <foxwarm-message sourceSessionId="agent/child" type="inter-agent"> after')
   assert.deepEqual(reordered, [
     { type: 'text', text: 'before <foxwarm-message ' },
-    { type: 'session-link', text: 'sourceSessionId="', sessionId: 'agent/child', kind: 'inter-agent-source' },
+    { type: 'session-link', text: 'sourceSessionId="', sessionId: 'agent/child', kind: 'session-field' },
     { type: 'text', text: '" type="inter-agent"> after' },
   ])
 
   assert.deepEqual(parseSessionLinkText('<foxwarm-message type="channel" sourceSessionId="agent/child">'), [
     { type: 'text', text: '<foxwarm-message type="channel" ' },
-    { type: 'session-link', text: 'sourceSessionId="', sessionId: 'agent/child', kind: 'inter-agent-source' },
+    { type: 'session-link', text: 'sourceSessionId="', sessionId: 'agent/child', kind: 'session-field' },
     { type: 'text', text: '">' },
   ])
   assert.deepEqual(parseSessionLinkText('<foxwarm-message type="task" createdBySessionId="creator/main" ownerSessionId="worker/main" previousOwnerSessionId="old/main" attachedSessionId="worker/main">'), [
@@ -52,13 +52,13 @@ test('parseSessionLinkText links recognized Session fields in metadata attribute
 
   assert.deepEqual(parseSessionLinkText('<other sourceSessionId="agent/child">'), [
     { type: 'text', text: '<other ' },
-    { type: 'session-link', text: 'sourceSessionId="', sessionId: 'agent/child', kind: 'inter-agent-source' },
+    { type: 'session-link', text: 'sourceSessionId="', sessionId: 'agent/child', kind: 'session-field' },
     { type: 'text', text: '">' },
   ])
 
   assert.deepEqual(parseSessionLinkText('From sourceSessionId="agent/child" without a message wrapper.'), [
     { type: 'text', text: 'From ' },
-    { type: 'session-link', text: 'sourceSessionId="', sessionId: 'agent/child', kind: 'inter-agent-source' },
+    { type: 'session-link', text: 'sourceSessionId="', sessionId: 'agent/child', kind: 'session-field' },
     { type: 'text', text: '" without a message wrapper.' },
   ])
 
