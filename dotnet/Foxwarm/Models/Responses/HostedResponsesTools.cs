@@ -8,7 +8,8 @@ namespace Foxwarm.Models;
 internal sealed record GeneratedImageNormalization(
     Dictionary<int, JsonObject> Parts,
     IReadOnlyList<string> Failures,
-    int SuccessfulCount
+    int SuccessfulCount,
+    IReadOnlyDictionary<string, byte[]> ReplayBytes
 );
 
 internal static class HostedResponsesTools
@@ -77,6 +78,7 @@ internal static class HostedResponsesTools
         var usedIds = new HashSet<string>(StringComparer.Ordinal);
         var usedBytes = 0;
         var success = 0;
+        var replayBytes = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         for (var index = 0; index < output.Count; index++)
         {
             if (output[index] is not JsonObject item || !IsGeneratedImage(item))
@@ -148,13 +150,18 @@ internal static class HostedResponsesTools
                 };
                 usedBytes += bytes.Length;
                 success++;
+                replayBytes[imageId] = bytes;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception error)
             {
                 failures.Add(imageId + ": " + error.Message);
             }
         }
-        return new(parts, failures, success);
+        return new(parts, failures, success, replayBytes);
     }
 
     internal static JsonObject BuildReplayItem(JsonObject metadata, byte[] bytes)
@@ -169,16 +176,36 @@ internal static class HostedResponsesTools
         return replay;
     }
 
-    internal static string Guidance(JsonObject part) =>
-        "[assistant-generated image is available locally as "
-        + (Text(part["imageMeta"]?["imageId"]) ?? "an image reference")
-        + "; use image_crop or image_write_to_file if needed]";
+    internal static string Guidance(JsonObject part)
+    {
+        var metadata = part["imageMeta"] as JsonObject;
+        var reference = part["inlineDataRef"] as JsonObject;
+        var imageId = Text(metadata?["imageId"]) ?? Text(reference?["imageId"]) ?? "image";
+        var width = Number(metadata?["width"] ?? reference?["width"]) ?? "?";
+        var height = Number(metadata?["height"] ?? reference?["height"]) ?? "?";
+        var mime = Text(metadata?["mimeType"]) ?? Text(reference?["mimeType"]);
+        var extension = mime switch
+        {
+            "image/jpeg" => "jpg",
+            "image/png" or "image/webp" or "image/gif" => mime[6..],
+            _ => "png",
+        };
+        var fileName = new string(
+            imageId
+                .Select(character =>
+                    char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-'
+                        ? character
+                        : '_'
+                )
+                .ToArray()
+        );
+        return $"[IMAGE: id={imageId}, size={width}x{height}] you can use image_crop({{ id: \"{imageId}\", x: 0, y: 0, width: 100, height: 100 }}) and image_write_to_file({{ id: \"{imageId}\", filePath: \"artifacts/{fileName}.{extension}\" }})";
+    }
 
     internal static string Placeholder(JsonObject part) =>
         "[an assistant-generated image is present earlier in this conversation; "
-        + "the current model does not receive its image content. Local image reference "
-        + (Text(part["imageMeta"]?["imageId"]) ?? "is available for crop or save.")
-        + "]";
+        + "the current model does not receive its image content]\n"
+        + Guidance(part);
 
     internal static string FailureNote(IReadOnlyList<string> failures)
     {
@@ -193,7 +220,7 @@ internal static class HostedResponsesTools
             if (item[key] is JsonNode value)
                 result[key] =
                     key == "revised_prompt"
-                        ? JsonValue.Create(Text(value)?.Trim())
+                        ? JsonValue.Create(BoundedText(Text(value)))
                         : value.DeepClone();
         result["type"] = "image_generation_call";
         return result;
@@ -203,7 +230,17 @@ internal static class HostedResponsesTools
     {
         var safe = new string(
             (callId ?? "")
-                .Where(character => char.IsLetterOrDigit(character) || character is '_' or '-')
+                .Where(character =>
+                    character
+                        is >= 'A'
+                            and <= 'Z'
+                            or >= 'a'
+                            and <= 'z'
+                            or >= '0'
+                            and <= '9'
+                            or '_'
+                            or '-'
+                )
                 .ToArray()
         );
         return safe.Length > 0 ? "ig_" + safe : "ig_image" + (index + 1);
@@ -211,13 +248,8 @@ internal static class HostedResponsesTools
 
     private static byte[] DecodeBase64(string value, int maxBytes)
     {
-        var compact = new string(value.Where(character => !char.IsWhiteSpace(character)).ToArray());
-        if (
-            compact.Length == 0
-            || compact.Any(character =>
-                !(char.IsLetterOrDigit(character) || character is '+' or '/' or '=')
-            )
-        )
+        var compact = new string(value.Where(character => !IsEcmaWhitespace(character)).ToArray());
+        if (compact.Length == 0 || compact.Any(character => !IsBase64Ascii(character)))
             throw new InvalidDataException("image result contained invalid base64.");
         var firstPadding = compact.IndexOf('=');
         if (firstPadding >= 0 && compact[firstPadding..].Any(character => character != '='))
@@ -225,6 +257,9 @@ internal static class HostedResponsesTools
         var padding = compact.Length - compact.TrimEnd('=').Length;
         if (padding > 2 || compact.Length % 4 == 1 || padding > 0 && compact.Length % 4 != 0)
             throw new InvalidDataException("image result contained inconsistent base64 padding.");
+        var estimatedBytes = (compact.Length - padding) * 3 / 4;
+        if (estimatedBytes > maxBytes)
+            throw new InvalidDataException("image result exceeded the decoded byte limit.");
         var padded = compact + new string('=', (4 - compact.Length % 4) % 4);
         var bytes = Convert.FromBase64String(padded);
         if (bytes.Length == 0 || bytes.Length > maxBytes)
@@ -235,15 +270,39 @@ internal static class HostedResponsesTools
     }
 
     private static string? DetectMime(byte[] bytes) =>
-        bytes is [0x89, 0x50, 0x4E, 0x47, ..] ? "image/png"
+        bytes.Length >= 8
+        && bytes[0] == 0x89
+        && bytes[1] == 0x50
+        && bytes[2] == 0x4E
+        && bytes[3] == 0x47
+        && bytes[4] == 0x0D
+        && bytes[5] == 0x0A
+        && bytes[6] == 0x1A
+        && bytes[7] == 0x0A
+            ? "image/png"
         : bytes.Length >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF
             ? "image/jpeg"
         : bytes.Length >= 12
         && Encoding.ASCII.GetString(bytes, 0, 4) == "RIFF"
         && Encoding.ASCII.GetString(bytes, 8, 4) == "WEBP"
             ? "image/webp"
-        : bytes.Length >= 4 && Encoding.ASCII.GetString(bytes, 0, 4) == "GIF8" ? "image/gif"
+        : bytes.Length >= 6 && Encoding.ASCII.GetString(bytes, 0, 6) is "GIF87a" or "GIF89a"
+            ? "image/gif"
         : null;
+
+    private static string? BoundedText(string? value)
+    {
+        var trimmed = value?.Trim();
+        return string.IsNullOrEmpty(trimmed) ? null
+            : trimmed.Length > 2000 ? trimmed[..2000]
+            : trimmed;
+    }
+
+    private static bool IsEcmaWhitespace(char value) =>
+        value is '\t' or '\n' or '\f' or '\r' or ' ';
+
+    private static bool IsBase64Ascii(char value) =>
+        value is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '+' or '/' or '=';
 
     private static string? DeclaredMime(string? format) =>
         format switch
@@ -257,4 +316,9 @@ internal static class HostedResponsesTools
 
     private static string? Text(JsonNode? node) =>
         node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+
+    private static string? Number(JsonNode? node) =>
+        node is JsonValue value && value.TryGetValue<double>(out var number)
+            ? number.ToString("0", System.Globalization.CultureInfo.InvariantCulture)
+            : null;
 }

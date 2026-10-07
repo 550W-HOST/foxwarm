@@ -29,6 +29,7 @@ internal static class ConfiguredModelRequests
                 "Image generation requires the OpenAI Responses protocol."
             );
         var featurePurpose = purpose is "compact-plan" or "background" or "setup-test";
+        var imageDeclared = imageEnabled && !featurePurpose;
         if (responses)
         {
             if (
@@ -40,7 +41,7 @@ internal static class ConfiguredModelRequests
                     "Responses keepReasoningOnError recovery is not implemented."
                 );
             var extra = model.Configuration["extraFields"] as JsonObject;
-            if (imageEnabled && extra?["tools"] is JsonArray)
+            if (imageDeclared && extra?["tools"] is JsonArray)
                 throw new InvalidDataException(
                     "imageGeneration cannot replace extraFields.tools; configure hosted tools with imageGeneration."
                 );
@@ -55,7 +56,7 @@ internal static class ConfiguredModelRequests
                 );
             if (
                 extra?["tool_choice"] is JsonObject choice
-                && !imageEnabled
+                && !imageDeclared
                 && SessionWait.Text(choice["type"]) == "image_generation"
             )
                 throw new InvalidDataException(

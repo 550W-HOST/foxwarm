@@ -27,10 +27,20 @@ public sealed record ResponsesToolCallProgress(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Arguments
 );
 
+public sealed record ResponsesStreamPart(
+    int OutputIndex,
+    string Kind,
+    int? ContentIndex = null,
+    int? SummaryIndex = null,
+    string? Text = null,
+    string? Status = null
+);
+
 public sealed record ResponsesStreamProgress(
     string Reasoning,
     string Text,
-    IReadOnlyList<ResponsesToolCallProgress> ToolCalls
+    IReadOnlyList<ResponsesToolCallProgress> ToolCalls,
+    IReadOnlyList<ResponsesStreamPart>? Parts = null
 );
 
 public sealed class ResponsesStreamCallbacks
@@ -124,7 +134,10 @@ public sealed class ResponsesEventAccumulator
                 {
                     callbacks?.OnMeaningfulProgress?.Invoke();
                     EnsureOutputItem(outputIndex.Value, lifecycleItem);
-                    if (String(lifecycleItem, "type") == "image_generation_call")
+                    if (
+                        type == "response.output_item.added"
+                        && String(lifecycleItem, "type") == "image_generation_call"
+                    )
                         callbacks?.OnImageGenerationActivity?.Invoke();
                     EmitProgress();
                 }
@@ -134,17 +147,31 @@ public sealed class ResponsesEventAccumulator
             case "response.image_generation_call.completed":
             case "response.image_generation_call.partial_image":
                 callbacks?.OnImageGenerationActivity?.Invoke();
-                if (outputIndex is not null)
-                    EnsureOutputItem(
-                        outputIndex.Value,
-                        new JsonObject
-                        {
-                            ["type"] = "image_generation_call",
-                            ["status"] = type is "response.image_generation_call.completed"
-                                ? "completed"
-                                : "in_progress",
-                        }
-                    );
+                if (
+                    outputIndex is not null
+                    && outputItems.TryGetValue(outputIndex.Value, out var imageItem)
+                    && String(imageItem, "type") == "image_generation_call"
+                )
+                {
+                    var previousStatus = String(imageItem, "status");
+                    var status =
+                        type == "response.image_generation_call.completed"
+                        || previousStatus == "completed"
+                            ? "completed"
+                            : "in_progress";
+                    if (status != previousStatus)
+                    {
+                        EnsureOutputItem(
+                            outputIndex.Value,
+                            new JsonObject
+                            {
+                                ["type"] = "image_generation_call",
+                                ["status"] = status,
+                            }
+                        );
+                        EmitProgress();
+                    }
+                }
                 return;
             case "response.content_part.added":
             case "response.content_part.done":
@@ -450,7 +477,27 @@ public sealed class ResponsesEventAccumulator
                 String(x.Value, "arguments")
             ))
             .ToList();
-        return new ResponsesStreamProgress(reasoning, text, calls.AsReadOnly());
+        var parts = outputItems
+            .OrderBy(x => x.Key)
+            .Select(x =>
+            {
+                var item = x.Value;
+                var kind = String(item, "type") switch
+                {
+                    "image_generation_call" => "image-generation",
+                    "function_call" => "tool-call",
+                    "reasoning" => "reasoning",
+                    "message" => "message",
+                    _ => null,
+                };
+                return kind is null
+                    ? null
+                    : new ResponsesStreamPart(x.Key, kind, Status: String(item, "status"));
+            })
+            .OfType<ResponsesStreamPart>()
+            .ToList()
+            .AsReadOnly();
+        return new ResponsesStreamProgress(reasoning, text, calls.AsReadOnly(), parts);
     }
 
     private void EmitProgress() => callbacks?.OnProgress?.Invoke(BuildProgress());

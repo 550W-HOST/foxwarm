@@ -17,7 +17,8 @@ internal sealed partial class ImageBlobStore
         IReadOnlyList<JsonObject> history,
         string protocol,
         string outputFormat = "webp",
-        CancellationToken token = default
+        CancellationToken token = default,
+        string? concreteModelId = null
     )
     {
         var result = new List<JsonObject>();
@@ -31,6 +32,16 @@ internal sealed partial class ImageBlobStore
                 var reference = part["inlineDataRef"] as JsonObject;
                 var inline = part["inlineData"] as JsonObject;
                 if (reference is null && inline is null)
+                    continue;
+                var generatedSourceModel = SessionWait.Text(
+                    part["providerMeta"]?["openaiResponses"]?["sourceModelId"]
+                );
+                if (
+                    SessionWait.Text(part["imageMeta"]?["origin"]) == "generated"
+                    && generatedSourceModel is not null
+                    && concreteModelId is not null
+                    && generatedSourceModel != concreteModelId
+                )
                     continue;
                 var mime = Mime(reference ?? inline!);
                 byte[] bytes;

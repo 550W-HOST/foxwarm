@@ -28,7 +28,15 @@ internal static class AnthropicRequestSerializer
                     && SessionWait.Text(part["toolUseId"]) is { Length: > 0 }
                 )
                     continue;
-                if (SessionWait.Text(part["imageMeta"]?["origin"]) != "generated")
+                if (SessionWait.Text(part["imageMeta"]?["origin"]) == "generated")
+                    blocks.Add(
+                        new JsonObject
+                        {
+                            ["type"] = "text",
+                            ["text"] = HostedResponsesTools.Placeholder(part),
+                        }
+                    );
+                else
                     ProviderImageParts.AddOccurrence(blocks, part, "anthropic");
                 if (
                     CompletionsRequestSerializer.Truthy(part["thinking"])

@@ -125,7 +125,15 @@ internal static class CompletionsRequestSerializer
                     );
                 if (SessionWait.Text(part["text"]) is { Length: > 0 } text)
                     content.Add(new JsonObject { ["type"] = "text", ["text"] = text });
-                if (SessionWait.Text(part["imageMeta"]?["origin"]) != "generated")
+                if (SessionWait.Text(part["imageMeta"]?["origin"]) == "generated")
+                    content.Add(
+                        new JsonObject
+                        {
+                            ["type"] = "text",
+                            ["text"] = HostedResponsesTools.Placeholder(part),
+                        }
+                    );
+                else
                     ProviderImageParts.AddOccurrence(content, part, "completions");
                 if (part["functionCall"] is JsonObject call)
                 {

@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Foxwarm.Images;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
 
@@ -64,7 +65,8 @@ public static partial class ResponsesRequestSerializer
     internal static JsonArray ConvertHistoryWithImages(
         IReadOnlyList<JsonObject> history,
         string concreteModelId,
-        Foxwarm.Images.ImageBlobStore? images = null
+        Foxwarm.Images.ImageBlobStore? images = null,
+        IReadOnlyDictionary<string, byte[]>? replayBytes = null
     )
     {
         var input = new JsonArray();
@@ -150,7 +152,14 @@ public static partial class ResponsesRequestSerializer
                             throw new ModelPreparationException(
                                 "Generated image bytes are unavailable for native replay."
                             );
-                        var bytes = images.ReadAsync(reference).GetAwaiter().GetResult();
+                        var imageId = String(part["imageMeta"] as JsonObject, "imageId");
+                        var bytes =
+                            imageId is not null
+                            && replayBytes?.TryGetValue(imageId, out var replay) == true
+                                ? replay
+                            : part["inlineData"] is JsonObject inline
+                                ? ImageBlobStore.InlineBytes(inline)
+                            : images.ReadAsync(reference).GetAwaiter().GetResult();
                         Flush();
                         input.Add(HostedResponsesTools.BuildReplayItem(outputItem, bytes));
                         PrepareAssistant(part);
@@ -1014,8 +1023,10 @@ public sealed class ResponsesChatService : IChatService
                         && (item["content"] as JsonArray)
                             ?.OfType<JsonObject>()
                             .Any(content =>
-                                SessionWait.Text(content["text"]) is { Length: > 0 }
-                                || SessionWait.Text(content["refusal"]) is { Length: > 0 }
+                                SessionWait.Text(content["text"]) is string text
+                                    && OpenAIRequestText.Trim(text).Length > 0
+                                || SessionWait.Text(content["refusal"]) is string refusal
+                                    && OpenAIRequestText.Trim(refusal).Length > 0
                             ) == true
                 )
             );

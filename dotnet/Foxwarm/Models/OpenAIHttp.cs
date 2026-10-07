@@ -102,6 +102,9 @@ internal static class OpenAIHttp
             ?.OfType<JsonObject>()
             .Any(part =>
                 part["functionCall"] is not null
+                || part["inlineDataRef"] is JsonObject imageReference
+                    && Foxwarm.Sessions.SessionWait.Text(imageReference["mimeType"]) is string mime
+                    && mime.StartsWith("image/", StringComparison.Ordinal)
                 || Foxwarm.Sessions.SessionWait.Text(part["text"]) is string text
                     && OpenAIRequestText.Trim(text).Length > 0
             ) == true;

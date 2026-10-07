@@ -204,7 +204,8 @@ internal sealed class ModelRequestOwner(
                                 ? "responses"
                             : "anthropic",
                         outputFormat: imageOutputFormat,
-                        token: cancellationToken
+                        token: cancellationToken,
+                        concreteModelId: leaf.Key
                     );
                 }
                 catch (Foxwarm.Images.ImageInputException error)

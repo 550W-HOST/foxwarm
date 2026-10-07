@@ -133,9 +133,11 @@ internal sealed class ResponsesWsChatService(
                         return;
                     }
                     var prepared = ConcreteRequestHistory.Prepare(rows, options.ConcreteModelId);
-                    var replay = ResponsesRequestSerializer.ConvertHistory(
+                    var replay = ResponsesRequestSerializer.ConvertHistoryWithImages(
                         prepared,
-                        options.ConcreteModelId
+                        options.ConcreteModelId,
+                        options.Images,
+                        generated?.ReplayBytes
                     );
                     captured.Finalize(replay.Select(item => item?.DeepClone()).ToArray());
                 }
@@ -173,8 +175,10 @@ internal sealed class ResponsesWsChatService(
                         && (item["content"] as JsonArray)
                             ?.OfType<JsonObject>()
                             .Any(content =>
-                                SessionWait.Text(content["text"]) is { Length: > 0 }
-                                || SessionWait.Text(content["refusal"]) is { Length: > 0 }
+                                SessionWait.Text(content["text"]) is string text
+                                    && OpenAIRequestText.Trim(text).Length > 0
+                                || SessionWait.Text(content["refusal"]) is string refusal
+                                    && OpenAIRequestText.Trim(refusal).Length > 0
                             ) == true
                 )
             );

@@ -68,6 +68,8 @@ public sealed class HostedResponsesToolsTests
                 ["status"] = "completed",
                 ["output_format"] = "png",
                 ["result"] = Convert.ToBase64String(png),
+                ["id"] = "é/call_png-1",
+                ["revised_prompt"] = new string('x', 2105),
                 ["unexpected"] = "not-persisted",
             },
             new JsonObject
@@ -84,6 +86,13 @@ public sealed class HostedResponsesToolsTests
                 ["status"] = "completed",
                 ["output_format"] = "jpeg",
                 ["result"] = Convert.ToBase64String(png),
+            },
+            new JsonObject
+            {
+                ["type"] = "image_generation_call",
+                ["id"] = "unicode-space",
+                ["status"] = "completed",
+                ["result"] = Convert.ToBase64String(png).Insert(4, "\u00a0"),
             }
         );
         var normalized = await HostedResponsesTools.ExternalizeAsync(
@@ -93,12 +102,14 @@ public sealed class HostedResponsesToolsTests
             default
         );
         Assert.Equal(1, normalized.SuccessfulCount);
-        Assert.Equal(2, normalized.Failures.Count);
+        Assert.Equal(3, normalized.Failures.Count);
         var part = normalized.Parts[0];
         Assert.Equal("generated", part["imageMeta"]!["origin"]!.GetValue<string>());
+        Assert.Equal("ig_call_png-1", part["imageMeta"]!["imageId"]!.GetValue<string>());
         Assert.NotNull(part["inlineDataRef"]);
         var metadata = part["providerMeta"]!["openaiResponses"]!["outputItem"]!.AsObject();
         Assert.Null(metadata["unexpected"]);
+        Assert.Equal(2000, metadata["revised_prompt"]!.GetValue<string>().Length);
 
         var history = new[]
         {
@@ -117,6 +128,16 @@ public sealed class HostedResponsesToolsTests
             Convert.ToBase64String(png),
             Assert.IsAssignableFrom<JsonValue>(replayItem!["result"]).GetValue<string>()
         );
+        var crossModel = ResponsesRequestSerializer.ConvertHistoryWithImages(
+            history,
+            "openai/other",
+            store
+        );
+        Assert.DoesNotContain(
+            crossModel,
+            node => node?["type"]?.GetValue<string>() == "image_generation_call"
+        );
+        Assert.Contains(crossModel, node => node?["type"]?.GetValue<string>() == "message");
     }
 
     [Fact]
@@ -183,7 +204,8 @@ public sealed class HostedResponsesToolsTests
                 }
             ),
         };
-        using var http = new HttpClient(new SingleResponseHandler(response));
+        var handler = new SingleResponseHandler(response);
+        using var http = new HttpClient(handler);
         var options = new ResponsesClientOptions(
             new Uri("http://localhost/v1"),
             "wire",
@@ -195,12 +217,14 @@ public sealed class HostedResponsesToolsTests
         {
             ImageGeneration = new JsonObject { ["enabled"] = true },
             Images = store,
+            DisallowEmptyResponse = true,
         };
         var service = new ResponsesChatService(http, options);
         var result = await service.ChatAsync("session", [], default);
         var part = Assert.Single(result.AssistantMessage!["parts"]!.AsArray());
         Assert.Equal("generated", part!["imageMeta"]!["origin"]!.GetValue<string>());
         Assert.NotNull(part["inlineDataRef"]);
+        Assert.Equal(1, handler.Calls);
     }
 
     [Fact]
@@ -239,6 +263,169 @@ public sealed class HostedResponsesToolsTests
         Assert.False(error.Countable);
     }
 
+    [Fact]
+    public async Task Missing_generated_blob_fails_before_provider_send()
+    {
+        using var temp = new TempDirectory();
+        var handler = new SingleResponseHandler(new JsonObject { ["output"] = new JsonArray() });
+        using var http = new HttpClient(handler);
+        var options = new ResponsesClientOptions(
+            new Uri("http://localhost/v1"),
+            "wire",
+            "openai/wire",
+            "",
+            "system",
+            1000
+        )
+        {
+            Images = new ImageBlobStore(temp.Path),
+        };
+        var history = new[]
+        {
+            new JsonObject
+            {
+                ["role"] = "model",
+                ["parts"] = new JsonArray(
+                    new JsonObject
+                    {
+                        ["inlineDataRef"] = new JsonObject
+                        {
+                            ["blobId"] = new string('f', 64) + ".png",
+                            ["imageId"] = "missing-generated",
+                            ["mimeType"] = "image/png",
+                            ["byteLength"] = 95,
+                            ["sha256"] = new string('f', 64),
+                        },
+                        ["imageMeta"] = new JsonObject
+                        {
+                            ["imageId"] = "missing-generated",
+                            ["origin"] = "generated",
+                            ["mimeType"] = "image/png",
+                        },
+                        ["providerMeta"] = new JsonObject
+                        {
+                            ["openaiResponses"] = new JsonObject
+                            {
+                                ["sourceModelId"] = "openai/wire",
+                                ["outputItem"] = new JsonObject
+                                {
+                                    ["type"] = "image_generation_call",
+                                    ["id"] = "missing-generated",
+                                    ["status"] = "completed",
+                                },
+                            },
+                        },
+                    }
+                ),
+            },
+        };
+        await Assert.ThrowsAsync<ImageInputException>(() =>
+            new ResponsesChatService(http, options).ChatAsync("session", history, default)
+        );
+        Assert.Equal(0, handler.Calls);
+    }
+
+    [Fact]
+    public void Image_stream_status_progress_is_known_item_only_and_never_contains_preview_bytes()
+    {
+        var progress = new List<ResponsesStreamProgress>();
+        var accumulator = new ResponsesEventAccumulator(
+            new ResponsesStreamCallbacks { OnProgress = progress.Add }
+        );
+        accumulator.Consume(
+            new JsonObject
+            {
+                ["type"] = "response.output_item.added",
+                ["output_index"] = 2,
+                ["item"] = new JsonObject
+                {
+                    ["type"] = "image_generation_call",
+                    ["id"] = "image-2",
+                    ["status"] = "in_progress",
+                },
+            }
+        );
+        accumulator.Consume(
+            new JsonObject
+            {
+                ["type"] = "response.image_generation_call.partial_image",
+                ["output_index"] = 9,
+                ["partial_image_b64"] = "preview-must-not-escape",
+            }
+        );
+        accumulator.Consume(
+            new JsonObject
+            {
+                ["type"] = "response.image_generation_call.generating",
+                ["output_index"] = 2,
+            }
+        );
+        accumulator.Consume(
+            new JsonObject
+            {
+                ["type"] = "response.image_generation_call.completed",
+                ["output_index"] = 2,
+            }
+        );
+        var last = progress[^1];
+        var image = Assert.Single(last.Parts!, part => part.Kind == "image-generation");
+        Assert.Equal(2, image.OutputIndex);
+        Assert.Equal("completed", image.Status);
+        Assert.DoesNotContain(progress, update => update.Text.Contains("preview-must-not-escape"));
+    }
+
+    [Fact]
+    public async Task Foreign_generated_history_skips_blob_read_and_uses_local_id_guidance()
+    {
+        using var temp = new TempDirectory();
+        var store = new ImageBlobStore(temp.Path);
+        var part = new JsonObject
+        {
+            ["inlineDataRef"] = new JsonObject
+            {
+                ["blobId"] = new string('f', 64) + ".png",
+                ["imageId"] = "ig_foreign",
+                ["mimeType"] = "image/png",
+                ["byteLength"] = 1,
+                ["sha256"] = new string('f', 64),
+            },
+            ["imageMeta"] = new JsonObject
+            {
+                ["imageId"] = "ig_foreign",
+                ["origin"] = "generated",
+                ["mimeType"] = "image/png",
+            },
+            ["providerMeta"] = new JsonObject
+            {
+                ["openaiResponses"] = new JsonObject
+                {
+                    ["sourceModelId"] = "openai/source",
+                    ["outputItem"] = new JsonObject
+                    {
+                        ["type"] = "image_generation_call",
+                        ["id"] = "foreign",
+                        ["status"] = "completed",
+                    },
+                },
+            },
+        };
+        var hydrated = await store.HydrateAsync(
+            [new JsonObject { ["role"] = "model", ["parts"] = new JsonArray(part) }],
+            "completions",
+            concreteModelId: "completions/target"
+        );
+        Assert.Null(hydrated[0]["parts"]![0]!["inlineData"]);
+        var wire = CompletionsRequestSerializer.ConvertHistory(
+            hydrated,
+            "completions/target",
+            "reasoning_content"
+        );
+        Assert.Contains(
+            wire,
+            node => node?["content"]?.ToJsonString().Contains("ig_foreign") == true
+        );
+    }
+
     private sealed class TempDirectory : IDisposable
     {
         internal string Path { get; } =
@@ -258,11 +445,14 @@ public sealed class HostedResponsesToolsTests
 
     private sealed class SingleResponseHandler(JsonObject response) : HttpMessageHandler
     {
+        internal int Calls { get; private set; }
+
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken
         )
         {
+            Calls++;
             var body =
                 "data: "
                 + new JsonObject
