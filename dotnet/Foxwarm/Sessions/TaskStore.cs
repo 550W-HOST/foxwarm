@@ -1,0 +1,707 @@
+using System.Globalization;
+using System.Text.Json.Nodes;
+using Microsoft.Data.Sqlite;
+
+namespace Foxwarm.Sessions;
+
+internal sealed class TaskError(string code, string message, int statusCode = 400)
+    : Exception(message)
+{
+    internal string Code { get; } = code;
+    internal int StatusCode { get; } = statusCode;
+}
+
+internal sealed record TaskAssignmentPlan(int Revision, string? NewOwner, string? PreviousOwner);
+
+internal sealed record TaskStoreResult(
+    JsonObject Payload,
+    TaskAssignmentPlan? Assignment = null,
+    bool Completed = false
+);
+
+internal sealed class TaskStore : IDisposable
+{
+    private const int ListLimit = 50;
+    private const int ChildLimit = 20;
+    private const int NoteLimit = 10;
+    private readonly string path;
+    private readonly Func<string, string?> resolveAlias;
+    private readonly Func<string, IReadOnlyList<string>> aliases;
+    private readonly object gate = new();
+    private SqliteConnection? connection;
+
+    internal TaskStore(
+        string root,
+        Func<string, string?> resolveAlias,
+        Func<string, IReadOnlyList<string>> aliases
+    )
+    {
+        path = Path.Combine(root, "state", "tasks.sqlite");
+        this.resolveAlias = resolveAlias;
+        this.aliases = aliases;
+    }
+
+    internal TaskStoreResult Execute(JsonObject args, string? actor, int? httpLimit = null)
+    {
+        Validate(args, httpLimit);
+        lock (gate)
+        {
+            var db = Open();
+            var read = Text(args["action"]) is "list" or "get";
+            db.Open();
+            if (read)
+            {
+                using var tx = db.BeginTransaction(System.Data.IsolationLevel.Serializable);
+                try
+                {
+                    var result = ExecuteTransaction(db, args, actor, httpLimit ?? ListLimit);
+                    tx.Commit();
+                    return result;
+                }
+                catch
+                {
+                    try
+                    {
+                        tx.Rollback();
+                    }
+                    catch { }
+                    throw;
+                }
+                finally
+                {
+                    db.Close();
+                }
+            }
+            db.ExecuteNonQuery("BEGIN IMMEDIATE");
+            try
+            {
+                var result = ExecuteTransaction(db, args, actor, httpLimit ?? ListLimit);
+                db.ExecuteNonQuery("COMMIT");
+                return result;
+            }
+            catch
+            {
+                try
+                {
+                    db.ExecuteNonQuery("ROLLBACK");
+                }
+                catch { }
+                throw;
+            }
+            finally
+            {
+                db.Close();
+            }
+        }
+    }
+
+    internal string? DefaultActor(JsonObject args)
+    {
+        var id = Text(args["taskId"]);
+        if (id is null)
+            return null;
+        lock (gate)
+        {
+            var db = Open();
+            db.Open();
+            try
+            {
+                var row = Read(db, id);
+                return row is null
+                    ? null
+                    : Text(row["ownerSessionId"]) ?? Text(row["createdBySessionId"]);
+            }
+            finally
+            {
+                db.Close();
+            }
+        }
+    }
+
+    internal void MarkNotification(string taskId, string field, string status, int? revision = null)
+    {
+        lock (gate)
+        {
+            var db = Open();
+            db.Open();
+            using var tx = db.BeginTransaction();
+            db.ExecuteNonQuery("BEGIN IMMEDIATE");
+            try
+            {
+                var sql =
+                    $"UPDATE tasks SET {field}=$status WHERE id=$id AND {field}='pending'"
+                    + (revision is null ? "" : " AND assignmentRevision=$revision");
+                using var cmd = db.CreateCommand();
+                cmd.CommandText = sql;
+                cmd.Parameters.AddWithValue("$status", status);
+                cmd.Parameters.AddWithValue("$id", taskId);
+                if (revision is not null)
+                    cmd.Parameters.AddWithValue("$revision", revision.Value);
+                cmd.ExecuteNonQuery();
+                tx.Commit();
+            }
+            catch
+            {
+                try
+                {
+                    tx.Rollback();
+                }
+                catch { }
+                throw;
+            }
+            finally
+            {
+                db.Close();
+            }
+        }
+    }
+
+    private TaskStoreResult ExecuteTransaction(
+        SqliteConnection db,
+        JsonObject args,
+        string? actor,
+        int limit
+    )
+    {
+        var action = Text(args["action"])!;
+        if (action == "list")
+        {
+            var status = Text(args["status"]);
+            var where = status is null ? "status IN ('open','active')" : "status=$status";
+            var rows = Query(
+                db,
+                $"SELECT * FROM tasks WHERE {where} ORDER BY updatedAt DESC,id LIMIT $limit",
+                status,
+                Math.Min(ListLimit, Math.Max(1, limit))
+            );
+            var total = ScalarInt(db, $"SELECT COUNT(*) FROM tasks WHERE {where}", status);
+            return new(
+                TaskJson(
+                    new JsonObject
+                    {
+                        ["tasks"] = new JsonArray(rows.ToArray()),
+                        ["total"] = total,
+                        ["omitted"] = total - rows.Count,
+                    }
+                )
+            );
+        }
+        var taskId = Text(args["taskId"]);
+        if (action == "create")
+        {
+            var parent = Text(args["parentTaskId"]);
+            if (parent is not null && !Exists(db, parent))
+                throw new TaskError("TASK_NOT_FOUND", $"Task {parent} not found.", 404);
+            var id = "task_" + Guid.NewGuid().ToString("N");
+            var now = Now();
+            using var cmd = db.CreateCommand();
+            cmd.CommandText =
+                "INSERT INTO tasks(id,title,description,status,parentTaskId,createdBySessionId,createdAt,updatedAt) VALUES($id,$title,$description,'open',$parent,$creator,$now,$now)";
+            Add(cmd, "$id", id);
+            Add(cmd, "$title", Text(args["title"])!);
+            Add(cmd, "$description", Text(args["description"]));
+            Add(cmd, "$parent", parent);
+            Add(cmd, "$creator", Canonical(actor!));
+            Add(cmd, "$now", now);
+            cmd.ExecuteNonQuery();
+            return new(TaskJson(new JsonObject { ["task"] = Public(db, id) }));
+        }
+        if (taskId is null)
+            throw new TaskError("TASK_INVALID_ARGS", $"task {action} requires a non-empty taskId.");
+        var task =
+            Read(db, taskId)
+            ?? throw new TaskError("TASK_NOT_FOUND", $"Task {taskId} not found.", 404);
+        if (action == "get")
+            return new(TaskJson(Details(db, task["id"]!.GetValue<string>())));
+        var state =
+            $"status={Text(task["status"])}, owner={Text(task["ownerSessionId"]) ?? "unclaimed"}";
+        if (Text(task["status"]) is "completed" or "cancelled")
+            throw new TaskError(
+                "TASK_TERMINAL",
+                $"Task {taskId} is terminal ({state}); {action} is not allowed.",
+                409
+            );
+        actor = Canonical(
+            actor ?? throw new TaskError("TASK_INVALID_ARGS", "task requires a current Session.")
+        );
+        var owner = Text(task["ownerSessionId"]);
+        var creator = Canonical(Text(task["createdBySessionId"])!);
+        TaskAssignmentPlan? plan = null;
+        var completed = false;
+        var now2 = Now();
+        if (action == "claim")
+        {
+            if (owner is not null && owner != actor)
+                throw new TaskError(
+                    "TASK_OWNED",
+                    $"Task {taskId} is already claimed by another Session ({state}).",
+                    409
+                );
+            if (owner is null)
+                Update(
+                    db,
+                    taskId,
+                    "ownerSessionId",
+                    actor,
+                    "status",
+                    "active",
+                    "updatedAt",
+                    now2,
+                    "reminderLastSeq",
+                    null,
+                    "reminderMessageCount",
+                    0
+                );
+        }
+        else
+        {
+            var permitted = action is "assign" or "cancel"
+                ? actor == creator || actor == owner
+                : actor == (owner ?? creator);
+            if (!permitted)
+                throw new TaskError(
+                    "TASK_FORBIDDEN",
+                    $"Session {actor} cannot {action} task {taskId} ({state}).",
+                    403
+                );
+            switch (action)
+            {
+                case "assign":
+                    var requestedRaw = Text(args["ownerSessionId"]);
+                    var requested =
+                        args.ContainsKey("ownerSessionId") && args["ownerSessionId"] is null
+                            ? null
+                            : Canonical(requestedRaw!);
+                    var changed = owner != requested;
+                    var revision = Int(task["assignmentRevision"]) + (changed ? 1 : 0);
+                    var previous = changed ? owner : Text(task["previousOwnerSessionId"]);
+                    var notifyNew =
+                        args["notifySession"]?.GetValue<bool>() == true
+                        && requested is not null
+                        && (!Text(task["assignmentNotificationStatus"]).IsIn("failed", "sent"));
+                    var notifyPrevious =
+                        args["notifySession"]?.GetValue<bool>() == true
+                        && previous is not null
+                        && previous != requested
+                        && (changed || Text(task["previousOwnerNotificationStatus"]) == "failed");
+                    Update(
+                        db,
+                        taskId,
+                        "ownerSessionId",
+                        requested,
+                        "status",
+                        requested is null ? "open" : "active",
+                        "updatedAt",
+                        now2,
+                        "assignmentRevision",
+                        revision,
+                        "previousOwnerSessionId",
+                        previous,
+                        "assignmentNotificationStatus",
+                        notifyNew ? "pending" : Text(task["assignmentNotificationStatus"]),
+                        "previousOwnerNotificationStatus",
+                        notifyPrevious ? "pending" : Text(task["previousOwnerNotificationStatus"])
+                    );
+                    plan = new(
+                        revision,
+                        notifyNew ? requested : null,
+                        notifyPrevious ? previous : null
+                    );
+                    break;
+                case "update":
+                    Update(
+                        db,
+                        taskId,
+                        "description",
+                        Text(args["description"]) ?? Text(task["description"]),
+                        "status",
+                        Text(args["status"]) ?? Text(task["status"]),
+                        "updatedAt",
+                        now2
+                    );
+                    if (args["note"] is not null)
+                        AddNote(db, taskId, actor, Text(args["note"])!, now2);
+                    break;
+                case "complete":
+                    Update(
+                        db,
+                        taskId,
+                        "status",
+                        "completed",
+                        "result",
+                        Text(args["result"]),
+                        "completedAt",
+                        now2,
+                        "updatedAt",
+                        now2,
+                        "completionNotificationStatus",
+                        "pending"
+                    );
+                    completed = true;
+                    break;
+                case "cancel":
+                    Update(
+                        db,
+                        taskId,
+                        "status",
+                        "cancelled",
+                        "cancelledAt",
+                        now2,
+                        "updatedAt",
+                        now2
+                    );
+                    if (args["reason"] is not null)
+                        AddNote(db, taskId, actor, Text(args["reason"])!, now2);
+                    break;
+            }
+        }
+        var payload = new JsonObject { ["task"] = Public(db, taskId) };
+        if (plan is not null)
+            payload["assignmentNotificationStatus"] = "pending";
+        return new(TaskJson(payload), plan, completed);
+    }
+
+    private JsonObject Details(SqliteConnection db, string id)
+    {
+        var task = Public(db, id);
+        var children = Query(
+            db,
+            "SELECT id,title,status,ownerSessionId FROM tasks WHERE parentTaskId=$id ORDER BY createdAt,id LIMIT 20",
+            null,
+            20,
+            id
+        );
+        var childCount = ScalarInt(
+            db,
+            "SELECT COUNT(*) FROM tasks WHERE parentTaskId=$id",
+            null,
+            id
+        );
+        var notes = Query(
+            db,
+            "SELECT sessionId,text,createdAt FROM task_notes WHERE taskId=$id ORDER BY id DESC LIMIT 10",
+            null,
+            10,
+            id
+        );
+        notes.Reverse();
+        var noteCount = ScalarInt(db, "SELECT COUNT(*) FROM task_notes WHERE taskId=$id", null, id);
+        return new JsonObject
+        {
+            ["task"] = task,
+            ["children"] = new JsonArray(children.ToArray()),
+            ["childrenOmitted"] = childCount - children.Count,
+            ["notes"] = new JsonArray(notes.ToArray()),
+            ["notesOmitted"] = noteCount - notes.Count,
+        };
+    }
+
+    private JsonObject Public(SqliteConnection db, string id)
+    {
+        var row =
+            Read(db, id) ?? throw new TaskError("TASK_NOT_FOUND", $"Task {id} not found.", 404);
+        foreach (
+            var key in new[]
+            {
+                "legacyGoalSessionId",
+                "reminderLastSeq",
+                "reminderMessageCount",
+                "assignmentRevision",
+            }
+        )
+            row.Remove(key);
+        foreach (var key in row.Select(x => x.Key).ToArray())
+            if (key is "description" && row[key]?.GetValue<string>() is { Length: > 4000 } text)
+                row[key] = text[..3999] + "…";
+        return row;
+    }
+
+    private JsonObject? Read(SqliteConnection db, string id)
+    {
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = "SELECT * FROM tasks WHERE id=$id";
+        Add(cmd, "$id", id);
+        using var reader = cmd.ExecuteReader();
+        return reader.Read() ? Row(reader) : null;
+    }
+
+    private static JsonObject Row(SqliteDataReader reader)
+    {
+        var row = new JsonObject();
+        for (var i = 0; i < reader.FieldCount; i++)
+            row[reader.GetName(i)] = reader.IsDBNull(i)
+                ? null
+                : JsonValue.Create(reader.GetValue(i));
+        return row;
+    }
+
+    private static JsonObject TaskJson(JsonObject value) => value;
+
+    private bool Exists(SqliteConnection db, string id) => Read(db, id) is not null;
+
+    private List<JsonObject> Query(
+        SqliteConnection db,
+        string sql,
+        string? status,
+        int limit,
+        string? id = null
+    )
+    {
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = sql;
+        if (status is not null)
+            Add(cmd, "$status", status);
+        Add(cmd, "$limit", limit);
+        if (id is not null)
+            Add(cmd, "$id", id);
+        using var r = cmd.ExecuteReader();
+        var result = new List<JsonObject>();
+        while (r.Read())
+            result.Add(Row(r));
+        return result;
+    }
+
+    private int ScalarInt(SqliteConnection db, string sql, string? status, string? id = null)
+    {
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = sql;
+        if (status is not null)
+            Add(cmd, "$status", status);
+        if (id is not null)
+            Add(cmd, "$id", id);
+        return Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+    }
+
+    private void AddNote(
+        SqliteConnection db,
+        string taskId,
+        string sessionId,
+        string text,
+        long now
+    )
+    {
+        using var cmd = db.CreateCommand();
+        cmd.CommandText =
+            "INSERT INTO task_notes(taskId,sessionId,text,createdAt) VALUES($task,$session,$text,$now)";
+        Add(cmd, "$task", taskId);
+        Add(cmd, "$session", sessionId);
+        Add(cmd, "$text", text);
+        Add(cmd, "$now", now);
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void Update(SqliteConnection db, string id, params object?[] values)
+    {
+        using var cmd = db.CreateCommand();
+        var sets = new List<string>();
+        for (var i = 0; i < values.Length; i += 2)
+        {
+            var key = (string)values[i]!;
+            sets.Add($"{key}=$p{i}");
+            Add(cmd, $"$p{i}", values[i + 1]);
+        }
+        sets.Add("id=id");
+        cmd.CommandText = $"UPDATE tasks SET {string.Join(',', sets)} WHERE id=$id";
+        Add(cmd, "$id", id);
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void Add(SqliteCommand cmd, string name, object? value) =>
+        cmd.Parameters.AddWithValue(name, value ?? DBNull.Value);
+
+    private string Canonical(string id) => resolveAlias(id) ?? id;
+
+    private IReadOnlyList<string> References(string id) =>
+        new[] { Canonical(id) }
+            .Concat(aliases(Canonical(id)))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+    private static long Now() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+    private static string? Text(JsonNode? node) =>
+        node is JsonValue v && v.TryGetValue<string>(out var text) ? text : null;
+
+    private static int Int(JsonNode? node) =>
+        node is JsonValue v && v.TryGetValue<int>(out var value) ? value : 0;
+
+    private SqliteConnection Open()
+    {
+        if (connection is null)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            connection = new SqliteConnection($"Data Source={path};Cache=Shared");
+            connection.Open();
+            Initialize(connection);
+            connection.Close();
+        }
+        return connection;
+    }
+
+    private static void Initialize(SqliteConnection db)
+    {
+        db.ExecuteNonQuery(
+            "PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY,title TEXT NOT NULL,description TEXT,status TEXT NOT NULL CHECK(status IN ('open','active','completed','cancelled')),parentTaskId TEXT REFERENCES tasks(id),createdBySessionId TEXT NOT NULL,ownerSessionId TEXT,result TEXT,createdAt INTEGER NOT NULL,updatedAt INTEGER NOT NULL,completedAt INTEGER,cancelledAt INTEGER,completionNotificationStatus TEXT,assignmentNotificationStatus TEXT,previousOwnerSessionId TEXT,previousOwnerNotificationStatus TEXT,assignmentRevision INTEGER NOT NULL DEFAULT 0,attachedSessionId TEXT,legacyGoalSessionId TEXT,reminderLastSeq INTEGER,reminderMessageCount INTEGER NOT NULL DEFAULT 0); CREATE INDEX IF NOT EXISTS tasks_status ON tasks(status,updatedAt); CREATE INDEX IF NOT EXISTS tasks_parent ON tasks(parentTaskId,createdAt); CREATE INDEX IF NOT EXISTS tasks_self_owned ON tasks(createdBySessionId,ownerSessionId,status,createdAt,id); CREATE TABLE IF NOT EXISTS task_notes(id INTEGER PRIMARY KEY,taskId TEXT NOT NULL REFERENCES tasks(id),sessionId TEXT NOT NULL,text TEXT NOT NULL,createdAt INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS task_notes_task ON task_notes(taskId,id); CREATE UNIQUE INDEX IF NOT EXISTS tasks_legacy_goal ON tasks(legacyGoalSessionId);"
+        );
+        foreach (
+            var column in new[]
+            {
+                ("completionNotificationStatus", "TEXT"),
+                ("assignmentNotificationStatus", "TEXT"),
+                ("previousOwnerSessionId", "TEXT"),
+                ("previousOwnerNotificationStatus", "TEXT"),
+                ("assignmentRevision", "INTEGER NOT NULL DEFAULT 0"),
+                ("attachedSessionId", "TEXT"),
+                ("legacyGoalSessionId", "TEXT"),
+                ("reminderLastSeq", "INTEGER"),
+                ("reminderMessageCount", "INTEGER NOT NULL DEFAULT 0"),
+            }
+        )
+        {
+            using var cmd = db.CreateCommand();
+            cmd.CommandText = "PRAGMA table_info(tasks)";
+            using var r = cmd.ExecuteReader();
+            var found = false;
+            while (r.Read())
+                if (r.GetString(1) == column.Item1)
+                    found = true;
+            if (!found)
+                db.ExecuteNonQuery($"ALTER TABLE tasks ADD COLUMN {column.Item1} {column.Item2}");
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (gate)
+        {
+            connection?.Dispose();
+            connection = null;
+        }
+    }
+
+    private static void Validate(JsonObject args, int? httpLimit)
+    {
+        var action = Text(args["action"]);
+        if (
+            action
+            is not (
+                "create"
+                or "list"
+                or "get"
+                or "claim"
+                or "assign"
+                or "update"
+                or "complete"
+                or "cancel"
+            )
+        )
+            throw new TaskError(
+                "TASK_INVALID_ARGS",
+                "task action must be one of: create, list, get, claim, assign, update, complete, cancel."
+            );
+        foreach (var key in args.Select(x => x.Key))
+            if (key != "action" && !Allowed(action!, key))
+                throw new TaskError(
+                    "TASK_INVALID_ARGS",
+                    $"{key} is not allowed for task {action}."
+                );
+        Limit(args, "title", 200);
+        Limit(args, "description", 4000);
+        Limit(args, "result", 4000);
+        Limit(args, "reason", 1000);
+        Limit(args, "note", 1000);
+        Limit(args, "taskId", 128);
+        Limit(args, "parentTaskId", 128);
+        Limit(args, "ownerSessionId", 256);
+        if (args.ContainsKey("status"))
+        {
+            var allowedStatuses =
+                action == "update"
+                    ? new[] { "open", "active" }
+                    : new[] { "open", "active", "completed", "cancelled" };
+            if (!allowedStatuses.Contains(Text(args["status"]), StringComparer.Ordinal))
+                throw new TaskError(
+                    "TASK_INVALID_ARGS",
+                    $"status for task {action} must be one of: {string.Join(", ", allowedStatuses)}."
+                );
+        }
+        if (
+            args.ContainsKey("parentTaskId")
+            && string.IsNullOrWhiteSpace(Text(args["parentTaskId"]))
+        )
+            throw new TaskError("TASK_INVALID_ARGS", "parentTaskId must be non-empty.");
+        if (args.ContainsKey("note") && string.IsNullOrWhiteSpace(Text(args["note"])))
+            throw new TaskError("TASK_INVALID_ARGS", "note must be non-empty.");
+        if (action == "create" && string.IsNullOrWhiteSpace(Text(args["title"])))
+            throw new TaskError("TASK_INVALID_ARGS", "task create requires a non-empty title.");
+        if (
+            action is not "create" and not "list"
+            && string.IsNullOrWhiteSpace(Text(args["taskId"]))
+        )
+            throw new TaskError("TASK_INVALID_ARGS", $"task {action} requires a non-empty taskId.");
+        if (
+            args.ContainsKey("ownerSessionId")
+            && args["ownerSessionId"] is not null
+            && string.IsNullOrWhiteSpace(Text(args["ownerSessionId"]))
+        )
+            throw new TaskError(
+                "TASK_INVALID_ARGS",
+                "task assign requires an existing ownerSessionId or null."
+            );
+        if (args["notifySession"] is JsonValue notify && !notify.TryGetValue<bool>(out _))
+            throw new TaskError("TASK_INVALID_ARGS", "notifySession must be a boolean.");
+        if (
+            action == "update"
+            && !args.ContainsKey("description")
+            && !args.ContainsKey("note")
+            && !args.ContainsKey("status")
+        )
+            throw new TaskError(
+                "TASK_INVALID_ARGS",
+                "task update requires description, note, or status."
+            );
+        if (httpLimit is not null && (httpLimit < 1 || httpLimit > 50))
+            throw new TaskError("TASK_INVALID_ARGS", "limit must be an integer from 1 to 50.");
+    }
+
+    private static bool Allowed(string action, string key) =>
+        action switch
+        {
+            "create" => key is "title" or "description" or "parentTaskId",
+            "list" => key is "status",
+            "get" or "claim" => key is "taskId",
+            "assign" => key is "taskId" or "ownerSessionId" or "notifySession",
+            "update" => key is "taskId" or "description" or "note" or "status",
+            "complete" => key is "taskId" or "result",
+            "cancel" => key is "taskId" or "reason",
+            _ => false,
+        };
+
+    private static void Limit(JsonObject args, string key, int max)
+    {
+        if (!args.ContainsKey(key))
+            return;
+        var value = Text(args[key]);
+        if (value is null || value.Length > max)
+            throw new TaskError(
+                "TASK_INVALID_ARGS",
+                $"{key} must be a string of at most {max} characters."
+            );
+    }
+}
+
+internal static class TaskJsonExtensions
+{
+    internal static bool IsIn(this string? value, params string[] values) =>
+        value is not null && values.Contains(value, StringComparer.Ordinal);
+}
+
+internal static class SqliteTaskExtensions
+{
+    internal static void ExecuteNonQuery(this SqliteConnection db, string sql)
+    {
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
+    }
+}

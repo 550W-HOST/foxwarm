@@ -194,6 +194,7 @@ internal sealed partial class WebUIChannel(
         RegisterRelationRoutes(app);
         RegisterDeleteRoute(app);
         RegisterHistoryRoutes(app);
+        RegisterTaskRoutes(app);
         RegisterUploadAndImageRoutes(app);
         RegisterFileRoutes(app);
         app.MapPost(

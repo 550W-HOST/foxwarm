@@ -10,6 +10,7 @@ export type WorkbenchTab =
   | (WorkbenchTabBase & { type: 'agents' })
   | (WorkbenchTabBase & { type: 'search' })
   | (WorkbenchTabBase & { type: 'setup' })
+  | (WorkbenchTabBase & { type: 'tasks' })
 
 export type WorkbenchPaneNode = {
   id: string

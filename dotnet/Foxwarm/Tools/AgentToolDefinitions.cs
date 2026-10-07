@@ -66,6 +66,58 @@ internal static class AgentToolDefinitions
             ["parameters"] = parameters,
         };
 
+    private static JsonObject TaskDefinition() =>
+        Tool(
+            "task",
+            "Create and track a small task shared by Foxwarm Sessions. Use one action at a time to create, list, inspect, claim, update, complete, or cancel a task. The current Session is recorded automatically; do not provide another Session identity.",
+            Parameters(
+                new JsonObject
+                {
+                    ["action"] = Choice(
+                        "Task operation to perform.",
+                        "create",
+                        "list",
+                        "get",
+                        "claim",
+                        "assign",
+                        "update",
+                        "complete",
+                        "cancel"
+                    ),
+                    ["title"] = String("Task title. Required when action is create."),
+                    ["description"] = String(
+                        "Short problem or scope description for a new task, or replacement description when updating."
+                    ),
+                    ["parentTaskId"] = String(
+                        "Existing parent task ID for a simple child task. Set only when creating."
+                    ),
+                    ["taskId"] = String(
+                        "Existing task ID. Required for get, claim, update, complete, and cancel."
+                    ),
+                    ["status"] = Choice(
+                        "For list, filter by task status. For update, set only open or active.",
+                        "open",
+                        "active",
+                        "completed",
+                        "cancelled"
+                    ),
+                    ["note"] = String("Short progress note to append when updating a task."),
+                    ["result"] = String("Short completion summary for a completed task."),
+                    ["notifySession"] = Boolean(
+                        "When true, send task notifications after the assignment is committed: notify the new owner, and notify the previous owner when ownership changes or is released."
+                    ),
+                    ["ownerSessionId"] = new JsonObject
+                    {
+                        ["type"] = new JsonArray("string", "null"),
+                        ["description"] =
+                            "Existing Session ID to receive the task, or null to release the current owner.",
+                    },
+                    ["reason"] = String("Short reason for cancelling a task."),
+                },
+                "action"
+            )
+        );
+
     public static IReadOnlyList<JsonObject> Definitions() =>
         [
             Tool(
@@ -209,5 +261,6 @@ internal static class AgentToolDefinitions
                 "Refresh this session's prompt snapshot from its memory files. Later model requests use the refreshed snapshot; an in-flight request keeps the snapshot it already selected.",
                 Parameters(new JsonObject())
             ),
+            TaskDefinition(),
         ];
 }

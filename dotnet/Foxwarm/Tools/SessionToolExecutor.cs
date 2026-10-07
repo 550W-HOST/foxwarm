@@ -439,6 +439,8 @@ internal sealed partial class SessionToolExecutor(
                     "submit_compact_plan is available only to the dedicated compactor."
                 )
             );
+        handlers["task"] = async (owner, args, _) =>
+            await owner.Manager.Tasks.ExecuteForToolAsync(owner.Hosted, args);
         foreach (
             var name in new[]
             {

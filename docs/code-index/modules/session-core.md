@@ -26,6 +26,7 @@ Canonical image references in live history, queues, archives, and forks are owne
 - [src-session-misc](../units/src-session-misc.md) — archive append helpers, relations, message visibility, snapshot refresh, and child reminders.
 - [src-managed-sessions](../units/src-managed-sessions.md) — exclusive leases, inbox interception, step execution, and controller wakeup.
 - [src-session-goal](../units/src-session-goal.md) — long-horizon goal persistence and bounded reminders.
+- C# `Sessions/TaskStore.cs` and `Sessions/TaskService.cs` — Main-local lazy task SQLite authority, strict action transitions, bounded projections, canonical Session-ID references, and post-commit notification delivery. Deferred Goal/child/reminder consumers remain outside Phase 7A.
 
 Active history transformation, compaction, archive-store, and vector retrieval are owned by [session context](./session-context.md).
 

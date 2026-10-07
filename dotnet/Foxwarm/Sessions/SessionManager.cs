@@ -29,6 +29,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private readonly Foxwarm.McpClient mcp;
     private readonly ModelRouting modelRouting = new();
     internal LlmRequestJournalStore Journal { get; }
+    internal TaskService Tasks { get; }
     private readonly ResponsesWsTransport websockets = new();
     private readonly ToolRegistry tools;
     internal Foxwarm.ToolScript.MainToolScript ToolScript { get; }
@@ -78,6 +79,11 @@ internal sealed partial class SessionManager : IAsyncDisposable
         deletionChannels = new(this.root);
         archiveIdentities = new(this.root);
         Catalog = new SessionCatalog(this.root);
+        Tasks = new TaskService(
+            this,
+            this.root,
+            id => SessionCatalog.Text(Catalog.Resolve(id)["sessionId"])
+        );
         Catalog.Changed += () => TopologyChanged?.Invoke();
         Catalog.BeforePresentationMutation = BeginCatalogMutation;
         Catalog.BeforeAuthorityProjection = id =>
@@ -494,6 +500,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         await mcp.DisposeAsync();
         await websockets.DisposeAsync();
         Journal.Dispose();
+        Tasks.Dispose();
         admissionStop.Dispose();
         Catalog.Dispose();
         http.Dispose();

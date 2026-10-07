@@ -1,4 +1,4 @@
-import { History, Workflow } from 'lucide-react'
+import { ClipboardList, History, Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { BoundedSessionListPresentationProps, Session } from './SessionListCore'
 import type { SessionIdleNotificationMode } from '../sessionIdleNotifications'
@@ -19,6 +19,7 @@ interface SessionListProps {
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
   onSelectSearch?: () => void
+  onSelectTasks?: () => void
   onSelectSetup: () => void
   codePath: string
   codeNodeId: string
@@ -50,6 +51,7 @@ export default function SessionList({
   onKeepSession,
   onSelectArchitecture,
   onSelectSearch,
+  onSelectTasks,
   onSelectSetup,
   codePath,
   codeNodeId,
@@ -96,6 +98,7 @@ export default function SessionList({
             <span>Agents</span>
           </button>
           {onSelectSearch && <button type="button" onClick={onSelectSearch} title="Search history" aria-label="Search history" className="inline-flex items-center justify-center rounded-lg bg-fw-neutral-surface px-3 py-2 text-fw-text hover:bg-fw-hover"><History className="h-4 w-4" /></button>}
+          {onSelectTasks && <button type="button" onClick={onSelectTasks} title="Tasks" aria-label="Tasks" className="inline-flex items-center justify-center rounded-lg bg-fw-neutral-surface px-3 py-2 text-fw-text hover:bg-fw-hover"><ClipboardList className="h-4 w-4" /></button>}
           <AgentCreationMenu
             agents={agents}
             currentAgent={currentSessionRecord?.agent}
