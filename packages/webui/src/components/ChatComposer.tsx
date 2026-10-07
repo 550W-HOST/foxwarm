@@ -72,7 +72,7 @@ interface ChatComposerProps {
   onChangeChildModel: (model: string | null) => Promise<void>
   onChangeEffort: (effort: string | null) => Promise<void>
   onChangeChildEffort: (effort: string | null) => Promise<void>
-  onRefreshModels: () => Promise<void>
+  onRefreshModels: () => void
   onOpenModelSettings: () => void
   sendKeyMode?: 'modEnter' | 'enter'
   onHeightChange?: (height: number) => void
@@ -274,7 +274,7 @@ function ModelSelector({
   onChangeChildModel: (model: string | null) => Promise<void>
   onChangeEffort: (effort: string | null) => Promise<void>
   onChangeChildEffort: (effort: string | null) => Promise<void>
-  onRefreshModels: () => Promise<void>
+  onRefreshModels: () => void
   onOpenModelSettings: () => void
 }) {
   const [open, setOpen] = useState(false)
@@ -375,9 +375,8 @@ function ModelSelector({
     filterComposingRef.current = false
     setActiveScope('current')
     updatePopupPosition()
-    void onRefreshModels()
     setOpen(true)
-  }, [onRefreshModels, open, updatePopupPosition])
+  }, [open, updatePopupPosition])
 
   useLayoutEffect(() => {
     if (open) updatePopupPosition()

@@ -21,7 +21,7 @@ import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
 import { buildReferencedAttachmentParts } from '../attachmentRefs'
 import { postReferencedMessage, toLegacyUploadedFiles, uploadReferencedFiles } from '../attachmentSend'
 import { formatSessionHeaderSubtitle } from '../sessionHeader'
-import { createLatestRequestGate, loadPageOnce, runLatestModelOptionsRequest } from '../modelOptionsLoader'
+import { createLatestRequestGate, loadPageOnce, MODEL_OPTIONS_CHANGED_EVENT, refreshModelOptions, runLatestModelOptionsRequest } from '../modelOptionsLoader'
 import { webUiRealtime } from '../realtime'
 import SessionUiSettingsMenu from './SessionUiSettingsMenu'
 import {
@@ -404,8 +404,13 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   }, [])
 
   useEffect(() => {
+    const handleModelsChanged = () => { void fetchModels() }
+    window.addEventListener(MODEL_OPTIONS_CHANGED_EVENT, handleModelsChanged)
     void fetchModels()
-    return () => modelRequestGateRef.current.invalidate()
+    return () => {
+      window.removeEventListener(MODEL_OPTIONS_CHANGED_EVENT, handleModelsChanged)
+      modelRequestGateRef.current.invalidate()
+    }
   }, [fetchModels])
 
   useEffect(() => {
@@ -2285,7 +2290,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         onChangeChildModel={updateChildModel}
         onChangeEffort={updateSessionEffort}
         onChangeChildEffort={updateChildEffort}
-        onRefreshModels={fetchModels}
+        onRefreshModels={refreshModelOptions}
         modelsRefreshing={modelsRefreshing}
         onOpenModelSettings={onOpenModelSettings || (() => {})}
         sendKeyMode={sendKeyMode}
