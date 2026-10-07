@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using Foxwarm;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
+using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Tests;
 
@@ -399,6 +400,53 @@ public sealed class CompactLifecycleTests
             .ToJsonString();
         Assert.Contains("/blobs/", transport);
         Assert.DoesNotContain(Convert.ToBase64String(bytes), transport);
+    }
+
+    [Fact]
+    public async Task Real_compaction_checkpoints_task_progress_from_ordinary_visible_sequences_once()
+    {
+        await using var fixture = await CompactFixture.CreateAsync();
+        var taskOwner = await fixture.AuthorizationManager.CreateNamedAsync(
+            "main",
+            "s",
+            null,
+            null
+        );
+        var created = await fixture.AuthorizationManager.Tasks.ExecuteForToolAsync(
+            taskOwner,
+            new JsonObject { ["action"] = "create", ["title"] = "compaction progress" }
+        );
+        var taskId = created["task"]!["id"]!.GetValue<string>();
+        await fixture.AuthorizationManager.Tasks.ExecuteForToolAsync(
+            taskOwner,
+            new JsonObject { ["action"] = "claim", ["taskId"] = taskId }
+        );
+
+        await fixture.SeedAsync();
+        var visible = TaskProgress.Sequences(fixture.Owner.Entry.Snapshot());
+        Assert.NotEmpty(visible);
+        await fixture.Owner.Compactor.StartManualAsync();
+        await fixture.Peer.PlanReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        fixture.Peer.ReleasePlan();
+        await fixture.Owner.Compactor.DrainAsync();
+        await fixture.Owner.DrainForegroundAsync();
+
+        using var db = new SqliteConnection(
+            $"Data Source={Path.Combine(fixture.TaskDataRoot, "state", "tasks.sqlite")}"
+        );
+        db.Open();
+        using var command = db.CreateCommand();
+        command.CommandText = "SELECT reminderLastSeq,reminderMessageCount FROM tasks WHERE id=$id";
+        command.Parameters.AddWithValue("$id", taskId);
+        using var row = command.ExecuteReader();
+        Assert.True(row.Read());
+        Assert.Equal(visible.Max(), row.GetInt64(0));
+        Assert.Equal(visible.Length, row.GetInt32(1));
+        Assert.DoesNotContain(
+            fixture.Owner.Entry.Snapshot().History,
+            message => message["__meta"]?["goalReminder"] is not null
+        );
+        Assert.Empty(fixture.Owner.Entry.Snapshot().Queue);
     }
 
     [Theory]
@@ -968,6 +1016,7 @@ public sealed class CompactLifecycleTests
         internal readonly SessionOwner Owner;
         internal readonly string MemoryPath;
         internal readonly SessionManager AuthorizationManager;
+        internal readonly string TaskDataRoot;
 
         private CompactFixture(bool background)
         {
@@ -1070,6 +1119,7 @@ public sealed class CompactLifecycleTests
                 images: Store.Images
             );
             var authorizationData = Path.Combine(temp.Path, "authorization-data");
+            TaskDataRoot = authorizationData;
             var authorizationWork = Path.Combine(temp.Path, "authorization-work");
             Directory.CreateDirectory(authorizationWork);
             AuthorizationManager = new SessionManager(
