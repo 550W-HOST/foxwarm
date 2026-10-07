@@ -160,7 +160,13 @@ test('awaited no-op compaction releases its transient runtime phase without call
 
 test('compact planning retries plain-text/no-tool response and succeeds on a later submit_compact_plan call', async () => {
   const { sessionHistory, archive, llm } = await loadDeps();
+  const { writeAuthoritativeSessionState } = await import('./stateFile');
+  const { getSessionHistoryFilePath, readSessionHistorySnapshot } = await import('./metadataStore');
+  const { estimateSessionTokens } = await import('../tokenCount');
   const session = await makeCompactableSession(archive, makeSessionId('compact_retry_plain_text_success'));
+  session.stats = { totalCachedTokens: 9000, totalInputTokens: 8000, totalOutputTokens: 7000,
+    lastUsage: { cachedTokens: 6000, inputTokens: 5000, outputTokens: 4000 } };
+  const parentStats = structuredClone(session.stats);
   const saveCounter = { count: 0 };
   const prompts: string[] = [];
   const purposes: Array<string | undefined> = [];
@@ -203,8 +209,10 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
 
       if (prompts.length === 1) {
         const text = 'I can summarize this in plain text, but I forgot the tool call.';
-        await Promise.resolve(options?.appendMessage?.({ role: 'model', parts: [{ text }] }));
-        return { text, toolCalls: [], allParts: [{ text }] };
+        const usage = { cachedTokens: 5, inputTokens: 10, outputTokens: 7, reasoningTokens: 3 };
+        await Promise.resolve(options?.appendMessage?.({ role: 'model', parts: [{ thinking: 'planner reasoning' }, { text }], __meta: { usage } }));
+        activeSession.stats.totalInputTokens += usage.inputTokens;
+        return { text, usage, toolCalls: [], allParts: [{ text }] };
       }
 
       const toolCall = {
@@ -220,12 +228,17 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
           }]),
         },
       };
-      await Promise.resolve(options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] }));
-      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+      const usage = { cachedTokens: 2, inputTokens: 20, outputTokens: 8 };
+      await Promise.resolve(options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }],
+        providerMeta: { sourceModelId: 'fixture/planner', providerSpecificFields: { opaque: 'retained' } }, __meta: { usage } }));
+      activeSession.stats.totalInputTokens += usage.inputTokens;
+      return { text: '', usage, toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
     };
 
+    const deps = makeDepsForSession(session, saveCounter);
+    deps.saveSession = async () => { saveCounter.count += 1; await writeAuthoritativeSessionState(session); };
     await sessionHistory.processSessionCompactionRequest(
-      makeDepsForSession(session, saveCounter),
+      deps,
       session.id,
       { keepPercent: 0.5 },
       'await',
@@ -242,14 +255,53 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
     assert(session.history.some(message => message.parts.some(part => /summary after retrying a missing compact tool call/.test(part.text || ''))));
     assert(session.history.some(message => message.parts.some(part => (part.system || '').includes('event="compact-completed"'))));
     assert.equal(session.history[0]?.__meta?.contextBlock?.level, 1);
+    const completion = session.history.at(-1)!;
+    const planner = completion.compaction?.planner;
+    assert(planner);
+    assert.equal(completion.__meta?.compaction, undefined);
+    assert.equal(planner.steps, 2);
+    assert.deepEqual(planner.toolCalls.map(call => call.id), ['compact-plan-after-plain-text']);
+    assert.deepEqual(planner.usage, { cachedTokens: 7, inputTokens: 30, outputTokens: 15, reasoningTokens: 3 });
+    assert.deepEqual(session.stats, parentStats, 'detached planner usage never changes parent totals');
+    assert.deepEqual(planner.messages.map(message => message.role), ['user', 'model', 'user', 'model']);
+    assert.equal(flattenPrompt(planner.messages[0].parts), prompts[0]);
+    assert.equal(flattenPrompt(planner.messages[2].parts), prompts[1]);
+    assert.equal(planner.messages[1].parts[0].thinking, 'planner reasoning');
+    assert.deepEqual(planner.messages[3].providerMeta?.providerSpecificFields, { opaque: 'retained' });
+    assert(planner.messages.every(message => message.__meta?.seq === undefined), 'inherited history rows are not copied into planner messages');
+    assert.doesNotMatch(JSON.stringify(planner.messages), /recent user message/);
+    const persisted = await readSessionHistorySnapshot(session.id);
+    assert.deepEqual(persisted?.history.at(-1).compaction, completion.compaction);
+    const archived = await archive.readArchiveMessagesBySeqRange(session.id, completion.__meta!.seq, completion.__meta!.seq);
+    assert.deepEqual(archived[0].message.compaction, completion.compaction);
+    const withoutDebug = { ...session, history: session.history.map(({ compaction: _compaction, ...message }) => message) };
+    assert.equal(estimateSessionTokens(session), estimateSessionTokens(withoutDebug));
   } finally {
     (llm as any).chat = originalChat;
     (llm as any).buildSessionSystemPromptSnapshotForSession = originalBuild;
+    await fs.remove(getSessionHistoryFilePath(session.id));
     if (!SAVE_GENERATED_SESSION_LOGS) {
       await fs.remove(path.join((await loadDeps()).tempRoot, 'logs', 'sessions', `${session.id}.jsonl`)).catch(() => {});
       await fs.remove(path.join((await loadDeps()).tempRoot, 'logs', 'sessions', `${session.id}.blocks.jsonl`)).catch(() => {});
     }
   }
+});
+
+test('provider-free display-only cleanup does not fabricate planner diagnostics', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_display_only_debug'));
+  session.history.slice(0, 2).forEach(message => { message.modelVisible = false; });
+  const originalChat = llm.chat;
+  try {
+    (llm as any).chat = async () => { throw new Error('display-only cleanup must not call the planner'); };
+    await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0.5 }, 'await');
+    assert.equal(session.history.length, 3);
+    const completion = session.history.at(-1)!;
+    assert(completion.parts.some(part => part.system?.includes('event="compact-completed"')));
+    assert.equal(completion.compaction, undefined);
+    const archived = await archive.readArchiveMessagesBySeqRange(session.id, completion.__meta!.seq, completion.__meta!.seq);
+    assert.equal(archived[0].message.compaction, undefined);
+  } finally { (llm as any).chat = originalChat; }
 });
 
 test('awaited compact cancellation aborts its provider signal without changing history', async () => {
@@ -2025,19 +2077,39 @@ test('malformed raw compact arguments retain one file through JSON and range ret
         default: toolCall = { name: 'submit_compact_plan', args: { argsFilePath: filePath } };
       }
       toolCall.id = `file-round-${round}`;
-      await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
-      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+      const toolCalls = round === 6
+        ? [toolCall, { id: 'file-round-6-extra', name: 'read', args: { filePath: 'must-not-read.txt' } }]
+        : [toolCall];
+      if (parts) await options.appendMessage({ role: 'user', parts });
+      const allParts = toolCalls.map(functionCall => ({ functionCall }));
+      await options.appendMessage({ role: 'model', parts: allParts });
+      return { text: '', toolCalls, allParts };
     };
     await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0.5 }, 'await');
     assert.equal(round, 10);
     assert.equal(await fs.pathExists(filePath), false);
     assert.equal(await fs.pathExists(path.dirname(filePath)), false);
     assert(session.history.some(message => message.parts.some(part => (part.text || '').includes('repaired raw résumé 🦊'))));
-    assert(!JSON.stringify(session.history).includes(filePath));
-    assert(!JSON.stringify(session.history).includes('must never execute'));
+    const planner = session.history.at(-1)!.compaction?.planner;
+    assert(planner);
+    assert.equal(planner.steps, 10);
+    assert.deepEqual(planner.toolCalls.map(call => call.id), [
+      ...Array.from({ length: 6 }, (_, index) => `file-round-${index + 1}`), 'file-round-6-extra',
+      ...Array.from({ length: 4 }, (_, index) => `file-round-${index + 7}`),
+    ]);
+    assert.equal(planner.usage, undefined, 'missing provider usage is not fabricated');
+    assert.equal(planner.messages.filter(message => message.role === 'model').length, 10);
+    assert.equal(planner.messages.filter(message => message.role === 'user').length, 10);
+    assert.equal(planner.messages.filter(message => message.role === 'tool').length, 7);
+    assert.equal(planner.messages[1].parts[0].functionCall?.rawArgsText, raw);
+    assert(JSON.stringify(planner).includes(filePath));
+    const modelContext = session.history.map(({ compaction: _compaction, ...message }) => message);
+    assert(!JSON.stringify(modelContext).includes(filePath));
+    assert(!JSON.stringify(modelContext).includes('must never execute'));
     assert.equal(await fs.pathExists(path.join(path.dirname(path.dirname(path.dirname(filePath))), 'memory', 'must-not-exist.md')), false);
     const records = await archive.readArchiveMessagesBySeqRange(session.id, 1, session.nextMessageSeq);
-    assert(!JSON.stringify(records).includes(filePath), 'repair feedback stays outside Archive');
+    assert.deepEqual(records.at(-1)!.message.compaction?.planner, planner, 'repair diagnostics persist only on the completion record');
+    assert(!JSON.stringify(records.slice(0, -1)).includes(filePath));
   } finally { (llm as any).chat = originalChat; }
 });
 

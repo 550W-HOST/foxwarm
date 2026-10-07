@@ -1499,8 +1499,8 @@ function getHistoricalConcreteModelId(message: Message): string | undefined {
 }
 
 /** Keep persisted presentation metadata out of canonical request journals and provider input. */
-function stripFunctionResponseDisplayMeta(contents: Message[]): Message[] {
-    return contents.map(message => ({
+function stripRequestDisplayMeta(contents: Message[]): Message[] {
+    return contents.map(({ compaction: _compaction, ...message }) => ({
         ...message,
         parts: message.parts.map(part => {
             if (!part.functionResponse?.__meta) return part;
@@ -3380,7 +3380,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
     // Repair the provider-neutral source form first. This exact canonical
     // array is journaled before clone-only provider hydration, so durable
     // session image references are never expanded into provider base64 here.
-    let canonicalContents = stripFunctionResponseDisplayMeta(stripReservedProviderImageHelperFields(
+    let canonicalContents = stripRequestDisplayMeta(stripReservedProviderImageHelperFields(
         fixToolCalls(structuredClone(options.contents || [])),
     ));
     const resolvedModel = options.modelsConfigOverride
@@ -3494,7 +3494,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
                 }
                 if (resumeFromCommittedHistory) {
                     modelStreamEmitter.close();
-                    canonicalContents = stripFunctionResponseDisplayMeta(stripReservedProviderImageHelperFields(
+                    canonicalContents = stripRequestDisplayMeta(stripReservedProviderImageHelperFields(
                         fixToolCalls(structuredClone(options.getCommittedHistoryForRetry!())),
                     ));
                     requestId = randomUUID();

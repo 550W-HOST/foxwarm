@@ -38,7 +38,7 @@ import {
   selectCompactCandidateTargetLevels,
   validateCompactPlanArgs,
 } from './compactPlan';
-import { CompactionRequest, FunctionCall, Message, MessagePart, QueueItem, Session, TokenUsage } from '../types';
+import { CompactionPlannerDebug, CompactionRequest, FunctionCall, Message, MessagePart, QueueItem, Session, TokenUsage } from '../types';
 import { formatToolResponsePayload } from '../../packages/shared/dist/toolResponseFormatting';
 import { formatMessagePreviewText } from '../utils/messageFormat';
 import { buildSystemMessageParts } from '../utils/systemMessageParts';
@@ -215,6 +215,7 @@ type CompactJobResult =
       preserveMessages: Array<{ seq: number; operationIndex: number }>;
       removePreservedMessages: number[];
       replacedItemCount: number;
+      planner?: CompactionPlannerDebug;
     };
 
 type CompactJobState = {
@@ -1026,6 +1027,7 @@ async function finalizeCompaction(
   compactedSkillNames: string[] = [],
   insertedCompletionMessages: Awaited<ReturnType<typeof appendMessagesToArchive>> = [],
   operation: CompactOperation,
+  planner?: CompactionPlannerDebug,
 ): Promise<void> {
   const persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshotForSession(session);
   if (isCompactCancelled(operation)) throw new CompactCancelledError();
@@ -1037,6 +1039,7 @@ async function finalizeCompaction(
   const completionMessage: Message = {
     role: 'user',
     parts: buildSystemMessageParts(completionText),
+    ...(planner ? { compaction: { planner } } : {}),
     __meta: { timestamp: Date.now() },
   };
   insertedCompletionMessages.push(...await appendMessagesToArchive(session, [completionMessage]));
@@ -1153,6 +1156,9 @@ async function runCompactJob(
   let compactPlan: CompactPlan | null = null;
   let compactRoundsUsed = 0;
   let invalidCompactPlanAttempts = 0;
+  const plannerHistoryStart = transientSession.history.length;
+  const plannerToolCalls: FunctionCall[] = [];
+  let plannerUsage: TokenUsage | undefined;
 
   let repairFile: CompactPlanRepairFile | undefined;
   const appendToolFeedback = async (call: FunctionCall, response: string) => {
@@ -1192,6 +1198,18 @@ async function runCompactJob(
       if (isCompactCancelled(operation)) throw new CompactCancelledError();
 
       const toolCalls = result.toolCalls || [];
+      plannerToolCalls.push(...structuredClone(toolCalls));
+      // Count each round's result once, not the cloned parent's cumulative
+      // stats or the same usage echoed on an appended assistant message.
+      if (result.usage) {
+        plannerUsage ??= { cachedTokens: 0, inputTokens: 0, outputTokens: 0 };
+        plannerUsage.cachedTokens += result.usage.cachedTokens || 0;
+        plannerUsage.inputTokens += result.usage.inputTokens || 0;
+        plannerUsage.outputTokens += result.usage.outputTokens || 0;
+        if (result.usage.reasoningTokens !== undefined) {
+          plannerUsage.reasoningTokens = (plannerUsage.reasoningTokens || 0) + result.usage.reasoningTokens;
+        }
+      }
       const call = toolCalls[0];
       if (repairFile && toolCalls.length === 1 && (call.name === 'edit' || call.name === 'apply_patch')) {
         try {
@@ -1292,7 +1310,13 @@ async function runCompactJob(
   return {
     status: 'ready',
     completionMarker,
-      completionBroadcastMessage,
+    completionBroadcastMessage,
+    planner: {
+      steps: compactRoundsUsed,
+      toolCalls: plannerToolCalls,
+      ...(plannerUsage ? { usage: plannerUsage } : {}),
+      messages: structuredClone(transientSession.history.slice(plannerHistoryStart)),
+    },
     snapshotHistory: historySnapshot,
     consumedHistoryCount: splitIndex,
     operations: operations.map(operation => ({
@@ -1390,6 +1414,7 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
       result.completionBroadcastMessage, createdRecords.length,
       result.replacedItemCount, compactedSkillNames, insertedCompletionMessages,
       operation,
+      result.planner,
     );
     operation.committed = true;
 

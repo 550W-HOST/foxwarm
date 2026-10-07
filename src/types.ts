@@ -130,6 +130,8 @@ export interface LlmRequestTiming {
 
 export interface Message {
   role: 'user' | 'model' | 'tool';
+  /** Persisted compact-completion diagnostics, excluded from model input. */
+  compaction?: { planner: CompactionPlannerDebug };
   /** Message-level provider metadata echoed back on later requests. */
   providerMeta?: MessageProviderMeta;
   /**
@@ -159,6 +161,17 @@ export interface Message {
     preservedFromBlockId?: number;
     [key: string]: any;
   };
+}
+
+export interface CompactionPlannerDebug {
+  /** Number of planner rounds, including rejected submissions and repairs. */
+  steps: number;
+  /** Calls returned by the planner in occurrence order, whether accepted or not. */
+  toolCalls: FunctionCall[];
+  /** Sum of reported usage for this invocation only; reasoning is part of output. */
+  usage?: TokenUsage;
+  /** Newly appended planner instructions, responses and feedback, without inherited history. */
+  messages: Message[];
 }
 
 export interface ToolScriptSubCall {

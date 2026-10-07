@@ -142,6 +142,12 @@ Only the newest pure compact-completion notice remains in active model-visible h
 
 Canonical implementation: `formatCompactionCompletionMarker()` in [src-session-history](../units/src-session-history.md).
 
+### D-context-compact-planner-debug
+
+[2026-10-07] A successful planner-backed compact completion stores diagnostics at top-level `Message.compaction.planner`, not under `__meta`. `steps` counts planner rounds, `toolCalls` preserves all returned calls in occurrence order (including rejected calls and repairs), and `messages` preserves complete newly appended planner instructions, responses and tool feedback without the inherited history prefix. Optional `usage` sums each round's reported result once; it excludes parent Session totals and does not recount usage echoed on assistant metadata. Reasoning usage remains a component of output usage. Provider-free cleanup does not invent a planner record, and missing provider usage remains absent.
+
+The diagnostics use ordinary Session-history and Archive persistence and the existing JSON inspection views; there is no separate storage or dedicated UI. Request preparation excludes the entire `compaction` field from provider input and canonical request journals, while context estimates continue to count message parts only. The completion marker itself remains model-visible under [D-context-compact-completion](#d-context-compact-completion).
+
 ### D-context-one-compact-engine
 
 Async and awaited compaction share one snapshot/job/commit engine. Planning never mutates the live session, and commit replaces only a compatible consumed prefix.

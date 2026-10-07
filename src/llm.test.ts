@@ -3824,11 +3824,12 @@ test('chat journals only historical concrete model provenance and strips all __m
   }
 });
 
-test('requestLlmOnce excludes presentation paths and ToolScript activity from provider requests and journals', async () => {
+test('requestLlmOnce excludes presentation paths, ToolScript activity and planner diagnostics from requests and journals', async () => {
   const originalPost = axios.post;
   let capturedBody: any;
   const displayPath = '/display-only/agent-file.txt';
   const displayCall = 'display-only-nested-tool';
+  const plannerText = 'display-only-planner-instruction';
   const contents: Message[] = [
     { role: 'model', parts: [{ functionCall: { id: 'read-file', name: 'read', args: { filePath: 'file.txt' } } }] },
     { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'read-file', name: 'read', response: { output: 'contents' },
@@ -3837,7 +3838,11 @@ test('requestLlmOnce excludes presentation paths and ToolScript activity from pr
     { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'script', name: 'run_script',
       response: { status: 'completed', runId: 'tsr_fixture', result: 0 },
       __meta: { toolScriptSubCalls: [{ id: 'tss_1', name: displayCall, status: 'completed', startedAt: 1 }] } } }] },
-    { role: 'user', parts: [{ text: 'next request' }] },
+    { role: 'user', parts: [{ text: 'next request' }], compaction: { planner: {
+      steps: 1, toolCalls: [{ id: 'planner-call', name: 'submit_compact_plan', args: { summary: plannerText } }],
+      usage: { cachedTokens: 2, inputTokens: 3, outputTokens: 4 },
+      messages: [{ role: 'user', parts: [{ system: plannerText }] }],
+    } } },
   ];
   const original = structuredClone(contents);
   try {
@@ -3858,11 +3863,15 @@ test('requestLlmOnce excludes presentation paths and ToolScript activity from pr
       assert.equal(request.includes(displayPath), false, providerType);
       assert.equal(request.includes(displayCall), false, providerType);
       assert.equal(request.includes('toolScriptSubCalls'), false, providerType);
+      assert.equal(request.includes(plannerText), false, providerType);
+      assert.equal(request.includes('compaction'), false, providerType);
       assert.ok(request.includes('tsr_fixture'), providerType);
       const journal = await reconstructLlmRequest(result.llmRequestId!);
       assert.equal(journal.completeness, 'complete');
       assert.equal(JSON.stringify(journal).includes(displayPath), false, providerType);
       assert.equal(JSON.stringify(journal).includes(displayCall), false, providerType);
+      assert.equal(JSON.stringify(journal).includes(plannerText), false, providerType);
+      if (journal.completeness === 'complete') assert(journal.messages.every(message => !message.compaction));
       assert.deepEqual(contents, original, 'request preparation must not rewrite persisted/UI history');
     }
   } finally { (axios as any).post = originalPost; }

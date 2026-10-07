@@ -11,7 +11,7 @@ import * as sessionManager from '../sessionManager';
 import { buildWebUiSessionListProjection, getBoundedSessionListChildTotal, setWebUiDeleteLifecycleTestHookForTests, WebUIChannel } from './webuiChannel';
 import { loadSessionsMetadataSnapshot, readSessionHistorySnapshot, serializeSessionHistoryPayload } from '../session/metadataStore';
 import { markSessionCatalogStub } from '../sessionRuntimeState';
-import type { Message, Session } from '../types';
+import type { CompactionPlannerDebug, Message, Session } from '../types';
 import { formatFoxwarmMessage } from '../utils/promptWrappers';
 import fs from 'fs-extra';
 import { getAgentDir } from '../config';
@@ -588,6 +588,8 @@ test('WebUI history route returns queued preview messages separately from commit
   const sessionId = makeSessionId('webui_history_queue');
   const imageBuffer = await makeTinyPng();
   const session = await sessionManager.getSession(sessionId);
+  const planner: CompactionPlannerDebug = { steps: 1, toolCalls: [], usage: { cachedTokens: 2, inputTokens: 3, outputTokens: 4 },
+    messages: [{ role: 'user' as const, parts: [{ system: 'planner-only diagnostic instruction' }] }] };
   session.agent = 'main';
   session.history = [{
     role: 'model',
@@ -601,6 +603,7 @@ test('WebUI history route returns queued preview messages separately from commit
     { functionCall: { id: 'non-object', name: 'exec', args: {}, rawArgsText: '[]', argsParseError: 'Expected top-level object' } },
     { functionResponse: { tool_use_id: 'nested', name: 'exec', response: { output: { rawArgsText: 'tool data kept' } } } }],
     __meta: { timestamp: Date.now(), seq: 1 },
+    compaction: { planner },
   }];
   session.persistentMemorySnapshot = 'persisted system snapshot';
   session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
@@ -681,6 +684,7 @@ test('WebUI history route returns queued preview messages separately from commit
     assert.equal(payload.session.queueLength, 4);
     assert.equal(payload.session.runtimeState.state, 'requesting-model');
     assert.equal(payload.messages.length, 1);
+    assert.deepEqual(payload.messages[0].compaction?.planner, planner, 'Chat JSON retains planner diagnostics');
     assert.equal(payload.messages[0].parts[0].text, 'committed answer');
     assert.equal(payload.messages[0].parts[1].inlineData, undefined);
     assert.equal(payload.messages[0].parts[1].inlineDataRef.path, undefined);
@@ -768,6 +772,7 @@ test('WebUI history route returns queued preview messages separately from commit
     assert.equal(debugText.includes(legacySecretPath), false);
     assert.doesNotMatch(debugText, /"path"\s*:/);
     const debugPayload = JSON.parse(debugText);
+    assert.deepEqual(debugPayload.payload.history[0].compaction?.planner, planner, 'debug-file JSON retains planner diagnostics');
     assert.equal(debugPayload.payload.contextFrontier, undefined, 'obsolete active frontier is not exposed as current debug business state');
     assert.equal(debugPayload.payload.obsoleteContextFrontier[0].marker, 'obsolete-context-frontier-field');
     assert.equal(debugPayload.payload.obsoleteContextFrontier[0].nestedFunctionResponse.functionResponse.response.status, 'kept');
