@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, ClipboardList, X } from 'lucide-react'
+import { ArrowLeft, Check, ClipboardList, Copy, X } from 'lucide-react'
 import { makeApiUrl } from '../config'
 import { WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import SessionSelector from './SessionSelector'
@@ -88,14 +88,56 @@ const compactSessionLabel = (sessionId: string, agent?: string | null) => {
   const parts = sessionId.split('/').filter(Boolean)
   const leaf = parts[parts.length - 1] || sessionId
   const prefix = agent || parts.slice(0, -1).join('/')
-  return prefix && prefix !== leaf ? `${prefix} · ${leaf}` : leaf
+  return prefix && prefix !== leaf ? `${prefix}/${leaf}` : leaf
 }
 
 function SessionReference({ sessionId, agent, compact = true, onOpenSession }: { sessionId: string; agent?: string | null; compact?: boolean; onOpenSession?: (sessionId: string) => void }) {
   const label = compact ? compactSessionLabel(sessionId, agent) : sessionId
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
+  const copyResetTimeoutRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    setCopyState('idle')
+    return () => {
+      if (copyResetTimeoutRef.current !== null) window.clearTimeout(copyResetTimeoutRef.current)
+    }
+  }, [sessionId])
+
+  const copySessionId = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    setCopyState('idle')
+    try {
+      await copyTextToClipboard(sessionId)
+      setCopyState('copied')
+      if (copyResetTimeoutRef.current !== null) window.clearTimeout(copyResetTimeoutRef.current)
+      copyResetTimeoutRef.current = window.setTimeout(() => {
+        setCopyState('idle')
+        copyResetTimeoutRef.current = null
+      }, 1500)
+    } catch (error) {
+      console.error('Failed to copy Session ID:', error)
+      setCopyState('error')
+      if (copyResetTimeoutRef.current !== null) window.clearTimeout(copyResetTimeoutRef.current)
+      copyResetTimeoutRef.current = window.setTimeout(() => {
+        setCopyState('idle')
+        copyResetTimeoutRef.current = null
+      }, 3000)
+    }
+  }
+
+  const copyLabel = copyState === 'copied'
+    ? `Copied Session ID ${sessionId}`
+    : copyState === 'error'
+      ? `Copy failed for Session ID ${sessionId}`
+      : `Copy Session ID ${sessionId}`
+
   return <span data-session-reference={sessionId} className="inline-flex min-w-0 max-w-full items-center gap-1 align-middle" title={sessionId}>
     {onOpenSession ? <button type="button" data-session-open={sessionId} className="min-w-0 truncate text-left text-fw-accent hover:underline" onClick={event => { event.stopPropagation(); onOpenSession(sessionId) }} aria-label={`Open Session ${sessionId}`}>{label}</button> : <span className="min-w-0 truncate">{label}</span>}
-    <button type="button" data-session-copy={sessionId} className="shrink-0 px-0.5 text-[10px] text-fw-text-muted hover:text-fw-text" title={`Copy Session ID ${sessionId}`} aria-label={`Copy Session ID ${sessionId}`} onClick={event => { event.stopPropagation(); void copyTextToClipboard(sessionId) }}>Copy</button>
+    <button type="button" data-session-copy={sessionId} data-session-copy-state={copyState} className="shrink-0 rounded p-0.5 text-fw-text-muted hover:bg-fw-hover hover:text-fw-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fw-focus-ring" title={copyLabel} aria-label={copyLabel} onClick={copySessionId}>
+      {copyState === 'copied' ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : <Copy className="h-3.5 w-3.5" aria-hidden="true" />}
+    </button>
+    {copyState === 'error' && <span data-session-copy-error role="alert" className="shrink-0 text-xs text-fw-danger">Copy failed</span>}
   </span>
 }
 
@@ -279,7 +321,7 @@ export default function TasksView({ onBack, onOpenSession }: { onBack?: () => vo
     <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-fw-border bg-fw-surface p-3">
       {tabHeader ? <WorkbenchTabClose className={buttonClass} iconClassName="h-4 w-4" /> : onBack && <button type="button" className={buttonClass} onClick={onBack} aria-label="Back"><ArrowLeft className="h-4 w-4" /></button>}
       <h2 className="mr-2 flex items-center gap-2 text-sm font-semibold"><WorkbenchTabIcon className="inline-flex items-center"><ClipboardList className="h-4 w-4" /></WorkbenchTabIcon>Tasks</h2>
-      <button type="button" className={buttonClass} onClick={() => { setCreateError(''); setTaskWarning(''); setCreateOwner(readLastTaskOwner()); setCreateOpen(true) }}>New task</button>
+      <button type="button" data-task-new className={`${buttonClass} bg-fw-accent text-fw-text-inverse hover:bg-fw-accent`} onClick={() => { setCreateError(''); setTaskWarning(''); setCreateOwner(readLastTaskOwner()); setCreateOpen(true) }}>New task</button>
       <div role="group" aria-label="Task scope" className="flex gap-1" data-task-scopes>
         {TASK_SCOPES.map(nextScope => <button key={nextScope} type="button" data-task-scope={nextScope} aria-pressed={scope === nextScope} onClick={() => setScope(nextScope)} className={`${buttonClass} ${scope === nextScope ? 'bg-fw-accent-surface text-fw-accent' : ''}`}>{TASK_SCOPE_LABELS[nextScope]}</button>)}
       </div>
