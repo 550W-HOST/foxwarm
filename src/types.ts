@@ -166,8 +166,8 @@ export interface Message {
 export interface CompactionPlannerDebug {
   /** Number of planner rounds, including rejected submissions and repairs. */
   steps: number;
-  /** Calls returned by the planner in occurrence order, whether accepted or not. */
-  toolCalls: FunctionCall[];
+  /** Tool names returned by the planner in occurrence order, whether accepted or not. */
+  toolCalls: string[];
   /** Sum of reported usage for this invocation only; reasoning is part of output. */
   usage?: TokenUsage;
   /** Newly appended planner instructions, responses and feedback, without inherited history. */

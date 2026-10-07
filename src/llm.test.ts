@@ -3839,7 +3839,7 @@ test('requestLlmOnce excludes presentation paths, ToolScript activity and planne
       response: { status: 'completed', runId: 'tsr_fixture', result: 0 },
       __meta: { toolScriptSubCalls: [{ id: 'tss_1', name: displayCall, status: 'completed', startedAt: 1 }] } } }] },
     { role: 'user', parts: [{ text: 'next request' }], compaction: { planner: {
-      steps: 1, toolCalls: [{ id: 'planner-call', name: 'submit_compact_plan', args: { summary: plannerText } }],
+      steps: 1, toolCalls: ['submit_compact_plan'],
       usage: { cachedTokens: 2, inputTokens: 3, outputTokens: 4 },
       messages: [{ role: 'user', parts: [{ system: plannerText }] }],
     } } },

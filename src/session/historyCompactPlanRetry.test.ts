@@ -260,7 +260,7 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
     assert(planner);
     assert.equal(completion.__meta?.compaction, undefined);
     assert.equal(planner.steps, 2);
-    assert.deepEqual(planner.toolCalls.map(call => call.id), ['compact-plan-after-plain-text']);
+    assert.deepEqual(planner.toolCalls, ['submit_compact_plan']);
     assert.deepEqual(planner.usage, { cachedTokens: 7, inputTokens: 30, outputTokens: 15, reasoningTokens: 3 });
     assert.deepEqual(session.stats, parentStats, 'detached planner usage never changes parent totals');
     assert.deepEqual(planner.messages.map(message => message.role), ['user', 'model', 'user', 'model']);
@@ -2093,9 +2093,9 @@ test('malformed raw compact arguments retain one file through JSON and range ret
     const planner = session.history.at(-1)!.compaction?.planner;
     assert(planner);
     assert.equal(planner.steps, 10);
-    assert.deepEqual(planner.toolCalls.map(call => call.id), [
-      ...Array.from({ length: 6 }, (_, index) => `file-round-${index + 1}`), 'file-round-6-extra',
-      ...Array.from({ length: 4 }, (_, index) => `file-round-${index + 7}`),
+    assert.deepEqual(planner.toolCalls, [
+      'submit_compact_plan', 'submit_compact_plan', 'edit', 'submit_compact_plan', 'apply_patch',
+      'exec', 'read', 'write_memory', 'submit_compact_plan', 'submit_compact_plan', 'submit_compact_plan',
     ]);
     assert.equal(planner.usage, undefined, 'missing provider usage is not fabricated');
     assert.equal(planner.messages.filter(message => message.role === 'model').length, 10);

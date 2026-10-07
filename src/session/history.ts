@@ -1157,7 +1157,7 @@ async function runCompactJob(
   let compactRoundsUsed = 0;
   let invalidCompactPlanAttempts = 0;
   const plannerHistoryStart = transientSession.history.length;
-  const plannerToolCalls: FunctionCall[] = [];
+  const plannerToolCalls: string[] = [];
   let plannerUsage: TokenUsage | undefined;
 
   let repairFile: CompactPlanRepairFile | undefined;
@@ -1198,7 +1198,7 @@ async function runCompactJob(
       if (isCompactCancelled(operation)) throw new CompactCancelledError();
 
       const toolCalls = result.toolCalls || [];
-      plannerToolCalls.push(...structuredClone(toolCalls));
+      plannerToolCalls.push(...toolCalls.map(call => call.name));
       // Count each round's result once, not the cloned parent's cumulative
       // stats or the same usage echoed on an appended assistant message.
       if (result.usage) {
