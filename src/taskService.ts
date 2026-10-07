@@ -21,10 +21,48 @@ export class TaskService {
     try { return await operation(); } finally { release!(); }
   }
 
+  private async deliverAssignmentPlan(result: any, sessionId: string, plan: { revision: number; newOwner?: string; previousOwner?: string }, additionalMessage?: string): Promise<{ result: any; newOwnerDelivered: boolean }> {
+    const failedRecipients: string[] = [];
+    let newOwnerDelivered = !plan.newOwner;
+    for (const [recipient, plannedTarget] of [['previous', plan.previousOwner], ['new', plan.newOwner]] as const) {
+      if (!plannedTarget) continue;
+      const target = this.deps.resolveSessionId(plannedTarget) || plannedTarget;
+      sessionId = this.deps.resolveSessionId(sessionId) || sessionId;
+      if (target === sessionId) {
+        this.store.markAssignmentNotification(result.task.id, plan.revision, recipient, 'skipped');
+        if (recipient === 'new') newOwnerDelivered = true;
+      }
+      else try {
+        const description = recipient === 'new'
+          ? this.store.readStoredDescription(result.task.id)
+          : result.task.description;
+        const summary = `${result.task.id} — ${result.task.title}\nStatus: ${result.task.status}${description ? `\n${description}` : ''}`;
+        const message = recipient === 'previous'
+          ? `Task ownership ${result.task.ownerSessionId ? `transferred to ${result.task.ownerSessionId}` : 'released'}: ${summary.slice(0, 1000)}`
+          : `You have been assigned a task: ${summary}${additionalMessage ? `\n\nAdditional instruction:\n${additionalMessage}` : ''}`;
+        const event = recipient === 'previous'
+          ? result.task.ownerSessionId ? 'transferred' : 'released'
+          : result.task.previousOwnerSessionId ? 'transferred' : 'assigned';
+        await this.deps.sendToSession(target, message, sessionId, {
+          ...(recipient === 'previous' ? { trigger: false } : {}),
+          taskNotification: { taskId: result.task.id, event, recipient },
+        });
+        this.store.markAssignmentNotification(result.task.id, plan.revision, recipient, 'sent');
+        if (recipient === 'new') newOwnerDelivered = true;
+      } catch {
+        this.store.markAssignmentNotification(result.task.id, plan.revision, recipient, 'failed');
+        failedRecipients.push(recipient === 'previous' ? 'previous owner' : 'new owner');
+      }
+    }
+    if (failedRecipients.length) result.warning = `Task assigned, but the ${failedRecipients.join(' and ')} notification could not be delivered.`;
+    result.task = this.store.execute({ action: 'get', taskId: result.task.id }, sessionId).task;
+    return { result, newOwnerDelivered };
+  }
+
   async execute(args: Record<string, any>, sessionId: string, anchorSeq?: number): Promise<any> {
     validateTaskArgs(args);
     sessionId = this.deps.resolveSessionId(sessionId) || sessionId;
-    const result = await this.exclusive(async () => {
+    let result = await this.exclusive(async () => {
       let normalized = args;
       if (args.ownerSessionId !== undefined && args.ownerSessionId !== null) {
         const ownerSessionId = this.deps.resolveSessionId(args.ownerSessionId);
@@ -38,37 +76,7 @@ export class TaskService {
     });
     const plan = result.assignmentNotification;
     delete result.assignmentNotification;
-    if (plan) {
-      const failedRecipients: string[] = [];
-      for (const [recipient, plannedTarget] of [['previous', plan.previousOwner], ['new', plan.newOwner]] as const) {
-        if (!plannedTarget) continue;
-        const target = this.deps.resolveSessionId(plannedTarget) || plannedTarget;
-        sessionId = this.deps.resolveSessionId(sessionId) || sessionId;
-        if (target === sessionId) this.store.markAssignmentNotification(result.task.id, plan.revision, recipient, 'skipped');
-        else try {
-          const description = recipient === 'new'
-            ? this.store.readStoredDescription(result.task.id)
-            : result.task.description;
-          const summary = `${result.task.id} — ${result.task.title}\nStatus: ${result.task.status}${description ? `\n${description}` : ''}`;
-          const message = recipient === 'previous'
-            ? `Task ownership ${result.task.ownerSessionId ? `transferred to ${result.task.ownerSessionId}` : 'released'}: ${summary.slice(0, 1000)}`
-            : `You have been assigned a task: ${summary}`;
-          const event = recipient === 'previous'
-            ? result.task.ownerSessionId ? 'transferred' : 'released'
-            : result.task.previousOwnerSessionId ? 'transferred' : 'assigned';
-          await this.deps.sendToSession(target, message, sessionId, {
-            ...(recipient === 'previous' ? { trigger: false } : {}),
-            taskNotification: { taskId: result.task.id, event, recipient },
-          });
-          this.store.markAssignmentNotification(result.task.id, plan.revision, recipient, 'sent');
-        } catch {
-          this.store.markAssignmentNotification(result.task.id, plan.revision, recipient, 'failed');
-          failedRecipients.push(recipient === 'previous' ? 'previous owner' : 'new owner');
-        }
-      }
-      if (failedRecipients.length) result.warning = `Task assigned, but the ${failedRecipients.join(' and ')} notification could not be delivered.`;
-      result.task = this.store.execute({ action: 'get', taskId: result.task.id }, sessionId).task;
-    }
+    if (plan) result = (await this.deliverAssignmentPlan(result, sessionId, plan)).result;
     if (args.action === 'complete') {
       // Completion is already durable. Delivery failure must not undo it;
       // retries of complete are terminal-state errors, not repeated sends.
@@ -121,24 +129,30 @@ export class TaskService {
     return this.store.execute({ action: 'get', taskId }, undefined);
   }
 
-  async createAttachedChild(taskId: string, sourceSessionId: string, create: () => Promise<string>): Promise<string> {
-    return this.exclusive(async () => {
-      const task = this.store.execute({ action: 'get', taskId }, sourceSessionId).task;
+  async createAttachedChild(taskId: string, sourceSessionId: string, create: () => Promise<string>, additionalMessage?: string): Promise<{ childSessionId: string; assignmentDelivered: boolean; warning?: string }> {
+    const source = this.deps.resolveSessionId(sourceSessionId) || sourceSessionId;
+    const attached = await this.exclusive(async () => {
+      const task = this.store.execute({ action: 'get', taskId }, source).task;
       if (task.status === 'completed' || task.status === 'cancelled') throw new TaskError('TASK_TERMINAL', 'A terminal task cannot be attached to a new Session.', 409);
-      if (task.ownerSessionId) throw new TaskError('TASK_OWNED', `Task ${task.id} is already owned by Session ${task.ownerSessionId}.`, 409);
+      if (task.createdBySessionId !== source && task.ownerSessionId !== source) {
+        throw new TaskError('TASK_FORBIDDEN', `Session ${source} cannot assign task ${task.id} (creator or owner required).`, 403);
+      }
       const childSessionId = await create();
-      this.store.bindChild(taskId, childSessionId);
-      return childSessionId;
+      const result = this.store.execute({ action: 'assign', taskId, ownerSessionId: childSessionId, notifySession: true }, source);
+      const plan = result.assignmentNotification;
+      delete result.assignmentNotification;
+      this.store.attachChild(taskId, childSessionId);
+      return { childSessionId, result: { ...result, assignmentNotification: plan } };
     });
-  }
-
-  async deliverAttachedChildAssignment(taskId: string, childSessionId: string, sourceSessionId: string, additionalMessage?: string): Promise<void> {
-    const task = this.store.execute({ action: 'get', taskId }, sourceSessionId).task;
-    const description = this.store.readStoredDescription(taskId);
-    const summary = `${task.id} — ${task.title}\nStatus: ${task.status}${description ? `\n${description}` : ''}`;
-    const message = `You have been assigned a task: ${summary}${additionalMessage ? `\n\nAdditional instruction:\n${additionalMessage}` : ''}`;
-    await this.deps.sendToSession(childSessionId, message, sourceSessionId, {
-      taskNotification: { taskId: task.id, event: 'assigned', recipient: 'new' },
-    });
+    let { childSessionId, result } = attached;
+    let assignmentDelivered = true;
+    if (result.assignmentNotification) {
+      const plan = result.assignmentNotification;
+      delete result.assignmentNotification;
+      const delivered = await this.deliverAssignmentPlan(result, source, plan, additionalMessage);
+      assignmentDelivered = delivered.newOwnerDelivered;
+      result = delivered.result;
+    }
+    return { childSessionId, assignmentDelivered, ...(result.warning ? { warning: result.warning } : {}) };
   }
 }

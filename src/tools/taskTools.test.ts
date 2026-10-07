@@ -9,6 +9,7 @@ import { BUILTIN_TOOL_PLACEMENTS } from './placement';
 import * as sessionManager from '../sessionManager';
 import { task, callTool, call_tool, modelFacingDefinitions, create_child_session } from '../tools';
 import { resetMainManagementToolsForTests, shutdownMainManagementTools } from '../mainManagementTools';
+import { tool_create_child_session as directCreateChildSession } from '../toolsSessionAgent/interSession';
 import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from '../toolAuthorization';
 import { parseFoxwarmWrappedContent } from '../utils/promptWrappers';
 
@@ -81,9 +82,10 @@ rules:
 });
 
 
-test('create_child_session taskId binds the real child before delivery and rejects owned or missing tasks before creation', async () => {
+test('create_child_session taskId assigns or transfers the real child before delivery and rejects unauthorized or terminal tasks before creation', async () => {
   const prefix = `task_child_${Date.now()}`;
   const parent = await sessionManager.getSession(`${prefix}_parent`);
+  const outsider = await sessionManager.getSession(`${prefix}_outsider`);
   const ctx: any = { sessionId: parent.id, session: parent, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} };
   const children: string[] = [];
   try {
@@ -105,18 +107,52 @@ test('create_child_session taskId binds the real child before delivery and rejec
     assert.doesNotMatch(assignment.content, /inter-agent/);
     assert.equal(readResult(await task({ action: 'get', taskId }, ctx)).task.ownerSessionId, childId);
     assert.match(readResult(await task({ action: 'get', taskId }, ctx)).notes[0].text, new RegExp(childId));
+    const transferredResult: any = await create_child_session({ suffix: 'replacement', taskId, message: 'Continue the transferred task.' }, ctx);
+    const transferredId = String(transferredResult).match(/`([^`]+)`/)![1];
+    children.push(transferredId);
+    const oldChild = await sessionManager.getExistingSession(childId);
+    const replacement = await sessionManager.getExistingSession(transferredId);
+    assert.equal(oldChild.queue.length, 2);
+    assert.equal(oldChild.queue[1].trigger, false, 'transferred old owner receives passive ingress');
+    assert.equal(replacement.queue.length, 1);
+    assert.match(replacement.queue[0].parts?.[0].system || '', new RegExp(`taskId="${taskId}"`));
+    assert.equal(readResult(await task({ action: 'get', taskId }, ctx)).task.ownerSessionId, transferredId);
     const count = sessionManager.getAllSessions().size;
-    await assert.rejects(() => create_child_session({ suffix: 'duplicate', taskId }, ctx), /already owned/);
+    await assert.rejects(() => create_child_session({ suffix: 'forbidden', taskId }, { sessionId: outsider.id, session: outsider }), /creator or owner required/);
     await assert.rejects(() => create_child_session({ suffix: 'missing', taskId: 'missing' }, ctx), /not found/);
     assert.equal(sessionManager.getAllSessions().size, count);
     const completion = await executeTools([{ id: 'child-task-complete', name: 'task', args: { action: 'complete', taskId, result: 'Finished delegated work' } }],
-      { sessionId: child.id, session: child }, child);
-    assert.deepEqual((completion as any).__toolPostAction, { successfulSendToSessionTargets: [parent.id], completedLinkedTask: { taskId, attachedSessionId: child.id } });
+      { sessionId: replacement.id, session: replacement }, replacement);
+    assert.deepEqual((completion as any).__toolPostAction, { successfulSendToSessionTargets: [parent.id], completedLinkedTask: { taskId, attachedSessionId: transferredId } });
     assert.equal(readResult(await task({ action: 'get', taskId }, ctx)).task.status, 'completed');
+    await assert.rejects(() => create_child_session({ suffix: 'terminal', taskId }, ctx), /terminal/);
+    assert.equal(sessionManager.getAllSessions().size, count);
   } finally {
     await shutdownMainManagementTools();
     resetMainManagementToolsForTests();
     for (const id of children) await sessionManager.deleteSession(id);
+    await sessionManager.deleteSession(parent.id);
+    await sessionManager.deleteSession(outsider.id);
+  }
+});
+
+test('create_child_session does not enter wait when task assignment delivery fails', async () => {
+  const parent = await sessionManager.getSession(`task_delivery_failure_${Date.now()}_parent`);
+  const service = taskService as any;
+  const original = service.createAttachedChild;
+  service.createAttachedChild = async () => ({
+    childSessionId: 'delivery-failure-child',
+    assignmentDelivered: false,
+    warning: 'Task assigned, but the new owner notification could not be delivered.',
+  });
+  try {
+    const result: any = await directCreateChildSession({ suffix: 'executor', taskId: 'task_delivery_failure', afterSend: 'wait' }, { sessionId: parent.id, session: parent });
+    const output = typeof result === 'string' ? result : result.output;
+    assert.match(output, /task assignment delivery failed/);
+    assert.match(output, /new owner notification could not be delivered/);
+    assert.equal(typeof result === 'string' ? undefined : result.__toolPostAction, undefined);
+  } finally {
+    service.createAttachedChild = original;
     await sessionManager.deleteSession(parent.id);
   }
 });
@@ -129,6 +165,7 @@ test('real Session moves preserve task owner/creator/attached identities, notifi
   let raw: DatabaseSync;
   try {
     const taskId = readResult(await task({ action: 'create', title: 'Linked work across Session moves' }, { sessionId: creator.id })).taskId;
+    await task({ action: 'assign', taskId, ownerSessionId: parent.id }, { sessionId: creator.id });
     const created = await create_child_session({ suffix: 'executor', taskId }, { sessionId: parent.id, session: parent });
     child = await sessionManager.getExistingSession(String(created).match(/`([^`]+)`/)![1]);
     const ctx = { sessionId: child.id, session: child };
@@ -153,7 +190,7 @@ test('real Session moves preserve task owner/creator/attached identities, notifi
     assert.equal(projected.task.createdBySessionId, currentCreator.id);
     assert.equal(projected.task.ownerSessionId, child.id);
     assert.equal(projected.task.attachedSessionId, child.id);
-    assert.equal(projected.notes[0].sessionId, child.id);
+    assert(projected.notes.some((note: any) => note.sessionId === child.id));
     assert.equal(taskService.list().tasks.find((entry: any) => entry.id === taskId).ownerSessionId, child.id);
     assert.equal(refs(taskId).ownerSessionId, oldChild, 'ordinary bounded reads do not rewrite persisted references');
     await task({ action: 'assign', taskId: selfId, ownerSessionId: oldChild, notifySession: true }, currentCtx);

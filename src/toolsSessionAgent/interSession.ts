@@ -43,17 +43,26 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
   const currentSessionId = ctx.sessionId;
   const create = () => sessionManager.createChildSession(currentSessionId, suffix, fork,
     { agentName, displayName, node, taskId, model: forced.model, effort: forced.effort, sourceOverride: (ctx as any).sourceOverride });
-  const childSessionId = taskId
-    ? await taskService.createAttachedChild(taskId, currentSessionId, create)
-    : await create();
+  let childSessionId: string;
+  let taskAssignmentDelivered = true;
+  let taskAssignmentWarning: string | undefined;
+  if (taskId) {
+    const attached = await taskService.createAttachedChild(taskId, currentSessionId, create, message);
+    childSessionId = attached.childSessionId;
+    taskAssignmentDelivered = attached.assignmentDelivered;
+    taskAssignmentWarning = attached.warning;
+  } else {
+    childSessionId = await create();
+  }
 
   if (taskId) {
-    await taskService.deliverAttachedChildAssignment(taskId, childSessionId, currentSessionId, message);
-    const output = `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'}). Task assignment sent.`;
-    if (afterSend === 'wait') {
+    const output = taskAssignmentDelivered
+      ? `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'}). Task assignment sent${taskAssignmentWarning ? ` with warning: ${taskAssignmentWarning}` : ''}.`
+      : `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'}), but task assignment delivery failed${taskAssignmentWarning ? `: ${taskAssignmentWarning}` : '.'}`;
+    if (taskAssignmentDelivered && afterSend === 'wait') {
       return { output, __toolPostAction: { waitForReply: true, successfulSendToSessionTarget: childSessionId } };
     }
-    return afterSend === 'finish'
+    return taskAssignmentDelivered && afterSend === 'finish'
       ? { ...buildEndTurnResult(), output, __toolPostAction: { finishAfterSend: true } }
       : output;
   }
