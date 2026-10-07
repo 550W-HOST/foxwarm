@@ -57,7 +57,7 @@ export class TaskService {
             : result.task.previousOwnerSessionId ? 'transferred' : 'assigned';
           await this.deps.sendToSession(target, message, sessionId, {
             ...(recipient === 'previous' ? { trigger: false } : {}),
-            taskNotification: { taskId: result.task.id, event },
+            taskNotification: { taskId: result.task.id, event, recipient },
           });
           this.store.markAssignmentNotification(result.task.id, plan.revision, recipient, 'sent');
         } catch {

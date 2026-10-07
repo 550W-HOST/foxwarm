@@ -102,7 +102,7 @@ test('assignment notices commit before previous/new delivery, preserve independe
   assert.equal(sends.length, 0);
   const notified = await service.execute({ action: 'assign', taskId, ownerSessionId: 'first', notifySession: true }, 'creator');
   assert.equal(notified.task.assignmentNotificationStatus, 'sent');
-  assert.deepEqual(sends[0].taskNotification, { taskId, event: 'assigned' });
+  assert.deepEqual(sends[0].taskNotification, { taskId, event: 'assigned', recipient: 'new' });
   assert.match(sends[0].message, /You have been assigned a task.*task_.*Notify\nStatus: active/);
   assert.ok(sends[0].message.length > 4000);
   assert.ok(sends[0].message.endsWith('x'.repeat(4000)));
@@ -113,7 +113,10 @@ test('assignment notices commit before previous/new delivery, preserve independe
   const transferred = await service.execute({ action: 'assign', taskId, ownerSessionId: 'second', notifySession: true }, 'creator');
   assert.deepEqual(sends.slice(1).map(send => [send.target, send.trigger]), [['first', false], ['second', true]]);
   assert.equal(transferred.task.ownerSessionId, 'second');
-  assert.deepEqual(sends.slice(1).map(send => send.taskNotification), [{ taskId, event: 'transferred' }, { taskId, event: 'transferred' }]);
+  assert.deepEqual(sends.slice(1).map(send => send.taskNotification), [
+    { taskId, event: 'transferred', recipient: 'previous' },
+    { taskId, event: 'transferred', recipient: 'new' },
+  ]);
   assert.equal(transferred.task.previousOwnerNotificationStatus, 'failed');
   assert.equal(transferred.task.assignmentNotificationStatus, 'sent');
   assert.match(transferred.warning, /previous owner notification/);
@@ -127,7 +130,7 @@ test('assignment notices commit before previous/new delivery, preserve independe
   assert.equal(released.task.assignmentNotificationStatus, null);
   assert.deepEqual([sends[4].target, sends[4].trigger], ['second', false]);
   assert.match(sends[4].message, /ownership released/);
-  assert.deepEqual(sends[4].taskNotification, { taskId, event: 'released' });
+  assert.deepEqual(sends[4].taskNotification, { taskId, event: 'released', recipient: 'previous' });
   await service.execute({ action: 'assign', taskId, ownerSessionId: null, notifySession: true }, 'creator');
   assert.equal(sends.length, 5);
   const self = await service.execute({ action: 'assign', taskId, ownerSessionId: 'creator', notifySession: true }, 'creator');
@@ -221,7 +224,7 @@ test('create can commit an existing owner and optional assignment notification w
   await assert.rejects(() => service.execute({ action: 'claim', taskId: quiet.task.id }, 'second'), /already claimed/);
   const notified = await service.execute({ action: 'create', title: 'Notify on create', description: 'y'.repeat(4000), ownerSessionId: 'first', notifySession: true }, 'creator');
   assert.equal(notified.task.assignmentNotificationStatus, 'sent');
-  assert.deepEqual(sends[0].options.taskNotification, { taskId: notified.task.id, event: 'assigned' });
+  assert.deepEqual(sends[0].options.taskNotification, { taskId: notified.task.id, event: 'assigned', recipient: 'new' });
   assert.equal(sends[0].options.trigger, undefined);
   assert.ok(sends[0].message.endsWith('y'.repeat(4000)));
   fail = true;
