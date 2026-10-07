@@ -201,7 +201,7 @@ public sealed class LlmRequestJournalQualificationTests
             );
             var first = await journal.ReconstructAsync(rows[1]!["requestId"]!.GetValue<string>());
             var second = await journal.ReconstructAsync(rows[0]!["requestId"]!.GetValue<string>());
-            Assert.Equal(1, first["attempts"]!.AsArray().Count);
+            Assert.Single(first["attempts"]!.AsArray());
             Assert.Equal(2, second["attempts"]!.AsArray().Count);
             Assert.Equal(
                 "failure",

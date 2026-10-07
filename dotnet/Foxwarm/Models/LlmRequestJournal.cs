@@ -353,8 +353,9 @@ public sealed class LlmRequestJournalStore : IDisposable
             if (imported > sourceLength)
                 imported = 0;
             long completeOffset = imported;
-            using var transaction = connection.BeginTransaction(deferred: false);
+            var transaction = connection.BeginTransaction(deferred: false);
             var requestIds = new HashSet<string>(StringComparer.Ordinal);
+            var recordsInBatch = 0;
             await foreach (var item in ReadJsonlLinesAsync(fullPath, imported, token))
             {
                 token.ThrowIfCancellationRequested();
@@ -364,8 +365,31 @@ public sealed class LlmRequestJournalStore : IDisposable
                     continue;
                 using var document = JsonDocument.Parse(line);
                 InsertLegacyRecord(connection, transaction, document.RootElement, requestIds);
+                if (++recordsInBatch == 200)
+                {
+                    transaction.Commit();
+                    transaction.Dispose();
+                    transaction = connection.BeginTransaction(deferred: false);
+                    recordsInBatch = 0;
+                }
             }
             foreach (var requestId in requestIds)
+                ValidateRequestManifest(connection, transaction, requestId);
+            var verificationRequestIds = new HashSet<string>(StringComparer.Ordinal);
+            await foreach (var item in ReadJsonlLinesAsync(fullPath, 0, token))
+            {
+                token.ThrowIfCancellationRequested();
+                if (item.Line.Length == 0)
+                    continue;
+                using var document = JsonDocument.Parse(item.Line);
+                InsertLegacyRecord(
+                    connection,
+                    transaction,
+                    document.RootElement,
+                    verificationRequestIds
+                );
+            }
+            foreach (var requestId in verificationRequestIds)
                 ValidateRequestManifest(connection, transaction, requestId);
             using (var state = connection.CreateCommand())
             {
@@ -378,6 +402,7 @@ public sealed class LlmRequestJournalStore : IDisposable
                 state.ExecuteNonQuery();
             }
             transaction.Commit();
+            transaction.Dispose();
             var stateRoot = Path.Combine(root, "state");
             var relative = Path.GetRelativePath(stateRoot, fullPath);
             if (relative.StartsWith("..", StringComparison.Ordinal))
