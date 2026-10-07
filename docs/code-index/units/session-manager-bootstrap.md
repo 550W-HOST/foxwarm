@@ -8,7 +8,7 @@ Builds the Main Session manager, initializes identity/catalog/archive services, 
 
 ## Stable methods and callers
 
-`LoadMainHostAsync` orders identity evidence/catalog initialization/owner loading; admission resolves identity, calls `PersistentSessionAuthorityStore.LoadAsync`, distinguishes null store result from cataloged missing-authority, applies `RecoverBusySnapshot`, strict-saves recovery, then publishes the owner. Catalog helpers expose Main identity/topology/presentation query/publication callbacks.
+`LoadMainHostAsync` orders identity evidence/catalog initialization/owner loading; admission resolves identity, calls `PersistentSessionAuthorityStore.LoadAsync`, distinguishes null store result from cataloged missing-authority, applies `RecoverBusySnapshot`, strict-saves recovery, then publishes the owner. Catalog helpers expose Main identity/topology/presentation query/publication callbacks; presentation changes keep live parent fields aligned with the Main catalog before owner state notifications.
 
 ## Contract and side effects
 

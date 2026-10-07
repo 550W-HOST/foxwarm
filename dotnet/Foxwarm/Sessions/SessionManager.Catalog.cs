@@ -266,8 +266,8 @@ internal sealed partial class SessionManager
     {
         var all = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
         foreach (var chunk in ids.Distinct(StringComparer.Ordinal).Chunk(200))
-        foreach (var row in Catalog.GetMany(chunk))
-            all[SessionCatalog.Text(row["id"])!] = row;
+            foreach (var row in Catalog.GetMany(chunk))
+                all[SessionCatalog.Text(row["id"])!] = row;
         var current = LocalProjections();
         var currentMain = new Dictionary<string, JsonObject>(all, StringComparer.Ordinal);
         if (includeLocal)
@@ -277,8 +277,8 @@ internal sealed partial class SessionManager
                     .Where(id => !currentMain.ContainsKey(id))
                     .Chunk(200)
             )
-            foreach (var row in Catalog.GetMany(chunk))
-                currentMain[SessionCatalog.Text(row["id"])!] = row;
+                foreach (var row in Catalog.GetMany(chunk))
+                    currentMain[SessionCatalog.Text(row["id"])!] = row;
         foreach (var local in current)
         {
             var id = SessionCatalog.Text(local["id"])!;
@@ -401,6 +401,8 @@ internal sealed partial class SessionManager
         try
         {
             foreach (var id in change.ChangedIds)
+                SyncHotParent(id);
+            foreach (var id in change.ChangedIds)
                 Find(id)?.PublishStateChanged();
         }
         catch (Exception error)
@@ -408,6 +410,21 @@ internal sealed partial class SessionManager
             throw new PresentationCommittedException(change, error);
         }
         return change;
+    }
+
+    private void SyncHotParent(string id)
+    {
+        var owner = Find(id);
+        if (owner is null)
+            return;
+        var parent = SessionCatalog.Text(Catalog.Get(id)?["parentSessionId"]);
+        owner.Entry.WithState(state =>
+        {
+            if (parent is null)
+                state.AuthorityEnvelope.Remove("parentSessionId");
+            else
+                state.AuthorityEnvelope["parentSessionId"] = parent;
+        });
     }
 
     internal void ReplyToCommand(string id, string text)

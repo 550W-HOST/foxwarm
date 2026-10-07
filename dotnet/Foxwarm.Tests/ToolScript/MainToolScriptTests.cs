@@ -40,6 +40,8 @@ public sealed class MainToolScriptTests
                 f.Owner.Registry.TriggerOverride = _ => Task.CompletedTask;
                 f.mcp = new(f.Data);
                 var definitions = WorkspaceTools.Definitions();
+                foreach (var item in ObservationToolDefinitions.Definitions())
+                    definitions.Add(item?.DeepClone());
                 foreach (var item in ToolScriptToolDefinitions.Definitions())
                     definitions.Add(item?.DeepClone());
                 foreach (var item in UnifiedToolDefinitions.All())
@@ -171,6 +173,30 @@ public sealed class MainToolScriptTests
         Assert.Equal("completed", denied["status"]!.GetValue<string>());
         Assert.Equal("denied", denied["result"]!.GetValue<string>());
         Assert.False(File.Exists(Path.Combine(f.Work, "forbidden")));
+    }
+
+    [Fact]
+    public async Task Official_monty_can_call_targeted_session_status_through_the_direct_path()
+    {
+        await using var f = await Fixture.Create();
+        var target = await f.Manager.CreateNamedAsync("main", "monty-status-target", null, null);
+        var parent = await f.Manager.CreateNamedAsync("main", "monty-parent-target", null, null);
+        var child = await f.Manager.CreateNamedAsync("main", "monty-child-target", null, null);
+        var run = await f.Call(
+            "run_script",
+            new JsonObject
+            {
+                ["code"] =
+                    $"status = call_tool('session', {{'action': 'status', 'sessionId': '{target.Id}'}})\n"
+                    + $"parent = call_tool('session', {{'action': 'update-parent', 'sessionId': '{child.Id}', 'parentSessionId': '{parent.Id}'}})\n"
+                    + "return {'status': status['output'], 'parent': parent}\n",
+            }
+        );
+        Assert.True(run["status"]?.GetValue<string>() == "completed", run.ToJsonString());
+        var result = run["result"]!.AsObject();
+        Assert.Contains($"session id: `{target.Id}`", result["status"]!.GetValue<string>());
+        Assert.Equal(child.Id, result["parent"]!["sessionId"]!.GetValue<string>());
+        Assert.Equal(parent.Id, result["parent"]!["parentSessionId"]!.GetValue<string>());
     }
 
     [Fact]

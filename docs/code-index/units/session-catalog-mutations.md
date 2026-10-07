@@ -13,11 +13,11 @@ Owns the mutation edges around the Main catalog: authority publication, identity
 - Presentation helpers commit display name/parent/pinned/sidebar/channel-facing fields without entering Session authority validation.
 - Deletion helpers remove projection rows, aliases, counts, and dependent catalog metadata after the manager has completed its lifecycle claim.
 
-Callers: `SessionManager` lifecycle/identity/deletion methods, `SessionSaveLane.CommitDisplayNameAsync`, `WebUIChannel` presentation routes, and `MessageRouter` presentation commands.
+Callers: `SessionManager` lifecycle/identity/deletion methods, `SessionObservation` parent updates, `SessionSaveLane.CommitDisplayNameAsync`, `WebUIChannel` presentation routes, and `MessageRouter` presentation commands.
 
 ## Contract and side effects
 
-This unit cannot reconstruct active history, authorize a Session mutation, or bypass the exact owner. Its SQLite writes update the Main projection only. Presentation changes can race a semantic JSON save; the catalog mutation's transaction and `PublishAuthority` overlay rules determine which Main-owned fields remain visible, while the authority store remains the source for semantic fields.
+This unit cannot reconstruct active history, authorize a Session mutation, or bypass the exact owner. Its SQLite writes update the Main projection only. Presentation changes can race a semantic JSON save; the catalog mutation's transaction and `PublishAuthority` overlay rules determine which Main-owned fields remain visible, while the authority store remains the source for semantic fields. Parent presentation changes synchronize any live owner’s cached parent field before state-change notification so routing and status do not retain an older hot parent shadow.
 
 ## Tests
 

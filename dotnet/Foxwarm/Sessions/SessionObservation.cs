@@ -158,7 +158,11 @@ internal sealed partial class SessionManager
                 )
             );
         }
-        Keys(args, ["action", "start", "count", "scope", "sessionId", "name"], []);
+        Keys(
+            args,
+            ["action", "start", "count", "scope", "sessionId", "name", "parentSessionId"],
+            []
+        );
         var action =
             SessionWait.Text(args["action"]) is string raw && SessionGoal.Trim(raw).Length > 0
                 ? SessionGoal.Trim(raw).ToLowerInvariant()
@@ -186,6 +190,36 @@ internal sealed partial class SessionManager
                     ? $"Session `{targetId}` display name changed from {Format(result.Previous)} to {Format(result.Current)}."
                     : $"Session `{targetId}` display name unchanged (from {Format(result.Previous)} to {Format(result.Current)})."
             );
+        }
+        if (action == "update-parent")
+        {
+            if (AgentIsolated(source.Agent))
+                throw new InvalidDataException(
+                    "Isolated session cannot use session parent update tool."
+                );
+            var requestedTarget = OptionalString(args, "sessionId");
+            var targetId = string.IsNullOrWhiteSpace(requestedTarget) ? source.Id : requestedTarget;
+            if (!args.ContainsKey("parentSessionId"))
+                throw new InvalidDataException(
+                    "parentSessionId is required for action=\"update-parent\" and must be a non-empty session ID or null."
+                );
+            string? requestedParent = null;
+            if (args["parentSessionId"] is not null)
+            {
+                requestedParent = SessionWait.Text(args["parentSessionId"]);
+                if (requestedParent is null || SessionGoal.Trim(requestedParent).Length == 0)
+                    throw new InvalidDataException(
+                        "parentSessionId must be a non-empty session ID or null."
+                    );
+                requestedParent = SessionGoal.Trim(requestedParent);
+            }
+            var change = ChangePresentation(catalog => catalog.SetParent(targetId, requestedParent));
+            return new JsonObject
+            {
+                ["sessionId"] = change.Result["childSessionId"]?.DeepClone(),
+                ["previousParentSessionId"] = change.Result["previousParentSessionId"]?.DeepClone(),
+                ["parentSessionId"] = change.Result["parentSessionId"]?.DeepClone(),
+            };
         }
         if (action == "list")
         {
@@ -224,25 +258,41 @@ internal sealed partial class SessionManager
         }
         if (action != "status")
             throw new InvalidDataException(
-                "session.action must be \"status\", \"list\", or \"update-display-name\"."
+                "session.action must be \"status\", \"list\", \"update-display-name\", or \"update-parent\"."
             );
-        var currentCwd = source.Entry.WithState(state =>
+        var requestedStatusId = OptionalString(args, "sessionId");
+        requestedStatusId = string.IsNullOrWhiteSpace(requestedStatusId)
+            ? source.Id
+            : SessionGoal.Trim(requestedStatusId);
+        if (AgentIsolated(source.Agent) && !IsCurrentSessionReference(source, requestedStatusId))
+            throw new InvalidDataException(
+                "Isolated session can only use session status for its current session."
+            );
+        var statusTarget = await GetExistingAsync(requestedStatusId);
+        if (statusTarget is null)
+            return Output($"Session `{requestedStatusId}` not found.");
+        var currentCwd = statusTarget.Entry.WithState(state =>
             SessionWait.Text(state.AuthorityEnvelope["cwd"])
         );
-        var meta = source.Metadata();
-        var dto = source.BuildDto(meta);
-        var summary = source.ContextSummary();
+        var meta = statusTarget.Metadata();
+        var dto = statusTarget.BuildDto(meta);
+        var summary = statusTarget.ContextSummary();
         var catalog = models.Capture();
         var leaf = catalog.All.Count == 0 ? null : catalog.Resolve(meta.Model);
-        var (_, children) = CatalogMetadataOffset(0, 10, parent: source.Id);
+        var (_, children) = CatalogMetadataOffset(0, 10, parent: statusTarget.Id);
+        var currentNode = statusTarget.Entry.WithState(state =>
+            SessionWait.Text(state.AuthorityEnvelope["currentNode"]) ?? "master"
+        );
+        var isolated = AgentIsolated(statusTarget.Agent);
         return Output(
             "📊 *Session Status*\n\n"
-                + $"- session id: `{source.Id}`\n- name: {meta.DisplayName ?? "unset"}\n- agent id/name: `{source.Agent}`\n- current node: `master`\n- agent directory: `{agents.AgentDirectory(source.Agent)}`\n- current cwd: {(currentCwd is string cwd && SessionGoal.Trim(cwd).Length > 0 ? $"`{SessionGoal.Trim(cwd)}`" : $"not set (defaults to current node agent directory; master: `{agents.AgentDirectory(source.Agent)}`)")}\n"
+                + $"- session id: `{meta.Id}`\n- name: {meta.DisplayName ?? "unset"}\n- agent id/name: `{statusTarget.Agent}`\n- current node: `{currentNode}` (connected={(currentNode == "master" ? "true" : "false")}, type={(currentNode == "master" ? "master" : "unknown")}){(isolated ? " (isolated)" : "")}\n- agent directory: `{agents.AgentDirectory(statusTarget.Agent)}`\n- current cwd: {(currentCwd is string cwd && SessionGoal.Trim(cwd).Length > 0 ? $"`{SessionGoal.Trim(cwd)}`" : $"not set (defaults to current node agent directory; master: `{agents.AgentDirectory(statusTarget.Agent)}`)")}\n"
                 + (
                     meta.ParentSessionId is null
                         ? ""
                         : $"- parent session id: `{meta.ParentSessionId}`\n"
                 )
+                + (meta.Archived ? "- 📦 archived\n" : "")
                 + $"- model: `{leaf?.Key ?? catalog.DefaultKey}`\n- effort: raw={meta.Effort ?? "unset"}, effective={(SessionWait.Text(dto["effectiveEffort"]) ?? "per-leaf default")}, allowed={string.Join('|', leaf?.AllowedEfforts ?? HostModels.Efforts)}, default={(leaf is null ? "high" : leaf.DefaultEffort)}\n"
                 + $"- messages: {meta.MessageCount}\n- token estimate: ~{summary.Estimate} / {leaf?.ContextLimit ?? catalog.PresentationContextLimit}\n- images: {summary.Images}\n- last usage: {(summary.Usage is null ? "none" : EcmaJson.Stringify(summary.Usage))}\n- last message: {SessionStatus.Date(meta.LastMessageTime)}\n- auto-compact threshold: ~{dto["effectiveCompactThresholdTokens"]} tokens ({(summary.Threshold is > 0 ? "override" : "model default")})\n"
                 + $"- child model: raw={meta.ChildModel ?? "follow current"}, effective={dto["effectiveChildModelKey"]}; child effort: raw={meta.ChildEffort ?? "unset"}, effective={dto["effectiveChildEffort"]}\n"
@@ -257,6 +307,14 @@ internal sealed partial class SessionManager
         );
     }
 
+    private bool IsCurrentSessionReference(SessionOwner source, string requested)
+    {
+        if (requested == source.Id)
+            return true;
+        return Catalog.Get(source.Id)?["aliases"] is JsonArray aliases
+            && aliases.OfType<JsonNode>().Select(SessionCatalog.Text).Contains(requested);
+    }
+
     private (long Total, JsonObject[] Page) CatalogMetadataOffset(
         int start,
         int count,
@@ -267,8 +325,8 @@ internal sealed partial class SessionManager
         var local = LocalProjections();
         var persistedLocal = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
         foreach (var chunk in local.Select(row => SessionCatalog.Text(row["id"])!).Chunk(200))
-        foreach (var row in Catalog.GetMany(chunk))
-            persistedLocal[SessionCatalog.Text(row["id"])!] = row;
+            foreach (var row in Catalog.GetMany(chunk))
+                persistedLocal[SessionCatalog.Text(row["id"])!] = row;
         bool Scope(JsonObject row) =>
             (agent is null || SessionCatalog.Text(row["agent"]) == agent)
             && (parent is null || SessionCatalog.Text(row["parentSessionId"]) == parent);

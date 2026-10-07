@@ -10,7 +10,7 @@ Discovers concrete tools, projects model definitions, applies output/control pol
 
 - `ToolRegistry` combines builtins, MCP, provider-hosted definitions, and permitted Node capabilities into one discovered set with stable names/schemas.
 - `UnifiedToolDefinitions`/`UnifiedTools.Schema` publish model-facing JSON; `UnifiedTools` resolves calls and carries Session/agent/request scope into execution.
-- `SessionToolExecutor` dispatches definitions, commits observation/memory/wait/settings/timer/compact changes through SessionManager/save-lane APIs, and returns typed tool results; its ToolScript partial bridges to MainToolScript.
+- `SessionToolExecutor` dispatches definitions, commits observation/memory/wait/settings/timer/compact changes through SessionManager/save-lane APIs, and returns typed tool results; the `session` tool resolves targeted status through the real Main owner and applies parent changes through catalog presentation mutation; its ToolScript partial bridges to MainToolScript.
 - `ToolCallControls`, `ToolOutputGuard`, `BoundedTextExcerpt`, and `ToolResponseFormatting` enforce call ordering, size/truncation, status/error envelopes, and provider-visible output boundaries.
 
 ## Contract and side effects
@@ -19,4 +19,4 @@ Definition discovery is not authorization: execution calls `ToolAuthorizationEva
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Tools/MainLocalToolsTests.cs`; `MainLocalToolsTests.cs`; `MainLocalToolsTests.cs`; `ToolAuthorizationEffectsTests.cs`; `HandoffConfirmationTests.cs`; ToolScript tool tests.
+`dotnet/Foxwarm.Tests/Tools/MainLocalToolsTests.cs`; `ToolAuthorizationEffectsTests.cs`; `HandoffConfirmationTests.cs`; ToolScript tool tests.

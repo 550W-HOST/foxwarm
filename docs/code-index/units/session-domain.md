@@ -9,7 +9,7 @@ Defines stable Session/Agent identity and message shapes used by owner/runtime, 
 ## Stable symbols and callers
 
 - `SessionIdentity` is the canonical `(sessionId, agent)` lifetime key; `SessionBoundary`/`SessionContinuation` carry fork/continuation relationships.
-- `CanonicalMessage`, `FunctionCallArguments`, and `ModelRetryNotice` define validated history/tool/retry records; `SessionObservation.cs` supplies message-page/status observation helpers. Deep clones prevent caller mutation after admission.
+- `CanonicalMessage`, `FunctionCallArguments`, and `ModelRetryNotice` define validated history/tool/retry records; `SessionObservation.cs` supplies message-page and targeted status observation helpers plus the `session` parent-update dispatch. Targeted status resolves aliases to the real hot owner, accounts for that owner's persistent memory snapshot, and does not admit unknown IDs.
 - `SessionWait`, `SessionWaitTimeouts`, and `WaitLiveness` distinguish declared durable waits from transient in-flight states.
 - `AgentCatalog`/`AgentMemory` load Agent metadata, selected/conditional memory, manifests, and knowledge references; `SessionListQueries` builds query DTOs but does not own catalog rows.
 - `SessionPresentation`, `SessionGoal`, counters, and source normalization provide stable fields for manager/save-lane/UI operations.

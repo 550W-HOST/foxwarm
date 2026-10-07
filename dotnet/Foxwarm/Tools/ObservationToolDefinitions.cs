@@ -41,15 +41,16 @@ internal static class ObservationToolDefinitions
         [
             Definition(
                 "session",
-                "Inspect this session's status, list sessions in the current Agent by default, or change a session's display name. Status includes the current Node and working directory, model and effort settings, context usage, and recent children.",
+                "Inspect session status, list sessions in the current Agent by default, or change a session's display name or parent. Status includes the current Node and working directory, model and effort settings, context usage, and recent children.",
                 new JsonObject
                 {
                     ["action"] = Field(
                         "string",
-                        "status (default) inspects this session; list returns a page of sessions; update-display-name sets or clears a session's display name.",
+                        "status (default) inspects a session; list returns a page of sessions; update-display-name sets or clears its display name; update-parent changes or removes its parent.",
                         "status",
                         "list",
-                        "update-display-name"
+                        "update-display-name",
+                        "update-parent"
                     ),
                     ["start"] = Field(
                         "number",
@@ -67,12 +68,18 @@ internal static class ObservationToolDefinitions
                     ),
                     ["sessionId"] = Field(
                         "string",
-                        "Target for update-display-name. Defaults to this session; status always describes this session."
+                        "Target for status, update-display-name, or update-parent. Defaults to this session."
                     ),
                     ["name"] = Field(
                         "string",
                         "New display name for update-display-name. An empty string clears it."
                     ),
+                    ["parentSessionId"] = new JsonObject
+                    {
+                        ["type"] = new JsonArray("string", "null"),
+                        ["description"] =
+                            "Existing Session ID to use as the parent, or null to remove the parent. Required for update-parent.",
+                    },
                 }
             ),
             Definition(

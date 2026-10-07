@@ -41,6 +41,8 @@ public sealed class MainLocalToolsTests
             f.Owner = await f.Manager.CreateNamedAsync("main", "tools", null, null);
             f.mcp = new(Path.Combine(f.Temp.Path, "data"));
             var defs = MainLocalToolDefinitions.Definitions();
+            foreach (var definition in ObservationToolDefinitions.Definitions())
+                defs.Add(definition.DeepClone());
             foreach (var definition in WorkspaceTools.Definitions().OfType<JsonObject>())
                 defs.Add(definition.DeepClone());
             foreach (var definition in FileDeliveryDefinitions.Definitions().OfType<JsonObject>())
@@ -817,6 +819,138 @@ public sealed class MainLocalToolsTests
         var missing = await f.Call("stop_session", new JsonObject { ["sessionId"] = "missing" });
         Assert.Equal("tool_error", Error(missing));
         Assert.Contains("not found", missing["error"]!["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Session_status_targets_the_real_owner_and_does_not_admit_unknown_sessions()
+    {
+        await using var f = await Fixture.Create();
+        var target = await f.Manager.CreateNamedAsync("main", "status-target", null, null);
+        target.Entry.WithState(state =>
+        {
+            state.AuthorityEnvelope["cwd"] = "/target/cwd";
+            state.AuthorityEnvelope["persistentMemorySnapshot"] = "target-only memory";
+            state.History.Add(
+                new JsonObject
+                {
+                    ["role"] = "user",
+                    ["parts"] = new JsonArray(new JsonObject { ["text"] = "target-only history" }),
+                }
+            );
+            state.Meta["messageCount"] = state.History.Count;
+        });
+        var before = f.Manager.Owners().Count();
+        var status = await f.Call(
+            "session",
+            new JsonObject { ["action"] = "status", ["sessionId"] = target.Id }
+        );
+        Assert.True(Error(status) is null, status.ToJsonString());
+        var output = status["output"]!.GetValue<string>();
+        Assert.Contains($"session id: `{target.Id}`", output);
+        Assert.Contains("/target/cwd", output);
+        Assert.Contains("messages: 1", output);
+
+        var unified = await f.Call(
+            "call_tool",
+            new JsonObject
+            {
+                ["source"] = "builtin",
+                ["name"] = "session",
+                ["args"] = new JsonObject
+                {
+                    ["action"] = "status",
+                    ["sessionId"] = target.Id,
+                },
+            }
+        );
+        Assert.True(Error(unified) is null, unified.ToJsonString());
+        Assert.Contains($"session id: `{target.Id}`", unified["output"]!.GetValue<string>());
+
+        var missing = await f.Call(
+            "session",
+            new JsonObject { ["action"] = "status", ["sessionId"] = "missing-target" }
+        );
+        Assert.Null(Error(missing));
+        Assert.Contains("Session `missing-target` not found.", missing["output"]!.GetValue<string>());
+        Assert.Equal(before, f.Manager.Owners().Count());
+    }
+
+    [Fact]
+    public async Task Session_update_parent_uses_catalog_topology_and_hot_owner_state()
+    {
+        await using var f = await Fixture.Create();
+        var parent = await f.Manager.CreateNamedAsync("main", "parent-target", null, null);
+        var child = await f.Manager.CreateNamedAsync("main", "child-target", null, null);
+
+        var attached = await f.Call(
+            "session",
+            new JsonObject
+            {
+                ["action"] = "update-parent",
+                ["sessionId"] = child.Id,
+                ["parentSessionId"] = parent.Id,
+            }
+        );
+        Assert.True(Error(attached) is null, attached.ToJsonString());
+        Assert.Equal(child.Id, attached["sessionId"]!.GetValue<string>());
+        Assert.Equal(parent.Id, attached["parentSessionId"]!.GetValue<string>());
+        Assert.Null(attached["previousParentSessionId"]);
+        Assert.Equal(parent.Id, f.Manager.Catalog.Get(child.Id)!["parentSessionId"]!.GetValue<string>());
+        Assert.Equal(parent.Id, child.Metadata().ParentSessionId);
+        Assert.Equal(parent.Id, child.Entry.Snapshot().AuthorityEnvelope["parentSessionId"]!.GetValue<string>());
+        await f.Manager.SendAsync(parent, child.Id, "routing probe", trigger: false);
+        Assert.Equal("parent", child.Entry.Snapshot().Queue[^1].SourceSessionRelation);
+
+        var noop = await f.Call(
+            "session",
+            new JsonObject
+            {
+                ["action"] = "update-parent",
+                ["sessionId"] = child.Id,
+                ["parentSessionId"] = parent.Id,
+            }
+        );
+        Assert.Null(Error(noop));
+        Assert.Equal(parent.Id, noop["previousParentSessionId"]!.GetValue<string>());
+        Assert.Equal(parent.Id, noop["parentSessionId"]!.GetValue<string>());
+
+        var detached = await f.Call(
+            "session",
+            new JsonObject
+            {
+                ["action"] = "update-parent",
+                ["sessionId"] = child.Id,
+                ["parentSessionId"] = null,
+            }
+        );
+        Assert.Null(Error(detached));
+        Assert.Equal(parent.Id, detached["previousParentSessionId"]!.GetValue<string>());
+        Assert.Null(detached["parentSessionId"]);
+        Assert.Null(child.Metadata().ParentSessionId);
+        Assert.Null(child.Entry.Snapshot().AuthorityEnvelope["parentSessionId"]);
+
+        var reattached = await f.Call(
+            "session",
+            new JsonObject
+            {
+                ["action"] = "update-parent",
+                ["sessionId"] = child.Id,
+                ["parentSessionId"] = parent.Id,
+            }
+        );
+        Assert.Null(Error(reattached));
+
+        var cycle = await f.Call(
+            "session",
+            new JsonObject
+            {
+                ["action"] = "update-parent",
+                ["sessionId"] = parent.Id,
+                ["parentSessionId"] = child.Id,
+            }
+        );
+        Assert.Equal("agent_tool_error", Error(cycle));
+        Assert.Contains("cycle", cycle["error"]!["message"]!.GetValue<string>());
     }
 
     [Fact]

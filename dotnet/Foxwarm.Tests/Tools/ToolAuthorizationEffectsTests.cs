@@ -482,6 +482,25 @@ public sealed class ToolAuthorizationEffectsTests
             Error(await Call(execution.Tools, "session", Obj("""{"action":"list"}""")))
         );
         Assert.Null(Error(await Call(execution.Tools, "session", Obj("""{"action":"status"}"""))));
+        Assert.Null(
+            Error(
+                await Call(
+                    execution.Tools,
+                    "session",
+                    Obj("""{"action":"status","sessionId":"self"}""")
+                )
+            )
+        );
+        Assert.Equal(
+            "agent_tool_error",
+            Error(
+                await Call(
+                    execution.Tools,
+                    "session",
+                    Obj("""{"action":"status","sessionId":"kid"}""")
+                )
+            )
+        );
         Assert.Equal(
             "tool_authorization_denied",
             Error(
