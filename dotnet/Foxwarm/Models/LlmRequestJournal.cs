@@ -651,6 +651,255 @@ public sealed class LlmRequestJournalStore : IDisposable
             : Convert.ToInt64(value, CultureInfo.InvariantCulture);
     }
 
+    private static void ValidateLegacyRecordShape(JsonElement record)
+    {
+        if (
+            !record.TryGetProperty("v", out var version)
+            || version.ValueKind != JsonValueKind.Number
+            || version.GetInt32() != 1
+        )
+            throw new InvalidDataException("Invalid legacy LLM request journal record version.");
+        var kind =
+            record.TryGetProperty("kind", out var kindValue)
+            && kindValue.ValueKind == JsonValueKind.String
+                ? kindValue.GetString()
+                : null;
+        if (kind is not ("object" or "request" or "attempt-start" or "attempt-result"))
+            throw new InvalidDataException("Invalid legacy LLM request journal record kind.");
+        var allowed = kind switch
+        {
+            "object" => new[] { "v", "kind", "objectId", "objectKind", "payload", "createdAt" },
+            "request" => new[]
+            {
+                "v",
+                "kind",
+                "requestId",
+                "sessionId",
+                "purpose",
+                "iteration",
+                "createdAt",
+                "promptObjectId",
+                "toolSchemaObjectId",
+                "requestedModelKey",
+                "promptCacheKeyHash",
+                "messageCount",
+                "checkpointMessageObjectIds",
+                "baseRequestId",
+                "commonPrefixLength",
+                "appendedMessageObjectIds",
+                "deltaDepth",
+            },
+            "attempt-start" => new[]
+            {
+                "v",
+                "kind",
+                "eventId",
+                "requestId",
+                "attempt",
+                "startedAt",
+                "concreteModelId",
+                "virtualModelKey",
+                "providerType",
+                "semanticPayloadSha256",
+                "promptObjectId",
+            },
+            _ => new[]
+            {
+                "v",
+                "kind",
+                "eventId",
+                "requestId",
+                "attempt",
+                "completedAt",
+                "outcome",
+                "result",
+                "error",
+            },
+        };
+        foreach (var property in record.EnumerateObject())
+            if (!allowed.Contains(property.Name, StringComparer.Ordinal))
+                throw new InvalidDataException(
+                    $"Unknown legacy LLM journal field {property.Name}."
+                );
+        static void RequiredString(JsonElement value, string name)
+        {
+            if (
+                !value.TryGetProperty(name, out var property)
+                || property.ValueKind != JsonValueKind.String
+            )
+                throw new InvalidDataException($"Legacy journal field {name} must be a string.");
+        }
+        static void RequiredFinite(JsonElement value, string name)
+        {
+            if (
+                !value.TryGetProperty(name, out var property)
+                || property.ValueKind != JsonValueKind.Number
+                || !double.IsFinite(property.GetDouble())
+            )
+                throw new InvalidDataException($"Legacy journal field {name} must be finite.");
+        }
+        static void RequiredInteger(
+            JsonElement value,
+            string name,
+            int minimum,
+            int maximum = int.MaxValue
+        )
+        {
+            if (
+                !value.TryGetProperty(name, out var property)
+                || property.ValueKind != JsonValueKind.Number
+                || !property.TryGetInt32(out var number)
+                || number < minimum
+                || number > maximum
+            )
+                throw new InvalidDataException(
+                    $"Legacy journal field {name} must be an integer in range."
+                );
+        }
+        static void OptionalString(JsonElement value, string name)
+        {
+            if (
+                value.TryGetProperty(name, out var property)
+                && property.ValueKind != JsonValueKind.String
+            )
+                throw new InvalidDataException(
+                    $"Legacy journal field {name} must be omitted or a string."
+                );
+        }
+        static void Sha256String(JsonElement value, string name)
+        {
+            RequiredString(value, name);
+            var text = value.GetProperty(name).GetString()!;
+            if (
+                text.Length != 71
+                || !text.StartsWith("sha256:", StringComparison.Ordinal)
+                || text[7..].Any(character => !Uri.IsHexDigit(character) || char.IsUpper(character))
+            )
+                throw new InvalidDataException(
+                    $"Legacy journal field {name} is not a lowercase sha256 identifier."
+                );
+        }
+        switch (kind)
+        {
+            case "object":
+                RequiredString(record, "objectId");
+                RequiredString(record, "objectKind");
+                RequiredString(record, "payload");
+                RequiredFinite(record, "createdAt");
+                if (
+                    record.GetProperty("objectKind").GetString()
+                    is not ("prompt" or "tool-schema" or "message")
+                )
+                    throw new InvalidDataException("Invalid legacy object kind.");
+                if (
+                    Sha256(
+                        record.GetProperty("objectKind").GetString()!
+                            + "\0"
+                            + record.GetProperty("payload").GetString()!
+                    ) != record.GetProperty("objectId").GetString()
+                )
+                    throw new InvalidDataException("Legacy object hash mismatch.");
+                break;
+            case "request":
+                RequiredString(record, "requestId");
+                OptionalString(record, "sessionId");
+                RequiredString(record, "purpose");
+                RequiredInteger(record, "iteration", 0);
+                RequiredFinite(record, "createdAt");
+                RequiredString(record, "promptObjectId");
+                RequiredString(record, "toolSchemaObjectId");
+                RequiredString(record, "requestedModelKey");
+                Sha256String(record, "promptCacheKeyHash");
+                RequiredInteger(record, "messageCount", 0);
+                RequiredInteger(record, "deltaDepth", 0, 8);
+                if (
+                    record.GetProperty("purpose").GetString()
+                    is not (
+                        "normal-turn"
+                        or "compact-plan"
+                        or "btw"
+                        or "toolscript-one-shot"
+                        or "cli"
+                        or "setup-test"
+                        or "low-level"
+                    )
+                )
+                    throw new InvalidDataException("Invalid legacy journal purpose.");
+                var checkpoint = record.TryGetProperty(
+                    "checkpointMessageObjectIds",
+                    out var checkpointValue
+                );
+                var delta =
+                    record.TryGetProperty("baseRequestId", out var baseValue)
+                    || record.TryGetProperty("commonPrefixLength", out _)
+                    || record.TryGetProperty("appendedMessageObjectIds", out _);
+                if (
+                    checkpoint == delta
+                    || checkpoint && record.GetProperty("deltaDepth").GetInt32() != 0
+                )
+                    throw new InvalidDataException(
+                        "Legacy request checkpoint/delta shape is invalid."
+                    );
+                if (checkpointValue.ValueKind != JsonValueKind.Array && checkpoint)
+                    throw new InvalidDataException("Legacy checkpoint ids must be an array.");
+                if (delta)
+                {
+                    if (
+                        !record.TryGetProperty("baseRequestId", out var baseRequest)
+                        || baseRequest.ValueKind != JsonValueKind.String
+                        || !record.TryGetProperty("commonPrefixLength", out var common)
+                        || common.ValueKind != JsonValueKind.Number
+                        || !common.TryGetInt32(out var prefix)
+                        || prefix < 0
+                        || !record.TryGetProperty("appendedMessageObjectIds", out var appended)
+                        || appended.ValueKind != JsonValueKind.Array
+                    )
+                        throw new InvalidDataException("Legacy request delta shape is invalid.");
+                }
+                break;
+            case "attempt-start":
+                RequiredString(record, "eventId");
+                RequiredString(record, "requestId");
+                RequiredInteger(record, "attempt", 1);
+                RequiredFinite(record, "startedAt");
+                RequiredString(record, "concreteModelId");
+                OptionalString(record, "virtualModelKey");
+                RequiredString(record, "providerType");
+                Sha256String(record, "semanticPayloadSha256");
+                if (record.TryGetProperty("promptObjectId", out var prompt))
+                    Sha256String(record, "promptObjectId");
+                break;
+            default:
+                RequiredString(record, "eventId");
+                RequiredString(record, "requestId");
+                RequiredInteger(record, "attempt", 1);
+                RequiredFinite(record, "completedAt");
+                RequiredString(record, "outcome");
+                if (
+                    record.GetProperty("outcome").GetString()
+                    is not ("success" or "failure" or "abort")
+                )
+                    throw new InvalidDataException("Invalid legacy attempt outcome.");
+                if (
+                    record.GetProperty("outcome").GetString() == "success"
+                    && (
+                        !record.TryGetProperty("result", out var result)
+                        || result.ValueKind != JsonValueKind.Object
+                    )
+                )
+                    throw new InvalidDataException("Legacy success result is missing.");
+                if (
+                    record.GetProperty("outcome").GetString() != "success"
+                    && (
+                        !record.TryGetProperty("error", out var error)
+                        || error.ValueKind != JsonValueKind.Object
+                    )
+                )
+                    throw new InvalidDataException("Legacy attempt error is missing.");
+                break;
+        }
+    }
+
     private static void InsertLegacyRecord(
         SqliteConnection connection,
         SqliteTransaction transaction,
@@ -658,6 +907,7 @@ public sealed class LlmRequestJournalStore : IDisposable
         HashSet<string> requestIds
     )
     {
+        ValidateLegacyRecordShape(record);
         if (
             !record.TryGetProperty("v", out var version)
             || version.GetInt32() != 1
@@ -880,6 +1130,7 @@ public sealed class LlmRequestJournalStore : IDisposable
         JsonElement record
     )
     {
+        ValidateLegacyRecordShape(record);
         switch (record.GetProperty("kind").GetString())
         {
             case "object":
