@@ -301,14 +301,13 @@ export class TaskStore {
     return { task: this.requireTask(db, task.id), ...(assignmentNotification ? { assignmentNotification } : {}) };
   }
 
-  bindChild(taskId: string, childSessionId: string): void {
+  attachChild(taskId: string, childSessionId: string): void {
     childSessionId = this.canonicalId(childSessionId);
     const db = this.getDb();
     db.exec('BEGIN IMMEDIATE');
     try {
       const task = this.requireTask(db, taskId);
-      if (task.ownerSessionId) throw new TaskError('TASK_OWNED', `Task ${task.id} is already owned by Session ${task.ownerSessionId}.`, 409);
-      this.executeInTransaction(db, { action: 'claim', taskId }, childSessionId, TASK_LIST_LIMIT);
+      if (task.ownerSessionId !== childSessionId) throw new TaskError('TASK_OWNED', `Task ${task.id} is not owned by child Session ${childSessionId}.`, 409);
       db.prepare('UPDATE tasks SET attachedSessionId=? WHERE id=?').run(childSessionId, taskId);
       this.addNote(db, taskId, childSessionId, `Attached new Session ${childSessionId}.`, Date.now());
       db.exec('COMMIT');

@@ -44,11 +44,10 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
   const create = () => sessionManager.createChildSession(currentSessionId, suffix, fork,
     { agentName, displayName, node, taskId, model: forced.model, effort: forced.effort, sourceOverride: (ctx as any).sourceOverride });
   const childSessionId = taskId
-    ? await taskService.createAttachedChild(taskId, currentSessionId, create)
+    ? await taskService.createAttachedChild(taskId, currentSessionId, create, message)
     : await create();
 
   if (taskId) {
-    await taskService.deliverAttachedChildAssignment(taskId, childSessionId, currentSessionId, message);
     const output = `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'}). Task assignment sent.`;
     if (afterSend === 'wait') {
       return { output, __toolPostAction: { waitForReply: true, successfulSendToSessionTarget: childSessionId } };

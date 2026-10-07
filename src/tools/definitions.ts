@@ -288,12 +288,12 @@ Example:
         {
             name: 'create_child_session',
             defaultInject: true,
-            description: `Create a child Session under the current Session. With taskId, the child claims the task, receives its full description and any message as one assignment, and starts work. Task completion notifies the task creator; do not send a separate routine completion report. Without taskId, message is optional and normal completion reporting applies.`,
+            description: `Create a child Session under the current Session. With taskId, the task is assigned or transferred to the child, receives its full description and any message as one assignment, and starts work. Task completion notifies the task creator; do not send a separate routine completion report. Without taskId, message is optional and normal completion reporting applies.`,
             parameters: {
                 type: 'object',
                 properties: {
                     agentName: { type: 'string', description: "Existing agent that will own the child. Omit to use this session's agent." },
-                    taskId: { type: 'string', maxLength: 128, description: "Existing unowned task to assign to the new Session. The child receives the full task description and starts work. Creation fails if the task is owned or terminal." },
+                    taskId: { type: 'string', maxLength: 128, description: "Existing task to assign or transfer to the new Session. The child receives the full task description and starts work. Completed or cancelled tasks cannot be assigned." },
                     suffix: { type: 'string', description: "Name for the child. Within the same agent, it replaces a main leaf or is appended to the parent ID. Under a different agent, it becomes that agent's session name. A numeric suffix is added when needed to avoid an existing ID." },
                     displayName: { type: 'string', description: "Display name for the new child session. This does not change its session ID." },
                     fork: { type: 'boolean', description: "Copy the parent's current context into the child. Defaults to false. Context copying is available only when the child belongs to the same agent as the parent.", default: false },
