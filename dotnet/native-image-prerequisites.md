@@ -39,4 +39,4 @@ New canonical history, queued parts and immutable Archive rows contain verified 
 
 New identity move intent is version 2 and retains legacy Session image directories. Version 1 recovery keeps its original directional artifact behavior. Already completed old moves with missing legacy paths are not repaired or reconstructed. Other identity, JSON, Archive and fork-cap contracts remain unchanged.
 
-See the canonical [Main input-images contract](../docs/code-index/units/dotnet.md#main-input-images) for staging authorization, safe browser transport, provider-only hydration, call association, request-local deduplication and remaining non-goals.
+See the canonical [Main input-images contract](../docs/code-index/units/images.md) for staging authorization, safe browser transport, provider-only hydration, call association, request-local deduplication and remaining non-goals.
