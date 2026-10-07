@@ -21,27 +21,30 @@ public sealed partial class SessionSaveLane
             {
                 var envelope = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();
                 envelope["promptCacheKey"] = newCache;
+                var staged = await PrepareGoalOnlyAsync(
+                        snapshot with
+                        {
+                            AuthorityEnvelope = envelope,
+                        }
+                    )
+                    .ConfigureAwait(false);
                 void Publish(SessionState state)
                 {
                     state.AuthorityEnvelope["promptCacheKey"] = newCache;
                 }
                 try
                 {
-                    await store.CommitAsync(
-                        snapshot with
-                        {
-                            AuthorityEnvelope = envelope,
-                        },
-                        SaveKind.Strict
-                    );
+                    await store.CommitAsync(staged, SaveKind.Strict);
                 }
                 catch (AuthorityCommittedException)
                 {
                     entry.WithState(Publish);
+                    PublishGoalOnly(staged);
                     entry.InvokeCommitted(entry.Snapshot());
                     throw;
                 }
                 entry.WithState(Publish);
+                PublishGoalOnly(staged);
                 entry.InvokeCommitted(entry.Snapshot());
             }
             var captured = entry.Snapshot();
@@ -65,6 +68,7 @@ public sealed partial class SessionSaveLane
                         .ToArray(),
                 }
             );
+            staged = await PrepareGoalOnlyAsync(staged).ConfigureAwait(false);
             void Publish(SessionState state) =>
                 state.Queue.RemoveAll(item => captured.Any(prior => ReferenceEquals(item, prior)));
             try
@@ -74,10 +78,12 @@ public sealed partial class SessionSaveLane
             catch (AuthorityCommittedException)
             {
                 entry.WithState(Publish);
+                PublishGoalOnly(staged);
                 entry.InvokeQueuedCommitted(entry.Snapshot());
                 throw;
             }
             entry.WithState(Publish);
+            PublishGoalOnly(staged);
             entry.InvokeQueuedCommitted(entry.Snapshot());
         });
 
@@ -117,6 +123,7 @@ public sealed partial class SessionSaveLane
                 BusyStartedAt = null,
                 Stopping = false,
             };
+            staged = await PrepareGoalOnlyAsync(staged).ConfigureAwait(false);
             void Publish(SessionState state)
             {
                 state.PublishCommittedHistoryRewrite(
@@ -144,6 +151,7 @@ public sealed partial class SessionSaveLane
             catch (AuthorityCommittedException)
             {
                 entry.WithState(Publish);
+                PublishGoalOnly(staged);
                 entry.InvokeCommitted(entry.Snapshot());
                 throw;
             }
@@ -152,6 +160,7 @@ public sealed partial class SessionSaveLane
                 ClearCommitScope.Value = previous;
             }
             entry.WithState(Publish);
+            PublishGoalOnly(staged);
             entry.InvokeCommitted(entry.Snapshot());
         });
 }

@@ -15,6 +15,7 @@ internal sealed partial class SessionManager
     {
         var previous = semanticCaller.Value;
         semanticCaller.Value = cancellationToken;
+        successfulSendReceipt.Value = null;
         try
         {
             return await ExecuteAgentToolCoreAsync(source, name, args);
@@ -183,7 +184,8 @@ internal sealed partial class SessionManager
                                 OptionalString(args, "displayName"),
                                 null,
                                 forceModel,
-                                OptionalBool(args, "fork") ?? false
+                                OptionalBool(args, "fork") ?? false,
+                                taskId
                             )
                         ).Child;
                     }
@@ -200,7 +202,8 @@ internal sealed partial class SessionManager
                                         OptionalString(args, "displayName"),
                                         null,
                                         forceModel,
-                                        OptionalBool(args, "fork") ?? false
+                                        OptionalBool(args, "fork") ?? false,
+                                        taskId
                                     )
                                 ).Child
                         );

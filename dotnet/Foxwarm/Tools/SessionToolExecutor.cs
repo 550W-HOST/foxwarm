@@ -129,21 +129,7 @@ internal sealed partial class SessionToolExecutor(
         try
         {
             var response = await ExecuteCoreAsync(call, token);
-            if (
-                SessionWait.Text(call["name"]) == "send_to_session"
-                && response["error"] is null
-                && call["args"] is JsonObject sendArgs
-                && SessionWait.Text(sendArgs["sessionId"]) is string requested
-            )
-            {
-                var parent = hosted.Metadata().ParentSessionId;
-                if (
-                    parent is not null
-                    && sessions.ResolveSessionReference(hosted, requested) == parent
-                )
-                    current.Receipt = new TurnToolReceipt(parent, null, null);
-            }
-            if (current.Receipt is not null)
+            if (!Programmatic && current.Receipt is not null)
                 turnReceipts.Add(current.Receipt);
             return new(
                 response,
@@ -321,7 +307,9 @@ internal sealed partial class SessionToolExecutor(
 
     private async Task<JsonObject> ExecuteTaskAsync(JsonObject args, CancellationToken token)
     {
-        var response = await Manager.Tasks.ExecuteForToolAsync(Hosted, args).ConfigureAwait(false);
+        var (response, completionTarget) = await Manager
+            .Tasks.ExecuteForToolWithReceiptAsync(Hosted, args)
+            .ConfigureAwait(false);
         if (
             SessionWait.Text(args["action"]) == "complete"
             && response["task"] is JsonObject task
@@ -332,6 +320,8 @@ internal sealed partial class SessionToolExecutor(
                 SessionWait.Text(task["id"]),
                 Hosted.Id
             );
+        else if (completionTarget is not null)
+            invocation.Value!.Receipt = new TurnToolReceipt(completionTarget, null, null);
         return response;
     }
 
@@ -426,6 +416,8 @@ internal sealed partial class SessionToolExecutor(
             args,
             cancellationToken
         );
+        if (!Programmatic && sessions.ConsumeSuccessfulSendReceipt() is { } receiptTarget)
+            invocation.Value!.Receipt = new TurnToolReceipt(receiptTarget, null, null);
         if (
             response.Remove("__waitTarget", out var target) && SessionWait.Text(target) is string id
         )

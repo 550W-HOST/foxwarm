@@ -142,8 +142,8 @@ internal sealed class TaskStore : IDisposable
                     Add(
                         insert,
                         "$title",
-                        goal.Trim().Split('\n')[0][
-                            ..Math.Min(200, goal.Trim().Split('\n')[0].Length)
+                        SessionGoal.Trim(goal).Split('\n')[0][
+                            ..Math.Min(200, SessionGoal.Trim(goal).Split('\n')[0].Length)
                         ]
                     );
                     Add(insert, "$description", goal);
@@ -153,6 +153,19 @@ internal sealed class TaskStore : IDisposable
                     Add(insert, "$legacy", sessionId);
                     Add(insert, "$anchor", anchorSeq);
                     insert.ExecuteNonQuery();
+                }
+                else if (Read(db, existing) is { } existingRow)
+                {
+                    Update(
+                        db,
+                        existing,
+                        "createdBySessionId",
+                        Canonical(Text(existingRow["createdBySessionId"])),
+                        "ownerSessionId",
+                        Canonical(Text(existingRow["ownerSessionId"])),
+                        "legacyGoalSessionId",
+                        Canonical(Text(existingRow["legacyGoalSessionId"]))
+                    );
                 }
                 db.ExecuteNonQuery("COMMIT");
             }
@@ -168,7 +181,7 @@ internal sealed class TaskStore : IDisposable
         }
     }
 
-    internal void BindChild(string taskId, string childSessionId, long anchorSeq)
+    internal void BindChild(string taskId, string childSessionId)
     {
         lock (gate)
         {
@@ -201,7 +214,7 @@ internal sealed class TaskStore : IDisposable
                     "updatedAt",
                     now,
                     "reminderLastSeq",
-                    anchorSeq,
+                    null,
                     "reminderMessageCount",
                     0
                 );
@@ -226,7 +239,7 @@ internal sealed class TaskStore : IDisposable
         }
     }
 
-    internal JsonArray TaskContext(
+    internal JsonObject TaskContext(
         string sessionId,
         IReadOnlyList<long> sequences,
         bool consume,
@@ -240,7 +253,7 @@ internal sealed class TaskStore : IDisposable
             try
             {
                 var references = References(sessionId);
-                var result = new JsonArray();
+                var result = new List<JsonObject>();
                 using var cmd = db.CreateCommand();
                 cmd.CommandText = "SELECT * FROM tasks WHERE status='active' ORDER BY createdAt,id";
                 using var reader = cmd.ExecuteReader();
@@ -259,13 +272,25 @@ internal sealed class TaskStore : IDisposable
                         || !references.Contains(owner)
                     )
                         continue;
-                    var last =
+                    if (
+                        creator != Text(row["createdBySessionId"])
+                        || owner != Text(row["ownerSessionId"])
+                    )
+                        Update(
+                            db,
+                            Text(row["id"])!,
+                            "createdBySessionId",
+                            creator,
+                            "ownerSessionId",
+                            owner
+                        );
+                    long lastSeq = 0;
+                    var hasLast =
                         row["reminderLastSeq"] is JsonValue lastValue
-                        && lastValue.TryGetValue<long>(out var lastSeq)
-                            ? lastSeq
-                            : 0;
+                        && lastValue.TryGetValue<long>(out lastSeq);
+                    var last = hasLast ? lastSeq : 0;
                     var count = Int(row["reminderMessageCount"]);
-                    count = Math.Min(30, count + sequences.Count(seq => seq > last));
+                    count = hasLast ? Math.Min(30, count + sequences.Count(seq => seq > last)) : 0;
                     var due = count >= 30;
                     var id = Text(row["id"])!;
                     if (consume && (due || retained.Contains(id)))
@@ -291,7 +316,12 @@ internal sealed class TaskStore : IDisposable
                     );
                 }
                 db.ExecuteNonQuery("COMMIT");
-                return result;
+                var tasks = new JsonArray(result.Take(50).Select(item => (JsonNode)item).ToArray());
+                return new JsonObject
+                {
+                    ["tasks"] = tasks,
+                    ["omitted"] = Math.Max(0, result.Count - tasks.Count),
+                };
             }
             catch
             {

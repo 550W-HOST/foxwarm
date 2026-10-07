@@ -215,23 +215,15 @@ internal sealed partial class SessionCompactor
                 return false;
         }
         token.ThrowIfCancellationRequested();
-        sessions?.Tasks.TaskContext(
-            snapshot.Id,
-            snapshot
-                .History.Select(row => row["__meta"]?["seq"])
-                .OfType<JsonValue>()
-                .Select(value => value.TryGetValue<long>(out var seq) ? seq : 0)
-                .Where(seq => seq > 0)
-                .Distinct()
-                .OrderBy(seq => seq)
-                .TakeLast(30)
-                .ToArray(),
-            false,
-            []
-        );
         await hosted.Entry.SaveLane.CommitCompactionAsync(
             live =>
             {
+                sessions?.Tasks.TaskContext(
+                    live.Id,
+                    SessionCompactor.OrdinaryVisibleSequences(live.Snapshot()),
+                    false,
+                    []
+                );
                 if (
                     live.HistoryVersion != snapshot.HistoryVersion
                     || live.History.Count < snapshot.History.Count

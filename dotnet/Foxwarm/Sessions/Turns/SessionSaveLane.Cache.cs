@@ -19,24 +19,22 @@ public sealed partial class SessionSaveLane
             key = Guid.NewGuid().ToString();
             var envelope = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();
             envelope["promptCacheKey"] = key;
+            var staged = await PrepareGoalOnlyAsync(snapshot with { AuthorityEnvelope = envelope })
+                .ConfigureAwait(false);
             void Publish(SessionState state) => state.AuthorityEnvelope["promptCacheKey"] = key;
             try
             {
-                await store.CommitAsync(
-                    snapshot with
-                    {
-                        AuthorityEnvelope = envelope,
-                    },
-                    SaveKind.Strict
-                );
+                await store.CommitAsync(staged, SaveKind.Strict);
             }
             catch (AuthorityCommittedException)
             {
                 entry.WithState(Publish);
+                PublishGoalOnly(staged);
                 entry.InvokeCommitted(entry.Snapshot());
                 throw;
             }
             entry.WithState(Publish);
+            PublishGoalOnly(staged);
             entry.InvokeCommitted(entry.Snapshot());
             result = key;
         });

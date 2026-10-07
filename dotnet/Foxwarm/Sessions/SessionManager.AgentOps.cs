@@ -117,7 +117,8 @@ internal sealed partial class SessionManager
         string? displayName,
         string? initialMessage,
         JsonObject? forceModel,
-        bool fork = false
+        bool fork = false,
+        string? taskId = null
     )
     {
         if (
@@ -182,7 +183,7 @@ internal sealed partial class SessionManager
                     var system =
                         SessionBoundary.Identity(parentId, child.Id, inherited: false)
                         + "\nYou are a child session (new, empty context). "
-                        + SessionBoundary.Completion(parentId, HandoffConfirmationEnabled);
+                        + SessionBoundary.Completion(parentId, HandoffConfirmationEnabled, taskId);
                     await child.Entry.SaveLane.CommitCanonicalAppendAsync(state =>
                     {
                         var message = new JsonObject
@@ -320,6 +321,8 @@ internal sealed partial class SessionManager
             && target.Registry.HasRunnableWork(target.Entry)
         )
             target.Registry.Trigger(target.Id);
+        if (relation == "parent")
+            successfulSendReceipt.Value = target.Id;
         return target.Id;
     }
 

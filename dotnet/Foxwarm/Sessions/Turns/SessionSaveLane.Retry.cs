@@ -101,18 +101,21 @@ public sealed partial class SessionSaveLane
                 entry.InvokeCommitted(entry.Snapshot());
                 notice.NotificationSucceeded = entry.BestEffortFailureCount == failures;
             }
+            var stagedForGoal = await PrepareGoalOnlyAsync(prepared.Staged).ConfigureAwait(false);
             try
             {
                 if (prepared.Append && store is ICanonicalAppendAuthorityStore canonical)
-                    await canonical.CommitCanonicalAppendAsync(prepared.Staged, [prepared.Message]);
+                    await canonical.CommitCanonicalAppendAsync(stagedForGoal, [prepared.Message]);
                 else
-                    await store.CommitAsync(prepared.Staged, SaveKind.Strict);
+                    await store.CommitAsync(stagedForGoal, SaveKind.Strict);
             }
             catch (AuthorityCommittedException)
             {
                 PublishCommitted();
+                PublishGoalOnly(stagedForGoal);
                 throw;
             }
             PublishCommitted();
+            PublishGoalOnly(stagedForGoal);
         });
 }

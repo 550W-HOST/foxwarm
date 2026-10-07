@@ -51,9 +51,12 @@ internal sealed class SessionChatService(
         var retainedTaskIds = new List<string>();
         async Task<IReadOnlyList<JsonObject>> RequestContext()
         {
-            var visible = history
-                .Where(row =>
-                    row["__meta"]?["goalReminder"] is null && row["__meta"]?["contextBlock"] is null
+            var visible = hosted
+                .Entry.Snapshot()
+                .History.Where(row =>
+                    CanonicalMessage.FromNode(row).IsModelVisible
+                    && row["__meta"]?["goalReminder"] is null
+                    && row["__meta"]?["contextBlock"] is null
                 )
                 .Select(row => row["__meta"]?["seq"])
                 .OfType<JsonValue>()
@@ -65,7 +68,8 @@ internal sealed class SessionChatService(
                 .ToArray();
             if (tasks is null)
                 return [];
-            var current = tasks.TaskContext(hosted.Id, visible, true, retainedTaskIds);
+            var context = tasks.TaskContext(hosted.Id, visible, true, retainedTaskIds);
+            var current = context["tasks"]!.AsArray();
             retainedTaskIds = current.Select(item => item!["id"]!.GetValue<string>()).ToList();
             if (current.Count == 0)
                 return [];

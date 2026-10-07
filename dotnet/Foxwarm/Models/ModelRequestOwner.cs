@@ -118,10 +118,11 @@ internal sealed class ModelRequestOwner(
         long? requestStarted = null;
         string? journalRequestId = null;
         var journalAttempt = 0;
+        var baseHistory = history;
         var retainedContext = requestContext is null
             ? Array.Empty<JsonObject>()
             : (await requestContext().ConfigureAwait(false)).ToArray();
-        history = history.Concat(retainedContext).ToArray();
+        history = baseHistory.Concat(retainedContext).ToArray();
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -430,7 +431,8 @@ internal sealed class ModelRequestOwner(
                 cancellationToken.ThrowIfCancellationRequested();
                 if (updated is not null)
                 {
-                    history = updated.Concat(retainedContext).ToArray();
+                    baseHistory = updated;
+                    history = baseHistory.Concat(retainedContext).ToArray();
                     requestStarted = null;
                     journalRequestId = null;
                     journalAttempt = 0;
@@ -446,7 +448,7 @@ internal sealed class ModelRequestOwner(
                     if (changed)
                     {
                         retainedContext = nextContext;
-                        history = history.Concat(retainedContext).ToArray();
+                        history = baseHistory.Concat(retainedContext).ToArray();
                         requestStarted = null;
                         journalRequestId = null;
                         journalAttempt = 0;

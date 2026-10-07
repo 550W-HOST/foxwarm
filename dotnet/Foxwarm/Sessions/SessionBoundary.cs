@@ -56,6 +56,9 @@ internal static class SessionBoundary
             || text.TrimEnd().EndsWith("[NO_ACTION]", StringComparison.Ordinal)
         );
 
+    internal static string ChildReminder(string parentSessionId) =>
+        $"<foxwarm-system kind=\"child-reminder\" event=\"missing-handoff\" parentSessionId=\"{Escape(parentSessionId)}\">Reminder: message ended without send_to_session call. If you need to report completion to the parent session, call send_to_session({{sessionId: `{Escape(parentSessionId)}`, message: \"...\", afterSend: \"finish\"}}) now. This reports so the Session becomes idle without a wait. If no action is needed, say `[NO_ACTION]`. Next time, you can end your final message with `[NO_ACTION]` to prevent this reminder.</foxwarm-system>";
+
     private static string Escape(string value) =>
         value
             .Replace("&", "&amp;", StringComparison.Ordinal)
@@ -80,8 +83,14 @@ internal static class SessionBoundary
     internal static string Identity(string parent, string current, bool inherited) =>
         $"<foxwarm-system kind=\"session-boundary\" event=\"{(inherited ? "history-inherited" : "new-child")}\" parentSessionId=\"{Escape(parent)}\" currentSessionId=\"{Escape(current)}\" time=\"{LocalTime()}\" />";
 
-    internal static string Completion(string parent, bool handoffConfirmation = false) =>
-        $"When you finish, explicitly call send_to_session({{sessionId: `{parent}`, message: \"...\", afterSend: \"finish\"{(handoffConfirmation ? HandoffConfirmation.GuidanceArgument : "")}}}).{(handoffConfirmation ? HandoffConfirmation.Guidance : "")} This sends the final report and ends the turn idle without creating a wait. Use afterSend: \"wait\" only when you genuinely require a later reply from the parent; do not add a separate wait call. If no report or parent action is needed, end your final message with `[NO_ACTION]`.";
+    internal static string Completion(
+        string parent,
+        bool handoffConfirmation = false,
+        string? taskId = null
+    ) =>
+        taskId is not null
+            ? $"When you finish, use task({{action: \"complete\", taskId: \"{Escape(taskId)}\", result: \"...\"}}) for the completion report instead of sending a separate completion message. This completes the linked task and ends the turn idle. If no report or parent action is needed, end your final message with `[NO_ACTION]`."
+            : $"When you finish, explicitly call send_to_session({{sessionId: `{parent}`, message: \"...\", afterSend: \"finish\"{(handoffConfirmation ? HandoffConfirmation.GuidanceArgument : "")}}}).{(handoffConfirmation ? HandoffConfirmation.Guidance : "")} This sends the final report and ends the turn idle without creating a wait. Use afterSend: \"wait\" only when you genuinely require a later reply from the parent; do not add a separate wait call. If no report or parent action is needed, end your final message with `[NO_ACTION]`.";
 
     internal static string ManualForkNotice(string parent, string child, string? initialMessage)
     {

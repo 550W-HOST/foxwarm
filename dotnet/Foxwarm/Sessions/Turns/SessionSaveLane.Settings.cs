@@ -45,15 +45,17 @@ public sealed partial class SessionSaveLane
                     else
                         state.AuthorityEnvelope[key] = value.DeepClone();
             }
+            var staged = await PrepareGoalOnlyAsync(prepared.Snapshot).ConfigureAwait(false);
             var previous = SettingsCommitScope.Value;
             SettingsCommitScope.Value = true;
             try
             {
-                await store.CommitAsync(prepared.Snapshot, SaveKind.Strict);
+                await store.CommitAsync(staged, SaveKind.Strict);
             }
             catch (AuthorityCommittedException)
             {
                 entry.WithState(Publish);
+                PublishGoalOnly(staged);
                 entry.InvokeCommitted(entry.Snapshot());
                 throw;
             }
@@ -62,6 +64,7 @@ public sealed partial class SessionSaveLane
                 SettingsCommitScope.Value = previous;
             }
             entry.WithState(Publish);
+            PublishGoalOnly(staged);
             entry.InvokeCommitted(entry.Snapshot());
         });
 }

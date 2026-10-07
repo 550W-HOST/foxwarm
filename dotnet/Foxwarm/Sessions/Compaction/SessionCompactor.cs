@@ -514,13 +514,12 @@ internal sealed partial class SessionCompactor
         }
     }
 
-    private void CheckpointTaskProgress(SessionSnapshot snapshot)
-    {
-        if (sessions is null)
-            return;
-        var sequences = snapshot
+    internal static long[] OrdinaryVisibleSequences(SessionSnapshot snapshot) =>
+        snapshot
             .History.Where(row =>
-                row["__meta"]?["goalReminder"] is null && row["__meta"]?["contextBlock"] is null
+                CanonicalMessage.FromNode(row).IsModelVisible
+                && row["__meta"]?["goalReminder"] is null
+                && row["__meta"]?["contextBlock"] is null
             )
             .Select(row => row["__meta"]?["seq"])
             .OfType<JsonValue>()
@@ -530,6 +529,12 @@ internal sealed partial class SessionCompactor
             .OrderBy(seq => seq)
             .TakeLast(30)
             .ToArray();
+
+    private void CheckpointTaskProgress(SessionSnapshot snapshot)
+    {
+        if (sessions is null)
+            return;
+        var sequences = OrdinaryVisibleSequences(snapshot);
         sessions.Tasks.TaskContext(snapshot.Id, sequences, false, []);
     }
 
@@ -543,7 +548,6 @@ internal sealed partial class SessionCompactor
     private async Task ApplyAsync(CompactRun run)
     {
         run.Cancellation.Token.ThrowIfCancellationRequested();
-        CheckpointTaskProgress(run.Snapshot);
         lock (gate)
             run.Phase = "committing";
         try
@@ -551,17 +555,20 @@ internal sealed partial class SessionCompactor
             long archiveMaximum = 0;
             await hosted.Entry.SaveLane.CommitCompactionAsync(
                 state =>
-                    state.Id != run.Snapshot.Id
-                        ? throw new CompactionSnapshotIncompatibleException(
+                {
+                    if (state.Id != run.Snapshot.Id)
+                        throw new CompactionSnapshotIncompatibleException(
                             "Compaction was planned for a previous Session identity."
-                        )
-                        : PrepareCompact(
-                            state,
-                            run.Snapshot,
-                            run.Candidates!,
-                            run.Plan!,
-                            archiveMaximum
-                        ),
+                        );
+                    CheckpointTaskProgress(state.Snapshot());
+                    return PrepareCompact(
+                        state,
+                        run.Snapshot,
+                        run.Candidates!,
+                        run.Plan!,
+                        archiveMaximum
+                    );
+                },
                 run.Cancellation.Token,
                 async (snapshot, token) =>
                 {

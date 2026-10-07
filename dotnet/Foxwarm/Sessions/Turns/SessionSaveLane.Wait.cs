@@ -15,11 +15,17 @@ public sealed partial class SessionSaveLane
 
     private async Task CommitWaitSnapshotAsync(SessionSnapshot staged)
     {
+        staged = await PrepareGoalOnlyAsync(staged).ConfigureAwait(false);
         var previous = WaitCommitScope.Value;
         WaitCommitScope.Value = true;
         try
         {
             await store.CommitAsync(staged, SaveKind.Strict);
+        }
+        catch (AuthorityCommittedException)
+        {
+            PublishGoalOnly(staged);
+            throw;
         }
         finally
         {

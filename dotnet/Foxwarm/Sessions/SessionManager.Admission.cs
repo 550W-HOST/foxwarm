@@ -28,6 +28,15 @@ internal sealed partial class SessionManager
     private readonly CancellationTokenSource admissionStop = new();
     private volatile bool servicesReady;
     private readonly AsyncLocal<CancellationToken?> semanticCaller = new();
+    private readonly AsyncLocal<string?> successfulSendReceipt = new();
+
+    internal string? ConsumeSuccessfulSendReceipt()
+    {
+        var value = successfulSendReceipt.Value;
+        successfulSendReceipt.Value = null;
+        return value;
+    }
+
     internal Func<string, CancellationToken, Task>? BeforeAdmissionRead { get; set; }
     internal Action<string>? AdmissionReadObserved { get; set; }
 

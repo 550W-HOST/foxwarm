@@ -8,7 +8,7 @@ internal sealed class TaskService : IDisposable
     private readonly SessionManager manager;
     private readonly Func<string, string?> resolveSessionId;
     private readonly Func<string, long?> anchorSeq;
-    private readonly SemaphoreSlim childLane = new(1, 1);
+    private readonly SemaphoreSlim mutationLane = new(1, 1);
 
     internal TaskService(
         SessionManager manager,
@@ -29,6 +29,24 @@ internal sealed class TaskService : IDisposable
         string? actor,
         int? httpLimit = null,
         long? anchor = null
+    )
+    {
+        await mutationLane.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            return await ExecuteCoreAsync(args, actor, httpLimit, anchor).ConfigureAwait(false);
+        }
+        finally
+        {
+            mutationLane.Release();
+        }
+    }
+
+    private async Task<TaskStoreResult> ExecuteCoreAsync(
+        JsonObject args,
+        string? actor,
+        int? httpLimit,
+        long? anchor
     )
     {
         TaskStore.Validate(args, httpLimit);
@@ -80,7 +98,7 @@ internal sealed class TaskService : IDisposable
         return Task.CompletedTask;
     }
 
-    internal JsonArray TaskContext(
+    internal JsonObject TaskContext(
         string sessionId,
         IReadOnlyList<long> sequences,
         bool consume,
@@ -92,7 +110,7 @@ internal sealed class TaskService : IDisposable
         Func<Task<SessionOwner>> create
     )
     {
-        await childLane.WaitAsync().ConfigureAwait(false);
+        await mutationLane.WaitAsync().ConfigureAwait(false);
         try
         {
             var task = store
@@ -107,16 +125,12 @@ internal sealed class TaskService : IDisposable
                     409
                 );
             var child = await create().ConfigureAwait(false);
-            store.BindChild(
-                taskId,
-                child.Id,
-                Math.Max(0, child.Entry.Snapshot().NextMessageSeq - 1)
-            );
+            store.BindChild(taskId, child.Id);
             return child;
         }
         finally
         {
-            childLane.Release();
+            mutationLane.Release();
         }
     }
 
@@ -247,10 +261,25 @@ internal sealed class TaskService : IDisposable
         return result;
     }
 
-    internal async Task<JsonObject> ExecuteForToolAsync(SessionOwner source, JsonObject args) =>
-        (
+    internal async Task<(
+        JsonObject Payload,
+        string? CompletionTarget
+    )> ExecuteForToolWithReceiptAsync(SessionOwner source, JsonObject args)
+    {
+        var payload = (
             await ExecuteAsync(args, source.Id, anchor: source.Entry.Snapshot().NextMessageSeq - 1)
         ).Payload;
+        var task = payload["task"] as JsonObject;
+        var completionTarget =
+            Text(args["action"]) == "complete"
+            && task?["completionNotificationStatus"]?.GetValue<string>() == "sent"
+                ? task["createdBySessionId"]?.GetValue<string>()
+                : null;
+        return (payload, completionTarget);
+    }
+
+    internal async Task<JsonObject> ExecuteForToolAsync(SessionOwner source, JsonObject args) =>
+        (await ExecuteForToolWithReceiptAsync(source, args)).Payload;
 
     public void Dispose() => store.Dispose();
 

@@ -19,6 +19,7 @@ public sealed partial class SessionSaveLane
                     "Compaction was planned for a previous Session identity."
                 );
             staged = staged with { Queue = staged.Queue.Append(item).ToArray() };
+            staged = await PrepareGoalOnlyAsync(staged).ConfigureAwait(false);
             void Publish(SessionState state) => state.Queue.Add(item);
             try
             {
@@ -27,10 +28,12 @@ public sealed partial class SessionSaveLane
             catch (AuthorityCommittedException)
             {
                 entry.WithState(Publish);
+                PublishGoalOnly(staged);
                 entry.InvokeQueuedCommitted(entry.Snapshot());
                 throw;
             }
             entry.WithState(Publish);
+            PublishGoalOnly(staged);
             entry.InvokeQueuedCommitted(entry.Snapshot());
         });
 
@@ -49,6 +52,7 @@ public sealed partial class SessionSaveLane
                 return;
             var staged = entry.Snapshot();
             staged = staged with { Queue = staged.Queue.Where(item => !Owned(item)).ToArray() };
+            staged = await PrepareGoalOnlyAsync(staged).ConfigureAwait(false);
             void Publish(SessionState state) =>
                 state.Queue.RemoveAll(item => captured.Any(prior => ReferenceEquals(item, prior)));
             try
@@ -58,10 +62,12 @@ public sealed partial class SessionSaveLane
             catch (AuthorityCommittedException)
             {
                 entry.WithState(Publish);
+                PublishGoalOnly(staged);
                 entry.InvokeQueuedCommitted(entry.Snapshot());
                 throw;
             }
             entry.WithState(Publish);
+            PublishGoalOnly(staged);
             entry.InvokeQueuedCommitted(entry.Snapshot());
         });
 
@@ -70,6 +76,7 @@ public sealed partial class SessionSaveLane
         {
             var snapshot = entry.Snapshot();
             var staged = snapshot with { Busy = false, BusyStartedAt = null, Stopping = false };
+            staged = await PrepareGoalOnlyAsync(staged).ConfigureAwait(false);
             void Publish(SessionState state)
             {
                 state.Busy = false;
@@ -83,10 +90,12 @@ public sealed partial class SessionSaveLane
             catch (AuthorityCommittedException)
             {
                 entry.WithState(Publish);
+                PublishGoalOnly(staged);
                 entry.InvokeCommitted(entry.Snapshot());
                 throw;
             }
             entry.WithState(Publish);
+            PublishGoalOnly(staged);
             entry.InvokeCommitted(entry.Snapshot());
         });
 }

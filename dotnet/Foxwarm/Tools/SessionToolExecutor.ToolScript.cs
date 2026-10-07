@@ -50,6 +50,8 @@ internal sealed partial class SessionToolExecutor
                         },
                         currentToken
                     );
+                    if (execution.Receipt is not null && rootCall is not null)
+                        rootCall.Receipt = execution.Receipt;
                     if (PolicyUnavailable)
                         throw new ToolScriptHostFatalException(
                             new ToolAuthorizationUnavailableException()

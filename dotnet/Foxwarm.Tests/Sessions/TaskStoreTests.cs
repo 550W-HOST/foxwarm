@@ -38,7 +38,7 @@ public sealed class TaskStoreTests
             false,
             []
         );
-        Assert.Empty(context);
+        Assert.Empty(context["tasks"]!.AsArray());
     }
 
     [Fact]
@@ -51,7 +51,7 @@ public sealed class TaskStoreTests
             "parent"
         );
         var id = created.Payload["task"]!["id"]!.GetValue<string>();
-        store.BindChild(id, "child", 7);
+        store.BindChild(id, "child");
         var task = store
             .Execute(new JsonObject { ["action"] = "get", ["taskId"] = id }, null)
             .Payload["task"]!;

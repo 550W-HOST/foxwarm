@@ -273,7 +273,6 @@ public sealed class SessionAuthorityDocument
             )
         )
             throw new InvalidDataException("Session authority aliases must be nonempty strings.");
-        SessionGoal.Validate(root);
         if (root["childHandoffState"] is JsonObject handoff)
         {
             var boundary = RequiredString(

@@ -42,6 +42,7 @@ public sealed partial class SessionSaveLane
                 else
                     state.AuthorityEnvelope["cwd"] = next;
             }
+            operation = await PrepareGoalOnlyAsync(operation).ConfigureAwait(false);
             var previousScope = SettingsCommitScope.Value;
             SettingsCommitScope.Value = true;
             try
@@ -51,6 +52,7 @@ public sealed partial class SessionSaveLane
             catch (AuthorityCommittedException)
             {
                 entry.WithState(Publish);
+                PublishGoalOnly(operation);
                 entry.InvokeCommitted(entry.Snapshot());
                 throw;
             }
@@ -59,6 +61,7 @@ public sealed partial class SessionSaveLane
                 SettingsCommitScope.Value = previousScope;
             }
             entry.WithState(Publish);
+            PublishGoalOnly(operation);
             entry.InvokeCommitted(entry.Snapshot());
         });
         return result;

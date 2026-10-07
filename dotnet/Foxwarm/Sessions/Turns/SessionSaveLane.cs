@@ -78,6 +78,15 @@ public sealed partial class SessionSaveLane
         );
     }
 
+    private async Task<SessionSnapshot> PrepareGoalOnlyAsync(SessionSnapshot snapshot) =>
+        (await PrepareGoalAsync(snapshot, _ => { }).ConfigureAwait(false)).Snapshot;
+
+    private void PublishGoalOnly(SessionSnapshot snapshot)
+    {
+        if (snapshot.AuthorityEnvelope["goalState"] is null)
+            entry.WithState(state => state.AuthorityEnvelope.Remove("goalState"));
+    }
+
     // Identity IO joins the existing ordered save lane, never the short state or registry gate.
     internal Task MutateIdentityAsync(Func<Task> operation) => EnqueueOperationAsync(operation);
 
@@ -206,6 +215,17 @@ public sealed partial class SessionSaveLane
                 ]!.DeepClone()
             );
         });
+
+    internal Task QueueChildReminderAsync(string parentSessionId) =>
+        AdmitAsync(
+            new QueueItem(
+                QueueItemType.Background,
+                [new JsonObject { ["system"] = SessionBoundary.ChildReminder(parentSessionId) }],
+                SourceSessionRelation: "other",
+                Trigger: false
+            ),
+            SaveKind.BestEffort
+        );
 
     public Task<bool> CommitBackgroundExecCompletionAsync(string execId, string message) =>
         AdmitWithReceiptAsync(
@@ -348,11 +368,18 @@ public sealed partial class SessionSaveLane
         {
             var snapshot = entry.SnapshotForPersistence();
             var prepared = await PrepareGoalAsync(snapshot, _ => { }).ConfigureAwait(false);
-            await store
-                .CommitAsync(prepared.Snapshot, kind, cancellationToken)
-                .ConfigureAwait(false);
-            if (prepared.Snapshot.AuthorityEnvelope["goalState"] is null)
-                entry.WithState(state => state.AuthorityEnvelope.Remove("goalState"));
+            try
+            {
+                await store
+                    .CommitAsync(prepared.Snapshot, kind, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (AuthorityCommittedException)
+            {
+                prepared.Publish(entry.State);
+                throw;
+            }
+            prepared.Publish(entry.State);
         });
 
     private Task EnqueueOperationAsync(Func<Task> operation)

@@ -255,8 +255,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     private async Task<SessionSnapshot> MigrateGoalSnapshotAsync(SessionSnapshot snapshot)
     {
-        if (snapshot.AuthorityEnvelope["goalState"] is not JsonObject goalState)
+        if (!snapshot.AuthorityEnvelope.ContainsKey("goalState"))
             return snapshot;
+        if (snapshot.AuthorityEnvelope["goalState"] is not JsonObject goalState)
+            throw new InvalidDataException("Session authority goalState must be an object.");
         if (
             goalState["goal"] is not JsonValue goalValue
             || !goalValue.TryGetValue<string>(out var goal)
@@ -266,7 +268,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             );
         var envelope = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();
         envelope.Remove("goalState");
-        if (string.IsNullOrWhiteSpace(goal))
+        if (SessionGoal.Trim(goal).Length == 0)
             return snapshot with { AuthorityEnvelope = envelope };
         var anchor =
             goalState["anchorSeq"] is JsonValue anchorValue
