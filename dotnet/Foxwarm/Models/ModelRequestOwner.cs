@@ -228,36 +228,11 @@ internal sealed class ModelRequestOwner(
                 requestStarted ??= Stopwatch.GetTimestamp();
                 result = await service.ChatAsync(sessionId, prepared, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
-                if (journal is not null && currentJournalRequestId is not null)
-                {
-                    try
-                    {
-                        await journal
-                            .AppendChatResultAsync(
-                                currentJournalRequestId,
-                                currentJournalAttempt,
-                                result,
-                                cancellationToken
-                            )
-                            .ConfigureAwait(false);
-                    }
-                    catch (Exception journalError)
-                    {
-                        warning?.Invoke(journalError);
-                    }
-                    result = result with
-                    {
-                        JournalRequestId = currentJournalRequestId,
-                        JournalAttempt = currentJournalAttempt,
-                    };
-                }
-                if (request is not null)
-                    routing.Success(request, leaf.Key);
+                var completedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                var duration = Stopwatch.GetElapsedTime(requestStarted.Value).TotalMilliseconds;
                 if (result.AssistantMessage is JsonObject message)
                 {
                     var meta = message["__meta"] as JsonObject ?? new JsonObject();
-                    var completedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                    var duration = Stopwatch.GetElapsedTime(requestStarted.Value).TotalMilliseconds;
                     meta["timestamp"] = completedAt;
                     meta["llmRequestTiming"] = new JsonObject
                     {
@@ -273,6 +248,31 @@ internal sealed class ModelRequestOwner(
                     if (meta.Parent is null)
                         message["__meta"] = meta;
                 }
+                if (journal is not null && currentJournalRequestId is not null)
+                {
+                    result = result with
+                    {
+                        JournalRequestId = currentJournalRequestId,
+                        JournalAttempt = currentJournalAttempt,
+                    };
+                    try
+                    {
+                        await journal
+                            .AppendChatResultAsync(
+                                currentJournalRequestId,
+                                currentJournalAttempt,
+                                result,
+                                cancellationToken
+                            )
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception journalError)
+                    {
+                        warning?.Invoke(journalError);
+                    }
+                }
+                if (request is not null)
+                    routing.Success(request, leaf.Key);
                 succeeded = true;
                 return result;
             }

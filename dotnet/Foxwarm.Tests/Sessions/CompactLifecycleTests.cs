@@ -225,6 +225,13 @@ public sealed class CompactLifecycleTests
             );
         }
         await owner.DrainAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        var journalRows = await manager.Journal.ListAsync(null, "compact-plan", null, null, 20);
+        Assert.NotEmpty(journalRows);
+        var compactJournal = await manager.Journal.ReconstructAsync(
+            journalRows[0]!["requestId"]!.GetValue<string>()
+        );
+        Assert.Equal("compact-plan", compactJournal["purpose"]!.GetValue<string>());
+        Assert.NotEmpty(compactJournal["attempts"]!.AsArray());
         Assert.Equal(8, peer.RequestCount);
         Assert.DoesNotContain("compact-plan-", (await peer.RequestAt(1)).Body);
         Assert.Contains(

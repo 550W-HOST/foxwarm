@@ -1353,6 +1353,9 @@ public sealed class LlmRequestJournalStore : IDisposable
         var modelId = SessionWait.Text(assistant?["__meta"]?["modelId"]);
         if (modelId is not null)
             source["modelId"] = modelId;
+        var virtualModelKey = SessionWait.Text(assistant?["__meta"]?["virtualModelKey"]);
+        if (virtualModelKey is not null)
+            source["virtualModelKey"] = virtualModelKey;
         if (result.JournalRequestId is not null)
             source["llmRequestId"] = result.JournalRequestId;
         if (result.JournalAttempt is not null)
