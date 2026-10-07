@@ -11,9 +11,10 @@ import { COMPACT_FLOW_MAX_ROUNDS } from '../session/compactPlan';
 import { getCompactOperationPhase, hasCompletedCompactJob } from '../session/history';
 import { MessagePart, Session } from '../types';
 import { tool_get_archived_messages } from '../toolsSessionAgent';
-import { INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX } from '../toolCallControls';
+import { INTER_AGENT_HANDOFF_RECALL_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX } from '../toolCallControls';
 
-const SELFTEST_HANDOFF_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nI checked that this self-test handoff is necessary, targets the correct parent, contains the complete fixture message, and follows the parent-child communication rules.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
+const SELFTEST_HANDOFF_RECALL = `${INTER_AGENT_HANDOFF_RECALL_PREFIX}\nI recalled the self-test communication rules, the requested fixture behavior, and the parent session scope.`;
+const SELFTEST_HANDOFF_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nI checked that this self-test handoff is necessary, actionable, contains the complete fixture message, and is not duplicate or inherited-rule acknowledgement.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
 
 function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -206,7 +207,7 @@ async function main(): Promise<void> {
         }
 
         if (activeSession.id === childId && nextCall === 2) {
-          const toolCall = { id: 'child-report', name: 'send_to_session', args: { sessionId: parentId, message: 'child-ok', confirmation: SELFTEST_HANDOFF_CONFIRMATION } };
+          const toolCall = { id: 'child-report', name: 'send_to_session', args: { sessionId: parentId, handoffRecall: SELFTEST_HANDOFF_RECALL, message: 'child-ok', handoffConfirmation: SELFTEST_HANDOFF_CONFIRMATION } };
           await appendStubModelMessage(activeSession, [{ functionCall: toolCall }]);
           return { text: '', toolCalls: [toolCall] };
         }
@@ -262,7 +263,7 @@ async function main(): Promise<void> {
             const sendToolCall = {
               id: 'child-report-wait',
               name: 'send_to_session',
-              args: { sessionId: parentId, message: 'child-wait-ok', afterSend: 'finish', confirmation: SELFTEST_HANDOFF_CONFIRMATION },
+              args: { sessionId: parentId, handoffRecall: SELFTEST_HANDOFF_RECALL, message: 'child-wait-ok', afterSend: 'finish', handoffConfirmation: SELFTEST_HANDOFF_CONFIRMATION },
             };
             await appendStubModelMessage(activeSession, [{ functionCall: sendToolCall }]);
             return { text: '', toolCalls: [sendToolCall] };
@@ -318,7 +319,7 @@ async function main(): Promise<void> {
             const toolCall = {
               id: 'child-report-endturn-compat',
               name: 'send_to_session',
-              args: { sessionId: parentId, message: 'child-endturn-compat-ok', noFurtherAssistantReply: true, confirmation: SELFTEST_HANDOFF_CONFIRMATION },
+              args: { sessionId: parentId, handoffRecall: SELFTEST_HANDOFF_RECALL, message: 'child-endturn-compat-ok', noFurtherAssistantReply: true, handoffConfirmation: SELFTEST_HANDOFF_CONFIRMATION },
             };
             await appendStubModelMessage(activeSession, [{ functionCall: toolCall }]);
             return { text: '', toolCalls: [toolCall] };

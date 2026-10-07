@@ -483,7 +483,7 @@ export const APP_CONFIG_SCHEMA = {
     handoffConfirmation: {
       type: 'boolean',
       default: false,
-      description: 'Require structured confirmation for send_to_session and create_child_session. Defaults to false and requires restart.',
+      description: 'Require structured handoff recall and confirmation for send_to_session and create_child_session. Defaults to false and requires restart.',
     },
     vectorMaintenance: {
       oneOf: [

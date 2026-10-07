@@ -2,8 +2,10 @@ import { MessagePart } from '../types';
 import { formatFoxwarmSystem } from '../utils/promptWrappers';
 import { HANDOFF_CONFIRMATION_ENABLED } from '../config';
 import {
+  INTER_AGENT_HANDOFF_RECALL_PREFIX,
+  INTER_AGENT_HANDOFF_RECALL_PLACEHOLDER,
   INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX,
-  INTER_AGENT_HANDOFF_REVIEW_PLACEHOLDER,
+  INTER_AGENT_HANDOFF_CONFIRMATION_PLACEHOLDER,
   INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX,
 } from '../toolCallControls';
 
@@ -29,18 +31,26 @@ export function buildChildReminder(parentSessionId: string): string {
   return buildChildReminderForMode(parentSessionId, HANDOFF_CONFIRMATION_ENABLED);
 }
 
-function confirmationArgument(): string {
-  return `, confirmation: "${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\\n${INTER_AGENT_HANDOFF_REVIEW_PLACEHOLDER}\\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}"`;
+function handoffReviewArguments(parentSessionId: string): string {
+  return `handoffRecall: "${INTER_AGENT_HANDOFF_RECALL_PREFIX}\\n${INTER_AGENT_HANDOFF_RECALL_PLACEHOLDER}", sessionId: \`${parentSessionId}\`, message: "...", afterSend: "finish", handoffConfirmation: "${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\\n${INTER_AGENT_HANDOFF_CONFIRMATION_PLACEHOLDER}\\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}"`;
 }
 
 export function buildChildCompletionInstructionForMode(parentSessionId: string, enabled: boolean): string {
-  const confirmation = enabled ? confirmationArgument() : '';
-  const confirmationGuidance = enabled ? ' The confirmation must be the final argument property, and you must replace the placeholder with your own review rather than copying it.' : '';
-  return `If your current work is tracked by a task, complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. For work not tracked by a task, when you finish, explicitly call send_to_session({sessionId: \`${parentSessionId}\`, message: "...", afterSend: "finish"${confirmation}}).${confirmationGuidance} This sends the report and ends the turn idle without creating a wait. Use afterSend: "wait" only when you genuinely require a later reply from the parent; do not add a separate wait call. If no separate report or parent action is needed, end your final message with \`${NO_ACTION_MARKER}\`.`;
+  const argumentsText = enabled
+    ? handoffReviewArguments(parentSessionId)
+    : `sessionId: \`${parentSessionId}\`, message: "...", afterSend: "finish"`;
+  const guidance = enabled
+    ? ' The recall must be before message and both review fields must use this handoff\'s own content; handoffConfirmation must be the final argument property. If the handoff should not be sent, omit it or cancel it instead of adding approval text.'
+    : '';
+  return `If your current work is tracked by a task, complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. For work not tracked by a task, when you finish, explicitly call send_to_session({${argumentsText}}).${guidance} This sends the report and ends the turn idle without creating a wait. Use afterSend: "wait" only when you genuinely require a later reply from the parent; do not add a separate wait call. If no separate report or parent action is needed, end your final message with \`${NO_ACTION_MARKER}\`.`;
 }
 
 export function buildChildReminderForMode(parentSessionId: string, enabled: boolean): string {
-  const confirmation = enabled ? confirmationArgument() : '';
-  const confirmationGuidance = enabled ? ' The confirmation must be the final argument property, and you must replace the placeholder with your own review rather than copying it.' : '';
-  return formatFoxwarmSystem({ kind: 'child-reminder', event: 'missing-handoff', parentSessionId }, `Reminder: check whether your work still needs a completion report. If your current work is tracked by a task, complete it with the task tool unless it is already complete; do not send a duplicate routine completion report. Otherwise, if you need to report completion to the parent session, call send_to_session({sessionId: \`${parentSessionId}\`, message: "...", afterSend: "finish"${confirmation}}) now.${confirmationGuidance} This reports so the Session becomes idle without a wait. Use afterSend: "wait" only when you genuinely require a later reply; do not add a separate wait call. If no separate report or parent action is needed, say \`${NO_ACTION_MARKER}\`.`);
+  const argumentsText = enabled
+    ? handoffReviewArguments(parentSessionId)
+    : `sessionId: \`${parentSessionId}\`, message: "...", afterSend: "finish"`;
+  const guidance = enabled
+    ? ' The recall must be before message and both review fields must use this handoff\'s own content; handoffConfirmation must be the final argument property. If the handoff should not be sent, omit it or cancel it instead of adding approval text.'
+    : '';
+  return formatFoxwarmSystem({ kind: 'child-reminder', event: 'missing-handoff', parentSessionId }, `Reminder: check whether your work still needs a completion report. If your current work is tracked by a task, complete it with the task tool unless it is already complete; do not send a duplicate routine completion report. Otherwise, if you need to report completion to the parent session, call send_to_session({${argumentsText}}) now.${guidance} This reports so the Session becomes idle without a wait. Use afterSend: "wait" only when you genuinely require a later reply; do not add a separate wait call. If no separate report or parent action is needed, say \`${NO_ACTION_MARKER}\`.`);
 }

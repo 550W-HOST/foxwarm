@@ -6,10 +6,11 @@ import { executeTools, fixToolCalls } from './llm';
 import { convertToOpenAIFormat, convertToOpenAIResponsesFormat } from './llmProviders/openai';
 import { parseFunctionCallArgs } from './toolCallArgs';
 import * as sessionManager from './sessionManager';
-import { INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX } from './toolCallControls';
+import { INTER_AGENT_HANDOFF_RECALL_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX } from './toolCallControls';
 
 process.env.TZ = 'Asia/Shanghai';
 
+const TEST_RECALL = `${INTER_AGENT_HANDOFF_RECALL_PREFIX}\nI recalled the applicable communication rules, the user request, and the recipient scope for this test handoff.`;
 const TEST_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nThis test handoff was checked for necessity, accuracy, self-containment, scope, and communication rules.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
 
 function makeSessionId(prefix: string): string {
@@ -210,7 +211,7 @@ test('executeTools encodes successful afterSend wait handoffs as terminal post-a
 
   const toolMessage = await executeTools(
     [
-      { id: 'call_send', name: 'send_to_session', args: { sessionId: targetSessionId, message: 'handoff ok', afterSend: 'wait', confirmation: TEST_CONFIRMATION } },
+      { id: 'call_send', name: 'send_to_session', args: { sessionId: targetSessionId, handoffRecall: TEST_RECALL, message: 'handoff ok', afterSend: 'wait', handoffConfirmation: TEST_CONFIRMATION } },
     ],
     { sessionId: sourceSessionId, session: source },
     source,
@@ -240,7 +241,7 @@ test('successful afterSend finish remains terminal when a sibling tool fails', a
   await sessionManager.getSession(targetSessionId);
   try {
     const toolMessage: any = await executeTools([
-      { id: 'call_send', name: 'send_to_session', args: { sessionId: targetSessionId, message: 'done', afterSend: 'finish', confirmation: TEST_CONFIRMATION } },
+      { id: 'call_send', name: 'send_to_session', args: { sessionId: targetSessionId, handoffRecall: TEST_RECALL, message: 'done', afterSend: 'finish', handoffConfirmation: TEST_CONFIRMATION } },
       { id: 'call_read_missing', name: 'read', args: { filePath: makeMissingFilePath() } },
     ], { sessionId: sourceSessionId, session: source }, source);
 
@@ -267,7 +268,7 @@ test('successful flagged handoff keeps its post-batch wait request despite a sib
   try {
     const source = await sessionManager.getSession(sourceSessionId);
     const toolMessage: any = await executeTools([
-      { id: 'flagged-send', name: 'send_to_session', args: { sessionId: targetSessionId, message: 'hello', afterSend: 'wait', confirmation: TEST_CONFIRMATION } },
+      { id: 'flagged-send', name: 'send_to_session', args: { sessionId: targetSessionId, handoffRecall: TEST_RECALL, message: 'hello', afterSend: 'wait', handoffConfirmation: TEST_CONFIRMATION } },
       { id: 'missing-read', name: 'read', args: { filePath: makeMissingFilePath() } },
     ], { sessionId: sourceSessionId, session: source }, source);
     assert.deepEqual(toolMessage.__toolPostAction, {
@@ -293,8 +294,8 @@ test('multiple successful flagged handoffs coalesce and all failed handoffs requ
   await sessionManager.getSession(targetB);
   try {
     const successful: any = await executeTools([
-      { id: 'send-a', name: 'send_to_session', args: { sessionId: targetA, message: 'a', afterSend: 'wait', confirmation: TEST_CONFIRMATION } },
-      { id: 'send-b', name: 'send_to_session', args: { sessionId: targetB, message: 'b', afterSend: 'wait', confirmation: TEST_CONFIRMATION } },
+      { id: 'send-a', name: 'send_to_session', args: { sessionId: targetA, handoffRecall: TEST_RECALL, message: 'a', afterSend: 'wait', handoffConfirmation: TEST_CONFIRMATION } },
+      { id: 'send-b', name: 'send_to_session', args: { sessionId: targetB, handoffRecall: TEST_RECALL, message: 'b', afterSend: 'wait', handoffConfirmation: TEST_CONFIRMATION } },
     ], { sessionId: sourceSessionId, session: source }, source);
     assert.deepEqual(successful.__toolPostAction, {
       waitForReply: true,
@@ -303,8 +304,8 @@ test('multiple successful flagged handoffs coalesce and all failed handoffs requ
     });
 
     const failed: any = await executeTools([
-      { id: 'missing-a', name: 'send_to_session', args: { sessionId: makeSessionId('missing_a'), message: 'a', afterSend: 'wait', confirmation: TEST_CONFIRMATION } },
-      { id: 'missing-b', name: 'send_to_session', args: { sessionId: makeSessionId('missing_b'), message: 'b', afterSend: 'wait', confirmation: TEST_CONFIRMATION } },
+      { id: 'missing-a', name: 'send_to_session', args: { sessionId: makeSessionId('missing_a'), handoffRecall: TEST_RECALL, message: 'a', afterSend: 'wait', handoffConfirmation: TEST_CONFIRMATION } },
+      { id: 'missing-b', name: 'send_to_session', args: { sessionId: makeSessionId('missing_b'), handoffRecall: TEST_RECALL, message: 'b', afterSend: 'wait', handoffConfirmation: TEST_CONFIRMATION } },
     ], { sessionId: sourceSessionId, session: source }, source);
     assert.equal(failed.__toolPostAction, undefined);
   } finally {
@@ -321,7 +322,7 @@ test('flagged handoff plus explicit wait remains deterministic when a sibling fa
   await sessionManager.getSession(targetSessionId);
   try {
     const toolMessage: any = await executeTools([
-      { id: 'send', name: 'send_to_session', args: { sessionId: targetSessionId, message: 'hello', afterSend: 'wait', confirmation: TEST_CONFIRMATION } },
+      { id: 'send', name: 'send_to_session', args: { sessionId: targetSessionId, handoffRecall: TEST_RECALL, message: 'hello', afterSend: 'wait', handoffConfirmation: TEST_CONFIRMATION } },
       { id: 'wait', name: 'wait', args: {} },
       { id: 'missing', name: 'read', args: { filePath: makeMissingFilePath() } },
     ], { sessionId: sourceSessionId, session: source }, source);

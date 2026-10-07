@@ -92,7 +92,7 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
 
 export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
   validateInterAgentHandoffConfirmationForMode(args, HANDOFF_CONFIRMATION_ENABLED);
-  const unknownKeys = Object.keys(args || {}).filter(key => !['sessionId', 'message', 'afterSend', 'noFurtherAssistantReply', 'waitAfterHandoff', 'confirmation'].includes(key));
+  const unknownKeys = Object.keys(args || {}).filter(key => !['sessionId', 'handoffRecall', 'message', 'afterSend', 'noFurtherAssistantReply', 'waitAfterHandoff', 'handoffConfirmation'].includes(key));
   if (unknownKeys.length) throw new Error(`send_to_session received unsupported argument${unknownKeys.length === 1 ? '' : 's'}: ${unknownKeys.join(', ')}.`);
   const { sessionId, message } = args;
   const afterSend = normalizeAfterSendBehavior(args, 'send_to_session');

@@ -55,7 +55,7 @@ Worker placement is startup configuration:
 - `vector` is a connection/feature object, not a general boolean shorthand. Omission or `false` disables Vector; an object opts in unless `enabled:false`. Enabled Vector requires a nonempty absolute HTTP(S) `baseUrl` without credentials, query, or fragment components that already includes its OpenAI-compatible API root; runtime appends only `/embeddings`. `vector.lexicalIndex` is a narrow startup boolean and defaults false. `vector.hybridSearch` also defaults false and normalizes false unless Vector and lexical indexing are both enabled.
 - `sessionWorkers` is experimental and accepts a boolean or object. Omission/`false` keeps the default in-process session runtime. `true` enables default worker settings. An object enables workers unless `enabled:false`; `idleSeconds` defaults to 60 and accepts numeric YAML integers from 1 through 86,400 (boolean and string coercion is rejected).
 - `dbWorkers` is boolean, defaults to `true`, and currently moves only an enabled LanceDB/vector owner into a child process. It has no effect while Vector is disabled.
-- `handoffConfirmation` is a top-level startup boolean, defaults to `false`, and controls only structured confirmation for `send_to_session` / `create_child_session`; cancellation controls are independent. Changing it requires restart.
+- `handoffConfirmation` is a top-level startup boolean, defaults to `false`, and controls only the structured `handoffRecall` / `handoffConfirmation` review for `send_to_session` / `create_child_session`; cancellation controls are independent. Changing it requires restart.
 - `mcpInbound` is a strict startup-only `{ enabled, identities }` block, disabled when absent. Malformed disabled blocks still fail validation; enabled configurations need independently authenticated external IDs. Enabling it starts `/mcp` on the existing HTTP listener; the available verified-external tool mappings are documented in [tool dispatch](../threads/tool-dispatch.md). See [D-config-mcp-inbound-foundation](./src-mcp-inbound-config.md#d-config-mcp-inbound-foundation) and [D-mcp-inbound-http-transport](./src-mcp-inbound-http.md#d-mcp-inbound-http-transport).
 - `vectorMaintenance` accepts `false`, `true`, or an options object; the normalized default is enabled with positive-integer `retentionHours` defaulting to `24`. Its exact-owner execution contract is canonical in [D-vector-owner-maintenance](src-vector.md#d-vector-owner-maintenance).
 - Worker placement changes require a process restart. Managed channel hot reload does not change process topology.
@@ -161,7 +161,7 @@ The mutable models configuration has one active location: `<data-root>/state/mod
 
 ### D-config-handoff-confirmation
 
-[2026-09-04] Top-level `handoffConfirmation` accepts only a boolean and defaults to `false`. It is resolved once at startup and requires restart to change. `true` enables the exact inter-agent confirmation contract and its schema/reminder guidance; omission or `false` disables only that confirmation requirement. Model tool-call cancellation controls remain enabled in both modes.
+[2026-09-04] Top-level `handoffConfirmation` accepts only a boolean and defaults to `false`. It is resolved once at startup and requires restart to change. `true` enables the exact inter-agent `handoffRecall` / `handoffConfirmation` contract and its schema/reminder guidance; omission or `false` disables only that review requirement. Model tool-call cancellation controls remain enabled in both modes.
 
 ## Canonical ownership
 

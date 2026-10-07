@@ -16,9 +16,10 @@ import { createNodeRegistryStore, createPendingPairing, resetNodeRegistryForTest
 import * as nodeTools from './tools/nodeTools';
 import { getAgentDir, getAgentMemoryDir, resolveModelConfig } from './config';
 import { sessionCatalogStore } from './session/catalogStore';
-import { INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX } from './toolCallControls';
+import { INTER_AGENT_HANDOFF_RECALL_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX } from './toolCallControls';
 
-const TEST_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nThis worker handoff was checked for necessity, accuracy, self-containment, scope, and communication rules.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
+const TEST_RECALL = `${INTER_AGENT_HANDOFF_RECALL_PREFIX}\nI recalled the worker communication rules, the requested task, and the recipient scope.`;
+const TEST_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nThis worker handoff was checked for necessity and actionability, not duplication or inherited-rule acknowledgement.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
 
 test.before(async () => {
   await sessionCatalogStore.initialize();
@@ -219,7 +220,7 @@ test('main-management facade forks read-only, rejects stale generations, and val
     const inheritedResult: any = await client.call('execute', {
       sourceSessionId: parentId,
       operation: 'create_child_session',
-      args: { suffix: 'mp-new', displayName: 'Worker child', fork: false, confirmation: TEST_CONFIRMATION },
+      args: { suffix: 'mp-new', displayName: 'Worker child', fork: false, handoffRecall: TEST_RECALL, handoffConfirmation: TEST_CONFIRMATION },
     });
     assert.ok(String(inheritedResult?.result).includes(inheritedChildId));
     const inheritedChild = await sessionManager.getSession(inheritedChildId);
@@ -234,7 +235,7 @@ test('main-management facade forks read-only, rejects stale generations, and val
     const dtoResult: any = await client.call('execute', {
       sourceSessionId: parentId,
       operation: 'create_child_session',
-      args: { suffix: 'dto-child', fork: false, node: 'node-from-worker', forceModel: { modelId: forcedModel, effort: 'none' }, confirmation: TEST_CONFIRMATION },
+      args: { suffix: 'dto-child', fork: false, node: 'node-from-worker', forceModel: { modelId: forcedModel, effort: 'none' }, handoffRecall: TEST_RECALL, handoffConfirmation: TEST_CONFIRMATION },
     });
     assert.ok(String(dtoResult?.result).includes(dtoChildId));
     const dtoChild = await sessionManager.getSession(dtoChildId);
@@ -247,7 +248,7 @@ test('main-management facade forks read-only, rejects stale generations, and val
     const crossAgentResult: any = await client.call('execute', {
       sourceSessionId: parentId,
       operation: 'create_child_session',
-      args: { agentName: targetAgent, suffix: 'worker-child', displayName: 'Across agents', fork: false, confirmation: TEST_CONFIRMATION },
+      args: { agentName: targetAgent, suffix: 'worker-child', displayName: 'Across agents', fork: false, handoffRecall: TEST_RECALL, handoffConfirmation: TEST_CONFIRMATION },
     });
     assert.ok(String(crossAgentResult?.result).includes(targetChildId));
     const targetChild = await sessionManager.getSession(targetChildId);
@@ -260,7 +261,7 @@ test('main-management facade forks read-only, rejects stale generations, and val
       () => client.call('execute', {
         sourceSessionId: parentId,
         operation: 'create_child_session',
-        args: { agentName: targetAgent, suffix: 'worker-fork', fork: true, confirmation: TEST_CONFIRMATION },
+        args: { agentName: targetAgent, suffix: 'worker-fork', fork: true, handoffRecall: TEST_RECALL, handoffConfirmation: TEST_CONFIRMATION },
       }),
       /cannot fork across agents/,
     );
@@ -273,7 +274,7 @@ test('main-management facade forks read-only, rejects stale generations, and val
 
     // fork=true derives from the authority through a strictly read-only detached read.
     const forkResult: any = await client.call('execute',
-      { sourceSessionId: parentId, operation: 'create_child_session', args: { suffix: 'mp-fork', displayName: 'Worker fork', fork: true, confirmation: TEST_CONFIRMATION } });
+      { sourceSessionId: parentId, operation: 'create_child_session', args: { suffix: 'mp-fork', displayName: 'Worker fork', fork: true, handoffRecall: TEST_RECALL, handoffConfirmation: TEST_CONFIRMATION } });
     assert.ok(String(forkResult?.result).includes(forkChildId));
     const parentHistoryLength = (await sessionManager.getSessionMessages(parentId, 0, 1000)).length;
     const forked = await sessionManager.getSession(forkChildId);

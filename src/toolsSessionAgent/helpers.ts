@@ -292,7 +292,7 @@ export type ForcedSessionModelEffort = {
 };
 
 const CREATE_CHILD_SESSION_KEYS = new Set([
-  'taskId',   'agentName', 'suffix', 'displayName', 'fork', 'message', 'node', 'forceModel', 'afterSend', 'noFurtherAssistantReply', 'waitAfterHandoff', 'confirmation',
+  'taskId',   'agentName', 'suffix', 'displayName', 'fork', 'handoffRecall', 'message', 'node', 'forceModel', 'afterSend', 'noFurtherAssistantReply', 'waitAfterHandoff', 'handoffConfirmation',
 ]);
 const CREATE_SESSION_KEYS = new Set([
   'agentName', 'sessionName', 'displayName', 'parentSessionId', 'node', 'forceModel', 'systemPromptFiles',
@@ -362,7 +362,7 @@ export function normalizeCreateChildSessionArgs(
   normalizeForceModel(args, 'create_child_session', makeError);
   const unknownKey = Object.keys(args).find(key => !CREATE_CHILD_SESSION_KEYS.has(key));
   if (unknownKey) {
-    throw makeError(`create_child_session accepts only agentName, suffix, displayName, fork, message, node, forceModel, taskId, afterSend, and confirmation; unknown key: ${unknownKey}.`);
+    throw makeError(`create_child_session accepts only agentName, suffix, displayName, fork, handoffRecall, message, node, forceModel, taskId, afterSend, and handoffConfirmation; unknown key: ${unknownKey}.`);
   }
   if (args.taskId !== undefined && (typeof args.taskId !== 'string' || !args.taskId.trim() || args.taskId.length > 128)) {
     throw makeError('create_child_session taskId must be a bounded non-empty string.');

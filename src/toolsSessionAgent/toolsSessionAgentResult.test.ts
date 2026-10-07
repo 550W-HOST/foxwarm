@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import * as sessionManager from '../sessionManager';
 import { tool_move_session, tool_send_to_session as rawToolSendToSession, tool_wait } from '../toolsSessionAgent';
 import type { Session } from '../types';
-import { INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX } from '../toolCallControls';
+import { INTER_AGENT_HANDOFF_RECALL_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX } from '../toolCallControls';
 
+const TEST_RECALL = `${INTER_AGENT_HANDOFF_RECALL_PREFIX}\nI recalled the applicable communication rules, the user request, and the recipient scope for this test handoff.`;
 const TEST_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nThis test message was checked for necessity, accuracy, self-containment, scope, and communication rules.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
-const tool_send_to_session: typeof rawToolSendToSession = (args, ctx) => rawToolSendToSession({ ...args, confirmation: TEST_CONFIRMATION }, ctx);
+const tool_send_to_session: typeof rawToolSendToSession = (args, ctx) => rawToolSendToSession({ handoffRecall: TEST_RECALL, ...args, handoffConfirmation: TEST_CONFIRMATION }, ctx);
 
 function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
