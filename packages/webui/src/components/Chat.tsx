@@ -272,7 +272,6 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMatchId, setSearchMatchId] = useState<string | null>(null)
   const [searchNavigation, setSearchNavigation] = useState(0)
-  const [, setSearchHistory] = useState<string[]>([])
   const searchInputRef = useRef<HTMLInputElement>(null)
   const searchAppliedNavigationRef = useRef(0)
   const searchHistoryRef = useRef<string[]>([])
@@ -1618,14 +1617,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   const currentSearchIndex = searchMatches.findIndex(match => match.id === searchMatchId)
   const selectedSearchMatch = searchMatches[currentSearchIndex >= 0 ? currentSearchIndex : 0] || null
 
-  const setSearchHistoryCursor = useCallback((index: number | null) => {
-    searchHistoryIndexRef.current = index
-  }, [])
-
   const loadSearchHistory = useCallback(() => {
     const history = readSearchHistory()
     searchHistoryRef.current = history
-    setSearchHistory(history)
     return history
   }, [])
 
@@ -1633,7 +1627,6 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     if (!query.trim()) return
     const history = [query, ...searchHistoryRef.current.filter(item => item !== query)].slice(0, SEARCH_HISTORY_LIMIT)
     searchHistoryRef.current = history
-    setSearchHistory(history)
     writeSearchHistory(history)
   }, [])
 
@@ -1661,10 +1654,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     setSearchOpen(false)
     setSearchQuery('')
     setSearchMatchId(null)
-    setSearchHistoryCursor(null)
+    searchHistoryIndexRef.current = null
     searchHistoryDraftRef.current = ''
     lastSearchQueryRef.current = ''
-  }, [recordSearchHistory, searchQuery, setSearchHistoryCursor])
+  }, [recordSearchHistory, searchQuery])
 
   const navigateSearchHistory = useCallback((direction: -1 | 1): boolean => {
     const history = searchHistoryRef.current
@@ -1674,7 +1667,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     if (direction < 0) {
       if (currentIndex === null) searchHistoryDraftRef.current = searchQuery
       const nextIndex = currentIndex === null ? 0 : Math.min(currentIndex + 1, history.length - 1)
-      setSearchHistoryCursor(nextIndex)
+      searchHistoryIndexRef.current = nextIndex
       setSearchQuery(history[nextIndex])
       setSearchMatchId(null)
       return true
@@ -1682,16 +1675,16 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
 
     if (currentIndex === null) return false
     if (currentIndex === 0) {
-      setSearchHistoryCursor(null)
+      searchHistoryIndexRef.current = null
       setSearchQuery(searchHistoryDraftRef.current)
     } else {
       const nextIndex = currentIndex - 1
-      setSearchHistoryCursor(nextIndex)
+      searchHistoryIndexRef.current = nextIndex
       setSearchQuery(history[nextIndex])
     }
     setSearchMatchId(null)
     return true
-  }, [searchQuery, setSearchHistoryCursor])
+  }, [searchQuery])
 
   const stepSearch = useCallback((direction: -1 | 1) => {
     if (!searchMatches.length) return
@@ -1723,12 +1716,12 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     if (selectedText && selectedText.trim()) {
       setSearchQuery(selectedText)
       setSearchMatchId(null)
-      setSearchHistoryCursor(null)
+      searchHistoryIndexRef.current = null
       searchHistoryDraftRef.current = ''
     }
     searchInputRef.current?.focus()
     searchInputRef.current?.select()
-  }, [loadSearchHistory, setSearchHistoryCursor])
+  }, [loadSearchHistory])
 
   useEffect(() => {
     if (!searchShortcutActive) return
@@ -1746,10 +1739,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     setSearchOpen(false)
     setSearchQuery('')
     setSearchMatchId(null)
-    setSearchHistoryCursor(null)
+    searchHistoryIndexRef.current = null
     searchHistoryDraftRef.current = ''
     lastSearchQueryRef.current = ''
-  }, [sessionId, setSearchHistoryCursor])
+  }, [sessionId])
 
   useLayoutEffect(() => {
     const registry = CSS.highlights
@@ -2204,7 +2197,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
               value={searchQuery}
               onChange={event => {
                 setSearchQuery(event.target.value)
-                setSearchHistoryCursor(null)
+                searchHistoryIndexRef.current = null
                 searchHistoryDraftRef.current = ''
               }}
               onKeyDown={event => {
@@ -2212,11 +2205,11 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
                 if (event.key === 'Enter') {
                   event.preventDefault()
                   recordSearchHistory(searchQuery)
-                  setSearchHistoryCursor(null)
+                  searchHistoryIndexRef.current = null
                   searchHistoryDraftRef.current = ''
                   stepSearch(event.shiftKey ? -1 : 1)
                 }
-                if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+                if (!event.nativeEvent.isComposing && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
                   if (navigateSearchHistory(event.key === 'ArrowUp' ? -1 : 1)) event.preventDefault()
                 }
               }}

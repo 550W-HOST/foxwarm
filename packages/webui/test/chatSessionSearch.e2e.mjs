@@ -164,6 +164,24 @@ test('Ctrl/Cmd+F captures text and composer selections, and search history navig
   await page.click('[aria-label="Close search"]')
 })
 
+test('Search history arrows do not take over while an IME composition is active',async()=>{
+  await page.evaluate(()=>localStorage.clear())
+  await page.click('button[aria-label="Find in chat"]')
+  const input = '[data-chat-search] input[aria-label="Search messages"]'
+  await page.type(input,'ime complete query')
+  await page.click('[aria-label="Close search"]')
+  await page.click('button[aria-label="Find in chat"]')
+  const composing = await page.$eval(input,input=>{
+    const event = new KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true,cancelable:true,isComposing:true})
+    const dispatched = input.dispatchEvent(event)
+    return {dispatched,value:input.value,defaultPrevented:event.defaultPrevented}
+  })
+  assert.deepEqual(composing,{dispatched:true,value:'',defaultPrevented:false})
+  await page.keyboard.press('ArrowUp')
+  assert.equal(await page.$eval(input,input=>input.value),'ime complete query')
+  await page.click('[aria-label="Close search"]')
+})
+
 test('finds already-loaded older unmounted rows, read results, reasoning, rendered Markdown and CTX summary without Archive',async()=>{
   await page.click('button[aria-label="Find in chat"]')
   for(const [needle, expected] of [['OLD_ONLY_MATCH','OLD_ONLY_MATCH'],['PASTED_DEEP_SEARCH','PASTED_DEEP_SEARCH'],['command-needle','command-needle'],['read-file-needle','read-file-needle'],['fallback-needle','fallback-needle'],['json-needle','json-needle'],['thought-needle','thought-needle'],['hello world','hello world'],['visible-needle','visible-needle'],['<safe>','<safe>'],['CTX摘要末尾','CTX摘要末尾'],['SYSTEM_BODY_HIDDEN_TARGET','SYSTEM_BODY_HIDDEN_TARGET']]){
