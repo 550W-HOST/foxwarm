@@ -397,7 +397,14 @@ public sealed class LlmRequestJournalStore : IDisposable
                     );
             }
             foreach (var requestId in verificationRequestIds)
+            {
                 ValidateRequestManifest(connection, transaction, requestId);
+                var reconstructed = Reconstruct(connection, requestId);
+                if (reconstructed["completeness"]?.GetValue<string>() != "complete")
+                    throw new InvalidDataException(
+                        $"Legacy LLM request {requestId} failed reconstruction verification."
+                    );
+            }
             using (var state = connection.CreateCommand())
             {
                 state.Transaction = transaction;

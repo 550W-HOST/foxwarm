@@ -121,4 +121,78 @@ public sealed class LlmRequestJournalTests
                 Directory.Delete(importedRoot, true);
         }
     }
+
+    [Fact]
+    public async Task Migration_rejects_duplicate_attempt_results_and_retains_source()
+    {
+        var root = Path.Combine(
+            Path.GetTempPath(),
+            "foxwarm-journal-duplicate-root-" + Guid.NewGuid().ToString("N")
+        );
+        var source = Path.Combine(root, "legacy.jsonl");
+        var importedRoot = Path.Combine(
+            Path.GetTempPath(),
+            "foxwarm-journal-duplicate-import-" + Guid.NewGuid().ToString("N")
+        );
+        try
+        {
+            using (var store = new LlmRequestJournalStore(root))
+            {
+                var requestId = await store.BeginRequestAsync(
+                    "session",
+                    "normal-turn",
+                    0,
+                    "System",
+                    new JsonArray(),
+                    new[]
+                    {
+                        new JsonObject
+                        {
+                            ["role"] = "user",
+                            ["parts"] = new JsonArray(new JsonObject { ["text"] = "hello" }),
+                        },
+                    },
+                    "model",
+                    "cache"
+                );
+                await store.AppendAttemptStartAsync(
+                    requestId,
+                    1,
+                    "model",
+                    null,
+                    "responses",
+                    new JsonObject { ["input"] = "hello" },
+                    "System"
+                );
+                await store.AppendAttemptResultAsync(
+                    requestId,
+                    1,
+                    "success",
+                    new JsonObject { ["text"] = "done" },
+                    null
+                );
+                await store.ExportJsonlAsync(source);
+            }
+            var lines = (await File.ReadAllLinesAsync(source)).ToList();
+            var result = lines
+                .Select(line => JsonNode.Parse(line)!.AsObject())
+                .Single(record => record["kind"]?.GetValue<string>() == "attempt-result");
+            result["eventId"] = "sha256:duplicate-event-id";
+            lines.Add(result.ToJsonString());
+            await File.WriteAllLinesAsync(source, lines);
+            using var imported = new LlmRequestJournalStore(importedRoot);
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                imported.MigrateLegacyAsync(source)
+            );
+            Assert.True(File.Exists(source));
+            Assert.Empty(await imported.ListAsync(null, null, null, null, 10));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
+            if (Directory.Exists(importedRoot))
+                Directory.Delete(importedRoot, true);
+        }
+    }
 }
