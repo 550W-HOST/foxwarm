@@ -36,13 +36,22 @@ public sealed class TaskChildDeliveryTests
                     await manager.CreateChildAsync(parent, "vanished", null, null, null, null)
                 ).Child;
                 committedChild = child;
-                await manager.DeleteAsync(child.Id);
+                var faults = Path.Combine(temp.Path, "data", "state", "experiment-faults");
+                Directory.CreateDirectory(faults);
+                await File.WriteAllTextAsync(
+                    Path.Combine(
+                        faults,
+                        SessionIdentity.ExecDirectorySegment(child.Id) + ".catalog-projection"
+                    ),
+                    "fail"
+                );
                 return child;
             },
             "delivery failure message"
         );
 
         Assert.NotNull(committedChild);
+        Assert.NotNull(manager.Catalog.Get(committedChild!.Id));
         Assert.False(result.AssignmentDelivered);
         Assert.Contains("new owner notification", result.Warning);
         var task = (
@@ -51,7 +60,7 @@ public sealed class TaskChildDeliveryTests
                 null
             )
         ).Payload["task"]!;
-        Assert.Equal(committedChild!.Id, task["ownerSessionId"]!.GetValue<string>());
+        Assert.Equal(committedChild.Id, task["ownerSessionId"]!.GetValue<string>());
         Assert.Equal(committedChild.Id, task["attachedSessionId"]!.GetValue<string>());
         Assert.Equal("failed", task["assignmentNotificationStatus"]!.GetValue<string>());
     }
