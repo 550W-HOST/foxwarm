@@ -30,8 +30,8 @@ Compact-threshold settings, child-model settings, snapshot refresh, and current 
 | `normalizePositivePreviewLength` | Coerces preview length to positive integer or fallback |
 | `assertPreviewRequestWithinLimit` | Throws if combined preview budget exceeds char limit |
 | `formatTimerTimestamp` | Formats a timer timestamp as ISO string or 'n/a' |
-| `formatTimerSummary` | Builds a human-readable timer creation summary, optionally omitting the message for mutation receipts |
-| `formatTimerUpdateSummary` | Builds a human-readable timer update summary, optionally omitting the message for mutation receipts |
+| `formatTimerSummary` | Builds a human-readable timer creation receipt without the message body |
+| `formatTimerUpdateSummary` | Builds a human-readable timer update receipt without the message body |
 | `expandHomePath` | Expands `~` prefix to OS home directory |
 | `resolveAgentPath` | Resolves relative file path against agent or session CWD |
 | `detectMimeType` | Returns MIME type based on file extension |

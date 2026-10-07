@@ -241,7 +241,7 @@ export function formatTimerTimestamp(timestamp?: number | null): string {
   return Number.isNaN(date.getTime()) ? 'n/a' : date.toISOString();
 }
 
-export function formatTimerSummary(timer: timers.TimerView, options: { includeMessage?: boolean } = {}): string {
+export function formatTimerSummary(timer: timers.TimerView): string {
   const mode = timer.mode === 'cron'
     ? `cron: ${timer.cron}`
     : `at: ${formatTimerTimestamp(timer.at)}`;
@@ -249,10 +249,10 @@ export function formatTimerSummary(timer: timers.TimerView, options: { includeMe
     ? `new session (${timer.agentName || 'main'} / ${timer.sessionPrefix || 'timer'})`
     : `session ${timer.sessionId}`;
 
-  return `Timer \`${timer.id}\` created.\nMode: ${mode}\nTarget: ${target}\nNext run: ${formatTimerTimestamp(timer.nextRunAt)}${options.includeMessage === false ? '' : `\nMessage: ${timer.message}`}`;
+  return `Timer \`${timer.id}\` created.\nMode: ${mode}\nTarget: ${target}\nNext run: ${formatTimerTimestamp(timer.nextRunAt)}`;
 }
 
-export function formatTimerUpdateSummary(timer: timers.TimerView, options: { includeMessage?: boolean } = {}): string {
+export function formatTimerUpdateSummary(timer: timers.TimerView): string {
   const mode = timer.mode === 'cron'
     ? `cron: ${timer.cron}`
     : `at: ${formatTimerTimestamp(timer.at)}`;
@@ -260,7 +260,7 @@ export function formatTimerUpdateSummary(timer: timers.TimerView, options: { inc
     ? `new session (${timer.agentName || 'main'} / ${timer.sessionPrefix || 'timer'})`
     : `session ${timer.sessionId}`;
 
-  return `Timer \`${timer.id}\` updated.\nMode: ${mode}\nTarget: ${target}\nNext run: ${formatTimerTimestamp(timer.nextRunAt)}${options.includeMessage === false ? '' : `\nMessage: ${timer.message}`}`;
+  return `Timer \`${timer.id}\` updated.\nMode: ${mode}\nTarget: ${target}\nNext run: ${formatTimerTimestamp(timer.nextRunAt)}`;
 }
 
 export function detectMimeType(filePath: string): string {

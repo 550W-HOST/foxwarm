@@ -59,7 +59,7 @@ Manages scheduled timers that fire messages into sessions — either as one-time
 | `listTimers(sessionId?)` | ~680 | Filters and sorts active timers into views |
 | `deleteTimer(timerId, sessionId?)` | ~695 | Removes a timer with optional ownership check |
 
-Model-facing `create_timer` and `update_timer` use the shared timer summary formatters with the message line suppressed; successful receipts retain timer ID, mode/schedule, target and next run. `list_timers` remains the explicit detail query and includes the stored message. Trigger delivery still uses the persisted raw message through `buildTimerTriggeredMessage`; storage and scheduling are unchanged.
+Model-facing `create_timer` and `update_timer` use shared timer summary formatters that omit the message line; successful receipts retain timer ID, mode/schedule, target and next run. `list_timers` remains the explicit detail query and includes the stored message. Trigger delivery still uses the persisted raw message through `buildTimerTriggeredMessage`; storage and scheduling are unchanged.
 
 ## Dependencies
 
