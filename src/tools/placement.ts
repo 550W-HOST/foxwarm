@@ -46,6 +46,7 @@ export const BUILTIN_TOOL_PLACEMENTS = {
       status: 'session-owner',
       list: 'main-management',
       'update-display-name': 'main-management',
+      'update-parent': 'main-management',
     },
   },
   task: { owner: 'main-management' },

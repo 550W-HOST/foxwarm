@@ -25,8 +25,13 @@ export async function tool_session(args: ToolArgs = {}, ctx?: ToolContext) {
     return updateSessionDisplayName(args, ctx);
   }
 
+  if (action === 'update-parent') {
+    if (ctx?.sessionPlacement === 'session-worker') return executeMainManagementTool('session_update_parent', args, ctx);
+    return updateSessionParent(args, ctx?.sessionId);
+  }
+
   if (action !== 'status') {
-    throw new Error('session.action must be "status", "list", or "update-display-name".');
+    throw new Error('session.action must be "status", "list", "update-display-name", or "update-parent".');
   }
 
   const targetSessionId = ctx?.sessionId;
@@ -34,7 +39,26 @@ export async function tool_session(args: ToolArgs = {}, ctx?: ToolContext) {
     throw new Error('Cannot show session status without current session context.');
   }
 
-  return formatSessionStatus(await buildSessionStatusInfo(targetSessionId, ctx?.session, ctx?.sessionPlacement === 'session-worker'));
+  const requestedSessionId = typeof args.sessionId === 'string' && args.sessionId.trim()
+    ? args.sessionId.trim()
+    : targetSessionId;
+  const currentSession = ctx?.session;
+  const isCurrentSession = requestedSessionId === targetSessionId
+    || !!currentSession?.aliases?.includes(requestedSessionId);
+  if (ctx?.sessionPlacement === 'session-worker' && !isCurrentSession) {
+    return executeMainManagementTool('session_status', { ...args, sessionId: requestedSessionId }, ctx);
+  }
+
+  if (isCurrentSession && currentSession) {
+    return formatSessionStatus(await buildSessionStatusInfo(targetSessionId, currentSession, ctx?.sessionPlacement === 'session-worker'));
+  }
+
+  const target = await sessionRuntime.getSession(requestedSessionId);
+  if (!target) {
+    throw new Error(`Session \`${requestedSessionId}\` not found.`);
+  }
+
+  return formatSessionStatus(await buildSessionStatusInfo(target.id, target));
 }
 
 export async function tool_delete_session(args: ToolArgs, ctx: ToolContext) {
@@ -96,6 +120,43 @@ async function updateSessionDisplayName(args: ToolArgs, ctx?: ToolContext) {
   await sessionRuntime.updateSettings(session.id, { displayName: nextName || null });
 
   return `Session \`${session.id}\` display name changed from ${formatDisplayName(previousName)} to ${formatDisplayName(nextName)}.`;
+}
+
+export async function updateSessionParent(args: ToolArgs, sourceSessionId?: string) {
+  const targetSessionId = typeof args.sessionId === 'string' && args.sessionId.trim()
+    ? args.sessionId.trim()
+    : sourceSessionId;
+  if (!targetSessionId) {
+    throw new Error('Session ID is required.');
+  }
+  if (!Object.prototype.hasOwnProperty.call(args, 'parentSessionId')) {
+    throw new Error('parentSessionId is required for action="update-parent" and must be a non-empty session ID or null.');
+  }
+  const requestedParent = args.parentSessionId;
+  if (requestedParent !== null && (typeof requestedParent !== 'string' || !requestedParent.trim())) {
+    throw new Error('parentSessionId must be a non-empty session ID or null.');
+  }
+
+  const result = await sessionManager.setSessionParent(
+    targetSessionId,
+    requestedParent === null ? undefined : requestedParent.trim(),
+  );
+  return {
+    sessionId: result.childSessionId,
+    previousParentSessionId: result.previousParentSessionId ?? null,
+    parentSessionId: result.parentSessionId ?? null,
+  };
+}
+
+export async function statusSessionForManagement(args: ToolArgs, sourceSessionId: string) {
+  const requestedSessionId = typeof args.sessionId === 'string' && args.sessionId.trim()
+    ? args.sessionId.trim()
+    : sourceSessionId;
+  const target = await sessionRuntime.getSession(requestedSessionId);
+  if (!target) {
+    throw new Error(`Session \`${requestedSessionId}\` not found.`);
+  }
+  return formatSessionStatus(await buildSessionStatusInfo(target.id, target));
 }
 
 export async function tool_stop_session(args: ToolArgs, ctx?: ToolContext) {

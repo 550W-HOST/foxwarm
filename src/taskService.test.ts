@@ -104,7 +104,8 @@ test('assignment notices commit before previous/new delivery, preserve independe
   assert.equal(notified.task.assignmentNotificationStatus, 'sent');
   assert.deepEqual(sends[0].taskNotification, { taskId, event: 'assigned' });
   assert.match(sends[0].message, /You have been assigned a task.*task_.*Notify\nStatus: active/);
-  assert.ok(sends[0].message.length < 1400);
+  assert.ok(sends[0].message.length > 4000);
+  assert.ok(sends[0].message.endsWith('x'.repeat(4000)));
   service.store.close();
   await service.execute({ action: 'assign', taskId, ownerSessionId: 'first', notifySession: true }, 'creator');
   assert.equal(sends.length, 1, 'successful notification survives restart without resending');
@@ -218,10 +219,11 @@ test('create can commit an existing owner and optional assignment notification w
   assert.equal(quiet.task.ownerSessionId, 'first');
   assert.equal(sends.length, 0);
   await assert.rejects(() => service.execute({ action: 'claim', taskId: quiet.task.id }, 'second'), /already claimed/);
-  const notified = await service.execute({ action: 'create', title: 'Notify on create', ownerSessionId: 'first', notifySession: true }, 'creator');
+  const notified = await service.execute({ action: 'create', title: 'Notify on create', description: 'y'.repeat(4000), ownerSessionId: 'first', notifySession: true }, 'creator');
   assert.equal(notified.task.assignmentNotificationStatus, 'sent');
   assert.deepEqual(sends[0].options.taskNotification, { taskId: notified.task.id, event: 'assigned' });
   assert.equal(sends[0].options.trigger, undefined);
+  assert.ok(sends[0].message.endsWith('y'.repeat(4000)));
   fail = true;
   const failed = await service.execute({ action: 'create', title: 'Failed delivery', ownerSessionId: 'second', notifySession: true }, 'creator');
   assert.equal(failed.task.status, 'active');
@@ -234,6 +236,10 @@ test('create can commit an existing owner and optional assignment notification w
   assert.equal(sends.length, 2, 'self target does not produce a redundant send');
   assert.deepEqual(service.store.taskContext('creator', Array.from({ length: 30 }, (_, i) => i + 12), true), [], 'self creation starts a fresh progress anchor');
   assert.equal(service.store.taskContext('creator', Array.from({ length: 30 }, (_, i) => i + 41), true)[0].id, self.task.id);
+  const legacyGoal = 'legacy goal '.repeat(400);
+  const legacy = service.store.migrateLegacyGoal('creator', legacyGoal, 0);
+  await service.execute({ action: 'assign', taskId: legacy.id, ownerSessionId: 'second', notifySession: true }, 'creator');
+  assert.ok(sends[2].message.endsWith(legacyGoal));
   const open = await service.execute({ action: 'create', title: 'Explicitly unowned', ownerSessionId: null, notifySession: true }, 'creator');
   assert.equal(open.task.status, 'open');
   assert.equal(open.task.ownerSessionId, null);

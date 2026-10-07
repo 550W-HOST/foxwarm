@@ -38,7 +38,9 @@ export const MAIN_MANAGEMENT_TOOL_OPERATIONS = [
   'delete_timer',
   'create_child_session',
   'session_list',
+  'session_status',
   'session_update_display_name',
+  'session_update_parent',
   'get_session_messages',
   'get_archived_messages',
   'get_archived_blocks',
@@ -127,7 +129,9 @@ async function invokeAllowedOperation(operation: MainManagementToolOperation, ar
     case 'update_timer': return timerTools.tool_update_timer(args, ctx);
     case 'delete_timer': return timerTools.tool_delete_timer(args, ctx);
     case 'session_list': return buildSessionListOutput(args, ctx.sessionId);
+    case 'session_status': return sessionCrudTools.statusSessionForManagement(args, ctx.sessionId);
     case 'session_update_display_name': return sessionCrudTools.tool_session(args, ctx);
+    case 'session_update_parent': return sessionCrudTools.updateSessionParent(args, ctx.sessionId);
     case 'get_archived_messages': return archiveRecallTools.tool_get_archived_messages(args, ctx);
     case 'get_archived_blocks': return archiveRecallTools.tool_get_archived_blocks(args, ctx);
     case 'recall': return archiveRecallTools.tool_recall(args, ctx);
@@ -143,7 +147,7 @@ async function invokeAllowedOperation(operation: MainManagementToolOperation, ar
 const mainManagementArgError = (message: string): RpcError => new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', message);
 
 function operationCapability(operation: MainManagementToolOperation): string {
-  if (operation === 'session_list' || operation === 'session_update_display_name') return 'session';
+  if (operation === 'session_list' || operation === 'session_status' || operation === 'session_update_display_name' || operation === 'session_update_parent') return 'session';
   return operation;
 }
 
@@ -292,6 +296,19 @@ export function createMainManagementToolServiceHandler(options: {
         if (action !== 'update-display-name' || typeof args.name !== 'string'
           || !target || target.id !== sourceSessionId) {
           throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'session_update_display_name requires the exact source session, update-display-name action, and a string name.');
+        }
+      }
+      if (operation === 'session_status') {
+        const action = typeof args.action === 'string' ? args.action.trim().toLowerCase() : 'status';
+        if (action !== 'status' || (args.sessionId !== undefined
+          && (typeof args.sessionId !== 'string' || !args.sessionId.trim()))) {
+          throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'session_status requires action="status" and an optional non-empty sessionId.');
+        }
+      }
+      if (operation === 'session_update_parent') {
+        const action = typeof args.action === 'string' ? args.action.trim().toLowerCase() : '';
+        if (action !== 'update-parent' || !Object.prototype.hasOwnProperty.call(args, 'parentSessionId')) {
+          throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'session_update_parent requires action="update-parent" and an explicit parentSessionId.');
         }
       }
       const needsExactSource = ['get_archived_messages', 'get_archived_blocks', 'recall', 'create_agent', 'create_session', 'set_tool_rules'].includes(operation);

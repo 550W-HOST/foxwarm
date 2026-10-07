@@ -159,7 +159,10 @@ export async function buildSessionStatusInfo(
   exactOwner = false,
   historyMessages?: Message[],
 ): Promise<SessionStatusInfo> {
-  const session = suppliedSession || await sessionManager.getSession(sessionId);
+  const session = suppliedSession || await sessionManager.getExistingSession(sessionId);
+  if (!session) {
+    throw new Error(`Session \`${sessionId}\` not found.`);
+  }
   const realSessionId = session.id || sessionId;
   const agentName = session.agent || 'main';
   const agentDir = getAgentDir(agentName);

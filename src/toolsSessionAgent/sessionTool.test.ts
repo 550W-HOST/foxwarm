@@ -71,6 +71,16 @@ test('session status action reports current identity, usage, cwd, node, compact 
 
     const explicitStatus = String(await tool_session({ action: 'status' }, { sessionId, session }));
     assert.equal(explicitStatus, status);
+
+    const targetStatus = String(await tool_session({ action: 'status', sessionId: parentSessionId }, { sessionId, session }));
+    assert.ok(targetStatus.includes(`session id: \`${parentSessionId}\``));
+    assert.ok(!targetStatus.includes(`session id: \`${sessionId}\``));
+    const missingId = makeSessionId('session_status_missing');
+    await assert.rejects(
+      tool_session({ action: 'status', sessionId: missingId }, { sessionId, session }),
+      (error: any) => error?.message === `Session \`${missingId}\` not found.`,
+    );
+    assert.equal(sessionManager.getAllSessions().has(missingId), false);
   } finally {
     for (const id of [childSessionId, sessionId, parentSessionId]) {
       await sessionManager.deleteSession(id).catch(() => {});
@@ -136,6 +146,8 @@ test('session list scopes by caller Agent before pagination and preserves explic
 
     const schema = definitions.find(def => def.name === 'session')?.parameters;
     assert.deepEqual((schema?.properties as any)?.scope?.enum, ['current-agent', 'all']);
+    assert.deepEqual((schema?.properties as any)?.action?.enum, ['status', 'list', 'update-display-name', 'update-parent']);
+    assert.deepEqual((schema?.properties as any)?.parentSessionId?.type, ['string', 'null']);
     assert.ok(!schema?.required?.includes('scope'));
   } finally {
     for (const id of ids) await sessionManager.deleteSession(id).catch(() => {});
@@ -168,9 +180,38 @@ test('session update-display-name action reports set, change, clear, and no-op t
 
     await assert.rejects(
       tool_session({ action: 'rename', name: 'Legacy Alias' }, { sessionId, session }),
-      /session\.action must be "status", "list", or "update-display-name"/,
+      /session\.action must be "status", "list", "update-display-name", or "update-parent"/,
     );
   } finally {
     await sessionManager.deleteSession(sessionId).catch(() => {});
+  }
+});
+
+test('session update-parent requires an explicit parent and returns the committed relation', async () => {
+  await sessionManager.loadSessions();
+  const parentId = makeSessionId('session_parent_update_parent');
+  const childId = makeSessionId('session_parent_update_child');
+  const otherParentId = makeSessionId('session_parent_update_other');
+
+  try {
+    await ensureSession(parentId);
+    const child = await ensureSession(childId);
+    await ensureSession(otherParentId);
+    const ctx = { sessionId: childId, session: child };
+
+    await assert.rejects(() => tool_session({ action: 'update-parent' }, ctx), /parentSessionId is required/);
+    await assert.rejects(() => tool_session({ action: 'update-parent', parentSessionId: '' }, ctx), /non-empty session ID or null/);
+
+    const attached = await tool_session({ action: 'update-parent', parentSessionId: parentId }, ctx) as any;
+    assert.deepEqual(attached, { sessionId: childId, previousParentSessionId: null, parentSessionId: parentId });
+    assert.equal((await sessionManager.getExistingSession(childId))?.parentSessionId, parentId);
+
+    const moved = await tool_session({ action: 'update-parent', parentSessionId: otherParentId }, ctx) as any;
+    assert.deepEqual(moved, { sessionId: childId, previousParentSessionId: parentId, parentSessionId: otherParentId });
+    const detached = await tool_session({ action: 'update-parent', parentSessionId: null }, ctx) as any;
+    assert.deepEqual(detached, { sessionId: childId, previousParentSessionId: otherParentId, parentSessionId: null });
+    assert.equal((await sessionManager.getExistingSession(childId))?.parentSessionId, undefined);
+  } finally {
+    for (const id of [childId, otherParentId, parentId]) await sessionManager.deleteSession(id).catch(() => {});
   }
 });

@@ -1269,7 +1269,7 @@ test('consolidated resource tool schemas expose their approved actions', () => {
   const definition = definitions.find(def => def.name === 'session');
   assert.ok(definition);
   assert.equal(definition.defaultInject, true);
-  assert.deepEqual((definition.parameters?.properties as any)?.action?.enum, ['status', 'list', 'update-display-name']);
+  assert.deepEqual((definition.parameters?.properties as any)?.action?.enum, ['status', 'list', 'update-display-name', 'update-parent']);
   assert.equal((definition.parameters?.properties as any)?.start?.type, 'number');
   assert.equal((definition.parameters?.properties as any)?.count?.type, 'number');
   assert.equal((definition.parameters?.properties as any)?.sessionId?.type, 'string');
