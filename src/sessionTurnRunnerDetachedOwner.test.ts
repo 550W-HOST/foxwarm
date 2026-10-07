@@ -1625,7 +1625,7 @@ async function assertLinkedChildCompletion(scripted: boolean): Promise<void> {
   let requests = 0;
   try {
     const created = JSON.parse((await tool_task({ action: 'create', title: 'Linked work' }, { sessionId: creator.id, session: creator } as any)).output);
-    const attached = await create_child_session({ suffix: 'task-link-child', taskId: created.task.id }, { sessionId: parent.id, session: parent } as any);
+    const attached = await create_child_session({ suffix: 'task-link-child', taskId: created.taskId }, { sessionId: parent.id, session: parent } as any);
     const childId = String(attached).match(/`([^`]+)`/)![1];
     child = await sessionManager.getExistingSession(childId);
     assert.equal(child.parentSessionId, parent.id);
@@ -1636,9 +1636,9 @@ async function assertLinkedChildCompletion(scripted: boolean): Promise<void> {
         const call = scripted
           ? { id: 'linked-task-script', name: 'run_script', args: {
             code: 'call_tool({"toolId": "builtin:task", "args": {"action": "complete", "taskId": args["taskId"], "result": "Finished."}})\nreturn {"scriptFinished": True}',
-            args: { taskId: created.task.id },
+            args: { taskId: created.taskId },
           } }
-          : { id: 'linked-task-complete', name: 'call_tool', args: { toolId: 'builtin:task', args: { action: 'complete', taskId: created.task.id, result: 'Finished.' } } };
+          : { id: 'linked-task-complete', name: 'call_tool', args: { toolId: 'builtin:task', args: { action: 'complete', taskId: created.taskId, result: 'Finished.' } } };
         await options.appendMessage({ role: 'model', parts: [{ functionCall: call }] });
         return { text: '', toolCalls: [call], allParts: [{ functionCall: call }] };
       }
@@ -1652,7 +1652,7 @@ async function assertLinkedChildCompletion(scripted: boolean): Promise<void> {
     assert.equal(child.queue.length, 0);
     assert.equal(parent.queue.length, 0, 'no fabricated successful parent send or duplicate routine report');
     assert.match(JSON.stringify(creator.queue), /Task completed.*Finished/);
-    const completed = JSON.parse((await tool_task({ action: 'get', taskId: created.task.id }, { sessionId: creator.id, session: creator } as any)).output);
+    const completed = JSON.parse((await tool_task({ action: 'get', taskId: created.taskId }, { sessionId: creator.id, session: creator } as any)).output);
     assert.equal(completed.task.attachedSessionId, child.id);
     assert.equal(completed.task.completionNotificationStatus, 'sent');
   } finally {

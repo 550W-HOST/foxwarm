@@ -68,7 +68,11 @@ Exact tool description:
 - `complete`: Mark a task completed with an optional result summary. Only the owner, or creator when unclaimed, may complete. After commit, the shared service sends a Task notification to the creator through the existing inter-session queue. Delivery failure returns a warning without undoing completion. Self completion records skipped without a redundant self-send or warning. Pending/sent/failed/skipped state survives restart; repeated completion never resends. No background notification retry runs.
 - `cancel`: Cancel a task with an optional reason. Creator or owner may cancel; reason is recorded as an authored note.
 
-Unknown actions, unsupported keys and invalid values fail before effect. Completed/cancelled tasks reject every mutation, including claim, repeated completion/cancellation and attempts to reopen. Mutation results include the current task/owner/status; authority and terminal-state errors include current owner/status and the relevant conflict.
+Unknown actions, unsupported keys and invalid values fail before effect. Completed/cancelled tasks reject every mutation, including claim, repeated completion/cancellation and attempts to reopen. Internal TaskService mutation results include the current task/owner/status; the model-facing builtin projects successful mutations to the short receipt described below. Authority and terminal-state errors include current owner/status and the relevant conflict.
+
+### Model mutation receipts
+
+The model-facing builtin boundary projects `create`, `claim`, `assign`, `update`, `complete` and `cancel` results to a short JSON receipt containing only `taskId`, `status` and `ownerSessionId`, plus an actual postcommit `warning` when notification delivery fails. It does not echo title, description, note, result, timestamps, null internal notification states or other store fields. This projection occurs after TaskService has completed persistence, notification delivery and internal post-action construction, so creator notifications, child-handoff completion signals, assignment status and failure warnings retain their existing semantics. `list` keeps its bounded summaries and `get` remains the explicit full detail query with description/result/notes. Direct, unified, Worker and nested ToolScript calls use the same projection.
 
 ## Notification metadata
 

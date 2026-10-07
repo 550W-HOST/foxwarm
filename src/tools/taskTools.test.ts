@@ -39,22 +39,25 @@ test('direct, unified and Worker task calls use exact context identity through M
   let taskId: string;
   try {
     await assert.rejects(() => task({ action: 'list' }, undefined), /active source session/);
-    const created = readResult(await callTool('task', { action: 'create', title: 'Exercise shared task' }, creatorCtx)).task;
-    taskId = created.id;
-    assert.equal(created.createdBySessionId, creator.id);
-    const claimed = readResult(await call_tool({ source: 'builtin', name: 'task', args: { action: 'claim', taskId } }, ownerCtx)).task;
+    const created = readResult(await callTool('task', { action: 'create', title: 'Exercise shared task' }, creatorCtx));
+    taskId = created.taskId;
+    assert.equal(created.status, 'open');
+    assert.equal(created.ownerSessionId, null);
+    assert.equal(readResult(await task({ action: 'get', taskId }, creatorCtx)).task.createdBySessionId, creator.id);
+    const claimed = readResult(await call_tool({ source: 'builtin', name: 'task', args: { action: 'claim', taskId } }, ownerCtx));
     assert.equal(claimed.ownerSessionId, owner.id);
+    assert.equal(claimed.status, 'active');
     await assert.rejects(() => task({ action: 'update', taskId, note: 'Creator cannot change ownership' }, creatorCtx), /owner required/);
     await task({ action: 'update', taskId, note: 'Working' }, ownerCtx);
     assert.equal(JSON.stringify(creator), creatorBefore);
-    const result = readResult(await task({ action: 'complete', taskId, result: 'Done' }, ownerCtx)).task;
+    const result = readResult(await task({ action: 'complete', taskId, result: 'Done' }, ownerCtx));
     assert.equal(result.status, 'completed');
     const inspected = readResult(await task({ action: 'get', taskId }, creatorCtx));
     assert.equal(inspected.task.result, 'Done');
     assert.equal(inspected.notes[0].sessionId, owner.id);
     assert.equal(JSON.stringify(creator.history), '[]');
     assert.equal(creator.queue.length, 1);
-    assert.equal(result.completionNotificationStatus, 'sent');
+    assert.equal(readResult(await task({ action: 'get', taskId }, ownerCtx)).task.completionNotificationStatus, 'sent');
     assert.equal(JSON.stringify(owner), ownerBefore);
     setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
 version: 1
@@ -83,7 +86,7 @@ test('create_child_session taskId binds the real child before delivery and rejec
   const ctx: any = { sessionId: parent.id, session: parent, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} };
   const children: string[] = [];
   try {
-    const taskId = readResult(await task({ action: 'create', title: 'Child work' }, ctx)).task.id;
+    const taskId = readResult(await task({ action: 'create', title: 'Child work' }, ctx)).taskId;
     const result = await create_child_session({ suffix: 'executor', taskId }, ctx);
     const childId = String(result).match(/`([^`]+)`/)![1];
     children.push(childId);
@@ -117,18 +120,18 @@ test('real Session moves preserve task owner/creator/attached identities, notifi
   let child: Awaited<ReturnType<typeof sessionManager.getExistingSession>>;
   let raw: DatabaseSync;
   try {
-    const taskId = readResult(await task({ action: 'create', title: 'Linked work across Session moves' }, { sessionId: creator.id })).task.id;
+    const taskId = readResult(await task({ action: 'create', title: 'Linked work across Session moves' }, { sessionId: creator.id })).taskId;
     const created = await create_child_session({ suffix: 'executor', taskId }, { sessionId: parent.id, session: parent });
     child = await sessionManager.getExistingSession(String(created).match(/`([^`]+)`/)![1]);
     const ctx = { sessionId: child.id, session: child };
-    const selfId = readResult(await task({ action: 'create', title: 'Self-owned work across rename' }, ctx)).task.id;
+    const selfId = readResult(await task({ action: 'create', title: 'Self-owned work across rename' }, ctx)).taskId;
     await task({ action: 'claim', taskId: selfId }, ctx);
     const legacy = taskService.store.migrateLegacyGoal(child.id, 'Full legacy Goal across rename', 1);
     raw = new DatabaseSync(taskService.store.filePath, { readOnly: true });
     const refs = (id: string): any => raw.prepare('SELECT createdBySessionId,ownerSessionId,attachedSessionId,reminderLastSeq FROM tasks WHERE id=?').get(id);
     const anchor = refs(selfId).reminderLastSeq;
     taskService.store.taskContext(child.id, Array.from({ length: 29 }, (_, i) => anchor + i + 1), false);
-    const transferId = readResult(await task({ action: 'create', title: 'Transfer across aliases' }, { sessionId: creator.id })).task.id;
+    const transferId = readResult(await task({ action: 'create', title: 'Transfer across aliases' }, { sessionId: creator.id })).taskId;
     await task({ action: 'assign', taskId: transferId, ownerSessionId: child.id }, { sessionId: creator.id });
     const oldCreator = creator.id;
     const oldChild = child.id;
@@ -152,7 +155,8 @@ test('real Session moves preserve task owner/creator/attached identities, notifi
     assert.equal(refs(selfId).createdBySessionId, child.id);
     assert.equal(refs(selfId).ownerSessionId, child.id);
     assert.equal(taskService.store.migrateLegacyGoal(child.id, 'Full legacy Goal across rename', 1).id, legacy.id, 'legacy map is retry-safe across aliases');
-    const transfer = readResult(await task({ action: 'assign', taskId: transferId, ownerSessionId: oldCreator, notifySession: true }, { sessionId: currentCreator.id })).task;
+    await task({ action: 'assign', taskId: transferId, ownerSessionId: oldCreator, notifySession: true }, { sessionId: currentCreator.id });
+    const transfer = readResult(await task({ action: 'get', taskId: transferId }, { sessionId: currentCreator.id })).task;
     assert.equal(transfer.ownerSessionId, currentCreator.id, 'creator actor and new owner aliases resolve before permission checks');
     assert.equal(transfer.previousOwnerSessionId, child.id);
     assert.equal(transfer.assignmentNotificationStatus, 'skipped');
@@ -188,7 +192,7 @@ test('actual Task notices classify assignment/transfer/release/completion separa
   const triggered: string[] = [];
   sessionManager.setSessionTriggerCallback(id => { triggered.push(id); });
   try {
-    const taskId = readResult(await task({ action: 'create', title: 'Task notifications', ownerSessionId: first.id, notifySession: true }, { sessionId: creator.id })).task.id;
+    const taskId = readResult(await task({ action: 'create', title: 'Task notifications', ownerSessionId: first.id, notifySession: true }, { sessionId: creator.id })).taskId;
     const notice = (session: typeof creator, index: number, event: string): void => {
       const text = session.queue[index].parts[0].system;
       assert.match(text, /^<foxwarm-message type="task"/);
@@ -220,5 +224,52 @@ test('actual Task notices classify assignment/transfer/release/completion separa
     for (const session of [creator, first, second]) await sessionManager.deleteSession(session.id);
     await shutdownMainManagementTools();
     resetMainManagementToolsForTests();
+  }
+});
+
+test('model task mutation receipts stay minimal across direct, unified, Worker and preserve warning while get stays detailed', async () => {
+  const prefix = `task_receipt_${Date.now()}`;
+  const creator = await sessionManager.getSession(`${prefix}_creator`);
+  const owner = await sessionManager.getSession(`${prefix}_owner`);
+  const directCtx: any = { sessionId: creator.id, session: creator };
+  const workerCtx: any = { sessionId: owner.id, session: owner, sessionPlacement: 'session-worker', persistCurrentSession: async () => { throw new Error('Task must not persist Session state'); } };
+  const assertReceipt = (value: any, expectedStatus: string, expectedOwner: string | null) => {
+    assert.deepEqual(Object.keys(value).sort(), ['ownerSessionId', 'status', 'taskId']);
+    assert.match(value.taskId, /^task_/);
+    assert.equal(value.status, expectedStatus);
+    assert.equal(value.ownerSessionId, expectedOwner);
+    assert.equal(value.title, undefined);
+    assert.equal(value.description, undefined);
+    assert.equal(value.result, undefined);
+    assert.equal(value.note, undefined);
+    assert.equal(value.updatedAt, undefined);
+    return value.taskId as string;
+  };
+  try {
+    const created = readResult(await task({ action: 'create', title: 'Hidden detail', description: 'Private detail' }, directCtx));
+    const taskId = assertReceipt(created, 'open', null);
+    const claimed = readResult(await call_tool({ source: 'builtin', name: 'task', args: { action: 'claim', taskId } }, workerCtx));
+    assertReceipt(claimed, 'active', owner.id);
+    const updated = readResult(await task({ action: 'update', taskId, note: 'Private note' }, workerCtx));
+    assertReceipt(updated, 'active', owner.id);
+    const details = readResult(await task({ action: 'get', taskId }, directCtx));
+    assert.equal(details.task.title, 'Hidden detail');
+    assert.equal(details.task.description, 'Private detail');
+    assert.equal(details.notes[0].text, 'Private note');
+    await sessionManager.deleteSession(creator.id);
+    const completed = readResult(await task({ action: 'complete', taskId, result: 'Private result' }, workerCtx));
+    assert.equal(completed.taskId, taskId);
+    assert.equal(completed.status, 'completed');
+    assert.equal(completed.ownerSessionId, owner.id);
+    assert.match(completed.warning, /completion notification could not be delivered/);
+    assert.equal(completed.title, undefined);
+    const completedDetails = readResult(await task({ action: 'get', taskId }, workerCtx));
+    assert.equal(completedDetails.task.result, 'Private result');
+    assert.equal(completedDetails.task.completionNotificationStatus, 'failed');
+  } finally {
+    await shutdownMainManagementTools();
+    resetMainManagementToolsForTests();
+    await sessionManager.deleteSession(creator.id).catch(() => false);
+    await sessionManager.deleteSession(owner.id).catch(() => false);
   }
 });

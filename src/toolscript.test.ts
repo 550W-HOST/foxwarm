@@ -1593,7 +1593,7 @@ test('a real Task completion receipt belongs only to the ToolScript slice that p
   const creator = await sessionManager.getSession(makeId('script_task_creator'));
   let child: Session;
   try {
-    const taskId = JSON.parse((await tools.task({ action: 'create', title: 'Complete before pause' }, { sessionId: creator.id, session: creator })).output).task.id;
+    const taskId = JSON.parse((await tools.task({ action: 'create', title: 'Complete before pause' }, { sessionId: creator.id, session: creator })).output).taskId;
     const created = await tools.create_child_session({ suffix: 'script-task-child', taskId }, { sessionId: creator.id, session: creator });
     child = await sessionManager.getExistingSession(String(created).match(/`([^`]+)`/)![1]);
     const ctx = { sessionId: child.id, session: child };
@@ -1609,5 +1609,28 @@ test('a real Task completion receipt belongs only to the ToolScript slice that p
   } finally {
     if (child) await sessionManager.deleteSession(child.id);
     await sessionManager.deleteSession(creator.id);
+  }
+});
+
+test('nested ToolScript task mutation exposes the same compact receipt fields', async () => {
+  const sessionId = `toolscript_task_receipt_${Date.now()}`;
+  const session = await sessionManager.getSession(sessionId);
+  try {
+    const toolMessage = await executeTools([{ id: 'nested-task-receipt', name: 'run_script', args: {
+      code: 'return call_tool({"toolId": "builtin:task", "args": {"action": "create", "title": "Script detail", "description": "Not echoed"}})',
+    } }], { sessionId, session }, session);
+    const response: any = toolMessage.parts[0].functionResponse?.response;
+    const output = response?.result?.output;
+    const receipt = typeof output === 'string' ? JSON.parse(output) : output;
+    assert.deepEqual(Object.keys(receipt).sort(), ['ownerSessionId', 'status', 'taskId']);
+    assert.equal(receipt.status, 'open');
+    assert.equal(receipt.ownerSessionId, null);
+    assert.equal(receipt.title, undefined);
+    const taskId = receipt.taskId;
+    const details = JSON.parse((await tools.task({ action: 'get', taskId }, { sessionId, session })).output);
+    assert.equal(details.task.description, 'Not echoed');
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
   }
 });

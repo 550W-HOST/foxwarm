@@ -18,13 +18,28 @@ export const taskService = new TaskService(new TaskStore(path.join(STATE_DIR, 't
   sendToSession: (target, message, source, options) => sessionManager.sendToSession(target, message, source, options),
 });
 
+const TASK_MUTATION_ACTIONS = new Set(['create', 'claim', 'assign', 'update', 'complete', 'cancel']);
+
+function buildTaskMutationReceipt(result: any): Record<string, unknown> {
+  const task = result?.task || {};
+  return {
+    taskId: task.id,
+    status: task.status,
+    ownerSessionId: task.ownerSessionId ?? null,
+    ...(typeof result?.warning === 'string' ? { warning: result.warning } : {}),
+  };
+}
+
 /** Runs only at the Main-owned management boundary. */
 export async function tool_task(args: ToolArgs, ctx: ToolContext): Promise<any> {
   const result = await taskService.execute(args, ctx?.sessionId, typeof ctx?.session?.nextMessageSeq === 'number' ? Math.max(0, ctx.session.nextMessageSeq - 1) : undefined);
   const complete = args.action === 'complete';
   const sent = complete && result.task.completionNotificationStatus === 'sent';
   const linked = complete && result.task.attachedSessionId === ctx?.sessionId;
-  return { output: JSON.stringify(result),
+  const visibleResult = TASK_MUTATION_ACTIONS.has(args.action)
+    ? buildTaskMutationReceipt(result)
+    : result;
+  return { output: JSON.stringify(visibleResult),
     ...(sent || linked ? { __toolPostAction: {
       ...(sent ? { successfulSendToSessionTarget: result.task.createdBySessionId } : {}),
       ...(linked ? { completedLinkedTask: { taskId: result.task.id, attachedSessionId: result.task.attachedSessionId } } : {}),
