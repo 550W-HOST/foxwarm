@@ -151,6 +151,59 @@ test('runtime validates action-specific fields, types, required fields, sizes an
   assert.equal(store.execute({ action: 'list' }, 'coordinator').total, 0);
 });
 
+test('WebUI user actor is separate from Session actors for create, comment and owner changes', t => {
+  const store = fixture(t);
+  const created = store.executeAsUser({ action: 'create', title: 'User task', ownerSessionId: 'worker', notifySession: true });
+  assert.equal(created.task.createdByKind, 'user');
+  assert.equal(created.task.createdBySessionId, null);
+  assert.equal(created.task.ownerSessionId, 'worker');
+  assert.equal(created.assignmentNotification.newOwner, 'worker');
+  const commented = store.executeAsUser({ action: 'comment', taskId: created.task.id, note: 'User comment', notifySession: true });
+  assert.equal(commented.commentNotification.owner, 'worker');
+  const details = store.execute({ action: 'get', taskId: created.task.id });
+  assert.deepEqual(details.notes.at(-1), { authorKind: 'user', sessionId: null, text: 'User comment', createdAt: details.notes.at(-1).createdAt });
+  const reassigned = store.executeAsUser({ action: 'assign', taskId: created.task.id, ownerSessionId: 'other', notifySession: true });
+  assert.equal(reassigned.task.ownerSessionId, 'other');
+  assert.equal(reassigned.assignmentNotification.newOwner, 'other');
+  assert.equal(reassigned.assignmentNotification.previousOwner, 'worker');
+  store.execute({ action: 'complete', taskId: created.task.id }, 'other');
+  assert.equal(store.executeAsUser({ action: 'comment', taskId: created.task.id, note: 'After completion' }).task.status, 'completed');
+  assert.throws(() => store.executeAsUser({ action: 'assign', taskId: created.task.id, ownerSessionId: null }), /terminal/);
+});
+
+test('actor-column migration preserves legacy tasks and notes as Session-authored', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-task-legacy-schema-'));
+  const filePath = path.join(root, 'tasks.sqlite');
+  const db = new DatabaseSync(filePath);
+  db.exec(`CREATE TABLE tasks (
+    id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT,
+    status TEXT NOT NULL CHECK(status IN ('open','active','completed','cancelled')),
+    parentTaskId TEXT REFERENCES tasks(id), createdBySessionId TEXT NOT NULL,
+    ownerSessionId TEXT, result TEXT, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL,
+    completedAt INTEGER, cancelledAt INTEGER, completionNotificationStatus TEXT,
+    assignmentNotificationStatus TEXT, previousOwnerSessionId TEXT, previousOwnerNotificationStatus TEXT,
+    assignmentRevision INTEGER NOT NULL DEFAULT 0, attachedSessionId TEXT, legacyGoalSessionId TEXT,
+    reminderLastSeq INTEGER, reminderMessageCount INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX tasks_status ON tasks(status, updatedAt);
+  CREATE INDEX tasks_parent ON tasks(parentTaskId, createdAt);
+  CREATE TABLE task_notes (id INTEGER PRIMARY KEY, taskId TEXT NOT NULL REFERENCES tasks(id), sessionId TEXT NOT NULL, text TEXT NOT NULL, createdAt INTEGER NOT NULL);
+  CREATE INDEX task_notes_task ON task_notes(taskId, id);`);
+  db.prepare('INSERT INTO tasks (id,title,status,createdBySessionId,createdAt,updatedAt) VALUES (?,?,?,?,?,?)').run('legacy', 'Legacy', 'open', 'old-session', 1, 1);
+  db.prepare('INSERT INTO task_notes (taskId,sessionId,text,createdAt) VALUES (?,?,?,?)').run('legacy', 'old-session', 'Old note', 2);
+  db.close();
+  const store = new TaskStore(filePath);
+  t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const details = store.execute({ action: 'get', taskId: 'legacy' });
+  assert.equal(details.task.createdByKind, 'session');
+  assert.equal(details.task.createdBySessionId, 'old-session');
+  assert.deepEqual(details.notes[0], { authorKind: 'session', sessionId: 'old-session', text: 'Old note', createdAt: 2 });
+  const migratedDb = new DatabaseSync(filePath);
+  const columns = migratedDb.prepare('PRAGMA table_info(tasks)').all() as any[];
+  migratedDb.close();
+  assert.ok(columns.some(column => column.name === 'createdByKind'));
+});
+
 test('completion results allow 20000 characters but reject 20001 before changing the task', t => {
   const store = fixture(t);
   const task = store.execute({ action: 'create', title: 'Long result' }, 'owner').task;

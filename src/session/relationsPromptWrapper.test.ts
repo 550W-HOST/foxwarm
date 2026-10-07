@@ -103,3 +103,20 @@ test('Task delivery uses bounded task metadata without reply routes or a peer-re
   });
   assert.notEqual(parseFoxwarmWrappedContent(enqueued.parts[0].system).attrs.hint, assignmentHint);
 });
+
+test('User Task delivery keeps an explicit user source without fabricating a Session', async () => {
+  const target = makeSession('user-task-owner');
+  let enqueued: QueueItem;
+  await sendToSession({
+    getExistingSession: async id => id === target.id ? target : null,
+    getAgentMetadata: () => ({}),
+    enqueueSessionItem: async (_id, item) => { enqueued = item; },
+  }, target.id, 'User comment.', undefined, {
+    taskNotification: { taskId: 'task_user', event: 'commented', sourceKind: 'user' },
+  });
+  const wrapped = parseFoxwarmWrappedContent(enqueued.parts[0].system);
+  assert.equal(wrapped.attrs.type, 'task');
+  assert.equal(wrapped.attrs.sourceKind, 'user');
+  assert.equal(wrapped.attrs.sourceSessionId, undefined);
+  assert.equal(wrapped.attrs.hint, 'Task notification from the user through Tasks.');
+});

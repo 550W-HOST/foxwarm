@@ -10,7 +10,7 @@ export class TaskService {
     resolveSessionId: (id: string) => string | undefined;
     resolveSessionAgent?: (id: string) => string | undefined;
     readSessionMessageSeq?: (id: string) => Promise<number | undefined>;
-    sendToSession: (target: string, message: string, source: string, options?: SessionDeliveryOptions) => Promise<unknown>;
+    sendToSession: (target: string, message: string, source?: string, options?: SessionDeliveryOptions) => Promise<unknown>;
   }) {}
 
   private async exclusive<T>(operation: () => Promise<T> | T): Promise<T> {
@@ -21,13 +21,13 @@ export class TaskService {
     try { return await operation(); } finally { release!(); }
   }
 
-  private async deliverAssignmentPlan(result: any, sessionId: string, plan: { revision: number; newOwner?: string; previousOwner?: string }, additionalMessage?: string): Promise<{ result: any; newOwnerDelivered: boolean }> {
+  private async deliverAssignmentPlan(result: any, sessionId: string | undefined, plan: { revision: number; newOwner?: string; previousOwner?: string; sourceKind?: 'session' | 'user' }, additionalMessage?: string): Promise<{ result: any; newOwnerDelivered: boolean }> {
     const failedRecipients: string[] = [];
     let newOwnerDelivered = !plan.newOwner;
     for (const [recipient, plannedTarget] of [['previous', plan.previousOwner], ['new', plan.newOwner]] as const) {
       if (!plannedTarget) continue;
       const target = this.deps.resolveSessionId(plannedTarget) || plannedTarget;
-      sessionId = this.deps.resolveSessionId(sessionId) || sessionId;
+      if (sessionId) sessionId = this.deps.resolveSessionId(sessionId) || sessionId;
       if (target === sessionId) {
         this.store.markAssignmentNotification(result.task.id, plan.revision, recipient, 'skipped');
         if (recipient === 'new') newOwnerDelivered = true;
@@ -43,9 +43,9 @@ export class TaskService {
         const event = recipient === 'previous'
           ? result.task.ownerSessionId ? 'transferred' : 'released'
           : result.task.previousOwnerSessionId ? 'transferred' : 'assigned';
-        await this.deps.sendToSession(target, message, sessionId, {
+        await this.deps.sendToSession(target, message, plan.sourceKind === 'user' ? undefined : sessionId, {
           ...(recipient === 'previous' ? { trigger: false } : {}),
-          taskNotification: { taskId: result.task.id, event, recipient },
+          taskNotification: { taskId: result.task.id, event, recipient, ...(plan.sourceKind ? { sourceKind: plan.sourceKind } : {}) },
         });
         this.store.markAssignmentNotification(result.task.id, plan.revision, recipient, 'sent');
         if (recipient === 'new') newOwnerDelivered = true;
@@ -81,8 +81,10 @@ export class TaskService {
       // Completion is already durable. Delivery failure must not undo it;
       // retries of complete are terminal-state errors, not repeated sends.
       sessionId = this.deps.resolveSessionId(sessionId) || sessionId;
-      const creator = this.deps.resolveSessionId(result.task.createdBySessionId) || result.task.createdBySessionId;
-      if (creator === sessionId) {
+      const creator = result.task.createdByKind === 'session' && result.task.createdBySessionId
+        ? this.deps.resolveSessionId(result.task.createdBySessionId) || result.task.createdBySessionId
+        : undefined;
+      if (!creator || creator === sessionId) {
         this.store.markCompletionNotification(result.task.id, 'skipped');
       } else try {
         await this.deps.sendToSession(creator,
@@ -93,6 +95,34 @@ export class TaskService {
         result.warning = 'Task completed, but the completion notification could not be delivered.';
       }
       result.task = this.store.execute({ action: 'get', taskId: result.task.id }, sessionId).task;
+    }
+    return result;
+  }
+
+  async executeAsUser(args: Record<string, any>): Promise<any> {
+    if (args.action !== 'comment') validateTaskArgs(args);
+    const normalized = { ...args };
+    if (normalized.ownerSessionId !== undefined && normalized.ownerSessionId !== null) {
+      const ownerSessionId = this.deps.resolveSessionId(normalized.ownerSessionId);
+      if (!ownerSessionId) throw new TaskError('TASK_SESSION_NOT_FOUND', 'Target Session was not found.', 404);
+      normalized.ownerSessionId = ownerSessionId;
+    }
+    let result = await this.exclusive(() => this.store.executeAsUser(normalized));
+    const assignmentPlan = result.assignmentNotification;
+    delete result.assignmentNotification;
+    if (assignmentPlan) result = (await this.deliverAssignmentPlan(result, undefined, { ...assignmentPlan, sourceKind: 'user' })).result;
+    const commentPlan = result.commentNotification;
+    delete result.commentNotification;
+    if (commentPlan) {
+      try {
+        await this.deps.sendToSession(commentPlan.owner,
+          `Comment on task ${result.task.id} — ${result.task.title}\n${normalized.note}`,
+          undefined,
+          { taskNotification: { taskId: result.task.id, event: 'commented', sourceKind: 'user' } });
+      } catch {
+        result.warning = 'Comment saved, but the owner notification could not be delivered.';
+      }
+      result.task = this.store.execute({ action: 'get', taskId: result.task.id }, undefined).task;
     }
     return result;
   }
@@ -119,7 +149,7 @@ export class TaskService {
       ...result,
       tasks: result.tasks.map((task: any) => ({
         ...task,
-        createdByAgent: this.deps.resolveSessionAgent!(task.createdBySessionId) || null,
+        createdByAgent: task.createdBySessionId ? this.deps.resolveSessionAgent!(task.createdBySessionId) || null : null,
         ownerAgent: task.ownerSessionId ? this.deps.resolveSessionAgent!(task.ownerSessionId) || null : null,
       })),
     };

@@ -288,7 +288,7 @@ Example:
         {
             name: 'create_child_session',
             defaultInject: true,
-            description: `Create a child Session under the current Session. With taskId, assign or transfer the task to the child, deliver its full description and any message as one assignment, and start work. Task completion notifies the task creator; do not send a separate routine completion report. Without taskId, message is optional and normal completion reporting applies.`,
+            description: `Create a child Session under the current Session. With taskId, assign or transfer the task to the child, deliver its full description and any message as one assignment, and start work. Complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. Without taskId, message is optional and normal completion reporting applies.`,
             parameters: {
                 type: 'object',
                 properties: {
