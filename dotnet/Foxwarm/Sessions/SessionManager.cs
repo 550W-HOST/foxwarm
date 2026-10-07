@@ -83,7 +83,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             this,
             this.root,
             id => ResolveTaskSessionId(id),
-            id => TaskSessionAliases(id)
+            id => TaskSessionAliases(id),
+            id => TaskAnchorSeq(id)
         );
         Catalog.Changed += () => TopologyChanged?.Invoke();
         Catalog.BeforePresentationMutation = BeginCatalogMutation;
@@ -223,6 +224,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 .Cast<string>()
                 .ToArray()
             : [];
+
+    internal long? TaskAnchorSeq(string id) =>
+        Find(id)?.Entry.Snapshot().NextMessageSeq is { } next ? next - 1 : null;
 
     public Task LoadAsync() => LoadOwnersAsync(startMainServices: false);
 

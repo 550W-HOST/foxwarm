@@ -7,23 +7,27 @@ internal sealed class TaskService : IDisposable
     private readonly TaskStore store;
     private readonly SessionManager manager;
     private readonly Func<string, string?> resolveSessionId;
+    private readonly Func<string, long?> anchorSeq;
 
     internal TaskService(
         SessionManager manager,
         string root,
         Func<string, string?> resolveSessionId,
-        Func<string, IReadOnlyList<string>> aliases
+        Func<string, IReadOnlyList<string>> aliases,
+        Func<string, long?> anchorSeq
     )
     {
         this.manager = manager;
         this.resolveSessionId = resolveSessionId;
+        this.anchorSeq = anchorSeq;
         store = new TaskStore(root, resolveSessionId, aliases);
     }
 
     internal async Task<TaskStoreResult> ExecuteAsync(
         JsonObject args,
         string? actor,
-        int? httpLimit = null
+        int? httpLimit = null,
+        long? anchor = null
     )
     {
         TaskStore.Validate(args, httpLimit);
@@ -50,7 +54,8 @@ internal sealed class TaskService : IDisposable
             && ownerString.TryGetValue<string>(out var ownerId)
         )
             normalizedArgs["ownerSessionId"] = resolveSessionId(ownerId) ?? ownerId;
-        var result = store.Execute(normalizedArgs, actor, httpLimit);
+        var selectedAnchor = actor is null ? null : anchor ?? anchorSeq(actor);
+        var result = store.Execute(normalizedArgs, actor, httpLimit, selectedAnchor);
         var warnings = new List<string>();
         if (result.Assignment is { } assignment)
             await DeliverAssignmentAsync(Text(args["taskId"])!, actor!, assignment, warnings);
@@ -190,13 +195,15 @@ internal sealed class TaskService : IDisposable
         var canonical =
             resolveSessionId(target)
             ?? throw new TaskError("TASK_SESSION_NOT_FOUND", "Target Session was not found.", 404);
-        var result = (await ExecuteAsync(args, canonical, limit)).Payload;
+        var result = (await ExecuteAsync(args, canonical, limit, anchorSeq(canonical))).Payload;
         result["sessionId"] = canonical;
         return result;
     }
 
     internal async Task<JsonObject> ExecuteForToolAsync(SessionOwner source, JsonObject args) =>
-        (await ExecuteAsync(args, source.Id)).Payload;
+        (
+            await ExecuteAsync(args, source.Id, anchor: source.Entry.Snapshot().NextMessageSeq - 1)
+        ).Payload;
 
     public void Dispose() => store.Dispose();
 

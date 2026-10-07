@@ -41,7 +41,12 @@ internal sealed class TaskStore : IDisposable
         this.aliases = aliases;
     }
 
-    internal TaskStoreResult Execute(JsonObject args, string? actor, int? httpLimit = null)
+    internal TaskStoreResult Execute(
+        JsonObject args,
+        string? actor,
+        int? httpLimit = null,
+        long? anchorSeq = null
+    )
     {
         Validate(args, httpLimit);
         var action = Text(args["action"]);
@@ -56,7 +61,13 @@ internal sealed class TaskStore : IDisposable
                 using var tx = db.BeginTransaction(System.Data.IsolationLevel.Serializable);
                 try
                 {
-                    var result = ExecuteTransaction(db, args, actor, httpLimit ?? ListLimit);
+                    var result = ExecuteTransaction(
+                        db,
+                        args,
+                        actor,
+                        httpLimit ?? ListLimit,
+                        anchorSeq
+                    );
                     tx.Commit();
                     return result;
                 }
@@ -73,7 +84,7 @@ internal sealed class TaskStore : IDisposable
             db.ExecuteNonQuery("BEGIN IMMEDIATE");
             try
             {
-                var result = ExecuteTransaction(db, args, actor, httpLimit ?? ListLimit);
+                var result = ExecuteTransaction(db, args, actor, httpLimit ?? ListLimit, anchorSeq);
                 db.ExecuteNonQuery("COMMIT");
                 return result;
             }
@@ -145,7 +156,8 @@ internal sealed class TaskStore : IDisposable
         SqliteConnection db,
         JsonObject args,
         string? actor,
-        int limit
+        int limit,
+        long? anchorSeq
     )
     {
         var action = Text(args["action"])!;
@@ -246,7 +258,7 @@ internal sealed class TaskStore : IDisposable
                     "updatedAt",
                     now2,
                     "reminderLastSeq",
-                    null,
+                    anchorSeq,
                     "reminderMessageCount",
                     0
                 );
@@ -304,7 +316,11 @@ internal sealed class TaskStore : IDisposable
                         "previousOwnerNotificationStatus",
                         notifyPrevious ? "pending" : previousStatus,
                         "reminderLastSeq",
-                        changed ? null : NullableLong(task["reminderLastSeq"]),
+                        changed
+                            ? requested == actor
+                                ? anchorSeq
+                                : null
+                            : NullableLong(task["reminderLastSeq"]),
                         "reminderMessageCount",
                         changed ? 0 : Int(task["reminderMessageCount"])
                     );
@@ -335,6 +351,8 @@ internal sealed class TaskStore : IDisposable
                     );
                     if (args["note"] is not null)
                         AddNote(db, taskId, actor!, Text(args["note"])!, now2);
+                    if (Text(args["status"]) == "active" && Text(task["status"]) != "active")
+                        Update(db, taskId, "reminderLastSeq", anchorSeq, "reminderMessageCount", 0);
                     break;
                 case "complete":
                     Update(
