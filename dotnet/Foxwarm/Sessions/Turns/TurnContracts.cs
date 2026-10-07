@@ -98,6 +98,7 @@ public sealed record ChatResult(
 )
 {
     internal HistoryAppendFinalizer? HistoryAppend { get; init; }
+    internal bool Terminal { get; init; }
 
     internal void FinalizeHistory(
         IReadOnlyList<JsonObject>? rows,

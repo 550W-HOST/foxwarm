@@ -87,6 +87,8 @@ public sealed class SessionTurnRunner
                         && registry.OnTurnCompleted is not null
                     )
                         await registry.OnTurnCompleted(entry, result).ConfigureAwait(false);
+                    if (result.Terminal)
+                        break;
                 }
                 catch (OperationCanceledException) when (entry.WithState(state => state.Stopping))
                 {

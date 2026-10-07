@@ -225,8 +225,33 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 .ToArray()
             : [];
 
-    internal long? TaskAnchorSeq(string id) =>
-        Find(id)?.Entry.Snapshot().NextMessageSeq is { } next ? next - 1 : null;
+    internal long? TaskAnchorSeq(string id)
+    {
+        var canonical = ResolveTaskSessionId(id);
+        if (canonical is null)
+            return null;
+        var row = Catalog.Get(canonical);
+        var agent = SessionCatalog.Text(row?["agent"]) ?? "main";
+        var path = Path.Combine(root, "state", "sessions", canonical + ".json");
+        if (File.Exists(path))
+        {
+            var document = SessionAuthorityDocument.Load(path, canonical, agent);
+            var rootValue = document.CloneRoot();
+            if (rootValue["nextMessageSeq"] is JsonValue value)
+            {
+                if (value.TryGetValue<long>(out var detachedNext))
+                {
+                    return detachedNext - 1;
+                }
+                if (value.TryGetValue<double>(out var detachedDouble))
+                {
+                    return checked((long)detachedDouble) - 1;
+                }
+            }
+        }
+        var live = Find(canonical)?.Entry.Snapshot().NextMessageSeq;
+        return live is { } next ? next - 1 : null;
+    }
 
     public Task LoadAsync() => LoadOwnersAsync(startMainServices: false);
 

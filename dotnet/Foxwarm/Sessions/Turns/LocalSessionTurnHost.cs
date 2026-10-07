@@ -182,7 +182,7 @@ public sealed partial class LocalSessionTurnHost
                     if (stopping)
                         throw new OperationCanceledException(registered.Token);
                     if (terminal)
-                        return result;
+                        return result with { Terminal = true };
                     await AppendQueuedFollowUpsAfterToolAsync().ConfigureAwait(false);
                     if (automaticCompact is not null)
                         await automaticCompact(result).ConfigureAwait(false);
