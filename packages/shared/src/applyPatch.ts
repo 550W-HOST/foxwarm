@@ -216,10 +216,12 @@ function advanceCursorToAnchor(anchor: string, inputLines: string[], cursor: num
 function readSection(lines: string[], startIndex: number, filePath: string): {
   nextContext: string[];
   sectionChunks: ApplyPatchChunk[];
+  patchLines: string[];
   endIndex: number;
   eof: boolean;
 } {
   const context: string[] = [];
+  const patchLines: string[] = [];
   let delLines: string[] = [];
   let insLines: string[] = [];
   const sectionChunks: ApplyPatchChunk[] = [];
@@ -238,6 +240,7 @@ function readSection(lines: string[], startIndex: number, filePath: string): {
     }
 
     index += 1;
+    patchLines.push(raw);
     const lastMode: 'keep' | 'add' | 'delete' = mode;
     let line = raw;
     if (line === '') line = ' ';
@@ -285,14 +288,15 @@ function readSection(lines: string[], startIndex: number, filePath: string): {
 
   if (index < lines.length && lines[index] === END_FILE) {
     index += 1;
-    return { nextContext: context, sectionChunks, endIndex: index, eof: true };
+    patchLines.push(END_FILE);
+    return { nextContext: context, sectionChunks, patchLines, endIndex: index, eof: true };
   }
 
   if (index === origIndex) {
     throw new Error(`Invalid apply_patch input for ${filePath}: empty update section near line ${index + 1}.`);
   }
 
-  return { nextContext: context, sectionChunks, endIndex: index, eof: false };
+  return { nextContext: context, sectionChunks, patchLines, endIndex: index, eof: false };
 }
 
 function equalsSlice(source: string[], target: string[], start: number, mapFn: (value: string) => string): boolean {
@@ -351,75 +355,76 @@ function findContext(lines: string[], context: string[], start: number, eof: boo
 }
 
 const MAX_CONTEXT_ERROR_LENGTH = 1600;
-const MAX_CONTEXT_ERROR_LINE_LENGTH = 240;
-const MAX_DIAGNOSTIC_SNIPPET_LENGTH = 160;
-const CONTEXT_PREVIEW_LINES = 3;
+const MAX_CONTEXT_ERROR_PATH_LENGTH = 120;
+const FAILED_HUNK_OMISSION = '\n... (middle of failed hunk omitted) ...\n';
 
-function diagnosticSnippet(value: string, offset = 0): string {
-  const from = Math.max(0, offset - 60);
-  const excerpt = value.slice(from, from + 120);
-  const quoted = JSON.stringify(`${from > 0 ? '…' : ''}${excerpt}${from + excerpt.length < value.length ? '…' : ''}`);
-  return quoted.length <= MAX_DIAGNOSTIC_SNIPPET_LENGTH
-    ? quoted
-    : `${quoted.slice(0, MAX_DIAGNOSTIC_SNIPPET_LENGTH - 1)}…`;
+function formatContextErrorPath(filePath: string): string {
+  const shortened = filePath.length <= MAX_CONTEXT_ERROR_PATH_LENGTH
+    ? filePath
+    : `${filePath.slice(0, 60)}…${filePath.slice(-59)}`;
+  return JSON.stringify(shortened);
 }
 
-// Diagnostic candidates never participate in patch matching. Only report a
-// location when the first nonblank context line (or its long prefix) is unique.
-function findDiagnosticCandidate(lines: string[], context: string[], start: number): number | undefined {
-  const offset = context.findIndex(line => normalizeMatchLine(line) !== '');
-  if (offset === -1) return undefined;
-  const expected = normalizeMatchLine(context[offset]);
-  for (const prefixOnly of [false, true]) {
-    if (prefixOnly && expected.length < 32) return undefined;
-    let candidate: number | undefined;
-    for (let i = start + offset; i < lines.length; i += 1) {
-      const actual = normalizeMatchLine(lines[i]);
-      const matches = prefixOnly ? actual.startsWith(expected.slice(0, 32)) : actual === expected;
-      if (!matches) continue;
-      if (candidate !== undefined) return undefined;
-      candidate = i - offset;
-    }
-    if (candidate !== undefined) return candidate;
-  }
-  return undefined;
+function clipFailedHunkLine(line: string, maxLength: number, fromEnd: boolean): string {
+  if (maxLength <= 0) return '';
+  if (line.length <= maxLength) return line;
+  if (!fromEnd || maxLength === 1) return line.slice(0, maxLength);
+  return `${line.slice(0, 1)}${line.slice(-maxLength + 1)}`;
 }
 
-function formatContextMismatch(lines: string[], context: string[], start: number, eof: boolean, filePath: string): string {
-  const characters = context.reduce((total, line) => total + line.length, Math.max(0, context.length - 1));
-  const details = [
-    `Could not match ${eof ? 'EOF' : 'patch'} context while patching ${diagnosticSnippet(filePath)} starting at line ${start + 1}.`,
-    `Expected context: ${context.length} lines, ${characters} characters; file: ${lines.length} lines.`,
-  ];
-  const candidate = findDiagnosticCandidate(lines, context, start);
-  if (candidate !== undefined) {
-    const mismatch = context.findIndex((line, i) =>
-      lines[candidate + i] === undefined || normalizeMatchLine(line) !== normalizeMatchLine(lines[candidate + i]));
-    const actual = lines[candidate + mismatch];
-    const expected = context[mismatch];
-    const normalizedExpected = normalizeMatchLine(expected);
-    const normalizedActual = actual === undefined ? '' : normalizeMatchLine(actual);
-    let column = 0;
-    while (column < normalizedExpected.length && column < normalizedActual.length && normalizedExpected[column] === normalizedActual[column]) {
-      column += 1;
+function takeFailedHunkLines(patchLines: string[], maxLength: number, fromEnd: boolean): string {
+  if (maxLength <= 0) return '';
+  const selected: string[] = [];
+  let used = 0;
+  const addLine = (index: number): boolean => {
+    const line = patchLines[index];
+    const separatorLength = selected.length > 0 ? 1 : 0;
+    const available = maxLength - used - separatorLength;
+    if (available <= 0) return false;
+
+    if (line.length <= available) {
+      if (fromEnd) selected.unshift(line);
+      else selected.push(line);
+      used += separatorLength + line.length;
+      return true;
     }
-    details.push(
-      `Candidate starts at file line ${candidate + 1}; first mismatch at file line ${candidate + mismatch + 1} (context line ${mismatch + 1}).`,
-      `Expected: ${diagnosticSnippet(expected.trim(), column)}`,
-      `Actual: ${actual === undefined ? '<end of file>' : diagnosticSnippet(actual.trim(), column)}`,
-    );
+
+    const clipped = clipFailedHunkLine(line, available, fromEnd);
+    if (fromEnd) selected.unshift(clipped);
+    else selected.push(clipped);
+    return false;
+  };
+
+  if (fromEnd) {
+    for (let index = patchLines.length - 1; index >= 0; index -= 1) {
+      if (!addLine(index)) break;
+    }
   } else {
-    details.push('No unique candidate location; limited preview:');
-    for (let i = 0; i < Math.min(CONTEXT_PREVIEW_LINES, context.length); i += 1) {
-      details.push(`Expected ${i + 1}: ${diagnosticSnippet(context[i])}`);
-    }
-    for (let i = start; i < Math.min(start + CONTEXT_PREVIEW_LINES, lines.length); i += 1) {
-      details.push(`Actual file line ${i + 1}: ${diagnosticSnippet(lines[i])}`);
+    for (let index = 0; index < patchLines.length; index += 1) {
+      if (!addLine(index)) break;
     }
   }
-  return details.map(line => line.length > MAX_CONTEXT_ERROR_LINE_LENGTH
-    ? `${line.slice(0, MAX_CONTEXT_ERROR_LINE_LENGTH - 1)}…`
-    : line).join('\n').slice(0, MAX_CONTEXT_ERROR_LENGTH);
+
+  return selected.join('\n');
+}
+
+function formatBoundedFailedHunk(patchLines: string[], maxLength: number): string {
+  const hunk = patchLines.join('\n');
+  if (hunk.length <= maxLength) return hunk;
+
+  const contentLength = Math.max(0, maxLength - FAILED_HUNK_OMISSION.length);
+  if (contentLength === 0) return FAILED_HUNK_OMISSION.slice(0, maxLength);
+
+  const headLength = Math.ceil(contentLength / 2);
+  const tailLength = contentLength - headLength;
+  const head = takeFailedHunkLines(patchLines, headLength, false);
+  const tail = takeFailedHunkLines(patchLines, tailLength, true);
+  return `${head}${FAILED_HUNK_OMISSION}${tail}`;
+}
+
+function formatContextMismatch(patchLines: string[], start: number, eof: boolean, filePath: string): string {
+  const prefix = `Could not match ${eof ? 'EOF' : 'patch'} context while patching ${formatContextErrorPath(filePath)} starting at line ${start + 1}.\nFailed hunk:\n`;
+  return `${prefix}${formatBoundedFailedHunk(patchLines, Math.max(0, MAX_CONTEXT_ERROR_LENGTH - prefix.length))}`.slice(0, MAX_CONTEXT_ERROR_LENGTH);
 }
 
 function parseUpdateDiff(lines: string[], input: string, filePath: string): { chunks: ApplyPatchChunk[]; fuzz: number } {
@@ -433,6 +438,7 @@ function parseUpdateDiff(lines: string[], input: string, filePath: string): { ch
   let cursor = 0;
 
   while (!isDone(parser, UPDATE_SECTION_TERMINATORS)) {
+    const anchorLine = parser.lines[parser.index]?.startsWith('@@') ? parser.lines[parser.index] : undefined;
     const anchor = readStr(parser, '@@ ');
     const hasBareAnchor = !anchor && parser.lines[parser.index] === '@@';
     if (hasBareAnchor) parser.index += 1;
@@ -445,11 +451,14 @@ function parseUpdateDiff(lines: string[], input: string, filePath: string): { ch
       cursor = advanceCursorToAnchor(anchor, inputLines, cursor, parser);
     }
 
-    const { nextContext, sectionChunks, endIndex, eof } = readSection(parser.lines, parser.index, filePath);
+    const { nextContext, sectionChunks, patchLines, endIndex, eof } = readSection(parser.lines, parser.index, filePath);
+    const failedHunk = anchorLine === undefined
+      ? patchLines
+      : [anchorLine, ...patchLines];
     const { newIndex, fuzz } = findContext(inputLines, nextContext, cursor, eof);
 
     if (newIndex === -1) {
-      throw new Error(formatContextMismatch(inputLines, nextContext, cursor, eof, filePath));
+      throw new Error(formatContextMismatch(failedHunk, cursor, eof, filePath));
     }
 
     parser.fuzz += fuzz;

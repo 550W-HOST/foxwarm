@@ -36,9 +36,11 @@ Parses and applies text-based patch operations (update, add, delete) to file con
 | `equalsSlice(source, target, start, mapFn)` | Compares a contiguous line sequence using one normalization pass |
 | `findContextCore(lines, context, start)` | Searches in exact, trimEnd, trim, then Unicode order |
 | `findContext(lines, context, start, eof)` | Prefers end-of-file context before the existing forward-search fallback |
-| `diagnosticSnippet(value, offset)` | Produces a bounded, escaped excerpt near a differing character |
-| `findDiagnosticCandidate(lines, context, start)` | Finds a unique first nonblank context line or long-prefix candidate for diagnostics only |
-| `formatContextMismatch(lines, context, start, eof, filePath)` | Reports context size and a local mismatch or limited preview within output limits |
+| `formatContextErrorPath(filePath)` | Keeps a long file path from consuming the failed-hunk error budget |
+| `clipFailedHunkLine(line, maxLength, fromEnd)` | Clips one oversized displayed hunk line while retaining its patch prefix when possible |
+| `takeFailedHunkLines(patchLines, maxLength, fromEnd)` | Selects bounded complete or clipped hunk lines from the beginning or end |
+| `formatBoundedFailedHunk(patchLines, maxLength)` | Keeps a failed hunk within the diagnostic character budget, showing its head and tail when needed |
+| `formatContextMismatch(patchLines, start, eof, filePath)` | Reports the match failure and only the failed hunk within output limits |
 | `parseUpdateDiff(lines, input, filePath)` | Positions chunks using anchors and context matching |
 | `applyChunks(input, chunks, filePath)` | Splices edit chunks and rejects overlaps |
 | `applyUpdatePatch(content, lines, filePath)` | Normalizes, applies chunks, and restores line endings |
@@ -57,7 +59,7 @@ None — this module is self-contained with no imports from other project module
 - Update diffs use `@@` anchors and contiguous context sequences with whitespace and Unicode fallbacks; see [D-apply-patch-context-matching](#d-apply-patch-context-matching).
 - Chunks track original line indices for deletions and insertions; `applyChunks` validates no overlapping or out-of-bounds chunks.
 - Per-file success summaries report `Added path (+N)` and `Updated path (+N -M)`; delete summaries retain `Deleted path`.
-- Malformed input retains its specific failure reason and, where useful, one short format hint rather than a repeated full patch example. Context-match errors use bounded local diagnostics.
+- Malformed input retains its specific failure reason and, where useful, one short format hint rather than a repeated full patch example. Context-match errors show only the failed patch hunk, bounded to the context error limit.
 
 ## Integration
 
@@ -79,12 +81,12 @@ Successful add and update operations include compact Git-style line counts in ea
 
 Anchors also gain this final Unicode fallback after their existing exact/trim behavior. Normalization locates existing content only; it does not rewrite retained context or inserted text. Existing anchor reuse, missing-anchor fallback, EOF preference, line endings, and per-file partial-success semantics remain unchanged.
 
-Context-match error diagnostics are limited to 1,600 characters overall and 240 characters per line, with escaped snippets limited to 160 characters. A unique match for the first nonblank context line (or its first 32 characters for a long line) may identify a candidate and the first inconsistent Expected/Actual line; snippets focus near the differing character. Ambiguous or unlocated context gets at most three expected and three actual preview lines plus context size.
+### D-apply-patch-context-diagnostics
 
-These candidates are diagnostic only and never authorize patch application; missing punctuation and omitted intervening lines still fail. No complete-context log is written. These limits cover the context error; caller-owned already-applied summaries remain intact.
+[2026-10-09] Context-match error diagnostics retain a short path/match explanation followed by the original failed patch hunk. The hunk keeps its `@@` anchor when present and preserves context, deletion, and insertion prefixes. Errors are limited to 1,600 characters overall; short hunks are shown completely, while longer hunks show their beginning and end with an explicit middle-omitted marker. No actual file content or other hunk is searched for or included. This limit covers the context error; caller-owned already-applied and remaining-operation summaries remain intact.
 
 ## Tests
 
-`applyPatch.test.ts` owns the single parser/matcher suite: operation counts, supported Unicode mappings and stricter-pass precedence, anchor/EOF behavior, CRLF/final-newline preservation, malformed envelopes, basic/multiple hunks, blank context, and bounded diagnostics for missing punctuation or noncontiguous context. No separate Main-engine test or standalone algorithm selftest remains.
+`applyPatch.test.ts` owns the single parser/matcher suite: operation counts, supported Unicode mappings and stricter-pass precedence, anchor/EOF behavior, CRLF/final-newline preservation, malformed envelopes, basic/multiple hunks, blank context, and bounded failed-hunk diagnostics for short, long, and multi-hunk failures. Node and backend tool tests verify matching regressions, unchanged failed files, skipped subsequent operations, and retained partial-success summaries.
 
 Main filesystem tests in `src/tools/applyPatchOutput.test.ts` go through canonical `callTool`; Node wrapper tests cover partial effects and injected primitives. `src/nodeExecution.test.ts` covers provider-owned opaque parent paths, and compact repair, memory/path, authorization, metadata, and paired CLI transport tests retain their respective integration boundaries.

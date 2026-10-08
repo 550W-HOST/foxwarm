@@ -74,7 +74,6 @@ const failure = (input: string, lines: string[], filePath = 'sample.cs'): string
     return true;
   });
   assert.ok(message.length <= 1600);
-  assert.ok(message.split('\n').every(line => line.length <= 240));
   return message;
 };
 
@@ -108,38 +107,58 @@ test('Unicode EOF matching preserves CRLF and final newline semantics', () => {
     'heading\r\ntail “new”');
 });
 
-test('missing ASCII punctuation in a long C# interpolation fails with a local mismatch', () => {
-  const actual = `    Log($"${'x'.repeat(4000)}{Render(value)}");`;
-  const expected = actual.replace('Render(value)', 'Render(value');
-  const trailing = Array.from({ length: 100 }, (_, i) => `context ${i}`);
-  const input = ['void Report() {', actual, ...trailing, '}'].join('\n');
-  const message = failure(input, [' void Report() {', `-${expected}`, '+replacement', ...trailing.map(line => ` ${line}`), ' }']);
-  assert.match(message, /file line 2 \(context line 2\)/);
-  assert.ok(message.includes('Render(value)'));
-  assert.ok(message.includes('Render(value}'));
-  assert.ok(!message.includes('context 99'));
+test('short context failures show the complete failed hunk without file previews', () => {
+  const hunk = ['@@ missing section', '-old', '+new', ' tail'];
+  const message = failure('actual one\nactual two', hunk);
+  assert.match(message, /Could not match patch context while patching "sample\.cs"/);
+  assert.ok(message.endsWith(hunk.join('\n')));
+  assert.ok(!message.includes('actual one'));
+  assert.ok(!message.includes('actual two'));
 });
 
-test('omitted intervening method lines remain a mismatch rather than a patch match', () => {
-  const input = ['void Finish() {', '    Start();', '    Save();', '    Notify();', '    Stop();', '}'].join('\n');
-  const message = failure(input, [' void Finish() {', '-    Start();', '+    Begin();', ' }']);
-  assert.match(message, /file line 3 \(context line 3\)/);
-  assert.ok(message.includes('Save();'));
-  assert.ok(message.includes('"}"'));
+test('long file paths do not hide the failed hunk', () => {
+  const path = 'p'.repeat(3000);
+  const hunk = ['-old', '+new'];
+  const message = failure('actual', hunk, path);
+  assert.ok(message.length <= 1600);
+  assert.ok(message.includes(hunk.join('\n')));
+  assert.ok(!message.includes(path));
 });
 
-test('unlocated and ambiguous failures show bounded previews and context sizes', () => {
-  const context = Array.from({ length: 200 }, (_, i) => `expected ${i} ${'z'.repeat(2000)}`);
-  const input = Array.from({ length: 200 }, (_, i) => `actual ${i} ${'a'.repeat(2000)}`).join('\n');
-  const message = failure(input, [`-${context[0]}`, '+replacement', ...context.slice(1).map(line => ` ${line}`), '*** End of File'], 'p'.repeat(3000));
-  assert.ok(message.includes('200 lines'));
-  assert.ok(!message.includes('expected 199'));
-  assert.ok(!message.includes('actual 199'));
-  const ambiguous = failure('header\na\nheader\nb', [' header', '-missing', '+replacement']);
-  assert.ok(!ambiguous.includes('Candidate starts'));
-  assert.ok(ambiguous.includes('2 lines'));
-  const escaped = failure('a\n'.repeat(20), [`-${'\t'.repeat(1000)}unknown`, '+new']);
-  assert.ok(!escaped.includes('\t'));
+test('long context failures show only the failed hunk head and tail', () => {
+  const hunk = [
+    '@@ long section',
+    '-missing first',
+    '+replacement first',
+    ...Array.from({ length: 200 }, (_, i) => ` context ${i}`),
+    '-missing last',
+    '+replacement last',
+  ];
+  const message = failure('actual file content', hunk);
+  assert.ok(message.length <= 1600);
+  assert.match(message, /@@ long section/);
+  assert.match(message, /-missing first/);
+  assert.match(message, /\+replacement last/);
+  assert.match(message, / context 183/);
+  assert.match(message, /middle of failed hunk omitted/);
+  assert.ok(!message.includes(' context 100'));
+  assert.ok(!message.includes('actual file content'));
+});
+
+test('multiple-hunk failures report only the failed hunk', () => {
+  const input = ['start', 'one', 'two', 'end'].join('\n');
+  const message = failure(input, [
+    '@@ start',
+    ' one',
+    '-two',
+    '+TWO',
+    '@@ missing section',
+    '-missing',
+    '+replacement',
+  ]);
+  assert.match(message, /@@ missing section\n-missing\n\+replacement/);
+  assert.ok(!message.includes('@@ start'));
+  assert.ok(!message.includes('TWO'));
 });
 
 function applySingleUpdate(input: string, diffBody: string): string {
