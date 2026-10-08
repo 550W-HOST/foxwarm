@@ -3260,10 +3260,15 @@ async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: an
             ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
         } : null;
     } else {
+        const getReportedTokenCount = (value: unknown): number | undefined =>
+            typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+        const inputTokens = getReportedTokenCount(resp?.usage?.input_tokens);
+        const cacheCreationTokens = getReportedTokenCount(resp?.usage?.cache_creation_input_tokens) ?? 0;
+        const cachedTokens = getReportedTokenCount(resp?.usage?.cache_read_input_tokens) ?? 0;
         usage = resp?.usage ? {
-            inputTokens: resp.usage.input_tokens,
-            outputTokens: resp.usage.output_tokens,
-            cachedTokens: resp.usage.cache_read_input_tokens || 0,
+            inputTokens: inputTokens === undefined ? undefined : inputTokens + cacheCreationTokens,
+            outputTokens: getReportedTokenCount(resp.usage.output_tokens),
+            cachedTokens,
         } : null;
     }
 

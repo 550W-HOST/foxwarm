@@ -677,9 +677,10 @@ test('requestLlmOnce can make a direct provider-specific request without a sessi
           { type: 'text', text: 'anthropic ok' },
         ],
         usage: {
-          input_tokens: 7,
+          input_tokens: 2,
+          cache_creation_input_tokens: 7324,
+          cache_read_input_tokens: 22903,
           output_tokens: 3,
-          cache_read_input_tokens: 1,
         },
       },
     };
@@ -712,9 +713,42 @@ test('requestLlmOnce can make a direct provider-specific request without a sessi
     assert.equal(result.modelId, 'anthropic/claude-sonnet-4-5');
     assert.deepEqual(result.allParts, [{ text: 'anthropic ok' }]);
     assert.deepEqual(result.usage, {
+      inputTokens: 7326,
+      outputTokens: 3,
+      cachedTokens: 22903,
+    });
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('Anthropic usage keeps legacy input/output counts when cache fields are absent', async () => {
+  const originalPost = axios.post;
+  (axios as any).post = async () => ({
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    data: {
+      content: [{ type: 'text', text: 'anthropic legacy usage' }],
+      usage: { input_tokens: 7, output_tokens: 3 },
+    },
+  });
+
+  try {
+    const result = await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'legacy usage response' }] }],
+      systemPrompt: '',
+      model: 'anthropic/claude-sonnet-4-5',
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    assert.equal(result.text, 'anthropic legacy usage');
+    assert.deepEqual(result.usage, {
       inputTokens: 7,
       outputTokens: 3,
-      cachedTokens: 1,
+      cachedTokens: 0,
     });
   } finally {
     (axios as any).post = originalPost;
