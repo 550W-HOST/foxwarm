@@ -91,8 +91,14 @@ const { tool_search_tools } = require('./lib/tools/unifiedSearch');
     const keys = Object.keys(definition.parameters.properties);
     assert(keys.indexOf('handoffRecall') < keys.indexOf('message'));
     assert.equal(keys.at(-3), 'handoffConfirmation');
-    assert.equal(definition.parameters.required.includes('handoffRecall'), true);
-    assert.equal(definition.parameters.required.includes('handoffConfirmation'), true);
+    if (name === 'send_to_session') {
+      assert.equal(definition.parameters.required.includes('handoffRecall'), true);
+      assert.equal(definition.parameters.required.includes('handoffConfirmation'), true);
+    } else {
+      assert.equal(definition.parameters.required.includes('handoffRecall'), false);
+      assert.equal(definition.parameters.required.includes('handoffConfirmation'), false);
+      assert.match(definition.description, /when message or taskId is supplied/);
+    }
     assert.deepEqual(definition.parameters.properties.__cancelTool.enum, [true]);
     assert.deepEqual(definition.parameters.properties.__cancelAllToolsThisTurn.enum, [true]);
   }
@@ -107,7 +113,10 @@ const { tool_search_tools } = require('./lib/tools/unifiedSearch');
     const targetQueueText = targetAfterSend.queue.flatMap(item => item.parts || []).map(part => part.text || part.system || '').join('\\n');
     assert.match(targetQueueText, /valid/);
     assert.doesNotMatch(targetQueueText, /handoffRecall|handoffConfirmation|Before composing this inter-agent handoff|Before sending this inter-agent handoff/);
-    await assert.rejects(() => interSession.tool_create_child_session({ suffix: 'missing', handoffRecall: ${JSON.stringify(recall)}, handoffConfirmation: ${JSON.stringify(confirmation)}, message: 'late' }, { sessionId: sourceId, session: source }), /final argument property/);
+    await assert.rejects(() => interSession.tool_create_child_session({ suffix: 'missing', message: 'late' }, { sessionId: sourceId, session: source }), /handoff recall/);
+    const pureChild = await interSession.tool_create_child_session({ suffix: 'pure-child' }, { sessionId: sourceId, session: source });
+    const pureChildId = String(pureChild.output || pureChild).match(/\x60([^\x60]+)\x60/)?.[1];
+    if (pureChildId) await sessionManager.deleteSession(pureChildId).catch(() => {});
     await assert.rejects(() => tools.call_tool({ source: 'builtin', name: 'send_to_session', args: { sessionId: targetId, message: 'missing unified' } }, { sessionId: sourceId, session: source }), /handoff recall/);
     const discovery = await tool_search_tools({ query: 'send_to_session', sources: ['builtin'], limit: 1, includeSchema: true }, { sessionId: sourceId, session: source });
     const declaration = discovery.output;
