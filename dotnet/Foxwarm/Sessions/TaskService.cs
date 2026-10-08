@@ -63,12 +63,14 @@ internal sealed class TaskService : IDisposable
                 && resolveSessionId(requested) is not { } canonical
             )
                 throw new TaskError("TASK_SESSION_NOT_FOUND", "Target Session was not found.", 404);
-            if (normalized["ownerSessionId"] is JsonValue ownerValue
-                && ownerValue.TryGetValue<string>(out var ownerId))
+            if (
+                normalized["ownerSessionId"] is JsonValue ownerValue
+                && ownerValue.TryGetValue<string>(out var ownerId)
+            )
                 normalized["ownerSessionId"] = resolveSessionId(ownerId) ?? ownerId;
             var result = store.ExecuteAsUser(normalized);
             var warnings = new List<string>();
-            var taskId = Text(result.Payload["task"]? ["id"]) ?? Text(normalized["taskId"]);
+            var taskId = Text(result.Payload["task"]?["id"]) ?? Text(normalized["taskId"]);
             if (result.Assignment is { } assignment && taskId is not null)
                 await DeliverAssignmentAsync(taskId, null, assignment, warnings);
             if (result.CommentOwner is { } commentOwner && taskId is not null)
@@ -87,7 +89,9 @@ internal sealed class TaskService : IDisposable
                 }
                 catch
                 {
-                    warnings.Add("Comment saved, but the owner notification could not be delivered.");
+                    warnings.Add(
+                        "Comment saved, but the owner notification could not be delivered."
+                    );
                 }
             }
             if (warnings.Count > 0)
@@ -95,8 +99,7 @@ internal sealed class TaskService : IDisposable
             if (result.Assignment is not null || result.CommentOwner is not null)
                 result.Payload["task"] = store
                     .Execute(new JsonObject { ["action"] = "get", ["taskId"] = taskId! }, null)
-                    .Payload["task"]!
-                    .DeepClone();
+                    .Payload["task"]!.DeepClone();
             return result.Payload;
         }
         finally
@@ -290,9 +293,10 @@ internal sealed class TaskService : IDisposable
             .Execute(new JsonObject { ["action"] = "get", ["taskId"] = taskId }, null)
             .Payload["task"]
             ?.AsObject();
-        var creator = row?["createdByKind"]?.GetValue<string>() == "session"
-            ? row?["createdBySessionId"]?.GetValue<string>()
-            : null;
+        var creator =
+            row?["createdByKind"]?.GetValue<string>() == "session"
+                ? row?["createdBySessionId"]?.GetValue<string>()
+                : null;
         if (creator is null || resolveSessionId(creator) == resolveSessionId(actor))
         {
             store.MarkNotification(taskId, "completionNotificationStatus", "skipped");

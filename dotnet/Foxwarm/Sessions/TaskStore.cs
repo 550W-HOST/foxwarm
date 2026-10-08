@@ -96,7 +96,14 @@ internal sealed class TaskStore : IDisposable
             db.ExecuteNonQuery("BEGIN IMMEDIATE");
             try
             {
-                var result = ExecuteTransaction(db, args, actor, httpLimit ?? ListLimit, anchorSeq, actorKind);
+                var result = ExecuteTransaction(
+                    db,
+                    args,
+                    actor,
+                    httpLimit ?? ListLimit,
+                    anchorSeq,
+                    actorKind
+                );
                 db.ExecuteNonQuery("COMMIT");
                 return result;
             }
@@ -477,7 +484,11 @@ internal sealed class TaskStore : IDisposable
             Add(cmd, "$status", requestedOwner is null ? "open" : "active");
             Add(cmd, "$revision", requestedOwner is null ? 0 : 1);
             Add(cmd, "$notification", notifyNew ? "pending" : null);
-            Add(cmd, "$anchor", actorKind == "session" && requestedOwner == Canonical(actor!) ? anchorSeq : null);
+            Add(
+                cmd,
+                "$anchor",
+                actorKind == "session" && requestedOwner == Canonical(actor!) ? anchorSeq : null
+            );
             cmd.ExecuteNonQuery();
             return new(
                 TaskJson(new JsonObject { ["task"] = Public(db, id) }),
@@ -513,11 +524,16 @@ internal sealed class TaskStore : IDisposable
                 $"Task {taskId} is terminal ({state}); {action} is not allowed.",
                 409
             );
-        actor = actorKind == "session"
-            ? Canonical(
-                actor ?? throw new TaskError("TASK_INVALID_ARGS", "task requires a current Session.")
-            )
-            : null;
+        actor =
+            actorKind == "session"
+                ? Canonical(
+                    actor
+                        ?? throw new TaskError(
+                            "TASK_INVALID_ARGS",
+                            "task requires a current Session."
+                        )
+                )
+                : null;
         var owner = Canonical(Text(task["ownerSessionId"]));
         var creator = Canonical(Text(task["createdBySessionId"])!);
         Update(
@@ -561,10 +577,13 @@ internal sealed class TaskStore : IDisposable
         }
         else
         {
-            var permitted = actorKind == "user"
-                || (action is "assign" or "cancel"
-                    ? actor == creator || actor == owner
-                    : actor == (owner ?? creator));
+            var permitted =
+                actorKind == "user"
+                || (
+                    action is "assign" or "cancel"
+                        ? actor == creator || actor == owner
+                        : actor == (owner ?? creator)
+                );
             if (!permitted)
                 throw new TaskError(
                     "TASK_FORBIDDEN",
@@ -977,7 +996,9 @@ internal sealed class TaskStore : IDisposable
             db.ExecuteNonQuery(
                 "DROP INDEX IF EXISTS tasks_status; DROP INDEX IF EXISTS tasks_parent; DROP INDEX IF EXISTS tasks_legacy_goal; DROP INDEX IF EXISTS tasks_self_owned; DROP INDEX IF EXISTS task_notes_task;"
             );
-            db.ExecuteNonQuery("ALTER TABLE tasks RENAME TO tasks_actor_legacy; ALTER TABLE task_notes RENAME TO task_notes_actor_legacy;");
+            db.ExecuteNonQuery(
+                "ALTER TABLE tasks RENAME TO tasks_actor_legacy; ALTER TABLE task_notes RENAME TO task_notes_actor_legacy;"
+            );
             db.ExecuteNonQuery(
                 "CREATE TABLE tasks(id TEXT PRIMARY KEY,title TEXT NOT NULL,description TEXT,status TEXT NOT NULL CHECK(status IN ('open','active','completed','cancelled')),parentTaskId TEXT REFERENCES tasks(id),createdByKind TEXT NOT NULL DEFAULT 'session' CHECK(createdByKind IN ('session','user')),createdBySessionId TEXT,ownerSessionId TEXT,result TEXT,createdAt INTEGER NOT NULL,updatedAt INTEGER NOT NULL,completedAt INTEGER,cancelledAt INTEGER,completionNotificationStatus TEXT,assignmentNotificationStatus TEXT,previousOwnerSessionId TEXT,previousOwnerNotificationStatus TEXT,assignmentRevision INTEGER NOT NULL DEFAULT 0,attachedSessionId TEXT,legacyGoalSessionId TEXT,reminderLastSeq INTEGER,reminderMessageCount INTEGER NOT NULL DEFAULT 0);"
             );
@@ -994,7 +1015,11 @@ internal sealed class TaskStore : IDisposable
         }
         catch
         {
-            try { db.ExecuteNonQuery("ROLLBACK; PRAGMA foreign_keys=ON;"); } catch { }
+            try
+            {
+                db.ExecuteNonQuery("ROLLBACK; PRAGMA foreign_keys=ON;");
+            }
+            catch { }
             throw;
         }
     }
@@ -1130,12 +1155,23 @@ internal sealed class TaskStore : IDisposable
         {
             if (
                 action == "create"
-                    ? key is not ("action" or "title" or "description" or "parentTaskId" or "ownerSessionId" or "notifySession")
-                    : action == "assign"
-                        ? key is not ("action" or "taskId" or "ownerSessionId" or "notifySession")
-                        : key is not ("action" or "taskId" or "note" or "notifySession")
+                    ? key
+                        is not (
+                            "action"
+                            or "title"
+                            or "description"
+                            or "parentTaskId"
+                            or "ownerSessionId"
+                            or "notifySession"
+                        )
+                : action == "assign"
+                    ? key is not ("action" or "taskId" or "ownerSessionId" or "notifySession")
+                : key is not ("action" or "taskId" or "note" or "notifySession")
             )
-                throw new TaskError("TASK_INVALID_ARGS", $"{key} is not allowed for user task {action}.");
+                throw new TaskError(
+                    "TASK_INVALID_ARGS",
+                    $"{key} is not allowed for user task {action}."
+                );
         }
         Limit(args, "title", 200);
         Limit(args, "description", 20000);
@@ -1149,11 +1185,22 @@ internal sealed class TaskStore : IDisposable
             throw new TaskError("TASK_INVALID_ARGS", "A comment requires a non-empty note.");
         if (action == "assign" && !args.ContainsKey("ownerSessionId"))
             throw new TaskError("TASK_INVALID_ARGS", "Owner changes require ownerSessionId.");
-        if (args.ContainsKey("ownerSessionId") && args["ownerSessionId"] is not null
-            && (string.IsNullOrWhiteSpace(Text(args["ownerSessionId"])) || Text(args["ownerSessionId"])!.Length > 256))
-            throw new TaskError("TASK_INVALID_ARGS", "ownerSessionId must identify an existing Session or be null.");
-        if (args.ContainsKey("notifySession")
-            && (args["notifySession"] is not JsonValue notify || !notify.TryGetValue<bool>(out _)))
+        if (
+            args.ContainsKey("ownerSessionId")
+            && args["ownerSessionId"] is not null
+            && (
+                string.IsNullOrWhiteSpace(Text(args["ownerSessionId"]))
+                || Text(args["ownerSessionId"])!.Length > 256
+            )
+        )
+            throw new TaskError(
+                "TASK_INVALID_ARGS",
+                "ownerSessionId must identify an existing Session or be null."
+            );
+        if (
+            args.ContainsKey("notifySession")
+            && (args["notifySession"] is not JsonValue notify || !notify.TryGetValue<bool>(out _))
+        )
             throw new TaskError("TASK_INVALID_ARGS", "notifySession must be a boolean.");
     }
 

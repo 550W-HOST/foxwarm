@@ -12,6 +12,7 @@ Owns the browser composer’s ordered draft model, rich contenteditable editing,
 - `createMessageAttachmentDrafts`, `getMessageAttachmentFile`, `setMessageAttachmentFile`, `getMessageAttachmentDraft`, `setMessageAttachmentDraft`, `removeMessageAttachmentDraft`, and `clearMessageAttachmentDraft` own exact-Session page-memory `File` references.
 - `InlineComposerEditor` exposes its imperative draft/reset, selection, undo/redo, attachment, composition, and transcription boundary to `ChatComposer`; `ChatComposer` owns send/record/model-selector UI; `attachmentSend.uploadReferencedFiles` and `postReferencedMessage` are called by `Chat` only on accepted send.
 - `buildStreamingAssistantMessage`, `applyModelStreamEvent`, `applyModelStreamSnapshot`, `reconcileCommittedModelDraft`, `shouldClearDraftForCommittedModel`, and `isSessionTurnIncomplete` keep provisional model output distinct from committed history.
+- `Chat` provides a browser find surface with Ctrl/Cmd+F, IME-safe query entry, bounded recent-query history, and match navigation over the loaded Session timeline.
 
 ## Draft and attachment contract
 

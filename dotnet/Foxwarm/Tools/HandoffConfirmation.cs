@@ -69,14 +69,15 @@ internal static class HandoffConfirmation
             (parameters["required"] as JsonArray ?? [])
                 .Where(value =>
                     SessionWait.Text(value)
-                    is not ("confirmation" or "handoffRecall" or "handoffConfirmation")
+                        is not ("confirmation" or "handoffRecall" or "handoffConfirmation")
                 )
                 .Select(value => value?.DeepClone())
                 .ToArray()
         );
         if (enabled)
         {
-            copy["description"] = SessionWait.Text(copy["description"])
+            copy["description"] =
+                SessionWait.Text(copy["description"])
                 + " A structured handoff recall and confirmation are required."
                 + (
                     name == "create_child_session"
@@ -149,6 +150,7 @@ internal static class HandoffConfirmation
 
     internal static string GuidanceArgument(string parentSessionId) =>
         $"handoffRecall: \"{RecallPrefix}\\n{RecallPlaceholder}\", sessionId: `{parentSessionId}`, message: \"...\", afterSend: \"finish\", handoffConfirmation: \"{Prefix}\\n{Placeholder}\\n{Suffix}\"";
+
     internal const string Guidance =
         " The recall must be before message and both review fields must use this handoff's own content; handoffConfirmation must be the final argument property. If the handoff should not be sent, omit it or cancel it instead of adding approval text.";
 }

@@ -9,9 +9,9 @@ Implements bounded local file reads/writes/patches, native path/cwd rules, persi
 ## Stable methods and callers
 
 - `MainNativePaths` resolves data/workspace/tool roots and rejects traversal/cross-root paths; `FileToolCore` scans/reads/writes with byte/line/output limits and `PendingWriteRefs` tracks retryable write artifacts.
-- `WorkspaceTools` exposes repository-aware list/read/write/edit/patch operations; `WorkspacePatch` parses/apply-checks bounded patches and reports exact failures.
+- `WorkspaceTools` exposes repository-aware list/read/write/edit/patch operations; `WorkspacePatch` parses/apply-checks bounded patches, accepts Unicode punctuation/space-equivalent context after strict matching, and reports bounded candidate/mismatch diagnostics including EOF cases.
 - `LocalExecManager` defines persistent/parallel process records, cwd/env/petname, timeout/kill/output lifecycle; `ExecPetnames` provides stable process labels.
-- `FileDeliveryDefinitions` turns approved paths into authenticated delivery metadata; `HandoffConfirmation` records caller confirmation before sensitive handoff/delivery effects.
+- `FileDeliveryDefinitions` turns approved paths into authenticated delivery metadata; `HandoffConfirmation` requires ordered `handoffRecall` and final `handoffConfirmation` fields before enabled inter-agent handoffs.
 
 Callers: `SessionToolExecutor`, `WebUIChannel.Files/Images`, Code services, and Node-compatible local tooling. All effects pass the unified authorization boundary first.
 

@@ -30,8 +30,12 @@ internal sealed partial class SessionManager
                 Trigger: trigger
             );
             await target.Entry.SaveLane.CommitInterSessionAsync(item);
-            if (trigger && Accepting && !target.Entry.WithState(state => state.Busy || state.Stopping)
-                && target.Registry.HasRunnableWork(target.Entry))
+            if (
+                trigger
+                && Accepting
+                && !target.Entry.WithState(state => state.Busy || state.Stopping)
+                && target.Registry.HasRunnableWork(target.Entry)
+            )
                 target.Registry.Trigger(target.Id);
             return;
         }

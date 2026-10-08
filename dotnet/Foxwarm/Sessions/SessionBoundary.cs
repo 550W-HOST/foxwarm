@@ -57,17 +57,13 @@ internal static class SessionBoundary
             || trimmed.EndsWith("[NO_ACTION]", StringComparison.Ordinal)
         );
 
-    internal static string ChildReminder(
-        string parentSessionId,
-        bool handoffConfirmation = false
-    )
+    internal static string ChildReminder(string parentSessionId, bool handoffConfirmation = false)
     {
         var args = handoffConfirmation
             ? HandoffConfirmation.GuidanceArgument(parentSessionId)
             : $"sessionId: `{Escape(parentSessionId)}`, message: \"...\", afterSend: \"finish\"";
         var guidance = handoffConfirmation ? HandoffConfirmation.Guidance : "";
-        return
-            $"<foxwarm-system kind=\"child-reminder\" event=\"missing-handoff\" parentSessionId=\"{Escape(parentSessionId)}\">Reminder: check whether your work still needs a completion report. If your current work is tracked by a task, complete it with the task tool unless it is already complete; do not send a duplicate routine completion report. Otherwise, if you need to report completion to the parent session, call send_to_session({{{args}}}) now.{guidance} This reports so the Session becomes idle without a wait. Use afterSend: \"wait\" only when you genuinely require a later reply; do not add a separate wait call. If no separate report or parent action is needed, say `[NO_ACTION]`.</foxwarm-system>";
+        return $"<foxwarm-system kind=\"child-reminder\" event=\"missing-handoff\" parentSessionId=\"{Escape(parentSessionId)}\">Reminder: check whether your work still needs a completion report. If your current work is tracked by a task, complete it with the task tool unless it is already complete; do not send a duplicate routine completion report. Otherwise, if you need to report completion to the parent session, call send_to_session({{{args}}}) now.{guidance} This reports so the Session becomes idle without a wait. Use afterSend: \"wait\" only when you genuinely require a later reply; do not add a separate wait call. If no separate report or parent action is needed, say `[NO_ACTION]`.</foxwarm-system>";
     }
 
     private static string Escape(string value) =>
@@ -106,8 +102,7 @@ internal static class SessionBoundary
             ? HandoffConfirmation.GuidanceArgument(parent)
             : $"sessionId: `{parent}`, message: \"...\", afterSend: \"finish\"";
         var guidance = handoffConfirmation ? HandoffConfirmation.Guidance : "";
-        return
-            $"If your current work is tracked by a task, complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. For work not tracked by a task, when you finish, explicitly call send_to_session({{{args}}}).{guidance} This sends the report and ends the turn idle without creating a wait. Use afterSend: \"wait\" only when you genuinely require a later reply from the parent; do not add a separate wait call. If no separate report or parent action is needed, end your final message with `[NO_ACTION]`.";
+        return $"If your current work is tracked by a task, complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. For work not tracked by a task, when you finish, explicitly call send_to_session({{{args}}}).{guidance} This sends the report and ends the turn idle without creating a wait. Use afterSend: \"wait\" only when you genuinely require a later reply from the parent; do not add a separate wait call. If no separate report or parent action is needed, end your final message with `[NO_ACTION]`.";
     }
 
     internal static string ManualForkNotice(string parent, string child, string? initialMessage)

@@ -298,8 +298,8 @@ public sealed class HandoffConfirmationTests
             {
                 Assert.NotNull(rejected.Response["error"]);
                 Assert.Null(manager.Catalog.Get("parent_empty-child"));
-            input["handoffRecall"] = Recall();
-            input["handoffConfirmation"] = Review();
+                input["handoffRecall"] = Recall();
+                input["handoffConfirmation"] = Review();
             }
             else
             {
@@ -319,7 +319,9 @@ public sealed class HandoffConfirmationTests
                 .Single(item => item["name"]!.GetValue<string>() == "create_child_session");
             Assert.Equal(
                 enabled,
-                definition["parameters"]!["properties"]!.AsObject().ContainsKey("handoffConfirmation")
+                definition["parameters"]!["properties"]!
+                    .AsObject()
+                    .ContainsKey("handoffConfirmation")
             );
             var rows = manager
                 .Catalog.List()

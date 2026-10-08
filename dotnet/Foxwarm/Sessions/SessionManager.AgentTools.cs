@@ -238,7 +238,13 @@ internal sealed partial class SessionManager
                 {
                     Keys(
                         args,
-                        ["sessionId", "handoffRecall", "message", "afterSend", "handoffConfirmation"],
+                        [
+                            "sessionId",
+                            "handoffRecall",
+                            "message",
+                            "afterSend",
+                            "handoffConfirmation",
+                        ],
                         ["sessionId", "message"]
                     );
                     var after = AfterSend(args);

@@ -151,9 +151,10 @@ internal sealed partial class WebUIChannel
                 body["action"] = action;
                 if (hasId)
                     body["taskId"] = context.Request.RouteValues["id"]?.ToString();
-                var result = action is "create" or "assign" && target is null
-                    ? await sessions.Tasks.ExecuteAsUserAsync(body)
-                    : await sessions.Tasks.ExecuteForWebUiAsync(body, target);
+                var result =
+                    action is "create" or "assign" && target is null
+                        ? await sessions.Tasks.ExecuteAsUserAsync(body)
+                        : await sessions.Tasks.ExecuteForWebUiAsync(body, target);
                 context.Response.StatusCode = success;
                 await Results.Json(result).ExecuteAsync(context);
             }
@@ -196,11 +197,21 @@ internal sealed partial class WebUIChannel
                 try
                 {
                     if (context.Request.Query.Count > 0)
-                        throw new TaskError("TASK_INVALID_ARGS", "Task operations do not accept query parameters.");
-                    var body = await JsonNode.ParseAsync(context.Request.Body) as JsonObject
-                        ?? throw new TaskError("TASK_INVALID_ARGS", "Task operations require a JSON object body.");
+                        throw new TaskError(
+                            "TASK_INVALID_ARGS",
+                            "Task operations do not accept query parameters."
+                        );
+                    var body =
+                        await JsonNode.ParseAsync(context.Request.Body) as JsonObject
+                        ?? throw new TaskError(
+                            "TASK_INVALID_ARGS",
+                            "Task operations require a JSON object body."
+                        );
                     if (body.ContainsKey("action") || body.ContainsKey("taskId"))
-                        throw new TaskError("TASK_INVALID_ARGS", "The route selects the task and action.");
+                        throw new TaskError(
+                            "TASK_INVALID_ARGS",
+                            "The route selects the task and action."
+                        );
                     body["action"] = action;
                     body["taskId"] = context.Request.RouteValues["id"]?.ToString();
                     var result = await sessions.Tasks.ExecuteAsUserAsync(body);
@@ -213,11 +224,26 @@ internal sealed partial class WebUIChannel
                 }
                 catch (JsonException)
                 {
-                    await TaskErrorResult(new TaskError("TASK_INVALID_ARGS", "Task operations require a JSON object body.")).ExecuteAsync(context);
+                    await TaskErrorResult(
+                            new TaskError(
+                                "TASK_INVALID_ARGS",
+                                "Task operations require a JSON object body."
+                            )
+                        )
+                        .ExecuteAsync(context);
                 }
                 catch
                 {
-                    await Results.Json(new { code = "TASK_WRITE_FAILED", error = "Task operation could not be completed." }, statusCode: 500).ExecuteAsync(context);
+                    await Results
+                        .Json(
+                            new
+                            {
+                                code = "TASK_WRITE_FAILED",
+                                error = "Task operation could not be completed.",
+                            },
+                            statusCode: 500
+                        )
+                        .ExecuteAsync(context);
                 }
             }
         );
