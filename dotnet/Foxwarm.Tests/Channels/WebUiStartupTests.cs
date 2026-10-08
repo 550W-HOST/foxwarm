@@ -72,6 +72,7 @@ public sealed class WebUiStartupTests
                 var key in new[]
                 {
                     "FOXWARM_EXPERIMENT_PORT",
+                    "FOXWARM_EXPERIMENT_BIND_ADDRESS",
                     "FOXWARM_EXPERIMENT_API_TOKEN",
                     "FOXWARM_PUBLIC_BASE_URL",
                     "FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN",
