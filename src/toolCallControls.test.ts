@@ -251,30 +251,28 @@ test('direct handoff handlers require confirmation for delivery and allow pure c
   }
 });
 
-test('direct child delivery requires confirmation while task metadata remains delivery-only', async () => {
-  const parentId = unique('confirm_child_delivery_parent');
-  const parent = await makeSession(parentId);
-  let childId: string | undefined;
-  try {
-    await assert.rejects(
-      () => tool_create_child_session({ suffix: 'message-required', message: 'start' }, { sessionId: parentId, session: parent }),
-      /handoff recall/,
-    );
-    await assert.rejects(
-      () => tool_create_child_session({ suffix: 'task-required', taskId: 'task_missing' }, { sessionId: parentId, session: parent }),
-      /handoff recall/,
-    );
-    const createResult: any = await tool_create_child_session({
-      suffix: 'confirmed-task',
-      taskId: 'task_missing',
-      handoffRecall: recall(),
-      handoffConfirmation: confirmation(),
-    }, { sessionId: parentId, session: parent }).catch((error: Error) => error);
-    assert.match(String(createResult?.message || createResult), /not found/);
-  } finally {
-    if (childId) await sessionManager.deleteSession(childId).catch(() => false);
-    await sessionManager.deleteSession(parentId).catch(() => false);
-  }
+test('taskId-only child delivery follows the handoff condition without mixing task metadata into review', () => {
+  const confirmedTaskAssignment = {
+    suffix: 'task-child',
+    taskId: 'task_123',
+    handoffRecall: recall(),
+    handoffConfirmation: confirmation(),
+  };
+  assert.doesNotThrow(() => validateInterAgentHandoffConfirmationForMode(
+    confirmedTaskAssignment,
+    true,
+    'create_child_session',
+  ));
+  assert.throws(() => validateInterAgentHandoffConfirmationForMode(
+    { suffix: 'task-child', taskId: 'task_123' },
+    true,
+    'create_child_session',
+  ), /handoff recall/);
+  assert.doesNotThrow(() => validateInterAgentHandoffConfirmationForMode(
+    { suffix: 'pure-child' },
+    true,
+    'create_child_session',
+  ));
 });
 
 test('a canceled handoff bypasses confirmation checks and still produces a paired tool response', async () => {
