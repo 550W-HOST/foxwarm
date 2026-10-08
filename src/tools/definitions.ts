@@ -329,7 +329,7 @@ Example:
                 // tool_wait enforces mutual exclusion before starting a wait.
                 properties: {
                     reason: { type: 'string', description: "Briefly explain what you are waiting for." },
-                    wakeIfNoActivityAfterSeconds: { type: 'number', exclusiveMinimum: 0, description: "Resume after this many seconds if nothing else has resumed the session. Use this as a fallback so you can check progress or decide what to do next." },
+                    wakeIfNoActivityAfterSeconds: { type: ['number', 'null'], exclusiveMinimum: 0, description: "Resume after this many seconds if nothing else has resumed the session. Set to null to disable the automatic 600-second fallback for waitExecIds." },
                     waitAllSessions: {
                         type: 'array',
                         description: "Session IDs from which you need responses before continuing the dependent work. Use this only when every listed session must respond. Cannot be combined with waitAnySessions.",
@@ -344,11 +344,11 @@ Example:
                     },
                     waitExecIds: {
                         type: 'array',
-                        description: "Background executions whose completion you are waiting for. Use an active execId owned by this session or agent, or one whose completion is already queued. Use the execId returned by exec, not a process ID or file path.",
+                        description: "Background executions whose completion you are waiting for. Use an active execId owned by this session or agent, or one whose completion is already queued. Use the execId returned by exec, not a process ID or file path. When wakeIfNoActivityAfterSeconds is omitted, this wait also wakes after 600 seconds; set it to null to wait indefinitely.",
                         minItems: 1, uniqueItems: true,
                         items: { type: 'string', description: "Execution ID returned by exec." }
                     },
-                    waitForInput: { type: 'boolean', enum: [true], description: "Set to true when waiting for a user message or another external event that is not covered by the session or execution options." }
+                    waitForInput: { type: 'boolean', enum: [true], description: "Set to true when waiting for a user message or another external event that is not covered by the session or execution options. When combined with waitExecIds, this keeps the wait input-driven without adding the automatic exec fallback." }
                 }
             } as any
         },

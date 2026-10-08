@@ -1,5 +1,5 @@
 import type { Message } from './chatShared'
-import { formatStructuredSystemText, isSystemLikeText, renderAssistantMarkdownSegments, renderMarkdownSegments } from './chatShared'
+import { formatStructuredSystemText, getSystemMessagePreviewDescriptor, isSystemLikeText, renderAssistantMarkdownSegments, renderMarkdownSegments } from './chatShared'
 import { isCommittedHistoryMessage } from '../chatHistoryState'
 import { getContextBlockMetaFromMessage, getContextBlockSummaryText } from './ContextBlockCard'
 import { getGroupedToolEntries, getToolCallSearchText, getToolResponseSearchText } from './ToolTimelineItems'
@@ -78,7 +78,8 @@ export function projectSessionSearchFields(messages: Message[], groupTools: bool
       if (text.trim()) fields.push({ rowKey, groupKey, sourceIndex, groupStartIndex: groupKey ? groupStarts.get(groupKey) : undefined, surface, partIndex, ...(toolIndex !== undefined ? { toolIndex } : {}), ...(responseIndex !== undefined ? { responseIndex } : {}), ...(pastedIndex !== undefined ? { pastedIndex } : {}), text })
     }
     if (row.systemLikeMessage) {
-      const body = msg.parts.map(part => part.system ? formatStructuredSystemText(part.system) : part.text || '').filter(Boolean).join('\n')
+      const descriptor = getSystemMessagePreviewDescriptor(msg)
+      const body = descriptor.bodyText || msg.parts.map(part => part.system ? formatStructuredSystemText(part.system) : part.text || '').filter(Boolean).join('\n')
       add('system', 0, body.split('\n').filter(line => !isSystemLikeText(line)).join('\n'))
       continue
     }

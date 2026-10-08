@@ -321,6 +321,10 @@ export interface SystemMessagePreviewDescriptor extends SystemMessageKind {
   previewPrefix: string
   /** Session identity represented by the inter-agent collapsed-preview prefix. */
   previewSessionId?: string
+  /** Presentation-only body for message kinds whose source text contains a transport prefix. */
+  bodyText?: string
+  /** Count of logical body lines for a counted thread-card tag. */
+  lineCount?: number
 }
 
 /** Click handler for markdown containers: intercepts link clicks with a confirmation dialog */
@@ -472,6 +476,43 @@ const getSystemMessagePreviewAttribute = (value: unknown): string => (
   typeof value === 'string' ? value.trim() : ''
 )
 
+export interface LlmErrorMessageDetails {
+  bodyText: string
+  lineCount: number
+}
+
+const LLM_ERROR_PREFIX = '⚠️ LLM Error: '
+
+/**
+ * Recognizes the persisted display-only model-text shape used for LLM retry notices.
+ * The notice metadata is authoritative; the warning prefix is presentation text only.
+ * Mixed model parts, user text, and tool responses stay ordinary content.
+ */
+export const getLlmErrorMessageDetails = (message: Message): LlmErrorMessageDetails | null => {
+  if (message.role !== 'model' || message.__meta?.noticeType !== 'llm-retry' || !Array.isArray(message.parts) || message.parts.length !== 1) return null
+  const part = message.parts[0]
+  if (!part || typeof part !== 'object'
+    || typeof part.text !== 'string'
+    || part.system !== undefined
+    || part.thinking !== undefined
+    || part.functionCall !== undefined
+    || part.functionResponse !== undefined
+    || part.toolUseId !== undefined
+    || part.inlineData !== undefined
+    || part.inlineDataRef !== undefined
+    || part.inlineDataUnavailable !== undefined) return null
+
+  const bodyText = part.text.startsWith(LLM_ERROR_PREFIX)
+    ? part.text.slice(LLM_ERROR_PREFIX.length)
+    : part.text
+  const logicalBody = bodyText.trim()
+
+  return {
+    bodyText,
+    lineCount: logicalBody ? logicalBody.split(/\r\n|\r|\n/).length : 1,
+  }
+}
+
 /**
  * Finds a heavy system card's stable kind plus its collapsed-preview metadata.
  * A real foxwarm-system kind wins over a direct channel wrapper or a
@@ -479,6 +520,17 @@ const getSystemMessagePreviewAttribute = (value: unknown): string => (
  * as the actual event it contains.
  */
 export const getSystemMessagePreviewDescriptor = (message: Message): SystemMessagePreviewDescriptor => {
+  const llmError = getLlmErrorMessageDetails(message)
+  if (llmError) {
+    return {
+      kind: 'llm error',
+      source: 'legacy',
+      previewPrefix: '',
+      bodyText: llmError.bodyText,
+      lineCount: llmError.lineCount,
+    }
+  }
+
   let messageType: { kind: string; attrs: Record<string, string> } | null = null
 
   for (const part of message.parts) {

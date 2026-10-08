@@ -1,5 +1,6 @@
 import {
   formatToolLabel,
+  getLlmErrorMessageDetails,
   getToolResponseStatus,
   isHeavySystemTextLine,
   isLightweightStructuredSystem,
@@ -168,8 +169,9 @@ const getMessageUsageAttribution = (msg: Message, timing: DerivedRequestTiming):
   messageSeqs: [getValidMessageSeq(msg)],
 })
 
-/** Only a whole event/reminder wrapper may join a tool run; quoted tags do not. */
-const getGroupableSystemKind = (msg: Message): 'event' | 'goal-reminder' | null => {
+/** Whole event/reminder wrappers and metadata-classified display-only LLM retry notices may join a tool run; quoted content does not. */
+const getGroupableSystemKind = (msg: Message): 'event' | 'goal-reminder' | 'llm-error' | null => {
+  if (getLlmErrorMessageDetails(msg)) return 'llm-error'
   if (msg.role !== 'user' || msg.parts.length !== 1) return null
   const part = msg.parts[0]
   const value = part.system || part.text || ''
@@ -190,6 +192,7 @@ const isGroupableSystemMessage = (msg: Message): boolean => getGroupableSystemKi
 const isToolGroupableMessage = (msg: Message): boolean => msg.role === 'model' || msg.role === 'tool' || isGroupableSystemMessage(msg)
 
 const isHeavySystemLikeMessage = (message: Message): boolean => {
+  if (getLlmErrorMessageDetails(message)) return true
   if (message.role === 'model') return false
   return (
     message.parts.some((part) => !!part.system && !isLightweightStructuredSystem(part.system)) ||
@@ -280,7 +283,9 @@ const scanGroup = (messages: Message[], start: number, finalStandaloneStartIdx: 
     if (!isToolGroupableMessage(msg)) break
     // Ordinary model output splits the group: content and everything after it belong to the
     // next group, while thinking before that content stays with the group that ends here.
-    if (msg.role === 'model' && getGroupContentPartIndex(msg) !== -1) return { start, end: index, contentBreakIdx: index }
+    if (msg.role === 'model' && !getLlmErrorMessageDetails(msg) && getGroupContentPartIndex(msg) !== -1) {
+      return { start, end: index, contentBreakIdx: index }
+    }
     // A visible time marker belongs outside the group, after any complete call/result pair.
     if (msg.role === 'model' && hasToolCalls(msg) && timeMarkers[index]) break
     end = index + 1
@@ -330,7 +335,12 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
   for (let index = start; index < end; index++) {
     const msg = messages[index]
     const systemKind = groupHasToolCalls ? getGroupableSystemKind(msg) : null
-    if (systemKind) {
+    if (systemKind === 'llm-error') {
+      const details = getLlmErrorMessageDetails(msg)
+      for (let line = 0; line < (details?.lineCount || 0); line++) {
+        items.push({ name: 'system-llm-error', label: 'LLM error', tone: 'system' })
+      }
+    } else if (systemKind) {
       items.push({ name: `system-${systemKind}`, label: systemKind === 'event' ? 'Event' : 'Goal reminder', tone: 'system' })
     }
     const parts = index === start ? msg.parts.slice(startPartFrom) : msg.parts

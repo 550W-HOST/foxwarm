@@ -5,6 +5,7 @@ import {
   copyTextToClipboard,
   clampContentStyle,
   formatStructuredSystemText,
+  getLlmErrorMessageDetails,
   getSystemMessagePreviewDescriptor,
   isCollapsibleSystemText,
   isLightweightSystemTextLine,
@@ -638,8 +639,9 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
     return []
   }), [msg.parts])
 
-  const renderedText = allLines.join('\n')
   const messageKind = useMemo(() => getSystemMessagePreviewDescriptor(msg), [msg])
+  const renderedText = messageKind.bodyText ?? allLines.join('\n')
+  const renderedLines = useMemo(() => renderedText.split(/\r\n|\r|\n/), [renderedText])
   const interAgentPreview = useMemo(() => (
     messageKind.kind === 'inter-agent' && messageKind.previewSessionId
       ? allLines.filter((line) => !isSystemLikeText(line)).join('\n').trim()
@@ -647,9 +649,12 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
   ), [allLines, messageKind.kind, messageKind.previewSessionId])
   const preview = useMemo(() => {
     const bodyLine = allLines.find((line) => line.trim() && !isSystemLikeText(line))
-    const body = bodyLine?.trim() || renderedText.trim() || messageKind.kind
+    const body = messageKind.bodyText?.split(/\r\n|\r|\n/)[0]?.trim()
+      || bodyLine?.trim()
+      || renderedText.trim()
+      || messageKind.kind
     return `${messageKind.previewPrefix}${body}`
-  }, [allLines, messageKind.kind, messageKind.previewPrefix, renderedText])
+  }, [allLines, messageKind.bodyText, messageKind.kind, messageKind.previewPrefix, renderedText])
   const surfaceClass = 'bg-fw-system-surface/55 dark:bg-fw-system-surface/10 text-fw-system-text'
   const threadLineClass = 'text-fw-system-accent hover:text-fw-system-accent focus-visible:text-fw-system-accent'
   const headerClass = 'bg-fw-system-surface-strong/80 dark:bg-fw-system-surface-strong/20'
@@ -675,7 +680,7 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
           className={`foxwarm-system-message-header -ml-2 -mr-2 ${THREAD_CARD_HEADER_ROW_CLASS} px-2 py-1 ${headerClass} ${expanded ? `mb-1 cursor-pointer ${headerHoverClass}` : ''}`}
           onClick={expanded ? (event) => { event.stopPropagation(); toggle() } : undefined}
         >
-          <ToolTag name="system" iconName={`system-${messageKind.kind}`} label={messageKind.kind} tone="system" className="foxwarm-system-message-tag" />
+          <ToolTag name="system" iconName={`system-${messageKind.kind}`} label={messageKind.kind === 'llm error' ? `LLM error ×${messageKind.lineCount || 1}` : `${messageKind.kind}${messageKind.lineCount ? ` ×${messageKind.lineCount}` : ''}`} tone="system" className="foxwarm-system-message-tag" />
           {!expanded && (
             <span ref={headerFade.ref} {...headerFade.overflowFadeProps} className={`foxwarm-system-message-preview ${THREAD_CARD_HEADER_PREVIEW_CLASS}`} title={messageKind.kind === 'inter-agent' && messageKind.previewSessionId ? `From ${messageKind.previewSessionId}:` : preview}>
               {messageKind.previewSessionId ? (
@@ -691,7 +696,7 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
         )}
         {expanded && (
           <pre data-search-surface="system" className="foxwarm-system-message-body max-w-full whitespace-pre-wrap break-words font-sans text-sm" style={{ lineHeight: '1.5em' }}>
-            {renderedText.split('\n').map((line, lineIdx, lines) => {
+            {renderedLines.map((line, lineIdx, lines) => {
               const isPrefix = isSystemLikeText(line)
               const nextIsPrefix = lineIdx < lines.length - 1 && isSystemLikeText(lines[lineIdx + 1])
               return (
@@ -889,6 +894,7 @@ const MessageRow = memo(function MessageRow({
     anchorKey,
     scrollbarAnchorKey,
   } = row
+  const llmError = useMemo(() => getLlmErrorMessageDetails(msg), [msg])
   const toolDisclosure = {
     expandedToolKeys: expandedTools.get(messageKey) || EMPTY_TOOL_KEYS,
     onToolToggle: useCallback((toolKey: string, expanded: boolean) => {
@@ -933,6 +939,7 @@ const MessageRow = memo(function MessageRow({
   // group) content of this group's card. The existing row flags still own visibility.
   const belongsToOrdinarySurface = (item: typeof visibleModelParts[number]) => {
     if (msg.role !== 'model') return false // Tool/result and event rows remain group content.
+    if (llmError) return false
     if (item.webSearchAction) return hasVisibleTextContent // Preserve the text-bearing hosted-search exception.
     if (item.reasoningRun) return firstGroupContentPartIndex !== -1 && item.partIndex < firstGroupContentPartIndex
     return true

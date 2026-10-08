@@ -5,6 +5,7 @@ import {
 } from '../chatViewportState'
 import {
   getSystemMessagePreviewDescriptor,
+  getLlmErrorMessageDetails,
   getToolResponseStatus,
   isHeavySystemTextLine,
   isLightweightStructuredSystem,
@@ -55,7 +56,7 @@ const estimateRenderedMessageHeight = (message: Message, pairedResponse?: Messag
     const visualUnits = Array.from(line).reduce((units, character) => units + (/[\u0000-\u00ff]/.test(character) ? 1 : 1.7), 0)
     return total + Math.max(1, Math.ceil(visualUnits / 68))
   }, 0)
-  const isThreadCard = message.__meta?.contextBlock || message.role === 'tool' || message.parts.some(part => !!part.functionCall || !!part.functionResponse || !!part.system) || !!pairedResponse
+  const isThreadCard = message.__meta?.contextBlock || getLlmErrorMessageDetails(message) !== null || message.role === 'tool' || message.parts.some(part => !!part.functionCall || !!part.functionResponse || !!part.system) || !!pairedResponse
   const imageCount = [message, pairedResponse].filter(Boolean).reduce((count, candidate) => count + candidate!.parts.filter(part => !!part.inlineData || !!part.inlineDataRef).length, 0)
   // Collapsed thread cards preview at most three lines. Ordinary prose keeps
   // its line/wrap estimate (with only a generous safety ceiling).
@@ -102,10 +103,10 @@ export const formatMessageForContextEstimate = (message: Message): string => {
 
 export const getContextScrollbarMessageTone = (message: Message): ContextScrollbarTone => {
   if (message.__meta?.contextBlock) return 'context-block'
-  const isHeavySystem = message.role !== 'model' && (
+  const isHeavySystem = getLlmErrorMessageDetails(message) !== null || (message.role !== 'model' && (
     message.parts.some(part => !!part.system && !isLightweightStructuredSystem(part.system || '')) ||
     message.parts.some(part => !!part.text && part.text.split('\n').some(isHeavySystemTextLine))
-  )
+  ))
   if (isHeavySystem) {
     // Keep the descriptor in this pure classifier so system metadata stays in
     // the same semantic family as the actual timeline card.
@@ -183,7 +184,7 @@ export const buildContextScrollbarSegments = (messages: Message[], persistentMem
         ...message,
         parts: message.parts.map(({ thinking: _thinking, functionCall: _functionCall, functionResponse: _functionResponse, ...part }) => part),
       }
-      appendSegment('content', estimateTokenCount(formatMessageForContextEstimate(contentOnly)), getContextScrollbarMessageTone(contentOnly), 'model')
+      appendSegment('content', estimateTokenCount(formatMessageForContextEstimate(contentOnly)), getContextScrollbarMessageTone(contentOnly), getContextScrollbarMessageCategory(contentOnly))
       const callOnly: Message = {
         ...message,
         parts: message.parts.filter(part => !!part.functionCall).map(part => ({ functionCall: part.functionCall! })),

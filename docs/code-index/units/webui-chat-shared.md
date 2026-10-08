@@ -1,6 +1,6 @@
 # Unit: webui-chat-shared
 
-Files: packages/webui/src/components/chatShared.tsx, packages/webui/src/components/markdownRenderer.ts, packages/webui/src/components/MarkdownHtmlSegment.tsx, packages/webui/src/components/mermaidPolicy.ts, packages/webui/test/markdownRenderer.test.mjs, packages/webui/test/mermaidPolicy.test.mjs
+Files: packages/webui/src/components/chatShared.tsx, packages/webui/src/components/markdownRenderer.ts, packages/webui/src/components/MarkdownHtmlSegment.tsx, packages/webui/src/components/mermaidPolicy.ts, packages/webui/test/chatSharedMetadata.test.mjs, packages/webui/test/markdownRenderer.test.mjs, packages/webui/test/mermaidPolicy.test.mjs
 Secondary files: packages/webui/src/components/SpecialBlock.tsx, packages/webui/test/specialBlocks.e2e.mjs
 
 ## Purpose
@@ -53,6 +53,7 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 | `formatStructuredSystemText(system)` | ~225 | Formats legacy system text with bracket prefix while passing through foxwarm metadata tag lines |
 | `isSystemLikeText(text)` | ~229 | Checks if text looks like legacy system text or a foxwarm metadata tag line |
 | `parseFoxwarmMetadataLine(text)` / `isLightweightFoxwarmMetadataLine(text)` | ~230 | Parses foxwarm tag attrs and decides whether metadata is lightweight vs collapsible-heavy |
+| `getLlmErrorMessageDetails(message)` | ~485 | Recognizes one text-only model part carrying `__meta.noticeType: 'llm-retry'`, removes the first-line `⚠️ LLM Error:` presentation prefix when present, and returns the body plus logical line count |
 | `getSystemMessagePreviewDescriptor(message)` / `getSystemMessageKind(message)` | ~255 | Extract the stable heavy-message tag and collapsed-preview metadata, preferring a system kind over non-channel wrappers and legacy fallbacks |
 | `THREAD_CARD_HEADER_ROW_CLASS` / `THREAD_CARD_HEADER_PREVIEW_CLASS` | ~420 | Shared one-line collapsed header geometry for thread-card tags and previews |
 | `isLightweightStructuredSystem(system)` | ~232 | Checks if system string is lightweight structured |
@@ -89,6 +90,7 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 - `computeUnifiedDiffLines` wraps the `diff` library to produce line-level change objects with type annotations.
 - `renderSystemTextWithSessionLinks` uses the shared parser and existing `SessionHashLink` for legacy references and public Session fields in plain text, metadata attributes, and JSON/YAML-shaped output. See [D-webui-session-field-links](#d-webui-session-field-links).
 - System-like line classification is mixed-format: old `[SYSTEM:]`/`[FROM:]` prefixes remain supported, and `foxwarm-system`, `foxwarm-metadata`, `foxwarm-message`, `foxwarm-image`, and `foxwarm-file` lines are metadata for small-text rendering. `parseFoxwarmMetadataLine` inspects the first line of both single-line and full multi-line wrappers. Direct channel wrappers, closing tags, attachment descriptors, and time/session/channel-mode/external-input metadata remain lightweight; non-channel source wrappers (`type="inter-agent"`, `task`, `timer`, `trigger`, etc.), `<foxwarm-system kind="event" ...>` wait/event tags, and `<foxwarm-system kind="snapshot" ...>` are heavy/collapsible like legacy non-direct `[SYSTEM:]` messages.
+- `getLlmErrorMessageDetails` recognizes only a single text-only model part whose `__meta.noticeType` is the persisted source-code literal `llm-retry`. It removes the fixed first-line `⚠️ LLM Error: ` presentation prefix when present; malformed retry text without that prefix remains intact. Ordinary assistant text that merely mentions `llm error`, quoted/user content, mixed model parts, and tool error responses remain unclassified. `getSystemMessagePreviewDescriptor` exposes the prefix-free body as the `llm error` descriptor without changing the stored message.
 - `getSystemMessagePreviewDescriptor` scans every wrapper line in a heavy message. It skips lightweight system metadata (`time`, `session`, `channel-mode`, `external-input`) and then prefers the first valid heavy `foxwarm-system kind` even when corrupted history also contains a direct channel wrapper; otherwise it uses a non-channel `foxwarm-message type`, with `system` as the legacy/malformed fallback. Task notifications retain their `task` kind and ordinary body preview without an inter-agent From/reply prefix. It exposes only safe collapsed-preview prefixes: `From sourceSessionId` for inter-agent, session-boundary `event`, or event `type`, each only when non-empty. `getSystemMessageKind` returns the descriptor's stable kind/source pair for existing callers.
 - `toolMeta`/`ToolTag` maps tool-like and thread-card tag names to icons (lucide-react), colors, and display labels for consistent UI rendering. Every tag exposes `data-tool-tag-tone` independently of optional component-specific classes, so real tools, Tool Group summaries, CTX-BLOCK, Reasoning/Web Search, and System cards share one stable semantic tone hook. Reasoning and hosted Web Search use dedicated non-tool icons. `ToolTag.iconName` lets non-tool timeline cards select dedicated system-kind icons without changing real tool mappings; source-generated heavy kinds cover event, session-boundary, goal/child reminders, managed/session events, system delivery, and BTW, while non-channel wrappers cover inter-agent, timer, trigger, background, and onboot. Snapshot/system-prompt compatibility cards also have stable icons. Unknown system icon names fall back to Bell; unknown real tools retain the Wrench fallback. The shared `system` tag tone uses the blue palette for all heavy timeline system cards; scoped console-treatment rules preserve that blue allocation rather than applying the global red-blue utility remap.
 - The `send_to_session` tool tag uses the same `MessagesSquare` icon as the inter-agent system tag, while unrelated inter-session tool icon mappings remain unchanged.
@@ -108,6 +110,10 @@ WebUI identity image rendering uses the same deployment-relative API helper but 
 - `toolMeta` drives icon/color rendering in tool call bubbles across the chat interface.
 
 ## Design Decisions
+
+### D-webui-llm-error-card-classification
+
+[2026-10-08] Display-only LLM retry notices are presentation-classified only when a model message contains one text-only part and the persisted metadata field `__meta.noticeType` has the source-code literal value `llm-retry`. The card removes only the first-line `⚠️ LLM Error:` presentation prefix when present, keeps malformed retry text intact, and uses the prefix-free logical body-line count for the unified `LLM error ×N` tag. Ordinary assistant text that mentions `llm error`, user/quoted text, mixed model parts, and tool responses remain ordinary content. This is a WebUI projection only: canonical history and the backend message protocol are unchanged.
 
 ### D-webui-session-field-links
 
