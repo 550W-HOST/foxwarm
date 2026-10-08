@@ -149,6 +149,25 @@ internal sealed class TaskService : IDisposable
                 throw new InvalidDataException("Task assignment did not return a task ID.");
             await DeliverAssignmentAsync(resultTaskId, actor!, assignment, warnings);
         }
+        if (result.CommentOwner is { } commentOwner && commentOwner != actor)
+        {
+            try
+            {
+                await manager.SendTaskNotificationAsync(
+                    actor,
+                    commentOwner,
+                    $"Comment on task {resultTaskId}\n{Text(args["note"])}",
+                    true,
+                    resultTaskId!,
+                    "commented",
+                    "comment"
+                );
+            }
+            catch
+            {
+                warnings.Add("Comment saved, but the owner notification could not be delivered.");
+            }
+        }
         if (result.Completed)
         {
             if (resultTaskId is null)
@@ -157,7 +176,7 @@ internal sealed class TaskService : IDisposable
         }
         if (warnings.Count > 0)
             result.Payload["warning"] = string.Join(" ", warnings);
-        if (result.Assignment is not null || result.Completed)
+        if (result.Assignment is not null || result.Completed || result.CommentOwner is not null)
             result.Payload["task"] = store
                 .Execute(new JsonObject { ["action"] = "get", ["taskId"] = resultTaskId! }, null)
                 .Payload["task"]!.DeepClone();

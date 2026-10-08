@@ -96,7 +96,6 @@ internal sealed partial class WebUIChannel
         MapTaskWrite(app, "/api/tasks/{id}/complete", "complete", true, 200);
         MapTaskWrite(app, "/api/tasks/{id}/cancel", "cancel", true, 200);
         MapUserTaskWrite(app, "/api/tasks/{id}/comments", "comment");
-        MapUserTaskWrite(app, "/api/tasks/{id}/assign", "assign");
     }
 
     private void MapTaskWrite(

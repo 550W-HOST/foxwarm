@@ -360,6 +360,69 @@ public sealed class WebUiStartupTests
     }
 
     [Fact]
+    public async Task Actual_authenticated_user_task_routes_support_create_assign_release_and_comment()
+    {
+        await using var h = new Host();
+        await File.WriteAllTextAsync(h.TokenPath, h.Token);
+        h.Start();
+        await h.Ready();
+
+        var description = new string('d', 20000);
+        var create = await h.Client.PostAsJsonAsync(
+            "/api/tasks",
+            new { title = "HTTP user task", description }
+        );
+        Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+        var created = await create.Content.ReadFromJsonAsync<JsonObject>();
+        var taskId = created!["task"]!["id"]!.GetValue<string>();
+        Assert.Equal("user", created["task"]!["createdByKind"]!.GetValue<string>());
+        Assert.Equal(20000, created["task"]!["description"]!.GetValue<string>().Length);
+
+        var session = await h.Client.PostAsJsonAsync(
+            "/api/sessions",
+            new { agentId = "main", sessionId = "task-owner" }
+        );
+        Assert.True(session.IsSuccessStatusCode, await session.Content.ReadAsStringAsync());
+        var sessionPayload = await session.Content.ReadFromJsonAsync<JsonObject>();
+        var ownerId = sessionPayload!["sessionId"]!.GetValue<string>();
+        var assign = await h.Client.PostAsJsonAsync(
+            $"/api/tasks/{taskId}/assign",
+            new { ownerSessionId = ownerId }
+        );
+        Assert.True(
+            assign.IsSuccessStatusCode,
+            $"{assign.StatusCode}: {await assign.Content.ReadAsStringAsync()}"
+        );
+        var assigned = await assign.Content.ReadFromJsonAsync<JsonObject>();
+        Assert.Equal(ownerId, assigned!["task"]!["ownerSessionId"]!.GetValue<string>());
+
+        var comment = await h.Client.PostAsJsonAsync(
+            $"/api/tasks/{taskId}/comments",
+            new { note = "user comment" }
+        );
+        Assert.Equal(HttpStatusCode.OK, comment.StatusCode);
+        var details = await (
+            await h.Client.GetAsync($"/api/tasks/{taskId}")
+        ).Content.ReadFromJsonAsync<JsonObject>();
+        Assert.Contains(
+            details!["notes"]!.AsArray(),
+            note =>
+                note?["authorKind"]?.GetValue<string>() == "user"
+                && note["text"]?.GetValue<string>() == "user comment"
+        );
+
+        var release = await h.Client.PostAsJsonAsync(
+            $"/api/tasks/{taskId}/assign",
+            new { ownerSessionId = (string?)null }
+        );
+        Assert.Equal(HttpStatusCode.OK, release.StatusCode);
+        var released = await release.Content.ReadFromJsonAsync<JsonObject>();
+        Assert.Null(released!["task"]!["ownerSessionId"]);
+
+        await h.Stop();
+    }
+
+    [Fact]
     public async Task Actual_explicit_public_authority_rejects_loopback_and_forged_forwarding_but_keeps_absent_origin_CLI()
     {
         await using var h = new Host();

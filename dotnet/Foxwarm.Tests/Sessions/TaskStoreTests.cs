@@ -24,7 +24,10 @@ public sealed class TaskStoreTests
             },
             "main"
         );
-        Assert.Equal(4000, loaded.Payload["task"]!["description"]!.GetValue<string>().Length);
+        Assert.Equal(
+            goal.Length,
+            loaded.Payload["task"]!["description"]!.GetValue<string>().Length
+        );
         using var db = new SqliteConnection(
             $"Data Source={Path.Combine(temp.Path, "state", "tasks.sqlite")}"
         );
@@ -125,7 +128,7 @@ public sealed class TaskStoreTests
             {
                 ["action"] = "create",
                 ["title"] = "task",
-                ["description"] = new string('d', 4000),
+                ["description"] = new string('d', 20000),
             },
             "old"
         );
@@ -150,13 +153,58 @@ public sealed class TaskStoreTests
             {
                 ["action"] = "complete",
                 ["taskId"] = id,
-                ["result"] = new string('r', 4000),
+                ["result"] = new string('r', 20000),
             },
             "main"
         );
         Assert.Equal("completed", completed.Payload["task"]!["status"]!.GetValue<string>());
+        Assert.Equal(20000, completed.Payload["task"]!["description"]!.GetValue<string>().Length);
+        Assert.Equal(20000, completed.Payload["task"]!["result"]!.GetValue<string>().Length);
         Assert.Throws<TaskError>(() =>
             store.Execute(new JsonObject { ["action"] = "complete", ["taskId"] = id }, "main")
+        );
+    }
+
+    [Fact]
+    public void NonOwnerSessionMayAddNoteOnlyAndOwnerReceivesCommentTarget()
+    {
+        using var temp = new TempDirectory();
+        using var store = new TaskStore(temp.Path, id => id, _ => []);
+        var created = store.Execute(
+            new JsonObject
+            {
+                ["action"] = "create",
+                ["title"] = "note",
+                ["ownerSessionId"] = "owner",
+            },
+            "creator"
+        );
+        var id = created.Payload["task"]!["id"]!.GetValue<string>();
+        var noted = store.Execute(
+            new JsonObject
+            {
+                ["action"] = "update",
+                ["taskId"] = id,
+                ["note"] = "progress from a non-owner",
+            },
+            "observer"
+        );
+        Assert.Equal("owner", noted.CommentOwner);
+        var details = store.Execute(new JsonObject { ["action"] = "get", ["taskId"] = id }, null);
+        Assert.Contains(
+            details.Payload["notes"]!.AsArray(),
+            note => note?["text"]?.GetValue<string>() == "progress from a non-owner"
+        );
+        Assert.Throws<TaskError>(() =>
+            store.Execute(
+                new JsonObject
+                {
+                    ["action"] = "update",
+                    ["taskId"] = id,
+                    ["description"] = "not allowed",
+                },
+                "observer"
+            )
         );
     }
 

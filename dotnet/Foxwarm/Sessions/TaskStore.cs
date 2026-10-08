@@ -550,6 +550,7 @@ internal sealed class TaskStore : IDisposable
         );
         TaskAssignmentPlan? plan = null;
         var completed = false;
+        string? commentOwner = null;
         var now2 = Now();
         if (action == "claim")
         {
@@ -577,8 +578,14 @@ internal sealed class TaskStore : IDisposable
         }
         else
         {
+            var noteOnlyUpdate =
+                action == "update"
+                && args.ContainsKey("note")
+                && !args.ContainsKey("description")
+                && !args.ContainsKey("status");
             var permitted =
                 actorKind == "user"
+                || noteOnlyUpdate
                 || (
                     action is "assign" or "cancel"
                         ? actor == creator || actor == owner
@@ -669,6 +676,8 @@ internal sealed class TaskStore : IDisposable
                     );
                     if (args["note"] is not null)
                         AddNote(db, taskId, actor!, actorKind, Text(args["note"])!, now2);
+                    if (args["note"] is not null && owner is not null && owner != actor)
+                        commentOwner = owner;
                     if (Text(args["status"]) == "active" && Text(task["status"]) != "active")
                         Update(db, taskId, "reminderLastSeq", anchorSeq, "reminderMessageCount", 0);
                     break;
@@ -706,7 +715,7 @@ internal sealed class TaskStore : IDisposable
             }
         }
         var payload = new JsonObject { ["task"] = Public(db, taskId) };
-        return new(TaskJson(payload), plan, completed);
+        return new(TaskJson(payload), plan, completed, commentOwner);
     }
 
     private JsonObject Details(SqliteConnection db, string id)
@@ -760,8 +769,10 @@ internal sealed class TaskStore : IDisposable
             }
         )
             row.Remove(key);
-        if (Text(row["description"]) is { Length: > 4000 } description)
-            row["description"] = description[..3999] + "…";
+        if (Text(row["description"]) is { Length: > 20000 } description)
+            row["description"] = description[..19999] + "…";
+        if (Text(row["result"]) is { Length: > 20000 } result)
+            row["result"] = result[..19999] + "…";
         return CanonicalReferences(row);
     }
 
