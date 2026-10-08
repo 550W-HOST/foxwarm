@@ -29,6 +29,7 @@ const {
   isCollapsibleSystemText,
   isLightweightStructuredSystem,
   isSystemLikeText,
+  getLlmErrorMessageDetails,
   isLightweightSystemTextLine,
   getSystemMessageKind,
   getSystemMessagePreviewDescriptor,
@@ -201,4 +202,32 @@ test('system preview descriptors use only supported non-empty wrapper metadata',
   assert.deepEqual(descriptor('<foxwarm-message type="channel">\nold wrapper\n</foxwarm-message>\n<foxwarm-system kind="time" />\n<foxwarm-system kind="session" />\n<foxwarm-system kind="event" type="wait-timeout">\ntimeout\n</foxwarm-system>'), {
     kind: 'event', source: 'foxwarm-system', previewPrefix: 'wait-timeout: ',
   })
+})
+
+test('LLM error model text uses a case-insensitive prefix and counts trimmed body lines', () => {
+  const message = { role: 'model', parts: [{ text: '  LLM ERROR: first line\nsecond line\n\nthird line  ' }] }
+  assert.deepEqual(getLlmErrorMessageDetails(message), {
+    bodyText: 'first line\nsecond line\n\nthird line',
+    lineCount: 4,
+  })
+  assert.deepEqual(getSystemMessagePreviewDescriptor(message), {
+    kind: 'llm error', source: 'legacy', previewPrefix: '', bodyText: 'first line\nsecond line\n\nthird line', lineCount: 4,
+  })
+})
+
+test('LLM error classification requires a model text part with non-empty body', () => {
+  const cases = [
+    { role: 'model', parts: [{ text: 'quoted: llm error: not a prefix' }] },
+    { role: 'model', parts: [{ text: 'llm error:' }] },
+    { role: 'model', parts: [{ text: 'llm error:   ' }] },
+    { role: 'model', parts: [{ text: 'llm error: body' }, { text: 'second part' }] },
+    { role: 'model', parts: [{ text: 'llm error: body', functionCall: { name: 'exec', args: {} } }] },
+    { role: 'user', parts: [{ text: 'llm error: user text' }] },
+    { role: 'tool', parts: [{ functionResponse: { name: 'exec', response: { error: 'llm error: tool failure' } } }] },
+  ]
+
+  for (const message of cases) {
+    assert.equal(getLlmErrorMessageDetails(message), null, JSON.stringify(message))
+    assert.notEqual(getSystemMessagePreviewDescriptor(message).kind, 'llm error', JSON.stringify(message))
+  }
 })
