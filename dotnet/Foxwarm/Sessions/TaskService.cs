@@ -77,14 +77,15 @@ internal sealed class TaskService : IDisposable
             {
                 try
                 {
+                    var title = Text(result.Payload["task"]?["title"]) ?? taskId;
                     await manager.SendTaskNotificationAsync(
                         null,
                         commentOwner,
-                        $"Comment on task {taskId}\n{Text(normalized["note"])}",
+                        $"Note on task {taskId} — {title}\n{Text(normalized["note"])}",
                         true,
                         taskId,
-                        "commented",
-                        "comment"
+                        "note",
+                        "note"
                     );
                 }
                 catch
@@ -153,14 +154,15 @@ internal sealed class TaskService : IDisposable
         {
             try
             {
+                var title = Text(result.Payload["task"]?["title"]) ?? resultTaskId;
                 await manager.SendTaskNotificationAsync(
                     actor,
                     commentOwner,
-                    $"Comment on task {resultTaskId}\n{Text(args["note"])}",
+                    $"Note on task {resultTaskId} — {title}\n{Text(args["note"])}",
                     true,
                     resultTaskId!,
-                    "commented",
-                    "comment"
+                    "note",
+                    "note"
                 );
             }
             catch

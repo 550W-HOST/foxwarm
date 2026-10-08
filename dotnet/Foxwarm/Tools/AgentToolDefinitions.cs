@@ -201,7 +201,7 @@ internal static class AgentToolDefinitions
             ),
             Tool(
                 "create_child_session",
-                "Create a child Session under the current Session. With taskId, assign or transfer the task to the child, deliver its full description and any message as one assignment, and start work. Task completion notifies the task creator; do not send a separate routine completion report. Without taskId, message is optional and normal completion reporting applies.",
+                "Create a child Session under the current Session. If taskId is supplied, attach the new Session to that task; when the task-linked child completes, use task(action:\"complete\", ...) for the completion report instead of sending a separate completion message. Without taskId, preserve the normal completion-report behavior.",
                 Parameters(
                     new JsonObject
                     {
