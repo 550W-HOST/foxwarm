@@ -39,12 +39,13 @@ before(async () => {
       {role:'model',parts:[{text:'İ UNIQUEOFFSET tail'}],__meta:{seq:126,timestamp:1700000000126}},
       {role:'user',parts:[{text:'<pasted-text>dupeWORD first, dupeWORD second</pasted-text> plain dupeWORD one and dupeWORD two'}],__meta:{seq:127,timestamp:1700000000127}},
       {role:'model',parts:[{text:'start\\n\\n\\\\[\\nZ\\n\\\\]\\n\\nZ after'}],__meta:{seq:128,timestamp:1700000000128}},
+      {role:'model',modelVisible:false,parts:[{text:'⚠️ LLM Error: Attempt 1/5 failed: LLM_RETRY_SEARCH_TARGET\\nAttempt 2/5 failed: second retry'}],__meta:{seq:129,timestamp:1700000000129,noticeType:'llm-retry'}},
     ]
     window.fixture = { archiveRequests:0, get history(){return history}, emitStream(text){this.socket?.onmessage?.({data:JSON.stringify({type:'session-event',sessionId:'fixture/main',event:{type:'model-stream-update',streamId:'fixture-search-stream',text}})})} }
     window.fetch = async input => {
       const url = String(input)
       if (url.includes('/context-blocks/')) {window.fixture.archiveRequests++;return new Response('{}',{status:404})}
-      if (url.includes('/history')) return new Response(JSON.stringify({session:{id:'fixture/main',busy:false,runtimeState:{state:'idle'},queueLength:0,messageCount:history.length,historyVersion:0,modelKey:'fixture/model'},messages:history,queuedMessages:[],queueLength:0,latestSeq:128,historyVersion:0,prefixLength:0,historyComplete:true}),{status:200,headers:{'Content-Type':'application/json'}})
+      if (url.includes('/history')) return new Response(JSON.stringify({session:{id:'fixture/main',busy:false,runtimeState:{state:'idle'},queueLength:0,messageCount:history.length,historyVersion:0,modelKey:'fixture/model'},messages:history,queuedMessages:[],queueLength:0,latestSeq:129,historyVersion:0,prefixLength:0,historyComplete:true}),{status:200,headers:{'Content-Type':'application/json'}})
       if (url.includes('/models')) return new Response(JSON.stringify({models:[{key:'fixture/model',contextLimit:128000}]}),{status:200})
       if (url.includes('/asr/status')) return new Response(JSON.stringify({configured:false,available:false}),{status:200})
       if (url.includes('/commands')) return new Response(JSON.stringify({commands:[]}),{status:200})
@@ -200,6 +201,16 @@ test('finds already-loaded older unmounted rows, read results, reasoning, render
   }
   const state=await snapshot();assert.equal(state.oldMounted,true);assert.equal(state.archive,0)
   assert.equal(await page.$eval('.foxwarm-context-block-card [aria-label="Expand CTX-BLOCK B#7"]',el=>el.getAttribute('aria-expanded')),'false')
+  await page.click('[aria-label="Close search"]')
+})
+
+test('LLM retry Search indexes the metadata-classified body without its warning prefix',async()=>{
+  await page.click('button[aria-label="Find in chat"]')
+  await query('LLM_RETRY_SEARCH_TARGET')
+  await page.waitForFunction(()=>[...CSS.highlights].some(([name,h])=>name.startsWith('foxwarm-chat-search-')&&[...h][0]?.toString()==='LLM_RETRY_SEARCH_TARGET'))
+  assert.equal((await snapshot()).hits,'1/1')
+  await query('LLM Error')
+  await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent==='0/0')
   await page.click('[aria-label="Close search"]')
 })
 

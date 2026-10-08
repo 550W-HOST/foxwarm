@@ -27,7 +27,7 @@ import { validateInterAgentHandoffConfirmationForMode } from '../toolCallControl
 
 export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext) {
   await requireNotIsolated(ctx, 'create_child_session');
-  validateInterAgentHandoffConfirmationForMode(args, HANDOFF_CONFIRMATION_ENABLED);
+  validateInterAgentHandoffConfirmationForMode(args, HANDOFF_CONFIRMATION_ENABLED, 'create_child_session');
   const normalizedArgs = normalizeCreateChildSessionArgs(args);
   const { agentName, suffix, displayName, fork = false, message, node, taskId } = normalizedArgs;
   const afterSend = normalizeAfterSendBehavior(normalizedArgs, 'create_child_session');
@@ -91,7 +91,7 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
 }
 
 export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
-  validateInterAgentHandoffConfirmationForMode(args, HANDOFF_CONFIRMATION_ENABLED);
+  validateInterAgentHandoffConfirmationForMode(args, HANDOFF_CONFIRMATION_ENABLED, 'send_to_session');
   const unknownKeys = Object.keys(args || {}).filter(key => !['sessionId', 'handoffRecall', 'message', 'afterSend', 'noFurtherAssistantReply', 'waitAfterHandoff', 'handoffConfirmation'].includes(key));
   if (unknownKeys.length) throw new Error(`send_to_session received unsupported argument${unknownKeys.length === 1 ? '' : 's'}: ${unknownKeys.join(', ')}.`);
   const { sessionId, message } = args;

@@ -40,7 +40,7 @@ export function buildChildCompletionInstructionForMode(parentSessionId: string, 
     ? handoffReviewArguments(parentSessionId)
     : `sessionId: \`${parentSessionId}\`, message: "...", afterSend: "finish"`;
   const guidance = enabled
-    ? ' The recall must be before message and both review fields must use this handoff\'s own content; handoffConfirmation must be the final argument property. If the handoff should not be sent, omit it or cancel it instead of adding approval text.'
+    ? ' The recall must be before message and both review fields must use this handoff\'s own content; these fields are local checks and are not part of the delivered report; handoffConfirmation must be the final argument property. If the handoff should not be sent, omit it or cancel it instead of adding approval text.'
     : '';
   return `If your current work is tracked by a task, complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. For work not tracked by a task, when you finish, explicitly call send_to_session({${argumentsText}}).${guidance} This sends the report and ends the turn idle without creating a wait. Use afterSend: "wait" only when you genuinely require a later reply from the parent; do not add a separate wait call. If no separate report or parent action is needed, end your final message with \`${NO_ACTION_MARKER}\`.`;
 }
@@ -50,7 +50,7 @@ export function buildChildReminderForMode(parentSessionId: string, enabled: bool
     ? handoffReviewArguments(parentSessionId)
     : `sessionId: \`${parentSessionId}\`, message: "...", afterSend: "finish"`;
   const guidance = enabled
-    ? ' The recall must be before message and both review fields must use this handoff\'s own content; handoffConfirmation must be the final argument property. If the handoff should not be sent, omit it or cancel it instead of adding approval text.'
+    ? ' The recall must be before message and both review fields must use this handoff\'s own content; these fields are local checks and are not part of the delivered report; handoffConfirmation must be the final argument property. If the handoff should not be sent, omit it or cancel it instead of adding approval text.'
     : '';
   return formatFoxwarmSystem({ kind: 'child-reminder', event: 'missing-handoff', parentSessionId }, `Reminder: check whether your work still needs a completion report. If your current work is tracked by a task, complete it with the task tool unless it is already complete; do not send a duplicate routine completion report. Otherwise, if you need to report completion to the parent session, call send_to_session({${argumentsText}}) now.${guidance} This reports so the Session becomes idle without a wait. Use afterSend: "wait" only when you genuinely require a later reply; do not add a separate wait call. If no separate report or parent action is needed, say \`${NO_ACTION_MARKER}\`.`);
 }

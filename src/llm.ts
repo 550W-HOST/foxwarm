@@ -1917,7 +1917,7 @@ function planToolCalls(functionCalls: FunctionCall[]): PlannedToolCall[] {
         if (isSingleToolCancellationRequested(call)) return { call: executionCall, presetResult: buildCanceledToolResult() };
         if (!call.argsParseError && (call.name === 'send_to_session' || call.name === 'create_child_session')) {
             try {
-                validateInterAgentHandoffConfirmationForMode(executionCall.args, HANDOFF_CONFIRMATION_ENABLED);
+                validateInterAgentHandoffConfirmationForMode(executionCall.args, HANDOFF_CONFIRMATION_ENABLED, call.name);
             } catch (error) {
                 return { call: executionCall, presetResult: buildHandoffConfirmationError(error) };
             }

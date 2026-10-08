@@ -376,6 +376,41 @@ test('failed execution and continuation retain traceback and partial stdout with
   }
 });
 
+test('host calls do not mask a later script traceback with a second snapshot resume', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_host_resume_error');
+  const session = await sessionManager.getSession(sessionId);
+  const missingFile = `$fw_agentdir/${makeId('missing')}.txt`;
+  const successfulExec = 'call_tool({"source": "node", "nodeId": "master", "name": "exec", "args": {"command": "true"}})';
+  const cases = [
+    { code: `${successfulExec}\nraise Exception("boom")`, expected: /Exception: boom/ },
+    { code: `${successfulExec}\nraise IndexError("boom")`, expected: /IndexError: boom/ },
+    { code: asMain(`${successfulExec}\nraise Exception("boom")`), expected: /Exception: boom/ },
+    { code: asMain(`${successfulExec}\nraise IndexError("boom")`), expected: /IndexError: boom/ },
+    {
+      code: `call_tool({"source": "node", "nodeId": "master", "name": "read", "args": {"filePath": "${missingFile}"}})`,
+      expected: /RuntimeError: ENOENT: no such file or directory/,
+    },
+  ];
+
+  try {
+    for (const testCase of cases) {
+      const result = await tool_run_script({ code: testCase.code }, { sessionId, session });
+      assert.equal(result.status, 'failed');
+      assert.match(result.error || '', testCase.expected);
+      assert.doesNotMatch(result.error || '', /snapshot has already been resumed/i);
+      const record = await getToolScriptRunForTests(result.runId);
+      if (testCase.code.includes('name": "exec"')) {
+        assert.deepEqual(record?.executedTools, ['exec']);
+        assert.equal(record?.hostCallCount, 1);
+      }
+    }
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
 test('run_script rejects Monty OS functions without bypassing call_tool', async () => {
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_os_boundary');

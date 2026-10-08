@@ -17,6 +17,21 @@ const CANCEL_PROPERTY_SCHEMA = {
 
 const HANDOFF_TOOL_NAMES = new Set(['send_to_session', 'create_child_session']);
 
+function hasArgument(args: Record<string, any>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(args || {}, key);
+}
+
+export function requiresInterAgentHandoffConfirmation(
+  toolName: string,
+  args: Record<string, any>,
+): boolean {
+  if (toolName === 'send_to_session') return true;
+  if (toolName === 'create_child_session') {
+    return hasArgument(args, 'message') || hasArgument(args, 'taskId');
+  }
+  return true;
+}
+
 export function addHandoffConfirmationSchema(definition: ToolDefinition, enabled: boolean): ToolDefinition {
   if (!HANDOFF_TOOL_NAMES.has(definition.name)) return definition;
   const parameters = definition.parameters;
@@ -30,7 +45,7 @@ export function addHandoffConfirmationSchema(definition: ToolDefinition, enabled
       if (enabled) {
         properties.handoffRecall = {
           type: 'string',
-          description: `Put handoffRecall before message. Start with the exact opening sentence below, then write the actual applicable communication rules, the user\'s actual request, and the scope this recipient needs. Replace the placeholder with this handoff\'s own recalled context.\n\n${INTER_AGENT_HANDOFF_RECALL_PREFIX}\n${INTER_AGENT_HANDOFF_RECALL_PLACEHOLDER}`,
+          description: `Put handoffRecall before message. Start with the exact opening sentence below, then write the actual applicable communication rules, the user\'s actual request, and the scope this recipient needs. Replace the placeholder with this handoff\'s own recalled context. This field is checked locally and is not delivered to the recipient.\n\n${INTER_AGENT_HANDOFF_RECALL_PREFIX}\n${INTER_AGENT_HANDOFF_RECALL_PLACEHOLDER}`,
         };
       }
     }
@@ -40,15 +55,17 @@ export function addHandoffConfirmationSchema(definition: ToolDefinition, enabled
   if (enabled) {
     properties.handoffConfirmation = {
       type: 'string',
-      description: `Put handoffConfirmation last in the arguments. Write an honest review of the proposed handoff using the exact opening and closing sentences below. Replace the placeholder with your own specific review. If the handoff should not proceed, omit it or cancel with __cancelTool=true instead of approving it to satisfy the check.\n\nFor a handoff that should proceed, use: ${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n${INTER_AGENT_HANDOFF_CONFIRMATION_PLACEHOLDER}\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`,
+      description: `Put handoffConfirmation last in the arguments. Write an honest review of the proposed handoff using the exact opening and closing sentences below. Replace the placeholder with your own specific review. This field is checked locally and is not delivered to the recipient.${definition.name === 'create_child_session' ? ' When taskId is supplied, review the handoff action without copying the task description; the task assignment delivers that description separately.' : ''} If the handoff should not proceed, omit it or cancel with __cancelTool=true instead of approving it to satisfy the check.\n\nFor a handoff that should proceed, use: ${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n${INTER_AGENT_HANDOFF_CONFIRMATION_PLACEHOLDER}\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`,
     };
-    required.push('handoffRecall', 'handoffConfirmation');
+    if (definition.name === 'send_to_session') {
+      required.push('handoffRecall', 'handoffConfirmation');
+    }
   }
   return {
     ...definition,
     description: enabled
       ? `${definition.description}${definition.name === 'create_child_session'
-        ? ' A confirmation review is required, even when creating a child without an initial message.'
+        ? ' A confirmation review is required when message or taskId is supplied; creating a child without either does not require review fields.'
         : ' A confirmation review is required.'}`
       : definition.description,
     parameters: {
@@ -139,6 +156,12 @@ export function validateInterAgentHandoffConfirmation(args: Record<string, any>)
   }
 }
 
-export function validateInterAgentHandoffConfirmationForMode(args: Record<string, any>, enabled: boolean): void {
-  if (enabled) validateInterAgentHandoffConfirmation(args);
+export function validateInterAgentHandoffConfirmationForMode(
+  args: Record<string, any>,
+  enabled: boolean,
+  toolName?: string,
+): void {
+  if (enabled && (!toolName || requiresInterAgentHandoffConfirmation(toolName, args))) {
+    validateInterAgentHandoffConfirmation(args);
+  }
 }
