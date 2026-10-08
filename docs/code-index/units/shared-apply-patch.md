@@ -37,9 +37,7 @@ Parses and applies text-based patch operations (update, add, delete) to file con
 | `findContextCore(lines, context, start)` | Searches in exact, trimEnd, trim, then Unicode order |
 | `findContext(lines, context, start, eof)` | Prefers end-of-file context before the existing forward-search fallback |
 | `formatContextErrorPath(filePath)` | Keeps a long file path from consuming the failed-hunk error budget |
-| `clipFailedHunkLine(line, maxLength, fromEnd)` | Clips one oversized displayed hunk line while retaining its patch prefix when possible |
-| `takeFailedHunkLines(patchLines, maxLength, fromEnd)` | Selects bounded complete or clipped hunk lines from the beginning or end |
-| `formatBoundedFailedHunk(patchLines, maxLength)` | Keeps a failed hunk within the diagnostic character budget, showing its head and tail when needed |
+| `formatBoundedFailedHunk(patchLines, maxLength)` | Joins a failed hunk and keeps its head and tail within the diagnostic character budget |
 | `formatContextMismatch(patchLines, start, eof, filePath)` | Reports the match failure and only the failed hunk within output limits |
 | `parseUpdateDiff(lines, input, filePath)` | Positions chunks using anchors and context matching |
 | `applyChunks(input, chunks, filePath)` | Splices edit chunks and rejects overlaps |

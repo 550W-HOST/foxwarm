@@ -216,12 +216,10 @@ function advanceCursorToAnchor(anchor: string, inputLines: string[], cursor: num
 function readSection(lines: string[], startIndex: number, filePath: string): {
   nextContext: string[];
   sectionChunks: ApplyPatchChunk[];
-  patchLines: string[];
   endIndex: number;
   eof: boolean;
 } {
   const context: string[] = [];
-  const patchLines: string[] = [];
   let delLines: string[] = [];
   let insLines: string[] = [];
   const sectionChunks: ApplyPatchChunk[] = [];
@@ -240,7 +238,6 @@ function readSection(lines: string[], startIndex: number, filePath: string): {
     }
 
     index += 1;
-    patchLines.push(raw);
     const lastMode: 'keep' | 'add' | 'delete' = mode;
     let line = raw;
     if (line === '') line = ' ';
@@ -288,15 +285,14 @@ function readSection(lines: string[], startIndex: number, filePath: string): {
 
   if (index < lines.length && lines[index] === END_FILE) {
     index += 1;
-    patchLines.push(END_FILE);
-    return { nextContext: context, sectionChunks, patchLines, endIndex: index, eof: true };
+    return { nextContext: context, sectionChunks, endIndex: index, eof: true };
   }
 
   if (index === origIndex) {
     throw new Error(`Invalid apply_patch input for ${filePath}: empty update section near line ${index + 1}.`);
   }
 
-  return { nextContext: context, sectionChunks, patchLines, endIndex: index, eof: false };
+  return { nextContext: context, sectionChunks, endIndex: index, eof: false };
 }
 
 function equalsSlice(source: string[], target: string[], start: number, mapFn: (value: string) => string): boolean {
@@ -365,49 +361,6 @@ function formatContextErrorPath(filePath: string): string {
   return JSON.stringify(shortened);
 }
 
-function clipFailedHunkLine(line: string, maxLength: number, fromEnd: boolean): string {
-  if (maxLength <= 0) return '';
-  if (line.length <= maxLength) return line;
-  if (!fromEnd || maxLength === 1) return line.slice(0, maxLength);
-  return `${line.slice(0, 1)}${line.slice(-maxLength + 1)}`;
-}
-
-function takeFailedHunkLines(patchLines: string[], maxLength: number, fromEnd: boolean): string {
-  if (maxLength <= 0) return '';
-  const selected: string[] = [];
-  let used = 0;
-  const addLine = (index: number): boolean => {
-    const line = patchLines[index];
-    const separatorLength = selected.length > 0 ? 1 : 0;
-    const available = maxLength - used - separatorLength;
-    if (available <= 0) return false;
-
-    if (line.length <= available) {
-      if (fromEnd) selected.unshift(line);
-      else selected.push(line);
-      used += separatorLength + line.length;
-      return true;
-    }
-
-    const clipped = clipFailedHunkLine(line, available, fromEnd);
-    if (fromEnd) selected.unshift(clipped);
-    else selected.push(clipped);
-    return false;
-  };
-
-  if (fromEnd) {
-    for (let index = patchLines.length - 1; index >= 0; index -= 1) {
-      if (!addLine(index)) break;
-    }
-  } else {
-    for (let index = 0; index < patchLines.length; index += 1) {
-      if (!addLine(index)) break;
-    }
-  }
-
-  return selected.join('\n');
-}
-
 function formatBoundedFailedHunk(patchLines: string[], maxLength: number): string {
   const hunk = patchLines.join('\n');
   if (hunk.length <= maxLength) return hunk;
@@ -417,9 +370,7 @@ function formatBoundedFailedHunk(patchLines: string[], maxLength: number): strin
 
   const headLength = Math.ceil(contentLength / 2);
   const tailLength = contentLength - headLength;
-  const head = takeFailedHunkLines(patchLines, headLength, false);
-  const tail = takeFailedHunkLines(patchLines, tailLength, true);
-  return `${head}${FAILED_HUNK_OMISSION}${tail}`;
+  return `${hunk.slice(0, headLength)}${FAILED_HUNK_OMISSION}${tailLength > 0 ? hunk.slice(-tailLength) : ''}`;
 }
 
 function formatContextMismatch(patchLines: string[], start: number, eof: boolean, filePath: string): string {
@@ -438,7 +389,7 @@ function parseUpdateDiff(lines: string[], input: string, filePath: string): { ch
   let cursor = 0;
 
   while (!isDone(parser, UPDATE_SECTION_TERMINATORS)) {
-    const anchorLine = parser.lines[parser.index]?.startsWith('@@') ? parser.lines[parser.index] : undefined;
+    const hunkStart = parser.index;
     const anchor = readStr(parser, '@@ ');
     const hasBareAnchor = !anchor && parser.lines[parser.index] === '@@';
     if (hasBareAnchor) parser.index += 1;
@@ -451,14 +402,11 @@ function parseUpdateDiff(lines: string[], input: string, filePath: string): { ch
       cursor = advanceCursorToAnchor(anchor, inputLines, cursor, parser);
     }
 
-    const { nextContext, sectionChunks, patchLines, endIndex, eof } = readSection(parser.lines, parser.index, filePath);
-    const failedHunk = anchorLine === undefined
-      ? patchLines
-      : [anchorLine, ...patchLines];
+    const { nextContext, sectionChunks, endIndex, eof } = readSection(parser.lines, parser.index, filePath);
     const { newIndex, fuzz } = findContext(inputLines, nextContext, cursor, eof);
 
     if (newIndex === -1) {
-      throw new Error(formatContextMismatch(failedHunk, cursor, eof, filePath));
+      throw new Error(formatContextMismatch(parser.lines.slice(hunkStart, endIndex), cursor, eof, filePath));
     }
 
     parser.fuzz += fuzz;

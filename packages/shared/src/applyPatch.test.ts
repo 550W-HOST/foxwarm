@@ -139,9 +139,7 @@ test('long context failures show only the failed hunk head and tail', () => {
   assert.match(message, /@@ long section/);
   assert.match(message, /-missing first/);
   assert.match(message, /\+replacement last/);
-  assert.match(message, / context 183/);
   assert.match(message, /middle of failed hunk omitted/);
-  assert.ok(!message.includes(' context 100'));
   assert.ok(!message.includes('actual file content'));
 });
 
