@@ -867,24 +867,15 @@ function normalizeErrorMessage(error: any, record?: ToolScriptRunRecord, runtime
     return augmentWithContext('Unknown ToolScript error');
   }
   if (typeof error === 'string') {
-    if (/Snapshot has already been resumed/i.test(error)) {
-      return augmentWithContext(`${error}\n\nThis usually indicates a ToolScript runtime/snapshot lifecycle failure rather than a literal double-resume in user code. Repeated host calls and resource-limit exhaustion are common triggers.`);
-    }
     return augmentWithContext(error);
   }
   if (typeof error?.display === 'function') {
     try {
       const displayText = String(error.display('traceback'));
-      if (/Snapshot has already been resumed/i.test(displayText)) {
-        return augmentWithContext(`${displayText}\n\nThis usually indicates a ToolScript runtime/snapshot lifecycle failure rather than a literal double-resume in user code. Repeated host calls and resource-limit exhaustion are common triggers.`);
-      }
       return augmentWithContext(displayText);
     } catch {}
   }
   if (typeof error?.message === 'string' && error.message) {
-    if (/Snapshot has already been resumed/i.test(error.message)) {
-      return augmentWithContext(`${error.message}\n\nThis usually indicates a ToolScript runtime/snapshot lifecycle failure rather than a literal double-resume in user code. Repeated host calls and resource-limit exhaustion are common triggers.`);
-    }
     return augmentWithContext(error.message);
   }
   if (typeof error?.toString === 'function') {
@@ -1429,54 +1420,9 @@ async function advanceExecution(args: {
       return buildBaseResult(record);
     }
 
+    let result: any;
     try {
-      const result = await executeScriptHostCall(functionName, positionalArgs, kwargs, runtimeState, ctx);
-      if (functionName === 'open_managed_session' && result && typeof result === 'object' && (result as any).sessionId && (result as any).leaseId) {
-        upsertManagedLeaseRef(record, {
-          sessionId: String((result as any).sessionId),
-          leaseId: String((result as any).leaseId),
-          ...(ctx.toolScriptRunId ? { controllerRunId: ctx.toolScriptRunId } : {}),
-        });
-      }
-      if (functionName === 'release_managed_session' && result && typeof result === 'object' && (result as any).sessionId) {
-        const leaseId = kwargs.lease_id ?? kwargs.leaseId ?? positionalArgs[1];
-        if (typeof leaseId === 'string') {
-          removeManagedLeaseRef(record, String((result as any).sessionId), leaseId);
-        }
-      }
-      if (result && typeof result === 'object' && (result as any).__toolscriptWaitForManagedEvent) {
-        record.snapshotBase64 = await dumpMontySnapshot(progress);
-        markRunWaiting(record, {
-          reason: 'managed_event',
-          waitingSince: Date.now(),
-          managedEvent: {
-            sessionId: String((result as any).sessionId),
-            leaseId: String((result as any).leaseId),
-            ...(typeof (result as any).expectedRevision === 'number' ? { expectedRevision: (result as any).expectedRevision } : {}),
-            ...((result as any).runMode ? { runMode: (result as any).runMode } : {}),
-            ...((result as any).inboxOrder ? { inboxOrder: (result as any).inboxOrder } : {}),
-          },
-        }, runtimeState);
-        if ((result as any).sessionId && (result as any).leaseId) {
-          upsertManagedLeaseRef(record, {
-            sessionId: String((result as any).sessionId),
-            leaseId: String((result as any).leaseId),
-            ...(ctx.toolScriptRunId ? { controllerRunId: ctx.toolScriptRunId } : {}),
-          });
-        }
-        await saveRun(record);
-        return buildBaseResult(record);
-      }
-      if (shouldPauseForTimeout(record)) {
-        record.snapshotBase64 = await dumpMontySnapshot(progress);
-        markRunWaiting(record, buildTimeoutWaitingState(record, runtimeState, {
-          mode: 'return',
-          value: normalizeMontyValue(result),
-        }), runtimeState);
-        await saveRun(record);
-        return buildBaseResult(record);
-      }
-      progress = await progress.resume(result);
+      result = await executeScriptHostCall(functionName, positionalArgs, kwargs, runtimeState, ctx);
     } catch (error: any) {
       if (isToolAuthorizationPolicyUnavailable(error)) throw error;
       if (shouldPauseForTimeout(record)) {
@@ -1492,7 +1438,55 @@ async function advanceExecution(args: {
         return buildBaseResult(record);
       }
       progress = await progress.resumeError(buildMontyResumeError('RuntimeError', error?.message || String(error)));
+      continue;
     }
+
+    if (functionName === 'open_managed_session' && result && typeof result === 'object' && (result as any).sessionId && (result as any).leaseId) {
+      upsertManagedLeaseRef(record, {
+        sessionId: String((result as any).sessionId),
+        leaseId: String((result as any).leaseId),
+        ...(ctx.toolScriptRunId ? { controllerRunId: ctx.toolScriptRunId } : {}),
+      });
+    }
+    if (functionName === 'release_managed_session' && result && typeof result === 'object' && (result as any).sessionId) {
+      const leaseId = kwargs.lease_id ?? kwargs.leaseId ?? positionalArgs[1];
+      if (typeof leaseId === 'string') {
+        removeManagedLeaseRef(record, String((result as any).sessionId), leaseId);
+      }
+    }
+    if (result && typeof result === 'object' && (result as any).__toolscriptWaitForManagedEvent) {
+      record.snapshotBase64 = await dumpMontySnapshot(progress);
+      markRunWaiting(record, {
+        reason: 'managed_event',
+        waitingSince: Date.now(),
+        managedEvent: {
+          sessionId: String((result as any).sessionId),
+          leaseId: String((result as any).leaseId),
+          ...(typeof (result as any).expectedRevision === 'number' ? { expectedRevision: (result as any).expectedRevision } : {}),
+          ...((result as any).runMode ? { runMode: (result as any).runMode } : {}),
+          ...((result as any).inboxOrder ? { inboxOrder: (result as any).inboxOrder } : {}),
+        },
+      }, runtimeState);
+      if ((result as any).sessionId && (result as any).leaseId) {
+        upsertManagedLeaseRef(record, {
+          sessionId: String((result as any).sessionId),
+          leaseId: String((result as any).leaseId),
+          ...(ctx.toolScriptRunId ? { controllerRunId: ctx.toolScriptRunId } : {}),
+        });
+      }
+      await saveRun(record);
+      return buildBaseResult(record);
+    }
+    if (shouldPauseForTimeout(record)) {
+      record.snapshotBase64 = await dumpMontySnapshot(progress);
+      markRunWaiting(record, buildTimeoutWaitingState(record, runtimeState, {
+        mode: 'return',
+        value: normalizeMontyValue(result),
+      }), runtimeState);
+      await saveRun(record);
+      return buildBaseResult(record);
+    }
+    progress = await progress.resume(result);
   }
 }
 
