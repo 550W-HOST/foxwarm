@@ -14,6 +14,7 @@ Provides reusable code editing and diff visualization components for the WebUI. 
 - Shared `MODELS_CONFIG_SCHEMA` / `APP_CONFIG_SCHEMA` objects plus WebUI-local distinct in-memory model URIs and file-match wrappers.
 - `parseModelsYamlSuggestions`, `getProviderModelCompletionContext`, and `createModelsYamlCompletionProvider` — derive local routing completions and exact provider-model completion context from unsaved YAML, then own the editor-lifetime provider-list cache.
 - `DiffPreview` — memoized unified/split diff visualization.
+- `getUnifiedDiffSearchText` — pure searchable text from the same line-change derivation as the unified diff renderer; shared context is represented once.
 
 ## Behavior
 

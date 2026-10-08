@@ -10,13 +10,15 @@ import {
 } from '../toolsSessionAgent';
 import type { MessagePart, Session } from '../types';
 import {
+  INTER_AGENT_HANDOFF_RECALL_PREFIX,
   INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX,
   INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX,
 } from '../toolCallControls';
 
+const TEST_RECALL = `${INTER_AGENT_HANDOFF_RECALL_PREFIX}\nI recalled the applicable communication rules, the user request, and the recipient scope for this test handoff.`;
 const TEST_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nFocused regression test reviewed this handoff for necessity, accuracy, self-containment, scope, and communication rules.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
-const tool_send_to_session: typeof rawToolSendToSession = (args, ctx) => rawToolSendToSession({ ...args, confirmation: TEST_CONFIRMATION }, ctx);
-const tool_create_child_session: typeof rawToolCreateChildSession = (args, ctx) => rawToolCreateChildSession({ ...args, confirmation: TEST_CONFIRMATION }, ctx);
+const tool_send_to_session: typeof rawToolSendToSession = (args, ctx) => rawToolSendToSession({ handoffRecall: TEST_RECALL, ...args, handoffConfirmation: TEST_CONFIRMATION }, ctx);
+const tool_create_child_session: typeof rawToolCreateChildSession = (args, ctx) => rawToolCreateChildSession({ handoffRecall: TEST_RECALL, ...args, handoffConfirmation: TEST_CONFIRMATION }, ctx);
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -193,7 +195,7 @@ test('router appends every result, arms flagged activity wait despite a sibling 
   (llm as any).chat = async (parts: MessagePart[] | null, active: Session) => {
     calls++;
     await appendStubUser(active, parts);
-    const sendCall = { id: 'flagged-send', name: 'send_to_session', args: { sessionId: targetId, message: 'work', afterSend: 'wait', confirmation: TEST_CONFIRMATION } };
+    const sendCall = { id: 'flagged-send', name: 'send_to_session', args: { sessionId: targetId, handoffRecall: TEST_RECALL, message: 'work', afterSend: 'wait', handoffConfirmation: TEST_CONFIRMATION } };
     const errorCall = { id: 'sibling-error', name: 'read', args: { filePath: `/missing-handoff-${Date.now()}` } };
     await appendStubModel(active, [{ functionCall: sendCall }, { functionCall: errorCall }]);
     return { text: '', toolCalls: [sendCall, errorCall] };
@@ -230,7 +232,7 @@ test('completed child report finishes idle without arming a wait or another LLM 
   (llm as any).chat = async (parts: MessagePart[] | null, active: Session) => {
     calls++;
     await appendStubUser(active, parts);
-    const report = { id: 'final-report', name: 'send_to_session', args: { sessionId: parentId, message: 'done', afterSend: 'finish', confirmation: TEST_CONFIRMATION } };
+    const report = { id: 'final-report', name: 'send_to_session', args: { sessionId: parentId, handoffRecall: TEST_RECALL, message: 'done', afterSend: 'finish', handoffConfirmation: TEST_CONFIRMATION } };
     await appendStubModel(active, [{ functionCall: report }]);
     return { text: '', toolCalls: [report] };
   };
@@ -264,7 +266,7 @@ test('afterSend finish remains terminal after a sibling error and appends the co
   (llm as any).chat = async (parts: MessagePart[] | null, active: Session) => {
     calls++;
     await appendStubUser(active, parts);
-    const finishCall = { id: 'finish-send', name: 'send_to_session', args: { sessionId: targetId, message: 'done', afterSend: 'finish', confirmation: TEST_CONFIRMATION } };
+    const finishCall = { id: 'finish-send', name: 'send_to_session', args: { sessionId: targetId, handoffRecall: TEST_RECALL, message: 'done', afterSend: 'finish', handoffConfirmation: TEST_CONFIRMATION } };
     const errorCall = { id: 'finish-sibling-error', name: 'read', args: { filePath: `/missing-finish-${Date.now()}` } };
     await appendStubModel(active, [{ functionCall: finishCall }, { functionCall: errorCall }]);
     return { text: '', toolCalls: [finishCall, errorCall] };
@@ -313,7 +315,7 @@ test('fast reply queued before wait arm wakes immediately after the flagged hand
     calls++;
     await appendStubUser(active, parts);
     if (calls === 1) {
-      const call = { id: 'fast-send', name: 'send_to_session', args: { sessionId: targetId, message: 'work', afterSend: 'wait', confirmation: TEST_CONFIRMATION } };
+      const call = { id: 'fast-send', name: 'send_to_session', args: { sessionId: targetId, handoffRecall: TEST_RECALL, message: 'work', afterSend: 'wait', handoffConfirmation: TEST_CONFIRMATION } };
       await appendStubModel(active, [{ functionCall: call }]);
       return { text: '', toolCalls: [call] };
     }
@@ -354,10 +356,10 @@ test('handoff wait aggregates only successful flagged resolved targets across mi
     calls++;
     await appendStubUser(active, parts);
     const toolCalls = [
-      { id: 'ordinary-first', name: 'send_to_session', args: { sessionId: ordinaryId, message: 'ordinary', confirmation: TEST_CONFIRMATION } },
-      { id: 'flagged-send', name: 'send_to_session', args: { sessionId: flaggedId, message: 'flagged', afterSend: 'wait', confirmation: TEST_CONFIRMATION } },
-      { id: 'flagged-create', name: 'create_child_session', args: { suffix: 'worker', message: 'created flagged', afterSend: 'wait', confirmation: TEST_CONFIRMATION } },
-      { id: 'failed-flagged', name: 'send_to_session', args: { sessionId: makeId('missing'), message: 'fails', afterSend: 'wait', confirmation: TEST_CONFIRMATION } },
+      { id: 'ordinary-first', name: 'send_to_session', args: { sessionId: ordinaryId, handoffRecall: TEST_RECALL, message: 'ordinary', handoffConfirmation: TEST_CONFIRMATION } },
+      { id: 'flagged-send', name: 'send_to_session', args: { sessionId: flaggedId, handoffRecall: TEST_RECALL, message: 'flagged', afterSend: 'wait', handoffConfirmation: TEST_CONFIRMATION } },
+      { id: 'flagged-create', name: 'create_child_session', args: { suffix: 'worker', handoffRecall: TEST_RECALL, message: 'created flagged', afterSend: 'wait', handoffConfirmation: TEST_CONFIRMATION } },
+      { id: 'failed-flagged', name: 'send_to_session', args: { sessionId: makeId('missing'), handoffRecall: TEST_RECALL, message: 'fails', afterSend: 'wait', handoffConfirmation: TEST_CONFIRMATION } },
     ];
     await appendStubModel(active, toolCalls.map(functionCall => ({ functionCall })));
     return { text: '', toolCalls };

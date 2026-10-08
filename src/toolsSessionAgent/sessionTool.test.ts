@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import * as sessionManager from '../sessionManager';
 import { tool_session } from '../toolsSessionAgent';
 import { getAgentDir } from '../config';
+import { definitions } from '../tools/definitions';
+import { buildSessionListOutput } from '../sessionStatus';
 import type { Session } from '../types';
 
 function makeSessionId(prefix: string): string {
@@ -35,9 +37,33 @@ test('session status action reports current identity, usage, cwd, node, compact 
   const parentSessionId = makeSessionId('session_status_parent');
   const sessionId = makeSessionId('session_status_current');
   const childSessionId = `${sessionId}_child`;
+  const parentAlias = `${parentSessionId}_alias`;
 
   try {
-    await ensureSession(parentSessionId);
+    const parent = await ensureSession(parentSessionId);
+    parent.aliases = [parentAlias];
+    sessionManager.updateAliasCache([parentAlias], parentSessionId);
+    parent.history = [
+      { role: 'user', parts: [{ text: 'target status history' }] },
+      {
+        role: 'tool',
+        parts: [{
+          functionResponse: {
+            tool_use_id: 'status-image',
+            name: 'browse_get',
+            response: {
+              inlineData: {
+                mimeType: 'image/png',
+                data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlqVZsAAAAASUVORK5CYII=',
+              },
+            },
+          },
+        }],
+      },
+    ];
+    parent.persistentMemorySnapshot = 'target persistent memory context';
+    parent.stats.lastUsage = { cachedTokens: 3, inputTokens: 4, outputTokens: 5 };
+    await sessionManager.saveSession(parentSessionId);
     const session = await ensureSession(sessionId);
     session.parentSessionId = parentSessionId;
     session.displayName = 'Status Test';
@@ -69,6 +95,26 @@ test('session status action reports current identity, usage, cwd, node, compact 
 
     const explicitStatus = String(await tool_session({ action: 'status' }, { sessionId, session }));
     assert.equal(explicitStatus, status);
+
+    const targetStatus = String(await tool_session({ action: 'status', sessionId: parentSessionId }, { sessionId, session }));
+    assert.ok(targetStatus.includes(`session id: \`${parentSessionId}\``));
+    assert.ok(!targetStatus.includes(`session id: \`${sessionId}\``));
+    assert.match(targetStatus, /token estimate: ~[1-9][0-9,]* /);
+    assert.match(targetStatus, /last usage: cached=3, input=4, output=5, total=12/);
+    assert.match(targetStatus, /Images: 1/);
+    const ownTargetStatus = String(await tool_session({ action: 'status' }, { sessionId: parentSessionId, session: parent }));
+    assert.equal(
+      /token estimate: ~([\d,]+)/.exec(ownTargetStatus)?.[1],
+      /token estimate: ~([\d,]+)/.exec(targetStatus)?.[1],
+    );
+    const aliasStatus = String(await tool_session({ action: 'status', sessionId: parentAlias }, { sessionId, session }));
+    assert.ok(aliasStatus.includes(`session id: \`${parentSessionId}\``));
+    const missingId = makeSessionId('session_status_missing');
+    await assert.rejects(
+      tool_session({ action: 'status', sessionId: missingId }, { sessionId, session }),
+      (error: any) => error?.message === `Session \`${missingId}\` not found.`,
+    );
+    assert.equal(sessionManager.getAllSessions().has(missingId), false);
   } finally {
     for (const id of [childSessionId, sessionId, parentSessionId]) {
       await sessionManager.deleteSession(id).catch(() => {});
@@ -92,6 +138,53 @@ test('session list action preserves old list pagination behavior', async () => {
   } finally {
     await sessionManager.deleteSession(otherId).catch(() => {});
     await sessionManager.deleteSession(sessionId).catch(() => {});
+  }
+});
+
+test('session list scopes by caller Agent before pagination and preserves explicit global listing', async () => {
+  await sessionManager.loadSessions();
+  const agent = makeSessionId('list_scope_agent');
+  const otherAgent = makeSessionId('list_scope_other_agent');
+  const ids = Array.from({ length: 5 }, (_, index) => makeSessionId(`scope_${index}`));
+  const [currentId, foreignNewest, secondOwn, foreignNext, thirdOwn] = ids;
+  try {
+    for (const [index, id] of ids.entries()) {
+      const session = await ensureSession(id);
+      session.agent = index === 1 || index === 3 ? otherAgent : agent;
+      session.meta.lastMessageTime = Date.now() + 10_000_000 - index * 1000;
+      await sessionManager.saveSession(id);
+    }
+    const current = await sessionManager.getSession(currentId);
+    const ctx = { sessionId: currentId, session: current };
+    const first = String(await tool_session({ action: 'list', count: 1 }, ctx));
+    assert.match(first, /Found 3 session\(s\)\. Showing 1-1\./);
+    assert.ok(first.includes(`\`${currentId}\``));
+    assert.ok(!first.includes(`\`${foreignNewest}\``));
+
+    const second = String(await tool_session({ action: 'list', start: 1, count: 1, scope: 'current-agent' }, ctx));
+    assert.match(second, /Found 3 session\(s\)\. Showing 2-2\./);
+    assert.ok(second.includes(`\`${secondOwn}\``));
+    assert.ok(!second.includes(`\`${foreignNext}\``));
+    const last = String(await tool_session({ action: 'list', start: 2, count: 1 }, ctx));
+    assert.ok(last.includes(`\`${thirdOwn}\``));
+    assert.equal(String(await tool_session({ action: 'list', start: 3 }, ctx)), 'No sessions found in the requested range. Total sessions: 3.');
+
+    const global = String(await tool_session({ action: 'list', count: 5, scope: 'all' }, ctx));
+    assert.ok(global.includes(`\`${foreignNewest}\``));
+    assert.ok(global.includes(`\`${foreignNext}\``));
+    assert.ok(global.includes('Found '));
+    assert.ok(String(await buildSessionListOutput({ scope: 'all', count: 5 })).includes(`\`${foreignNewest}\``));
+    await assert.rejects(() => tool_session({ action: 'list', scope: 'foreign' }, ctx), /session\.scope must be/);
+    await assert.rejects(() => buildSessionListOutput({}), /without current session context/);
+    await assert.rejects(() => buildSessionListOutput({}, 'missing-current-session'), /not found/);
+
+    const schema = definitions.find(def => def.name === 'session')?.parameters;
+    assert.deepEqual((schema?.properties as any)?.scope?.enum, ['current-agent', 'all']);
+    assert.deepEqual((schema?.properties as any)?.action?.enum, ['status', 'list', 'update-display-name', 'update-parent']);
+    assert.deepEqual((schema?.properties as any)?.parentSessionId?.type, ['string', 'null']);
+    assert.ok(!schema?.required?.includes('scope'));
+  } finally {
+    for (const id of ids) await sessionManager.deleteSession(id).catch(() => {});
   }
 });
 
@@ -121,9 +214,50 @@ test('session update-display-name action reports set, change, clear, and no-op t
 
     await assert.rejects(
       tool_session({ action: 'rename', name: 'Legacy Alias' }, { sessionId, session }),
-      /session\.action must be "status", "list", or "update-display-name"/,
+      /session\.action must be "status", "list", "update-display-name", or "update-parent"/,
     );
   } finally {
     await sessionManager.deleteSession(sessionId).catch(() => {});
+  }
+});
+
+test('session update-parent requires an explicit parent and returns the committed relation', async () => {
+  await sessionManager.loadSessions();
+  const parentId = makeSessionId('session_parent_update_parent');
+  const childId = makeSessionId('session_parent_update_child');
+  const otherParentId = makeSessionId('session_parent_update_other');
+
+  try {
+    await ensureSession(parentId);
+    const child = await ensureSession(childId);
+    await ensureSession(otherParentId);
+    const ctx = { sessionId: childId, session: child };
+
+    await assert.rejects(() => tool_session({ action: 'update-parent' }, ctx), /parentSessionId is required/);
+    await assert.rejects(() => tool_session({ action: 'update-parent', parentSessionId: '' }, ctx), /non-empty session ID or null/);
+    await assert.rejects(() => tool_session({ action: 'update-parent', parentSessionId: makeSessionId('session_parent_update_missing') }, ctx), /not found/);
+    await assert.rejects(() => tool_session({ action: 'update-parent', parentSessionId: childId }, ctx), /own parent/);
+
+    const attached = await tool_session({ action: 'update-parent', parentSessionId: parentId }, ctx) as any;
+    assert.deepEqual(attached, { sessionId: childId, previousParentSessionId: null, parentSessionId: parentId });
+    assert.equal((await sessionManager.getExistingSession(childId))?.parentSessionId, parentId);
+    await assert.rejects(
+      () => tool_session({ action: 'update-parent', sessionId: parentId, parentSessionId: childId }, ctx),
+      /parent cycle/,
+    );
+    assert.equal((await sessionManager.getExistingSession(parentId))?.parentSessionId, undefined);
+
+    const moved = await tool_session({ action: 'update-parent', parentSessionId: otherParentId }, ctx) as any;
+    assert.deepEqual(moved, { sessionId: childId, previousParentSessionId: parentId, parentSessionId: otherParentId });
+    const detached = await tool_session({ action: 'update-parent', parentSessionId: null }, ctx) as any;
+    assert.deepEqual(detached, { sessionId: childId, previousParentSessionId: otherParentId, parentSessionId: null });
+    assert.equal((await sessionManager.getExistingSession(childId))?.parentSessionId, undefined);
+
+    child.busy = true;
+    const busyMove = await tool_session({ action: 'update-parent', parentSessionId: otherParentId }, ctx) as any;
+    assert.deepEqual(busyMove, { sessionId: childId, previousParentSessionId: null, parentSessionId: otherParentId });
+    child.busy = false;
+  } finally {
+    for (const id of [childId, otherParentId, parentId]) await sessionManager.deleteSession(id).catch(() => {});
   }
 });

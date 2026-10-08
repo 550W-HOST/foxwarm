@@ -1,3 +1,4 @@
+import { applyPatchOperations } from '../../packages/shared/dist/fileToolCore';
 import {
     ToolArgs,
     ToolContext,
@@ -7,7 +8,6 @@ import {
     writeResolvedPath,
     editResolvedPath,
     deleteResolvedPath,
-    applyPatchOperations,
 } from './helpers';
 
 export async function tool_read_memory(args: ToolArgs, ctx: ToolContext) {

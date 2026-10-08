@@ -30,7 +30,7 @@ The server retains structured `/setup/models` request handling and `/setup/model
 
 - Models always render as a raw YAML editor. If the active file is missing or empty, Setup initializes editable text from a generated current-shape example rather than turning the packaged template into a write target.
 - The generated initial YAML defaults to `openai/gpt-5.6-sol` and lists `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`.
-- Raw model and app-config saves preserve user text after canonical backend validation. Comments, key order, quoting, custom fields, and formatting survive.
+- Raw model and app-config saves preserve user text after canonical backend validation. Comments, key order, quoting, custom fields, and formatting survive. Successful Models saves refresh only the current JavaScript context’s model cache and mounted Chat pickers, independent of editor revision feedback; failed saves retain cached choices. See [D-webui-model-settings-navigation](../modules/webui.md#d-webui-model-settings-navigation).
 - Each Models or Config save reports its success or validation error beside (or immediately below on narrow layouts) that section's own Save button using an announced status. While focus is inside the active section's Monaco editor or controlled textarea fallback, unmodified Ctrl+S or Meta+S prevents the browser Save action and invokes that same section-owned save path exactly once; repeat events and additional presses during an in-flight save remain prevented without starting duplicate requests. Hidden editors, Appearance, and other panes do not own the shortcut. Load and Weixin errors remain in the page-level error area.
 - Setup presents Appearance, Models, and Config as an accessible three-tab surface. Appearance is first and selected by default. Inactive panels are hidden while both editor instances remain mounted, preserving Monaco model/diagnostic lifecycle and each tab's local state without visibly stacking the editors.
 - The former checklist is removed. Completion/attention icons appear in the tab labels: Models reflects usable model configuration; Config reflects enabled channel health and omits its icon when no enabled channel provides a meaningful status. Disabled channels do not create attention state.
@@ -47,18 +47,19 @@ The server retains structured `/setup/models` request handling and `/setup/model
 
 ## Integration
 
-- Normal App owns singleton `system:setup`; a missing active models file forces this tab and rejects close.
-- The browser fixture runs the ordinary top-level Setup accessibility, product-copy, tab/keyboard, Config/Weixin, and theme scenario, plus the primary browser-name/icon scenario, against the built production preview. Its Vite development page remains for specialized editor-action, lazy-import-failure, embedded-host, and deployment-relative `/preview` probes, so cold dependency optimization cannot replace the document underneath ordinary product interactions.
+- Normal App owns singleton `system:setup`; a missing active models file forces this tab and rejects close. The degraded-editor OOBE fixture rejects the lazy YAML worker import without blocking shared bootstrap chunks, exercises the protected sole-tab header Close action, and verifies continued Models editing and save against the production preview.
+- The browser fixture runs the ordinary top-level Setup accessibility, product-copy, tab/keyboard, Config/Weixin, and theme scenario, plus the primary browser-name/icon scenario, against the built production preview; the degraded-editor OOBE scenario uses that preview too. Its Vite development page remains for specialized editor-action, embedded-host, and deployment-relative `/preview` probes, so cold dependency optimization cannot replace the document underneath ordinary product interactions. In Chromium, its request mocks intercept API routes only, except when a scenario explicitly blocks editor assets, so YAML workers can initialize.
 - The active file is the data-directory models path; diagnostics and writes do not follow the removed generic override. Canonical path contract: [D-config-models-data-path](./src-config.md#d-config-models-data-path).
 - Chat's model popup opens/activates this singleton and requests Models focus through App.
 - Code's Setup custom editor mounts the same non-forced leaf view, accepts only the nonce-bound fixed Models-focus signal, and lets the extension own close/restore identity.
-- `onSetupChanged` lets App refresh setup/OOBE status after successful model/config/login changes.
+- `onSetupChanged` lets App refresh setup/OOBE status after successful model/config/login changes. Model-cache refresh belongs to the leaf’s Models save path, so embedded Setup uses it too without requiring an App callback.
+- `setupModels.e2e.mjs` verifies a successful Models save updates the existing Chat picker in a real production-preview split-pane App, rejected saves preserve choices, and explicit picker Refresh refetches.
 
 ## Function index
 
 - `SetupView` — loads status and renders accessible Appearance/Models/Config tabs, raw editors, channel status, bottom-of-Config Weixin controls, theme management, and controlled browser-branding settings.
 - `loadStatus` — refreshes diagnostics and hydrates raw editor text.
-- `saveModels` / `saveConfig` — send raw YAML to backend-authoritative validators/writers.
+- `saveModels` / `saveConfig` — send raw YAML to backend-authoritative validators/writers; successful Models writes invoke the shared models-only refresh entry point.
 - `startWeixinLogin` / `waitWeixinLogin` — manage pairing and persisted channel setup.
 - `buildModelsYaml` / `makeDefaultProvider` in `setupModels.ts` — retained pure helpers used to generate initial raw YAML and verify the structured backend contract.
 

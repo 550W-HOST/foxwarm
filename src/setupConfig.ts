@@ -11,6 +11,7 @@ import {
   normalizeDbWorkersEnabled,
   normalizeHandoffConfirmationEnabled,
   normalizeMcpInboundConfig,
+  normalizePublicUrl,
   normalizeCompactionConfig,
   normalizeChannelProgressInterval,
   normalizeNodeProvidersConfig,
@@ -98,6 +99,7 @@ export function readRawAppConfigFile(filePath: string = APP_CONFIG_PATH): string
 
 export function validateAppConfigYaml(rawYaml: string): AppConfig {
   const config = parseYamlObject(rawYaml, 'app config') as AppConfig;
+  normalizePublicUrl(config.url);
   normalizeMcpInboundConfig(config.mcpInbound);
   if (config.channels !== undefined && !isPlainObject(config.channels)) {
     throw new Error('app config `channels` must be a YAML object.');
@@ -274,7 +276,7 @@ export function buildModelsConfigFromSetupForm(body: any, existingConfig: any = 
     if (isVirtual) {
       const targets = splitModelIds(hasOwn(draft, 'targets') ? draft.targets : existingProvider.targets);
       nextProvider.targets = targets;
-      for (const field of ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse'] as const) {
+      for (const field of ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError'] as const) {
         delete nextProvider[field];
       }
       if (providerType === 'session-hash') {

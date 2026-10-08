@@ -3,6 +3,7 @@
 Foxwarm can expose helper endpoints for bootstrapping a generic node client from a running master:
 
 - `/node/run.sh`
+- `/node/run-shell.sh` (independent exec-only POSIX shell client)
 - `/node/run-docker.sh`
 - `/node/run-interactive.sh`
 - `/node/run.ps1`
@@ -11,7 +12,15 @@ Foxwarm can expose helper endpoints for bootstrapping a generic node client from
 
 ## Base URL principle
 
-Foxwarm does **not** reliably know one universally correct external base URL for every node.
+Optionally set a public URL at the **top level** of the application config (not under `bot`):
+
+```yaml
+url: https://foxwarm.example.invalid/foxwarm
+```
+
+`/node pair-help` and `node_bootstrap_info` use this URL in their examples and download endpoints. The URL must be an absolute HTTP(S) address with no username, password, query, or fragment. A trailing slash is removed; a deployment path is retained. Restart the server after editing config. If omitted, each command contains a replaceable `YOUR_MASTER` address. No variable assignment is required before copying a command.
+
+Without a configured URL, Foxwarm does **not** reliably know one universally correct external base URL for every node.
 The reachable URL depends on where the node runs:
 
 - same machine: `http://localhost:3002`
@@ -20,25 +29,82 @@ The reachable URL depends on where the node runs:
 - reverse-proxy/public domain
 - other environment-specific routing
 
-What Foxwarm can do is fill a **request-derived default** into the downloaded bootstrap script based on the current HTTP request (`Host` / forwarded proto).
+The downloaded bootstrap script always receives a **request-derived default** based on its actual HTTP request (`Host` / forwarded proto), even when `url` is configured. This allows a script fetched from a LAN address to use that LAN address by default. The request alone cannot reveal a reverse-proxy deployment path.
 
 So the practical rule is:
 
 - if you fetch `/node/run.sh`, `/node/run-docker.sh`, or `/node/run.ps1` from the same reachable URL the node should later use, you usually do **not** need to pass `--host`
+- if `url` includes a path such as `/foxwarm`, pass `--host=YOUR_REACHABLE_URL` (or PowerShell `-HostUrl YOUR_REACHABLE_URL`) so the Node connects through that path
 - if you fetched the script through one address but the node should connect through another, pass `--host=...` explicitly
 
-Use a placeholder like this in examples:
+Replace `YOUR_MASTER` in the command you copy with a host reachable from the new Node.
+
+`/node pair-help` inlines the complete address and explicit host in every command, including any configured deployment prefix.
+
+## WebUI onboarding
+
+Open **System Architecture → Nodes**. This view shows Node identity, type, connection/compatibility status and available services without Session rows or inspectors. **New nodes** opens setup methods for Linux CLI, interactive CLI, Shell, Docker and Windows. The address defaults to `config.url`, or the current browser address including its deployment path. You can explicitly change it for the new Node's network.
+
+Copy a setup command and keep it private. CLI clients using pairing appear in **Pending approvals**; approve only requests you recognize. The button's pending count excludes already approved clients waiting to reconnect. Shell setup instead requires an explicit **Create** action, which reserves a Node name and shows its one-time per-node credential in the command. Copy that command before closing; closing the dialog discards its credentials.
+
+## Start a Node with a pre-created credential
+
+Run this **master-side command** before starting the Node:
+
+```text
+/node create my-node
+```
+
+It reserves `my-node` and returns its per-node auth token **once**. Save it privately. It is different from the global pairing token and the removed six-digit display code. The server stores only its hash. Then on the new Node:
 
 ```bash
-BASE_URL=http://YOUR_MASTER:3002
+curl -fsSL 'https://foxwarm.example.invalid/foxwarm/node/run.sh' | bash -s -- \
+  --dir=/opt/foxwarm-node \
+  --host='https://foxwarm.example.invalid/foxwarm' \
+  --node-id=my-node \
+  --auth-token=YOUR_PER_NODE_AUTH_TOKEN
 ```
+
+For an origin-only URL omit `--host`; the downloaded script infers its default from the request. Docker and interactive launchers accept the same `--node-id` and `--auth-token` flags; on Windows use `-NodeId` and `-AuthToken`, plus `-HostUrl` for a deployment path. Initial authenticated registration writes an owner-only credentials file; later restarts can use that file without either command-line token. `/node remove my-node` revokes it.
+
+Alternatively, start a new Node with the global pairing token as shown below. It reports a complete `/node approve <pending-id>` command in the startup log; copy that exact command into the master. This flow remains available alongside `/node create`.
+
+## Shell-only Node
+
+Use this client when you only need commands and do not want to install Node.js. It needs POSIX `sh`, `curl`, and these basic programs: `mktemp`, `mkfifo`, `dd`, `wc`, `head`, `tail`, `cat`, `mv`, `rm`, `mkdir`, `chmod`, `sleep`, `date`, `sed`, and `tr`. Startup checks each program and reports missing dependencies. BusyBox often supplies these utilities, but individual builds can omit them; this is not a guarantee for every router or OpenWrt image. The client does not install packages or create a service.
+
+On the master, first reserve the Node and save its per-node token privately:
+
+```text
+/node create my-shell
+```
+
+From the desired default working directory on the Linux device:
+
+```sh
+curl -fsSL 'https://foxwarm.example.invalid/foxwarm/node/run-shell.sh' -o run-shell.sh
+NODE_AUTH_TOKEN=YOUR_PER_NODE_AUTH_TOKEN sh ./run-shell.sh \
+  --host='https://foxwarm.example.invalid/foxwarm' --node-id=my-shell
+```
+
+The explicit host preserves a reverse-proxy deployment prefix. Normal curl certificate verification remains enabled. The shared pairing token cannot authenticate this client. Its per-node bearer is sent in headers through a private temporary curl configuration, not in URLs or ordinary client logs.
+
+Select `my-shell` using the normal Node selector or `/node my-shell`, then call ordinary `exec`. This Node advertises only `exec`, with command/cwd/timeout. It has no file tools, Code/Git/PTY services, Agent storage directories, or external-owner execution. Omitted cwd uses the startup directory, relative cwd resolves there, and a command's `cd` does not change the next command's default.
+
+The default foreground wait is 15 seconds, values above 60 are clamped, and fractional waits are rounded up to the next second. A command exceeding the wait keeps running; its initial response contains the existing exec ID, and completion is reported to the original Session even if its selected Node has changed. The retained output sample and total byte count arrive with completion. Use the returned exec ID with normal `wait`; there is no running-output/read-exec endpoint.
+
+Output is drained continuously into a FIFO collector. At most the first and last 4096 bytes are retained, with an exact total-byte count, exit code, and truncation notice. Short samples do not duplicate the overlapping middle. Binary samples are displayed as bounded hexadecimal. Full logs are not retained, and an infinite or no-newline stream does not grow an unbounded log file. Temporary sample files remain bounded per command. Each job independently waits and reports, so foreground commands, background commands and report retries do not stop task polling. The server bounds unfinished dispatches.
+
+Only result reports are retried after a lost network response; commands already handed out are never redispatched. A missed response, lost Main process context, or client crash can leave the outcome unknown. There is no durable task queue, persisted completion outbox, or crash continuation. Stop/restart the client explicitly after a lost registration. Stopping or revoking a Node does not kill already-running commands; use an explicit command or the device's process controls when that is needed. Report authorization ends after 24 hours, but an active FIFO/collector is not removed until the command exits. Finished temporary state is then removed.
+
+`/node remove my-shell` revokes the credential and disconnects the polling runtime. Keep the token outside public scripts and shell history; the environment placeholder above is only an example.
 
 ## Bare-metal one-command bootstrap
 
 ```bash
-curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+curl -fsSL 'http://YOUR_MASTER:3002/node/run.sh' | bash -s -- \
   --dir=/opt/foxwarm-node \
-  --pairing="$(cat test/state/node_token)" \
+  --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-node
 ```
 
@@ -55,10 +121,9 @@ Important persisted path:
 
 - `<dir>/data/state/node_credentials.json`
 
-Then approve the pending node from the master:
+When pairing starts, the Node log prints the exact approval command. Run it on the master; the optional node ID shown here assigns a particular final ID:
 
 ```text
-/node
 /node approve <pending-id> my-node
 ```
 
@@ -86,9 +151,9 @@ When `vscode-pty` is available, each Foxwarm-created terminal gets a terminal-sc
 If you want background mode instead:
 
 ```bash
-curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+curl -fsSL 'http://YOUR_MASTER:3002/node/run.sh' | bash -s -- \
   --dir=/opt/foxwarm-node \
-  --pairing="$(cat test/state/node_token)" \
+  --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-node \
   -d
 ```
@@ -100,9 +165,9 @@ writes output to `<dir>/data/logs/node.log`.
 For boot startup and systemd restart supervision:
 
 ```bash
-curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+curl -fsSL 'http://YOUR_MASTER:3002/node/run.sh' | bash -s -- \
   --dir=/opt/foxwarm-node \
-  --pairing="$(cat test/state/node_token)" \
+  --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-node \
   --install
 ```
@@ -119,16 +184,16 @@ If the script was fetched through the wrong address, override the host explicitl
 curl -fsSL "http://127.0.0.1:3002/node/run.sh" | bash -s -- \
   --dir=/opt/foxwarm-node \
   --host="http://192.168.1.50:3002" \
-  --pairing="$(cat test/state/node_token)" \
+  --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-node
 ```
 
 If you only want preparation without starting, use:
 
 ```bash
-curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+curl -fsSL 'http://YOUR_MASTER:3002/node/run.sh' | bash -s -- \
   --dir=/opt/foxwarm-node \
-  --pairing="$(cat test/state/node_token)" \
+  --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-node \
   --prepare-only
 ```
@@ -138,8 +203,8 @@ curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
 Use this when every tool call should require local confirmation:
 
 ```bash
-curl -fsSL "$BASE_URL/node/run-interactive.sh" | bash -s -- \
-  --pairing="$(cat test/state/node_token)" \
+curl -fsSL 'http://YOUR_MASTER:3002/node/run-interactive.sh' | bash -s -- \
+  --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-cli-node
 ```
 
@@ -155,8 +220,8 @@ Optional extras:
 If you want the Docker-based path instead, use:
 
 ```bash
-curl -fsSL "$BASE_URL/node/run-docker.sh" | bash -s -- \
-  --pairing="$(cat test/state/node_token)" \
+curl -fsSL 'http://YOUR_MASTER:3002/node/run-docker.sh' | bash -s -- \
+  --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-node
 ```
 
@@ -168,8 +233,8 @@ This writes `./docker-compose.yaml`, `./.env`, and `./data/`, then:
 If you want it to return immediately instead of following logs:
 
 ```bash
-curl -fsSL "$BASE_URL/node/run-docker.sh" | bash -s -- \
-  --pairing="$(cat test/state/node_token)" \
+curl -fsSL 'http://YOUR_MASTER:3002/node/run-docker.sh' | bash -s -- \
+  --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-node \
   -d
 ```
@@ -177,14 +242,16 @@ curl -fsSL "$BASE_URL/node/run-docker.sh" | bash -s -- \
 ## Manual compose flow
 
 ```bash
-curl -fsSL "$BASE_URL/node/docker-compose.yaml" -o docker-compose.yaml
-cat > .env <<'EOF'
-NODE_HOST=$BASE_URL
-NODE_SOURCE_URL=$BASE_URL/node/source.tar.gz
-NODE_PAIRING_TOKEN=YOUR_PAIRING_TOKEN
-NODE_ID=my-node
+curl -fsSL 'http://YOUR_MASTER:3002/node/docker-compose.yaml' -o docker-compose.yaml
+umask 077
+cat > .env <<'FOXWARM_NODE_ENV'
+NODE_HOST='http://YOUR_MASTER:3002'
+NODE_SOURCE_URL='http://YOUR_MASTER:3002/node/source.tar.gz'
+NODE_PAIRING_TOKEN='YOUR_PAIRING_TOKEN'
+NODE_ID='my-node'
 NODE_DATA_DIR=./data
-EOF
+FOXWARM_NODE_ENV
+chmod 600 .env
 
 docker compose up -d --build
 ```

@@ -11,7 +11,7 @@ Owns the authenticated page-scoped WebUI WebSocket and the server-side multiplex
 
 `WebUiRealtimeTransport` is a page singleton with injectable socket/timer dependencies for deterministic tests. It:
 
-- maintains reference-counted list and per-session logical subscriptions;
+- maintains reference-counted list, per-session and optional Logs logical subscriptions;
 - sends one complete, revisioned `set-subscriptions` snapshot containing the union of desired IDs;
 - preserves requested-to-canonical mappings from `subscriptions-accepted` and filters bounded list deltas back to each logical consumer;
 - reports registration to a new subscriber exactly once per physical socket generation, while reconnect registration reaches every retained subscriber;
@@ -32,18 +32,21 @@ The guest connection authenticates through the WebUI guest verifier and accepts 
 
 Client message:
 
-- `set-subscriptions` — positive `revision`, `sessionListActive`, `sessionListIds`, and `sessionIds`.
+- `set-subscriptions` — positive `revision`, `sessionListActive`, `sessionListIds`, `sessionIds`, and optional `logs: { id, cursor?: { fileId, offset } }`.
 
 Server messages:
 
 - `connected` — authenticated physical socket exists;
 - `subscriptions-accepted` — requested/canonical maps are installed for this revision;
 - existing `session-list-delta`, `sessions-updated`, `session-state`, `session-event`, `message`, `typing`, and `session-deleted` payloads, with `sessionId` on session-scoped envelopes;
-- `model-stream-snapshot` — exact-owner cumulative transient draft with stream/iteration/sequence watermark, server `startedAt`, and the existing outer `llmRequestId`, or `draft:null`; following live events carry the same request identity and inclusive sequence coverage ranges so the browser can distinguish Worker coalescing from presentation loss and reconcile exact canonical history rows;
+- `model-stream-snapshot` — exact-owner cumulative transient draft with stream/iteration/sequence watermark, server `startedAt`, existing outer `llmRequestId`, and optional indexed Responses `parts`, or `draft:null`; following live events carry the same request identity and inclusive sequence coverage ranges so the browser can distinguish Worker coalescing from presentation loss and reconcile exact canonical history rows;
 - `subscriptions-applied` — snapshot plus buffered-live initialization completed;
+- `logs-snapshot`, `logs-delta`, `logs-gap`, `logs-reset`, and `logs-error` — independently cursor-addressed optional logger-file frames with a logical `logsId`;
 - `protocol-error` — invalid subscription or initialization failure; the connection is then failed rather than left partially initialized.
 
 Reconnect does not require durable event replay. The client resends its complete subscription set, list consumers run their bounded refresh scheduler, and Chat runs its existing history reconciliation.
+
+Logs starts after ordinary subscription initialization and does not enter the Session pending-event queue. An unchanged Logs lifetime survives unrelated subscription revisions; reconnect sends its last file/byte frontier. Full fixed-file, bounded catch-up and topic-only gap semantics are canonical in [WebUI Logs](./webui-logs.md#live-contract). Channel stop disposes hub clients and their log subscriptions.
 
 ## Compatibility
 

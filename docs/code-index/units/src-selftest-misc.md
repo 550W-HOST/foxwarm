@@ -49,9 +49,9 @@ These files have no exports — they are standalone self-test scripts executed v
 | `../sessionManager` | Session CRUD, queue operations, compaction, message appending |
 | `../llm` | `chat` and `executeTools` — monkey-patched to stub LLM responses |
 | `../vector` | `scheduleSessionArchiveIndex` — stubbed out to prevent indexing side effects |
-| `../session/history` | `formatCompactionCompletionMarker` — used to build expected compaction markers |
+| `../session/history` | `getCompactOperationPhase`, `hasCompletedCompactJob` — distinguish held planning from completed work without using signal position |
 | `../session/compactPlan` | `COMPACT_FLOW_MAX_ROUNDS` — used to verify compaction round limits |
-| `../toolsSessionAgent` | `tool_get_archived_messages`, `tool_set_goal` — referenced for tool definitions in stall tests |
+| `../toolsSessionAgent` | `tool_get_archived_messages` — referenced for tool definitions in stall tests |
 
 ## Behavior
 
@@ -59,7 +59,7 @@ These files have no exports — they are standalone self-test scripts executed v
 - Queue drain tests verify that structured events, message events, and compaction items queued mid-tool-execution are consumed in the correct order within the same turn.
 - Tool loop stall tests verify multi-step tool chains (apply_patch → read → exec → final response) complete without stalling.
 - Child/parent session tests verify child sessions can read files, send results to parents, and that parent sessions process those notifications.
-- Compaction-triggered tests verify that when history grows large, compaction fires and the session continues processing remaining work afterward.
+- Compaction-triggered tests hold the asynchronous planner while the normal tool continuation completes, then release it and commit at the next owned safe point. They preserve exact provider/planner call counts, canonical tool pairing, archived responses, retained continuation rows, and idle cleanup. Completed-job priority is covered by the runner/history regression tests.
 - Failure propagation tests verify that network errors during LLM calls surface as error messages in session history.
 - All tests clean up created sessions and temp files in a `finally` block.
 
@@ -67,5 +67,5 @@ These files have no exports — they are standalone self-test scripts executed v
 
 - Exercises the public `MessageRouter.processSessionQueue` owned-entry path; self-tests enqueue durable ordinary input rather than invoking the runner's private single-turn seam.
 - Validates the contract between the router, session manager queue operations, and LLM call/tool-execution cycle.
-- Tests the compaction flow boundary where background `processSessionCompactionRequest` planning interleaves with ordinary queued work and publishes only a ready commit safe point.
+- Tests the compaction flow boundary where background `processSessionCompactionRequest` planning interleaves with ordinary queued work. Running planning does not block normal continuation; once ready, the existing owned safe point applies it without requiring FIFO ordering of compact signals.
 - Confirms parent/child session notification via `send_to_session` tool integration.

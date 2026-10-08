@@ -4,7 +4,7 @@ Files: src/nodes/manager.ts, src/nodes/protocolCompatibility.test.ts, src/nodes/
 
 ## Purpose
 
-Maintains the in-memory authenticated remote-node transport/runtime and routes tool/file/session requests between Foxwarm sessions and remote WebSocket connections. The manager still registers the local `master` record for existing local/compound/service behavior, while generic Node discovery and non-master provider resolution live in `src/nodes/providerRegistry.ts`.
+Maintains the in-memory authenticated remote-node transport/runtime and routes tool/file/session requests between Foxwarm sessions and remote WebSocket connections, plus exec-only Shell HTTP connections. The manager still registers the local `master` record for existing local/compound/service behavior, while generic Node discovery and non-master provider resolution live in `src/nodes/providerRegistry.ts`.
 
 ## Key Exports
 
@@ -23,13 +23,14 @@ Maintains the in-memory authenticated remote-node transport/runtime and routes t
 | `registerMasterNode()` | Registers the built-in `master` node with local tools and no WebSocket. |
 | `registerNode(ws, req, customNodeId?)` | Registers a legacy remote node; closes an older connection with the same id. |
 | `registerNodeWithTools(ws, req, nodeType, capabilities, customNodeId?)` | Registers an authenticated/capability-advertising node and stores its dynamic tool names. |
+| `registerHttpExecNode(...)` / `disconnectHttpExecNode(...)` | Registers the real Shell HTTP execution transport/default cwd and fences stale expiry/disconnect callbacks by transport identity. |
 | `registerIncompatibleNodeWithTools(...)` | Retains an authenticated incompatible connection for status/heartbeat while exposing no executable tools or services. |
 | `unregisterNode(nodeId, ws?)` | Removes a node if the close/error event belongs to the active WebSocket for that id. |
 | `disconnectNode(nodeId, reason?)` | Forcibly removes a non-master runtime node, rejects pending operations for it, and closes its WebSocket. |
 | `getCurrentNode(sessionId)` / `setCurrentNode(sessionId, nodeId)` | Reads or validates a session's current node selection. |
 | `getNode(nodeId)` / `listNodes()` / `listNodesWithTools()` | Query runtime node state and dynamic capabilities. |
 | `listNodeServiceSummaries()` | Returns a copy of connected node IDs/types/service versions and activity without exposing model-tool schemas. |
-| `executeNodeTool(...)` / `executeTool(...)` | Dispatches a tool call locally for `master` or over WebSocket for a remote node; direct parallel exec may provide a node/cwd routing snapshot. |
+| `executeTool(...)` | Sends authenticated remote tool calls over WebSocket or Shell HTTP; direct parallel exec may provide a node/cwd routing snapshot. Master model-tool execution belongs to canonical resolved dispatch, not this transport. |
 | `supportsExternalOwner(nodeId)` / `executeExternalTool(...)` | Require an online negotiated-v3 authenticated Node with explicit `externalToolOwner:1` before dispatching the disjoint owner payload. The external path supports file primitives, persistent exec with a separate reserved identity and `get_default_cwd`; a Main-local context fence executes immediately before the WebSocket send, with no intervening await. Internal Session calls are unchanged. |
 | `handleToolResponse(...)` / `handleToolError(...)` | Resolves/rejects a pending remote tool call by call id; external replies additionally match the authenticated Node source. |
 | `registerExternalExecBackground(...)` / `completeExternalExec(...)` / `queryExternalExec(...)` / `releaseExternalOwner(...)` | Accept authenticated, signed external command receipts, query only the owning Node and notify it when a context ends; no Session event is created. |
@@ -46,7 +47,6 @@ Maintains the in-memory authenticated remote-node transport/runtime and routes t
 | `registerRemoteExecBackground(...)` | Validates the authenticated Node's optional post-timeout background notice and transitions its exact Main reservation to active. |
 | `updateNodeActivity(nodeId)` | Refreshes last-activity timestamp for connected nodes. |
 | `getToolDefinition(toolName)` | Looks up master-side tool definitions lazily to avoid circular imports. |
-| `executeToolLocally(toolName, args, sessionId)` | Invokes a master-local tool with a runtime-node-aware context. |
 
 ## Dependencies
 
@@ -54,18 +54,19 @@ Maintains the in-memory authenticated remote-node transport/runtime and routes t
 - `../sessionManager` / `../sessionRuntime` — catalog/isolation metadata, projection-aware current assignment and history reads, and queueing node-originated events.
 - `../nodeFileTransfer` — master-side read/write transfer helpers.
 - `./registry` — reserved node-id checks for runtime registration.
-- `../tools` (lazy require) — local tool implementations and definitions.
+- `../tools` (lazy definition lookup) — canonical tool definitions; no local model-tool invocation or Session rehydration is performed here.
 
 ## Behavior
 
 - `master` is always present in the runtime node map and cannot be disconnected by `disconnectNode`. Its advertised model-tool set and discovery schemas are derived from canonical `NODE_ENVIRONMENT_BUILTIN_NAMES`, not a handwritten broad list.
 - Registering a remote node with an already-online id closes the previous WebSocket and replaces runtime capabilities.
+- HTTP and WebSocket registration replace each other's real runtimes without emulating a socket. HTTP dispatch uses its explicit transport; timeout cancels only an unclaimed HTTP task, and stale WebSocket close callbacks cannot remove an HTTP replacement. Shell-specific contracts are owned by [src-nodes-shell-http](./src-nodes-shell-http.md).
 - Every runtime record carries core protocol compatibility. Negotiated generations 1, 2 and 3 preserve executable internal Session tool/service/session-event paths; quarantined disjoint Nodes stay in `listNodes()` and service-summary status, while tool discovery omits them and selection, tools, file transfer, backend services, and application events fail before dispatch. Canonical contract: [D-node-thread-core-protocol-compatibility](../threads/node-communication.md#d-node-thread-core-protocol-compatibility).
 - Remote tool calls, file transfers, and backend service requests are tracked by generated ids and time out if no response arrives. Service timers are cleared on reply/disconnect. Fixed commands avoid per-keystroke response state; authenticated service events are dispatched to registered listeners.
 - Node disconnect emits `node-unavailable` to each advertised service before removal, allowing terminal bridges to close clients while leaving detached node-owned PTYs eligible for rediscovery after a same-process reconnect.
 - `disconnectNode` is used by administrative `/node remove` and `/node move` flows so deleting or renaming approved credentials also removes online runtime state and rejects pending work for the old node id.
 - Ordinary node-originated session access is allowed only when the target session's projection-aware `currentNode` matches the node id or the session's agent is isolated and bound to that node. Remote exec dispatch allocates and reserves the canonical exec ID across the source Session identity set before sending, then issues the signed completion capability; negotiated generation 1 may perform the exact-error-gated legacy spelling fallback, while generation 2 retains structured Node collision retries. A post-timeout notice reuses that capability only to transition the exact reservation to active. Foreground response from a Node advertising structured background registration and definite pre-start failure release; an old Node's ambiguous success or transport failure retains outcome-unknown; completion verifies the same scope, uses a deterministic external event ID, and clears state only after durable admission. The transient remote-exec liveness registry prunes reserved, active, and outcome-unknown records strictly after 24 hours from activation when available, otherwise reservation, matching the Node-side tracking TTL without a new wire message or timer subsystem. The pending call snapshots the dispatch peer's registration-support bit, so a same-ID reconnect replacement cannot reclassify a late response from the prior connection. Exact retained mailbox rows suppress replay independently, while the Session authority retains only the newest 32 IDs for suppression after mailbox cleanup. Canonical contracts: [core protocol compatibility](../threads/node-communication.md#d-node-thread-core-protocol-compatibility) and [remote exec completion](../threads/node-communication.md#d-node-thread-remote-exec-completion).
-- Local/master execution passes `__runtimeNodeId` through tool context when needed, then strips it from user-visible tool args.
+- Master model tools execute directly through `resolvedTools.ts`; the transport has no master/local handler branch, magic runtime-node argument, or execution alias. The local master record remains for topology, file transfer, and existing service behavior.
 - Remote dispatch normally reads current session routing at call time. A direct parallel-exec segment may pass its one captured current-node/cwd snapshot so all calls in that segment route consistently even if live session metadata changes while they run.
 - Remote model-tool responses pass through one isolated compatibility adapter before their pending call resolves. Master-local and MCP results never enter this adapter. The adapter's complete deletion contract is canonical in [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).
 

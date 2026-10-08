@@ -20,7 +20,7 @@ import { applyQueuedItemToWaitState, appendSessionMessagesForSession, buildManua
 import { beginCompactionSessionRuntimeState, clearActiveSessionRuntimeState, setActiveSessionRuntimeState, setSessionRuntimeStateUpdateCallback } from './sessionRuntimeState';
 import { LocalSessionTurnHost, SessionTurnRunner, type SessionTurnHost } from './sessionTurnRunner';
 import type { SessionTurnFinalKind } from './sessionTurnDelivery';
-import type { ChannelTurnProgress } from './types';
+import type { ChannelTurnProgress, InlineDataRef } from './types';
 import {
   buildSessionWorkerProjection,
   SessionWorkerPersistence,
@@ -63,6 +63,21 @@ export function mergeModelStreamDeltaEvents(left: SessionStreamEvent | undefined
         : {}),
     });
   }
+  const parts = new Map<string, NonNullable<SessionStreamEvent['partDeltas']>[number]>();
+  const partKey = (part: NonNullable<SessionStreamEvent['partDeltas']>[number]) =>
+    `${part.outputIndex}:${part.kind}:${part.contentIndex ?? ''}:${part.summaryIndex ?? ''}`;
+  for (const part of left.partDeltas || []) parts.set(partKey(part), { ...part });
+  for (const part of right.partDeltas || []) {
+    const key = partKey(part);
+    const previous = parts.get(key);
+    parts.set(key, previous ? {
+      ...previous,
+      ...part,
+      ...(previous.added ? { added: true } : {}),
+      ...(mergeTextDelta(previous.textDelta, part.textDelta)
+        ? { textDelta: mergeTextDelta(previous.textDelta, part.textDelta) } : {}),
+    } : { ...part });
+  }
   const reasoningDelta = mergeTextDelta(left.reasoningDelta, right.reasoningDelta);
   const textDelta = mergeTextDelta(left.textDelta, right.textDelta);
   return {
@@ -77,6 +92,7 @@ export function mergeModelStreamDeltaEvents(left: SessionStreamEvent | undefined
     ...(reasoningDelta ? { reasoningDelta } : {}),
     ...(textDelta ? { textDelta } : {}),
     ...(calls.size ? { toolCallDeltas: [...calls.values()] } : {}),
+    ...(parts.size ? { partDeltas: [...parts.values()] } : {}),
   };
 }
 
@@ -88,6 +104,7 @@ export type SessionWorkerHostDependencies = {
   publishCommitted?: (projection: SessionWorkerProjection) => Promise<void>;
   deliverIntermediateText?: (text: string, turnId?: string) => Promise<void>;
   deliverCommittedFinal?: (text: string, outcome: SessionTurnFinalKind, turnId?: string) => Promise<void>;
+  deliverGeneratedImages?: (images: InlineDataRef[]) => Promise<void>;
   reportChannelProgress?: (turnId: string, progress: ChannelTurnProgress) => Promise<void>;
   finishChannelProgress?: (turnId: string) => Promise<void>;
   /** Transient presentation channel: appended-message copies for the WebUI fan-out. */
@@ -421,7 +438,7 @@ export class SessionWorkerHost {
       const session = this.session!;
       return {
         busy: !!session.busy,
-        queueLength: session.queue?.length || 0,
+        queueLength: session.queue?.filter(item => item.trigger !== false).length || 0,
         runningExecCount: this.execRuntime?.listRunningExecs().length || 0,
       };
     });
@@ -636,10 +653,10 @@ export class SessionWorkerHost {
 
   private forwardSessionStreamEvent(event: SessionStreamEvent): void {
     if (!this.presentationSubscribed || !this.dependencies.publishPresentationStream) return;
-    if (event.type === 'model-stream-reset') {
-      // A retry/reset is a structural draft boundary. Preserve any already
-      // emitted cumulative frame before it, and cancel its coalescer timer so
-      // an older update can never reappear after the reset.
+    if (event.type === 'model-stream-reset' || (event.type === 'model-stream-update' && event.trimBeforeOutputIndex !== undefined)) {
+      // A reset or committed-prefix trim is a structural draft boundary.
+      // Flush earlier frames and cancel the coalescer timer before forwarding
+      // it, so an older update cannot reappear after the boundary.
       this.flushCoalescedStreamEvents();
       const copy = JSON.parse(JSON.stringify(event)) as SessionStreamEvent;
       this.forwardPresentation(() => this.dependencies.publishPresentationStream!(copy));
@@ -745,6 +762,7 @@ export class SessionWorkerHost {
           this.assertId(sessionId);
           return this.applyAndPersistQueueItem({ type, parts: buildTimestampedSystemMessageParts(message) });
         },
+        hasCompletedCompactJob: sessionId => { this.assertId(sessionId); return false; },
         applyCompletedCompactJob: async sessionId => { this.assertId(sessionId); throw this.compactionUnsupported(); },
         processSessionCompactionRequest: async (sessionId, request) => {
           this.assertId(sessionId); await this.runAutomaticCompaction(request, 'pre-final');
@@ -763,6 +781,12 @@ export class SessionWorkerHost {
           deliverCommittedFinal: async (_session, text, outcome, turnId) => {
             try { await this.dependencies.deliverCommittedFinal!(text, outcome, turnId); }
             catch (error) { logger.error({ err: error, sessionId: owner.id, outcome }, 'Committed final reverse delivery failed'); }
+          },
+        } : {}),
+        ...(this.dependencies.deliverGeneratedImages ? {
+          deliverGeneratedImages: async (_session, images) => {
+            try { await this.dependencies.deliverGeneratedImages!(images); }
+            catch (error) { logger.error({ err: error, sessionId: owner.id }, 'Generated image reverse delivery failed'); }
           },
         } : {}),
         ...(this.dependencies.deliverIntermediateText ? {
@@ -855,6 +879,7 @@ export class SessionWorkerHost {
     return createExecRuntime({
       getDefaultCwd: getAgentDir,
       getExecTempDir: agent => path.join(getAgentDir(agent), '.temp', 'exec'),
+      getAgentDir,
       registryPath: path.join(workerDir, 'running-exec.json'),
       nodeId: 'master',
       completionDispatcher: async (entry, _status, message) => this.commitExecCompletion(entry.id, message),

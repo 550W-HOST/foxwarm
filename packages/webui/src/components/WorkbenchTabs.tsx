@@ -1,39 +1,27 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { useDroppable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
 import { SortableContext, horizontalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
-import { Bookmark, Code2, Copy, ExternalLink, MessageSquareText, Settings, SquareTerminal, Users, X } from 'lucide-react'
-import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
+import { ClipboardList, Code2, FileText, MessageSquareText, History, Settings, SquareTerminal, Users, X } from 'lucide-react'
+import { useWorkbenchTabMenu, type WorkbenchTabMenuOptions } from './useWorkbenchTabMenu'
 import type { WorkbenchTab } from '../workbench/types'
 
-interface WorkbenchTabsProps {
+interface WorkbenchTabsProps extends WorkbenchTabMenuOptions {
   paneId: string
-  tabs: WorkbenchTab[]
   activeTabId: string | null
   focused?: boolean
   toolbar?: ReactNode
   dragEnabled?: boolean
   onSelectTab: (tabId: string) => void
-  onCloseTab: (tabId: string) => void
-  onKeepTab: (tabId: string) => void
-  onMoveTabToNewWindow: (tabId: string) => void
-  canMoveTabToNewWindow: (tabId: string) => boolean
-  onCloseOtherTabs: (tabId: string) => void
-  onCloseAllTabs: () => void
-}
-
-interface TabContextMenuState {
-  tabId: string
-  x: number
-  y: number
-  anchorRect?: ContextMenuAnchorRect
-  preferredPlacement?: 'point' | 'bottom-start' | 'bottom-end'
 }
 
 function TabIcon({ type }: { type: WorkbenchTab['type'] }) {
   if (type === 'chat') return <MessageSquareText className="h-4 w-4 shrink-0" />
   if (type === 'vscode') return <Code2 className="h-4 w-4 shrink-0" />
   if (type === 'agents') return <Users className="h-4 w-4 shrink-0" />
+  if (type === 'tasks') return <ClipboardList className="h-4 w-4 shrink-0" />
+  if (type === 'logs') return <FileText className="h-4 w-4 shrink-0" />
+  if (type === 'search') return <History className="h-4 w-4 shrink-0" />
   if (type === 'setup') return <Settings className="h-4 w-4 shrink-0" />
   return <SquareTerminal className="h-4 w-4 shrink-0" />
 }
@@ -55,37 +43,6 @@ function getNormalizedWheelDelta(event: React.WheelEvent<HTMLDivElement>, contai
   }
 
   return event.deltaY
-}
-
-async function copyTextToClipboard(text: string) {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text)
-      return
-    }
-  } catch {
-    // Fallback below
-  }
-
-  const textarea = document.createElement('textarea')
-  textarea.value = text
-  textarea.setAttribute('readonly', 'true')
-  textarea.style.position = 'fixed'
-  textarea.style.opacity = '0'
-  document.body.appendChild(textarea)
-  textarea.select()
-  document.execCommand('copy')
-  document.body.removeChild(textarea)
-}
-
-function getTabCopyId(tab: WorkbenchTab) {
-  if (tab.type === 'chat') return tab.sessionId
-  return tab.id
-}
-
-function getTabCopyPath(tab: WorkbenchTab) {
-  if (tab.type === 'terminal') return tab.cwd || null
-  return null
 }
 
 function TabStripRow({
@@ -264,6 +221,7 @@ function SortableTab({
       <TabIcon type={tab.type} />
       <span className={`min-w-0 flex-1 truncate text-left [direction:rtl] ${isPreview ? 'italic' : ''}`}>{tab.title}</span>
       <button
+        onPointerDown={(event) => event.stopPropagation()}
         onClick={(event) => {
           event.stopPropagation()
           onCloseTab(tab.id)
@@ -292,93 +250,7 @@ export default function WorkbenchTabs({
   onCloseOtherTabs,
   onCloseAllTabs,
 }: WorkbenchTabsProps) {
-  const [contextMenu, setContextMenu] = useState<TabContextMenuState | null>(null)
-  const contextMenuTab = useMemo(
-    () => (contextMenu ? tabs.find((tab) => tab.id === contextMenu.tabId) || null : null),
-    [contextMenu, tabs],
-  )
-
-  const menuEntries = useMemo<ContextMenuEntry[]>(() => {
-    if (!contextMenuTab) return []
-
-    const entries: ContextMenuEntry[] = []
-    const copyPath = getTabCopyPath(contextMenuTab)
-
-    if (contextMenuTab.type === 'chat' && contextMenuTab.preview) {
-      entries.push({
-        key: 'keep',
-        label: 'Keep',
-        icon: <Bookmark className="h-4 w-4" />,
-        onSelect: () => onKeepTab(contextMenuTab.id),
-      })
-    }
-
-    entries.push({
-      key: 'copy-id',
-      label: 'Copy id',
-      icon: <Copy className="h-4 w-4" />,
-      onSelect: () => {
-        void copyTextToClipboard(getTabCopyId(contextMenuTab))
-      },
-    })
-
-    if (copyPath) {
-      entries.push({
-        key: 'copy-path',
-        label: 'Copy path',
-        icon: <Copy className="h-4 w-4" />,
-        onSelect: () => {
-          void copyTextToClipboard(copyPath)
-        },
-      })
-    }
-
-    entries.push({ key: 'separator-window', type: 'separator' })
-    entries.push({
-      key: 'move-new-window',
-      label: 'Move to new window',
-      icon: <ExternalLink className="h-4 w-4" />,
-      disabled: !canMoveTabToNewWindow(contextMenuTab.id),
-      onSelect: () => onMoveTabToNewWindow(contextMenuTab.id),
-    })
-
-    entries.push({ key: 'separator-close', type: 'separator' })
-    entries.push({
-      key: 'close',
-      label: 'Close',
-      icon: <X className="h-4 w-4" />,
-      danger: true,
-      onSelect: () => onCloseTab(contextMenuTab.id),
-    })
-
-    entries.push({ key: 'separator-bulk-close', type: 'separator' })
-    entries.push({
-      key: 'close-others',
-      label: 'Close others',
-      icon: <X className="h-4 w-4" />,
-      disabled: tabs.length <= 1,
-      onSelect: () => onCloseOtherTabs(contextMenuTab.id),
-    })
-    entries.push({
-      key: 'close-all',
-      label: 'Close all',
-      icon: <X className="h-4 w-4" />,
-      onSelect: onCloseAllTabs,
-    })
-
-    return entries
-  }, [canMoveTabToNewWindow, contextMenuTab, onCloseAllTabs, onCloseOtherTabs, onCloseTab, onKeepTab, onMoveTabToNewWindow, tabs.length])
-
-  const openContextMenu = (tabId: string, event: React.MouseEvent<HTMLDivElement>) => {
-    event.preventDefault()
-    event.stopPropagation()
-    setContextMenu({
-      tabId,
-      x: event.clientX,
-      y: event.clientY,
-      preferredPlacement: 'point',
-    })
-  }
+  const { openContextMenu, menu } = useWorkbenchTabMenu({ tabs, onCloseTab, onKeepTab, onMoveTabToNewWindow, canMoveTabToNewWindow, onCloseOtherTabs, onCloseAllTabs })
 
   return (
     <div className="overflow-hidden border-b border-fw-border bg-fw-neutral-surface px-3 pt-2 dark:border-fw-border dark:bg-fw-canvas">
@@ -401,14 +273,7 @@ export default function WorkbenchTabs({
           </div>
         )}
       </div>
-      <ContextMenu
-        open={!!contextMenuTab}
-        entries={menuEntries}
-        point={contextMenu ? { x: contextMenu.x, y: contextMenu.y } : null}
-        anchorRect={contextMenu?.anchorRect || null}
-        preferredPlacement={contextMenu?.preferredPlacement || 'point'}
-        onClose={() => setContextMenu(null)}
-      />
+      {menu}
     </div>
   )
 }

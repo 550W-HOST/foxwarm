@@ -249,12 +249,13 @@ export class SessionWorkerStore {
     `).get(sessionId) as any).id);
   }
 
-  listSessionsWithPendingIntents(): string[] {
+  listSessionsWithPendingIntents(triggerOnly = false): string[] {
     const rows = this.getDb().prepare(`
       SELECT DISTINCT m.session_id AS sessionId
       FROM session_worker_mailbox m
       LEFT JOIN session_worker_ownership o ON o.session_id = m.session_id
       WHERE m.id > COALESCE(o.mailbox_cursor, 0) AND m.applied_at IS NULL
+        ${triggerOnly ? "AND COALESCE(json_extract(m.payload_json, '$.trigger'), 1) != 0" : ''}
       ORDER BY m.session_id
     `).all() as Array<{ sessionId: string }>;
     return rows.map(row => row.sessionId);

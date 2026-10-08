@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { RefreshCw, Settings } from 'lucide-react'
+import { ClipboardList, FileText, RefreshCw, Settings } from 'lucide-react'
 import { useTheme } from '../theme/useTheme'
 import ReloadAppButton from './ReloadAppButton'
 import { MENU_VIEWPORT_GUTTER, clampAnchoredMenuHorizontally, readHorizontalViewportBounds } from './menuPositioning'
@@ -8,10 +8,12 @@ interface GlobalUiSettingsMenuProps {
   menuAlign?: 'start' | 'end'
   menuSide?: 'top' | 'bottom'
   onOpenSetup?: () => void
+  onOpenLogs?: () => void
+  onOpenTasks?: () => void
   setupActive?: boolean
 }
 
-export default function GlobalUiSettingsMenu({ menuAlign = 'end', menuSide = 'bottom', onOpenSetup, setupActive = false }: GlobalUiSettingsMenuProps) {
+export default function GlobalUiSettingsMenu({ menuAlign = 'end', menuSide = 'bottom', onOpenSetup, onOpenLogs, onOpenTasks, setupActive = false }: GlobalUiSettingsMenuProps) {
   const theme = useTheme()
   const [open, setOpen] = useState(false)
   const [menuOffset, setMenuOffset] = useState(0)
@@ -138,14 +140,15 @@ export default function GlobalUiSettingsMenu({ menuAlign = 'end', menuSide = 'bo
                   }}
                   className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs ${setupActive ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent' : 'text-fw-text hover:bg-fw-hover dark:text-fw-text dark:hover:bg-fw-hover'}`}
                 >
-                  <span>WebUI: Open setup</span>
+                  <span className="inline-flex items-center gap-2"><Settings className="h-3.5 w-3.5" aria-hidden="true" />Open setup</span>
                   {setupActive && <span className="text-[10px] uppercase tracking-wide">active</span>}
                 </button>
               )}
               <ReloadAppButton className={menuButtonClass}>
-                <span>WebUI: reload</span>
-                <RefreshCw className="h-3.5 w-3.5" />
+                <span className="inline-flex items-center gap-2"><RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />Reload WebUI</span>
               </ReloadAppButton>
+              {onOpenTasks && <button type="button" className={menuButtonClass} onClick={() => { onOpenTasks(); setOpen(false) }}><span className="inline-flex items-center gap-2"><ClipboardList className="h-3.5 w-3.5" aria-hidden="true" />Tasks</span></button>}
+              {onOpenLogs && <button type="button" className={menuButtonClass} onClick={() => { onOpenLogs(); setOpen(false) }}><span className="inline-flex items-center gap-2"><FileText className="h-3.5 w-3.5" aria-hidden="true" />Open logs</span></button>}
             </div>
           </div>
         </div>

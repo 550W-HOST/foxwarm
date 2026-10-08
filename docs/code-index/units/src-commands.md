@@ -1,11 +1,11 @@
 # Unit: src-commands
 
-Files: src/commands.ts (facade), src/commands/types.ts, src/commands/autocomplete.ts, src/commands/helpers.ts, src/commands/sessionCmd.ts, src/commands/sessionCmd.test.ts, src/commands/modelEffortCommand.test.ts, src/commands/continueCommand.test.ts, src/commands/agentCmd.ts, src/commands/timerCmd.ts, src/commands/channelCmd.ts, src/commandHandler.ts
+Files: src/commands.ts (facade), src/commands/types.ts, src/commands/autocomplete.ts, src/commands/helpers.ts, src/commands/sessionCmd.ts, src/commands/sessionCmd.test.ts, src/commands/modelEffortCommand.test.ts, src/commands/continueCommand.test.ts, src/commands/agentCmd.ts, src/commands/timerCmd.ts, src/commands/channelCmd.ts, src/commands/channelWeixinCommand.test.ts, src/commandHandler.ts
 Secondary files: src/session/sessionIdAllocation.test.ts
 
 ## Purpose
 
-Defines all slash commands available in the bot (e.g. `/session`, `/fork`, `/agent`, `/timer`, `/channel`, `/model`, `/tools`, `/compact`, `/btw`, `/node`) and provides a `CommandHandler` class that dispatches incoming commands after authorization and session resolution. The `/node` command is the operator-facing surface for node pairing approval, approved-node removal/rename, pairing help, node listing, and session node switching.
+Defines all slash commands available in the bot (e.g. `/session`, `/fork`, `/agent`, `/timer`, `/channel`, `/model`, `/tools`, `/compact`, `/btw`, `/node`) and provides a `CommandHandler` class that dispatches incoming commands after authorization and session resolution. The `/node` command is the operator-facing surface for direct Node credential creation, pairing approval, approved-node removal/rename, pairing help, node listing, and session node switching.
 
 ## Key Exports
 
@@ -39,7 +39,8 @@ All `*_AUTOCOMPLETE` constants: TIMER, BTW, SESSION, AGENT, SKILL, NODE, MESSAGE
 | `formatChannelInfo(ctx)` | Formats current channel identifiers and state |
 | `formatChannelRuntimeStatus(channelId, typeFilter)` | Formats runtime status of managed channels |
 | `getManagedPlatformHelp()` | Returns comma-separated managed channel IDs |
-| `buildNodePairHelp(token)` | Builds node pairing/bootstrap help text |
+| `buildNodePairHelp(token)` | Builds independently copyable Node setup commands through the shared bootstrap generator |
+| `shellQuote(value)` | Quotes configured public URL for generated shell setup instructions |
 | `buildNodeListReply(currentNode, boundNode)` | Builds the operator-facing master/approved-remote Node list, pending approvals, and `/node` command help, including remove/move |
 | `handleCompactCommand(ctx, args, sessionId, session)` | Handles /compact command logic |
 
@@ -63,10 +64,11 @@ All `*_AUTOCOMPLETE` constants: TIMER, BTW, SESSION, AGENT, SKILL, NODE, MESSAGE
 ### commands/channelCmd.ts — /channel handler
 | Function | Description |
 |----------|-------------|
-| `handleChannelCommand(ctx, args)` | Dispatches /channel subcommands (info, auth, status, start, stop, restart, mode, dangerously-allow-all-users) |
+| `handleChannelCommand(ctx, args)` | Dispatches /channel subcommands (info, auth, status, start, stop, restart, mode, weixin, dangerously-allow-all-users) |
+| `handleWeixinChannelCommand(ctx, args)` | Handles nested `/channel weixin` status (the default), QR login and wait; saves the selected Weixin channel configuration and restarts its managed runtime after successful login |
 
 ### src/commands.ts (facade) — COMMANDS object + inline handlers
-Inline handlers: /help, /status, /btw, /fork, /stop, /dequeue, /continue, /node, /search, /messages, /model, /delete-messages, /verbose, /weixin, /attach, /skill. bare `/stop` stops only the active main run and reports that queued inputs will be committed to history without execution; `/stop compact` has dedicated autocomplete and cancels only compaction with cancelled, no-active, and completed/too-late results; other `/stop <arg>` values are rejected; `/dequeue` explicitly runs queued items, stopping the current run first if needed. `/continue` invokes the internal SessionRuntime retry control without a queue item or model-facing marker; the exact Session owner revalidates interrupted history before running. There is no `/retry` alias. `/compact` starts async-capable planning immediately; a busy model with `asyncCompact:false` receives a clear unavailable response. `/node remove <node-id>` removes an approved node and closes online runtime state; `/node move <old-id> <new-id>` renames an approved node id, closes the old runtime connection, and tells the operator to update node-side credentials/restart.
+Inline handlers: /help, /status, /btw, /fork, /stop, /dequeue, /continue, /node, /search, /messages, /model, /delete-messages, /verbose, /attach, /skill. bare `/stop` stops only the active main run and reports that queued inputs will be committed to history without execution; `/stop compact` has dedicated autocomplete and cancels only compaction with cancelled, no-active, and completed/too-late results; other `/stop <arg>` values are rejected; `/dequeue` explicitly runs queued items, stopping the current run first if needed. `/continue` invokes the internal SessionRuntime retry control without a queue item or model-facing marker; the exact Session owner revalidates interrupted history before running. There is no `/retry` alias. `/compact` starts async-capable planning immediately; a busy model with `asyncCompact:false` receives a clear unavailable response. `/node remove <node-id>` removes an approved node and closes online runtime state; `/node move <old-id> <new-id>` renames an approved node id, closes the old runtime connection, and tells the operator to update node-side credentials/restart.
 
 ### src/commandHandler.ts — Command dispatch
 | Function | Description |
@@ -86,7 +88,7 @@ Inline handlers: /help, /status, /btw, /fork, /stop, /dequeue, /continue, /node,
 - `./skills` / `./tools` — Skill and tool listing/toggling
 - `./timers` — Timer CRUD (create, list, delete)
 - `./tokenCount` — `estimateSessionSummary` (used by `sessionStatus` for status token/image estimates)
-- `./nodes/providerRegistry` / `./nodes/manager` / `./nodes/registry` — generic Node selection plus authenticated remote runtime, pairing approval, and approved-node remove/move operations
+- `./nodes/providerRegistry` / `./nodes/manager` / `./nodes/registry` — generic Node selection plus authenticated remote runtime, direct credential creation, pairing approval, and approved-node remove/move operations
 - `./btw` — Side-question execution
 - `./weixin/api` — WeChat QR login flow
 - `./messageRouter` — `MessageRouter` (used by `CommandHandler` for auth)
@@ -102,7 +104,7 @@ Inline handlers: /help, /status, /btw, /fork, /stop, /dequeue, /continue, /node,
 - `/model` inspects or atomically updates the current model/effort pair; `/session child-model` does the same for future-child defaults. `--effort default|unset` clears only the relevant raw effort while `none` remains explicit. `/session create` uses one complete serial parse for optional single `--model`, optional single canonical `--effort`, and repeatable `--system-prompt-file`; unknown/positional extras, duplicate single flags, missing values, and flag tokens used as values fail before model resolution or creation. Canonical effort semantics: [D-model-routing-effort](../threads/model-routing.md#d-model-routing-effort).
 - `/session new`, `/session create`, `/session fork`, `/fork`, and `/attach` await durable channel attachment after creating/resolving the target; they do not report success after an attachment write failure. Canonical semantics: [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
 - `/session move <target> [--parent <parent-session-id>]` preserves the incoming parent when the flag is omitted and intentionally reparents after the identity move when supplied. `/session unparent` remains the explicit detach surface. Canonical semantics: [D-lifecycle-identity-move-relations](../threads/session-lifecycle.md#d-lifecycle-identity-move-relations).
-- `/channel` subcommands can start/stop/restart managed channel processes and toggle security settings like `dangerouslyAllowAllUsers`.
+- `/channel` subcommands can start/stop/restart managed channel processes and toggle security settings like `dangerouslyAllowAllUsers`. `/channel weixin [status|login|wait <sessionKey>]` owns Weixin onboarding; the old standalone command is not registered. It retains ordinary command authorization and needs no attached Session.
 - `/status` delegates to `src/sessionStatus`, sharing status fields/formatting with `session({ action: "status" })`: session/agent identity, agent dir, parent id, model plus raw/effective current and child effort, message count, token/image estimate, last usage (including optional provider-reported reasoning tokens within output), last message time, auto-compact threshold, current node, current cwd/default cwd, busy/queue state, and recent child sessions.
 - `/search` delegates to `recall({ vector_query })` rather than the removed `search_vector` tool, so command output uses the same archive back-resolution and preview renderer as agent recall.
 - `/skill list` shows visible skills and entry-document counts; `/skill show <skill>` loads the skill entry document and lists resource paths without eagerly reading those resources.

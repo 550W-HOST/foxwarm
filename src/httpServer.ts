@@ -21,7 +21,7 @@ export interface HttpServerOptions {
 
 export interface RouteHandler {
   path: string;
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   handler: (req: express.Request, res: express.Response) => Promise<any>;
   noAuth?: boolean;
   auth?: 'admin' | 'webui';

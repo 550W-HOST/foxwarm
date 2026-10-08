@@ -33,8 +33,8 @@ test('child instructions and reminders distinguish final reports from reply wait
   assert.match(reminder, /\[NO_ACTION\]/);
   assert.match(completion, /afterSend: "finish"/);
   assert.match(reminder, /afterSend: "finish"/);
-  assert.doesNotMatch(completion, /confirmation/);
-  assert.doesNotMatch(reminder, /confirmation/);
+  assert.doesNotMatch(completion, /handoffRecall|handoffConfirmation/);
+  assert.doesNotMatch(reminder, /handoffRecall|handoffConfirmation/);
   assert.match(completion, /ends the turn idle without creating a wait/);
   assert.match(reminder, /becomes idle/);
   assert.match(completion, /afterSend: "wait" only when you genuinely require a later reply/);
@@ -56,10 +56,11 @@ test('child instructions include confirmation guidance only when enabled', () =>
   const disabledReminder = buildChildReminderForMode('parent/main', false);
   const enabledReminder = buildChildReminderForMode('parent/main', true);
 
-  assert.doesNotMatch(disabled, /confirmation/);
-  assert.doesNotMatch(disabledReminder, /confirmation/);
+  assert.doesNotMatch(disabled, /handoffRecall|handoffConfirmation/);
+  assert.doesNotMatch(disabledReminder, /handoffRecall|handoffConfirmation/);
   for (const text of [enabled, enabledReminder]) {
-    assert.match(text, /replace the placeholder with your own review rather than copying it/);
-    assert.match(text, /confirmation must be the final argument property/);
+    assert.match(text, /handoffRecall/);
+    assert.match(text, /handoffConfirmation must be the final argument property/);
+    assert.match(text, /recall must be before message/);
   }
 });

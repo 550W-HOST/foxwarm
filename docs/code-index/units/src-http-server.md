@@ -42,6 +42,7 @@ Provides a unified HTTP server with Express, WebSocket support, and instance-tok
 ## Behavior
 
 - Token auth checks the `foxwarm_token` cookie and the `Authorization: Bearer` header against the stored instance secret.
+- Route registration supports GET, POST, PUT, PATCH and DELETE.
 - Routes can opt out of auth via `noAuth: true`.
 - Authenticated route middleware returns 401 for missing or invalid auth, and 403 when a guest reaches an administrator-only route. The default route mode remains administrator-only; guest authorization is explicit per WebUI route.
 - `getAuthContext` and `getIncomingAuthContext` resolve the current cookie or Bearer token to an administrator or verified guest context. The removed cookie alias stays unsupported. The standalone MCP authentication path remains independent and unaffected.

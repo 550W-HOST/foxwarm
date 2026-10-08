@@ -1,8 +1,10 @@
+import { WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Activity, ArrowDownLeft, ArrowUpRight, Database, ArrowLeft, Bot, ChevronRight, CircleDot, Clock3, ExternalLink, FileText, FolderOpen, GitFork, Layers3, ListFilter, MemoryStick, MessageSquare, Network, Save, Search, Server, Shield, Trash2 } from 'lucide-react'
 import type { Session } from './SessionListCore'
 import AgentCreationMenu from './AgentCreationMenu'
+import NodeOnboardingModal, { useNodePendingApprovals } from './NodeOnboardingModal'
 import { getRuntimeStateSummary, getSessionRuntimeStateName, isSessionRuntimeActive } from '../sessionRuntimeState'
 import { API_BASE_PATH } from '../config'
 import { createSessionListRefreshScheduler, requestSessionListStreamOpenResync } from '../sessionListRefresh'
@@ -604,6 +606,22 @@ function AgentRegistryInspector({ agent, allAgents, nodes, memoryFiles, memoryLo
   )
 }
 
+function NodeOverviewCard({ node }: { node: WebUiNodeTarget }) {
+  const incompatible = node.protocolStatus === 'upgrade-required'
+  return <article className="rounded-xl border border-fw-border bg-fw-surface p-4">
+    <div className="flex items-center justify-between gap-2">
+      <h3 className="truncate font-semibold text-fw-text-strong">{node.displayName}</h3>
+      {renderMetaBadge(incompatible ? 'Upgrade required' : node.online ? 'Ready' : 'Offline', incompatible ? 'warning' : node.online ? 'active' : 'muted')}
+    </div>
+    <p className="mt-1 break-all font-mono text-xs text-fw-text-muted">{node.id}</p>
+    <p className="mt-2 text-xs text-fw-text-muted">{node.type}{node.lastSeenAt ? ` · Last seen ${new Date(node.lastSeenAt).toLocaleString()}` : ''}</p>
+    {node.protocolMessage ? <p className="mt-2 text-xs text-fw-warning">{node.protocolMessage}</p> : null}
+    <div className="mt-3 flex flex-wrap gap-1.5">
+      {Object.entries(node.services).map(([name, version]) => <span key={name} className="rounded bg-fw-canvas px-2 py-1 text-xs text-fw-text-muted">{name} v{version}</span>)}
+    </div>
+  </article>
+}
+
 export default function ArchitectureView({
   currentSession,
   onSelectSession,
@@ -613,6 +631,7 @@ export default function ArchitectureView({
   onAgentsChanged,
   onOpenAgentMemory,
 }: ArchitectureViewProps) {
+  const tabHeader = useWorkbenchTabHeader()
   const [sessions, setSessions] = useState<Session[]>([])
   const [rootIds, setRootIds] = useState<string[]>([])
   const [rootCursor, setRootCursor] = useState<string | null>(null)
@@ -629,7 +648,11 @@ export default function ArchitectureView({
   const [inspectedSessionId, setInspectedSessionId] = useState<string | null>(currentSession || null)
   const [nodeTargets, setNodeTargets] = useState<WebUiNodeTarget[]>(() => parseWebUiNodeTargets({ nodes: [] }))
   const [nodeTargetsError, setNodeTargetsError] = useState('')
-  const [surface, setSurface] = useState<'topology' | 'agents'>('topology')
+  const [surface, setSurface] = useState<'topology' | 'agents' | 'nodes'>('topology')
+  const [onboardingOpen, setOnboardingOpen] = useState(false)
+  const closeOnboarding = useCallback(() => setOnboardingOpen(false), [])
+  const pendingApprovals = useNodePendingApprovals(surface === 'nodes' || onboardingOpen)
+  const nodeRequestRef = useRef<AbortController | null>(null)
   const [agentRegistry, setAgentRegistry] = useState<AgentRegistryEntry[]>([])
   const [selectedRegistryAgentId, setSelectedRegistryAgentId] = useState<string | null>('main')
   const [agentMemoryFiles, setAgentMemoryFiles] = useState<AgentMemoryFile[]>([])
@@ -644,6 +667,9 @@ export default function ArchitectureView({
   const rootTargetRef = useRef(rootTarget); rootTargetRef.current = rootTarget
   const currentSessionRef = useRef(currentSession); currentSessionRef.current = currentSession
   const invalidationIdentityRef = useRef<string | null>(null)
+
+  const surfaceRef = useRef(surface); surfaceRef.current = surface
+  const isNodesOnly = () => surfaceRef.current === 'nodes'
 
   const collectArchitectureRoots = async (target: number, agent: string | null) => {
     const result = await replayCursorWindow<Session>({ targetCount: target, pageCap: 100, fetchPage: async (cursor, limit) => {
@@ -676,11 +702,12 @@ export default function ArchitectureView({
   }
 
   const replayArchitecture = async (target: number, branchTargets: Map<string, number>) => trackHttpRowsRequest(rowStoreRef.current, async startEpoch => {
+    if (isNodesOnly()) return
     const generation = ++generationRef.current; const requestAgent = selectedAgentRef.current; const requestFocus = currentSessionRef.current
     const { roots: combined, branches } = await replayAtomicWindows({ loadRoots: async () => { const roots = await collectArchitectureRoots(target, requestAgent); const focus = await collectArchitectureFocus(requestFocus, requestAgent); if (roots.revision !== undefined && focus.revision !== undefined && roots.revision !== focus.revision) throw new BoundedReplayRevisionMismatch(); return { ...roots, focus } },
       loadBranches: combined => { const targets = new Map(branchTargets); for (const parent of combined.focus.path.slice(0, -1)) targets.set(parent, Math.max(1, targets.get(parent) || 0)); return targets.size ? collectArchitectureBranches(targets, requestAgent, combined.revision) : Promise.resolve(new Map<string, { items: Session[]; nextCursor: string | null; total: number }>()) } })
     const { focus, ...roots } = combined
-    if (generation !== generationRef.current || selectedAgentRef.current !== requestAgent || currentSessionRef.current !== requestFocus) return
+    if (isNodesOnly() || generation !== generationRef.current || selectedAgentRef.current !== requestAgent || currentSessionRef.current !== requestFocus) return
     const ids = new Map(roots.childIds); const totals = new Map(roots.childTotals); const cursors = new Map(roots.childCursors); const rows = [...roots.rows]
     for (const [parent, branch] of branches) { ids.set(parent, branch.items.map(row => row.id)); totals.set(parent, branch.total); cursors.set(parent, branch.nextCursor); rows.push(...branch.items) }
     rows.push(...focus.rows)
@@ -707,22 +734,26 @@ export default function ArchitectureView({
     void replayArchitecture(rootTargetRef.current, new Map(branchTargetsRef.current)).catch(error => console.error('Failed Architecture focus replay', error))
   }, [currentSession])
 
-  useEffect(() => {
-    let disposed = false
-    const loadNodes = async () => {
-      try {
-        const response = await fetch(`${API_BASE_PATH}/nodes`)
-        const payload = await response.json().catch(() => ({}))
-        if (!response.ok) throw new Error(payload.error || `Node query failed (${response.status})`)
-        if (!disposed) { setNodeTargets(parseWebUiNodeTargets(payload)); setNodeTargetsError('') }
-      } catch (error) {
-        if (!disposed) setNodeTargetsError(error instanceof Error ? error.message : String(error))
-      }
-    }
-    void loadNodes()
-    const timer = window.setInterval(() => { void loadNodes() }, 30_000)
-    return () => { disposed = true; window.clearInterval(timer) }
+  const reloadNodes = useCallback(async () => {
+    if (document.hidden) return
+    nodeRequestRef.current?.abort()
+    const request = new AbortController(); nodeRequestRef.current = request
+    try {
+      const response = await fetch(`${API_BASE_PATH}/nodes`, { signal: request.signal })
+      const payload = await response.json()
+      if (!response.ok) throw new Error(payload.error || 'Could not load Nodes.')
+      if (nodeRequestRef.current === request) { setNodeTargets(parseWebUiNodeTargets(payload)); setNodeTargetsError('') }
+    } catch (error) {
+      if (nodeRequestRef.current === request && !request.signal.aborted) setNodeTargetsError(error instanceof Error ? error.message : 'Could not load Nodes.')
+    } finally { if (nodeRequestRef.current === request) nodeRequestRef.current = null }
   }, [])
+  useEffect(() => {
+    void reloadNodes()
+    const timer = window.setInterval(() => { if (!nodeRequestRef.current) void reloadNodes() }, 30_000)
+    const visibility = () => { if (document.hidden) { nodeRequestRef.current?.abort(); nodeRequestRef.current = null } else void reloadNodes() }
+    document.addEventListener('visibilitychange', visibility)
+    return () => { nodeRequestRef.current?.abort(); nodeRequestRef.current = null; window.clearInterval(timer); document.removeEventListener('visibilitychange', visibility) }
+  }, [reloadNodes])
 
   const loadAgentRegistry = useCallback(async () => {
     try {
@@ -762,6 +793,7 @@ export default function ArchitectureView({
 
   const architectureSubscriptionIds = useMemo(() => [...rootIds, ...[...childIds].flatMap(([parent, ids]) => [parent, ...ids])].filter((id, index, all) => all.indexOf(id) === index), [rootIds, childIds])
   useEffect(() => {
+    if (surface === 'nodes') return
     const scheduler = createSessionListRefreshScheduler(() => replayArchitecture(rootTargetRef.current, new Map(branchTargetsRef.current)))
     const subscriptionAgent = selectedAgent
     const unsubscribe = webUiRealtime.subscribeSessionList(architectureSubscriptionIds, {
@@ -772,15 +804,15 @@ export default function ArchitectureView({
       },
     })
     return () => { scheduler.dispose(); unsubscribe() }
-  }, [selectedAgent, architectureSubscriptionIds.join('\0')])
+  }, [surface === 'nodes', selectedAgent, architectureSubscriptionIds.join('\0')])
 
   useEffect(() => {
     const hasBusySession = sessions.some(session => isSessionRuntimeActive(session))
-    if (!hasBusySession) return
+    if (!hasBusySession || surface === 'nodes') return
 
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
-  }, [sessions])
+  }, [sessions, surface])
 
   const sessionMap = useMemo(() => new Map(sessions.map(session => [session.id, session])), [sessions])
 
@@ -967,15 +999,15 @@ export default function ArchitectureView({
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-3">
-                {onBack ? (
+                {tabHeader ? <WorkbenchTabClose className="inline-flex items-center justify-center rounded-lg p-2 text-fw-text hover:bg-fw-hover" /> : onBack ? (
                   <button onClick={onBack} className="inline-flex items-center gap-1 rounded-lg border border-fw-border bg-fw-surface px-3 py-1.5 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong dark:hover:bg-fw-hover md:hidden">
                     <ArrowLeft className="h-4 w-4" /> Back
                   </button>
                 ) : null}
-                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-fw-text-strong text-fw-surface"><Network className="h-5 w-5" /></span>
+                <WorkbenchTabIcon className="flex h-10 w-10 items-center justify-center rounded-xl bg-fw-text-strong text-fw-surface"><Network className="h-5 w-5" /></WorkbenchTabIcon>
                 <div>
                   <h1 className="text-2xl font-bold text-fw-text-strong">System Architecture</h1>
-                  <p className="mt-0.5 text-sm text-fw-text-muted">{surface === 'topology' ? 'Operational topology, runtime placement, and session diagnostics.' : 'Agent lifecycle, inheritance, isolation, and memory workspaces.'}</p>
+                  <p className="mt-0.5 text-sm text-fw-text-muted">{surface === 'topology' ? 'Operational topology, runtime placement, and session diagnostics.' : surface === 'nodes' ? 'Connected Nodes and new Node setup.' : 'Agent lifecycle, inheritance, isolation, and memory workspaces.'}</p>
                 </div>
               </div>
             </div>
@@ -983,21 +1015,21 @@ export default function ArchitectureView({
               <div className="inline-flex rounded-lg border border-fw-border bg-fw-surface p-0.5 dark:border-fw-border dark:bg-fw-surface">
                 <button type="button" data-active={surface === 'topology'} aria-pressed={surface === 'topology'} onClick={() => setSurface('topology')} className={`foxwarm-architecture-surface-tab rounded-md px-2.5 py-1 text-xs font-medium ${surface === 'topology' ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`}>Topology</button>
                 <button type="button" data-active={surface === 'agents'} aria-pressed={surface === 'agents'} onClick={() => setSurface('agents')} className={`foxwarm-architecture-surface-tab rounded-md px-2.5 py-1 text-xs font-medium ${surface === 'agents' ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`}>Agents</button>
+                <button type="button" data-active={surface === 'nodes'} aria-pressed={surface === 'nodes'} onClick={() => setSurface('nodes')} className={`foxwarm-architecture-surface-tab rounded-md px-2.5 py-1 text-xs font-medium ${surface === 'nodes' ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`}>Nodes</button>
               </div>
-              <span>{sessions.length} loaded of {summary.sessionCount} sessions</span>
-              {summary.managedCount > 0 ? renderMetaBadge(`${summary.managedCount} managed`, 'active') : null}
+              {surface !== 'nodes' && summary.managedCount > 0 ? renderMetaBadge(`${summary.managedCount} managed`, 'active') : null}
               {nodeTargetsError ? renderMetaBadge('node status unavailable', 'warning') : null}
             </div>
           </div>
 
-          <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
+          {surface !== 'nodes' ? <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
             <SummaryMetric label="Agents" value={agentRegistry.length || summary.agentCount} detail="persistent workspaces" icon={<Bot className="h-4 w-4" />} onClick={() => setSurface('agents')} active={surface === 'agents'} />
             <SummaryMetric label="Sessions" value={summary.sessionCount} detail={`${sessions.length} in loaded window`} icon={<Layers3 className="h-4 w-4" />} onClick={() => { setSurface('topology'); setStatusFilter('all') }} active={surface === 'topology' && statusFilter === 'all'} />
             <SummaryMetric label="Active" value={summary.activeCount} detail="model or tool work" icon={<Activity className="h-4 w-4" />} onClick={() => { setSurface('topology'); setStatusFilter('active') }} active={surface === 'topology' && statusFilter === 'active'} />
             <SummaryMetric label="Waiting" value={summary.waitingCount} detail="loaded wait conditions" icon={<Clock3 className="h-4 w-4" />} onClick={() => { setSurface('topology'); setStatusFilter('waiting') }} active={surface === 'topology' && statusFilter === 'waiting'} />
             <SummaryMetric label="Queued" value={summary.queuedSessions} detail="sessions with pending work" icon={<MessageSquare className="h-4 w-4" />} onClick={() => { setSurface('topology'); setStatusFilter('queued') }} active={surface === 'topology' && statusFilter === 'queued'} />
-            <SummaryMetric label="Nodes ready" value={`${readyNodes}/${displayNodes.length}`} detail="protocol-compatible execution" icon={<Server className="h-4 w-4" />} onClick={() => setSurface('topology')} />
-          </div>
+            <SummaryMetric label="Nodes" value={`${readyNodes}/${displayNodes.length}`} detail="protocol-compatible execution" icon={<Server className="h-4 w-4" />} onClick={() => setSurface('nodes')} />
+          </div> : null}
 
         </header>
 
@@ -1030,6 +1062,12 @@ export default function ArchitectureView({
           </div>
         </div> : null}
 
+        {surface === 'nodes' ? <main data-node-surface className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-sm font-semibold text-fw-text-strong">Nodes</h2><p className="mt-1 text-xs text-fw-text-muted">{nodeTargets.length} nodes</p></div><div className="flex flex-wrap items-center gap-2">{pendingApprovals.total > 0 && !pendingApprovals.error ? <span className="text-xs text-fw-accent">{pendingApprovals.total} pending approvals</span> : null}<button type="button" onClick={() => setOnboardingOpen(true)} className="rounded-lg bg-fw-accent px-3 py-2 text-sm font-medium text-white">New nodes</button></div></div>
+          {nodeTargetsError || pendingApprovals.error ? <p role="alert" className="text-sm text-fw-danger">{nodeTargetsError || pendingApprovals.error}</p> : null}
+          <div className="grid gap-3 md:grid-cols-2">{nodeTargets.map(node => <NodeOverviewCard key={node.id} node={node} />)}</div>
+        </main> : null}
+        {onboardingOpen ? <NodeOnboardingModal pending={pendingApprovals} onClose={closeOnboarding} onNodesChanged={reloadNodes} /> : null}
         {surface === 'topology' ? <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
             <div className="flex items-center justify-between gap-3 px-1 xl:col-span-2 xl:pr-[376px]">
               <div>
@@ -1071,7 +1109,7 @@ export default function ArchitectureView({
             onOpen={onSelectSession}
             onLoadMoreChildren={(sessionId) => loadSessionRelationships(sessionId, 20)}
           />
-        </div> : (
+        </div> : surface === 'agents' ? (
           <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
             <main className="min-w-0">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-3 px-1">
@@ -1086,7 +1124,7 @@ export default function ArchitectureView({
             </main>
             <AgentRegistryInspector agent={selectedRegistryAgent} allAgents={agentRegistry} nodes={displayNodes} memoryFiles={agentMemoryFiles} memoryLoading={agentMemoryLoading} memoryError={agentMemoryError} onOpenMemory={openAgentMemory} onSave={saveRegistryAgent} onDelete={deleteRegistryAgent} />
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   )

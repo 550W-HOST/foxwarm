@@ -151,6 +151,8 @@ interface ContextBlockCardProps {
   text: string
   nestedDepth: number
   renderNestedMessages: (messages: Message[], keyPrefix: string, nestedDepth: number) => ReactNode
+  searchReveal?: boolean
+  searchPartIndex?: number
 }
 
 const ContextBlockCard = memo(function ContextBlockCard({
@@ -160,12 +162,15 @@ const ContextBlockCard = memo(function ContextBlockCard({
   text,
   nestedDepth,
   renderNestedMessages,
+  searchReveal = false,
+  searchPartIndex,
 }: ContextBlockCardProps) {
   const [expanded, setExpanded] = useState(false)
   const { ref: heightRef, prepare } = useThreadCardHeightTransition(expanded)
   const [expansion, setExpansion] = useState<ExpansionState>({})
   const headerFade = useThreadCardOverflowFade<HTMLSpanElement>('right', !expanded)
-  const summaryFade = useThreadCardOverflowFade<HTMLDivElement>('bottom', !expanded)
+  const showFullSummary = expanded || searchReveal
+  const summaryFade = useThreadCardOverflowFade<HTMLDivElement>('bottom', !showFullSummary)
 
   const summary = useMemo(() => getContextBlockSummaryText(text), [text])
   const summaryHtml = useMemo(() => renderMarkdown(summary), [summary])
@@ -241,11 +246,13 @@ const ContextBlockCard = memo(function ContextBlockCard({
       <div className="min-w-0 space-y-2">
         <div
           ref={summaryFade.ref}
+          data-search-surface="ctx"
+          data-search-part-index={searchPartIndex}
           {...summaryFade.overflowFadeProps}
           className={`foxwarm-markdown prose max-w-none text-[13px] prose-p:my-1 prose-headings:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 ${contextBlockBodyClasses}`}
           dangerouslySetInnerHTML={{ __html: summaryHtml }}
           onClick={expanded ? handleMarkdownLinkClick : undefined}
-          style={expanded ? summaryFade.overflowFadeProps.style : { ...clampContentStyle(5), ...summaryFade.overflowFadeProps.style }}
+          style={showFullSummary ? summaryFade.overflowFadeProps.style : { ...clampContentStyle(5), ...summaryFade.overflowFadeProps.style }}
         />
 
         {expanded && expansion.loading && (

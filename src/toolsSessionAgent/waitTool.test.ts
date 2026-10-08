@@ -125,8 +125,11 @@ test('wait tool schema requires declared progress and distinguishes all/any/exec
   assert.equal(waitDefinition.parameters.properties.waitAllSessions?.uniqueItems, true);
   assert.equal(waitDefinition.parameters.properties.waitAllSessions?.minItems, 2);
   assert.equal(waitDefinition.parameters.properties.waitAllSessions?.items?.type, 'string');
-  assert.equal(waitDefinition.parameters.properties.waitAllSessions?.items?.pattern, '.*\\S.*');
+  assert.equal(Object.prototype.hasOwnProperty.call(waitDefinition.parameters.properties.waitAllSessions.items, 'pattern'), false);
   assert.equal(waitDefinition.parameters.properties.waitAnySessions?.minItems, 1);
+  assert.equal(waitDefinition.parameters.properties.waitAnySessions?.uniqueItems, true);
+  assert.equal(waitDefinition.parameters.properties.waitAnySessions?.items?.type, 'string');
+  assert.equal(Object.prototype.hasOwnProperty.call(waitDefinition.parameters.properties.waitAnySessions.items, 'pattern'), false);
   assert.equal(waitDefinition.parameters.properties.waitExecIds?.type, 'array');
   assert.equal(waitDefinition.parameters.properties.waitExecIds?.items?.type, 'string');
 });

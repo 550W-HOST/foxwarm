@@ -14,8 +14,9 @@ Manages a persistent registry of approved nodes and pending pairing requests. Ha
 - `PENDING_PAIRING_TTL_MS` — expiry constant (1 hour)
 - `createNodeRegistryStore(filePath?)` — factory for the disk-backed store
 - `initializeNodeRegistry()` — loads registry and cleans expired pairings
-- `createPendingPairing(input)` — creates a new pairing request with a 6-digit code
-- `approvePendingPairing(pendingId, requestedNodeId?, assertBeforeApproval?)` — approves a pairing, optionally checks a live external caller after asynchronous lookup and before trust mutation, generates auth token, notifies via WebSocket
+- `createPendingPairing(input)` — creates a new pairing request identified by its full pending ID
+- `createApprovedNode(nodeId)` — reserves an approved ID with a newly generated per-node token; returns plaintext only after writing its hash
+- `approvePendingPairing(pendingId, requestedNodeId?, assertBeforeApproval?)` — approves a pairing, rechecks that the same unapproved pending entry remains after asynchronous lookup, optionally checks a live external caller before trust mutation, generates auth token, notifies via WebSocket
 - `rejectPendingPairing(pendingId, reason?)` — rejects and notifies client
 - `claimApprovedPairing(pendingId)` — retrieves credentials for offline-approved pairings
 - `listPendingPairings()` — returns pending pairings with connection status
@@ -42,7 +43,6 @@ Manages a persistent registry of approved nodes and pending pairing requests. Ha
 | `hashToken(token)` | ~131 | SHA-256 hashes an auth token |
 | `randomToken(bytes)` | ~135 | Generates a random hex token |
 | `sanitizeNodeId(value)` | ~139 | Normalizes a string into a valid node ID slug |
-| `generatePairCode()` | ~150 | Produces a random 6-digit pairing code |
 | `assertNodeIdAllowed(nodeId)` | ~154 | Throws if node ID is invalid or reserved |
 | `normalizeExplicitNodeId(value)` | ~161 | Trims and validates an existing explicit node id. |
 | `normalizeNewNodeId(value)` | ~167 | Requires a new node id to already be in sanitized slug form and not reserved. |
@@ -60,6 +60,7 @@ Manages a persistent registry of approved nodes and pending pairing requests. Ha
 | `isPendingPairingExpired(record, now)` | ~316 | Checks if a pairing has exceeded TTL |
 | `cleanupExpiredPendingPairings(now)` | ~321 | Removes expired pairings, closes sockets, deletes orphan nodes |
 | `authenticateApprovedNode(nodeId, authToken)` | ~355 | Validates token hash and updates lastSeenAt |
+| `createApprovedNode(nodeId)` | ~400 | Validates exact new ID, persists hash, returns initial token only to caller |
 | `approvePendingPairing(pendingId, requestedNodeId?, assertBeforeApproval?)` | ~381 | Full approval flow: allocate ID, run optional pre-mutation external-context fence, store node, notify or stash |
 | `claimApprovedPairing(pendingId)` | ~453 | Returns stored credentials for offline approvals |
 | `rejectPendingPairing(pendingId, reason?)` | ~470 | Deletes pairing and notifies client via WebSocket |
@@ -75,7 +76,9 @@ Manages a persistent registry of approved nodes and pending pairing requests. Ha
 - Registry state is lazily loaded into memory on first access and written through to disk on every mutation.
 - If the primary file is corrupted, the store recovers from rotated backups and rewrites the primary.
 - Pending pairings expire after 1 hour (TTL checked on most public operations). Expired pairings that were approved but never claimed also remove their associated approved node record.
-- Auth tokens are stored as SHA-256 hashes; plaintext tokens are only held temporarily in pending records for offline claim scenarios.
+- Auth tokens are stored as SHA-256 hashes; plaintext exists in the once-returned direct-creation response and temporarily in pending records for offline claim scenarios.
+- Historical pending records with a six-digit `pairCode` load without it; the next registry write drops that field but retains approved-unclaimed credential handoffs.
+- Direct creation has no pending request, claims, or advertised protocol/capabilities before authenticated registration. The existing remove operation revokes its token.
 - WebSocket references are held in an in-memory map to deliver real-time approval/rejection notifications to waiting node clients.
 - Node IDs are sanitized, deduplicated with numeric suffixes, and validated against a reserved set.
 - Administrative removal deletes the approved credential record and also clears matching unclaimed approved-pending entries so an offline-approved node cannot later claim removed credentials.
@@ -86,6 +89,6 @@ Manages a persistent registry of approved nodes and pending pairing requests. Ha
 ## Integration
 
 - Used by WebSocket handlers that manage the node pairing handshake (attach/detach socket, claim approved pairing on reconnect).
-- Used by API/CLI endpoints for listing, approving/rejecting pairings, and removing/renaming approved nodes.
+- Used by the user-facing `/node` command for direct creation, listing, approving/rejecting pairings, and removing/renaming approved nodes.
 - `authenticateApprovedNode` is called on every authenticated node connection to verify credentials.
 - Relies on `DiskJsonData` for atomic writes and backup rotation, sharing that utility pattern with other persistent stores in the project.

@@ -310,6 +310,13 @@ test('graceful Worker drain closes and reaps its real native ToolScript pool bef
     const authority = await fs.readJson(fixture.statePath);
     assert.ok(authority.history.some((message: any) => message.parts?.some((part: any) => part.functionCall?.name === 'run_script')));
     assert.ok(authority.history.some((message: any) => message.parts?.some((part: any) => part.functionResponse?.name === 'run_script')));
+    const scriptResponse = authority.history.flatMap((message: any) => message.parts || [])
+      .find((part: any) => part.functionResponse?.name === 'run_script').functionResponse;
+    assert.deepEqual(scriptResponse.response, {
+      status: 'completed', runId: scriptResponse.response.runId,
+      stdout: 'native worker lifecycle\n', result: { ok: true },
+    });
+    assert.deepEqual(scriptResponse.__meta?.toolScriptSubCalls, []);
     const workerPid = fixture.supervisor.getStatus(sessionId)?.pid;
     assert.ok(workerPid);
     await waitFor(() => processDescendants(workerPid!).some(isMontyProcess));

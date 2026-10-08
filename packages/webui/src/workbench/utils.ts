@@ -234,7 +234,7 @@ function isSupportedWorkbenchTab(tab: unknown): tab is WorkbenchTab {
     return true
   }
 
-  if (raw.type === 'vscode' || raw.type === 'agents' || raw.type === 'setup') {
+  if (raw.type === 'vscode' || raw.type === 'agents' || raw.type === 'setup' || raw.type === 'search' || raw.type === 'logs' || raw.type === 'tasks') {
     return true
   }
 
@@ -283,12 +283,19 @@ export function sanitizeTabsById(tabsById: Record<string, WorkbenchTab>, root: W
   return Object.fromEntries(Object.entries(tabsById).flatMap(([tabId, tab]) => {
     if (!referencedIds.has(tabId) || !isSupportedWorkbenchTab(tab)) return []
 
+    // Pre-canonical preview IDs cannot identify their Session from the URL.
+    // Keep only preview records whose ID names their current Session.
+    if (tab.type === 'chat' && tab.preview && tabId !== `chat:${tab.sessionId}`) return []
+
     // Older workbench state may contain the removed tab-level `pinned` flag.
     // Read it tolerantly, but strip it so all future persisted writes use the
     // current single-row tab model.
     const { pinned: _legacyPinned, ...sanitizedTab } = tab as WorkbenchTab & { pinned?: unknown }
     if (sanitizedTab.type === 'vscode') {
       return [[tabId, { ...sanitizedTab, title: 'Code' } as WorkbenchTab]]
+    }
+    if (sanitizedTab.type === 'search') {
+      return [[tabId, { ...sanitizedTab, title: 'History' } as WorkbenchTab]]
     }
     return [[tabId, sanitizedTab as WorkbenchTab]]
   }))

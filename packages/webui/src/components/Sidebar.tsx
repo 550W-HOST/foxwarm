@@ -1,4 +1,4 @@
-import { PanelLeftClose, PanelLeftOpen, Workflow } from 'lucide-react'
+import { PanelLeftClose, PanelLeftOpen, History, Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { BoundedSessionListPresentationProps, Session } from './SessionListCore'
 import type { SessionIdleNotificationMode } from '../sessionIdleNotifications'
@@ -13,12 +13,15 @@ interface SidebarProps {
   sessions: Session[]
   agents: AgentSummary[]
   currentSession: string
-  currentView: 'session' | 'agents' | 'setup'
+  currentView: 'session' | 'agents' | 'setup' | 'logs' | 'tasks'
   currentSessionRecord?: Session
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
+  onSelectSearch: () => void
   onSelectSetup: () => void
+  onSelectLogs?: () => void
+  onSelectTasks?: () => void
   codePath: string
   codeNodeId: string
   codeOpenInNewWindow: boolean
@@ -50,7 +53,10 @@ export default function Sidebar({
   onSelectSession,
   onKeepSession,
   onSelectArchitecture,
+  onSelectSearch,
   onSelectSetup,
+  onSelectLogs,
+  onSelectTasks,
   codePath,
   codeNodeId,
   codeOpenInNewWindow,
@@ -151,11 +157,14 @@ export default function Sidebar({
           listContainerClassName="p-2 pt-1"
         />
       </div>
-      <div data-sidebar-footer className="flex shrink-0 justify-end border-t border-fw-border bg-fw-surface p-2">
+      <div data-sidebar-footer className="flex shrink-0 justify-end gap-1 border-t border-fw-border bg-fw-surface p-2">
+        <button type="button" onClick={onSelectSearch} title="Search history" aria-label="Search history" className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-fw-border text-fw-text transition hover:bg-fw-hover hover:text-fw-text-strong dark:border-fw-border dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse">
+          <History className="h-4 w-4" />
+        </button>
         <GlobalUiSettingsMenu
           menuAlign="end"
           menuSide="top"
-          onOpenSetup={onSelectSetup}
+          onOpenSetup={onSelectSetup} onOpenLogs={onSelectLogs} onOpenTasks={onSelectTasks}
           setupActive={currentView === 'setup'}
         />
       </div>

@@ -1,6 +1,6 @@
 # Unit: src-config
 
-Files: src/config.ts, src/compactionConfig.test.ts, src/setupConfig.ts, src/setupConfig.test.ts, src/modelsConfigSchema.test.ts, src/modelsConfigPath.test.ts, src/workerConfig.test.ts, src/imageGenerationConfig.test.ts
+Files: src/config.ts, src/publicUrl.test.ts, src/compactionConfig.test.ts, src/setupConfig.ts, src/setupConfig.test.ts, src/modelsConfigSchema.test.ts, src/modelsConfigPath.test.ts, src/workerConfig.test.ts, src/imageGenerationConfig.test.ts
 Secondary files: packages/shared/src/configSchemas.ts, templates/models.example.yaml, README.md, docs/virtual-models.md, docs/vector-memory.md, docs/executable-node-provider-protocol.md, docs/docker-worktree-node-provider.md
 
 ## Purpose
@@ -15,6 +15,7 @@ Owns application/model configuration types, path resolution, YAML readers/writer
   QQ generic-file media limits), guest-agent,
   ASR, and `AppConfig` types.
 - `readAppConfigFile`, `writeAppConfigFile`.
+- `normalizePublicUrl`, `PUBLIC_BASE_URL` — optional top-level public HTTP(S) URL for Node bootstrap examples; no effect on HTTP bind or internal API origin.
 - `safeAppConfigYamlError()` — converts an app-config YAML parse failure to a non-secret error with its 1-based line/column when available; Setup uses the same formatter.
 - `MCP_INBOUND_CONFIG`, `normalizeMcpInboundConfig`, and `authenticateMcpInboundBearer` — startup-validated inbound identity settings and verified principal creation; the validator is shared with Setup. The implementation is owned by [src-mcp-inbound-config](./src-mcp-inbound-config.md).
 - `ExecutableNodeProviderConfig`, `DockerWorktreeNodeProviderConfig`, normalized provider unions, `normalizeNodeProvidersConfig`, and `NODE_PROVIDERS_CONFIG` — strict startup definitions for trusted one-shot executable providers and resident Docker worktree providers.
@@ -54,7 +55,7 @@ Worker placement is startup configuration:
 - `vector` is a connection/feature object, not a general boolean shorthand. Omission or `false` disables Vector; an object opts in unless `enabled:false`. Enabled Vector requires a nonempty absolute HTTP(S) `baseUrl` without credentials, query, or fragment components that already includes its OpenAI-compatible API root; runtime appends only `/embeddings`. `vector.lexicalIndex` is a narrow startup boolean and defaults false. `vector.hybridSearch` also defaults false and normalizes false unless Vector and lexical indexing are both enabled.
 - `sessionWorkers` is experimental and accepts a boolean or object. Omission/`false` keeps the default in-process session runtime. `true` enables default worker settings. An object enables workers unless `enabled:false`; `idleSeconds` defaults to 60 and accepts numeric YAML integers from 1 through 86,400 (boolean and string coercion is rejected).
 - `dbWorkers` is boolean, defaults to `true`, and currently moves only an enabled LanceDB/vector owner into a child process. It has no effect while Vector is disabled.
-- `handoffConfirmation` is a top-level startup boolean, defaults to `false`, and controls only structured confirmation for `send_to_session` / `create_child_session`; cancellation controls are independent. Changing it requires restart.
+- `handoffConfirmation` is a top-level startup boolean, defaults to `false`, and controls only the structured `handoffRecall` / `handoffConfirmation` review for `send_to_session` / `create_child_session`; cancellation controls are independent. Changing it requires restart.
 - `mcpInbound` is a strict startup-only `{ enabled, identities }` block, disabled when absent. Malformed disabled blocks still fail validation; enabled configurations need independently authenticated external IDs. Enabling it starts `/mcp` on the existing HTTP listener; the available verified-external tool mappings are documented in [tool dispatch](../threads/tool-dispatch.md). See [D-config-mcp-inbound-foundation](./src-mcp-inbound-config.md#d-config-mcp-inbound-foundation) and [D-mcp-inbound-http-transport](./src-mcp-inbound-http.md#d-mcp-inbound-http-transport).
 - `vectorMaintenance` accepts `false`, `true`, or an options object; the normalized default is enabled with positive-integer `retentionHours` defaulting to `24`. Its exact-owner execution contract is canonical in [D-vector-owner-maintenance](src-vector.md#d-vector-owner-maintenance).
 - Worker placement changes require a process restart. Managed channel hot reload does not change process topology.
@@ -95,6 +96,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 - A single-model provider gets both provider-key and provider/model lookup entries; multi-model providers use provider/model keys.
 - Provider defaults are applied before model-level overrides. Header overrides merge one level by key. Nested plain objects under `extraFields` merge recursively. `contextLimit` overrides directly, `webSearch` and `imageGeneration` settings merge from provider to concrete model override, and Chat Completions `historyReasoningField` inherits or overrides as one normalized enum. Each `imageGeneration` side is normalized before merging, and the merged configuration is checked again for field combinations that only become contradictory through inheritance, so a provider background and a model output format cannot combine into an unsupported request.
 - Provider-scoped `disallowEmptyResponse` inherits from the provider entry to each concrete model entry, is rejected on virtual entries, participates in the route fingerprint, and controls whether empty/reasoning-only completions are retryable failures.
+- `keepReasoningOnError` is a strict provider/concrete-model boolean with model override and effective default `false`. It is rejected on virtual providers, preserved through concrete Setup forms and raw YAML/schema editing, and included in virtual leaf fingerprints. Only normal Responses streams consume it; see [D-streaming-keep-reasoning-on-error](../threads/streaming-pipeline.md#d-streaming-keep-reasoning-on-error).
 - First-class `effort` uses `{ allowed, default }`. Omission allows `none`, `low`, `medium`, `high`, `xhigh`, and `max` with `high` as the default. A model-level `allowed` list replaces the provider list; omitted model fields inherit provider values, and the resulting default must be allowed. Virtual entries cannot configure effort directly and expose the canonical union of reachable concrete levels.
 - `openai`, `openai-responses`, `openai-ws`, and `openai-completions` receive OpenAI defaults; `anthropic` receives Anthropic defaults; custom types must provide their own base URL/protocol-compatible settings. `openai-ws` rejects request compression because compression is an HTTP-body setting.
 - Invalid provider objects, model lists, and cross-strategy fields fail with provider-qualified validation errors.
@@ -105,6 +107,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 
 - App YAML missing at read time yields an empty config.
 - App config validation normalizes both executable and Docker worktree Node providers through the same runtime/setup path; launcher/image/roots/resources remain trusted host configuration and are never model-facing mutation fields.
+- Runtime startup and Setup validate `url` as an absolute HTTP(S) address without credentials, query, or fragment, trim outer whitespace/trailing slash, and preserve an optional deployment path. Missing `url` retains placeholder-based Node instructions. Shared JSON schema exposes the field to config editors.
 - Setup writes validate by parsing through the same current config readers before replacing files.
 - Structured setup accepts virtual target/failover fields; Models Setup remains a raw-YAML surface for string aliases, and raw virtual/alias YAML remains byte-preserving after validation. When retained structured setup changes a concrete provider into a virtual entry, provider-only fields including `effort`, `webSearch`, and `imageGeneration` are removed before the result is reparsed.
 - `writeAppConfigWithChannels` preserves surrounding raw YAML text/comments when possible.
@@ -158,7 +161,7 @@ The mutable models configuration has one active location: `<data-root>/state/mod
 
 ### D-config-handoff-confirmation
 
-[2026-09-04] Top-level `handoffConfirmation` accepts only a boolean and defaults to `false`. It is resolved once at startup and requires restart to change. `true` enables the exact inter-agent confirmation contract and its schema/reminder guidance; omission or `false` disables only that confirmation requirement. Model tool-call cancellation controls remain enabled in both modes.
+[2026-09-04] Top-level `handoffConfirmation` accepts only a boolean and defaults to `false`. It is resolved once at startup and requires restart to change. `true` enables the exact inter-agent `handoffRecall` / `handoffConfirmation` contract and its schema/reminder guidance; omission or `false` disables only that review requirement. Model tool-call cancellation controls remain enabled in both modes.
 
 ## Canonical ownership
 

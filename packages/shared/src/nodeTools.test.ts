@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
+
 import {
   apply_patch,
   buildBrowserScreenshotResult,
@@ -14,7 +15,7 @@ import {
   setNodeToolSessionEventDispatcher,
   write,
 } from './nodeTools';
-import { getNodeAgentDir, resolveNodeAgentDir } from './nodeFileTransfer';
+import { getNodeAgentDir, resolveNodeAgentDir, resolveNodePath } from './nodeFileTransfer';
 import { CLI_NODE_CAPABILITIES } from './nodeCapabilities';
 import { formatWriteContentRefRetryHint } from './fileToolCore';
 import { resolveExecTimeoutSeconds } from './persistentExec';
@@ -75,6 +76,13 @@ test('shared write contentRef retry hints are executable and JSON-escape actual 
   );
 });
 
+test('read and edit report a missing or blank filePath before path resolution', async () => {
+  for (const args of [{}, { filePath: '' }]) {
+    await assert.rejects(() => read(args as any), { message: 'read requires filePath.' });
+    await assert.rejects(() => edit({ ...args, oldText: 'old', newText: 'new' } as any), { message: 'edit requires filePath.' });
+  }
+});
+
 test('shared exec timeout resolution clamps only oversized finite values', () => {
   assert.deepEqual(resolveExecTimeoutSeconds(undefined), { requestedSeconds: 15, effectiveSeconds: 15 });
   assert.deepEqual(resolveExecTimeoutSeconds(60), { requestedSeconds: 60, effectiveSeconds: 60 });
@@ -101,6 +109,25 @@ test('node agent directories resolve relative configuration against an immutable
     resolveNodeAgentDir('alpha', { FOXWARM_AGENT_DIR: 'single-agent' }, runtimeRoot),
     path.join(runtimeRoot, 'single-agent'),
   );
+});
+
+test('CLI Node path tokens use its Agent root, not the session cwd or Main host root', async () => {
+  const agentName = uniqueAgent('cli_path_token');
+  const root = getNodeAgentDir(agentName);
+  const paths: Array<{ raw: string; resolved: string }> = [];
+  const ctx = { session: { agent: agentName, cwd: '/unrelated/cwd' }, onResolvedPaths: (items: typeof paths) => paths.push(...items) };
+  try {
+    assert.equal(resolveNodePath('$fw_tmp/a', agentName, '/unrelated/cwd'), path.join(root, 'tmp/a'));
+    assert.equal(resolveNodePath('./$fw_tmp/a', agentName, '/unrelated/cwd'), '/unrelated/cwd/$fw_tmp/a');
+    await write({ filePath: '$fw_tmp/nested.txt', content: 'before', createDirs: true }, ctx);
+    await edit({ filePath: '$fw_tmp/nested.txt', oldText: 'before', newText: 'after' }, ctx);
+    await read({ filePath: '$fw_tmp/nested.txt' }, ctx);
+    await apply_patch({ input: '*** Begin Patch\n*** Add File: $fw_tmp/another.txt\n+new\n*** End Patch' }, ctx);
+    assert.deepEqual(paths, ['nested.txt', 'nested.txt', 'nested.txt', 'another.txt'].map(name => ({
+      raw: `$fw_tmp/${name}`, resolved: path.join(root, 'tmp', name),
+    })));
+    await assert.rejects(() => read({ filePath: '${fw_tmp}/bad.txt' }, ctx), /Unknown Agent path variable/);
+  } finally { await cleanupAgent(agentName); }
 });
 
 test('node exec capture stays under the startup agent root after cwd changes', async t => {
@@ -512,5 +539,43 @@ test('node startup recovery delivers a current completion and prunes an expired 
     if (previousAgentDir === undefined) delete process.env.FOXWARM_AGENT_DIR;
     else process.env.FOXWARM_AGENT_DIR = previousAgentDir;
     await fs.remove(root);
+  }
+});
+
+test('node apply_patch retains Unicode edits and partial success when a later near match fails', async () => {
+  const agentName = uniqueAgent('node_apply_patch_matching');
+  const baseDir = getNodeAgentDir(agentName);
+  const good = 'section “target”\r\nold';
+  const bad = `Log($"${'x'.repeat(2000)}{Render(value)}");`;
+  try {
+    await fs.ensureDir(baseDir);
+    await fs.writeFile(path.join(baseDir, 'good.cs'), good);
+    await fs.writeFile(path.join(baseDir, 'bad.cs'), bad);
+    await assert.rejects(() => apply_patch({ input: [
+      '*** Begin Patch',
+      '*** Update File: good.cs',
+      '@@ section "target"',
+      '-old',
+      '+new “literal”',
+      '*** Update File: bad.cs',
+      '@@',
+      `-${bad.replace('Render(value)', 'Render(value')}`,
+      '+replacement',
+      '*** Add File: skipped.txt',
+      '+skipped',
+      '*** End Patch',
+    ].join('\n') }, { session: { agent: agentName } }), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.ok(error.message.length < 2000);
+      assert.match(error.message, /first mismatch at file line 1/);
+      assert.match(error.message, /- Updated good\.cs \(\+1 -1\)/);
+      assert.match(error.message, /1 remaining operation\(s\) were not applied/);
+      return true;
+    });
+    assert.equal(await fs.readFile(path.join(baseDir, 'good.cs'), 'utf8'), 'section “target”\r\nnew “literal”');
+    assert.equal(await fs.readFile(path.join(baseDir, 'bad.cs'), 'utf8'), bad);
+    assert.equal(await fs.pathExists(path.join(baseDir, 'skipped.txt')), false);
+  } finally {
+    await cleanupAgent(agentName);
   }
 });

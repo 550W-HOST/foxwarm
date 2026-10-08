@@ -164,6 +164,10 @@ export const SKILL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
 
 export const NODE_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   literalNode('list', 'List approved nodes, pending approvals, and current node status'),
+  literalNode('create', 'Create a Node credential before starting the Node', {
+    usage: '/node create <node-id>',
+    children: [placeholderNode('<node-id>', 'New Node ID')],
+  }),
   literalNode('approve', 'Approve a pending node pairing request', {
     usage: '/node approve <pending-id> [node-id]',
     children: [
@@ -212,6 +216,15 @@ export const VERBOSE_AUTOCOMPLETE: CommandAutocompleteNode[] = [
 ]
 
 export const CHANNEL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
+  literalNode('weixin', 'Manage Weixin login and status', {
+    children: [
+      literalNode('status', 'Show Weixin channel status'),
+      literalNode('login', 'Start Weixin QR login'),
+      literalNode('wait', 'Wait for Weixin QR login', {
+        children: [placeholderNode('<sessionKey>', 'Login session key')],
+      }),
+    ],
+  }),
   literalNode('info', 'Show current channel identifiers and attachment state'),
   literalNode('auth', 'Show current channel authorization diagnostics'),
   literalNode('status', 'Show runtime channel status', {

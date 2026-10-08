@@ -24,7 +24,7 @@ Auto-approve flags are TUI options implemented by the TUI's `toolCallInterceptor
 
 ## Behavior
 
-- Pairing success persists `nodeId`/`authToken` locally; authentication failure clears stale credentials before reconnection.
+- Pairing success persists `nodeId`/`authToken` locally. Direct authentication with explicit ID/token overrides a stale local file and persists the credentials on successful registration; authentication failure retains the existing fallback behavior for clients that also have a shared pairing token.
 - Pairing and registration advertise the bounded core Node-protocol range. The client validates Master's negotiated response before starting exec recovery; an incompatible response disables automatic reconnect until the process is updated/restarted. Canonical contract: [D-node-thread-core-protocol-compatibility](../threads/node-communication.md#d-node-thread-core-protocol-compatibility).
 - Both master and CLI client use WebSocket protocol ping/pong heartbeat at 30-second intervals with a 10-second timeout.
 - Shared `nodeTools` execute after the optional model-tool interceptor approves them.

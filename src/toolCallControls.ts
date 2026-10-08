@@ -4,8 +4,10 @@ export const CANCEL_TOOL_ARGUMENT = '__cancelTool';
 export const CANCEL_ALL_TOOLS_ARGUMENT = '__cancelAllToolsThisTurn';
 export const COMPACT_PLAN_TOOL_NAME = 'submit_compact_plan';
 
-export const INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX = 'Before performing this inter-agent handoff, have I checked that it is necessary, accurate, self-contained, appropriately scoped, and compliant with the communication rules?';
-export const INTER_AGENT_HANDOFF_REVIEW_PLACEHOLDER = '<replace this with your own non-empty review; do not copy this placeholder verbatim>';
+export const INTER_AGENT_HANDOFF_RECALL_PREFIX = 'Before composing this inter-agent handoff, have I recalled the applicable communication rules, the user\'s actual request, and the scope this recipient needs?';
+export const INTER_AGENT_HANDOFF_RECALL_PLACEHOLDER = '<write the actual applicable rules, request, and recipient scope recalled for this handoff>';
+export const INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX = 'Before sending this inter-agent handoff, have I honestly checked that it is necessary, actionable, and not merely acknowledgement, duplication, or inherited-rule repetition; if I found that it should not be sent, did I omit or cancel it instead?';
+export const INTER_AGENT_HANDOFF_CONFIRMATION_PLACEHOLDER = '<write the specific honest review for this handoff>';
 export const INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX = 'I have completed the check, found no issue, and confirm this inter-agent handoff should proceed.';
 
 const CANCEL_PROPERTY_SCHEMA = {
@@ -18,15 +20,29 @@ const HANDOFF_TOOL_NAMES = new Set(['send_to_session', 'create_child_session']);
 export function addHandoffConfirmationSchema(definition: ToolDefinition, enabled: boolean): ToolDefinition {
   if (!HANDOFF_TOOL_NAMES.has(definition.name)) return definition;
   const parameters = definition.parameters;
-  const properties = { ...(parameters.properties || {}) };
-  delete properties.confirmation;
-  const required = (parameters.required || []).filter(key => key !== 'confirmation');
+  const originalProperties = { ...(parameters.properties || {}) };
+  delete originalProperties.confirmation;
+  delete originalProperties.handoffRecall;
+  delete originalProperties.handoffConfirmation;
+  const properties: Record<string, any> = {};
+  for (const [key, value] of Object.entries(originalProperties)) {
+    if (key === 'message') {
+      if (enabled) {
+        properties.handoffRecall = {
+          type: 'string',
+          description: `Put handoffRecall before message. Start with the exact opening sentence below, then write the actual applicable communication rules, the user\'s actual request, and the scope this recipient needs. Replace the placeholder with this handoff\'s own recalled context.\n\n${INTER_AGENT_HANDOFF_RECALL_PREFIX}\n${INTER_AGENT_HANDOFF_RECALL_PLACEHOLDER}`,
+        };
+      }
+    }
+    properties[key] = value;
+  }
+  const required = (parameters.required || []).filter(key => key !== 'confirmation' && key !== 'handoffRecall' && key !== 'handoffConfirmation');
   if (enabled) {
-    properties.confirmation = {
+    properties.handoffConfirmation = {
       type: 'string',
-      description: `Put confirmation last in the arguments. Write an honest review of the proposed handoff using the exact opening and closing sentences below. Replace the middle placeholder with your own review. Check whether the recipient needs this handoff to perform work, make a decision, or change its current actions; if it would only acknowledge the message, omit it or combine it with the next actionable handoff. If the handoff should not proceed, cancel with __cancelTool=true instead of approving it to satisfy the check.\n\nFor a handoff that should proceed, use: ${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n${INTER_AGENT_HANDOFF_REVIEW_PLACEHOLDER}\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`,
+      description: `Put handoffConfirmation last in the arguments. Write an honest review of the proposed handoff using the exact opening and closing sentences below. Replace the placeholder with your own specific review. If the handoff should not proceed, omit it or cancel with __cancelTool=true instead of approving it to satisfy the check.\n\nFor a handoff that should proceed, use: ${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n${INTER_AGENT_HANDOFF_CONFIRMATION_PLACEHOLDER}\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`,
     };
-    required.push('confirmation');
+    required.push('handoffRecall', 'handoffConfirmation');
   }
   return {
     ...definition,
@@ -91,21 +107,35 @@ export function isSingleToolCancellationRequested(call: FunctionCall): boolean {
 }
 
 export function validateInterAgentHandoffConfirmation(args: Record<string, any>): void {
-  const confirmation = args?.confirmation;
+  const recall = args?.handoffRecall;
+  if (typeof recall !== 'string' || !recall.startsWith(INTER_AGENT_HANDOFF_RECALL_PREFIX)) {
+    throw new Error('Inter-agent handoff recall must start with the exact required opening sentence and include the applicable recalled context.');
+  }
+  const recalledContext = recall.slice(INTER_AGENT_HANDOFF_RECALL_PREFIX.length).trim();
+  if (!recalledContext || recalledContext === INTER_AGENT_HANDOFF_RECALL_PLACEHOLDER) {
+    throw new Error('Inter-agent handoff recall must include the caller\'s actual recalled context instead of the documented placeholder.');
+  }
+  const confirmation = args?.handoffConfirmation;
   const prefix = INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX;
   const suffix = INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX;
   if (typeof confirmation !== 'string' || !confirmation.startsWith(prefix) || !confirmation.endsWith(suffix)) {
     throw new Error('Inter-agent handoff confirmation must contain the exact required prefix and suffix separated by a non-empty review.');
   }
-  const review = confirmation.slice(prefix.length, confirmation.length - suffix.length);
-  if (!review.trim()) {
+  const review = confirmation.slice(prefix.length, confirmation.length - suffix.length).trim();
+  if (!review) {
     throw new Error('Inter-agent handoff confirmation review must be non-empty.');
   }
-  if (review.trim() === INTER_AGENT_HANDOFF_REVIEW_PLACEHOLDER) {
+  if (review === INTER_AGENT_HANDOFF_CONFIRMATION_PLACEHOLDER) {
     throw new Error('Inter-agent handoff confirmation review must replace the documented placeholder with the caller\'s own review.');
   }
-  if (Object.keys(args).at(-1) !== 'confirmation') {
+  const keys = Object.keys(args);
+  if (keys.at(-1) !== 'handoffConfirmation') {
     throw new Error('Inter-agent handoff confirmation must be the final argument property.');
+  }
+  const messageIndex = keys.indexOf('message');
+  const recallIndex = keys.indexOf('handoffRecall');
+  if (messageIndex >= 0 && (recallIndex < 0 || recallIndex > messageIndex)) {
+    throw new Error('Inter-agent handoff recall must be before the message argument.');
   }
 }
 

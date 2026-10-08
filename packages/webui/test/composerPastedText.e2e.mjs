@@ -23,7 +23,7 @@ await writeFile(entryPath, `
   import { createRoot } from 'react-dom/client'
   import ChatComposer from ${JSON.stringify(path.join(webuiRoot, 'src/components/ChatComposer.tsx'))}
   import InlineComposerEditor from ${JSON.stringify(path.join(webuiRoot, 'src/components/InlineComposerEditor.tsx'))}
-  import { makePlainComposerDraft } from ${JSON.stringify(path.join(webuiRoot, 'src/composerDraft.ts'))}
+  import { loadComposerDraft, makePlainComposerDraft, serializeComposerDraft } from ${JSON.stringify(path.join(webuiRoot, 'src/composerDraft.ts'))}
   window.fetch = async () => ({ ok: true, json: async () => ({ commands: [{ name: '/help', description: 'Help' }] }) })
   window.fixtureMicMode = 'ok'
   window.fixtureStreamMode = 'ok'
@@ -99,10 +99,13 @@ await writeFile(entryPath, `
         window.fixtureStreamSessions.push(session)
         return session
       },
-      onDraftEdited: text => { window.fixtureDraft = text },
     }
     return <div id="host"><ChatComposer {...props} /></div>
   }
+  // Observe the canonical persisted draft rather than a production edit callback.
+  Object.defineProperty(window, 'fixtureDraft', {
+    get: () => serializeComposerDraft(loadComposerDraft(window.fixtureCurrentSession || 'fixture/main')),
+  })
   function StaleSameSessionPropFixture() {
     const editorRef = useRef(null)
     const [disabled, setDisabled] = useState(false)
@@ -1460,7 +1463,7 @@ test(`${spec.name} keeps partial text on error and ignores late callbacks across
     old.callbacks.onPartial('late')
     old.callbacks.onFinal('late final')
   })
-  assert.equal(await page.evaluate(() => window.fixtureDraft), 'old partial')
+  assert.equal(await page.evaluate(() => window.fixtureDraft), '', 'late callbacks must not change the new Session draft')
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('composer_draft_v1_fixture/main')).segments[0].text), 'old partial')
   await page.type(editor, 'new')
   await page.click('button[aria-label="Start recording"]')

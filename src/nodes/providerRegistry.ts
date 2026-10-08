@@ -4,6 +4,8 @@ import { CLI_NODE_CAPABILITIES } from '../../packages/shared/dist/nodeCapabiliti
 import type { ExternalNodeOwner } from '../../packages/shared/dist/nodeProtocol';
 import { describeNodeProtocolCompatibility, type NodeProtocolCompatibility } from '../../packages/shared/dist/nodeProtocol';
 import { read, write, edit, apply_patch } from '../../packages/shared/dist/nodeTools';
+import { parseApplyPatchInput } from '../../packages/shared/dist/applyPatch';
+import { rejectUnsupportedAgentPathVariable } from '../../packages/shared/dist/agentPathVariables';
 import type { FileOperations, FileOperationStat, FileOperationDirectoryEntry } from '../../packages/shared/dist/fileOperations';
 
 export type NodeKind = 'master' | 'remote' | 'sandbox';
@@ -53,13 +55,14 @@ export type NodeToolRequest = NodeToolRequestBase & ({
     currentNode?: string;
     cwd?: string;
     deferSessionCwdSync?: boolean;
+    programmatic?: true;
     externalExec?: never;
   };
 } | {
   owner: ExternalNodeOwner;
   sourceSessionId?: never;
   context: {
-    agent?: never; currentNode?: string; cwd?: string; deferSessionCwdSync?: never;
+    agent?: never; currentNode?: string; cwd?: string; deferSessionCwdSync?: never; programmatic?: never;
     externalExec?: { execId: string; completionCapability: string };
   };
 });
@@ -352,6 +355,7 @@ export class NodeProviderRegistry {
     }
     const source = request.owner ? { owner: request.owner } : { sourceSessionId: request.sourceSessionId };
     if (request.toolName === 'exec') {
+      rejectUnsupportedAgentPathVariable(request.args.cwd);
       if (!descriptor.primitiveBackends?.exec || !provider.invokeExec) {
         throw new NodeProviderError('NODE_EXECUTION_TOOL_UNAVAILABLE', `Tool \`exec\` not available on node \`${request.nodeId}\`.`);
       }
@@ -361,6 +365,11 @@ export class NodeProviderRegistry {
     const mutation = request.toolName === 'write' || request.toolName === 'edit' || request.toolName === 'apply_patch';
     if (!access || (mutation && access !== 'read-write') || !provider.invokeFilesystem) {
       throw new NodeProviderError('NODE_EXECUTION_TOOL_UNAVAILABLE', `Tool \`${request.toolName}\` not available on node \`${request.nodeId}\`.`);
+    }
+    if (request.toolName === 'apply_patch' && typeof request.args.input === 'string') {
+      for (const operation of parseApplyPatchInput(request.args.input)) rejectUnsupportedAgentPathVariable(operation.filePath);
+    } else {
+      rejectUnsupportedAgentPathVariable(request.args.filePath);
     }
     let externalMutationAttempted = false;
     const call = async (operation: NodeFilesystemOperation, fields: Partial<NodeFilesystemRequest>) => {
@@ -418,6 +427,7 @@ export class NodeProviderRegistry {
       ...(request.owner
         ? { externalOwner: request.owner, externalCwd: request.context.cwd }
         : { sessionId: request.sourceSessionId, session: { agent: request.context.agent, cwd: request.context.cwd, currentNode: request.nodeId } }),
+      ...(request.context.programmatic ? { programmatic: true as const } : {}),
       fileOperations: operations,
       resolveFilePath: (filePath: string) => filePath,
       dirnameFilePath: providerParent,
@@ -697,7 +707,7 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
 
   private descriptorForRuntimeNode(nodeId: string): NodeDescriptor | undefined {
     const node: any = nodesManager.getNode(nodeId);
-    if (!node || nodeId === 'master' || !node.ws) return undefined;
+    if (!node || nodeId === 'master' || (!node.ws && !node.httpExec)) return undefined;
     const compatibility = node.protocolCompatibility as NodeProtocolCompatibility | undefined;
     if (compatibility?.status === 'upgrade-required') {
       const message = `Node \`${nodeId}\` is connected but cannot execute tools. ${describeNodeProtocolCompatibility(compatibility)}`;
@@ -761,7 +771,7 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
 
   async invokeTool(request: NodeToolRequest, options?: NodeProviderCallOptions): Promise<unknown> {
     const node: any = nodesManager.getNode(request.nodeId);
-    if (!node || request.nodeId === 'master' || !node.ws) {
+    if (!node || request.nodeId === 'master' || (!node.ws && !node.httpExec)) {
       throw new NodeProviderError(
         'NODE_EXECUTION_NODE_UNAVAILABLE',
         `Remote node \`${request.nodeId}\` is not connected.`,
@@ -793,11 +803,13 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
       request.args,
       request.sourceSessionId,
       routingSnapshot,
+      request.context.programmatic,
     );
   }
 
   async getDefaultCwd(request: NodeDefaultCwdRequest): Promise<string | undefined> {
     const node: any = nodesManager.getNode(request.nodeId);
+    if (node?.httpExec) return node.defaultCwd;
     if (!node?.ws || !node.tools.has('get_default_cwd')) return undefined;
     try {
       const value = await nodesManager.executeTool(request.nodeId, 'get_default_cwd', {}, request.sourceSessionId);

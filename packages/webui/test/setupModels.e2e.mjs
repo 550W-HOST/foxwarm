@@ -130,6 +130,8 @@ function respondJson(request, body, status = 200) {
 }
 
 async function attachRequestMocks(targetPage, options = {}) {
+  const blockedEditorAssets = options.blockYamlWorkerImport ? ['yaml.worker']
+    : options.blockEditorChunks ? ['monaco-editor', 'monaco-yaml', 'yaml.worker', 'editor.worker'] : []
   let mockModelsRawYaml = options.oobe ? '' : statusPayload.models.rawYaml
   let mockConfigRawYaml = options.configRawYaml ?? statusPayload.config.rawYaml
   let mockOobe = !!options.oobe
@@ -164,10 +166,22 @@ async function attachRequestMocks(targetPage, options = {}) {
     }
   }
   await targetPage.setRequestInterception(true)
+  if (targetPage.browser() === browser) {
+    // Chromium's default '*' interception can pause worker startup requests that
+    // never reach this page's request handler. Intercept only the mocked API, plus
+    // editor assets in the two scenarios that intentionally test the fallback.
+    await targetPage._client().send('Fetch.enable', {
+      handleAuthRequests: true,
+      patterns: [
+        { urlPattern: '*://*/api/*' },
+        ...blockedEditorAssets.map(asset => ({ urlPattern: `*${asset}*` })),
+      ],
+    })
+  }
   targetPage.on('request', (request) => {
     const url = new URL(request.url())
     requestPaths.push(url.pathname)
-    if (options.blockEditorChunks && /(monaco-editor|monaco-yaml|yaml\.worker|editor\.worker)/.test(url.pathname)) {
+    if (blockedEditorAssets.some(asset => url.pathname.includes(asset))) {
       void request.abort('failed')
       return
     }
@@ -186,10 +200,11 @@ async function attachRequestMocks(targetPage, options = {}) {
       return
     }
     if (url.pathname.endsWith('/api/models')) {
+      options.modelOptionsRequests?.push(url.pathname)
       const respondModels = () => respondJson(request, {
         defaultKey: 'route',
         currentKey: 'route',
-        models: [
+        models: options.modelOptions?.models ?? [
           { key: 'leaf/model-a', label: 'leaf/model-a', isVirtual: false, allowedEfforts: ['none', 'low', 'high'], defaultEffort: 'high' },
           { key: 'leaf/model-b', label: 'leaf/model-b', isVirtual: false, allowedEfforts: ['medium', 'max'], defaultEffort: 'medium' },
           { key: 'sticky', label: 'sticky', isVirtual: true, allowedEfforts: ['none', 'low', 'high'], defaultEffort: null },
@@ -1497,17 +1512,21 @@ test('OOBE remains editable and savable when lazy Monaco/YAML support import rej
   const degradedPage = await browser.newPage()
   const modelsSaveRequests = []
   const configSaveRequests = []
+  await degradedPage.setViewport({ width: 1440, height: 900 })
   await degradedPage.setCacheEnabled(false)
-  await attachRequestMocks(degradedPage, { blockEditorChunks: true, oobe: true, modelsSaveRequests, configSaveRequests })
+  // The production Monaco chunk also carries bootstrap helpers; reject only the lazy worker import.
+  await attachRequestMocks(degradedPage, { blockYamlWorkerImport: true, oobe: true, modelsSaveRequests, configSaveRequests })
   try {
-    await degradedPage.goto(`${baseUrl}/degraded/#setup`, { waitUntil: 'networkidle2' })
+    await degradedPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
     await degradedPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm first-time setup'), { timeout: 15_000 })
     await degradedPage.waitForSelector('[data-setup-tab="models"] [data-setup-tab-status="attention"]')
+    const forcedSetupClose = await degradedPage.waitForSelector('[data-workbench-tab-close="system:setup"]')
+    await degradedPage.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.activeTabId === 'system:setup')
     await degradedPage.click('[data-setup-tab="models"]')
-    const forcedSetupClose = await degradedPage.waitForSelector('[data-tab-id="system:setup"] button[title="Close tab"]')
     await forcedSetupClose.click()
-    await new Promise((resolve) => setTimeout(resolve, 100))
-    assert.ok(await degradedPage.$('[data-tab-id="system:setup"]'))
+    assert.ok(await degradedPage.$('[data-workbench-tab-close="system:setup"]'))
+    assert.equal(await degradedPage.$eval('[data-setup-tab="models"]', tab => tab.getAttribute('aria-selected')), 'true')
+    assert.equal(await degradedPage.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.activeTabId), 'system:setup')
     const fallback = await degradedPage.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"][data-editor-fallback="true"] textarea', { timeout: 15_000 })
     assert.ok((await degradedPage.$eval('body', (body) => body.textContent || '')).includes('Advanced editor features are unavailable. You can still edit and save this YAML.'))
     const fallbackHeight = await degradedPage.$eval('[data-editor-fallback="true"]', (editor) => ({
@@ -1942,6 +1961,72 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
     ), { timeout: 15_000 })
     assert.equal(await normalPage.$$eval('[data-tab-id="system:setup"]', (tabs) => tabs.length), 1)
   } finally {
+    await normalPage.close()
+  }
+})
+
+test('successful Setup save refreshes a mounted split-pane Chat; rejected saves keep options and manual Refresh refetches', async () => {
+  const normalPage = await browser.newPage()
+  const modelOptionsRequests = []
+  const modelOptions = { models: [{ key: 'leaf/old-model', label: 'old-model', isVirtual: false }] }
+  await normalPage.setViewport({ width: 1600, height: 900 })
+  await normalPage.evaluateOnNewDocument(() => {
+    const chat = { id: 'chat:model-cache', type: 'chat', sessionId: 'model-cache', title: 'Model cache' }
+    const setup = { id: 'system:setup', type: 'setup', title: 'Setup' }
+    localStorage.setItem('foxwarm_workbench_state_v4', JSON.stringify({ state: {
+      version: 4,
+      tabsById: { [chat.id]: chat, [setup.id]: setup },
+      root: { id: 'split-cache', kind: 'split', direction: 'row', sizes: [50, 50], children: [
+        { id: 'pane-chat', kind: 'pane', tabIds: [chat.id], activeTabId: chat.id },
+        { id: 'pane-setup', kind: 'pane', tabIds: [setup.id], activeTabId: setup.id },
+      ] },
+      focusedPaneId: 'pane-chat',
+    }, version: 1 }))
+  })
+  await attachRequestMocks(normalPage, { modelOptions, modelOptionsRequests })
+  try {
+    await normalPage.goto(`${productionBaseUrl}/#session/model-cache`, { waitUntil: 'networkidle2' })
+    await normalPage.waitForSelector('.foxwarm-model-selector-trigger')
+    await normalPage.evaluate(() => { window.fixtureModelTrigger = document.querySelector('.foxwarm-model-selector-trigger') })
+    await normalPage.click('.foxwarm-model-selector-trigger')
+    await normalPage.waitForSelector('[data-model-option-key="leaf/old-model"]')
+    await normalPage.keyboard.press('Escape')
+    assert.equal(modelOptionsRequests.length, 1, 'opening the picker reuses the initial model request')
+
+    await normalPage.click('[data-setup-tab="models"]')
+    await normalPage.waitForSelector('[data-setup-section="models"] [data-editor-ready="true"]')
+    await normalPage.click('[data-setup-section="models"] .view-lines')
+    await normalPage.keyboard.down('Control')
+    await normalPage.keyboard.press('a')
+    await normalPage.keyboard.up('Control')
+    await normalPage.keyboard.type('default: leaf/new-model\nproviders:\n  leaf:\n    providerType: openai-completions\n    models: [new-model]\n')
+    modelOptions.models = [{ key: 'leaf/new-model', label: 'new-model', isVirtual: false }]
+    await normalPage.click('button::-p-text(Save models)')
+    await normalPage.waitForFunction(() => document.querySelector('[data-setup-section="models"] [role="status"]')?.textContent?.includes('Models saved.'))
+    await waitForItems(modelOptionsRequests, 2)
+    assert.equal(await normalPage.evaluate(() => window.fixtureModelTrigger === document.querySelector('.foxwarm-model-selector-trigger')), true)
+    await normalPage.click('.foxwarm-model-selector-trigger')
+    await normalPage.waitForSelector('[data-model-option-key="leaf/new-model"]')
+    assert.equal(await normalPage.$('[data-model-option-key="leaf/old-model"]'), null)
+    assert.equal(modelOptionsRequests.length, 2)
+    await normalPage.keyboard.press('Escape')
+
+    saveError = 'Rejected model configuration'
+    modelOptions.models = [{ key: 'leaf/rejected-model', label: 'rejected-model', isVirtual: false }]
+    await normalPage.click('button::-p-text(Save models)')
+    await normalPage.waitForFunction(() => document.querySelector('[data-setup-section="models"] [role="alert"]')?.textContent?.includes('Rejected model configuration'))
+    await normalPage.click('.foxwarm-model-selector-trigger')
+    await normalPage.waitForSelector('[data-model-option-key="leaf/new-model"]')
+    assert.equal(await normalPage.$('[data-model-option-key="leaf/rejected-model"]'), null)
+    assert.equal(modelOptionsRequests.length, 2, 'failed saves do not invalidate the accepted options')
+
+    modelOptions.models = [{ key: 'leaf/manual-model', label: 'manual-model', isVirtual: false }]
+    await normalPage.click('button[aria-label="Refresh models"]')
+    await normalPage.waitForSelector('[data-model-option-key="leaf/manual-model"]')
+    assert.equal(await normalPage.$('[data-model-option-key="leaf/new-model"]'), null)
+    assert.equal(modelOptionsRequests.length, 3)
+  } finally {
+    saveError = null
     await normalPage.close()
   }
 })

@@ -7,7 +7,7 @@ import type { Session } from './types';
 import { canonicalPotentialPathSync, resolveAgentPath } from './utils/pathResolve';
 import { RpcError } from './rpc';
 import { resolveNodeTransferPath } from './nodeFileTransfer';
-import { parseApplyPatchInput } from './applyPatch';
+import { parseApplyPatchInput } from '../packages/shared/dist/applyPatch';
 import { requireVerifiedMcpInboundExternalId, type VerifiedMcpInboundPrincipal } from './mcpInboundConfig';
 
 export const TOOL_AUTH_CONFIG_PATH = path.join(STATE_DIR, 'tool-authorization.yaml');
@@ -473,12 +473,12 @@ function matchesRule(rule: ToolAuthorizationRule, request: ToolAuthorizationRequ
     && matchesArgs(rule.match.args, request)
     && matchesPath(rule.match.path, request);
 }
-function matchesRuleIdentity(rule: ToolAuthorizationRule, request: ToolAuthorizationRequest): boolean {
+function matchesRuleIdentity(rule: ToolAuthorizationRule, request: ToolAuthorizationRequest, targetNodeUnknown = false): boolean {
   return (rule.match.agent === undefined || (request.principal === 'internal' && matchesScalar(rule.match.agent, request.agent)))
     && matchesScalar(rule.match.session, request.session)
     && (rule.match.externalId === undefined || (request.principal === 'external' && matchesScalar(rule.match.externalId, request.externalId)))
     && matchesTool(rule.match.tool, request.tool)
-    && matchesScalar(rule.match.targetNode, request.targetNode);
+    && (targetNodeUnknown || matchesScalar(rule.match.targetNode, request.targetNode));
 }
 export async function evaluateToolAuthorization(request: ToolAuthorizationRequest): Promise<ToolAuthorizationEvaluation> {
   return evaluateToolAuthorizationPolicy(await loadToolAuthorizationPolicy(), request);
@@ -490,12 +490,20 @@ export function toolAuthorizationNeedsSessionTarget(policy: ToolAuthorizationPol
   return policy.rules.some(rule => rule.enabled && matchesRuleIdentity(rule, request)
     && !!rule.match.args && Object.values(rule.match.args).some(matcher => isPlainRecord(matcher) && 'session' in matcher));
 }
-export function isToolAuthorizationPotentiallyVisibleSync(request: ToolAuthorizationRequest): boolean {
+export interface ToolAuthorizationVisibilityProjection {
+  /** A model-facing builtin's Node selector has not been supplied yet. */
+  targetNodeUnknown?: boolean;
+}
+export function isToolAuthorizationPotentiallyVisibleSync(
+  request: ToolAuthorizationRequest,
+  projection: ToolAuthorizationVisibilityProjection = {},
+): boolean {
   const policy = loadToolAuthorizationPolicySync();
   for (const rule of policy.rules) {
-    if (!rule.enabled || !matchesRuleIdentity(rule, request)) continue;
+    if (!rule.enabled || !matchesRuleIdentity(rule, request, projection.targetNodeUnknown)) continue;
     const conditional = rule.match.path !== undefined
-      || (rule.match.args !== undefined && Object.keys(rule.match.args).length > 0);
+      || (rule.match.args !== undefined && Object.keys(rule.match.args).length > 0)
+      || (projection.targetNodeUnknown === true && rule.match.targetNode !== undefined);
     if (!conditional) return rule.action === 'allow';
     if (rule.action === 'allow') return true;
   }

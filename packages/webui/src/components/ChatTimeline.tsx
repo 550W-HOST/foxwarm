@@ -23,6 +23,7 @@ import {
 } from './chatShared'
 import ImageParts, { ImageItem } from './ImageParts'
 import ReasoningCard from './ReasoningCard'
+import { getReasoningRuns, type ReasoningRunPart } from './reasoningParts'
 import MarkdownHtmlSegment from './MarkdownHtmlSegment'
 import WebSearchCard from './WebSearchCard'
 import { getWebSearchAction, type WebSearchAction } from '../webSearchAction'
@@ -43,6 +44,7 @@ import SpecialBlock, { MermaidDiagram } from './SpecialBlock'
 import PastedTextBlock from './PastedTextBlock'
 import { PASTED_TEXT_CLOSE, PASTED_TEXT_OPEN, parsePastedTextSegments, type PastedTextSegment } from '../pastedText'
 import { formatTimelineTimeMarker, type TimelineTimeMarker } from './timelineTime'
+import type { SessionSearchMatch } from './chatSessionSearch'
 import { splitGeneratedAttachmentName } from '../attachmentRefs'
 import {
   formatCompactDuration,
@@ -63,6 +65,7 @@ import {
 interface ChatTimelineProps {
   sessionId: string
   messages: Message[]
+  isRunningTool?: boolean
   isMobile: boolean
   groupTools: boolean
   showUsageBadge: boolean
@@ -71,6 +74,7 @@ interface ChatTimelineProps {
   onOpenCodeFile?: OpenCodeFileHandler
   onOpenCodeCommit?: OpenCodeCommitHandler
   nestedDepth?: number
+  searchTarget?: SessionSearchMatch | null
 }
 
 const getUsageTotalTokens = (usage: NormalizedTokenUsage) => (
@@ -350,15 +354,19 @@ const MarkdownContent = memo(function MarkdownContent({ text, className }: { tex
         }
         if (segment.kind === 'latex') {
           return (
-            <SpecialBlock key={`markdown-token-${segment.tokenIndex}`} kind="latex" label="LaTeX" raw={segment.raw}>
-              <div className="foxwarm-special-block-latex min-w-0 max-w-full overflow-x-auto" dangerouslySetInnerHTML={{ __html: segment.html }} />
-            </SpecialBlock>
+            <div key={`markdown-token-${segment.tokenIndex}`} data-search-exclude className="contents">
+              <SpecialBlock kind="latex" label="LaTeX" raw={segment.raw}>
+                <div className="foxwarm-special-block-latex min-w-0 max-w-full overflow-x-auto" dangerouslySetInnerHTML={{ __html: segment.html }} />
+              </SpecialBlock>
+            </div>
           )
         }
         return (
-          <SpecialBlock key={`markdown-token-${segment.tokenIndex}`} kind="mermaid" label="Mermaid" raw={segment.raw}>
-            <MermaidDiagram source={segment.source} />
-          </SpecialBlock>
+          <div key={`markdown-token-${segment.tokenIndex}`} data-search-exclude className="contents">
+            <SpecialBlock kind="mermaid" label="Mermaid" raw={segment.raw}>
+              <MermaidDiagram source={segment.source} />
+            </SpecialBlock>
+          </div>
         )
       })}
     </div>
@@ -445,7 +453,7 @@ type AttachmentCorrelation = {
   imagePart?: Message['parts'][number]
 }
 
-function getPartDisplayText(part: Message['parts'][number]): string {
+export function getPartDisplayText(part: Message['parts'][number]): string {
   return part.text || (part.system ? formatStructuredSystemText(part.system) : '')
 }
 
@@ -487,7 +495,7 @@ function UserWrapperBoundaryBreak({ afterMetadata }: { afterMetadata: boolean })
   )
 }
 
-function findAttachmentCorrelations(parts: Message['parts']): Map<string, AttachmentCorrelation> {
+export function findAttachmentCorrelations(parts: Message['parts']): Map<string, AttachmentCorrelation> {
   const correlations = new Map<string, AttachmentCorrelation>()
   const activeRefs = new Set<string>()
   for (const part of parts) {
@@ -520,7 +528,7 @@ function findAttachmentCorrelations(parts: Message['parts']): Map<string, Attach
   return correlations
 }
 
-function stripGeneratedDescriptorLines(text: string, correlations: Map<string, AttachmentCorrelation>): string {
+export function stripGeneratedDescriptorLines(text: string, correlations: Map<string, AttachmentCorrelation>): string {
   const descriptors = new Set([...correlations.values()].map(item => item.descriptorText))
   return parsePastedTextSegments(text).map(segment => segment.kind === 'pasted-text'
     ? `${PASTED_TEXT_OPEN}${segment.text}${PASTED_TEXT_CLOSE}`
@@ -530,7 +538,7 @@ function stripGeneratedDescriptorLines(text: string, correlations: Map<string, A
 function AttachmentHistoryBlock({ correlation }: { correlation: AttachmentCorrelation }) {
   const { ref, kind, name, mimeType: mime, imagePart } = correlation
   return (
-    <span className="foxwarm-inline-history-attachment my-1 inline-flex max-w-full items-center gap-2 rounded-md border border-fw-border bg-fw-surface-raised px-2 py-1.5 align-middle text-sm shadow-sm" data-attachment-ref={ref}>
+    <span data-search-exclude className="foxwarm-inline-history-attachment my-1 inline-flex max-w-full items-center gap-2 rounded-md border border-fw-border bg-fw-surface-raised px-2 py-1.5 align-middle text-sm shadow-sm" data-attachment-ref={ref}>
       {kind === 'image' && imagePart
         ? <ImageItem part={imagePart} label={name} imageClassName="h-12 w-12 shrink-0 object-cover" />
         : <span aria-hidden="true">{kind === 'image' ? '🖼' : '📎'}</span>}
@@ -542,7 +550,7 @@ function AttachmentHistoryBlock({ correlation }: { correlation: AttachmentCorrel
   )
 }
 
-const CollapsibleUserText = memo(function CollapsibleUserText({ part, showUserMessageMetadata, correlations, inlineFlow = false }: { part: Message['parts'][number]; showUserMessageMetadata: boolean; correlations: Map<string, AttachmentCorrelation>; inlineFlow?: boolean }) {
+const CollapsibleUserText = memo(function CollapsibleUserText({ part, showUserMessageMetadata, correlations, inlineFlow = false, searchReveal = false, searchSurface, searchPartIndex, searchPastedIndex }: { part: Message['parts'][number]; showUserMessageMetadata: boolean; correlations: Map<string, AttachmentCorrelation>; inlineFlow?: boolean; searchReveal?: boolean; searchSurface?: SessionSearchMatch['surface']; searchPartIndex?: number; searchPastedIndex?: number }) {
   const text = stripGeneratedDescriptorLines(getPartDisplayText(part), correlations)
   const segments = useMemo<Array<PastedTextSegment | { kind: 'attachment'; tagText: string; ref: string }>>(() => {
     const output: Array<PastedTextSegment | { kind: 'attachment'; tagText: string; ref: string }> = []
@@ -560,22 +568,26 @@ const CollapsibleUserText = memo(function CollapsibleUserText({ part, showUserMe
     }
     return output
   }, [correlations, text])
+  const pastedOrdinalBySegment = useMemo(() => {
+    let ordinal = 0
+    return segments.map(segment => segment.kind === 'pasted-text' ? ordinal++ : -1)
+  }, [segments])
   const visibleClassificationText = useMemo(
     () => segments.filter((segment): segment is Extract<typeof segments[number], { kind: 'text' }> => segment.kind === 'text').map(segment => segment.text).join(''),
     [segments],
   )
   const isSystemMessage = isCollapsibleSystemText(visibleClassificationText)
   const [expanded, setExpanded] = useState(false)
-  const shouldCollapse = isSystemMessage && !expanded
+  const shouldCollapse = isSystemMessage && !expanded && !searchReveal
 
   return (
     <div className={inlineFlow ? 'contents' : undefined}>
       <div className={`${shouldCollapse ? 'overflow-hidden' : ''} ${inlineFlow ? 'contents' : ''}`} style={shouldCollapse ? { maxHeight: 'calc(1.5em * 4)' } : {}}>
-        <pre className={`foxwarm-user-message-text foxwarm-user-line-layout max-w-full whitespace-pre-wrap break-words font-sans ${inlineFlow ? 'inline' : ''}`} style={{ lineHeight: 0 }}>
+        <pre data-search-surface="user" data-search-part-index={searchPartIndex} className={`foxwarm-user-message-text foxwarm-user-line-layout max-w-full whitespace-pre-wrap break-words font-sans ${inlineFlow ? 'inline' : ''}`} style={{ lineHeight: 0 }}>
           {segments.map((segment, segmentIndex) => segment.kind === 'attachment'
             ? <AttachmentHistoryBlock key={`attachment-${segmentIndex}`} correlation={correlations.get(segment.ref)!} />
             : segment.kind === 'pasted-text'
-            ? <PastedTextBlock key={`pasted-${segmentIndex}`} text={segment.text} />
+            ? <PastedTextBlock key={`pasted-${segmentIndex}`} text={segment.text} searchPartIndex={searchPartIndex} searchPastedIndex={pastedOrdinalBySegment[segmentIndex]} searchReveal={searchReveal && searchSurface === 'pasted' && searchPastedIndex === pastedOrdinalBySegment[segmentIndex]} />
             : (
               <span key={`text-${segmentIndex}`}>
                 {renderUserPreLines(segment.text, showUserMessageMetadata, '1em', (line) => {
@@ -583,6 +595,7 @@ const CollapsibleUserText = memo(function CollapsibleUserText({ part, showUserMe
                   return (
                     <span
                       className={isPrefix ? 'foxwarm-lightweight-metadata-line' : undefined}
+                      data-search-exclude={isPrefix || undefined}
                       style={isPrefix
                         ? { fontSize: '70%', lineHeight: '1em', opacity: 0.7 }
                         : { fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
@@ -608,8 +621,9 @@ const CollapsibleUserText = memo(function CollapsibleUserText({ part, showUserMe
   )
 })
 
-const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, messageKey }: { msg: Message; messageKey: string }) {
-  const [expanded, setExpanded] = useState(false)
+const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, messageKey, searchReveal = false }: { msg: Message; messageKey: string; searchReveal?: boolean }) {
+  const [manualExpanded, setExpanded] = useState(false)
+  const expanded = manualExpanded || searchReveal
   const { ref: heightRef, prepare } = useThreadCardHeightTransition(expanded)
   const toggle = () => { prepare(); setExpanded(current => !current) }
   const headerFade = useThreadCardOverflowFade<HTMLSpanElement>('right', !expanded)
@@ -676,13 +690,14 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
           </div>
         )}
         {expanded && (
-          <pre className="foxwarm-system-message-body max-w-full whitespace-pre-wrap break-words font-sans text-sm" style={{ lineHeight: '1.5em' }}>
+          <pre data-search-surface="system" className="foxwarm-system-message-body max-w-full whitespace-pre-wrap break-words font-sans text-sm" style={{ lineHeight: '1.5em' }}>
             {renderedText.split('\n').map((line, lineIdx, lines) => {
               const isPrefix = isSystemLikeText(line)
               const nextIsPrefix = lineIdx < lines.length - 1 && isSystemLikeText(lines[lineIdx + 1])
               return (
                 <span
                   key={`${messageKey}-${lineIdx}`}
+                  data-search-exclude={isPrefix || undefined}
                   style={isPrefix
                     ? { display: 'block', fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }
                     : { opacity: 0.92 }
@@ -745,8 +760,9 @@ const WebSearchCitationLinks = memo(function WebSearchCitationLinks({ annotation
   )
 })
 
-const AssistantTextCard = memo(function AssistantTextCard({ text, message, annotations, onOpenCodeCommit }: { text: string; message: Message; annotations?: OpenAIResponsesAnnotation[]; onOpenCodeCommit?: OpenCodeCommitHandler }) {
+const AssistantTextCard = memo(function AssistantTextCard({ text, message, annotations, onOpenCodeCommit, searchReveal = false, searchPartIndex }: { text: string; message: Message; annotations?: OpenAIResponsesAnnotation[]; onOpenCodeCommit?: OpenCodeCommitHandler; searchReveal?: boolean; searchPartIndex?: number }) {
   const [viewMode, setViewMode] = useState<ViewMode>('rendered')
+  const displayedViewMode = searchReveal ? 'rendered' : viewMode
   const [copied, setCopied] = useState(false)
   const copyResetTimeoutRef = useRef<number | null>(null)
   const jsonText = useMemo(() => viewMode === 'json' ? JSON.stringify(message, null, 2) : '', [message, viewMode])
@@ -781,13 +797,13 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
   return (
     <div className="foxwarm-assistant-message-card min-w-0 max-w-full bg-fw-assistant-surface text-fw-assistant-text border border-fw-border px-2 py-2 rounded-lg cursor-text relative group">
       <div className="foxwarm-assistant-action-buttons absolute right-1 top-1 flex gap-0.5 opacity-0 transition-opacity">
-        <IconToggleButton onClick={() => setViewMode('rendered')} active={viewMode === 'rendered'} title="Rendered (Markdown)">
+        <IconToggleButton onClick={() => setViewMode('rendered')} active={displayedViewMode === 'rendered'} title="Rendered (Markdown)">
           <Eye size={12} />
         </IconToggleButton>
-        <IconToggleButton onClick={() => setViewMode('raw')} active={viewMode === 'raw'} title="Raw Text">
+        <IconToggleButton onClick={() => setViewMode('raw')} active={displayedViewMode === 'raw'} title="Raw Text">
           <Code size={12} />
         </IconToggleButton>
-        <IconToggleButton onClick={() => setViewMode('json')} active={viewMode === 'json'} title="JSON">
+        <IconToggleButton onClick={() => setViewMode('json')} active={displayedViewMode === 'json'} title="JSON">
           <FileJson size={14} />
         </IconToggleButton>
         <IconToggleButton onClick={handleCopy} active={copied} title={copied ? 'Copied' : 'Copy Raw Text'}>
@@ -795,8 +811,8 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
         </IconToggleButton>
       </div>
 
-      {viewMode === 'rendered' ? (
-        <div className="foxwarm-assistant-message-markdown">
+      {displayedViewMode === 'rendered' ? (
+        <div data-search-surface="model" data-search-part-index={searchPartIndex} className="foxwarm-assistant-message-markdown">
           {renderedSegments.map((segment, index) => segment.kind === 'markdown' ? (
             <MarkdownContent
               key={`markdown-${index}`}
@@ -804,15 +820,15 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
               className="foxwarm-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-fw-assistant-code-surface prose-pre:text-fw-assistant-code-text prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0"
             />
           ) : segment.kind === 'commit' ? (
-            <CommitMarkerCard key={`commit-${index}-${segment.target.commitId}`} target={segment.target} onOpen={onOpenCodeCommit} />
+            <div key={`commit-${index}-${segment.target.commitId}`} data-search-exclude className="contents"><CommitMarkerCard target={segment.target} onOpen={onOpenCodeCommit} /></div>
           ) : (
             <pre key={`invalid-commit-${index}`} className="my-2 whitespace-pre-wrap rounded border border-fw-warning-border bg-fw-warning-surface px-2 py-1.5 font-mono text-xs text-fw-warning dark:border-fw-warning-border dark:bg-fw-warning-surface-strong/30 dark:text-fw-warning" title="Invalid Foxwarm commit marker">
               {segment.raw}
             </pre>
           ))}
-          <WebSearchCitationLinks annotations={annotations} />
+          <div data-search-exclude className="contents"><WebSearchCitationLinks annotations={annotations} /></div>
         </div>
-      ) : viewMode === 'raw' ? (
+      ) : displayedViewMode === 'raw' ? (
         <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-fw-text-strong">{text}</pre>
       ) : (
         <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-fw-text-strong">{jsonText}</pre>
@@ -821,7 +837,13 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
   )
 })
 
+type ExpandedTools = ReadonlyMap<string, ReadonlySet<string>>
+type ToolToggleHandler = (messageKey: string, toolKey: string, expanded: boolean, groupKey?: string) => void
+const EMPTY_TOOL_KEYS: ReadonlySet<string> = new Set()
+
 interface MessageRowProps {
+  expandedTools: ExpandedTools
+  onToolToggle: ToolToggleHandler
   row: TimelineRowView
   isMobile: boolean
   showUserMessageMetadata: boolean
@@ -832,6 +854,7 @@ interface MessageRowProps {
   renderNestedMessages: (messages: Message[], keyPrefix: string, nestedDepth: number) => ReactNode
   groupFirst?: boolean
   surface?: 'all' | 'ordinary' | 'grouped'
+  searchTarget?: SessionSearchMatch | null
 }
 
 const MessageRow = memo(function MessageRow({
@@ -845,11 +868,15 @@ const MessageRow = memo(function MessageRow({
   renderNestedMessages,
   groupFirst = false,
   surface = 'all',
+  searchTarget,
+  expandedTools,
+  onToolToggle,
 }: MessageRowProps) {
   const {
     key: messageKey,
     msg,
     pairedToolResponse,
+    runningTool,
     collapsedGroup,
     hideFoldedThinking,
     suppressWebSearchCards,
@@ -862,21 +889,31 @@ const MessageRow = memo(function MessageRow({
     anchorKey,
     scrollbarAnchorKey,
   } = row
-  const visibleModelParts = useMemo<Array<{ part: Message['parts'][number]; webSearchAction: WebSearchAction | null; partIndex: number }>>(() => {
-    const visible: Array<{ part: Message['parts'][number]; webSearchAction: WebSearchAction | null; partIndex: number }> = []
+  const toolDisclosure = {
+    expandedToolKeys: expandedTools.get(messageKey) || EMPTY_TOOL_KEYS,
+    onToolToggle: useCallback((toolKey: string, expanded: boolean) => {
+      onToolToggle(messageKey, toolKey, expanded, row.group?.key)
+    }, [messageKey, onToolToggle, row.group?.key]),
+  }
+  const rowSearchTarget = searchTarget?.rowKey === messageKey ? searchTarget : null
+  const reasoningRuns = useMemo(() => getReasoningRuns(msg.parts), [msg.parts])
+  const reasoningTokens = msg.__meta?.usage?.reasoningTokens
+  const visibleModelParts = useMemo(() => {
+    const visible: Array<{ part: Message['parts'][number]; webSearchAction: WebSearchAction | null; partIndex: number; reasoningRun?: ReasoningRunPart[] }> = []
+    const runsByStart = new Map(reasoningRuns.map(run => [run[0].partIndex, run]))
     for (const [partIndex, part] of msg.parts.entries()) {
-      if (part.text || part.system || part.thinking) {
-        visible.push({ part, webSearchAction: null, partIndex })
-        continue
-      }
+      const reasoningRun = runsByStart.get(partIndex)
+      if (reasoningRun) visible.push({ part, webSearchAction: null, partIndex, reasoningRun })
+      // Mixed-field parts retain their ordinary output alongside their reasoning.
+      if (part.text || part.system) visible.push({ part, webSearchAction: null, partIndex })
       const webSearchAction = msg.role === 'model'
         ? getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem)
         : null
       if (webSearchAction) visible.push({ part, webSearchAction, partIndex })
     }
     return visible
-  }, [msg.parts])
-  const textLikeParts = useMemo(() => visibleModelParts.map(item => item.part), [visibleModelParts])
+  }, [msg.parts, msg.role, reasoningRuns])
+  const textLikeParts = useMemo(() => visibleModelParts.filter(item => !item.reasoningRun).map(item => item.part), [visibleModelParts])
   const attachmentCorrelations = useMemo(() => findAttachmentCorrelations(msg.parts), [msg.parts])
   const associatedImageParts = useMemo(() => new Set([...attachmentCorrelations.values()].flatMap(item => item.imagePart ? [item.imagePart] : [])), [attachmentCorrelations])
   const hasInlineAttachmentFlow = msg.role === 'user' && attachmentCorrelations.size > 0
@@ -897,7 +934,7 @@ const MessageRow = memo(function MessageRow({
   const belongsToOrdinarySurface = (item: typeof visibleModelParts[number]) => {
     if (msg.role !== 'model') return false // Tool/result and event rows remain group content.
     if (item.webSearchAction) return hasVisibleTextContent // Preserve the text-bearing hosted-search exception.
-    if (item.part.thinking) return firstGroupContentPartIndex !== -1 && item.partIndex < firstGroupContentPartIndex
+    if (item.reasoningRun) return firstGroupContentPartIndex !== -1 && item.partIndex < firstGroupContentPartIndex
     return true
   }
   const ordinaryParts = surface === 'all' ? visibleModelParts : visibleModelParts.filter(belongsToOrdinarySurface)
@@ -910,6 +947,7 @@ const MessageRow = memo(function MessageRow({
 
   return (
     <div
+      data-search-row={messageKey}
       className={`flex w-full min-w-0 max-w-full ${systemLikeMessage ? 'justify-start' : (msg.role === 'user' ? 'justify-end' : 'justify-start')} ${groupFirst ? '' : marginClass}`}
       data-chat-message-anchor-key={suppressAnchor ? undefined : anchorKey}
       data-context-scrollbar-anchor-key={suppressAnchor ? undefined : scrollbarAnchorKey}
@@ -922,7 +960,7 @@ const MessageRow = memo(function MessageRow({
         }`}
       >
         {systemLikeMessage ? (
-          <SystemLikeMessageCard msg={msg} messageKey={messageKey} />
+          <SystemLikeMessageCard msg={msg} messageKey={messageKey} searchReveal={rowSearchTarget?.surface === 'system'} />
         ) : msg.role === 'user' ? (
           <div className={hasInlineAttachmentFlow ? 'min-w-0' : 'flex min-w-0 flex-col'}>
             {textLikeParts.map((part, partIdx) => (
@@ -932,7 +970,7 @@ const MessageRow = memo(function MessageRow({
                   && !hasInlineAttachmentFlow
                   && !isWrappedDirectChannelText(part.system)
                   ? <InlineMetaPart systemText={formatStructuredSystemText(part.system)} isUser={true} showUserMessageMetadata={showUserMessageMetadata} />
-                  : <CollapsibleUserText part={part} showUserMessageMetadata={showUserMessageMetadata} correlations={attachmentCorrelations} inlineFlow={hasInlineAttachmentFlow} />}
+                  : <CollapsibleUserText part={part} showUserMessageMetadata={showUserMessageMetadata} correlations={attachmentCorrelations} inlineFlow={hasInlineAttachmentFlow} searchPartIndex={msg.parts.indexOf(part)} searchSurface={rowSearchTarget?.surface} searchPastedIndex={rowSearchTarget?.pastedIndex} searchReveal={(rowSearchTarget?.surface === 'user' || rowSearchTarget?.surface === 'pasted') && rowSearchTarget.partIndex === msg.parts.indexOf(part)} />}
                 {showUserMessageMetadata && inlineUserWrapperBoundaries?.open === partIdx && <UserWrapperBoundaryBreak afterMetadata />}
               </div>
             ))}
@@ -940,36 +978,36 @@ const MessageRow = memo(function MessageRow({
           </div>
         ) : (
           <div className={`flex min-w-0 max-w-full flex-col ${usageAnchorRelative ? 'relative' : ''}`}>
-            {displayedParts.map(({ part, webSearchAction, partIndex }, partIdx) => {
+            {displayedParts.map(({ part, webSearchAction, partIndex, reasoningRun }, partIdx) => {
               if (webSearchAction) {
                 if (suppressWebSearchCards && !hasVisibleTextContent) {
                   return null
                 }
                 return <WebSearchCard key={`web-search-${partIdx}`} action={webSearchAction} />
               }
-              if (part.system) {
-                return <InlineMetaPart key={`model-system-${partIdx}`} systemText={formatStructuredSystemText(part.system)} isUser={false} />
-              }
-              if (part.thinking) {
-                // Ordinary model output splits a group: thinking before that content belongs
-                // to the group that ends there; later thinking belongs to this row's group.
+              if (reasoningRun) {
+                // Ordinary output separates prior-group reasoning from this row's group.
                 const foldedIntoGroupAbove = firstGroupContentPartIndex !== -1 && partIndex < firstGroupContentPartIndex
                 const folded = foldedIntoGroupAbove ? hideFoldedThinking : collapsedGroup
-                if (folded) {
-                  return null
-                }
-                return <ReasoningCard key={`thinking-${partIdx}`} thinking={part.thinking} tone="message" />
+                if (folded) return null
+                const tokens = partIndex === reasoningRuns[0]?.[0].partIndex
+                  && typeof reasoningTokens === 'number' && Number.isFinite(reasoningTokens) && reasoningTokens >= 0
+                    ? reasoningTokens : undefined
+                return <ReasoningCard key={`thinking-${partIndex}`} thinking={reasoningRun.map(item => item.thinking).join('\n')} parts={reasoningRun} reasoningTokens={tokens} tone="message" searchReveal={rowSearchTarget?.surface === 'reasoning' && reasoningRun.some(item => item.partIndex === rowSearchTarget.partIndex)} />
+              }
+              if (part.system) {
+                return <InlineMetaPart key={`model-system-${partIdx}`} systemText={formatStructuredSystemText(part.system)} isUser={false} />
               }
               // Compare source part indices: `partIndex` indexes `msg.parts` like the folded-thinking
               // check above, while `partIdx` skips parts that are not rendered as model content.
               if (contextBlock && partIndex === firstTextPartIndex && part.text) {
-                return <ContextBlockCard key={`ctx-block-${contextBlock.id}`} sessionId={sessionId} messageKey={messageKey} block={contextBlock} text={part.text} nestedDepth={nestedDepth} renderNestedMessages={renderNestedMessages} />
+                return <ContextBlockCard key={`ctx-block-${contextBlock.id}`} sessionId={sessionId} messageKey={messageKey} block={contextBlock} text={part.text} nestedDepth={nestedDepth} renderNestedMessages={renderNestedMessages} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'ctx' && rowSearchTarget.partIndex === partIndex} />
               }
-              return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={part.providerMeta?.openaiResponses?.annotations} onOpenCodeCommit={onOpenCodeCommit} />
+              return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={part.providerMeta?.openaiResponses?.annotations} onOpenCodeCommit={onOpenCodeCommit} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'model' && rowSearchTarget.partIndex === partIndex} />
             })}
             {(surface !== 'grouped' || msg.role !== 'model') && <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />}
-            {surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup && pairedToolResponse ? <InterleavedToolGroup msg={msg} nextMsg={pairedToolResponse} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} /> : <ToolCallsBlock msg={msg} onOpenCodeFile={onOpenCodeFile} />)}
-            {surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup ? null : <ToolResponsesBlock msg={msg} />)}
+            {surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup && pairedToolResponse ? <InterleavedToolGroup {...toolDisclosure} runningTool={runningTool} msg={msg} nextMsg={pairedToolResponse} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} /> : <ToolCallsBlock {...toolDisclosure} runningTool={runningTool} msg={msg} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} />)}
+            {surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup ? null : <ToolResponsesBlock {...toolDisclosure} msg={msg} searchTarget={rowSearchTarget} />)}
             {surface !== 'ordinary' && usageBadge && <ModelUsageAnchor usage={usageBadge.usage} isMobile={isMobile} callCount={usageBadge.callCount} attribution={usageBadge.attribution} sessionId={sessionId} />}
           </div>
         )}
@@ -978,10 +1016,13 @@ const MessageRow = memo(function MessageRow({
   )
 }, (prev, next) => (
   prev.row === next.row &&
+  prev.expandedTools.get(prev.row.key) === next.expandedTools.get(next.row.key) &&
+  prev.onToolToggle === next.onToolToggle &&
   prev.isMobile === next.isMobile &&
   (prev.row.msg.role !== 'user' || prev.row.systemLikeMessage || prev.showUserMessageMetadata === next.showUserMessageMetadata) &&
   prev.groupFirst === next.groupFirst &&
   prev.surface === next.surface &&
+  (prev.searchTarget?.rowKey === prev.row.key ? prev.searchTarget.id : null) === (next.searchTarget?.rowKey === next.row.key ? next.searchTarget.id : null) &&
   prev.sessionId === next.sessionId &&
   prev.nestedDepth === next.nestedDepth &&
   prev.onOpenCodeFile === next.onOpenCodeFile &&
@@ -1045,8 +1086,9 @@ const TimelineTimeSeparator = memo(function TimelineTimeSeparator({ marker }: { 
   )
 })
 
-const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0 }: ChatTimelineProps) {
+const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, isRunningTool = false, isMobile, groupTools, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget }: ChatTimelineProps) {
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
+  const [expandedTools, setExpandedTools] = useState<ExpandedTools>(new Map())
   const rowsCacheRef = useRef<TimelineRowsCache | null>(null)
 
   const renderNestedMessages = useCallback((nestedMessages: Message[], keyPrefix: string, nextNestedDepth: number) => (
@@ -1066,13 +1108,22 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
   ), [groupTools, isMobile, onOpenCodeCommit, onOpenCodeFile, sessionId, showUsageBadge, showUserMessageMetadata])
 
   const rows = useMemo(() => {
-    const result = buildTimelineRows(
-      { messages, isMobile, groupTools, showUsageBadge, showTimeDividers, nestedDepth, expandedGroupKeys: expandedToolGroups },
-      rowsCacheRef.current,
-    )
+    const input = { messages, isRunningTool, isMobile, groupTools, showUsageBadge, showTimeDividers, nestedDepth, expandedGroupKeys: expandedToolGroups }
+    let result = buildTimelineRows(input, rowsCacheRef.current)
+    // A search reveal is transient: include only its owning group without changing manual expansion state.
+    if (searchTarget && groupTools && nestedDepth === 0) {
+      const targetIndex = result.rows.findIndex(row => row.key === searchTarget.rowKey)
+      const targetRow = result.rows[targetIndex]
+      const groupKey = searchTarget.surface === 'reasoning' && targetRow?.hideFoldedThinking
+        ? result.rows.slice(0, targetIndex).reverse().find(row => row.group?.summaryItems.length)?.group?.key
+        : targetRow?.group?.key || searchTarget.groupKey
+      if (groupKey && !expandedToolGroups.has(groupKey)) {
+        result = buildTimelineRows({ ...input, expandedGroupKeys: new Set([...expandedToolGroups, groupKey]) }, result.cache)
+      }
+    }
     rowsCacheRef.current = result.cache
     return result.rows
-  }, [expandedToolGroups, groupTools, isMobile, messages, nestedDepth, showUsageBadge, showTimeDividers])
+  }, [expandedToolGroups, groupTools, isMobile, isRunningTool, messages, nestedDepth, searchTarget, showUsageBadge, showTimeDividers])
 
 
   const groupedRows = useMemo(() => {
@@ -1098,7 +1149,22 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
     })
   }, [])
 
-  const rowProps = { isMobile, showUserMessageMetadata, sessionId, nestedDepth, onOpenCodeFile, onOpenCodeCommit, renderNestedMessages }
+  const handleToolToggle = useCallback<ToolToggleHandler>((messageKey, toolKey, expanded, groupKey) => {
+    setExpandedTools(previous => {
+      const keys = new Set(previous.get(messageKey))
+      if (expanded) keys.add(toolKey)
+      else keys.delete(toolKey)
+      const next = new Map(previous)
+      if (keys.size) next.set(messageKey, keys)
+      else next.delete(messageKey)
+      return next
+    })
+    // Only the user's open action opts the containing run into staying open.
+    // Later group collapse must win even while a member retains its own choice.
+    if (expanded && groupKey) handleGroupToggle(groupKey, true)
+  }, [handleGroupToggle])
+
+  const rowProps = { expandedTools, onToolToggle: handleToolToggle, isMobile, showUserMessageMetadata, sessionId, nestedDepth, onOpenCodeFile, onOpenCodeCommit, renderNestedMessages, searchTarget }
 
   return (
     <div className="foxwarm-chat-timeline min-w-0 max-w-full">
@@ -1110,6 +1176,10 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
       ])}
     </div>
   )
+})
+
+const ChatTimeline = memo(function ChatTimeline(props: ChatTimelineProps) {
+  return <SessionTimeline key={props.sessionId} {...props} />
 })
 
 export default ChatTimeline

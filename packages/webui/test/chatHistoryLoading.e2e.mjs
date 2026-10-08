@@ -50,7 +50,7 @@ async function buildFixtureBundle() {
       entry.settled = true
       const latestSeq = extras.latestSeq ?? messages.reduce((latest, message) => Math.max(latest, message.__meta?.seq || 0), 0)
       entry.resolve(new Response(JSON.stringify({
-        session: { id: extras.sessionId || 'fixture/main', busy: false, runtimeState: { state: 'idle', busy: false, queueLength }, queueLength, messageCount: extras.messageCount ?? messages.length, historyVersion, modelKey: 'fixture/model' },
+        session: { id: extras.sessionId || 'fixture/main', busy: extras.busy ?? false, runtimeState: { state: extras.busy ? 'requesting-model' : 'idle', busy: extras.busy ?? false, queueLength }, queueLength, messageCount: extras.messageCount ?? messages.length, historyVersion, modelKey: 'fixture/model' },
         messages,
         persistentMemorySnapshot: 'snapshot supplied by history',
         queuedMessages: extras.queuedMessages ?? [],
@@ -180,6 +180,7 @@ async function buildFixtureBundle() {
       ...Array.from({ length: count }, (_, index) => React.createElement(Chat, {
         key: generation + '-' + index,
         sessionId, canonicalSessionId: sessionId, sessionDisplayName: 'Fixture',
+        groupTools: new URLSearchParams(location.search).has('groupTools'),
         showUserMessageMetadata: !!window.fixtureShowUserMetadata,
       })),
     ))
@@ -252,37 +253,42 @@ after(async () => {
 test('real Chat ASR WebSocket close after ready unlocks retained partial; final and cancel do not report an error', async () => {
   page = await browser.newPage()
   await page.goto(`${fixtureUrl}?asrClose=1`, { waitUntil: 'load' })
-  const editor = '[role="textbox"][aria-label="Message"]'
-  await page.waitForSelector('button[aria-label="Start recording"]')
-  await page.type(editor, 'before')
-  await page.click('button[aria-label="Start recording"]')
-  await page.waitForFunction(() => window.fixtureAsrSockets().length === 1 && document.querySelector('[role="textbox"][aria-label="Message"]')?.contentEditable === 'false')
-  await page.evaluate(() => window.fixtureAsrSockets()[0].emit({ type: 'partial', text: ' partial' }))
-  await page.waitForFunction(() => document.querySelector('[role="textbox"][aria-label="Message"]')?.textContent === 'before partial')
-  await page.click('button[aria-label="Stop recording and transcribe"]')
-  await page.waitForFunction(() => window.fixtureAsrSockets()[0].sent.some(payload => payload.type === 'stop'))
-  await page.evaluate(() => window.fixtureAsrSockets()[0].fail())
-  await page.waitForFunction(() => document.querySelector('[role="alert"]')?.textContent.includes('closed before the final transcript')
-    && document.querySelector('[role="textbox"][aria-label="Message"]')?.contentEditable === 'true')
-  assert.equal(await page.$eval(editor, node => node.textContent), 'before partial')
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('composer_draft_v1_fixture/main')).segments[0].text), 'before partial')
+  try {
+    const editor = '[role="textbox"][aria-label="Message"]'
+    await page.waitForSelector('button[aria-label="Start recording"]')
+    await page.type(editor, 'before')
+    await page.click('button[aria-label="Start recording"]')
+    await page.waitForFunction(() => window.fixtureAsrSockets().length === 1 && document.querySelector('[role="textbox"][aria-label="Message"]')?.contentEditable === 'false')
+    await page.evaluate(() => window.fixtureAsrSockets()[0].emit({ type: 'partial', text: ' partial' }))
+    await page.waitForFunction(() => document.querySelector('[role="textbox"][aria-label="Message"]')?.textContent === 'before partial')
+    await page.click('button[aria-label="Stop recording and transcribe"]')
+    await page.waitForFunction(() => window.fixtureAsrSockets()[0].sent.some(payload => payload.type === 'stop'))
+    await page.evaluate(() => window.fixtureAsrSockets()[0].fail())
+    await page.waitForFunction(() => document.querySelector('[role="alert"]')?.textContent.includes('closed before the final transcript')
+      && document.querySelector('[role="textbox"][aria-label="Message"]')?.contentEditable === 'true')
+    assert.equal(await page.$eval(editor, node => node.textContent), 'before partial')
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('composer_draft_v1_fixture/main')).segments[0].text), 'before partial')
 
-  await page.click('button[aria-label="Start recording"]')
-  await page.waitForFunction(() => window.fixtureAsrSockets().length === 2)
-  await page.evaluate(() => window.fixtureAsrSockets()[1].emit({ type: 'final', text: ' final' }))
-  await page.waitForFunction(() => document.querySelector('[role="textbox"][aria-label="Message"]')?.contentEditable === 'true')
-  assert.equal(await page.$('[role="alert"]'), null)
-  assert.equal(await page.$eval(editor, node => node.textContent), 'before partial final')
+    await page.click('button[aria-label="Start recording"]')
+    await page.waitForFunction(() => window.fixtureAsrSockets().length === 2)
+    await page.evaluate(() => window.fixtureAsrSockets()[1].emit({ type: 'final', text: ' final' }))
+    await page.waitForFunction(() => document.querySelector('[role="textbox"][aria-label="Message"]')?.contentEditable === 'true')
+    assert.equal(await page.$('[role="alert"]'), null)
+    assert.equal(await page.$eval(editor, node => node.textContent), 'before partial final')
 
-  await page.click('button[aria-label="Start recording"]')
-  await page.waitForFunction(() => window.fixtureAsrSockets().length === 3)
-  await page.evaluate(() => window.renderFixtureChats(0, 1))
-  await page.waitForFunction(() => window.fixtureAsrSockets()[2].readyState === 3)
-  await page.evaluate(() => window.renderFixtureChats(1, 2))
-  await page.waitForSelector(editor)
-  assert.equal(await page.$('[role="alert"]'), null)
-  assert.equal(await page.$eval(editor, node => node.textContent), 'before partial final')
-  await page.close()
+    await page.click('button[aria-label="Start recording"]')
+    await page.waitForFunction(() => window.fixtureAsrSockets().length === 3)
+    await page.evaluate(() => window.renderFixtureChats(0, 1))
+    await page.waitForFunction(() => window.fixtureAsrSockets()[2].readyState === 3)
+    await page.evaluate(() => window.renderFixtureChats(1, 2))
+    await page.waitForSelector(editor)
+    assert.equal(await page.$('[role="alert"]'), null)
+    assert.equal(await page.$eval(editor, node => node.textContent), 'before partial final')
+  } finally {
+    // This fixture deliberately persists the ASR draft; later tests start with a clean composer.
+    await page.evaluate(() => localStorage.removeItem('composer_draft_v1_fixture/main'))
+    await page.close()
+  }
 })
 
 test('page bootstrap endpoints are fetched once across panes, remounts, and model popup opens', async () => {
@@ -1518,4 +1524,131 @@ test('pasted text survives a direct user send and canonical history reload with 
       }
     }
   }
+})
+
+for (const segmented of [false, true]) {
+  test(`busy Chat sends preserve ${segmented ? 'early-commentary suffix' : 'ordinary'} draft through ACK, queue history, and covered offset deltas`, async () => {
+    page = await browser.newPage()
+    await page.goto(fixtureUrl, { waitUntil: 'load' })
+    await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+    await page.evaluate(() => window.resolveFixtureHistory(0, undefined, 0, { busy: true }))
+    await page.waitForFunction(() => document.body.textContent.includes('old history row'))
+    const request = { streamVersion: 2, streamId: 'send-stream', llmRequestId: 'send-request', startedAt: 100 }
+    const historyRows = [{ role: 'user', parts: [{ text: 'old history row' }], __meta: { seq: 1, timestamp: 10 } }]
+    const resolveBusyHistory = (queueLength, queuedMessages = []) => page.evaluate(({ queueLength, queuedMessages, rows }) => {
+      const requestUrl = new URL(window.fixtureRequests.filter(url => url.includes('/history')).at(-1), location.href)
+      const afterSeq = requestUrl.searchParams.get('afterSeq')
+      window.resolveFixtureHistory(queueLength, afterSeq === null ? rows : rows.filter(row => row.__meta.seq > Number(afterSeq)), 0,
+        { busy: true, latestSeq: rows.at(-1).__meta.seq, messageCount: rows.length, queuedMessages })
+    }, { queueLength, queuedMessages, rows: historyRows })
+    const outputIndex = segmented ? 1 : 0
+    const delta = (sequence, offset, text) => ({
+      ...request, type: 'model-stream-update', sequenceStart: sequence, sequence,
+      ...(segmented ? { partDeltas: [{ outputIndex, kind: 'text', contentIndex: 0, phase: 'final_answer', textDelta: { offset, text } }] } : { textDelta: { offset, text } }),
+    })
+    const emit = event => page.evaluate(event => window.emitFixtureEvent({ type: 'session-event', event }), event)
+    await emit({ ...request, type: 'model-stream-reset', sequence: 0 })
+    if (segmented) {
+      await emit({ ...request, type: 'model-stream-update', sequenceStart: 1, sequence: 1,
+        partDeltas: [{ outputIndex: 0, kind: 'text', contentIndex: 0, phase: 'commentary', textDelta: { offset: 0, text: 'Committed commentary.' } }] })
+      const commentary = { role: 'model', parts: [{ text: 'Committed commentary.', phase: 'commentary' }],
+        __meta: { seq: 2, timestamp: 110, llmRequestId: 'send-request', llmSegment: { outputStart: 0, outputEndExclusive: 1, complete: false } } }
+      historyRows.push(commentary)
+      await page.evaluate(message => window.emitFixtureMessage(message), commentary)
+      await emit({ ...request, type: 'model-stream-update', sequenceStart: 2, sequence: 2, trimBeforeOutputIndex: 1 })
+    }
+    let sequence = segmented ? 3 : 1
+    await emit(delta(sequence++, 0, 'Before send '))
+    const draftSelector = `[data-search-row="llm-request-send-request${segmented ? '-output-1' : ''}"]`
+    const readDraft = () => page.$eval(draftSelector, node => node.textContent.trim())
+    await page.waitForFunction(selector => document.querySelector(selector)?.textContent.trim() === 'Before send', {}, draftSelector)
+    await page.type('[role="textbox"][aria-label="Message"]', 'Input while streaming')
+    await page.click('[aria-label="Send message"]')
+    await page.waitForFunction(() => window.fixtureMessageBodies.length === 1)
+    assert.equal(await readDraft(), 'Before send', 'POST pending retains the active prefix')
+    await emit(delta(sequence++, 12, 'after send'))
+    await page.waitForFunction(selector => document.querySelector(selector)?.textContent.trim() === 'Before send after send', {}, draftSelector)
+    await page.evaluate(() => window.resolveFixtureMessages())
+    await page.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
+    const lastSeq = segmented ? 2 : 1
+    await resolveBusyHistory(1, [{ role: 'user', parts: [{ text: 'Input while streaming' }], __meta: { temporary: true, queuedPreview: true, synthetic: 'send-preview' } }])
+    await page.waitForFunction(() => document.querySelector('[data-queued-preview]')?.textContent.includes('Input while streaming'))
+    assert.equal(await readDraft(), 'Before send after send', 'ACK and authoritative queue history retain the prefix')
+
+    // A duplicate covered event is ignored; a new sequence replaces its addressed suffix.
+    await emit(delta(sequence - 1, 12, 'must not appear'))
+    await emit(delta(sequence++, 12, 'after send plus overlap'))
+    await page.waitForFunction(selector => document.querySelector(selector)?.textContent.trim() === 'Before send after send plus overlap', {}, draftSelector)
+    const sent = await page.evaluate(() => window.fixtureMessageBodies[0])
+    const canonicalUser = { role: 'user', parts: sent.parts, __meta: { seq: lastSeq + 1, timestamp: 120, clientMessageId: sent.clientMessageId } }
+    historyRows.push(canonicalUser)
+    await page.evaluate(message => window.emitFixtureMessage(message), canonicalUser)
+    await page.waitForFunction(() => document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('Input while streaming'))
+    assert.equal(await readDraft(), 'Before send after send plus overlap', 'canonical user append does not consume a model draft')
+    await page.waitForFunction(() => window.fixtureHistoryRequestCount === 3)
+    await resolveBusyHistory(0)
+    await page.waitForFunction(() => !document.querySelector('[data-queued-preview]'))
+    await emit(delta(sequence++, 'Before send after send plus overlap'.length, ' continues'))
+    await page.waitForFunction(selector => document.querySelector(selector)?.textContent.trim() === 'Before send after send plus overlap continues', {}, draftSelector)
+
+    // A rejected second send also cannot erase the still-active model request.
+    await page.type('[role="textbox"][aria-label="Message"]', 'Rejected input')
+    await page.click('[aria-label="Send message"]')
+    await page.waitForFunction(() => window.fixtureMessageBodies.length === 2)
+    await page.evaluate(() => window.rejectNextFixtureMessage())
+    await page.waitForFunction(() => document.body.textContent.includes('Error: Failed to send message'))
+    assert.equal(await readDraft(), 'Before send after send plus overlap continues')
+    await emit(delta(sequence++, 'Before send after send plus overlap continues'.length, ' alive'))
+    await page.waitForFunction(selector => document.querySelector(selector)?.textContent.trim().endsWith(' continues alive'), {}, draftSelector)
+
+    // Matching completed canonical output closes exactly this draft, even while busy.
+    await page.evaluate(({ segmented, seq }) => window.emitFixtureMessage({ role: 'model', parts: [{ text: 'Before send after send plus overlap continues alive' }],
+      __meta: { seq, timestamp: 130, llmRequestId: 'send-request', ...(segmented ? { llmSegment: { outputStart: 1, outputEndExclusive: 2, complete: true } } : {}) },
+    }), { segmented, seq: lastSeq + 2 })
+    await page.waitForSelector(`[data-chat-message-anchor-key="seq-local-${lastSeq + 2}"]`)
+    assert.equal(await page.$$eval(draftSelector, nodes => nodes.length), 1, 'canonical handoff contains no duplicate synthetic row')
+    await emit({ ...request, type: 'model-stream-reset', streamId: 'next-stream', llmRequestId: 'next-request', startedAt: 140, sequence: 0 })
+    await emit({ ...request, type: 'model-stream-update', streamId: 'next-stream', llmRequestId: 'next-request', startedAt: 140,
+      sequenceStart: 1, sequence: 1, textDelta: { offset: 0, text: 'New request only' } })
+    await page.waitForFunction(() => document.querySelector('[data-search-row="llm-request-next-request"]')?.textContent.trim() === 'New request only')
+    // A new request reset also replaces an unfinished draft, without joining its prefix.
+    await emit({ ...request, type: 'model-stream-reset', streamId: 'replacement-stream', llmRequestId: 'replacement-request', startedAt: 150, sequence: 0 })
+    await emit({ ...request, type: 'model-stream-update', streamId: 'replacement-stream', llmRequestId: 'replacement-request', startedAt: 150,
+      sequenceStart: 1, sequence: 1, textDelta: { offset: 0, text: 'Replacement request only' } })
+    await page.waitForFunction(() => document.querySelector('[data-search-row="llm-request-replacement-request"]')?.textContent.trim() === 'Replacement request only')
+    assert.equal(await page.$('[data-search-row="llm-request-next-request"]'), null)
+    await page.evaluate(messageCount => window.emitFixtureEvent({ type: 'session-state', session: { id: 'fixture/main', busy: false,
+      runtimeState: { state: 'idle' }, queueLength: 0, messageCount, historyVersion: 0, modelKey: 'fixture/model' } }), lastSeq + 2)
+    await page.waitForFunction(() => !document.querySelector('[data-search-row="llm-request-replacement-request"]'))
+    if (segmented) assert.equal(await page.$$eval('[data-search-row="llm-request-send-request"]', nodes => nodes.length), 1, 'early commentary remains canonical')
+    await page.close()
+  })
+}
+
+test('real Chat WS call commit, tool result, and final model row retain a manually opened running tool', async () => {
+  page = await browser.newPage()
+  await page.goto(`${fixtureUrl}?groupTools`, { waitUntil: 'load' })
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+  await page.evaluate(() => window.resolveFixtureHistory(0, undefined, 0, { busy: true }))
+  await page.waitForFunction(() => document.body.textContent.includes('old history row'))
+  await page.evaluate(() => window.emitFixtureEvent({ type: 'session-event', event: {
+    type: 'model-stream-update', streamVersion: 2, streamId: 'tool-stream', llmRequestId: 'tool-request', startedAt: 100,
+    sequenceStart: 1, sequence: 1, toolCallDeltas: [{ index: 0, id: 'running-call', name: 'exec', argumentsDelta: { offset: 0, text: '{"command":"echo running"}' } }],
+  } }))
+  await page.waitForSelector('[aria-label="Expand exec tool"]')
+  await page.click('[aria-label="Expand exec tool"]')
+  await page.waitForSelector('.foxwarm-tool-call-args')
+  await page.evaluate(() => window.emitFixtureMessage({ role: 'model', parts: [{ functionCall: { id: 'running-call', name: 'exec', args: { command: 'echo running' } } }],
+    __meta: { seq: 2, timestamp: 110, llmRequestId: 'tool-request' } }))
+  await page.waitForSelector('[data-chat-message-anchor-key="seq-local-2"]')
+  assert.ok(await page.$('.foxwarm-tool-call-args'), 'matching canonical call retains explicit disclosure')
+  await page.evaluate(() => window.emitFixtureMessage({ role: 'tool', parts: [{ functionResponse: { name: 'exec', tool_use_id: 'running-call', response: { output: 'Running tool completed' } } }],
+    __meta: { seq: 3, timestamp: 120 } }))
+  await page.waitForSelector('.foxwarm-tool-expanded-content')
+  assert.ok(await page.$('.foxwarm-tool-call-args'), 'normal result pairing retains explicit disclosure')
+  await page.evaluate(() => window.emitFixtureMessage({ role: 'model', parts: [{ text: 'Tool run finished normally' }], __meta: { seq: 4, timestamp: 130, llmRequestId: 'final-request' } }))
+  await page.waitForFunction(() => document.body.textContent.includes('Tool run finished normally'))
+  assert.equal(await page.$eval('[data-tool-group]', node => node.dataset.toolGroupExpanded), 'true', 'historical regrouping retains the owning group')
+  assert.equal(await page.$eval('.foxwarm-tool-expanded-content', node => node.textContent.trim()), 'Running tool completed')
+  await page.close()
 })

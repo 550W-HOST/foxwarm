@@ -259,12 +259,12 @@ select {
   margin-top: 6px;
 }
 
-.pair-code {
-  font-size: 24px;
-  font-weight: 700;
+.approval-command {
+  font-size: 12px;
+  font-weight: 600;
   font-family: 'Courier New', monospace;
   color: var(--warning);
-  letter-spacing: 4px;
+  overflow-wrap: anywhere;
 }
 
 .node-id {

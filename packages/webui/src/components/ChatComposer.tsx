@@ -44,6 +44,7 @@ export type ModelOption = {
 }
 
 interface ChatComposerProps {
+  compactModelSelector?: boolean
   sessionId: string
   guestMode?: boolean
   sessionMissing: boolean
@@ -72,7 +73,7 @@ interface ChatComposerProps {
   onChangeChildModel: (model: string | null) => Promise<void>
   onChangeEffort: (effort: string | null) => Promise<void>
   onChangeChildEffort: (effort: string | null) => Promise<void>
-  onRefreshModels: () => Promise<void>
+  onRefreshModels: () => void
   onOpenModelSettings: () => void
   sendKeyMode?: 'modEnter' | 'enter'
   onHeightChange?: (height: number) => void
@@ -88,7 +89,6 @@ interface ChatComposerProps {
     stop: () => void
     cancel: () => void
   }>
-  onDraftEdited?: (draftText: string) => void
 }
 
 function formatEffortLabel(value: string): string {
@@ -224,6 +224,7 @@ function EffortRangeControl({
 type ModelSelectorScope = 'current' | 'child'
 
 function ModelSelector({
+  compact,
   options,
   currentModelKey,
   sessionModel,
@@ -250,6 +251,7 @@ function ModelSelector({
   onRefreshModels,
   onOpenModelSettings,
 }: {
+  compact?: boolean
   options: ModelOption[]
   currentModelKey?: string
   sessionModel?: string | null
@@ -273,7 +275,7 @@ function ModelSelector({
   onChangeChildModel: (model: string | null) => Promise<void>
   onChangeEffort: (effort: string | null) => Promise<void>
   onChangeChildEffort: (effort: string | null) => Promise<void>
-  onRefreshModels: () => Promise<void>
+  onRefreshModels: () => void
   onOpenModelSettings: () => void
 }) {
   const [open, setOpen] = useState(false)
@@ -338,9 +340,9 @@ function ModelSelector({
   const updatePopupPosition = useCallback(() => {
     const rect = buttonRef.current?.getBoundingClientRect()
     if (!rect) return
-    const width = Math.min(childFollows ? 360 : 720, Math.max(0, window.innerWidth - 16))
+    const width = Math.min(childFollows || compact ? 360 : 720, Math.max(0, window.innerWidth - 16))
     const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - width - 8))
-    const preferredMaxHeight = Math.min(window.innerWidth <= 640 ? 560 : 400, Math.max(220, window.innerHeight - 24))
+    const preferredMaxHeight = Math.min((compact ?? window.innerWidth <= 640) ? 560 : 400, Math.max(220, window.innerHeight - 24))
     const spaceAbove = Math.max(0, rect.top - 12)
     const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - 12)
     const openAbove = spaceAbove >= 180 || spaceAbove >= spaceBelow
@@ -362,7 +364,7 @@ function ModelSelector({
         maxHeight,
       })
     }
-  }, [childFollows])
+  }, [childFollows, compact])
 
   const toggleOpen = useCallback(() => {
     if (open) {
@@ -374,9 +376,8 @@ function ModelSelector({
     filterComposingRef.current = false
     setActiveScope('current')
     updatePopupPosition()
-    void onRefreshModels()
     setOpen(true)
-  }, [onRefreshModels, open, updatePopupPosition])
+  }, [open, updatePopupPosition])
 
   useLayoutEffect(() => {
     if (open) updatePopupPosition()
@@ -408,7 +409,11 @@ function ModelSelector({
     document.addEventListener('keydown', handleKeyDown)
     window.addEventListener('resize', handleReposition)
     window.addEventListener('scroll', handleReposition, true)
+    const anchorContainer = rootRef.current?.closest('.foxwarm-chat-root') || rootRef.current
+    const observer = new ResizeObserver(handleReposition)
+    if (anchorContainer) observer.observe(anchorContainer)
     return () => {
+      observer.disconnect()
       document.removeEventListener('mousedown', handlePointerDown, true)
       document.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('resize', handleReposition)
@@ -533,7 +538,7 @@ function ModelSelector({
   }
 
   return (
-    <div ref={rootRef} className="foxwarm-model-selector-root relative flex min-w-0 max-w-[30rem] flex-1" title={error || undefined}>
+    <div ref={rootRef} data-chat-layout={compact === undefined ? undefined : "true"} className="foxwarm-model-selector-root relative flex min-w-0 max-w-[30rem] flex-1" title={error || undefined}>
       <button
         ref={buttonRef}
         type="button"
@@ -568,6 +573,7 @@ function ModelSelector({
           aria-modal="false"
           aria-label="Model selection"
           data-model-selector-popup="true"
+          data-model-layout={compact === undefined ? undefined : compact ? "compact" : "wide"}
           data-model-saving={busy ? "true" : undefined}
         >
           <div className="foxwarm-model-columns min-h-0 flex-1" data-model-columns={childFollows ? '1' : '2'}>
@@ -658,6 +664,7 @@ function ModelSelector({
 }
 
 const ChatComposer = memo(function ChatComposer({
+  compactModelSelector,
   sessionId,
   guestMode = false,
   sessionMissing,
@@ -692,7 +699,6 @@ const ChatComposer = memo(function ChatComposer({
   onHeightChange,
   onSend,
   onCreateStreamingTranscriber,
-  onDraftEdited,
 }: ChatComposerProps) {
   const loadedDraft = useMemo(() => loadComposerDraft(sessionId), [sessionId])
   const [draftState, setDraftState] = useState<{ sessionId: string; draft: ComposerDraft }>(() => ({ sessionId, draft: loadedDraft }))
@@ -766,8 +772,7 @@ const ChatComposer = memo(function ChatComposer({
     if (activeSessionIdRef.current !== targetSessionId) return
     draftRef.current = nextDraft
     setDraftState({ sessionId: targetSessionId, draft: nextDraft })
-    onDraftEdited?.(serializeComposerDraft(nextDraft))
-  }, [onDraftEdited, persistDraftSafely, sessionId])
+  }, [persistDraftSafely, sessionId])
 
   useEffect(() => {
     let cancelled = false
@@ -1470,6 +1475,7 @@ const ChatComposer = memo(function ChatComposer({
               )}
             </div>
             {!guestMode && <ModelSelector
+              compact={compactModelSelector}
               options={modelOptions}
               currentModelKey={currentModelKey}
               sessionModel={sessionModel}

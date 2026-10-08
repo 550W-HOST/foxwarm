@@ -5,7 +5,7 @@ Secondary files: src/toolscriptSkills.test.ts, package.json, package-lock.json
 
 ## Purpose
 
-Implements persisted foreground/background ToolScript runs in the Monty 0.0.19 Python-subset VM. It lazily prefers Monty's native crash-isolated subprocess pool and falls back to Monty's Node in-process WASM pool when the native package fails during import or evaluation. It validates `main(args)`, enforces VM/slice limits, dispatches a small host API, stores version-identified snapshots/run records, resumes waits, and coordinates managed-session leases.
+Implements persisted foreground/background ToolScript runs in the Monty 0.0.19 Python-subset VM. It lazily prefers Monty's native crash-isolated subprocess pool and falls back to Monty's Node in-process WASM pool when the native package fails during import or evaluation. It feeds top-level source with legacy `main(args)` auto-call compatibility, enforces VM/slice limits, dispatches a small host API, stores version-identified snapshots/run records, resumes waits, and coordinates managed-session leases.
 
 ## Actual exports
 
@@ -21,10 +21,12 @@ ToolScript result/run types are internal, not exported TypeScript API types.
 
 ## Host API
 
-- `call_tool(...)` — normalize shorthand or a unified descriptor, dynamically load `./tools`, and invoke the exported `call_tool` handler with the outer exact `ToolContext`, including its trusted placement/persist hooks.
+- `call_tool(...)` — normalize shorthand or a unified descriptor, dynamically load `./tools`, and invoke the exported `call_tool` handler with the outer exact `ToolContext`, including its trusted placement/persist hooks and programmatic producer hint.
 - `request_model_without_context(prompt, model?)` — production one-shot model request using the current session's raw effort and optional model selection but not its history; returns the text plus canonical parts (text and Blob-referenced images) without reasoning, function calls, provider metadata, or image bytes.
 - `ask_agent(question)` — persist a snapshot and return an agent continuation.
 - `open_managed_session`, `session_step`, `release_managed_session`, `wait_for_managed_event` — explicit managed-session controller operations.
+
+The exact-owner Task facade emits a process-local completion receipt containing taskId/attachedSessionId. Each run/continue slice forwards only receipts actually emitted during that slice into its internal outer post-action; nested script contexts forward the same trusted callback. Script return values, stdout and saved run data are never scanned for completion claims. The existing child-handoff consumer handles the receipt; TaskService remains the sole completion/creator-notification owner.
 
 Unknown external function names are returned to Monty as runtime exceptions that list the available host API. Monty OS-function suspensions are rejected rather than exposed or mounted. There is no separate ToolScript file-I/O or MCP client path; scripts compose normal Foxwarm tools through `call_tool`.
 
@@ -32,14 +34,14 @@ Unknown external function names are returned to Monty as runtime exceptions that
 
 | Symbol/section | Responsibility |
 |---|---|
-| source/timeout/limit parsing | `main(args)` validation and bounded execution options |
+| source/timeout/limit parsing | Native top-level source, legacy main auto-call and bounded execution options |
 | call-tool descriptor normalization | String shorthand and unified target descriptor to wrapper args |
 | run persistence | Owner-scoped JSON record load/save/list |
 | `executeScriptHostCall` | Host function dispatch and unknown-call diagnostics |
 | Monty runtime lifecycle | Lazy pool creation, checked-out session cleanup, and test-only restart simulation |
 | `advanceExecution` | Async complete, name lookup, host-call, OS rejection, agent-wait, managed-wait, and timeout-safe checkpoints |
 | `startRun` / `resumeRun` | Feed source into a checked-out worker or load a compatible snapshot into a fresh worker session |
-| tool handlers | Session ownership, mode, continuation, cancellation, and result shaping |
+| `projectExecutionResult` / tool handlers | Lean execution responses, presentation hook, and explicit diagnostic inspection |
 
 ## Behavior
 
@@ -55,16 +57,19 @@ Unknown external function names are returned to Monty as runtime exceptions that
 - Run records live under the state data root and are accessible only from the owner session.
 - `activeBackgroundRuns` prevents concurrent execution/resume of one background run.
 - Managed leases acquired by a run are recorded. Controllers normally release them explicitly; cancellation and incompatible-snapshot terminalization perform best-effort cleanup. Failed releases remain recorded so calling `cancel_toolscript_run` on the terminal record retries cleanup.
-- `call_tool` subcalls publish ToolScript progress and are kept in the outer run result/record. They do not append each nested call as ordinary outer-session tool history.
+- `call_tool` subcalls publish live progress and remain in run diagnostics. `run_script` and `continue_script` expose only lean execution results; an in-process hook carries nested activity into model-invisible response metadata. See [D-dispatch-toolscript-execution-projection](../threads/tool-dispatch.md#d-dispatch-toolscript-execution-projection). Nested calls do not append ordinary outer-session tool history.
 - In Session-worker placement, managed-session host functions and cleanup of persisted managed leases fail before importing/calling child managed-session state. ToolScript progress emission returns before any child `sessionManager.notifySessionEvent`; transient running/final/error progress may drop until committed publication, while persisted run/subcall state remains authoritative. Ordinary VM/model/ask-agent/timeout and nested already-closed tools remain available; a later fixed managed reverse service owns that deferred closure.
 - `request_model_without_context` uses request-journal purpose `toolscript-one-shot`; it supplies the exact passed owner's prompt-cache key and raw effort so Worker placement never rehydrates or saves a second child-global Session merely to resolve request identity. Its canonical prompt and normalized provider result are durable independently of the outer ToolScript history boundary.
-- `continue_script` returns stdout produced in that continuation slice; persisted status retains cumulative stdout.
-- `executedTools` is cumulative, while `subCalls`, `hostCallCount`, and `lastHostCall` describe the latest execution slice.
+- `continue_script` returns stdout produced in that continuation slice, omitting the field when empty; persisted status retains cumulative stdout.
+- Diagnostic `executedTools` is cumulative, while `subCalls`, `hostCallCount`, and `lastHostCall` describe the latest execution slice. These are not fields of the default execution response.
 - Inline image payloads from a final result are promoted to the outer tool result and replaced with compact placeholders inside the textual result.
 - Canonical image parts returned by a final result (for example the `parts` of a `request_model_without_context` result, whether the script returns the result object or an object carrying its `parts`) are promoted the same way, except that their bytes stay in the image Blob store and only the reference travels to the outer tool result. The promoted reference becomes the session-visible image under the tool-result image id convention, the textual result keeps a bounded placeholder in its place, and an unresolvable reference fails the tool result instead of leaving a dangling image. The rewrite is limited to the promoted image entries themselves: a `parts` list that contains no promoted image, and every other result field, stays byte-identical, while text that rode along on a promoted part remains visible next to the placeholder.
 - MCP image content returned through a nested unified `call_tool` is source-normalized into the same inline payload shape, then promoted through the outer ToolScript result and provider image serialization without copying base64 into textual output.
 
 ## Compatibility
+
+- Ordinary top-level source reads `args` and preserves native return/final-expression behavior and host suspensions. Legacy main auto-call is governed by [D-toolscript-top-level-source](#d-toolscript-top-level-source).
+- Script-only read/exec/search fields and byte/capability limits are canonical in [D-dispatch-programmatic-tool-data](../threads/tool-dispatch.md#d-dispatch-programmatic-tool-data).
 
 - `call_tool` accepts the supported string shorthand and the current unified descriptor. String shorthand for direct Node-capability names resolves to `source=node`; descriptor examples use `source=node` with omitted `nodeId` for the current Node.
 - `continue_script.input` is a string at the tool boundary; structured input is passed as JSON text and parsed by the script.
@@ -104,3 +109,7 @@ Unknown external calls are not described as supported host APIs. The runtime lis
 ### D-toolscript-one-shot-parts
 
 [2026-09-19] `request_model_without_context` keeps its existing text behavior and additionally returns the canonical parts of the low-level result, so a script can hand a model-produced image back to the outer tool result instead of dropping it. The parts carry text and image parts whose bytes stay in the image Blob store; reasoning, function calls, provider metadata, and transport-only reference fields are not projected, and no image bytes enter the script value, the run record, or the model-visible text. A final result returning those parts promotes only the image parts through the shared tool-result image boundary, keeps other parts in place, and replaces the promoted entries with a bounded placeholder, while JSON that does not match the canonical reference shape is never treated as an image.
+
+### D-toolscript-top-level-source
+
+[2026-10-03] New runs feed ordinary top-level source directly to Monty with `args` as input, without requiring `main(args)`. Native top-level return, final-expression behavior and normal host suspensions are preserved. Explicitly permitted legacy compatibility retains the existing multiline regex for a source that looks like `def main(args)` and appends `main(args)` only for that form. Installed MontySession has no direct named-function invocation API; there is no second feed or new persistence lifecycle. Existing waiting snapshots continue their recorded execution without source rewrite or reparse. Current small examples favor top-level source; real legacy file-backed generator coverage remains. Local/neighbor module import is not implemented.

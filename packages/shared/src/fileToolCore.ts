@@ -1,4 +1,5 @@
 import path from 'path';
+import { applyUpdatePatch, buildAddedFileContent, formatApplyPatchOperationSummary, parseApplyPatchInput } from './applyPatch';
 import {
   MAX_FULL_TEXT_READ_BYTES,
   buildBoundedTextExcerpt,
@@ -6,7 +7,9 @@ import {
   formatDisplayByteConversionDisclaimer,
 } from './boundedTextExcerpt';
 import {
+  fileOperationPathExists,
   nativeFileOperations,
+  readWholeFile,
   type FileOperations,
 } from './fileOperations';
 
@@ -17,7 +20,26 @@ export type FileToolInlineImageResult = {
   inlineData: { data: string; mimeType: string };
 };
 
-export type FileToolReadResult = string | FileToolInlineImageResult;
+export type ProgrammaticFileReadResult = {
+  output: string;
+  content?: string;
+  truncated: boolean;
+  filePath: string;
+  sizeBytes: number;
+  selectedBytes: number;
+  startLine?: number;
+  endLine?: number;
+  totalLines?: number;
+};
+
+export type FileToolReadResult = string | FileToolInlineImageResult | ProgrammaticFileReadResult;
+
+export function requireToolFilePath(filePath: unknown, toolName: string): string {
+  if (typeof filePath !== 'string' || !filePath.trim()) {
+    throw new Error(`${toolName} requires filePath.`);
+  }
+  return filePath;
+}
 
 export type WriteParentIssue = {
   path: string;
@@ -380,6 +402,7 @@ export async function readFileToolPath(
   startLine?: number,
   endLine?: number,
   operations: FileOperations = nativeFileOperations,
+  programmatic = false,
 ): Promise<FileToolReadResult> {
   const stats = await operations.stat(fullPath);
   if (stats.kind === 'directory') {
@@ -397,6 +420,16 @@ export async function readFileToolPath(
     };
   }
 
+  const finish = (output: string, content: string | undefined, selectedBytes: number, scan?: ExactLineScanResult): FileToolReadResult => {
+    if (!programmatic) return output;
+    return {
+      output, ...(content === undefined ? {} : { content }), truncated: content === undefined,
+      filePath: fullPath, sizeBytes: stats.size, selectedBytes,
+      ...(scan?.selectedStartLine === undefined ? {} : { startLine: scan.selectedStartLine, endLine: scan.selectedEndLine }),
+      ...(scan?.totalLineCount === undefined ? {} : { totalLines: scan.totalLineCount }),
+    };
+  };
+
   const normalizedStartLine = normalizeOptionalLineBound(startLine);
   const normalizedEndLine = normalizeOptionalLineBound(endLine);
   if (stats.size > MAX_FULL_TEXT_READ_BYTES) {
@@ -404,7 +437,7 @@ export async function readFileToolPath(
       const start = normalizedStartLine !== undefined ? Math.max(1, Math.floor(normalizedStartLine)) : 1;
       const end = normalizedEndLine !== undefined ? Math.max(0, Math.floor(normalizedEndLine)) : undefined;
       if (end !== undefined && end < start) {
-        return `(no content in requested line range ${formatRequestedLineRange(start, end)})\n---\nFile size: ${stats.size} bytes.`;
+        return finish(`(no content in requested line range ${formatRequestedLineRange(start, end)})\n---\nFile size: ${stats.size} bytes.`, '', 0);
       }
       const scan = await scanFileLineRange(operations, fullPath, stats.size, start, end);
       if (scan.selectedLineCount === 0) {
@@ -412,12 +445,12 @@ export async function readFileToolPath(
           ...(scan.totalLineCount !== undefined ? [lineCountText(scan.totalLineCount)] : []),
           `File size: ${stats.size} bytes.`,
         ];
-        return `(no content in requested line range ${formatRequestedLineRange(start, end)})\n---\n${footer.join('\n')}`;
+        return finish(`(no content in requested line range ${formatRequestedLineRange(start, end)})\n---\n${footer.join('\n')}`, '', 0, scan);
       }
       const fullSelected = scan.selected.fullBuffer();
       if (fullSelected) {
         const selectedContent = fullSelected.toString('utf8');
-        return `${formatTextResult(selectedContent, scan.selectedEnding, buildRangeFooter(scan, start, end, stats.size))}\nComplete content remains in source file: ${displayPath}.`;
+        return finish(`${formatTextResult(selectedContent, scan.selectedEnding, buildRangeFooter(scan, start, end, stats.size))}\nComplete content remains in source file: ${displayPath}.`, selectedContent, scan.selected.totalBytes, scan);
       }
       const { head, tail } = scan.selected.samples();
       const metadata = [formatSelectedLines(scan, start, end)];
@@ -425,7 +458,7 @@ export async function readFileToolPath(
       if (scan.reachedEof && scan.selectedEndLine === scan.totalLineCount && scan.fileEnding === 'none') {
         metadata.push('File has no trailing newline.');
       }
-      return formatBoundedFileRead(
+      return finish(formatBoundedFileRead(
         displayPath,
         stats.size,
         head,
@@ -434,12 +467,12 @@ export async function readFileToolPath(
         'selected file range',
         metadata,
         footerSeparatorForEnding(scan.selectedEnding),
-      );
+      ), undefined, scan.selected.totalBytes, scan);
     }
     const sampleLength = Math.min(5000, stats.size);
     const head = await operations.read(fullPath, 0, sampleLength);
     const tail = await operations.read(fullPath, Math.max(0, stats.size - sampleLength), sampleLength);
-    return formatBoundedFileRead(displayPath, stats.size, head, tail, stats.size, 'file content');
+    return finish(formatBoundedFileRead(displayPath, stats.size, head, tail, stats.size, 'file content'), undefined, stats.size);
   }
 
   const buffer = await operations.read(fullPath, 0, stats.size);
@@ -452,19 +485,21 @@ export async function readFileToolPath(
 
   if (!hasRange) {
     if (scan.totalLineCount === 0) {
-      return `(empty file)\n---\n${lineCountText(0)}\nFile size: ${stats.size} bytes.`;
+      return finish(`(empty file)\n---\n${lineCountText(0)}\nFile size: ${stats.size} bytes.`, '', 0, scan);
     }
     const footer = [lineCountText(scan.totalLineCount!), `File size: ${stats.size} bytes.`];
     if (!scan.selectedLinesHaveContent) footer.push('File content contains only empty lines.');
     if (scan.fileEnding === 'none') footer.push('File has no trailing newline.');
-    return formatTextResult(buffer.toString('utf8'), scan.fileEnding!, footer);
+    const content = buffer.toString('utf8');
+    return finish(formatTextResult(content, scan.fileEnding!, footer), content, buffer.length, scan);
   }
 
   if (end !== undefined && end < start || scan.selectedLineCount === 0) {
-    return `(no content in requested line range ${formatRequestedLineRange(start, end)})\n---\n${lineCountText(scan.totalLineCount!)}\nFile size: ${stats.size} bytes.`;
+    return finish(`(no content in requested line range ${formatRequestedLineRange(start, end)})\n---\n${lineCountText(scan.totalLineCount!)}\nFile size: ${stats.size} bytes.`, '', 0, scan);
   }
   const selected = scan.selected.fullBuffer()!;
-  return formatTextResult(selected.toString('utf8'), scan.selectedEnding, buildRangeFooter(scan, start, end, stats.size));
+  const content = selected.toString('utf8');
+  return finish(formatTextResult(content, scan.selectedEnding, buildRangeFooter(scan, start, end, stats.size)), content, selected.length, scan);
 }
 
 export async function findWriteParentIssue(fullPath: string, operations: FileOperations = nativeFileOperations): Promise<WriteParentIssue | null> {
@@ -551,4 +586,43 @@ export async function writeFileToolPath(
 
     throw err;
   }
+}
+
+export async function applyPatchOperations(
+  input: string,
+  resolveOperationPath: (filePath: string) => { fullPath: string; displayPath: string },
+  fileOperations: FileOperations = nativeFileOperations,
+  dirname: (filePath: string) => string | Promise<string> = path.dirname,
+): Promise<string> {
+  const operations = parseApplyPatchInput(input);
+  const summaries: string[] = [];
+  for (let idx = 0; idx < operations.length; idx++) {
+    const operation = operations[idx];
+    const { fullPath, displayPath } = resolveOperationPath(operation.filePath);
+    try {
+      if (operation.action === 'update') {
+        if (!await fileOperationPathExists(fileOperations, fullPath)) throw new Error(`Cannot update missing file: ${displayPath}`);
+        const content = (await readWholeFile(fileOperations, fullPath)).toString('utf8');
+        await fileOperations.write(fullPath, applyUpdatePatch(content, operation.lines, displayPath), 'w');
+        summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
+      } else if (operation.action === 'add') {
+        if (await fileOperationPathExists(fileOperations, fullPath)) throw new Error(`Cannot add file that already exists: ${displayPath}`);
+        await fileOperations.mkdir(await dirname(fullPath));
+        await fileOperations.write(fullPath, buildAddedFileContent(operation.lines), 'w');
+        summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
+      } else {
+        if (!await fileOperationPathExists(fileOperations, fullPath)) throw new Error(`Cannot delete missing file: ${displayPath}`);
+        await fileOperations.remove(fullPath);
+        summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
+      }
+    } catch (err) {
+      const succeeded = summaries.length > 0
+        ? `\nOperations already applied (these changes are already on disk):\n${summaries.map(line => `- ${line}`).join('\n')}\n`
+        : '';
+      const remaining = operations.length - idx - 1;
+      const remainingHint = remaining > 0 ? `\n${remaining} remaining operation(s) were not applied.` : '';
+      throw new Error(`${(err as Error).message}${succeeded}${remainingHint}`);
+    }
+  }
+  return `Patch applied successfully.\n${summaries.map(line => `- ${line}`).join('\n')}`;
 }

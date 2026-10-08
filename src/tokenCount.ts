@@ -20,6 +20,14 @@ function isImageInlineData(value: unknown): value is InlineData {
     return typeof candidate.data === 'string' && isImageMimeType(candidate.mimeType || candidate.mime_type);
 }
 
+function isImageInlineDataRef(value: unknown): boolean {
+    if (!value || typeof value !== 'object') return false;
+    const candidate = value as { mimeType?: unknown; byteLength?: unknown; sha256?: unknown };
+    return typeof candidate.byteLength === 'number'
+        && typeof candidate.sha256 === 'string'
+        && isImageMimeType(typeof candidate.mimeType === 'string' ? candidate.mimeType : undefined);
+}
+
 function sanitizeValueForTokenEstimate(value: unknown): { sanitized: unknown; imageCount: number } {
     if (Array.isArray(value)) {
         let imageCount = 0;
@@ -39,6 +47,10 @@ function sanitizeValueForTokenEstimate(value: unknown): { sanitized: unknown; im
             },
             imageCount: 1,
         };
+    }
+
+    if (isImageInlineDataRef(value)) {
+        return { sanitized: '[image reference omitted]', imageCount: 1 };
     }
 
     if (!value || typeof value !== 'object') {
@@ -96,6 +108,10 @@ export function estimateMessagePartSummary(part: MessagePart): TokenEstimateSumm
             imageCount += sanitized.imageCount;
             tokens += estimateTokenCount(JSON.stringify(sanitized.sanitized));
         }
+    }
+
+    if (isImageInlineDataRef(part.inlineDataRef)) {
+        imageCount += 1;
     }
     
     return { tokens, imageCount };

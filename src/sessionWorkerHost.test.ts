@@ -1,3 +1,4 @@
+import { taskService } from './tools/taskTools';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fork } from 'node:child_process';
@@ -6,6 +7,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
+import axios from 'axios';
+import { PassThrough } from 'node:stream';
+import * as configModule from './config';
+import { loadModelsConfigFromObject } from './config';
 import { LocalRpcTransport, ProcessRpcClientTransport, ProcessRpcServer, RpcClient, RpcServiceRegistry } from './rpc';
 import { createMainManagementToolServiceHandler, mainManagementToolServiceDescriptor } from './mainManagementToolService';
 import { createMcpExternalServiceHandler, mcpExternalServiceDescriptor } from './mcpExternalService';
@@ -19,7 +24,7 @@ import { sessionWorkerControlServiceDescriptor } from './sessionWorkerControlSer
 import { SessionWorkerHost } from './sessionWorkerHost';
 import { sessionWorkerRuntimeServiceDescriptor } from './sessionWorkerRuntimeService';
 import { SessionWorkerStore } from './sessionWorkerStore';
-import type { Session } from './types';
+import type { InlineDataRef, Session } from './types';
 import * as llm from './llm';
 import * as sessionManager from './sessionManager';
 import { getAgentDir, SESSIONS_FILE, TIMERS_FILE } from './config';
@@ -61,6 +66,7 @@ async function withLocalHost(
   publishCommitted?: (projection: any) => Promise<void>,
   deliverCommittedFinal?: (source: any, text: string, outcome: any) => Promise<void>,
   deliverIntermediateText?: (source: any, text: string) => Promise<void>,
+  deliverGeneratedImages?: (images: InlineDataRef[]) => Promise<void>,
 ): Promise<void> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-local-worker-host-'));
   const store = new SessionWorkerStore(path.join(root, 'runtime.sqlite')); store.open();
@@ -85,6 +91,7 @@ async function withLocalHost(
     deliverCommittedFinal: deliverCommittedFinal
       ? (text, outcome) => deliverCommittedFinal(undefined, text, outcome)
       : undefined,
+    deliverGeneratedImages,
   });
   try {
     await (host as any).ensureLoaded();
@@ -93,6 +100,31 @@ async function withLocalHost(
     await testBody({ host, store, session: (host as any).session, turnHost, readDurable: () => structuredClone(durable) });
   } finally { store.close(); await fs.remove(root); }
 }
+
+test('Worker exact-owner media hook forwards only committed generated refs across its reverse dependency', async () => {
+  const initial = baseSession(`worker-generated-image-${Date.now()}`);
+  const originalChat = llm.chat;
+  const received: InlineDataRef[][] = [];
+  const ref: InlineDataRef = {
+    imageId: 'ig_worker', blobId: `${'a'.repeat(64)}.png`, mimeType: 'image/png',
+    byteLength: 7, sha256: 'a'.repeat(64),
+  };
+  (llm as any).chat = async (parts: any, _owner: Session, _iteration: number, options: any) => {
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    const assistant = { role: 'model', parts: [{ inlineDataRef: ref, imageMeta: { imageId: ref.imageId, origin: 'generated' } }] };
+    await options.appendMessage(assistant);
+    await options.onCommittedAssistantMessage(assistant);
+    return { text: '', allParts: assistant.parts };
+  };
+  try {
+    await withLocalHost(initial, async ({ host, store, readDurable }) => {
+      store.enqueueIntent(initial.id, 'worker-generated-image', 'enqueue', { type: 'background', parts: [{ text: 'draw' }] });
+      await host.runPending(8);
+      assert.deepEqual(received, [[ref]]);
+      assert.equal(readDurable().history.filter((message: any) => message.role === 'model').length, 1);
+    }, true, undefined, undefined, undefined, async images => { received.push(images); });
+  } finally { (llm as any).chat = originalChat; }
+});
 
 test('worker external event receipts bridge mailbox replay and applied-row cleanup', async () => {
   const initial = baseSession('worker-external-event-receipts');
@@ -826,6 +858,54 @@ test('Worker fenced turn-owned release failure restores authority and is not ret
   } finally { (llm as any).chat = originalChat; }
 });
 
+test('exact Worker clear retains block IDs and later compact never hydrates Main authority', async () => {
+  const initial = baseSession(`worker-clear-blocks-${Date.now()}`);
+  const archiveStore = await import('./session/archiveStore');
+  const originalChat = llm.chat;
+  const messages = (): Session['history'] => [
+    { role: 'user', parts: [{ text: `older user ${'alpha '.repeat(3000)}` }] },
+    { role: 'model', parts: [{ text: `older model ${'bravo '.repeat(3000)}` }] },
+    { role: 'user', parts: [{ text: 'recent user' }] },
+    { role: 'model', parts: [{ text: 'recent model' }] },
+  ];
+  (llm as any).chat = async (_parts: any, planner: Session, _iteration: number, options: any) => {
+    const raw = planner.history.filter(message => typeof message.__meta?.seq === 'number');
+    assert.equal(raw.length, 2);
+    const toolCall = { id: 'worker-clear-plan', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
+      level: 1, sourceKind: 'message', sourceStart: raw[0].__meta!.seq, sourceEnd: raw[1].__meta!.seq,
+      summary: `Worker summary ${raw[0].__meta!.seq}-${raw[1].__meta!.seq}.`,
+    }] } };
+    await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+    return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+  };
+  try {
+    await withLocalHost(initial, async ({ host, session, turnHost, readDurable }) => {
+      await turnHost.appendSessionMessages(session, messages());
+      assert.equal((await host.compactAwaited({ keepPercent: 0.5 })).compacted, true);
+      const first = await archiveStore.readLocalArchiveBlocks(session.id);
+      assert.deepEqual(first.map(block => block.id), [1]);
+      const nextMessageSeq = session.nextMessageSeq;
+      const cacheKey = session.promptCacheKey;
+      await turnHost.startSessionWait(session, { waitForInput: true });
+      const cleared = await host.clearHistory();
+      assert.equal(cleared.projection.messageCount, 0);
+      assert.deepEqual(readDurable().history, []);
+      assert.equal(readDurable().nextBlockId, 2);
+      assert.equal(readDurable().nextMessageSeq, nextMessageSeq);
+      assert.equal(session.meta.wait, undefined);
+      assert.notEqual(session.promptCacheKey, cacheKey);
+      await turnHost.appendSessionMessages(session, messages());
+      assert.equal((await host.compactAwaited({ keepPercent: 0.5 })).compacted, true);
+      const blocks = await archiveStore.readLocalArchiveBlocks(session.id);
+      assert.deepEqual(blocks.map(block => block.id), [1, 2]);
+      assert.deepEqual(blocks[0], first[0]);
+      assert.equal(readDurable().nextBlockId, 3);
+      assert.equal(readDurable().history[0].__meta.contextBlock.id, 2);
+      assert.equal(sessionManager.getAllSessions().has(session.id), false, 'only the exact Worker owns or persists semantic authority');
+    });
+  } finally { (llm as any).chat = originalChat; }
+});
+
 test('explicit awaited compact rejects busy or queued exact owners instead of waiting', async () => {
   const initial = baseSession('worker-explicit-compact-admission');
   await withLocalHost(initial, async ({ host, session }) => {
@@ -940,6 +1020,84 @@ test('exec completion is serialized after a failed turn and remains one durable 
     assert.match(String((session.queue[0] as any).parts?.[0]?.system), /foxwarm-system kind="system" time=/);
     assert.equal(readDurable().queue.length, 1);
   });
+});
+
+test('real Worker retry ingests durable mailbox input and honors Stop or dequeue during awaited ingestion', async t => {
+  for (const control of ['continue', 'stop', 'dequeue']) {
+    await t.test(control, async () => {
+      const initial = baseSession(`worker-retry-boundary-${control}-${Date.now()}`);
+      initial.model = 'fixture/model';
+      initial.persistentMemorySnapshot = '<foxwarm-current-model model-id="fixture/model" />\n\nworker retry prompt';
+      const originalPost = axios.post;
+      const originalResolve = configModule.resolveModelConfig;
+      const models = loadModelsConfigFromObject({ default: 'fixture/model', providers: {
+        fixture: { providerType: 'openai-completions', baseUrl: 'https://example.test/v1', apiKey: 'test-key', models: ['model'] },
+      } });
+      (configModule as any).resolveModelConfig = () => ({ modelsConfig: models, defaultKey: models.default,
+        currentKey: models.default, modelEntry: models.models[models.default], contextLimit: models.models[models.default].contextLimit });
+      try {
+        await withLocalHost(initial, async ({ host, store, session, turnHost, readDurable }) => {
+          const bodies: any[] = [];
+          const originalIngest = turnHost.ingestPendingQueue.bind(turnHost);
+          let boundaryReached!: () => void;
+          let releaseBoundary!: () => void;
+          const reached = new Promise<void>(resolve => { boundaryReached = resolve; });
+          const release = new Promise<void>(resolve => { releaseBoundary = resolve; });
+          let heldOnce = false;
+          turnHost.ingestPendingQueue = async (owner: Session) => {
+            await originalIngest(owner);
+            if (!heldOnce) { heldOnce = true; boundaryReached(); await release; }
+          };
+          (axios as any).post = async (_url: string, body: any) => {
+            bodies.push(body);
+            if (bodies.length === 1) {
+              store.enqueueIntent(initial.id, 'retry-correction-A', 'enqueue', { type: 'user', parts: [{ text: 'mailbox correction A' }] });
+              store.enqueueIntent(initial.id, 'retry-correction-B', 'enqueue', { type: 'background', parts: [{ text: 'mailbox correction B' }] });
+              assert.equal(session.queue.length, 0, 'new Worker input is durable only in the mailbox before the retry safe point');
+              throw new Error('mock provider retry failure');
+            }
+            const stream = new PassThrough();
+            process.nextTick(() => stream.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'worker retry answer' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`));
+            return { status: 200, statusText: 'OK', headers: {}, data: stream };
+          };
+          store.enqueueIntent(initial.id, 'initial-retry-turn', 'enqueue', { type: 'user', parts: [{ text: 'worker initial input' }] });
+          const turn = host.runPending(8);
+          await reached;
+          assert.equal(bodies.length, 1, 'the next provider send awaits exact-owner ingestion');
+          assert.equal(readDurable().queue.length, 2);
+          let stopping: Promise<any> | undefined;
+          if (control === 'stop') {
+            stopping = host.interrupt();
+            for (let tries = 0; tries < 40 && !session.stopping; tries++) await new Promise(resolve => setImmediate(resolve));
+            assert.equal(session.stopping, true);
+          } else if (control === 'dequeue') {
+            const result = await host.dequeue();
+            assert.equal(result.queuedItems, 2);
+            assert.equal(result.stoppedCurrent, true);
+          }
+          releaseBoundary();
+          await turn;
+          if (stopping) await stopping;
+          const durable = readDurable();
+          assert.equal(bodies.length, control === 'stop' ? 1 : 2);
+          assert.equal(durable.busy, false);
+          assert.equal(!!durable.stopping, false);
+          assert.equal(durable.queue.length, 0);
+          assert.equal(durable.meta.runQueuedAfterStop, undefined);
+          for (const text of ['mailbox correction A', 'mailbox correction B']) {
+            assert.equal(JSON.stringify(durable.history).split(text).length - 1, 1);
+            if (control !== 'stop') assert.equal(JSON.stringify(bodies[1]).split(text).length - 1, 1);
+          }
+          const assistant = durable.history.find((message: any) => message.parts[0]?.text === 'worker retry answer');
+          if (control !== 'stop') assert.equal(assistant.__meta.llmAttempt, 1);
+          assert.equal(durable.history.some((message: any) => message.parts[0]?.text?.startsWith('Error:')), false);
+        }, true);
+      } finally {
+        (axios as any).post = originalPost;
+        (configModule as any).resolveModelConfig = originalResolve;
+      }
+    });
+  }
 });
 
 test('dequeue during post-tool ingestion leaves new rows for the same outer action loop', async () => {
@@ -1234,7 +1392,7 @@ test('malformed primitive tool arguments do not poison Worker publication or lat
     if (parts) await options.appendMessage({ role: 'user', parts });
     chatCalls += 1;
     if (chatCalls === 1) {
-      const toolCall = { id: 'bad-goal', name: 'set_goal', args: { goal: true } } as any;
+      const toolCall = { id: 'bad-goal', name: 'set_session_child_model', args: { effort: true } } as any;
       await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
       return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
     }
@@ -1244,11 +1402,11 @@ test('malformed primitive tool arguments do not poison Worker publication or lat
   };
   try {
     await withLocalHost(initial, async ({ host, store, readDurable }) => {
-      store.enqueueIntent(initial.id, 'malformed-tool', 'enqueue', { type: 'user', parts: [{ text: 'call malformed set_goal' }] });
+      store.enqueueIntent(initial.id, 'malformed-tool', 'enqueue', { type: 'user', parts: [{ text: 'call malformed task' }] });
       await host.runPending(8);
       const afterMalformed = readDurable();
       const toolResponse = afterMalformed.history.find((message: any) => message.role === 'tool')?.parts?.[0]?.functionResponse?.response;
-      assert.deepEqual(toolResponse, { error: 'goal must be a string.' });
+      assert.match(String(toolResponse.error), /effort must be a canonical effort string or null/);
       assert.equal(afterMalformed.history.at(-1).parts[0].text, 'first turn recovered');
       assert.equal(afterMalformed.busy, false);
 
@@ -1270,7 +1428,9 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
   const sessionId = 'worker-host-real-child';
   const dbPath = path.join(root, 'session-runtime.sqlite');
   const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
-  await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
+  const legacyOwner = baseSession(sessionId);
+  legacyOwner.goalState = { goal: 'Resume legacy work', remindEvery: 2, anchorSeq: 0, updatedAt: 1 };
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(legacyOwner));
   await fs.outputFile(path.join(getAgentDir('main'), 'worker-send.txt'), 'worker-master-file');
   const store = new SessionWorkerStore(dbPath); store.open();
   const incarnationId = 'runtime-test-incarnation';
@@ -1306,7 +1466,7 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
       FOXWARM_SESSION_WORKER_INCARNATION_ID: incarnationId,
       FOXWARM_SESSION_WORKER_STORE_PATH: dbPath,
       FOXWARM_TEST_FAIL_WRITE_AT: '2',
-      FOXWARM_TEST_FAIL_GOAL: '1',
+      FOXWARM_TEST_FAIL_SETTING: '1',
       FOXWARM_TEST_WAIT_TOOL: '1',
       FOXWARM_TEST_EXTERNAL_REVERSE: '1',
       FOXWARM_TEST_PUBLICATION_TOOL: '1',
@@ -1389,6 +1549,11 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     assert.equal(durable.history.length, 2);
     assert.equal(durable.queue.length, 0);
     assert.equal(durable.busy, false);
+    assert.equal(durable.goalState, undefined);
+    const migratedTasks = taskService.list().tasks.filter((task: any) => task.createdBySessionId === sessionId);
+    assert.equal(migratedTasks.length, 1);
+    assert.equal(migratedTasks[0].ownerSessionId, sessionId);
+    assert.equal(migratedTasks[0].title, 'Resume legacy work');
     const archive = new DatabaseSync(path.join(root, 'state', 'archive-store.sqlite'), { readOnly: true });
     try {
       const rows = archive.prepare('SELECT role FROM archive_messages WHERE session_id=? ORDER BY seq').all(sessionId) as Array<{ role: string }>;
@@ -1405,8 +1570,8 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     store.enqueueIntent(sessionId, 'goal-fault', 'enqueue', { type: 'user', parts: [{ text: 'set-goal-fault' }] });
     await runtime.call('runPending', { limit: 8 });
     const afterGoalFault = await fs.readJson(statePath);
-    assert.equal(afterGoalFault.goalState, undefined);
-    assert.match(afterGoalFault.history.at(-1).parts[0].text, /reported tool failure: test goal persistence failure/);
+    assert.equal(afterGoalFault.compactThresholdTokens, undefined);
+    assert.match(afterGoalFault.history.at(-1).parts[0].text, /reported tool failure: test setting persistence failure/);
 
     await sessionManager.getSession(sessionId);
     store.enqueueIntent(sessionId, 'reverse-wait', 'enqueue', { type: 'user', parts: [{ text: 'wait through reverse RPC' }] });
@@ -1444,7 +1609,7 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     await assert.rejects(() => runtime.call('runPending', { limit: 8 }), assertRpcCode('SESSION_WORKER_PUBLICATION_RESYNC_REQUIRED'));
     const committedBeforeDisconnect = await fs.readJson(statePath);
     assert.equal(committedBeforeDisconnect.lastAppliedMailboxId, ambiguous.id);
-    assert.equal(committedBeforeDisconnect.goalState.goal, 'committed-before-publication-loss');
+    assert.equal(committedBeforeDisconnect.compactThresholdTokens, 4243);
     assert.equal(committedBeforeDisconnect.history.length, afterWait.history.length + 1);
     const archiveAfterFailure = new DatabaseSync(path.join(root, 'state', 'archive-store.sqlite'), { readOnly: true });
     const archiveCount = Number((archiveAfterFailure.prepare('SELECT COUNT(*) AS count FROM archive_messages WHERE session_id=?').get(sessionId) as any).count);

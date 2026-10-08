@@ -15,7 +15,7 @@ Defines the high-level asynchronous SessionRuntime service contract used at exte
 - `sessionRuntimeServiceDescriptor` — version-12 request/event descriptor, including queue-origin history batches, the exact latest history sequence frontier, and placement-neutral compact cancellation.
 - `createSessionRuntimeServiceHandler()` — local authoritative handler over current session-manager operations.
 - `initializeSessionRuntime()` / `shutdownSessionRuntime()` — local service lifecycle and bounded drain.
-- `listSessions()`, `getSession()`, `getHistory()` — immutable local or exact current-Worker projections/snapshots; history includes the exact authority's latest committed sequence frontier, while list requests carry SQL-backed `limit`/`offset` and return a maintained total.
+- `listSessions()`, `getSession()`, `getHistory()` — immutable local or exact current-Worker projections/snapshots; history includes the exact authority's latest committed sequence frontier, while list requests carry SQL-backed `limit`/`offset` and optional exact `agent` filtering, returning the corresponding maintained total. Unfiltered callers retain the global catalog page.
 - `getSessionListProjections()` — bounded by-ID projection batch plus optional
   active local/current-Worker union using one ownership query and an in-memory
   presentation revision for WebUI keyset invalidation. Its optional

@@ -2,21 +2,22 @@ import crypto from 'crypto';
 import fs from 'fs-extra';
 import type { Dirent } from 'node:fs';
 import path from 'path';
-import { applyUpdatePatch, buildAddedFileContent, formatApplyPatchOperationSummary, parseApplyPatchInput } from './applyPatch';
 import { getNodeAgentDir, resolveNodePath } from './nodeFileTransfer';
-import { readFileToolPath, writeFileToolPath } from './fileToolCore';
+import { applyPatchOperations, readFileToolPath, requireToolFilePath, writeFileToolPath } from './fileToolCore';
 import {
-  fileOperationPathExists,
   nativeFileOperations,
   readWholeFile,
   type FileOperations,
 } from './fileOperations';
 import { PersistentExecManager, resolveExecTimeoutSeconds, type ExecStatus, type RunningExecEntry } from './persistentExec';
+import type { ResolvedToolPath } from './resolvedPathMetadata';
 import type { ExternalNodeOwner } from './nodeProtocol';
 import { nativeProcessOperations } from './processOperations';
 
 export interface NodeToolContext {
   sessionId?: string;
+  /** Trusted caller context, not a tool argument or permission identity. */
+  programmatic?: true;
   session?: { agent?: string; cwd?: string; currentNode?: string };
   externalOwner?: ExternalNodeOwner;
   externalExecManager?: PersistentExecManager;
@@ -33,6 +34,7 @@ export interface NodeToolContext {
   resolveFilePath?: (filePath: string) => string;
   /** Return the parent in that same namespace without imposing host path semantics. */
   dirnameFilePath?: (filePath: string) => string | Promise<string>;
+  onResolvedPaths?: (paths: ResolvedToolPath[]) => void;
   broadcast?: (text: string) => Promise<void>;
   queueSystemEvent?: (message: string, type?: 'background' | 'trigger' | 'onboot', metadata?: NodeSessionEventMetadata) => Promise<void>;
 }
@@ -73,8 +75,12 @@ async function dirnameToolPath(filePath: string, ctx: NodeToolContext): Promise<
 }
 
 export async function read(args: ToolArgs, ctx: NodeToolContext = {}) {
-  const { filePath, startLine, endLine } = args;
-  return readFileToolPath(resolveToolPath(filePath, ctx), filePath, startLine, endLine, ctx.fileOperations);
+  const filePath = requireToolFilePath(args.filePath, 'read');
+  const { startLine, endLine } = args;
+  const fullPath = resolveToolPath(filePath, ctx);
+  const result = await readFileToolPath(fullPath, filePath, startLine, endLine, ctx.fileOperations, ctx.programmatic === true);
+  ctx.onResolvedPaths?.([{ raw: filePath, resolved: fullPath }]);
+  return result;
 }
 
 export async function write(args: ToolArgs, ctx: NodeToolContext = {}) {
@@ -87,66 +93,37 @@ export async function write(args: ToolArgs, ctx: NodeToolContext = {}) {
     createDirs: args.createDirs === true,
     parentPath: ctx.dirnameFilePath ? await dirnameToolPath(fullPath, ctx) : undefined,
   }, ctx.fileOperations);
+  ctx.onResolvedPaths?.([{ raw: filePath, resolved: fullPath }]);
   return 'File written successfully';
 }
 
 export async function edit(args: ToolArgs, ctx: NodeToolContext = {}) {
-  const { filePath, oldText, newText } = args;
+  const filePath = requireToolFilePath(args.filePath, 'edit');
+  const { oldText, newText } = args;
   if (typeof oldText !== 'string' || typeof newText !== 'string') throw new Error('Edit tool requires oldText and newText. Use apply_patch for patch-style edits.');
   const fullPath = resolveToolPath(filePath, ctx);
   const operations = ctx.fileOperations || nativeFileOperations;
   const content = (await readWholeFile(operations, fullPath)).toString('utf8');
   await operations.write(fullPath, applyExactReplacement(content, oldText, newText, 'oldText'), 'w');
+  ctx.onResolvedPaths?.([{ raw: filePath, resolved: fullPath }]);
   return 'File edited successfully';
-}
-
-async function applyPatchOperations(
-  input: string,
-  resolveOperationPath: (filePath: string) => { fullPath: string; displayPath: string },
-  fileOperations: FileOperations,
-  dirname: (filePath: string) => string | Promise<string> = path.dirname,
-): Promise<string> {
-  const operations = parseApplyPatchInput(input);
-  const summaries: string[] = [];
-  for (let idx = 0; idx < operations.length; idx++) {
-    const operation = operations[idx];
-    const { fullPath, displayPath } = resolveOperationPath(operation.filePath);
-    try {
-      if (operation.action === 'update') {
-        if (!await fileOperationPathExists(fileOperations, fullPath)) throw new Error(`Cannot update missing file: ${displayPath}`);
-        const content = (await readWholeFile(fileOperations, fullPath)).toString('utf8');
-        await fileOperations.write(fullPath, applyUpdatePatch(content, operation.lines, displayPath), 'w');
-        summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
-      } else if (operation.action === 'add') {
-        if (await fileOperationPathExists(fileOperations, fullPath)) throw new Error(`Cannot add file that already exists: ${displayPath}`);
-        await fileOperations.mkdir(await dirname(fullPath));
-        await fileOperations.write(fullPath, buildAddedFileContent(operation.lines), 'w');
-        summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
-      } else {
-        if (!await fileOperationPathExists(fileOperations, fullPath)) throw new Error(`Cannot delete missing file: ${displayPath}`);
-        await fileOperations.remove(fullPath);
-        summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
-      }
-    } catch (err) {
-      const succeeded = summaries.length > 0
-        ? `\nOperations already applied (these changes are already on disk):\n${summaries.map(line => `- ${line}`).join('\n')}\n`
-        : '';
-      const remaining = operations.length - idx - 1;
-      const remainingHint = remaining > 0 ? `\n${remaining} remaining operation(s) were not applied.` : '';
-      throw new Error(`${(err as Error).message}${succeeded}${remainingHint}`);
-    }
-  }
-  return `Patch applied successfully.\n${summaries.map(line => `- ${line}`).join('\n')}`;
 }
 
 export async function apply_patch(args: ToolArgs, ctx: NodeToolContext = {}) {
   if (!args.input || typeof args.input !== 'string') throw new Error('apply_patch requires input string.');
-  return applyPatchOperations(
+  const paths: ResolvedToolPath[] = [];
+  const result = await applyPatchOperations(
     args.input,
-    filePath => ({ fullPath: resolveToolPath(filePath, ctx), displayPath: filePath }),
+    filePath => {
+      const fullPath = resolveToolPath(filePath, ctx);
+      paths.push({ raw: filePath, resolved: fullPath });
+      return { fullPath, displayPath: filePath };
+    },
     ctx.fileOperations || nativeFileOperations,
     filePath => dirnameToolPath(filePath, ctx),
   );
+  ctx.onResolvedPaths?.(paths);
+  return result;
 }
 
 const sessionEventDispatchers = new Map<string, NonNullable<NodeToolContext['queueSystemEvent']>>();
@@ -164,6 +141,7 @@ function getExecManager(agentName: string): PersistentExecManager {
   const manager = new PersistentExecManager({
     getDefaultCwd: () => process.cwd(),
     getExecTempDir: () => execTempDir,
+    getAgentDir: getNodeAgentDir,
     registryPath: path.join(execTempDir, 'running-exec.json'),
     nodeId: process.env.FOXWARM_NODE_ID || 'remote-node',
     processOperations: nativeProcessOperations,
@@ -259,7 +237,7 @@ export async function exec(args: ToolArgs, ctx: NodeToolContext = {}) {
     try {
       const output = await manager.buildForegroundExecResult(entry, status, resolvedTimeout.warning);
       if (ctx.onExecForeground) ctx.onExecForeground(entry.id, output, await manager.getResolvedExecCwd(entry));
-      return output;
+      return ctx.programmatic ? await manager.buildProgrammaticExecResult(entry, status, output) : output;
     } finally {
       await manager.finalizeForegroundExec(entry.id);
     }
@@ -269,7 +247,8 @@ export async function exec(args: ToolArgs, ctx: NodeToolContext = {}) {
   }
   ctx.onExecBackground?.(entry.id);
   await manager.markExecForBackgroundNotification(entry.id);
-  return await manager.buildBackgroundTimeoutResult(entry, timeoutSeconds, resolvedTimeout.warning);
+  const output = await manager.buildBackgroundTimeoutResult(entry, timeoutSeconds, resolvedTimeout.warning);
+  return ctx.programmatic ? manager.buildProgrammaticExecResult(entry, null, output) : output;
 }
 
 class SharedBrowserManager {

@@ -1,6 +1,7 @@
 import http from 'node:http';
 import type { WebSocket } from 'ws';
 import type { HttpAuthContext } from '../httpServer';
+import { LOG_SOCKET_BUFFER_BYTES, type LogSubscription } from './webuiLogs';
 
 export const WEBUI_REALTIME_PATH = '/api/webui/stream';
 export const WEBUI_REALTIME_KEEPALIVE_MS = 30_000;
@@ -19,7 +20,7 @@ type ResolvedRealtimeIds = {
   requestedToCanonical: Record<string, string>;
 };
 
-export type WebUiRealtimeSocket = Pick<WebSocket, 'readyState' | 'send' | 'close' | 'ping' | 'on'>;
+export type WebUiRealtimeSocket = Pick<WebSocket, 'readyState' | 'send' | 'close' | 'ping' | 'on'> & { bufferedAmount?: number };
 
 export type WebUiRealtimeDependencies = {
   checkToken: (req: http.IncomingMessage) => boolean;
@@ -29,6 +30,7 @@ export type WebUiRealtimeDependencies = {
   loadModelStreamSnapshot?: (canonicalSessionId: string) => Promise<WebUiRealtimeEnvelope>;
   loadSessionList: (requestedIds: string[]) => Promise<WebUiRealtimeEnvelope>;
   onSessionSubscriptionChanged?: (canonicalSessionId: string) => void | Promise<void>;
+  subscribeLogs?: (request: LogSubscription, emit: (message: WebUiRealtimeEnvelope) => void, canSend: () => boolean) => () => void;
   keepaliveIntervalMs?: number;
 };
 
@@ -46,6 +48,8 @@ type WebUiRealtimeClient = {
   pending: WebUiRealtimeEnvelope[];
   applyTail: Promise<void>;
   stopKeepalive: () => void;
+  logsId?: string;
+  stopLogs?: () => void;
 };
 
 type SetSubscriptionsMessage = {
@@ -54,6 +58,7 @@ type SetSubscriptionsMessage = {
   sessionListActive: boolean;
   sessionListIds: string[];
   sessionIds: string[];
+  logs?: LogSubscription;
 };
 
 function normalizeIds(value: unknown, label: string): string[] {
@@ -73,6 +78,13 @@ function normalizeIds(value: unknown, label: string): string[] {
   return ids;
 }
 
+function parseLogSubscription(raw: any): LogSubscription | undefined {
+  if (raw == null) return undefined;
+  if (typeof raw !== 'object' || Array.isArray(raw) || typeof raw.id !== 'string' || !raw.id || raw.id.length > 128) throw new Error('Invalid logs subscription.');
+  if (raw.cursor !== undefined && (!raw.cursor || typeof raw.cursor.fileId !== 'string' || !raw.cursor.fileId || raw.cursor.fileId.length > 256 || !Number.isSafeInteger(raw.cursor.offset) || raw.cursor.offset < 0)) throw new Error('Invalid logs cursor.');
+  return { id: raw.id, ...(raw.cursor ? { cursor: { fileId: raw.cursor.fileId, offset: raw.cursor.offset } } : {}) };
+}
+
 function parseSetSubscriptions(raw: unknown): SetSubscriptionsMessage {
   if (!raw || typeof raw !== 'object' || (raw as any).type !== 'set-subscriptions') {
     throw new Error('Unsupported WebUI realtime message type.');
@@ -87,6 +99,7 @@ function parseSetSubscriptions(raw: unknown): SetSubscriptionsMessage {
     sessionListActive: (raw as any).sessionListActive === true,
     sessionListIds: normalizeIds((raw as any).sessionListIds, 'sessionListIds'),
     sessionIds: normalizeIds((raw as any).sessionIds, 'sessionIds'),
+    logs: parseLogSubscription((raw as any).logs),
   };
 }
 
@@ -194,6 +207,13 @@ export class WebUiRealtimeHub {
     }
   }
 
+  dispose(): void {
+    for (const client of [...this.clients]) {
+      try { client.socket.close(1001, 'WebUI channel stopped'); } catch {}
+      this.cleanupClient(client);
+    }
+  }
+
   private async applySubscriptions(client: WebUiRealtimeClient, message: SetSubscriptionsMessage): Promise<void> {
     if (client.closed || message.revision < client.requestedRevision || message.revision <= client.revision) return;
 
@@ -204,7 +224,8 @@ export class WebUiRealtimeHub {
       }
       client.auth = fresh;
     }
-
+    if (message.logs && !this.dependencies.subscribeLogs) throw new Error('Logs are unavailable.');
+    if (client.logsId !== message.logs?.id) { client.stopLogs?.(); client.stopLogs = undefined; client.logsId = undefined; }
     const resolvedList = this.dependencies.resolveIds(message.sessionListIds);
     const resolvedSessions = this.dependencies.resolveIds(message.sessionIds);
     if (client.auth.role === 'guest') {
@@ -269,6 +290,12 @@ export class WebUiRealtimeHub {
     client.pending = [];
     for (const payload of pending) this.safeSend(client, payload);
     this.safeSend(client, { type: 'subscriptions-applied', revision });
+    if (message.logs && !client.logsId && !client.closed) {
+      client.logsId = message.logs.id;
+      client.stopLogs = this.dependencies.subscribeLogs!(message.logs, payload => {
+        if (payload.logsId === client.logsId) this.safeSend(client, payload);
+      }, () => !client.closed && socketIsOpen(client.socket) && (client.socket.bufferedAmount || 0) < LOG_SOCKET_BUFFER_BYTES);
+    }
   }
 
   private deliver(client: WebUiRealtimeClient, payload: WebUiRealtimeEnvelope): void {
@@ -349,6 +376,9 @@ export class WebUiRealtimeHub {
     if (client.closed) return;
     client.closed = true;
     client.stopKeepalive();
+    client.stopLogs?.();
+    client.stopLogs = undefined;
+    client.logsId = undefined;
     this.clients.delete(client);
     const previousSessionIds = client.sessionIds;
     client.sessionIds = new Set();

@@ -1,6 +1,6 @@
 # Unit: src-tools-session-agent
 
-Files: src/toolsSessionAgent.ts (facade), src/toolsSessionAgent/helpers.ts, src/toolsSessionAgent/interSession.ts, src/toolsSessionAgent/archiveLexicalRecall.ts, src/toolsSessionAgent/archiveLexicalRecall.test.ts, src/toolsSessionAgent/archiveRecall.ts, src/toolsSessionAgent/archiveRecallVectorFallback.test.ts, src/toolsSessionAgent/archiveRecallVectorQuality.test.ts, src/contextPreviewRenderer.ts, src/contextPreviewRenderer.test.ts, src/toolsSessionAgent/timers.ts, src/toolsSessionAgent/agents.ts, src/toolsSessionAgent/skills.ts, src/toolsSessionAgent/settings.ts, src/toolsSessionAgent/sessionCrud.ts, src/sessionStatus.ts, src/toolsSessionAgent/toolsSessionAgentArchiveGuard.test.ts, src/toolsSessionAgent/toolsSessionAgentResult.test.ts, src/toolsSessionAgent/sessionTool.test.ts, src/toolsSessionAgent/handoffWait.test.ts
+Files: src/toolsSessionAgent.ts (facade), src/toolsSessionAgent/helpers.ts, src/toolsSessionAgent/interSession.ts, src/toolsSessionAgent/archiveLexicalRecall.ts, src/toolsSessionAgent/archiveLexicalRecall.test.ts, src/toolsSessionAgent/archiveRecall.ts, src/toolsSessionAgent/archiveRecallVectorFallback.test.ts, src/toolsSessionAgent/archiveRecallVectorQuality.test.ts, src/toolsSessionAgent/detachedSessionMessages.test.ts, src/contextPreviewRenderer.ts, src/contextPreviewRenderer.test.ts, src/toolsSessionAgent/timers.ts, src/toolsSessionAgent/agents.ts, src/toolsSessionAgent/skills.ts, src/toolsSessionAgent/settings.ts, src/toolsSessionAgent/sessionCrud.ts, src/sessionStatus.ts, src/toolsSessionAgent/toolsSessionAgentArchiveGuard.test.ts, src/toolsSessionAgent/toolsSessionAgentResult.test.ts, src/toolsSessionAgent/sessionTool.test.ts, src/toolsSessionAgent/handoffWait.test.ts
 
 ## Purpose
 
@@ -11,12 +11,13 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 - `tool_create_child_session`, `tool_send_to_session`, `tool_wait`, `tool_submit_compact_plan`, `tool_send_to_channel`, `tool_send_file` — inter-session communication
 - `tool_get_session_messages`, `tool_get_archived_messages`, `tool_get_archived_blocks`, `tool_recall` — archive/recall
 - `tool_create_timer`, `tool_list_timers`, `tool_update_timer`, `tool_delete_timer` — timer management
+  `create_timer` and `update_timer` retain schedule/mode/target/next-run information but omit the message body from their successful model-facing receipts. `list_timers` remains the detail query and includes message text; timer firing still delivers the persisted message.
 - `tool_create_agent`, `tool_list_agents`, `tool_set_agent_inherit`, `tool_set_agent_isolated`, `tool_move_session`, `tool_create_session` — agent/session management
 - `tool_skill` — skill list/load actions
-- `tool_set_goal`, `tool_set_session_compact_threshold`, `tool_set_session_child_model`, `tool_refresh_session_snapshot` — settings
+- `tool_set_session_compact_threshold`, `tool_set_session_child_model`, `tool_refresh_session_snapshot` — settings
 
-`tool_set_goal`, compact-threshold settings, child-model settings, snapshot refresh, and current stop can mutate the exact passed current Session when `session`, `sessionId`, target identity, and the local-only `persistCurrentSession` hook agree. Display-name updates are Main-owned catalog metadata: a Worker routes them through the fixed Main Management operation, and Main applies the SessionRuntime catalog update without persisting Worker authority. Compact/child settings normalize the passed owner exactly like SessionRuntime and persist only when the normalized settings view changes; canonical in-memory assign/delete still occurs for no-ops. Worker status formatting uses only that owner and marks remote node connectivity unknown instead of consulting a child catalog. Current archived-message/block permission checks also use the exact owner. Recall trims explicit session/agent selectors; current aliases and the exact owner's current-agent vector scope remain local/reverse-safe without a global Session lookup. Explicit other-session Worker targets are pre-handler fenced; local legacy/direct callers retain their existing SessionRuntime/SessionManager paths. Snapshot refresh delegates to the shared passed-Session prompt builder rather than looking the owner up again.
-- `tool_session`, `tool_delete_session`, `tool_stop_session`, `tool_compact_session` — session status/list/display-name update and lifecycle
+Compact-threshold settings, child-model settings, snapshot refresh, and current stop can mutate the exact passed current Session when `session`, `sessionId`, target identity, and the local-only `persistCurrentSession` hook agree. Display-name updates are Main-owned catalog metadata: a Worker routes them through the fixed Main Management operation, and Main applies the SessionRuntime catalog update without persisting Worker authority. Compact/child settings normalize the passed owner exactly like SessionRuntime and persist only when the normalized settings view changes; canonical in-memory assign/delete still occurs for no-ops. Worker status formatting uses only that owner and marks remote node connectivity unknown instead of consulting a child catalog. Current archived-message/block permission checks also use the exact owner. Recall trims explicit session/agent selectors; current aliases and the exact owner's current-agent vector scope remain local/reverse-safe without a global Session lookup. Explicit other-session Worker targets are pre-handler fenced; local legacy/direct callers retain their existing SessionRuntime/SessionManager paths. Snapshot refresh delegates to the shared passed-Session prompt builder rather than looking the owner up again.
+- `tool_session`, `tool_delete_session`, `tool_stop_session`, `tool_compact_session` — session status/list/display-name/parent update and lifecycle
 
 ## Function Index
 
@@ -29,8 +30,8 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 | `normalizePositivePreviewLength` | Coerces preview length to positive integer or fallback |
 | `assertPreviewRequestWithinLimit` | Throws if combined preview budget exceeds char limit |
 | `formatTimerTimestamp` | Formats a timer timestamp as ISO string or 'n/a' |
-| `formatTimerSummary` | Builds a human-readable timer creation summary |
-| `formatTimerUpdateSummary` | Builds a human-readable timer update summary |
+| `formatTimerSummary` | Builds a human-readable timer creation receipt without the message body |
+| `formatTimerUpdateSummary` | Builds a human-readable timer update receipt without the message body |
 | `expandHomePath` | Expands `~` prefix to OS home directory |
 | `resolveAgentPath` | Resolves relative file path against agent or session CWD |
 | `detectMimeType` | Returns MIME type based on file extension |
@@ -68,7 +69,9 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 | `buildRecallMessagesForBlock` | Returns messages covered by a block |
 | `buildRecallMessagesByRange` | Returns messages in a sequence range |
 | `renderContextBlockExpansion` | Read-only WebUI helper that expands one CTX-BLOCK layer into structured child block/raw message items without session queue/tool mutation |
-| `formatArchivedMessagePreview` | Formats a single archived message for display |
+| `searchStructuredRecallSources` | Shared ranked source-family retrieval and Archive reload used by model recall and the authenticated history viewer; caller supplies the already-authorized scope. The viewer requests bounded raw source reads and structured Timeline messages, while model recall retains its existing renderer and preview budget. |
+| `selectBoundedVectorRawMessageWindow` | Scans one raw source family by bounded effective Archive pages with the same message scorer and anchor tie-break as `selectVectorRawMessageWindow`, then reads a bounded neighborhood for the original atomic tool-group/window selector; I/O is proportional to matched source-family length but each SQL page and retained message set are bounded. |
+| `formatArchivedMessagePreview` | Formats archived rows through the shared renderer with valid Archive row timestamp precedence and persisted-message fallback |
 | `formatArchivedBlockPreview` | Formats archived blocks listing |
 
 ### contextPreviewRenderer.ts — Shared recall/session preview rendering
@@ -82,7 +85,8 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 | `extractStrongArchiveLocators` | Deterministically extracts at most four bounded high-confidence hash/Session/Node/path/symbol/slash-command/CamelCase/snake_case/numeric identifiers; ambiguous lowercase hyphen prose requires exact infrastructure shape or explicit ID/quoting context |
 | `searchArchiveLexicalSideChannel` | Scores bounded Archive candidates from block summaries or substantive model-visible message text and emits source-backed raw/block locations |
 | `fuseDenseAndLexicalHits` | Combines dense and lexical ranks at canonical source-family level with bounded shared boost and raw containment collapse |
-| `formatMessageHeading` | Builds consistent message headings with role emoji, origin labels, and visibility suffix |
+| `formatMessageHeading` | Builds consistent message headings with full local timestamps, role emoji, origin labels, and visibility suffix |
+| `renderMessageItems` / `clipRenderedPreview` / `elideRepeatedMessageDates` | Tracks only generated message-heading spans through grouped vector snippets and final clipping, then elides dates in surviving displayed order |
 
 ### toolsSessionAgent/timers.ts — Timer management
 | Function | Description |
@@ -110,7 +114,6 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 ### toolsSessionAgent/settings.ts — Session settings
 | Function | Description |
 |----------|-------------|
-| `tool_set_goal` | Sets or clears the session goal |
 | `tool_set_session_compact_threshold` | Reads or updates the trusted passed owner's compaction threshold, with the existing SessionRuntime path for other/legacy targets |
 | `tool_set_session_child_model` | Reads or atomically updates the trusted passed owner's future-child model/effort defaults, with the existing SessionRuntime path for other/legacy targets |
 | `tool_refresh_session_snapshot` | Refreshes a trusted passed owner's prompt snapshot directly, or uses the existing ID-based path for other/legacy targets |
@@ -118,7 +121,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 ### toolsSessionAgent/sessionCrud.ts — Session lifecycle
 | Function | Description |
 |----------|-------------|
-| `tool_session` | Model-facing session helper: status, paginated list, and display-name update actions |
+| `tool_session` | Model-facing session helper: status, paginated list, display-name update, and parent update actions |
 | `tool_delete_session` / `deleteSessionForSource` | Deletes another permitted session through the shared lifecycle orchestrator; Worker placement uses the fixed Main operation and canonical source/alias self-delete is forbidden |
 | `tool_stop_session` | Sends stop signal to a busy session |
 | `tool_compact_session` | Requests session compaction |
@@ -129,12 +132,11 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 | `buildSessionStatusInfo` | Builds the shared status data used by `/status` and `session({action:"status"})`: agent/session identity, agent dir, parent id, model plus raw/effective current and child effort, message count, token/image estimate, last usage, effective auto-compact threshold, current node connectivity, cwd/default cwd, busy/queue state, and recent child sessions. |
 | `formatSessionStatus` | Formats status info for command/tool output. |
 | `formatSessionListRow` | Shared row formatter reused by status child-session rows and session list output. |
-| `buildSessionListOutput` | Formats the old list_sessions-style paginated list for `session({action:"list"})`. |
+| `buildSessionListOutput` | Formats a paginated catalog list for `session({action:"list"})`, scoped to the source Session Agent by default; `scope:"all"` retains global catalog listing. Invalid scope and missing current-source identity fail before querying. |
 
 ## Dependencies
 
 - `./sessionManager` — session CRUD, message appending, archive access, agent inheritance/isolation
-- `./session/goal` — goal state management (set/clear/resolve remind settings)
 - `./session/layeredContext` — archive block formatting and retrieval
 - `./session/archive` — message archive append/read
 - `./session/messageVisibility` — redacting display-only content for model consumption
@@ -149,9 +151,12 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 - `./utils/messageFormat` — text formatting helpers
 - `./utils/unicode` — safe unicode truncation
 - `./utils/localTime` — local timestamp formatting
+- `./utils/messagePreviewTime` — valid persisted timestamps and shared local-day comparison state
 - `./channel` — `ChannelFile` type
 
 ## Behavior
+
+- `create_child_session.taskId` binds an unowned existing task to the actual new child before initial delivery; missing/owned/terminal task preflight rejects before creation. Shared task contracts are canonical in [src-tasks](./src-tasks.md).
 
 - `get_session_messages` and `recall` render through the shared context preview renderer: `previewLength` is a total output budget, values are clamped to 1000-20000 with a warning, tool calls/results default to name/id/status-only, and `contentFilter` / `includeRegex` / `excludeRegex` post-filter full message/block/tool content with match-centered snippets. An exact trusted current owner (matching target/context/passed Session plus the local owner persistence hook) slices passed history directly and uses the passed-session isolation guard; other/no-hook/mismatched calls retain global ID lookups. Every successful result includes the target session's concise canonical runtime-state summary, including empty pages and pages reduced to zero matches; a nonzero queue length is appended without changing message selection or filter semantics.
 - `contentFilter` is a literal case-insensitive result post-filter, never a semantic or retrieval query. `get_session_messages` first selects its page; exact recall first resolves `target`; vector recall first searches with `vector_query` and reloads source archive items; only then does the shared renderer filter. Filter stages run in the documented order `contentFilter` -> `includeRegex` -> `excludeRegex`, report separate exclusion counts, and keep the notice visible even when zero items remain or body previews are truncated.
@@ -165,7 +170,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 - `tool_recall` rejects legacy parameter names (`startSeq`, `endSeq`, `includeMessages`, etc.) with guidance to use the new `target` selector syntax (`msg#N-M`, `B#N`, `blocks`).
 - `renderContextBlockExpansion` is not a model-facing tool. WebUI uses it with `sessionId + blockId` to render temporary one-layer archive previews as structured timeline messages; one shared load obtains the parent block and immediate source records, then a pure formatter produces the compatible `text` field from the same data used for structured `items/messages`. Child block messages include `__meta.contextBlock` for recursive expansion, and raw archive messages keep their original message shape/seq metadata. Missing sessions/blocks are reported with structured errors.
 - `tool_wait` returns a `__toolLoopControl` signal that stops the current turn. Current calls must declare at least one valid source or fallback: a two-or-more `waitAllSessions` barrier, nonempty `waitAnySessions`, exact owned active/queued-completion `waitExecIds`, `waitForInput:true`, or positive `wakeIfNoActivityAfterSeconds`. `timeoutSeconds` and source-less waits are rejected. Session targets resolve through the Main-owned catalog/topology service, while exec ownership is checked against the exact process-local exec runtime.
-- `tool_session` replaces the old `list_sessions` tool and owns the display-name request while Main owns the resulting catalog metadata. With omitted args or `action:"status"`, it returns the same status fields as `/status` using `src/sessionStatus`: agent id/name, agent dir, session id, parent id, token/image estimate, last usage (with optional reasoning tokens displayed inside output rather than added to total), auto-compact threshold, current node, current cwd/default cwd, canonical runtime-state summary, and up to 10 recent child sessions. With `action:"list"`, it preserves old list pagination (`start`, `count`) and row formatting; with `action:"update-display-name"`, it sets or clears a display name through the Main-owned catalog operation and reports the previous/resulting values or an explicit no-op. Isolated sessions may use status but not list/update-display-name.
+- `tool_session` replaces the old `list_sessions` tool and owns the display-name request while Main owns the resulting catalog metadata. With omitted args or `action:"status"`, it returns the same status fields as `/status` using `src/sessionStatus`: agent id/name, agent dir, session id, parent id, token/image estimate, last usage (with optional reasoning tokens displayed inside output rather than added to total), auto-compact threshold, current node, current cwd/default cwd, canonical runtime-state summary, and up to 10 recent child sessions. Status accepts an optional `sessionId`; the exact current owner uses the passed Session, while another target uses the SessionRuntime projection and a Worker routes through the closed Main-management read boundary without hydrating a Worker stub or accidentally reusing the caller Session. Target status carries the target history and persistent-memory snapshot into the shared token/image estimate. Missing targets fail explicitly, and status formatting does not create a Session as a fallback. Isolated sessions may query only their current ID or own alias; cross-target status is rejected, and parent updates retain the existing non-isolated management boundary. With `action:"list"`, it filters to the source Session Agent by default (or accepts explicit `scope:"all"`) before the existing pagination (`start`, `count`) and row formatting; with `action:"update-display-name"`, it sets or clears a display name through the Main-owned catalog operation and reports the previous/resulting values or an explicit no-op. With `action:"update-parent"`, `parentSessionId` is required and must be an existing non-empty Session ID or null; the operation changes only the parent relation and returns the target, previous parent, and resulting parent IDs. Worker callers route it through Main's closed management operation, reusing `sessionManager.setSessionParent` relation/cycle/claim behavior. Isolated sessions may use owner-local status but not list/update-display-name/update-parent.
 - `tool_submit_compact_plan` remains guarded outside dedicated compaction, but its model-facing schema now includes `preserveMessages` and `removePreservedMessages` for compact-time raw-message preservation/removal handled by `src/session/compactPlan` and `src/session/history`.
 - `tool_send_to_session` delegates to session relations, accepts `<main>` / `<parent>` special target ids, and cannot target the current/source session itself; self-send errors include current/requested/resolved IDs and remind agents that messages to the current session's direct user should be ordinary assistant text instead.
 - `send_to_session` and `create_child_session` expose `afterSend:"continue" | "finish" | "wait"`. `finish` is the completed-child report path and stops idle without wait state, including when a sibling tool fails; both terminal child-creation modes await any initial delivery, while `wait` additionally requires a non-empty message and records resolved targets. Hidden legacy stop/wait booleans remain runtime-readable but are absent from the model schema. Canonical orchestration: [D-pipeline-handoff-wait](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait).
@@ -194,6 +199,14 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 
 - [2026-07-22] Rename the shared literal result filter on `recall` and `get_session_messages` from ambiguous `query` to `contentFilter`. It is explicitly a case-insensitive post-filter after target/page/vector retrieval; `target` owns exact CTX-BLOCK/range selection and `vector_query` owns semantic search. Do not preserve old `query` compatibility: reject it clearly. Report staged literal/include/exclude exclusion counts, and preserve the count/omit-filter hint even for zero-result or truncated previews.
 
-- [2026-07-02] The old model-facing `list_sessions` builtin is removed rather than compatibility-wrapped. The replacement is the default model-facing `session` tool: `session()` / `session({action:"status"})` for current status, and `session({action:"list", start, count})` for the old list behavior.
+### D-message-preview-timestamps
+
+Message previews use persisted `Message.__meta.timestamp`, with a valid authoritative Archive row timestamp taking precedence and the persisted Message timestamp as fallback for raw Archive rows. Only finite numeric values representable by `Date` are timed. Each displayed message shows local time to seconds and the numeric UTC offset. The first displayed message/page shows its full local date; only the immediately preceding displayed message on the same local day permits date elision. Missing/invalid message times remain untimed, reset comparison, and never use wall-clock time or body/wrapper parsing.
+
+The shared renderer applies this comparison after filters, result selection and clipping. Grouped raw vector windows retain generated heading spans so the first surviving row keeps its date even when match-centered snippets omit earlier rows. Date removal only shortens the bounded output and never modifies matching body text. `/messages` uses the same time state with a fresh state per page. Archived CTX-BLOCK ranges, canonical messages, Archive storage, provider serialization and WebUI Timeline timing are unchanged.
+
+### D-session-tool-list-scope
+
+[2026-07-02, updated 2026-09-28] The old model-facing `list_sessions` builtin is removed rather than compatibility-wrapped. The replacement is the default model-facing `session` tool: `session()` / `session({action:"status"})` for current status, and `session({action:"list", start, count, scope?})` for catalog listing. List defaults to the calling Session's Agent; only explicit `scope:"all"` retains the previous global view. Filter before pagination to keep offsets and totals consistent. The existing list permission and isolation checks remain unchanged; the scope option is not a grant and does not alter WebUI lists.
 - [2026-07-02] `/status` and `session({action:"status"})` must share the same status information source/formatter (`src/sessionStatus`) and expose the union of old `/status` fields plus the new tool fields: agent id/name, agent dir, session id, parent id, model, message/token/image status, last usage, last message time, effective auto-compact threshold, current node/connection, current cwd/default cwd, busy/queue state, and recent child sessions.
 - [2026-08-26] Session status/list distinguishes all-session, any-session, exec, input, and fallback waits. Current model calls must declare a real source/fallback; legacy persisted source-less waits remain readable without acquiring current quiescence semantics.

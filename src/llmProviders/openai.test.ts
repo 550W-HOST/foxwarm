@@ -323,6 +323,20 @@ test('collectOpenAIResponsesStream rebuilds streamed output items from SSE delta
   assert.equal(progress.at(-1)?.toolCalls?.[0]?.arguments, '{"filePath":"x"}');
 });
 
+test('Responses progress learns a commentary phase only when the completed message item reports it', async () => {
+  const progress: any[] = [];
+  const response = await collectOpenAIResponsesStream(makeStream([
+    { type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', content: [] } },
+    { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'Working' },
+    { type: 'response.output_item.done', output_index: 0,
+      item: { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'Working' }] } },
+    { type: 'response.completed', response: { id: 'response-phase', output: [], usage: { input_tokens: 1, output_tokens: 1 } } },
+  ]), new AbortController().signal, { onProgress: snapshot => progress.push(structuredClone(snapshot)) });
+  assert.equal(progress.find(snapshot => snapshot.parts?.[0]?.text === 'Working')?.parts[0].phase, undefined);
+  assert.equal(progress.at(-1).parts[0].phase, 'commentary');
+  assert.equal(response.output[0].phase, 'commentary');
+});
+
 test('collectOpenAIResponsesStream preserves indexed reasoning summary boundaries over condensed completed output', async () => {
   const firstSummary = '**Preparing final test report and preview options**';
   const secondSummary = '**Confirming no live deployment without user approval**';
@@ -851,6 +865,37 @@ test('convertToOpenAIResponsesFormat replays ordered web search metadata only to
     },
     { type: 'function_call', call_id: 'call_1', name: 'read', arguments: '{"filePath":"README.md"}' },
   ]);
+});
+
+test('generated images retain one native same-model replay and expose local IDs to later models without vision', () => {
+  const bytes = Buffer.from('fixture-native-image-bytes').toString('base64');
+  const part: Message['parts'][number] = {
+    inlineData: { mimeType: 'image/jpeg', data: bytes },
+    imageMeta: { imageId: 'ig_local123', origin: 'generated', mimeType: 'image/jpeg', width: 2, height: 3 },
+    providerMeta: { openaiResponses: {
+      sourceModelId: 'openai/source',
+      outputItem: { type: 'image_generation_call', id: 'ig_remote123', status: 'completed', output_format: 'jpeg' },
+    } },
+  };
+  const history: Message[] = [{ role: 'model', parts: [part] }];
+  const before = structuredClone(history);
+  const sameModel = convertToOpenAIResponsesFormat(history, 'openai/source');
+  assert.equal(sameModel.filter(item => item.type === 'image_generation_call').length, 1);
+  assert.equal(sameModel[0].result, bytes);
+  assert.equal(sameModel.filter(item => item.type === 'message').length, 1);
+  assert.match(JSON.stringify(sameModel), /\[IMAGE: id=ig_local123, size=2x3\]/);
+  assert.match(JSON.stringify(sameModel), /artifacts\/ig_local123.jpg/);
+  assert.doesNotMatch(JSON.stringify(sameModel), /input_image/);
+
+  const otherResponses = convertToOpenAIResponsesFormat(history, 'openai/other');
+  const otherChat = convertToOpenAIFormat(history);
+  for (const projection of [otherResponses, otherChat]) {
+    const serialized = JSON.stringify(projection);
+    assert.match(serialized, /does not receive its image content/);
+    assert.match(serialized, /\[IMAGE: id=ig_local123/);
+    assert.doesNotMatch(serialized, /input_image|image_url|fixture-native-image-bytes|ig_remote123/);
+  }
+  assert.deepEqual(history, before, 'provider guidance and replay bytes do not mutate canonical history');
 });
 
 test('convertToOpenAIResponsesFormat preserves explicit assistant phases and applies the legacy tool-call heuristic', () => {

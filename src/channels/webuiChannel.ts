@@ -1,3 +1,5 @@
+import { registerWebUiTaskRoutes } from './webuiTasks';
+import { taskService } from '../tools/taskTools';
 /**
  * WebUI Channel - HTTP API for web interface and external trigger
  */
@@ -13,7 +15,7 @@ import { buildSavedFileText, saveInboundSessionFile } from '../channelFiles';
 import { WebSocket } from 'ws';
 import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
 import { MessageRouter } from '../messageRouter';
-import { logger } from '../common';
+import { logger, MAIN_LOG_PATH } from '../common';
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
 import { deleteSessionLifecycle } from '../sessionDeletion';
@@ -31,9 +33,9 @@ import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLo
 import { createAsrServiceWebSocket, getAsrServiceStatus, transcribeWithAsrService } from '../asrClient';
 import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, getTerminalRecord, listTerminalRecords, resizeTerminal, resolveTerminalControlRequest, writeTerminalInput } from '../terminalRouter';
 import { getSessionHistoryFilePath } from '../session/metadataStore';
-import { getSessionListSequenceMessageCounts } from '../session/archiveStore';
+import { getSessionListSequenceMessageCounts, getVectorSearchLineage, hasArchivedSessionId, readEffectiveArchiveMessagePage } from '../session/archiveStore';
 import { normalizeWebUiInstanceName, normalizeWebUiTabIcon, readWebUiSettings, writeWebUiSettings } from '../webuiSettings';
-import { renderContextBlockExpansion } from '../toolsSessionAgent/archiveRecall';
+import { renderContextBlockExpansion, searchStructuredRecallSources } from '../toolsSessionAgent/archiveRecall';
 import type { Message, QueueHistoryAppendPresentation, QueueItem, Session } from '../types';
 import { registerVscodeWebRoutes } from '../vscodeWebRoutes';
 import { externalizeMessages, externalizeQueueItems, getSafeRasterMimeType, resolveImageBlobPath } from '../imageBlobs';
@@ -54,6 +56,8 @@ import {
   repeatedFocusIds,
 } from '../webuiSessionListQueries';
 import { normalizeWebUiMultipartFilename } from './webuiUpload';
+import { WebUiLogFile, registerWebUiLogRoutes } from './webuiLogs';
+import { registerWebUiNodeOnboardingRoutes } from './webuiNodeOnboarding';
 import { WebUiRealtimeHub, WEBUI_REALTIME_PATH } from './webuiRealtime';
 import { buildQueuedPreviewMessages, MAX_QUEUED_PREVIEW_ITEMS, sanitizeQueuedPreviewParts } from './webuiQueuePreview';
 import { listProviderModels, parseProviderModelListRequest, ProviderModelListError } from '../providerModelList';
@@ -307,6 +311,56 @@ async function materializeWebUiMessages(messages: Message[]): Promise<{ messages
       messages: messages.map(buildWebUiMessage),
     };
   }
+}
+
+/** History search exposes display data, never provider replay payloads. */
+async function materializeHistoryViewerMessages(messages: Message[]): Promise<Message[]> {
+  const projected = (await materializeWebUiMessages(messages)).messages;
+  return projected.map(message => {
+    const { providerMeta: _providerMeta, ...rest } = message;
+    return {
+      ...rest,
+      parts: rest.parts.map(part => {
+        if (!part.providerMeta) return part;
+        const { encryptedThinking: _encrypted, signature: _signature, openaiResponses, ...displayMeta } = part.providerMeta;
+        const item = openaiResponses?.outputItem;
+        const action = item?.type === 'web_search_call' && item.action && typeof item.action === 'object'
+          ? item.action : undefined;
+        const displayAction = action?.type === 'search'
+          ? { type: 'search', ...(typeof action.query === 'string' ? { query: action.query } : {}),
+            ...(Array.isArray(action.queries) ? { queries: action.queries.filter((q: unknown) => typeof q === 'string').slice(0, 20) } : {}) }
+          : action?.type === 'open_page' && typeof action.url === 'string'
+            ? { type: 'open_page', url: action.url } : undefined;
+        return { ...part, providerMeta: {
+          ...displayMeta,
+          ...(openaiResponses ? { openaiResponses: {
+            sourceModelId: openaiResponses.sourceModelId,
+            ...(openaiResponses.annotations ? { annotations: openaiResponses.annotations } : {}),
+            ...(displayAction ? { outputItem: { type: 'web_search_call', action: displayAction } } : {}),
+          } } : {}),
+        } };
+      }),
+    };
+  });
+}
+
+function historySearchQuery(req: express.Request, keys: string[]): Record<string, string | undefined> {
+  const values: Record<string, string | undefined> = {};
+  for (const [name, value] of Object.entries(req.query)) {
+    if (!keys.includes(name) || typeof value !== 'string') {
+      throw Object.assign(new Error(`Invalid history search parameter: ${name}.`), { statusCode: 400, code: 'HISTORY_SEARCH_INVALID' });
+    }
+    values[name] = value.trim();
+  }
+  return values;
+}
+
+function historySearchSeq(raw: string | undefined, name: string): number | undefined {
+  if (raw === undefined) return undefined;
+  if (!/^[1-9]\d*$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
+    throw Object.assign(new Error(`${name} must be a positive integer.`), { statusCode: 400, code: 'HISTORY_SEARCH_INVALID' });
+  }
+  return Number(raw);
 }
 
 async function sanitizeWebUiDebugPayload(payload: any): Promise<any> {
@@ -828,6 +882,7 @@ export class WebUIChannel implements Channel {
   private sseClients: Map<string, express.Response[]> = new Map(); // sessionId -> clients
   private realtimeHub?: WebUiRealtimeHub;
   private guestUploads = new Map<string, { tokenId: string; sessionId: string }>();
+  private logs = new WebUiLogFile(MAIN_LOG_PATH);
   private presentationSubscriberSessions = new Set<string>();
   private presentationSubscriptionListener?: (sessionId: string, active: boolean) => void | Promise<void>;
 
@@ -962,6 +1017,7 @@ export class WebUIChannel implements Channel {
       const guest = await verifyWebUiGuestToken(token);
       return guest ? { ...guest, features: WEBUI_GUEST_FEATURES } : null;
     });
+    if (this.enableWebUI) registerWebUiTaskRoutes(httpServerInstance, taskService);
     this.realtimeHub = new WebUiRealtimeHub({
       checkToken: req => httpServerInstance.checkIncomingToken(req),
       getAuthContext: req => httpServerInstance.getIncomingAuthContext(req),
@@ -1001,6 +1057,7 @@ export class WebUIChannel implements Channel {
         }
         return { type: 'session-list-delta', sessions, deletedIds };
       },
+      subscribeLogs: this.enableWebUI ? (request, emit, canSend) => this.logs.subscribe(request, emit, canSend) : undefined,
       onSessionSubscriptionChanged: sessionId => this.refreshPresentationSubscription(sessionId),
     });
     httpServerInstance.addWebSocket(WEBUI_REALTIME_PATH, async (ws, req) => {
@@ -1018,6 +1075,9 @@ export class WebUIChannel implements Channel {
             const finalSessionId = sessionId || 'main'; // Default to main session
 
             if (!text) throw new Error('Missing text');
+            if (!sessionManager.getSessionCatalog(finalSessionId)) {
+              throw new Error(`Session "${finalSessionId}" is unavailable. Choose an existing session or create one first.`);
+            }
 
             logger.info({ trigger: true, text, sessionId: finalSessionId }, 'External trigger received');
 
@@ -1035,6 +1095,8 @@ export class WebUIChannel implements Channel {
     // WebUI API endpoints
     if (this.enableWebUI) {
       registerVscodeWebRoutes(httpServerInstance);
+      registerWebUiLogRoutes(httpServerInstance, this.logs);
+      registerWebUiNodeOnboardingRoutes(httpServerInstance);
 
       // Auth endpoint
       httpServerInstance.addRoute({
@@ -2194,6 +2256,113 @@ export class WebUIChannel implements Channel {
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to get session state');
             res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/history/search', method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const q = historySearchQuery(req, ['query', 'limit', 'agentName', 'sessionId']);
+            if (!q.query || q.query.length > 2000) throw Object.assign(new Error('Enter a search query (up to 2,000 characters).'), { statusCode: 400 });
+            const limit = q.limit === undefined ? 5 : historySearchSeq(q.limit, 'limit');
+            if (!limit || limit > 20) throw Object.assign(new Error('limit must be between 1 and 20.'), { statusCode: 400 });
+            if ((q.agentName && q.agentName.length > 200) || (q.sessionId && q.sessionId.length > 300)) {
+              throw Object.assign(new Error('Agent or session name is too long.'), { statusCode: 400 });
+            }
+            const session = q.sessionId ? sessionManager.getSessionCatalog(q.sessionId) : undefined;
+            if (q.sessionId && !session && !await hasArchivedSessionId(q.sessionId)) {
+              return res.status(404).json({ error: 'Session not found', code: 'SESSION_NOT_FOUND' });
+            }
+            if (session && q.agentName && (session.agent || 'main') !== q.agentName) {
+              return res.status(400).json({ error: 'The selected session is not in that agent.', code: 'HISTORY_SEARCH_INVALID' });
+            }
+            if (q.sessionId && q.agentName && !session) {
+              return res.status(400).json({ error: 'Search this archived session without an additional agent filter.', code: 'HISTORY_SEARCH_INVALID' });
+            }
+            const lineage = q.sessionId ? await getVectorSearchLineage(session?.id || q.sessionId) : undefined;
+            const scope = lineage ? { lineageSessions: lineage }
+              : q.agentName ? { agent: q.agentName } : {};
+            const search = await searchStructuredRecallSources({
+              vectorQuery: q.query, limit, searchOptions: scope,
+              effectiveScope: q.sessionId ? 'current-session' : q.agentName ? 'current-agent' : 'global',
+              resolvedSessionId: q.sessionId ? lineage?.[0]?.sessionId || session?.id || q.sessionId : undefined,
+              bounded: true,
+            });
+            const sources = await Promise.all(search.sources.slice(0, limit).map(async source => {
+              const firstSeq = source.messages.filter(message => Number.isSafeInteger(message.__meta?.seq))[0]?.__meta?.seq
+                || source.sourceRange?.startSeq;
+              const lastSeq = source.messages.filter(message => Number.isSafeInteger(message.__meta?.seq)).at(-1)?.__meta?.seq
+                || source.sourceRange?.endSeq;
+              const [earlier, later] = source.kind === 'unavailable' || !firstSeq || !lastSeq
+                ? [{ records: [] as unknown[] }, { records: [] as unknown[] }]
+                : await Promise.all([
+                  readEffectiveArchiveMessagePage(source.sessionId, { beforeSeq: firstSeq, limit: 1 }),
+                  readEffectiveArchiveMessagePage(source.sessionId, { afterSeq: lastSeq, limit: 1 }),
+                ]);
+              return {
+                ...source, messages: await materializeHistoryViewerMessages(source.messages),
+                firstSeq, lastSeq, hasEarlier: earlier.records?.length > 0, hasLater: later.records?.length > 0,
+              };
+            }));
+            return res.json({ results: sources, searchKind: search.searchLabel });
+          } catch (error: any) {
+            const code = error?.code || 'HISTORY_SEARCH_FAILED';
+            const status = error?.statusCode || (code === 'VECTOR_DISABLED' || code === 'VECTOR_UNAVAILABLE' ? 503 : 500);
+            if (status >= 500 && code !== 'VECTOR_DISABLED' && code !== 'VECTOR_UNAVAILABLE') logger.error({ code }, 'History search failed');
+            return res.status(status).json({ error: error?.message || 'History search failed', code });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/history/window', method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const q = historySearchQuery(req, ['sessionId', 'target', 'beforeSeq', 'afterSeq', 'targetEndSeq']);
+            if (!q.sessionId || q.sessionId.length > 300) throw Object.assign(new Error('Choose a session.'), { statusCode: 400 });
+            const beforeSeq = historySearchSeq(q.beforeSeq, 'beforeSeq');
+            const afterSeq = historySearchSeq(q.afterSeq, 'afterSeq');
+            const targetEndSeq = historySearchSeq(q.targetEndSeq, 'targetEndSeq');
+            if (beforeSeq && afterSeq) throw Object.assign(new Error('Choose one paging direction.'), { statusCode: 400 });
+            if (q.target && (beforeSeq || afterSeq)) throw Object.assign(new Error('Use a target or a paging direction.'), { statusCode: 400 });
+            if (targetEndSeq && (!afterSeq || q.target)) throw Object.assign(new Error('A selected range can continue only after a message.'), { statusCode: 400 });
+            if (!q.target && !beforeSeq && !afterSeq) throw Object.assign(new Error('Enter a message reference.'), { statusCode: 400 });
+            if (!sessionManager.getSessionCatalog(q.sessionId) && !await hasArchivedSessionId(q.sessionId)) {
+              return res.status(404).json({ error: 'Session not found', code: 'SESSION_NOT_FOUND' });
+            }
+            const match = q.target?.match(/^msg#([1-9]\d*)(?:-([1-9]\d*))?$/i);
+            if (q.target && !match) throw Object.assign(new Error('Use msg#123 or msg#123-130.'), { statusCode: 400 });
+            const start = match ? historySearchSeq(match[1], 'start message')! : undefined;
+            const end = match ? historySearchSeq(match[2] || match[1], 'end message')! : undefined;
+            if (start !== undefined && end !== undefined && end < start) {
+              throw Object.assign(new Error('Select an ascending message range.'), { statusCode: 400 });
+            }
+            const page = await readEffectiveArchiveMessagePage(q.sessionId, {
+              ...(beforeSeq ? { beforeSeq } : {}), ...(afterSeq ? { afterSeq } : {}),
+              ...(start ? { startSeq: start, endSeq: end } : {}),
+              ...(targetEndSeq ? { endSeq: targetEndSeq } : {}), limit: 20,
+            });
+            const firstSeq = page.records[0]?.seq;
+            const lastSeq = page.records.at(-1)?.seq;
+            const [earlier, later] = firstSeq && lastSeq ? await Promise.all([
+              readEffectiveArchiveMessagePage(q.sessionId, { beforeSeq: firstSeq, limit: 1 }),
+              readEffectiveArchiveMessagePage(q.sessionId, { afterSeq: lastSeq, limit: 1 }),
+            ]) : [{ records: [] as unknown[] }, { records: [] as unknown[] }];
+            return res.json({ sessionId: q.sessionId, messages: await materializeHistoryViewerMessages(page.records.map(record => ({
+              ...record.message,
+              __meta: { ...record.message.__meta, seq: record.seq, timestamp: record.message.__meta?.timestamp || record.timestamp,
+                contextArchiveItem: { kind: 'message', seq: record.seq, inherited: record.inherited, sourceSessionId: record.sourceSessionId } },
+            }))), firstSeq, lastSeq, hasEarlier: earlier.records.length > 0, hasLater: later.records.length > 0,
+              ...(start ? { requestedRange: { startSeq: start, endSeq: end } } : {}),
+              ...(start || targetEndSeq ? { shownRange: firstSeq && lastSeq ? { startSeq: firstSeq, endSeq: lastSeq } : undefined,
+                hasMoreInTarget: page.hasMore } : {}),
+            });
+          } catch (error: any) {
+            const status = error?.statusCode || 500;
+            if (status >= 500) logger.error({ code: error?.code || 'HISTORY_SEARCH_FAILED' }, 'History window failed');
+            return res.status(status).json({ error: error?.message || 'History window failed', code: error?.code || 'HISTORY_SEARCH_INVALID' });
           }
         },
       });
@@ -3689,6 +3858,8 @@ export class WebUIChannel implements Channel {
 
   async stop(): Promise<void> {
     // HTTP server is managed globally, no need to stop here
+    this.logs.dispose();
+    this.realtimeHub?.dispose();
     logger.info('WebUI channel stopped');
     return Promise.resolve();
   }

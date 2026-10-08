@@ -10,7 +10,7 @@ Owns the OpenAI Responses hosted `image_generation` tool declaration and convert
 
 - `OPENAI_IMAGE_GENERATION_TOOL_TYPE` / `OPENAI_IMAGE_GENERATION_CALL_ITEM_TYPE` — provider tool and output-item type constants
 - `buildOpenAIImageGenerationTool(config?)` — maps an effective normalized config to the provider tool object; returns `undefined` when disabled and always sends `partial_images: 0`
-- `externalizeGeneratedImageItems(outputItems, { sourceModelId })` — validates and persists each completed image call, returning successful `MessagePart`s and bounded failure records
+- `externalizeGeneratedImageItems(outputItems, { sourceModelId, budget?, outputIndexStart? })` — validates and persists each completed image call, returning successful `MessagePart`s and bounded failure records; callers can share one budget and absolute output-index base across a physical attempt
 - `decodeStrictImageBase64(value, maxDecodedBytes)` — strict, non-lossy base64 decoding with a decoded-size bound
 - `sanitizeImageGenerationOutputItem(item)` — non-destructively copies only allowlisted replay fields and drops binary fields
 - `buildImageGenerationReplayItem(item, resultBase64)` — builds one complete same-model `image_generation_call` replay item from safe metadata plus locally verified bytes
@@ -19,12 +19,13 @@ Owns the OpenAI Responses hosted `image_generation` tool declaration and convert
 - `formatGeneratedImageFailureNote(failures)` / `formatGeneratedImageModelPlaceholder()` — bounded user-visible text helpers
 - `GeneratedImageReplayError` — raised when persisted generated-image bytes cannot be replayed, so callers can classify the failure as local and non-retryable instead of a provider or transport error
 - `IMAGE_GENERATION_MAX_DECODED_BYTES` / `IMAGE_GENERATION_MAX_RESPONSE_BYTES` / `IMAGE_GENERATION_MAX_IMAGE_ITEMS` / `IMAGE_GENERATION_MAX_META_TEXT_CHARS` — local limits
+- `createGeneratedImageExternalizationBudget()` — one physical attempt's shared count, cumulative decoded-byte total, and used-image-ID set
 - `GeneratedImageFailure`, `NormalizedGeneratedImage`, `NormalizedGeneratedImages`, `GeneratedImageMime` — result types
 
 ## Behavior
 
 - **Declaration**: the tool object contains only provider-supported fields (`type`, optional `model`/`action`/`size`/`quality`/`background`/`output_format`/`output_compression`, plus `partial_images: 0`). Foxwarm's own `enabled` flag is never emitted, and no default image model or size is invented.
-- **Acceptance**: only `image_generation_call` items with status `completed` and a non-empty `result` produce an image. The declared `output_format` must agree with the detected raster MIME, and the bytes must round-trip through strict base64 validation within both the per-image decoded and cumulative response limits.
+- **Acceptance**: the normal streaming coordinator passes one shared attempt-local budget and each segment's absolute output-index start, so splitting a response cannot reset its existing limits or fallback identities. [Canonical contract](../threads/image-blob-lifecycle.md#d-image-generated-output-replay). Only `image_generation_call` items with status `completed` and a non-empty `result` produce an image. The declared `output_format` must agree with the detected raster MIME, and the bytes must round-trip through strict base64 validation within both the per-image decoded and cumulative response limits.
 - **Persistence**: each accepted image becomes one canonical `MessagePart` with an `inlineDataRef` (blob id, MIME, byte length, SHA-256, and pixel dimensions when the blob probe can read them), `imageMeta.origin = "generated"`, and `providerMeta.openaiResponses.outputItem` holding only allowlisted, result-free native metadata. Provider base64 never enters canonical history.
 - **Failure handling**: a rejected image yields a bounded failure record instead of fabricated bytes and is never silently converted into a successful blank result.
 - **Placeholder**: `formatGeneratedImageModelPlaceholder` is the single bounded note used when a different concrete model or protocol cannot receive native generated-image replay.

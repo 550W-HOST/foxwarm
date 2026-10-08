@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as sessionManager from '../sessionManager';
-import { tool_move_session, tool_send_to_session as rawToolSendToSession, tool_set_goal, tool_wait } from '../toolsSessionAgent';
+import { tool_move_session, tool_send_to_session as rawToolSendToSession, tool_wait } from '../toolsSessionAgent';
 import type { Session } from '../types';
-import { INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX } from '../toolCallControls';
+import { INTER_AGENT_HANDOFF_RECALL_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX } from '../toolCallControls';
 
+const TEST_RECALL = `${INTER_AGENT_HANDOFF_RECALL_PREFIX}\nI recalled the applicable communication rules, the user request, and the recipient scope for this test handoff.`;
 const TEST_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nThis test message was checked for necessity, accuracy, self-containment, scope, and communication rules.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
-const tool_send_to_session: typeof rawToolSendToSession = (args, ctx) => rawToolSendToSession({ ...args, confirmation: TEST_CONFIRMATION }, ctx);
+const tool_send_to_session: typeof rawToolSendToSession = (args, ctx) => rawToolSendToSession({ handoffRecall: TEST_RECALL, ...args, handoffConfirmation: TEST_CONFIRMATION }, ctx);
 
 function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -151,47 +152,6 @@ test('move_session intentionally reparents and reports identity and relation res
   } finally {
     for (const sessionId of [targetId, sourceId, newParentId, oldParentId]) {
       await sessionManager.deleteSession(sessionId).catch(() => {});
-    }
-  }
-});
-
-test('set_goal returns concise output without echoing goal content or remindEvery', async () => {
-  await sessionManager.loadSessions();
-  const sessionId = makeSessionId('tool_result_goal');
-  const session = await ensureSession(sessionId);
-  try {
-    const updated = await tool_set_goal({ goal: 'Ship feature safely', remindEvery: 7 }, { sessionId, session });
-    assert.equal(updated, 'ok');
-    assert.doesNotMatch(String(updated), /ship feature|remindEvery|7/);
-
-    const cleared = await tool_set_goal({ clear: true }, { sessionId, session });
-    assert.equal(cleared, 'ok');
-  } finally {
-    try {
-      await sessionManager.deleteSession(sessionId);
-    } catch {
-      // ignore cleanup failures in test
-    }
-  }
-});
-
-test('set_goal accepts omitted remindEvery', async () => {
-  await sessionManager.loadSessions();
-  const sessionId = makeSessionId('tool_result_goal_optional');
-  const session = await ensureSession(sessionId);
-  try {
-    const updated = await tool_set_goal({ goal: 'Ship feature safely' }, { sessionId, session });
-    assert.equal(updated, 'ok');
-    assert.equal(session.goalState?.remindEvery, 20);
-
-    const second = await tool_set_goal({ goal: 'Ship feature later' }, { sessionId, session });
-    assert.equal(second, 'ok');
-    assert.equal(session.goalState?.remindEvery, 20);
-  } finally {
-    try {
-      await sessionManager.deleteSession(sessionId);
-    } catch {
-      // ignore cleanup failures in test
     }
   }
 });

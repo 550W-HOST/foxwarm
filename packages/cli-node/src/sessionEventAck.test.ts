@@ -5,6 +5,7 @@ import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { NodeClient } from './client';
 import { nodeTools, setNodeToolSessionEventDispatcher } from '../../shared/dist/nodeTools';
+import { getNodeAgentDir } from '../../shared/dist/nodeFileTransfer';
 
 async function clientWithResponder(responder: (request: any) => any) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-node-session-event-ack-'));
@@ -46,6 +47,29 @@ test('remote session event resolves only after master acceptance ACK', async () 
     assert.equal(sent[0].eventTimestamp, 123456789);
   } finally {
     setNodeToolSessionEventDispatcher(undefined);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('authenticated CLI wire carries successful target-local paths outside visible file output', async () => {
+  const { client, sent, root } = await clientWithResponder(() => ({ type: 'unrelated' }));
+  const agentName = `node_meta_${Date.now()}`;
+  try {
+    await (client as any).handleToolCall({ callId: 'file-write', tool: 'write', sessionId: 'session-a', agentName,
+      args: { filePath: '$fw_tmp/nested.txt', content: 'node bytes', createDirs: true } });
+    assert.deepEqual(sent[0].result, { output: 'File written successfully', __foxwarmResolvedToolPaths: [
+      { raw: '$fw_tmp/nested.txt', resolved: path.join(getNodeAgentDir(agentName), 'tmp/nested.txt') },
+    ] });
+    await (client as any).handleToolCall({ callId: 'file-read', tool: 'read', sessionId: 'session-a', agentName,
+      args: { filePath: '$fw_tmp/nested.txt' } });
+    assert.match(String(sent[1].result.output), /node bytes/);
+    assert.equal(sent[1].result.__foxwarmResolvedToolPaths[0].resolved, path.join(getNodeAgentDir(agentName), 'tmp/nested.txt'));
+    await (client as any).handleToolCall({ callId: 'file-error', tool: 'read', sessionId: 'session-a', agentName,
+      args: { filePath: '${fw_tmp}/bad.txt' } });
+    assert.equal(sent[2].type, 'tool_call_error');
+    assert.match(String(sent[2].error.message), /Unknown Agent path variable/);
+  } finally {
+    await fs.rm(getNodeAgentDir(agentName), { recursive: true, force: true });
     await fs.rm(root, { recursive: true, force: true });
   }
 });

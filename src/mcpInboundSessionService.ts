@@ -118,6 +118,6 @@ export async function sendExternalSession(principal: VerifiedMcpInboundPrincipal
   if (Buffer.byteLength(JSON.stringify(input), 'utf8') > 1024 * 1024) {
     throw new ExternalSessionBeforeAdmissionError('Message exceeds the Session input limit.');
   }
-  await sessionManager.enqueueSessionItem(sessionId, input, checkAdmission);
+  await sessionManager.enqueueSessionItem(sessionId, input, {}, checkAdmission);
   return { accepted: true, sessionId };
 }

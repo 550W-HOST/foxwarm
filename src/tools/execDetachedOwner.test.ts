@@ -104,6 +104,7 @@ test('detached timeout uses one injected runtime for wait, live cwd, mark, and f
     waitForExecCompletion: async () => { calls.push('wait'); return null; },
     markExecForBackgroundNotification: async () => { calls.push('mark'); return entry; },
     finalizeForegroundExec: async () => { calls.push('finalize'); },
+    buildProgrammaticExecResult: async () => { throw new Error('ordinary exec must not collect script data'); },
     buildForegroundExecResult: async () => { calls.push('foreground'); return 'foreground'; },
     buildBackgroundTimeoutResult: async () => { calls.push('background'); return 'background-result'; },
     readFinishedExecWorkingDirectory: async () => { calls.push('finished-cwd'); return root; },
@@ -129,7 +130,7 @@ test('detached timeout uses one injected runtime for wait, live cwd, mark, and f
 
 test('detached provider exec skips Main full-session save and updates cwd through exact Session runtime authority', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-provider-exec-owner-')); const next = path.join(root, 'next'); await fs.ensureDir(next); const entry = fakeEntry('provider-owner', 'cd next', root);
-  const runtime: ExecRuntime = { initialize: async () => {}, startPersistentExec: async () => entry, waitForExecCompletion: async () => ({ exitCode: 0, finishedAt: new Date().toISOString() }), markExecForBackgroundNotification: async () => null, finalizeForegroundExec: async () => {}, buildForegroundExecResult: async () => 'provider-output', buildBackgroundTimeoutResult: async () => 'background', readFinishedExecWorkingDirectory: async () => next, readLiveExecWorkingDirectory: async () => null, listRunningExecs: () => [], reconcileNow: async () => {}, shutdown: async () => {} };
+  const runtime: ExecRuntime = { initialize: async () => {}, startPersistentExec: async () => entry, waitForExecCompletion: async () => ({ exitCode: 0, finishedAt: new Date().toISOString() }), markExecForBackgroundNotification: async () => null, finalizeForegroundExec: async () => {}, buildProgrammaticExecResult: async () => { throw new Error('ordinary exec must not collect script data'); }, buildForegroundExecResult: async () => 'provider-output', buildBackgroundTimeoutResult: async () => 'background', readFinishedExecWorkingDirectory: async () => next, readLiveExecWorkingDirectory: async () => null, listRunningExecs: () => [], reconcileNow: async () => {}, shutdown: async () => {} };
   const originals = { save: sessionManager.saveSession, update: sessionRuntime.updateSettings }; const updates: any[] = [];
   (sessionManager as any).saveSession = async () => { throw new Error('Main full-session save forbidden'); };
   (sessionRuntime as any).updateSettings = async (sessionId: string, patch: any) => { updates.push({ sessionId, patch }); return { changed: ['cwd'], previous: { cwd: root }, current: { cwd: next } }; };
@@ -157,6 +158,7 @@ test('parallel detached exec replays cwd in model order through the same owner',
     waitForExecCompletion: async () => ({ exitCode: 0, finishedAt: new Date().toISOString() }),
     markExecForBackgroundNotification: async () => null,
     finalizeForegroundExec: async () => {},
+    buildProgrammaticExecResult: async () => { throw new Error('ordinary exec must not collect script data'); },
     buildForegroundExecResult: async entry => `output-${entry.command}`,
     buildBackgroundTimeoutResult: async () => 'background',
     readFinishedExecWorkingDirectory: async entry => cwdById.get(entry.id) || null,
@@ -193,4 +195,29 @@ test('parallel detached exec replays cwd in model order through the same owner',
     (sessionRuntime as any).updateSettings = originals.update;
     await fs.remove(root);
   }
+});
+
+test('programmatic exec keeps captured data and nonzero completion while ordinary calls avoid collection', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-script-exec-owner-'));
+  const session = createSession('script-exec-owner', root);
+  const runtime = createExecRuntime({ getDefaultCwd: () => root, getExecTempDir: () => root, registryPath: path.join(root, 'running.json') });
+  const buildData = runtime.buildProgrammaticExecResult;
+  let dataCalls = 0;
+  runtime.buildProgrammaticExecResult = async (...args) => { dataCalls++; return buildData(...args); };
+  const ctx = { sessionId: session.id, session, execRuntime: runtime, persistCurrentSession: async () => {} };
+  try {
+    const ordinary = await tool_exec({ command: 'printf ordinary', timeout: 5, programmatic: true }, ctx);
+    assert.equal(typeof ordinary, 'string'); assert.equal(dataCalls, 0);
+    const data: any = await tool_exec({ command: `printf '{"ok":true}\\n'; printf 'stderr' >&2; exit 7`, timeout: 5 }, { ...ctx, programmatic: true });
+    assert.equal(dataCalls, 1); assert.equal(data.status, 'completed'); assert.equal(data.exitCode, 7);
+    assert.equal(data.content, '{"ok":true}\nstderr'); assert.equal(data.truncated, false);
+    assert.match(data.output, /Exit code: 7/); assert.ok(await fs.pathExists(data.logPath));
+    assert.deepEqual(runtime.listRunningExecs(), []);
+    const running: any = await tool_exec({ command: "printf 'started\\n'; sleep 2; printf 'later\\n'", timeout: 1 }, { ...ctx, programmatic: true });
+    assert.equal(running.status, 'running'); assert.equal(running.content, 'started\n'); assert.equal(running.truncated, false);
+    assert.equal(runtime.listRunningExecs().find(entry => entry.id === running.execId)?.notifyOnCompletion, true);
+    await new Promise(resolve => setTimeout(resolve, 1500)); await runtime.reconcileNow();
+    assert.equal(running.content, 'started\n'); assert.match(await fs.readFile(running.logPath, 'utf8'), /later/);
+    assert.deepEqual(runtime.listRunningExecs(), []);
+  } finally { await runtime.shutdown(); await fs.remove(root); }
 });

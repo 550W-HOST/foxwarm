@@ -77,6 +77,11 @@ falls back to that leaf's configured default. `session-hash` does not accept
 failover thresholds or cooldowns. Concrete entries do not accept virtual
 routing fields.
 
+The optional `keepReasoningOnError` setting belongs to concrete provider/model
+entries, not virtual entries. On eligible Responses streams it defaults to false,
+and a model-level false overrides a provider-level true. A virtual request uses
+the selected leaf's setting; see the [streaming error checkpoint contract](code-index/threads/streaming-pipeline.md#d-streaming-keep-reasoning-on-error).
+
 Failover health is process-local and resets after restart or routing-config
 changes. The defaults are five consecutive failures and a 600,000 ms cooldown.
 Foxwarm keeps one outer retry loop and rebuilds each attempt from the selected

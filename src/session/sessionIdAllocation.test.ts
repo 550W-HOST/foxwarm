@@ -750,6 +750,24 @@ test('concurrent unbound-channel resolution converges on one attached session wi
   await sessionManager.deleteSession(sessionId);
 });
 
+test('stale channel attachments fail closed instead of recreating a missing target session', async () => {
+  await sessionManager.loadSessions();
+  const channelId = makeId('stale_channel');
+  const conversationId = makeId('stale_conversation');
+  const missingSessionId = makeId('missing_target');
+
+  sessionManager.attachChannel(channelId, conversationId, missingSessionId);
+  try {
+    await assert.rejects(
+      sessionManager.getOrCreateSessionForChannel(channelId, conversationId),
+      new RegExp(`Attached channel target session "${missingSessionId}" is unavailable`),
+    );
+    assert.equal(sessionManager.getAllSessions().has(missingSessionId), false);
+  } finally {
+    sessionManager.detachChannel(channelId, conversationId);
+  }
+});
+
 test('external attachment during channel creation discards the unused candidate', async () => {
   await sessionManager.loadSessions();
   const channelId = makeId('external_attach_channel');

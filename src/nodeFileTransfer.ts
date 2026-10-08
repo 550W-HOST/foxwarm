@@ -3,6 +3,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { getAgentDir } from './config';
 import { expandHomePath } from './utils/pathResolve';
+import { expandAgentPathVariable } from '../packages/shared/dist/agentPathVariables';
 
 export interface NodeTransferFilePayload {
   filePath: string;
@@ -50,7 +51,7 @@ export function resolveNodeTransferPath(filePath: string, agentName: string, res
   }
 
   const agentDir = getAgentDir(agentName);
-  const expandedPath = expandHomePath(filePath);
+  const expandedPath = expandHomePath(expandAgentPathVariable(filePath, agentDir));
   const resolved = path.isAbsolute(expandedPath)
     ? path.resolve(expandedPath)
     : path.resolve(agentDir, expandedPath);

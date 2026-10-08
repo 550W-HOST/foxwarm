@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { NodeClient } from './client';
+import fs from 'fs-extra';
+import os from 'node:os';
+import path from 'node:path';
 
 function makeClient() {
   const statuses: Array<{ status: string; detail: any }> = [];
@@ -57,4 +60,22 @@ test('a Session-only tool interceptor does not advertise external execution it c
   assert.equal((client as any).getNodeCapabilities().features.externalToolOwner, undefined);
   const standalone = makeClient();
   assert.equal((standalone.client as any).getNodeCapabilities().features.externalToolOwner, 1);
+});
+test('current CLI advertises and forwards the trusted programmatic hint to actual file producers', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-cli-script-data-'));
+  const file = path.join(root, 'data.txt');
+  const { client } = makeClient();
+  const responses: any[] = [];
+  (client as any).send = (message: any) => responses.push(message);
+  try {
+    await fs.writeFile(file, '{"v":1}\r\n');
+    assert.equal((client as any).getNodeCapabilities().features.programmaticToolData, true);
+    const message = { type: 'tool_call', callId: 'direct', tool: 'read', args: { filePath: file, programmatic: true }, sessionId: 'source', agentName: 'main' };
+    await (client as any).handleToolCall(message);
+    assert.equal(responses[0].type, 'tool_call_response'); assert.equal(responses[0].result.content, undefined);
+    await (client as any).handleToolCall({ ...message, callId: 'script', programmatic: true });
+    assert.equal(responses[1].type, 'tool_call_response'); assert.equal(responses[1].result.content, '{"v":1}\r\n');
+    assert.equal(responses[1].result.output, responses[0].result.output); assert.equal(responses[1].result.truncated, false);
+    assert.equal(responses[1].result.filePath, file);
+  } finally { await fs.remove(root); }
 });

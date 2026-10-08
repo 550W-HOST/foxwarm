@@ -1,6 +1,6 @@
 # Unit: shared-node-tools
 
-Files: packages/shared/src/fileOperations.ts, packages/shared/src/fileToolCore.ts, packages/shared/src/fileToolCore.test.ts, packages/shared/src/nodeTools.ts, packages/shared/src/nodeTools.test.ts, packages/shared/src/nodeCapabilities.ts, packages/shared/src/nodeFileTransfer.ts, packages/shared/src/execCwd.ts, packages/shared/src/index.ts, packages/shared/src/tokenCount.ts, packages/shared/src/toolResponseFormatting.ts, packages/shared/src/foxwarmMarkup.ts, packages/shared/src/webuiToolRendering.ts, packages/shared/src/webuiToolRendering.test.ts
+Files: packages/shared/src/fileOperations.ts, packages/shared/src/fileToolCore.ts, packages/shared/src/fileToolCore.test.ts, packages/shared/src/nodeTools.ts, packages/shared/src/nodeTools.test.ts, packages/shared/src/agentPathVariables.ts, packages/shared/src/agentPathVariables.test.ts, packages/shared/src/resolvedPathMetadata.ts, packages/shared/src/nodeCapabilities.ts, packages/shared/src/nodeFileTransfer.ts, packages/shared/src/execCwd.ts, packages/shared/src/index.ts, packages/shared/src/tokenCount.ts, packages/shared/src/toolResponseFormatting.ts, packages/shared/src/foxwarmMarkup.ts, packages/shared/src/webuiToolRendering.ts, packages/shared/src/webuiToolRendering.test.ts
 Secondary files: packages/shared/src/outputTruncation.ts, packages/shared/src/outputTruncation.test.ts
 
 ## Purpose
@@ -11,7 +11,8 @@ Provides shared file system tools, shell execution, browser automation, and util
 
 - `nodeTools` — aggregated object of all node tool functions (read, write, edit, apply_patch, exec, get_default_cwd, browse_*)
 - `read`, `write`, `edit`, `apply_patch`, `exec`, `get_default_cwd` — file and shell tool functions
-- `readFileToolPath`, `writeFileToolPath`, `readDirectoryListing`, `findWriteParentIssue`, `formatWriteParentIssueMessage` — shared file read/write core used by both master-side and node-side wrappers
+- `readFileToolPath`, `writeFileToolPath`, `applyPatchOperations`, `readDirectoryListing`, `findWriteParentIssue`, `formatWriteParentIssueMessage` — shared file read/write/patch core used by Main and Node wrappers
+- `requireToolFilePath` — shared required-path validation called by Main and Node read/edit wrappers before path resolution
 - `FileOperations`, `nativeFileOperations`, `readWholeFile`, `fileOperationPathExists` — low-level target-local stat/ranged-read/list/write/mkdir/remove contract, native implementation, and composition helpers
 - `NodeToolContext.resolveFilePath` / async-capable `dirnameFilePath` — optional target-namespace path seam used by primitive Node providers so Core can compose canonical file tools while the provider owns its namespace parent relation
 - `NodeToolContext.externalOwner` / `externalExecManager` — disjoint authenticated CLI execution context, never an Agent fallback or fabricated Session. Its pre-reserved real ID, completion capability, cwd and foreground/background callbacks keep output in the external Node namespace.
@@ -43,6 +44,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 | `applyExactReplacement(content, searchText, replaceText, label)` | ~21 | Replaces exactly one occurrence of text or throws |
 | `nativeFileOperations` (fileOperations) | complete file | Native stat, offset/count read, directory metadata, whole-write, mkdir, and remove implementation |
 | `readWholeFile(operations, filePath)` (fileOperations) | helper | Repeats bounded 64 KiB ranged reads until EOF for edit/patch callers |
+| `requireToolFilePath(filePath, toolName)` (fileToolCore) | required-path validation | Rejects missing or blank read/edit paths before wrapper path resolution without trimming valid paths |
 | `normalizeOptionalLineBound(value)` (fileToolCore) | ~35 | Treats omitted/null/non-finite/0 line bounds as absent |
 | `readDirectoryListing(fullPath, displayPath, startLine, endLine)` (fileToolCore) | ~65 | Reads and paginates a directory listing |
 | `getInlineImageMimeType(filePath)` (fileToolCore) | ~120 | Detects image MIME types supported for inline read results |
@@ -56,7 +58,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 | `read(args, ctx)` | ~107 | Tool: reads a file or directory |
 | `write(args, ctx)` | ~112 | Tool: writes content to a file; requires existing parent dirs unless `createDirs=true` |
 | `edit(args, ctx)` | ~120 | Tool: replaces exact text in a file |
-| `applyPatchOperations(input, resolveOperationPath)` | ~127 | Applies multi-file patch operations (add/update) |
+| `applyPatchOperations(input, resolveOperationPath, fileOperations, dirname)` (fileToolCore) | shared executor | Applies add/update/delete operations sequentially with partial-success summaries and an optional asynchronous target-owned parent |
 | `apply_patch(args, ctx)` | ~155 | Tool: applies OpenAI-style patch envelopes |
 | `exec(args, ctx)` | ~160 | Tool: executes shell commands with timeout and background support |
 | `get_default_cwd(args, ctx)` | ~230 | Tool: returns the default working directory |
@@ -84,18 +86,24 @@ Provides shared file system tools, shell execution, browser automation, and util
 | `formatStructuredValue(value)` | ~20 | Formats a value as YAML or string |
 | `formatToolResponsePayload(response)` | ~32 | Formats tool response, unwrapping single `output` key |
 | `formatCompactObjectPreview(response)` | ~42 | Formats compact preview of single-key objects |
-| `parseSessionLinkText(text)` | (webuiToolRendering.ts) | Parses legacy session references plus inter-agent XML source attributes into link/text segments |
+| `parseSessionLinkText(text)` | (webuiToolRendering.ts) | Parses legacy session references plus recognized Session reference fields in XML attributes and JSON/YAML-shaped text into link/text segments |
 | `shouldUseStreamingToolPlaceholder(options)` | (webuiToolRendering.ts) | Detects synthetic streaming tool calls whose args should not be parsed yet |
 
 ## Dependencies
 
-- `./applyPatch` — `applyUpdatePatch`, `buildAddedFileContent`, `parseApplyPatchInput`
-- `./fileToolCore` — shared read/write core also used by master-side wrappers
+- `./applyPatch` — pure parser/matcher and summaries consumed by the filesystem patch executor
+- `./fileToolCore` — shared read/write/patch core also used directly by Main file and memory wrappers
 - `./fileOperations` — injected low-level target-local file primitives; production root and CLI Node callers use the native implementation
 - `./nodeFileTransfer` — `detectTransferMimeType`, `getNodeAgentDir`, `resolveNodePath`
 - `./persistentExec` — `PersistentExecManager`, timeout constants, exec types
 
+- `packages/shared/src/agentPathVariables.ts` expands only exact leading `$fw_agentdir`/`$fw_tmp` with the actual native Agent root; primitive/external contexts reject leading tokens without a root. `packages/shared/src/resolvedPathMetadata.ts` carries only first-party CLI successful file paths to the dispatch extractor. Canonical contract: [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch.md#d-dispatch-native-agent-paths-and-code-targets).
+
 ## Behavior
+
+- Main and Node call the same `fileToolCore.applyPatchOperations` directly after environment-specific path/authority handling, preserving provider-owned asynchronous parents and sequential partial effects. Package ownership is canonical in [D-shared-package-boundary](../modules/shared-utilities.md#d-shared-package-boundary).
+
+- `NodeToolContext.programmatic` selects script-only read/exec data before producer work. Exact fields, byte budget, native shapes and capability gaps are canonical in [D-dispatch-programmatic-tool-data](../threads/tool-dispatch.md#d-dispatch-programmatic-tool-data).
 
 - Native/CLI file operations resolve paths relative to session cwd or agent directory, with home path expansion. Primitive providers instead inject exact target-namespace path/parent resolvers; URI, Windows, or custom paths are not translated through Main's agent filesystem. Node agent storage and exec capture roots are resolved against one immutable absolute node-process startup root, so later session-cwd changes cannot relocate `.temp/exec` or `running-exec.json` into a project checkout. The core composes only the injected `FileOperations` primitives, so stat, ranged bytes, directory metadata, images, edit, and patch remain above one target-local backend. Large non-image reads preserve `startLine`/`endLine` through bounded ranged reads; canonical details: [D-bounded-file-read-excerpts](#d-bounded-file-read-excerpts).
 - Text-file reads use a byte-level boundary scanner that treats LF, CRLF, and bare CR as line terminators; other Unicode separator characters remain content. A terminator closes one physical line and does not create a virtual final empty line, so an empty file has zero lines, `a\n` has one, and `\n\n` has two empty lines. Selected retained text preserves the recognized terminator sequence instead of split/join normalization; ordinary text keeps its existing UTF-8 decoding behavior. Ordinary reads always append a `---` footer with exact physical line count and whole-file `File size: N bytes.` metadata. A selected final nonterminated line receives one tool-owned LF before the footer plus `File has no trailing newline.`; otherwise the selected line's original LF, CRLF, or bare CR directly precedes the footer. Empty selections preserve their terminators and are described in the footer, while zero-line/reversed ranges return an explicit tool-authored notice. Oversized explicit ranges preserve bounded 64 KiB streaming and report total lines only when the required scan reaches EOF.
@@ -103,6 +111,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 - CLI Node installs one process-wide completion dispatcher, while direct library tests may inject a session dispatcher. `NodeToolContext.onExecStarted` fires only after persistent process creation succeeds, allowing the client to classify definite pre-start errors without exposing process state to Main. When an exec crosses its foreground timeout, `registerBackgroundExec` runs before completion notification is armed and before the ordinary tool response; foreground completion and pre-start failure never call it. Every unexpired remote background completion carries the persisted Master-assigned exec ID/capability and deterministic event ID; a missing dispatcher or rejected delivery throws so reconciliation keeps the entry. The shared 24-hour background tracking TTL removes older records before notification, without a new wire message. Canonical wire/authorization contract: [D-node-thread-remote-exec-completion](../threads/node-communication.md#d-node-thread-remote-exec-completion).
 - `initializeNodeToolExecRecovery()` discovers persisted per-agent exec registries at authenticated node startup and initializes their managers, including already-finished entries; recovery does not wait for a later tool call.
 - Node-side `exec` shares master-side timeout resolution: finite values above 60 seconds clamp to 60 and emit the requested/effective warning in the immediate foreground or background-switch result; invalid and below-minimum values still reject.
+- `read` and `edit` reject missing or blank `filePath` values before path resolution with `read requires filePath.` or `edit requires filePath.`; valid paths retain the existing resolution and operation behavior.
 - `edit` enforces single-occurrence matching to prevent ambiguous replacements
 - File existence checks treat only canonical `ENOENT` as missing; permission, protocol, malformed-provider, and other stat failures propagate so patch Add cannot overwrite an existing target after an indeterminate lookup.
 - `write` refuses to overwrite unless explicitly told, and requires parent directories to already exist unless `createDirs=true` is passed. The native backend retains `w`/`wx` behavior, so symlinked parent directories work naturally; friendly parent errors are generated only after write failure.
@@ -128,8 +137,9 @@ Non-image file reads above 1 MiB must not full-read or decode their source befor
   inbound descriptors cannot point at a partially written destination.
 - Exec cwd validation produces concise error messages preserving the failure reason, cwd source, raw cwd, and resolved cwd
 - Output exceeding `INLINE_OUTPUT_LIMIT` (10K chars) is truncated with a pointer to the log file
+- Node patch matching and bounded context errors follow [D-apply-patch-context-matching](./shared-apply-patch.md#d-apply-patch-context-matching); filesystem tests verify that a failed near match neither changes that file nor rolls back earlier successful Unicode edits.
 - Node `apply_patch` success and partial-failure summaries use the shared per-operation formatter, including per-file add/update counts; the count contract is canonical in [D-apply-patch-change-counts](./shared-apply-patch.md#d-apply-patch-change-counts).
-- `parseSessionLinkText` preserves all surrounding text while linking legacy session references and only the `sourceSessionId` value inside an opening `<foxwarm-message type="inter-agent" ...>` tag. It does not link arbitrary XML attributes or direct channel wrappers.
+- `parseSessionLinkText` preserves surrounding text while linking legacy references and recognized public Session fields without message-type branches. The field-name and alias contract is canonical in [D-webui-session-field-links](./webui-chat-shared.md#d-webui-session-field-links).
 
 ## Integration
 

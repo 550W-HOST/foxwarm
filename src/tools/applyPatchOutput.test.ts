@@ -3,14 +3,20 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import { applyPatchOperations } from './helpers';
+import { callTool } from '../tools';
+import * as sessionManager from '../sessionManager';
+
+async function patchContext(cwd: string) {
+  const session = await sessionManager.getSession(`patch_output_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+  session.agent = 'main';
+  session.currentNode = 'master';
+  session.cwd = cwd;
+  return { sessionId: session.id, session };
+}
 
 test('backend apply patch output reports per-file added and deleted line counts', async () => {
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-apply-patch-output-'));
-  const resolveOperationPath = (filePath: string) => ({
-    fullPath: path.join(baseDir, filePath),
-    displayPath: filePath,
-  });
+  const ctx = await patchContext(baseDir);
 
   try {
     await fs.writeFile(path.join(baseDir, 'replace.txt'), 'first\r\nkeep\r\nthird\r\nlast');
@@ -18,7 +24,7 @@ test('backend apply patch output reports per-file added and deleted line counts'
     await fs.writeFile(path.join(baseDir, 'remove.txt'), 'head\nremove\ntail');
     await fs.writeFile(path.join(baseDir, 'delete.txt'), 'delete me');
 
-    const result = await applyPatchOperations([
+    const result = await callTool('apply_patch', { input: [
       '*** Begin Patch',
       '*** Update File: replace.txt',
       '@@',
@@ -45,7 +51,7 @@ test('backend apply patch output reports per-file added and deleted line counts'
       '*** Add File: empty.txt',
       '*** Delete File: delete.txt',
       '*** End Patch',
-    ].join('\n'), resolveOperationPath);
+    ].join('\n') }, ctx);
 
     assert.equal(result, [
       'Patch applied successfully.',
@@ -63,20 +69,18 @@ test('backend apply patch output reports per-file added and deleted line counts'
     assert.equal(await fs.readFile(path.join(baseDir, 'empty.txt'), 'utf8'), '');
     assert.equal(await fs.pathExists(path.join(baseDir, 'delete.txt')), false);
   } finally {
+    await sessionManager.deleteSession(ctx.sessionId);
     await fs.remove(baseDir);
   }
 });
 
 test('backend partial failure includes counts for operations already applied', async () => {
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-apply-patch-partial-'));
-  const resolveOperationPath = (filePath: string) => ({
-    fullPath: path.join(baseDir, filePath),
-    displayPath: filePath,
-  });
+  const ctx = await patchContext(baseDir);
 
   try {
     await assert.rejects(
-      () => applyPatchOperations([
+      () => callTool('apply_patch', { input: [
         '*** Begin Patch',
         '*** Add File: applied.txt',
         '+one',
@@ -88,7 +92,7 @@ test('backend partial failure includes counts for operations already applied', a
         '*** Add File: skipped.txt',
         '+skipped',
         '*** End Patch',
-      ].join('\n'), resolveOperationPath),
+      ].join('\n') }, ctx),
       (error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         assert.match(message, /Cannot update missing file: missing\.txt/);
@@ -100,6 +104,45 @@ test('backend partial failure includes counts for operations already applied', a
     assert.equal(await fs.readFile(path.join(baseDir, 'applied.txt'), 'utf8'), 'one\ntwo');
     assert.equal(await fs.pathExists(path.join(baseDir, 'skipped.txt')), false);
   } finally {
+    await sessionManager.deleteSession(ctx.sessionId);
+    await fs.remove(baseDir);
+  }
+});
+
+test('backend Unicode patching retains per-file partial success when a later near match fails', async () => {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-apply-patch-matching-'));
+  const ctx = await patchContext(baseDir);
+  const good = 'section “target”\r\nold';
+  const bad = `Log($"${'x'.repeat(2000)}{Render(value)}");`;
+  try {
+    await fs.writeFile(path.join(baseDir, 'good.cs'), good);
+    await fs.writeFile(path.join(baseDir, 'bad.cs'), bad);
+    await assert.rejects(() => callTool('apply_patch', { input: [
+      '*** Begin Patch',
+      '*** Update File: good.cs',
+      '@@ section "target"',
+      '-old',
+      '+new “literal”',
+      '*** Update File: bad.cs',
+      '@@',
+      `-${bad.replace('Render(value)', 'Render(value')}`,
+      '+replacement',
+      '*** Add File: skipped.txt',
+      '+skipped',
+      '*** End Patch',
+    ].join('\n') }, ctx), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.ok(error.message.length < 2000);
+      assert.match(error.message, /first mismatch at file line 1/);
+      assert.match(error.message, /- Updated good\.cs \(\+1 -1\)/);
+      assert.match(error.message, /1 remaining operation\(s\) were not applied/);
+      return true;
+    });
+    assert.equal(await fs.readFile(path.join(baseDir, 'good.cs'), 'utf8'), 'section “target”\r\nnew “literal”');
+    assert.equal(await fs.readFile(path.join(baseDir, 'bad.cs'), 'utf8'), bad);
+    assert.equal(await fs.pathExists(path.join(baseDir, 'skipped.txt')), false);
+  } finally {
+    await sessionManager.deleteSession(ctx.sessionId);
     await fs.remove(baseDir);
   }
 });
