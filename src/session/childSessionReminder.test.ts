@@ -62,5 +62,6 @@ test('child instructions include confirmation guidance only when enabled', () =>
     assert.match(text, /handoffRecall/);
     assert.match(text, /handoffConfirmation must be the final argument property/);
     assert.match(text, /recall must be before message/);
+    assert.match(text, /local checks and are not part of the delivered report/);
   }
 });

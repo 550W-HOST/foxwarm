@@ -16,6 +16,7 @@ import {
   INTER_AGENT_HANDOFF_CONFIRMATION_PLACEHOLDER,
   INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX,
   addToolCancellationSchema,
+  requiresInterAgentHandoffConfirmation,
   validateInterAgentHandoffConfirmation,
   validateInterAgentHandoffConfirmationForMode,
 } from './toolCallControls';
@@ -70,7 +71,7 @@ test('default model-facing schemas omit handoff confirmation while always append
   }
 });
 
-test('enabled model-facing schemas require confirmation before unconditional cancellation controls', () => {
+test('enabled model-facing schemas describe conditional child handoff review before cancellation controls', () => {
   const enabled = buildToolDefinitions(true).map(addToolCancellationSchema);
     const requiredProtocolText = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n${INTER_AGENT_HANDOFF_CONFIRMATION_PLACEHOLDER}\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
   for (const name of ['create_child_session', 'send_to_session']) {
@@ -79,10 +80,27 @@ test('enabled model-facing schemas require confirmation before unconditional can
     assert.equal(keys.at(-3), 'handoffConfirmation');
     assert.ok(keys.indexOf('handoffRecall') < keys.indexOf('message'));
     assert.deepEqual(keys.slice(-2), ['__cancelTool', '__cancelAllToolsThisTurn']);
-    assert(definition.parameters.required?.includes('handoffRecall'));
-    assert(definition.parameters.required?.includes('handoffConfirmation'));
+    if (name === 'send_to_session') {
+      assert(definition.parameters.required?.includes('handoffRecall'));
+      assert(definition.parameters.required?.includes('handoffConfirmation'));
+    } else {
+      assert.equal(definition.parameters.required?.includes('handoffRecall'), false);
+      assert.equal(definition.parameters.required?.includes('handoffConfirmation'), false);
+      assert.match(definition.description, /when message or taskId is supplied/);
+      assert.match(definition.description, /without either does not require review fields/);
+      assert.match(definition.parameters.properties.handoffConfirmation.description, /without copying the task description/);
+    }
+    assert.match(definition.parameters.properties.handoffRecall.description, /checked locally and is not delivered/);
+    assert.match(definition.parameters.properties.handoffConfirmation.description, /checked locally and is not delivered/);
     assert.match(definition.parameters.properties.handoffConfirmation.description, new RegExp(`${requiredProtocolText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`));
   }
+});
+
+test('child handoff confirmation is required only for an initial message or task assignment', () => {
+  assert.equal(requiresInterAgentHandoffConfirmation('send_to_session', { sessionId: 'target' }), true);
+  assert.equal(requiresInterAgentHandoffConfirmation('create_child_session', { suffix: 'child' }), false);
+  assert.equal(requiresInterAgentHandoffConfirmation('create_child_session', { suffix: 'child', message: '' }), true);
+  assert.equal(requiresInterAgentHandoffConfirmation('create_child_session', { suffix: 'child', taskId: 'task_1' }), true);
 });
 
 test('a later whole-batch cancellation blocks an earlier exec without resolving or starting calls', async () => {
@@ -208,9 +226,11 @@ test('handoff recall and confirmation preserve exact framing and argument placem
   assert.throws(() => validateInterAgentHandoffConfirmation({ sessionId: 'target', message: 'hello', handoffRecall: recall(), handoffConfirmation: confirmation() }), /before the message/);
   assert.doesNotThrow(() => validateInterAgentHandoffConfirmationForMode({ sessionId: 'target', message: 'hello' }, false));
   assert.throws(() => validateInterAgentHandoffConfirmationForMode({ sessionId: 'target', message: 'hello' }, true), /handoff recall/);
+  assert.doesNotThrow(() => validateInterAgentHandoffConfirmationForMode({ suffix: 'child' }, true, 'create_child_session'));
+  assert.throws(() => validateInterAgentHandoffConfirmationForMode({ suffix: 'child', message: 'hello' }, true, 'create_child_session'), /handoff recall/);
 });
 
-test('direct handoff handlers accept valid confirmation, including child creation without a message', async () => {
+test('direct handoff handlers require confirmation for delivery and allow pure child creation without review fields', async () => {
   const parentId = unique('confirm_parent');
   const targetId = unique('confirm_target');
   const parent = await makeSession(parentId);
@@ -220,7 +240,7 @@ test('direct handoff handlers accept valid confirmation, including child creatio
     const sendResult: any = await tool_send_to_session({ sessionId: targetId, handoffRecall: recall(), message: 'hello', handoffConfirmation: confirmation() }, { sessionId: parentId, session: parent });
     assert.match(typeof sendResult === 'string' ? sendResult : sendResult.output, /Message sent/);
 
-    const createResult: any = await tool_create_child_session({ suffix: 'confirmed', handoffRecall: recall(), handoffConfirmation: confirmation() }, { sessionId: parentId, session: parent });
+    const createResult: any = await tool_create_child_session({ suffix: 'confirmed' }, { sessionId: parentId, session: parent });
     const output = typeof createResult === 'string' ? createResult : createResult.output;
     childId = output.match(/`([^`]+)`/)?.[1];
     assert.match(output, /Child session created/);
@@ -229,6 +249,30 @@ test('direct handoff handlers accept valid confirmation, including child creatio
     await sessionManager.deleteSession(targetId).catch(() => false);
     await sessionManager.deleteSession(parentId).catch(() => false);
   }
+});
+
+test('taskId-only child delivery follows the handoff condition without mixing task metadata into review', () => {
+  const confirmedTaskAssignment = {
+    suffix: 'task-child',
+    taskId: 'task_123',
+    handoffRecall: recall(),
+    handoffConfirmation: confirmation(),
+  };
+  assert.doesNotThrow(() => validateInterAgentHandoffConfirmationForMode(
+    confirmedTaskAssignment,
+    true,
+    'create_child_session',
+  ));
+  assert.throws(() => validateInterAgentHandoffConfirmationForMode(
+    { suffix: 'task-child', taskId: 'task_123' },
+    true,
+    'create_child_session',
+  ), /handoff recall/);
+  assert.doesNotThrow(() => validateInterAgentHandoffConfirmationForMode(
+    { suffix: 'pure-child' },
+    true,
+    'create_child_session',
+  ));
 });
 
 test('a canceled handoff bypasses confirmation checks and still produces a paired tool response', async () => {
