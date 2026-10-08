@@ -51,6 +51,60 @@ internal sealed class TaskService : IDisposable
         }
     }
 
+    internal async Task<JsonObject> ExecuteAsUserAsync(JsonObject args)
+    {
+        await mutationLane.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var normalized = (JsonObject)args.DeepClone();
+            if (
+                normalized["ownerSessionId"] is JsonValue owner
+                && owner.TryGetValue<string>(out var requested)
+                && resolveSessionId(requested) is not { } canonical
+            )
+                throw new TaskError("TASK_SESSION_NOT_FOUND", "Target Session was not found.", 404);
+            if (normalized["ownerSessionId"] is JsonValue ownerValue
+                && ownerValue.TryGetValue<string>(out var ownerId))
+                normalized["ownerSessionId"] = resolveSessionId(ownerId) ?? ownerId;
+            var result = store.ExecuteAsUser(normalized);
+            var warnings = new List<string>();
+            var taskId = Text(result.Payload["task"]? ["id"]) ?? Text(normalized["taskId"]);
+            if (result.Assignment is { } assignment && taskId is not null)
+                await DeliverAssignmentAsync(taskId, null, assignment, warnings);
+            if (result.CommentOwner is { } commentOwner && taskId is not null)
+            {
+                try
+                {
+                    await manager.SendTaskNotificationAsync(
+                        null,
+                        commentOwner,
+                        $"Comment on task {taskId}\n{Text(normalized["note"])}",
+                        true,
+                        taskId,
+                        "commented",
+                        "comment"
+                    );
+                }
+                catch
+                {
+                    warnings.Add("Comment saved, but the owner notification could not be delivered.");
+                }
+            }
+            if (warnings.Count > 0)
+                result.Payload["warning"] = string.Join(" ", warnings);
+            if (result.Assignment is not null || result.CommentOwner is not null)
+                result.Payload["task"] = store
+                    .Execute(new JsonObject { ["action"] = "get", ["taskId"] = taskId! }, null)
+                    .Payload["task"]!
+                    .DeepClone();
+            return result.Payload;
+        }
+        finally
+        {
+            mutationLane.Release();
+        }
+    }
+
     private async Task<TaskStoreResult> ExecuteCoreAsync(
         JsonObject args,
         string? actor,
@@ -194,7 +248,7 @@ internal sealed class TaskService : IDisposable
 
     private async Task<bool> DeliverAssignmentAsync(
         string taskId,
-        string actor,
+        string? actor,
         TaskAssignmentPlan plan,
         List<string> warnings,
         string? additionalMessage = null
@@ -236,7 +290,9 @@ internal sealed class TaskService : IDisposable
             .Execute(new JsonObject { ["action"] = "get", ["taskId"] = taskId }, null)
             .Payload["task"]
             ?.AsObject();
-        var creator = row?["createdBySessionId"]?.GetValue<string>();
+        var creator = row?["createdByKind"]?.GetValue<string>() == "session"
+            ? row?["createdBySessionId"]?.GetValue<string>()
+            : null;
         if (creator is null || resolveSessionId(creator) == resolveSessionId(actor))
         {
             store.MarkNotification(taskId, "completionNotificationStatus", "skipped");
@@ -258,7 +314,7 @@ internal sealed class TaskService : IDisposable
 
     private async Task<bool> DeliverAsync(
         string taskId,
-        string actor,
+        string? actor,
         string target,
         string message,
         bool trigger,
@@ -270,7 +326,7 @@ internal sealed class TaskService : IDisposable
     )
     {
         var canonicalTarget = resolveSessionId(target) ?? target;
-        if (canonicalTarget == (resolveSessionId(actor) ?? actor))
+        if (actor is not null && canonicalTarget == (resolveSessionId(actor) ?? actor))
         {
             store.MarkNotification(taskId, field, "skipped", revision);
             return true;

@@ -95,6 +95,8 @@ internal sealed partial class WebUIChannel
         MapTaskWrite(app, "/api/tasks/{id}", "update", true, 200, "PATCH");
         MapTaskWrite(app, "/api/tasks/{id}/complete", "complete", true, 200);
         MapTaskWrite(app, "/api/tasks/{id}/cancel", "cancel", true, 200);
+        MapUserTaskWrite(app, "/api/tasks/{id}/comments", "comment");
+        MapUserTaskWrite(app, "/api/tasks/{id}/assign", "assign");
     }
 
     private void MapTaskWrite(
@@ -124,6 +126,11 @@ internal sealed partial class WebUIChannel
                 string? target = null;
                 if (body.ContainsKey("sessionId"))
                 {
+                    if (action == "create")
+                        throw new TaskError(
+                            "TASK_INVALID_ARGS",
+                            "A WebUI task is created by the user; choose ownerSessionId for its recipient."
+                        );
                     if (
                         body["sessionId"] is not JsonValue value
                         || !value.TryGetValue<string>(out target)
@@ -144,7 +151,9 @@ internal sealed partial class WebUIChannel
                 body["action"] = action;
                 if (hasId)
                     body["taskId"] = context.Request.RouteValues["id"]?.ToString();
-                var result = await sessions.Tasks.ExecuteForWebUiAsync(body, target);
+                var result = action is "create" or "assign" && target is null
+                    ? await sessions.Tasks.ExecuteAsUserAsync(body)
+                    : await sessions.Tasks.ExecuteForWebUiAsync(body, target);
                 context.Response.StatusCode = success;
                 await Results.Json(result).ExecuteAsync(context);
             }
@@ -176,5 +185,41 @@ internal sealed partial class WebUIChannel
             app.MapMethods(route, ["PATCH"], handler);
         else
             app.MapPost(route, handler);
+    }
+
+    private void MapUserTaskWrite(WebApplication app, string route, string action)
+    {
+        app.MapPost(
+            route,
+            async context =>
+            {
+                try
+                {
+                    if (context.Request.Query.Count > 0)
+                        throw new TaskError("TASK_INVALID_ARGS", "Task operations do not accept query parameters.");
+                    var body = await JsonNode.ParseAsync(context.Request.Body) as JsonObject
+                        ?? throw new TaskError("TASK_INVALID_ARGS", "Task operations require a JSON object body.");
+                    if (body.ContainsKey("action") || body.ContainsKey("taskId"))
+                        throw new TaskError("TASK_INVALID_ARGS", "The route selects the task and action.");
+                    body["action"] = action;
+                    body["taskId"] = context.Request.RouteValues["id"]?.ToString();
+                    var result = await sessions.Tasks.ExecuteAsUserAsync(body);
+                    context.Response.StatusCode = 200;
+                    await Results.Json(result).ExecuteAsync(context);
+                }
+                catch (TaskError error)
+                {
+                    await TaskErrorResult(error).ExecuteAsync(context);
+                }
+                catch (JsonException)
+                {
+                    await TaskErrorResult(new TaskError("TASK_INVALID_ARGS", "Task operations require a JSON object body.")).ExecuteAsync(context);
+                }
+                catch
+                {
+                    await Results.Json(new { code = "TASK_WRITE_FAILED", error = "Task operation could not be completed." }, statusCode: 500).ExecuteAsync(context);
+                }
+            }
+        );
     }
 }

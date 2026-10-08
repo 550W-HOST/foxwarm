@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import vm from 'node:vm'
-const require = createRequire(import.meta.url), ts = require('typescript'), commit = '35b8420664044e32f516dded7f5c1c9a39cc1688'
+const require = createRequire(import.meta.url), ts = require('typescript'), commit = 'c02388400a05bf173912e36e7d1cfe899c5b948c'
 const source = path => execFileSync('git', ['show', `${commit}:${path}`], { encoding: 'utf8', cwd: process.env.FOXWARM_TS_ROOT })
 function load(text, path, dependencies = {}) {
   const js = ts.transpileModule(text, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, module = { exports: {} }

@@ -23,12 +23,17 @@ public sealed class HandoffConfirmationTests
         string middle = "The recipient needs this result to complete the assigned work."
     ) => HandoffConfirmation.Prefix + middle + HandoffConfirmation.Suffix;
 
+    private static string Recall(
+        string middle = "The recipient needs the applicable rules, request, and bounded scope."
+    ) => HandoffConfirmation.RecallPrefix + middle;
+
     private static JsonObject Args(JsonNode? review) =>
         new()
         {
             ["sessionId"] = "target",
+            ["handoffRecall"] = Recall(),
             ["message"] = "task",
-            ["confirmation"] = review,
+            ["handoffConfirmation"] = review,
         };
 
     private static JsonObject SyntheticDefinition =>
@@ -293,13 +298,14 @@ public sealed class HandoffConfirmationTests
             {
                 Assert.NotNull(rejected.Response["error"]);
                 Assert.Null(manager.Catalog.Get("parent_empty-child"));
-                input["confirmation"] = Review();
+            input["handoffRecall"] = Recall();
+            input["handoffConfirmation"] = Review();
             }
             else
             {
                 Assert.Null(rejected.Response["error"]);
                 input["suffix"] = "ignored-review-child";
-                input["confirmation"] = 123;
+                input["handoffConfirmation"] = 123;
             }
             var created = await manager.ExecuteAgentToolAsync(
                 parent,
@@ -313,7 +319,7 @@ public sealed class HandoffConfirmationTests
                 .Single(item => item["name"]!.GetValue<string>() == "create_child_session");
             Assert.Equal(
                 enabled,
-                definition["parameters"]!["properties"]!.AsObject().ContainsKey("confirmation")
+                definition["parameters"]!["properties"]!.AsObject().ContainsKey("handoffConfirmation")
             );
             var rows = manager
                 .Catalog.List()

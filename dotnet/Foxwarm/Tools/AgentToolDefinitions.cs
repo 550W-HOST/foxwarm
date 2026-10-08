@@ -224,6 +224,9 @@ internal static class AgentToolDefinitions
                         ["displayName"] = String(
                             "Display name for the new child session. This does not change its session ID."
                         ),
+                        ["handoffRecall"] = String(
+                            "Put handoffRecall before message. Start with the exact opening sentence required for a handoff, then write the actual applicable communication rules, the user's request, and the scope this child needs."
+                        ),
                         ["message"] = String(
                             "Optional initial instruction. With taskId, add only information not already in the task; it is delivered with the assignment."
                         ),
@@ -234,6 +237,9 @@ internal static class AgentToolDefinitions
                             "wait"
                         ),
                         ["forceModel"] = ForceModel(),
+                        ["handoffConfirmation"] = String(
+                            "Put handoffConfirmation last. Use the exact required opening and closing sentences with your own specific review."
+                        ),
                     },
                     "suffix"
                 )
@@ -247,12 +253,18 @@ internal static class AgentToolDefinitions
                         ["sessionId"] = String(
                             "Target Session ID. <main> selects this agent's main session; <parent> selects this session's direct parent and requires one to exist."
                         ),
+                        ["handoffRecall"] = String(
+                            "Put handoffRecall before message. Start with the exact opening sentence required for a handoff, then write the actual applicable communication rules, the user's request, and the scope this recipient needs."
+                        ),
                         ["message"] = String("Message to deliver."),
                         ["afterSend"] = Choice(
                             "What this session does after successful delivery: continue (default), finish the turn without waiting, or wait for a response. Other incoming activity can also resume a waiting session.",
                             "continue",
                             "finish",
                             "wait"
+                        ),
+                        ["handoffConfirmation"] = String(
+                            "Put handoffConfirmation last. Use the exact required opening and closing sentences with your own specific review."
                         ),
                     },
                     "sessionId",

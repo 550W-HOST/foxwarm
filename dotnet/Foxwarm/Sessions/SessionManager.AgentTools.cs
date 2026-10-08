@@ -153,12 +153,13 @@ internal sealed partial class SessionManager
                             "agentName",
                             "suffix",
                             "displayName",
+                            "handoffRecall",
                             "message",
                             "afterSend",
                             "forceModel",
                             "fork",
                             "taskId",
-                            "confirmation",
+                            "handoffConfirmation",
                         ],
                         ["suffix"]
                     );
@@ -237,7 +238,7 @@ internal sealed partial class SessionManager
                 {
                     Keys(
                         args,
-                        ["sessionId", "message", "afterSend", "confirmation"],
+                        ["sessionId", "handoffRecall", "message", "afterSend", "handoffConfirmation"],
                         ["sessionId", "message"]
                     );
                     var after = AfterSend(args);

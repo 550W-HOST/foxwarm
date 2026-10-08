@@ -5,15 +5,23 @@ namespace Foxwarm.Tools;
 
 internal static class HandoffConfirmation
 {
+    internal const string RecallPrefix =
+        "Before composing this inter-agent handoff, have I recalled the applicable communication rules, the user's actual request, and the scope this recipient needs?";
+    internal const string RecallPlaceholder =
+        "<write the actual applicable rules, request, and recipient scope recalled for this handoff>";
     internal const string Prefix =
-        "Before performing this inter-agent handoff, have I checked that it is necessary, accurate, self-contained, appropriately scoped, and compliant with the communication rules?";
-    internal const string Placeholder =
-        "<replace this with your own non-empty review; do not copy this placeholder verbatim>";
+        "Before sending this inter-agent handoff, have I honestly checked that it is necessary, actionable, and not merely acknowledgement, duplication, or inherited-rule repetition; if I found that it should not be sent, did I omit or cancel it instead?";
+    internal const string Placeholder = "<write the specific honest review for this handoff>";
     internal const string Suffix =
         "I have completed the check, found no issue, and confirm this inter-agent handoff should proceed.";
     internal const string ErrorCode = "invalid_inter_agent_handoff_confirmation";
+    private const string RecallDescription =
+        "Put handoffRecall before message. Start with the exact opening sentence below, then write the actual applicable communication rules, the user's actual request, and the scope this recipient needs. Replace the placeholder with this handoff's own recalled context.\n\n"
+        + RecallPrefix
+        + "\n"
+        + RecallPlaceholder;
     private const string Description =
-        "Put confirmation last in the arguments. Write an honest review of the proposed handoff using the exact opening and closing sentences below. Replace the middle placeholder with your own review. Check whether the recipient needs this handoff to perform work, make a decision, or change its current actions; if it would only acknowledge the message, omit it or combine it with the next actionable handoff. If the handoff should not proceed, cancel with __cancelTool=true instead of approving it to satisfy the check.\n\nFor a handoff that should proceed, use: "
+        "Put handoffConfirmation last in the arguments. Write an honest review of the proposed handoff using the exact opening and closing sentences below. Replace the placeholder with your own specific review. If the handoff should not proceed, omit it or cancel with __cancelTool=true instead of approving it to satisfy the check.\n\nFor a handoff that should proceed, use: "
         + Prefix
         + "\n"
         + Placeholder
@@ -43,27 +51,45 @@ internal static class HandoffConfirmation
         var parameters = copy["parameters"]!.AsObject();
         var properties = parameters["properties"]!.AsObject();
         properties.Remove("confirmation");
+        properties.Remove("handoffRecall");
+        properties.Remove("handoffConfirmation");
+        var original = properties.ToArray();
+        properties.Clear();
+        foreach (var (key, value) in original)
+        {
+            if (enabled && key == "message")
+                properties["handoffRecall"] = new JsonObject
+                {
+                    ["type"] = "string",
+                    ["description"] = RecallDescription,
+                };
+            properties[key] = value;
+        }
         var required = new JsonArray(
             (parameters["required"] as JsonArray ?? [])
-                .Where(value => SessionWait.Text(value) != "confirmation")
+                .Where(value =>
+                    SessionWait.Text(value)
+                    is not ("confirmation" or "handoffRecall" or "handoffConfirmation")
+                )
                 .Select(value => value?.DeepClone())
                 .ToArray()
         );
         if (enabled)
         {
-            copy["description"] =
-                SessionWait.Text(copy["description"])
+            copy["description"] = SessionWait.Text(copy["description"])
+                + " A structured handoff recall and confirmation are required."
                 + (
                     name == "create_child_session"
-                        ? " A confirmation review is required, even when creating a child without an initial message."
-                        : " A confirmation review is required."
+                        ? " This applies even when creating a child without an initial message."
+                        : ""
                 );
-            properties["confirmation"] = new JsonObject
+            properties["handoffConfirmation"] = new JsonObject
             {
                 ["type"] = "string",
                 ["description"] = Description,
             };
-            required.Add("confirmation");
+            required.Add("handoffRecall");
+            required.Add("handoffConfirmation");
         }
         if (required.Count > 0)
             parameters["required"] = required;
@@ -74,7 +100,17 @@ internal static class HandoffConfirmation
 
     internal static void Validate(JsonObject args)
     {
-        var text = SessionWait.Text(args["confirmation"]);
+        var recall = SessionWait.Text(args["handoffRecall"]);
+        if (recall is null || !recall.StartsWith(RecallPrefix, StringComparison.Ordinal))
+            throw new InvalidDataException(
+                "Inter-agent handoff recall must start with the exact required opening sentence and include the applicable recalled context."
+            );
+        var recalled = SessionGoal.Trim(recall[RecallPrefix.Length..]);
+        if (recalled.Length == 0 || recalled == RecallPlaceholder)
+            throw new InvalidDataException(
+                "Inter-agent handoff recall must include the caller's actual recalled context instead of the documented placeholder."
+            );
+        var text = SessionWait.Text(args["handoffConfirmation"]);
         if (
             text is null
             || !text.StartsWith(Prefix, StringComparison.Ordinal)
@@ -92,9 +128,16 @@ internal static class HandoffConfirmation
             throw new InvalidDataException(
                 "Inter-agent handoff confirmation review must replace the documented placeholder with the caller's own review."
             );
-        if (args.LastOrDefault().Key != "confirmation")
+        if (args.LastOrDefault().Key != "handoffConfirmation")
             throw new InvalidDataException(
                 "Inter-agent handoff confirmation must be the final argument property."
+            );
+        var keys = args.Select(pair => pair.Key).ToArray();
+        var message = Array.IndexOf(keys, "message");
+        var recallIndex = Array.IndexOf(keys, "handoffRecall");
+        if (message >= 0 && (recallIndex < 0 || recallIndex > message))
+            throw new InvalidDataException(
+                "Inter-agent handoff recall must be before the message argument."
             );
     }
 
@@ -104,8 +147,8 @@ internal static class HandoffConfirmation
             Validate(args);
     }
 
-    internal static string GuidanceArgument =>
-        $", confirmation: \"{Prefix}\\n{Placeholder}\\n{Suffix}\"";
+    internal static string GuidanceArgument(string parentSessionId) =>
+        $"handoffRecall: \"{RecallPrefix}\\n{RecallPlaceholder}\", sessionId: `{parentSessionId}`, message: \"...\", afterSend: \"finish\", handoffConfirmation: \"{Prefix}\\n{Placeholder}\\n{Suffix}\"";
     internal const string Guidance =
-        " The confirmation must be the final argument property, and you must replace the placeholder with your own review rather than copying it.";
+        " The recall must be before message and both review fields must use this handoff's own content; handoffConfirmation must be the final argument property. If the handoff should not be sent, omit it or cancel it instead of adding approval text.";
 }

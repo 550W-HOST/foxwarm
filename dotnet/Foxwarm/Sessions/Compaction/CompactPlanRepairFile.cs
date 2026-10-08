@@ -37,6 +37,17 @@ internal sealed class CompactPlanRepairFile : IAsyncDisposable
     internal string FilePath => filePath;
     internal bool StructuredFallback { get; }
 
+    internal string Preview()
+    {
+        file.Position = 0;
+        using var reader = new StreamReader(file, StrictUtf8, leaveOpen: true);
+        var content = reader.ReadToEnd();
+        const int limit = 1000;
+        if (content.Length <= limit * 2)
+            return content;
+        return content[..limit] + "\n…\n" + content[^limit..];
+    }
+
     internal static async Task<CompactPlanRepairFile> CreateAsync(
         JsonObject call,
         SessionManager sessions,

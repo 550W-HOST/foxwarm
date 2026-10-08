@@ -12,12 +12,18 @@ internal sealed class TaskError(string code, string message, int statusCode = 40
     internal int StatusCode { get; } = statusCode;
 }
 
-internal sealed record TaskAssignmentPlan(long Revision, string? NewOwner, string? PreviousOwner);
+internal sealed record TaskAssignmentPlan(
+    long Revision,
+    string? NewOwner,
+    string? PreviousOwner,
+    string SourceKind = "session"
+);
 
 internal sealed record TaskStoreResult(
     JsonObject Payload,
     TaskAssignmentPlan? Assignment = null,
-    bool Completed = false
+    bool Completed = false,
+    string? CommentOwner = null
 );
 
 internal sealed class TaskStore : IDisposable
@@ -46,12 +52,16 @@ internal sealed class TaskStore : IDisposable
         JsonObject args,
         string? actor,
         int? httpLimit = null,
-        long? anchorSeq = null
+        long? anchorSeq = null,
+        string actorKind = "session"
     )
     {
-        Validate(args, httpLimit);
+        if (actorKind == "user")
+            ValidateUser(args);
+        else
+            Validate(args, httpLimit);
         var action = Text(args["action"]);
-        if (action is not ("list" or "get") && string.IsNullOrEmpty(actor))
+        if (actorKind != "user" && action is not ("list" or "get") && string.IsNullOrEmpty(actor))
             throw new TaskError("TASK_INVALID_ARGS", "task requires a current Session.");
         lock (gate)
         {
@@ -67,7 +77,8 @@ internal sealed class TaskStore : IDisposable
                         args,
                         actor,
                         httpLimit ?? ListLimit,
-                        anchorSeq
+                        anchorSeq,
+                        actorKind
                     );
                     tx.Commit();
                     return result;
@@ -85,7 +96,7 @@ internal sealed class TaskStore : IDisposable
             db.ExecuteNonQuery("BEGIN IMMEDIATE");
             try
             {
-                var result = ExecuteTransaction(db, args, actor, httpLimit ?? ListLimit, anchorSeq);
+                var result = ExecuteTransaction(db, args, actor, httpLimit ?? ListLimit, anchorSeq, actorKind);
                 db.ExecuteNonQuery("COMMIT");
                 return result;
             }
@@ -100,6 +111,9 @@ internal sealed class TaskStore : IDisposable
             }
         }
     }
+
+    internal TaskStoreResult ExecuteAsUser(JsonObject args, int? httpLimit = null) =>
+        Execute(args, null, httpLimit, null, "user");
 
     internal string? DefaultActor(JsonObject args)
     {
@@ -243,6 +257,7 @@ internal sealed class TaskStore : IDisposable
                     db,
                     taskId,
                     childSessionId,
+                    "session",
                     $"Attached new Session {Canonical(childSessionId)}.",
                     now
                 );
@@ -406,7 +421,8 @@ internal sealed class TaskStore : IDisposable
         JsonObject args,
         string? actor,
         int limit,
-        long? anchorSeq
+        long? anchorSeq,
+        string actorKind
     )
     {
         var action = Text(args["action"])!;
@@ -416,7 +432,7 @@ internal sealed class TaskStore : IDisposable
             var where = status is null ? "status IN ('open','active')" : "status=$status";
             var rows = Query(
                 db,
-                $"SELECT id,title,status,parentTaskId,createdBySessionId,ownerSessionId,updatedAt FROM tasks WHERE {where} ORDER BY updatedAt DESC,id LIMIT $limit",
+                $"SELECT id,title,status,parentTaskId,createdByKind,createdBySessionId,ownerSessionId,updatedAt FROM tasks WHERE {where} ORDER BY updatedAt DESC,id LIMIT $limit",
                 status,
                 Math.Min(ListLimit, Math.Max(1, limit))
             );
@@ -449,22 +465,23 @@ internal sealed class TaskStore : IDisposable
             var now = Now();
             using var cmd = db.CreateCommand();
             cmd.CommandText =
-                "INSERT INTO tasks(id,title,description,status,parentTaskId,createdBySessionId,ownerSessionId,createdAt,updatedAt,assignmentRevision,assignmentNotificationStatus,reminderLastSeq) VALUES($id,$title,$description,$status,$parent,$creator,$owner,$now,$now,$revision,$notification,$anchor)";
+                "INSERT INTO tasks(id,title,description,status,parentTaskId,createdByKind,createdBySessionId,ownerSessionId,createdAt,updatedAt,assignmentRevision,assignmentNotificationStatus,reminderLastSeq) VALUES($id,$title,$description,$status,$parent,$creatorKind,$creator,$owner,$now,$now,$revision,$notification,$anchor)";
             Add(cmd, "$id", id);
             Add(cmd, "$title", Text(args["title"])!);
             Add(cmd, "$description", Text(args["description"]));
             Add(cmd, "$parent", parent);
-            Add(cmd, "$creator", Canonical(actor!));
+            Add(cmd, "$creatorKind", actorKind);
+            Add(cmd, "$creator", actorKind == "session" ? Canonical(actor!) : null);
             Add(cmd, "$owner", requestedOwner);
             Add(cmd, "$now", now);
             Add(cmd, "$status", requestedOwner is null ? "open" : "active");
             Add(cmd, "$revision", requestedOwner is null ? 0 : 1);
             Add(cmd, "$notification", notifyNew ? "pending" : null);
-            Add(cmd, "$anchor", requestedOwner == Canonical(actor!) ? anchorSeq : null);
+            Add(cmd, "$anchor", actorKind == "session" && requestedOwner == Canonical(actor!) ? anchorSeq : null);
             cmd.ExecuteNonQuery();
             return new(
                 TaskJson(new JsonObject { ["task"] = Public(db, id) }),
-                notifyNew ? new TaskAssignmentPlan(1, requestedOwner, null) : null
+                notifyNew ? new TaskAssignmentPlan(1, requestedOwner, null, actorKind) : null
             );
         }
         if (taskId is null)
@@ -474,6 +491,20 @@ internal sealed class TaskStore : IDisposable
             ?? throw new TaskError("TASK_NOT_FOUND", $"Task {taskId} not found.", 404);
         if (action == "get")
             return new(TaskJson(Details(db, task["id"]!.GetValue<string>())));
+        if (action == "comment")
+        {
+            var note = Text(args["note"]);
+            if (note is null)
+                throw new TaskError("TASK_INVALID_ARGS", "comment requires a non-empty note.");
+            AddNote(db, taskId, actorKind == "session" ? actor : null, actorKind, note, Now());
+            Update(db, taskId, "updatedAt", Now());
+            return new(
+                TaskJson(new JsonObject { ["task"] = Public(db, taskId) }),
+                CommentOwner: args["notifySession"]?.GetValue<bool>() != false
+                    ? Canonical(Text(task["ownerSessionId"]))
+                    : null
+            );
+        }
         var state =
             $"status={Text(task["status"])}, owner={Text(task["ownerSessionId"]) ?? "unclaimed"}";
         if (Text(task["status"]) is "completed" or "cancelled")
@@ -482,9 +513,11 @@ internal sealed class TaskStore : IDisposable
                 $"Task {taskId} is terminal ({state}); {action} is not allowed.",
                 409
             );
-        actor = Canonical(
-            actor ?? throw new TaskError("TASK_INVALID_ARGS", "task requires a current Session.")
-        );
+        actor = actorKind == "session"
+            ? Canonical(
+                actor ?? throw new TaskError("TASK_INVALID_ARGS", "task requires a current Session.")
+            )
+            : null;
         var owner = Canonical(Text(task["ownerSessionId"]));
         var creator = Canonical(Text(task["createdBySessionId"])!);
         Update(
@@ -528,9 +561,10 @@ internal sealed class TaskStore : IDisposable
         }
         else
         {
-            var permitted = action is "assign" or "cancel"
-                ? actor == creator || actor == owner
-                : actor == (owner ?? creator);
+            var permitted = actorKind == "user"
+                || (action is "assign" or "cancel"
+                    ? actor == creator || actor == owner
+                    : actor == (owner ?? creator));
             if (!permitted)
                 throw new TaskError(
                     "TASK_FORBIDDEN",
@@ -592,13 +626,15 @@ internal sealed class TaskStore : IDisposable
                             db,
                             taskId,
                             actor!,
+                            actorKind,
                             $"Owner changed from {owner ?? "unclaimed"} to {requested ?? "unclaimed"}.",
                             now2
                         );
                     plan = new(
                         revision,
                         notifyNew ? requested : null,
-                        notifyPrevious ? previous : null
+                        notifyPrevious ? previous : null,
+                        actorKind
                     );
                     break;
                 case "update":
@@ -613,7 +649,7 @@ internal sealed class TaskStore : IDisposable
                         now2
                     );
                     if (args["note"] is not null)
-                        AddNote(db, taskId, actor!, Text(args["note"])!, now2);
+                        AddNote(db, taskId, actor!, actorKind, Text(args["note"])!, now2);
                     if (Text(args["status"]) == "active" && Text(task["status"]) != "active")
                         Update(db, taskId, "reminderLastSeq", anchorSeq, "reminderMessageCount", 0);
                     break;
@@ -646,7 +682,7 @@ internal sealed class TaskStore : IDisposable
                         now2
                     );
                     if (args["reason"] is not null)
-                        AddNote(db, taskId, actor!, Text(args["reason"])!, now2);
+                        AddNote(db, taskId, actor!, actorKind, Text(args["reason"])!, now2);
                     break;
             }
         }
@@ -672,13 +708,13 @@ internal sealed class TaskStore : IDisposable
         );
         var notes = Query(
             db,
-            "SELECT sessionId,text,createdAt FROM task_notes WHERE taskId=$id ORDER BY id DESC LIMIT 10",
+            "SELECT authorKind,sessionId,text,createdAt FROM task_notes WHERE taskId=$id ORDER BY id DESC LIMIT 10",
             null,
             10,
             id
         );
         notes.Reverse();
-        notes = notes.Select(CanonicalReferences).ToList();
+        notes = notes.Select(CanonicalNoteReferences).ToList();
         children = children.Select(CanonicalReferences).ToList();
         var noteCount = ScalarInt(db, "SELECT COUNT(*) FROM task_notes WHERE taskId=$id", null, id);
         return new JsonObject
@@ -745,6 +781,13 @@ internal sealed class TaskStore : IDisposable
         return row;
     }
 
+    private JsonObject CanonicalNoteReferences(JsonObject row)
+    {
+        if (Text(row["authorKind"]) != "user" && Text(row["sessionId"]) is { } session)
+            row["sessionId"] = Canonical(session);
+        return row;
+    }
+
     private static JsonObject TaskJson(JsonObject value) => value;
 
     private bool Exists(SqliteConnection db, string id) => Read(db, id) is not null;
@@ -785,15 +828,17 @@ internal sealed class TaskStore : IDisposable
     private void AddNote(
         SqliteConnection db,
         string taskId,
-        string sessionId,
+        string? sessionId,
+        string authorKind,
         string text,
         long now
     )
     {
         using var cmd = db.CreateCommand();
         cmd.CommandText =
-            "INSERT INTO task_notes(taskId,sessionId,text,createdAt) VALUES($task,$session,$text,$now)";
+            "INSERT INTO task_notes(taskId,authorKind,sessionId,text,createdAt) VALUES($task,$kind,$session,$text,$now)";
         Add(cmd, "$task", taskId);
+        Add(cmd, "$kind", authorKind);
         Add(cmd, "$session", sessionId);
         Add(cmd, "$text", text);
         Add(cmd, "$now", now);
@@ -874,8 +919,8 @@ internal sealed class TaskStore : IDisposable
     {
         db.ExecuteNonQuery(
             "PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; "
-                + "CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY,title TEXT NOT NULL,description TEXT,status TEXT NOT NULL CHECK(status IN ('open','active','completed','cancelled')),parentTaskId TEXT REFERENCES tasks(id),createdBySessionId TEXT NOT NULL,ownerSessionId TEXT,result TEXT,createdAt INTEGER NOT NULL,updatedAt INTEGER NOT NULL,completedAt INTEGER,cancelledAt INTEGER); "
-                + "CREATE TABLE IF NOT EXISTS task_notes(id INTEGER PRIMARY KEY,taskId TEXT NOT NULL REFERENCES tasks(id),sessionId TEXT NOT NULL,text TEXT NOT NULL,createdAt INTEGER NOT NULL);"
+                + "CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY,title TEXT NOT NULL,description TEXT,status TEXT NOT NULL CHECK(status IN ('open','active','completed','cancelled')),parentTaskId TEXT REFERENCES tasks(id),createdByKind TEXT NOT NULL DEFAULT 'session' CHECK(createdByKind IN ('session','user')),createdBySessionId TEXT,ownerSessionId TEXT,result TEXT,createdAt INTEGER NOT NULL,updatedAt INTEGER NOT NULL,completedAt INTEGER,cancelledAt INTEGER); "
+                + "CREATE TABLE IF NOT EXISTS task_notes(id INTEGER PRIMARY KEY,taskId TEXT NOT NULL REFERENCES tasks(id),authorKind TEXT NOT NULL DEFAULT 'session' CHECK(authorKind IN ('session','user')),sessionId TEXT,text TEXT NOT NULL,createdAt INTEGER NOT NULL);"
         );
         foreach (
             var column in new[]
@@ -902,6 +947,7 @@ internal sealed class TaskStore : IDisposable
             if (!found)
                 db.ExecuteNonQuery($"ALTER TABLE tasks ADD COLUMN {column.Item1} {column.Item2}");
         }
+        MigrateActorColumns(db);
         db.ExecuteNonQuery(
             "CREATE INDEX IF NOT EXISTS tasks_status ON tasks(status,updatedAt); "
                 + "CREATE INDEX IF NOT EXISTS tasks_parent ON tasks(parentTaskId,createdAt); "
@@ -909,6 +955,48 @@ internal sealed class TaskStore : IDisposable
                 + "CREATE INDEX IF NOT EXISTS task_notes_task ON task_notes(taskId,id); "
                 + "CREATE UNIQUE INDEX IF NOT EXISTS tasks_legacy_goal ON tasks(legacyGoalSessionId);"
         );
+    }
+
+    private static void MigrateActorColumns(SqliteConnection db)
+    {
+        static bool Has(SqliteConnection connection, string table, string column)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = $"PRAGMA table_info({table})";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                if (reader.GetString(1) == column)
+                    return true;
+            return false;
+        }
+        if (Has(db, "tasks", "createdByKind") && Has(db, "task_notes", "authorKind"))
+            return;
+        db.ExecuteNonQuery("PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE;");
+        try
+        {
+            db.ExecuteNonQuery(
+                "DROP INDEX IF EXISTS tasks_status; DROP INDEX IF EXISTS tasks_parent; DROP INDEX IF EXISTS tasks_legacy_goal; DROP INDEX IF EXISTS tasks_self_owned; DROP INDEX IF EXISTS task_notes_task;"
+            );
+            db.ExecuteNonQuery("ALTER TABLE tasks RENAME TO tasks_actor_legacy; ALTER TABLE task_notes RENAME TO task_notes_actor_legacy;");
+            db.ExecuteNonQuery(
+                "CREATE TABLE tasks(id TEXT PRIMARY KEY,title TEXT NOT NULL,description TEXT,status TEXT NOT NULL CHECK(status IN ('open','active','completed','cancelled')),parentTaskId TEXT REFERENCES tasks(id),createdByKind TEXT NOT NULL DEFAULT 'session' CHECK(createdByKind IN ('session','user')),createdBySessionId TEXT,ownerSessionId TEXT,result TEXT,createdAt INTEGER NOT NULL,updatedAt INTEGER NOT NULL,completedAt INTEGER,cancelledAt INTEGER,completionNotificationStatus TEXT,assignmentNotificationStatus TEXT,previousOwnerSessionId TEXT,previousOwnerNotificationStatus TEXT,assignmentRevision INTEGER NOT NULL DEFAULT 0,attachedSessionId TEXT,legacyGoalSessionId TEXT,reminderLastSeq INTEGER,reminderMessageCount INTEGER NOT NULL DEFAULT 0);"
+            );
+            db.ExecuteNonQuery(
+                "INSERT INTO tasks(id,title,description,status,parentTaskId,createdByKind,createdBySessionId,ownerSessionId,result,createdAt,updatedAt,completedAt,cancelledAt,completionNotificationStatus,assignmentNotificationStatus,previousOwnerSessionId,previousOwnerNotificationStatus,assignmentRevision,attachedSessionId,legacyGoalSessionId,reminderLastSeq,reminderMessageCount) SELECT id,title,description,status,parentTaskId,'session',createdBySessionId,ownerSessionId,result,createdAt,updatedAt,completedAt,cancelledAt,completionNotificationStatus,assignmentNotificationStatus,previousOwnerSessionId,previousOwnerNotificationStatus,assignmentRevision,attachedSessionId,legacyGoalSessionId,reminderLastSeq,reminderMessageCount FROM tasks_actor_legacy;"
+            );
+            db.ExecuteNonQuery(
+                "CREATE TABLE task_notes(id INTEGER PRIMARY KEY,taskId TEXT NOT NULL REFERENCES tasks(id),authorKind TEXT NOT NULL DEFAULT 'session' CHECK(authorKind IN ('session','user')),sessionId TEXT,text TEXT NOT NULL,createdAt INTEGER NOT NULL);"
+            );
+            db.ExecuteNonQuery(
+                "INSERT INTO task_notes(id,taskId,authorKind,sessionId,text,createdAt) SELECT id,taskId,'session',sessionId,text,createdAt FROM task_notes_actor_legacy; DROP TABLE task_notes_actor_legacy; DROP TABLE tasks_actor_legacy;"
+            );
+            db.ExecuteNonQuery("COMMIT; PRAGMA foreign_keys=ON;");
+        }
+        catch
+        {
+            try { db.ExecuteNonQuery("ROLLBACK; PRAGMA foreign_keys=ON;"); } catch { }
+            throw;
+        }
     }
 
     public void Dispose()
@@ -947,8 +1035,8 @@ internal sealed class TaskStore : IDisposable
                     $"{key} is not allowed for task {action}."
                 );
         Limit(args, "title", 200);
-        Limit(args, "description", 4000);
-        Limit(args, "result", 4000);
+        Limit(args, "description", 20000);
+        Limit(args, "result", 20000);
         Limit(args, "reason", 1000);
         Limit(args, "note", 1000);
         Limit(args, "taskId", 128);
@@ -1032,6 +1120,42 @@ internal sealed class TaskStore : IDisposable
             "cancel" => key is "taskId" or "reason",
             _ => false,
         };
+
+    private static void ValidateUser(JsonObject args)
+    {
+        var action = Text(args["action"]);
+        if (action is not ("create" or "assign" or "comment"))
+            throw new TaskError("TASK_INVALID_ARGS", "Invalid user task operation.");
+        foreach (var key in args.Select(item => item.Key))
+        {
+            if (
+                action == "create"
+                    ? key is not ("action" or "title" or "description" or "parentTaskId" or "ownerSessionId" or "notifySession")
+                    : action == "assign"
+                        ? key is not ("action" or "taskId" or "ownerSessionId" or "notifySession")
+                        : key is not ("action" or "taskId" or "note" or "notifySession")
+            )
+                throw new TaskError("TASK_INVALID_ARGS", $"{key} is not allowed for user task {action}.");
+        }
+        Limit(args, "title", 200);
+        Limit(args, "description", 20000);
+        Limit(args, "taskId", 128);
+        Limit(args, "note", 1000);
+        if (action == "create" && string.IsNullOrWhiteSpace(Text(args["title"])))
+            throw new TaskError("TASK_INVALID_ARGS", "task create requires a non-empty title.");
+        if (action != "create" && string.IsNullOrWhiteSpace(Text(args["taskId"])))
+            throw new TaskError("TASK_INVALID_ARGS", $"task {action} requires a non-empty taskId.");
+        if (action == "comment" && string.IsNullOrWhiteSpace(Text(args["note"])))
+            throw new TaskError("TASK_INVALID_ARGS", "A comment requires a non-empty note.");
+        if (action == "assign" && !args.ContainsKey("ownerSessionId"))
+            throw new TaskError("TASK_INVALID_ARGS", "Owner changes require ownerSessionId.");
+        if (args.ContainsKey("ownerSessionId") && args["ownerSessionId"] is not null
+            && (string.IsNullOrWhiteSpace(Text(args["ownerSessionId"])) || Text(args["ownerSessionId"])!.Length > 256))
+            throw new TaskError("TASK_INVALID_ARGS", "ownerSessionId must identify an existing Session or be null.");
+        if (args.ContainsKey("notifySession")
+            && (args["notifySession"] is not JsonValue notify || !notify.TryGetValue<bool>(out _)))
+            throw new TaskError("TASK_INVALID_ARGS", "notifySession must be a boolean.");
+    }
 
     private static void Limit(JsonObject args, string key, int max)
     {
