@@ -20,7 +20,8 @@ internal sealed class HttpServer
         SessionManager sessions,
         Foxwarm.Terminal.TerminalRegistry terminals,
         PublicWebAddress? publicAddress = null,
-        bool? webUiEnabled = null
+        bool? webUiEnabled = null,
+        string bindAddress = "127.0.0.1"
     )
     {
         var address = publicAddress ?? PublicWebAddress.Capture(port);
@@ -35,7 +36,7 @@ internal sealed class HttpServer
             )
             .ToLowerInvariant();
         var builder = WebApplication.CreateBuilder(args);
-        builder.WebHost.UseUrls($"http://127.0.0.1:{port}");
+        builder.WebHost.UseUrls($"http://{bindAddress}:{port}");
         builder.Logging.ClearProviders();
         builder.WebHost.ConfigureKestrel(server =>
             server.Limits.MaxRequestBodySize = 2 * 1024 * 1024

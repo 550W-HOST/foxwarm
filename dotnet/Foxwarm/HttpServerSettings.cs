@@ -9,6 +9,7 @@ namespace Foxwarm;
 internal sealed record HttpServerSettings(
     int Port,
     string Token,
+    string BindAddress,
     PublicWebAddress Address,
     bool WebUiEnabled
 )
@@ -49,6 +50,16 @@ internal sealed record HttpServerSettings(
         }
         if (port is <= 0 or > 65535)
             throw new InvalidDataException("HTTP port must be between 1 and 65535.");
+        var bindAddress = Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_BIND_ADDRESS");
+        if (string.IsNullOrWhiteSpace(bindAddress))
+            bindAddress = "127.0.0.1";
+        if (
+            !System.Net.IPAddress.TryParse(bindAddress, out var parsedBindAddress)
+            || parsedBindAddress.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork
+        )
+            throw new InvalidDataException(
+                "FOXWARM_EXPERIMENT_BIND_ADDRESS must be an IPv4 address."
+            );
         var configuredUrl = SessionWait.Text(configuration.AppConfiguration["url"]);
         var address = PublicWebAddress.Capture(port, configuredUrl);
         var enabled = Enabled(configuration);
@@ -80,7 +91,7 @@ internal sealed record HttpServerSettings(
         }
         if (string.IsNullOrWhiteSpace(token))
             throw new InvalidDataException("HTTP access token must not be blank.");
-        return new(port, token, address, enabled);
+        return new(port, token, bindAddress, address, enabled);
     }
 }
 

@@ -59,7 +59,8 @@ var server = new HttpServer(
     sessions,
     terminals,
     http.Address,
-    http.WebUiEnabled
+    http.WebUiEnabled,
+    http.BindAddress
 );
 var webui = new WebUIChannel(sessions, runtime, router, terminals);
 if (server.WebUiEnabled)

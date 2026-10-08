@@ -10,7 +10,7 @@ Composes the .NET executable, captures environment/configuration, builds ASP.NET
 
 - `Program.cs` is the executable entry that resolves data/workspace roots, captures `HttpServerSettings`, constructs `SessionManager`, `TerminalRegistry`, `SessionRuntime`, `MessageRouter`, `HttpServer`, and `WebUIChannel`, then loads Main state before serving.
 - `HttpServer` owns prefix normalization, origin checks, token/cookie auth, static WebUI entry, `/health`, `/admin/shutdown`, and registration of Code/WebUI routes.
-- `HttpServerSettings.CaptureAsync`/`Enabled` determine port/address/token/WebUI mode; `ConfigurationYaml` parses source-compatible YAML; `Skills` enumerates configured Agent skills.
+- `HttpServerSettings.CaptureAsync`/`Enabled` determine port, bind address, public origin, token, and WebUI mode; the optional `FOXWARM_EXPERIMENT_BIND_ADDRESS` accepts an IPv4 address and defaults to loopback. `ConfigurationYaml` parses source-compatible YAML; `Skills` enumerates configured Agent skills.
 
 ## Contract and side effects
 
