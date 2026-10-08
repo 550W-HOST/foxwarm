@@ -18,6 +18,7 @@ import {
 } from '../timers';
 import { definitions } from '../tools';
 import { tool_wait } from '../toolsSessionAgent';
+import * as mainManagementTools from '../mainManagementTools';
 import type { Message, MessagePart, Session } from '../types';
 import { issueRemoteExecCompletionCapability, setNodeEventCapabilitySecretForTests } from '../nodes/sessionEventCapability';
 import { activateRemoteExecLivenessClaim, getRemoteExecLivenessRecordsForTests, reserveRemoteExecIdentity, resetRemoteExecLivenessClaimsForTests } from '../nodes/remoteExecLiveness';
@@ -528,6 +529,89 @@ test('waitExecIds require exact owned active exec IDs and are stored in runtime 
     assert.deepEqual(runtimeState.waiting?.waitExecIds, ['exec-a', 'exec-b']);
   } finally {
     await cleanupSession(sessionId);
+  }
+});
+
+test('waitExecIds use the 600-second fallback unless overridden, disabled, or input-dominated', async () => {
+  const defaultId = makeSessionId('wait_exec_default');
+  const explicitId = makeSessionId('wait_exec_explicit');
+  const disabledId = makeSessionId('wait_exec_disabled');
+  const inputId = makeSessionId('wait_exec_input');
+  const barrierId = makeSessionId('wait_exec_barrier');
+  const barrierChildA = makeSessionId('wait_exec_barrier_a');
+  const barrierChildB = makeSessionId('wait_exec_barrier_b');
+  const scheduled: Array<{ sourceSessionId: string; waitId: string; timeoutSeconds: number }> = [];
+  const originalSchedule = mainManagementTools.scheduleMainWaitTimeout;
+  (mainManagementTools as any).scheduleMainWaitTimeout = async (request: typeof scheduled[number]) => {
+    scheduled.push(structuredClone(request));
+    return { scheduled: true, waitId: request.waitId };
+  };
+  try {
+    const defaultSession = await sessionManager.getSession(defaultId);
+    const defaultEntry = { id: 'default-exec', sessionId: defaultId, agentName: defaultSession.agent || 'main' };
+    const defaultExecs = [defaultEntry];
+    await tool_wait({ waitExecIds: [defaultEntry.id] }, {
+      sessionId: defaultId,
+      session: defaultSession,
+      execRuntime: { listRunningExecs: () => defaultExecs } as any,
+    });
+    const defaultWait = await sessionManager.getSession(defaultId);
+    assert.equal(defaultWait.meta.wait?.timeoutSeconds, 600);
+    assert.equal(scheduled.length, 1);
+    assert.equal(scheduled[0].sourceSessionId, defaultId);
+    assert.equal(scheduled[0].timeoutSeconds, 600);
+
+    const defaultWaitId = defaultWait.meta.wait!.id;
+    await sessionManager.queueSessionWaitTimeoutEvent(defaultId, defaultWaitId, buildWaitTimeoutMessage({ waitTimeoutSeconds: 600 }));
+    assert.equal((await sessionManager.getSession(defaultId)).meta.wait, undefined);
+    assert.deepEqual(defaultExecs, [defaultEntry], 'timeout wake must not cancel the still-running exec');
+
+    const explicitSession = await sessionManager.getSession(explicitId);
+    const explicitEntry = { id: 'explicit-exec', sessionId: explicitId, agentName: explicitSession.agent || 'main' };
+    await tool_wait({ waitExecIds: [explicitEntry.id], wakeIfNoActivityAfterSeconds: 17 }, {
+      sessionId: explicitId,
+      session: explicitSession,
+      execRuntime: { listRunningExecs: () => [explicitEntry] } as any,
+    });
+    assert.equal((await sessionManager.getSession(explicitId)).meta.wait?.timeoutSeconds, 17);
+    assert.equal(scheduled.length, 2);
+    assert.equal(scheduled[1].timeoutSeconds, 17);
+
+    const disabledSession = await sessionManager.getSession(disabledId);
+    const disabledEntry = { id: 'disabled-exec', sessionId: disabledId, agentName: disabledSession.agent || 'main' };
+    await tool_wait({ waitExecIds: [disabledEntry.id], wakeIfNoActivityAfterSeconds: null }, {
+      sessionId: disabledId,
+      session: disabledSession,
+      execRuntime: { listRunningExecs: () => [disabledEntry] } as any,
+    });
+    assert.equal((await sessionManager.getSession(disabledId)).meta.wait?.timeoutSeconds, undefined);
+    assert.equal(scheduled.length, 2, 'explicit null disables the automatic fallback');
+
+    const inputSession = await sessionManager.getSession(inputId);
+    const inputEntry = { id: 'input-exec', sessionId: inputId, agentName: inputSession.agent || 'main' };
+    await tool_wait({ waitExecIds: [inputEntry.id], waitForInput: true }, {
+      sessionId: inputId,
+      session: inputSession,
+      execRuntime: { listRunningExecs: () => [inputEntry] } as any,
+    });
+    assert.equal((await sessionManager.getSession(inputId)).meta.wait?.timeoutSeconds, undefined);
+    assert.equal(scheduled.length, 2, 'waitForInput remains input-dominated');
+
+    const barrierSession = await sessionManager.getSession(barrierId);
+    await sessionManager.getSession(barrierChildA);
+    await sessionManager.getSession(barrierChildB);
+    await tool_wait({ waitAllSessions: [barrierChildA, barrierChildB] }, { sessionId: barrierId, session: barrierSession });
+    assert.equal((await sessionManager.getSession(barrierId)).meta.wait?.timeoutSeconds, undefined);
+    assert.equal(scheduled.length, 2, 'pure session barriers do not acquire the exec fallback');
+  } finally {
+    (mainManagementTools as any).scheduleMainWaitTimeout = originalSchedule;
+    await cleanupSession(defaultId);
+    await cleanupSession(explicitId);
+    await cleanupSession(disabledId);
+    await cleanupSession(inputId);
+    await cleanupSession(barrierId);
+    await cleanupSession(barrierChildA);
+    await cleanupSession(barrierChildB);
   }
 });
 

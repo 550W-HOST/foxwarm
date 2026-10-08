@@ -40,6 +40,8 @@ export function buildEndTurnResult(_reason?: string) {
   return { output: 'ok', __toolLoopControl: { stopCurrentTurn: true } };
 }
 
+export const DEFAULT_WAIT_EXEC_FALLBACK_SECONDS = 600;
+
 export type AfterSendBehavior = 'continue' | 'finish' | 'wait';
 
 export function normalizeAfterSendBehavior(

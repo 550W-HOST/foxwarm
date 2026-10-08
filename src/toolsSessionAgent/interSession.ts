@@ -2,6 +2,7 @@ import {
   ToolArgs,
   ToolContext,
   buildEndTurnResult,
+  DEFAULT_WAIT_EXEC_FALLBACK_SECONDS,
   normalizeWaitFallbackSeconds,
   normalizeWaitAllSessions,
   normalizeWaitAnySessions,
@@ -133,11 +134,18 @@ export async function tool_wait(args: ToolArgs, ctx?: ToolContext) {
   const unknownKeys = Object.keys(args).filter(key => !allowedKeys.has(key));
   if (unknownKeys.length) throw new Error(`wait received unsupported argument${unknownKeys.length === 1 ? '' : 's'}: ${unknownKeys.join(', ')}.`);
   const { reason } = args || {};
-  const timeoutSeconds = normalizeWaitFallbackSeconds(args?.wakeIfNoActivityAfterSeconds);
+  const requestedTimeoutSeconds = normalizeWaitFallbackSeconds(args?.wakeIfNoActivityAfterSeconds);
   let waitAllSessions = normalizeWaitAllSessions(args?.waitAllSessions);
   let waitAnySessions = normalizeWaitAnySessions(args?.waitAnySessions);
   const waitExecIds = normalizeWaitExecIds(args?.waitExecIds);
   const waitForInput = normalizeWaitForInput(args?.waitForInput);
+  const fallbackDisabled = Object.prototype.hasOwnProperty.call(args, 'wakeIfNoActivityAfterSeconds')
+    && args.wakeIfNoActivityAfterSeconds === null;
+  const timeoutSeconds = requestedTimeoutSeconds ?? (
+    waitExecIds && !waitForInput && !fallbackDisabled
+      ? DEFAULT_WAIT_EXEC_FALLBACK_SECONDS
+      : undefined
+  );
   if (waitAllSessions && waitAnySessions) throw new Error('waitAllSessions and waitAnySessions are mutually exclusive.');
   if (!waitAllSessions && !waitAnySessions && !waitExecIds && !waitForInput && timeoutSeconds === undefined) {
     throw new Error('wait requires at least one progress source: waitAllSessions, waitAnySessions, waitExecIds, waitForInput:true, or wakeIfNoActivityAfterSeconds. reason alone is not sufficient.');
