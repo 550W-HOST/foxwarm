@@ -1,7 +1,7 @@
 # Unit: src-mcp-inbound-http
 
 Files: `src/mcpInboundHttp.ts`, `src/mcpInboundHttp.test.ts`, `src/mcpInboundStartup.test.ts`
-Secondary files: `src/index.ts`, `src/httpServer.ts`, `src/config.ts`, `src/mcpInboundConfig.ts`, `src/mcpInboundCatalog.ts`, `src/mcpInboundIntegration.test.ts`
+Secondary files: `src/index.ts`, `src/httpServer.ts`, `src/config.ts`, `src/accessConfig.ts`, `src/mcpInboundCatalog.ts`, `src/mcpInboundIntegration.test.ts`
 
 ## Purpose
 

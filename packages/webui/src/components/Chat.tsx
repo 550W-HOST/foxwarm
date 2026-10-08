@@ -178,7 +178,7 @@ interface ChatProps {
   searchShortcutActive?: boolean
   canonicalSessionId?: string
   sessionDisplayName?: string
-  guestMode?: boolean
+  webUiIdentityMode?: boolean
   onBack?: () => void
   onOpenTerminal?: () => void
   onOpenCode?: () => void
@@ -236,7 +236,7 @@ type SessionListRecord = {
   isolated?: boolean
 }
 
-const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canonicalSessionId, sessionDisplayName, guestMode = false, onBack, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onGroupToolsChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onGroupToolsChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
   const [timelineState, dispatchTimeline] = useReducer(timelineReducer, { messages: [], queuedMessages: [] })
   const messages = timelineState.messages
   const queuedMessages = timelineState.queuedMessages
@@ -421,15 +421,15 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       }
     }
 
-    if (!guestMode) void fetchAsrStatus()
+    if (!webUiIdentityMode) void fetchAsrStatus()
     else setAsrAvailable(false)
     return () => {
       cancelled = true
     }
-  }, [guestMode])
+  }, [webUiIdentityMode])
 
   const fetchModels = useCallback(async () => {
-    if (guestMode) return
+    if (webUiIdentityMode) return
     await runLatestModelOptionsRequest(modelRequestGateRef.current, () => loadPageOnce('webui:models', async () => {
       const res = await fetch(`${API_BASE_PATH}/models`)
       if (!res.ok) throw new Error(`Failed to load models (${res.status})`)
@@ -443,11 +443,11 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       }
       if (state.loading !== undefined) setModelsRefreshing(state.loading)
     })
-  }, [guestMode])
+  }, [webUiIdentityMode])
 
   useEffect(() => {
     const handleModelsChanged = () => { void fetchModels() }
-    if (!guestMode) {
+    if (!webUiIdentityMode) {
       window.addEventListener(MODEL_OPTIONS_CHANGED_EVENT, handleModelsChanged)
       void fetchModels()
     }
@@ -455,7 +455,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       window.removeEventListener(MODEL_OPTIONS_CHANGED_EVENT, handleModelsChanged)
       modelRequestGateRef.current.invalidate()
     }
-  }, [fetchModels, guestMode])
+  }, [fetchModels, webUiIdentityMode])
 
   useEffect(() => {
     if (!sessionBusy) {
@@ -1592,7 +1592,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   }, [messages, scrollToBottom, streamingAssistantDraft])
 
   const snapshotSystemMessage = useMemo<Message | null>(() => {
-    const snapshotText = guestMode ? '' : persistentMemorySnapshot.trim()
+    const snapshotText = webUiIdentityMode ? '' : persistentMemorySnapshot.trim()
 
     if (!snapshotText) {
       return null
@@ -1606,7 +1606,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         synthetic: 'persistentMemorySnapshot',
       },
     }
-  }, [guestMode, persistentMemorySnapshot])
+  }, [webUiIdentityMode, persistentMemorySnapshot])
 
   const visibleMessages = useMemo(() => {
     if (showFullTimeline || messages.length <= DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
@@ -1938,7 +1938,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     let requestText = userMessage
     let uploadedFiles
     try {
-      uploadedFiles = await uploadReferencedFiles(files, `${API_BASE_PATH}/upload`, fetch, guestMode ? sessionId : undefined)
+      uploadedFiles = await uploadReferencedFiles(files, `${API_BASE_PATH}/upload`, fetch, webUiIdentityMode ? sessionId : undefined)
     } catch (err) {
       console.error('File upload failed:', err)
       setLoading(false)
@@ -2188,7 +2188,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       <ContentHeader
         icon={<MessageSquareText className="h-5 w-5" />}
         title={sessionDisplayName || sessionRecord?.displayName || sessionId}
-        subtitle={guestMode ? null : (
+        subtitle={webUiIdentityMode ? null : (
           <span data-session-header-subtitle className="font-mono text-[12px]" title={sessionRecord?.cwd || undefined}>
             {sessionHeaderSubtitle}
           </span>
@@ -2230,7 +2230,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
             {!isFullHistoryLoaded && <span className="foxwarm-chat-lg-label text-xs text-fw-text-muted">Earlier messages may still load.</span>}
           </div>
         ) : undefined}
-        actions={guestMode ? null : (
+        actions={webUiIdentityMode ? null : (
           <>
             <button type="button" onClick={() => activateSearch()} aria-label="Find in chat" title="Find in chat" className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover">
               <Search className="h-4 w-4" /><span className="foxwarm-chat-sm-label">Find</span>
@@ -2333,9 +2333,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
               turnIncomplete={sessionRecord?.runtimeState?.state === 'idle' && turnIncomplete}
               loading={loading}
               isMobile={isMobile}
-              onStop={guestMode ? undefined : handleStop}
-              onRunQueued={guestMode ? undefined : handleRunQueued}
-              onContinue={guestMode ? undefined : handleContinue}
+              onStop={webUiIdentityMode ? undefined : handleStop}
+              onRunQueued={webUiIdentityMode ? undefined : handleRunQueued}
+              onContinue={webUiIdentityMode ? undefined : handleContinue}
             />
             {queuedMessages.length > 0 && (
               <div className="foxwarm-queued-preview min-w-0 max-w-full" data-queued-preview="true" aria-label="Queued messages">
@@ -2375,7 +2375,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       <ChatComposer
         compactModelSelector={compactModelSelector}
         sessionId={sessionId}
-        guestMode={guestMode}
+        webUiIdentityMode={webUiIdentityMode}
         sessionMissing={sessionMissing}
         loading={loading}
         asrAvailable={asrAvailable}
@@ -2410,7 +2410,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         onCreateStreamingTranscriber={handleCreateStreamingTranscriber}
       />
 
-      {!guestMode && showDebugInfo && (
+      {!webUiIdentityMode && showDebugInfo && (
         <SessionDebugModal
           source={{
             sessionId,
@@ -2450,7 +2450,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   && prev.sendKeyMode === next.sendKeyMode
   && prev.groupTools === next.groupTools
   && prev.showUsageBadge === next.showUsageBadge
-  && prev.guestMode === next.guestMode
+  && prev.webUiIdentityMode === next.webUiIdentityMode
   && prev.showUserMessageMetadata === next.showUserMessageMetadata
   && prev.onSendKeyModeChange === next.onSendKeyModeChange
   && prev.onGroupToolsChange === next.onGroupToolsChange

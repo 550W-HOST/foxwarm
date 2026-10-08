@@ -5,10 +5,10 @@ import path from 'path';
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import yaml from 'js-yaml';
-import { normalizeMcpInboundConfig, type McpInboundConfig } from './mcpInboundConfig';
+import { normalizeAccessConfig, type AccessConfig } from './accessConfig';
 
-export { normalizeMcpInboundConfig, authenticateMcpInboundBearer } from './mcpInboundConfig';
-export type { McpInboundConfig, NormalizedMcpInboundConfig } from './mcpInboundConfig';
+export { normalizeAccessConfig, assertAccessTokensDoNotMatch, authenticateAccessBearer, authenticateAccessToken, hasAccessSurface } from './accessConfig';
+export type { AccessConfig, NormalizedAccessConfig, VerifiedAccessIdentity } from './accessConfig';
 import { DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS } from './llmStreamingTimeout';
 
 export type ChannelProgressConfig = false | {
@@ -543,7 +543,7 @@ export function normalizeHandoffConfirmationEnabled(value: unknown): boolean {
 
 export type AppConfig = {
   url?: string;
-  mcpInbound?: McpInboundConfig;
+  access?: AccessConfig;
   nodeProviders?: NodeProvidersConfig;
   vector?: VectorConfig;
   sessionWorkers?: SessionWorkersConfig;
@@ -765,7 +765,7 @@ export function normalizeProviderImageOutputFormat(value: unknown): 'webp' | 'jp
 }
 export const PROVIDER_IMAGE_OUTPUT_FORMAT = normalizeProviderImageOutputFormat(APP_CONFIG.llm?.providerImageOutputFormat);
 
-export const MCP_INBOUND_CONFIG = normalizeMcpInboundConfig(APP_CONFIG.mcpInbound);
+export const ACCESS_CONFIG = normalizeAccessConfig(APP_CONFIG.access);
 export const NODE_PROVIDERS_CONFIG = normalizeNodeProvidersConfig(APP_CONFIG.nodeProviders);
 export const COMPACTION_CONFIG = normalizeCompactionConfig(APP_CONFIG.llm);
 export const VECTOR_CONFIG = normalizeVectorConfig(APP_CONFIG.vector, APP_CONFIG.llm?.ollamaBaseUrl);

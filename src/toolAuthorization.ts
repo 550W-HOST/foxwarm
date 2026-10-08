@@ -8,7 +8,7 @@ import { canonicalPotentialPathSync, resolveAgentPath } from './utils/pathResolv
 import { RpcError } from './rpc';
 import { resolveNodeTransferPath } from './nodeFileTransfer';
 import { parseApplyPatchInput } from '../packages/shared/dist/applyPatch';
-import { requireVerifiedMcpInboundExternalId, type VerifiedMcpInboundPrincipal } from './mcpInboundConfig';
+import { requireVerifiedAccessIdentity, type VerifiedAccessIdentity } from './accessConfig';
 
 export const TOOL_AUTH_CONFIG_PATH = path.join(STATE_DIR, 'tool-authorization.yaml');
 export const TOOL_AUTH_POLICY_UNAVAILABLE = 'TOOL_AUTH_POLICY_UNAVAILABLE';
@@ -586,7 +586,7 @@ export function buildToolAuthorizationRequest(options: {
 
 /** Construct trusted external identity facts; execution-session and path context arrive in later integration. */
 export function buildExternalToolAuthorizationRequest(options: {
-  principal: VerifiedMcpInboundPrincipal;
+  principal: VerifiedAccessIdentity;
   sessionId?: string;
   tool: ToolAuthorizationToolRef;
   targetNode?: string;
@@ -594,7 +594,7 @@ export function buildExternalToolAuthorizationRequest(options: {
   /** Trusted execution-bound path facts; never accepted directly from external request JSON. */
   paths?: ToolAuthorizationPathRecord[];
 }): ToolAuthorizationRequest {
-  const externalId = requireVerifiedMcpInboundExternalId(options.principal);
+  const externalId = requireVerifiedAccessIdentity(options.principal);
   return {
     principal: 'external', externalId,
     ...(options.sessionId ? { session: options.sessionId } : {}),

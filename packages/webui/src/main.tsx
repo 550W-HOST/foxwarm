@@ -8,7 +8,7 @@ import { initializeThemeRuntime } from './theme/runtime'
 import { API_BASE_PATH } from './config'
 
 const App = lazy(() => import('./App'))
-const GuestWebUiApp = lazy(() => import('./GuestWebUiApp'))
+const WebUiIdentityApp = lazy(() => import('./WebUiIdentityApp'))
 const PopupWebUiApp = lazy(() => import('./PopupWebUiApp'))
 const EmbeddedSidebarApp = lazy(() => import('./EmbeddedWebUiApp').then(module => ({ default: module.EmbeddedSidebarApp })))
 const EmbeddedChatApp = lazy(() => import('./EmbeddedWebUiApp').then(module => ({ default: module.EmbeddedChatApp })))
@@ -47,7 +47,7 @@ const content = popupTarget
         ? <EmbeddedSetupApp target={embeddedTarget} />
     : <App />
 
-type AuthSession = { role: 'guest'; tokenId: string; sessionIds: string[] } | { role: 'admin' }
+type AuthSession = { role: 'webui'; identityId: string; sessionIds: string[] } | { role: 'admin' }
 
 function AuthenticatedWebUiRoot() {
   const [auth, setAuth] = useState<AuthSession | null>(null)
@@ -59,8 +59,8 @@ function AuthenticatedWebUiRoot() {
       return response.json()
     }).then(data => {
       if (!active) return
-      if (data?.role === 'guest' && Array.isArray(data.sessionIds) && typeof data.tokenId === 'string') {
-        setAuth({ role: 'guest', tokenId: data.tokenId, sessionIds: data.sessionIds.filter((id: unknown): id is string => typeof id === 'string') })
+      if (data?.role === 'webui' && Array.isArray(data.sessionIds) && typeof data.identityId === 'string') {
+        setAuth({ role: 'webui', identityId: data.identityId, sessionIds: data.sessionIds.filter((id: unknown): id is string => typeof id === 'string') })
       } else if (data?.role === 'admin') setAuth({ role: 'admin' })
       else setFailed(true)
     }).catch(() => { if (active) setFailed(true) })
@@ -68,7 +68,7 @@ function AuthenticatedWebUiRoot() {
   }, [])
   if (failed) return <div className="foxwarm-fixed-viewport-shell flex h-full items-center justify-center text-fw-text"><a href="login.html">Sign in again</a></div>
   if (!auth) return <div className="foxwarm-fixed-viewport-shell h-full bg-fw-canvas" />
-  return auth.role === 'guest' ? <GuestWebUiApp auth={auth} /> : content
+  return auth.role === 'webui' ? <WebUiIdentityApp auth={auth} /> : content
 }
 
 createRoot(document.getElementById('root')!).render(

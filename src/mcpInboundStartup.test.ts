@@ -36,7 +36,7 @@ test('headless inbound config starts real Main HTTP, Node bootstrap/WS and MCP w
   let child: ChildProcess | undefined;
   let logs = '';
   try {
-    await fs.outputFile(path.join(dir, 'state', 'config.yaml'), `bot:\n  name: headless-synthetic\n  httpPort: ${port}\n  enableWebUI: false\n  enableTrigger: false\nmcpInbound:\n  enabled: true\n  identities:\n    smoke: { token: ${secret} }\nvector: false\nsessionWorkers: false\ndbWorkers: false\nchannels: {}\n`);
+    await fs.outputFile(path.join(dir, 'state', 'config.yaml'), `bot:\n  name: headless-synthetic\n  httpPort: ${port}\n  enableWebUI: false\n  enableTrigger: false\naccess:\n  identities:\n    smoke:\n      token: ${secret}\n      surfaces:\n        mcp: {}\nvector: false\nsessionWorkers: false\ndbWorkers: false\nchannels: {}\n`);
     child = spawn(process.execPath, [require.resolve('./index')], {
       env: { ...process.env, FOXWARM_DATA_DIR: dir }, stdio: ['ignore', 'pipe', 'pipe'],
     });

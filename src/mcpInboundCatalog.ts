@@ -3,7 +3,7 @@ import * as mcpExternal from './mcpExternalService';
 import * as nodeExternal from './mcpInboundNodeService';
 import * as pairingExternal from './mcpInboundPairingService';
 import * as sessionExternal from './mcpInboundSessionService';
-import type { VerifiedMcpInboundPrincipal } from './mcpInboundConfig';
+import type { VerifiedAccessIdentity } from './accessConfig';
 import { McpInboundSafeError, type ExternalExecutionContext, type McpInboundCatalog } from './mcpInboundHttp';
 import { buildUnifiedToolId, parseUnifiedToolId } from './tools/resolvedTools';
 import { compareUnifiedSearchResults, scoreUnifiedToolQuery } from './tools/unifiedSearch';
@@ -120,13 +120,13 @@ function toolError(message: string): CallToolResult {
 
 /** Main-owned adapter: never invokes the internal Session RPC service or forges a Session ID. */
 export class McpInboundMcpCatalog implements McpInboundCatalog {
-  async listTools(_context: ExternalExecutionContext, _principal: VerifiedMcpInboundPrincipal): Promise<Tool[]> {
+  async listTools(_context: ExternalExecutionContext, _principal: VerifiedAccessIdentity): Promise<Tool[]> {
     return [discoverTool, callTool, nodeTool, execResultTool, sessionTool];
   }
 
   async callTool(
     context: ExternalExecutionContext, name: string, args: Record<string, unknown>, signal: AbortSignal,
-    principal: VerifiedMcpInboundPrincipal,
+    principal: VerifiedAccessIdentity,
   ): Promise<CallToolResult> {
     if (!plainObject(args)) return toolError('Tool arguments must be an object.');
     if (name === discoverTool.name) return this.discover(context, principal, args, signal);
@@ -137,12 +137,12 @@ export class McpInboundMcpCatalog implements McpInboundCatalog {
     return toolError('Tool is not available.');
   }
 
-  releaseContext(context: ExternalExecutionContext, principal: VerifiedMcpInboundPrincipal): void {
+  releaseContext(context: ExternalExecutionContext, principal: VerifiedAccessIdentity): void {
     nodeExternal.releaseExternalNodeContext(principal, context);
   }
 
   private async sessionAction(
-    context: ExternalExecutionContext, principal: VerifiedMcpInboundPrincipal, args: Record<string, unknown>,
+    context: ExternalExecutionContext, principal: VerifiedAccessIdentity, args: Record<string, unknown>,
   ): Promise<CallToolResult> {
     const action = args.action;
     const fields = action === 'list' ? ['action', 'start', 'count']
@@ -174,7 +174,7 @@ export class McpInboundMcpCatalog implements McpInboundCatalog {
   }
 
   private async discover(
-    context: ExternalExecutionContext, principal: VerifiedMcpInboundPrincipal,
+    context: ExternalExecutionContext, principal: VerifiedAccessIdentity,
     args: Record<string, unknown>, signal: AbortSignal,
   ): Promise<CallToolResult> {
     const options = discoveryArgs(args);
@@ -268,7 +268,7 @@ export class McpInboundMcpCatalog implements McpInboundCatalog {
   }
 
   private async nodeAction(
-    context: ExternalExecutionContext, principal: VerifiedMcpInboundPrincipal, args: Record<string, unknown>,
+    context: ExternalExecutionContext, principal: VerifiedAccessIdentity, args: Record<string, unknown>,
   ): Promise<CallToolResult> {
     if (!fieldsOnly(args, ['action', 'nodeId']) || !['list', 'status', 'select'].includes(String(args.action))
       || (args.action === 'select' ? typeof args.nodeId !== 'string' || !args.nodeId : args.nodeId !== undefined)) {
@@ -285,7 +285,7 @@ export class McpInboundMcpCatalog implements McpInboundCatalog {
   }
 
   private async execResult(
-    context: ExternalExecutionContext, principal: VerifiedMcpInboundPrincipal, args: Record<string, unknown>,
+    context: ExternalExecutionContext, principal: VerifiedAccessIdentity, args: Record<string, unknown>,
   ): Promise<CallToolResult> {
     if (!fieldsOnly(args, ['execId', 'limit']) || (args.execId !== undefined && (typeof args.execId !== 'string' || !args.execId))
       || (args.limit !== undefined && (!Number.isInteger(args.limit) || (args.limit as number) < 1 || (args.limit as number) > 20))) {
@@ -301,7 +301,7 @@ export class McpInboundMcpCatalog implements McpInboundCatalog {
   }
 
   private async call(
-    context: ExternalExecutionContext, principal: VerifiedMcpInboundPrincipal,
+    context: ExternalExecutionContext, principal: VerifiedAccessIdentity,
     args: Record<string, unknown>, signal: AbortSignal,
   ): Promise<CallToolResult> {
     if (!fieldsOnly(args, ['toolId', 'args']) || typeof args.toolId !== 'string' || !args.toolId

@@ -78,10 +78,10 @@ test('authenticated routes accept the current cookie and bearer token but reject
   });
 });
 
-test('webui auth routes allow guest tokens while admin routes reject guests', async () => {
+test('webui auth routes allow restricted identities while admin routes reject them', async () => {
   await withServer(async (server, baseUrl) => {
-    server.setGuestTokenVerifier(async (token) => token === 'guest-token'
-      ? { role: 'guest', tokenId: 'guest-1', sessionIds: ['guest/main'] }
+    server.setWebUiIdentityVerifier(async (token: string) => token === 'webui-token'
+      ? { role: 'webui', identityId: 'webui-1', sessionIds: ['webui/main'] }
       : null);
 
     server.addRoute({
@@ -101,18 +101,18 @@ test('webui auth routes allow guest tokens while admin routes reject guests', as
       },
     });
 
-    const guestAllowed = await fetch(`${baseUrl}/api/webui`, {
-      headers: { Authorization: 'Bearer guest-token' },
+    const webUiAllowed = await fetch(`${baseUrl}/api/webui`, {
+      headers: { Authorization: 'Bearer webui-token' },
     });
-    assert.equal(guestAllowed.status, 200);
-    assert.deepEqual(await guestAllowed.json(), {
-      auth: { role: 'guest', tokenId: 'guest-1', sessionIds: ['guest/main'] },
+    assert.equal(webUiAllowed.status, 200);
+    assert.deepEqual(await webUiAllowed.json(), {
+      auth: { role: 'webui', identityId: 'webui-1', sessionIds: ['webui/main'] },
     });
 
-    const guestDenied = await fetch(`${baseUrl}/api/admin-only`, {
-      headers: { Authorization: 'Bearer guest-token' },
+    const webUiDenied = await fetch(`${baseUrl}/api/admin-only`, {
+      headers: { Authorization: 'Bearer webui-token' },
     });
-    assert.equal(guestDenied.status, 403);
+    assert.equal(webUiDenied.status, 403);
 
     const adminAllowed = await fetch(`${baseUrl}/api/admin-only`, {
       headers: { Authorization: 'Bearer secret-token' },

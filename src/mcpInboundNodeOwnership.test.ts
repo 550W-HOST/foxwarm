@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizeMcpInboundConfig, authenticateMcpInboundBearer } from './mcpInboundConfig';
+import { normalizeAccessConfig, authenticateAccessBearer } from './accessConfig';
 import type { ExternalExecutionContext } from './mcpInboundHttp';
 import { callExternalNodeTool, externalExecResult, ExternalNodeBeforeEffectError, releaseExternalNodeContext } from './mcpInboundNodeService';
 import { nodesManager } from './nodes/manager';
@@ -12,8 +12,8 @@ import {
 import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from './toolAuthorization';
 
 const nodeId = 'synthetic-external-owner-node';
-const credentials = normalizeMcpInboundConfig({ enabled: true, identities: { alpha: { token: 'synthetic-owner-token' } } });
-const principal = authenticateMcpInboundBearer(credentials, 'Bearer synthetic-owner-token')!;
+const credentials = normalizeAccessConfig({ identities: { alpha: { token: 'synthetic-owner-token', surfaces: { mcp: {} } } } });
+const principal = authenticateAccessBearer(credentials, 'Bearer synthetic-owner-token')!;
 const policy = parseToolAuthorizationPolicyBytes(`version: 1
 rules:
   - id: synthetic-owner-exec

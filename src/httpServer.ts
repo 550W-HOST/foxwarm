@@ -34,9 +34,9 @@ export interface WebSocketHandler {
 
 export type HttpAuthContext =
   | { role: 'admin' }
-  | { role: 'guest'; tokenId: string; sessionIds: string[]; label?: string; expiresAt?: number; features?: Record<string, any> };
+  | { role: 'webui'; identityId: string; sessionIds: string[]; features?: Record<string, any> };
 
-export type GuestTokenVerifier = (token: string) => HttpAuthContext | null | Promise<HttpAuthContext | null>;
+export type WebUiIdentityVerifier = (token: string) => HttpAuthContext | null | Promise<HttpAuthContext | null>;
 
 export class HttpServer {
   public app: express.Application;
@@ -44,7 +44,7 @@ export class HttpServer {
   private wsServer: WebSocketServer;
   private port: number;
   private token: string;
-  private guestTokenVerifier?: GuestTokenVerifier;
+  private webUiIdentityVerifier?: WebUiIdentityVerifier;
   private routes: RouteHandler[] = [];
   private webSocketHandlers: WebSocketHandler[] = [];
 
@@ -105,8 +105,8 @@ export class HttpServer {
     return this.checkAdminTokenFromHeaders(req.headers.cookie, req.headers.authorization);
   }
 
-  setGuestTokenVerifier(verifier: GuestTokenVerifier | undefined): void {
-    this.guestTokenVerifier = verifier;
+  setWebUiIdentityVerifier(verifier: WebUiIdentityVerifier | undefined): void {
+    this.webUiIdentityVerifier = verifier;
   }
 
   async getAuthContext(req: express.Request): Promise<HttpAuthContext | null> {
@@ -136,11 +136,11 @@ export class HttpServer {
     const token = this.extractBearerToken(authHeader) || this.parseCookieToken(cookieHeader);
     if (!token) return null;
 
-    if (this.guestTokenVerifier) {
+    if (this.webUiIdentityVerifier) {
       try {
-        return await this.guestTokenVerifier(token);
+        return await this.webUiIdentityVerifier(token);
       } catch (err) {
-        logger.warn({ err }, 'Guest token verifier failed');
+        logger.warn({ err }, 'WebUI identity verifier failed');
       }
     }
 

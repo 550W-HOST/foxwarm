@@ -29,11 +29,11 @@ import { tool_run_script } from './toolscript';
 import { canonicalPotentialPathSync } from './utils/pathResolve';
 import { getAgentDir } from './config';
 import * as sessionManager from './sessionManager';
-import { authenticateMcpInboundBearer, normalizeMcpInboundConfig } from './mcpInboundConfig';
+import { authenticateAccessBearer, normalizeAccessConfig } from './accessConfig';
 
-const principalFor = (externalId: 'alpha' | 'beta') => authenticateMcpInboundBearer(
-  normalizeMcpInboundConfig({ enabled: true, identities: {
-    alpha: { token: 'rule-test-secret-alpha' }, beta: { token: 'rule-test-secret-beta' },
+const principalFor = (externalId: 'alpha' | 'beta') => authenticateAccessBearer(
+  normalizeAccessConfig({ identities: {
+    alpha: { token: 'rule-test-secret-alpha', surfaces: { mcp: {} } }, beta: { token: 'rule-test-secret-beta', surfaces: { mcp: {} } },
   } }),
   `Bearer rule-test-secret-${externalId}`,
 )!;
@@ -625,7 +625,7 @@ rules:
   assert.equal(evaluateToolAuthorizationPolicy(masterOnly, noNode).action, 'deny');
   assert.throws(() => buildExternalToolAuthorizationRequest({
     principal: { externalId: 'alpha' } as any, tool: { source: 'node', name: 'exec' },
-  }), /Verified MCP inbound identity is required/);
+  }), /Verified access identity is required/);
   assert.equal(evaluateToolAuthorizationPolicy(policy, buildToolAuthorizationRequest({
     session: { id: 'worker/main', agent: 'worker' }, tool: { source: 'node', name: 'exec' }, targetNode: 'node-a',
   })).rule?.id, 'agent-exec-allow');

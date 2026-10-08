@@ -5,13 +5,13 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
 import { HttpServer } from './httpServer';
-import { normalizeMcpInboundConfig } from './mcpInboundConfig';
+import { normalizeAccessConfig } from './accessConfig';
 import { McpInboundHttpService, type ExternalExecutionContext, type McpInboundCatalog } from './mcpInboundHttp';
 
 const alphaToken = 'synthetic-inbound-token-alpha';
 const betaToken = 'synthetic-inbound-token-beta';
-const config = normalizeMcpInboundConfig({ enabled: true, identities: {
-  alpha: { token: alphaToken }, beta: { token: betaToken },
+const config = normalizeAccessConfig({ identities: {
+  alpha: { token: alphaToken, surfaces: { mcp: {} } }, beta: { token: betaToken, surfaces: { mcp: {} } },
 } });
 
 async function freePort(): Promise<number> {

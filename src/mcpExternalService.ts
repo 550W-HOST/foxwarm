@@ -13,7 +13,7 @@ import * as sessionManager from './sessionManager';
 import { checkToolPermission, isToolVisibleForSession } from './isolatedCheck';
 import type { ResolvedToolPermissionIdentity } from './permissions';
 import type { Session } from './types';
-import { requireVerifiedMcpInboundExternalId, type VerifiedMcpInboundPrincipal } from './mcpInboundConfig';
+import { requireVerifiedAccessIdentity, type VerifiedAccessIdentity } from './accessConfig';
 import { buildExternalToolAuthorizationRequest, evaluateToolAuthorization, isToolAuthorizationPotentiallyVisibleSync } from './toolAuthorization';
 
 export type McpExternalConfigureRequest =
@@ -218,16 +218,16 @@ async function externalErrorDetail(error: unknown, before: mcpClient.McpServerCo
 }
 
 /** The external path is Main-owned and never presents an invented internal sourceSessionId to the v1 RPC service. */
-export async function listMcpServersForExternal(principal: VerifiedMcpInboundPrincipal): Promise<mcpClient.McpServerSummary[]> {
-  requireVerifiedMcpInboundExternalId(principal);
+export async function listMcpServersForExternal(principal: VerifiedAccessIdentity): Promise<mcpClient.McpServerSummary[]> {
+  requireVerifiedAccessIdentity(principal);
   assertNotTerminallyShutDown();
   return mcpClient.listServers();
 }
 
 export async function listMcpToolsForExternal(
-  principal: VerifiedMcpInboundPrincipal, externalSessionId: string, server: string, signal?: AbortSignal,
+  principal: VerifiedAccessIdentity, externalSessionId: string, server: string, signal?: AbortSignal,
 ): Promise<any[]> {
-  requireVerifiedMcpInboundExternalId(principal);
+  requireVerifiedAccessIdentity(principal);
   assertNotTerminallyShutDown();
   const before = await externalConfigSnapshot();
   const listed = await runWithAllSecretsRedacted(() => mcpClient.listTools(server, signal), before);
@@ -239,10 +239,10 @@ export async function listMcpToolsForExternal(
 }
 
 export async function callMcpToolForExternal(
-  principal: VerifiedMcpInboundPrincipal, externalSessionId: string, server: string,
+  principal: VerifiedAccessIdentity, externalSessionId: string, server: string,
   name: string, args: Record<string, unknown>, signal?: AbortSignal,
 ): Promise<any> {
-  requireVerifiedMcpInboundExternalId(principal);
+  requireVerifiedAccessIdentity(principal);
   assertNotTerminallyShutDown();
   const normalizedArgs = requireJsonArgs(args);
   const request = buildExternalToolAuthorizationRequest({

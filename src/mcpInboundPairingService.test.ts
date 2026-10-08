@@ -7,7 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { NodeClient } from '../packages/cli-node/dist/client';
 import { HttpServer } from './httpServer';
-import { normalizeMcpInboundConfig } from './mcpInboundConfig';
+import { normalizeAccessConfig } from './accessConfig';
 import { McpInboundMcpCatalog } from './mcpInboundCatalog';
 import { McpInboundHttpService } from './mcpInboundHttp';
 import { nodesManager } from './nodes/manager';
@@ -19,8 +19,8 @@ import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests }
 
 const pairingToken = 'synthetic-admin-provided-pairing-token';
 const nodeId = 'headless-external-node';
-const credentials = normalizeMcpInboundConfig({ enabled: true, identities: {
-  alpha: { token: 'synthetic-headless-operator-token' }, beta: { token: 'synthetic-headless-observer-token' },
+const credentials = normalizeAccessConfig({ identities: {
+  alpha: { token: 'synthetic-headless-operator-token', surfaces: { mcp: {} } }, beta: { token: 'synthetic-headless-observer-token', surfaces: { mcp: {} } },
 } });
 function pairingPolicy(approveExtras = '') {
   return parseToolAuthorizationPolicyBytes(`version: 1

@@ -8,7 +8,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import '../llm';
 import { createWorktreeFileOperations } from '../../packages/sandbox-node-runtime/dist/worktreeFileOperations';
-import { normalizeMcpInboundConfig, authenticateMcpInboundBearer } from '../mcpInboundConfig';
+import { normalizeAccessConfig, authenticateAccessBearer } from '../accessConfig';
 import { McpInboundMcpCatalog } from '../mcpInboundCatalog';
 import type { ExternalExecutionContext } from '../mcpInboundHttp';
 import { callExternalNodeTool, externalExecResult, externalNodeAction, listExternalNodeTools, releaseExternalNodeContext } from '../mcpInboundNodeService';
@@ -478,9 +478,9 @@ test('external owner uses an already-ready Docker worktree for canonical files a
   (nodeProviderRegistry as any).listNodes = registry.listNodes.bind(registry);
   (nodeProviderRegistry as any).resolveNode = registry.resolveNode.bind(registry);
   (nodeProviderRegistry as any).invokeTool = registry.invokeTool.bind(registry);
-  const config = normalizeMcpInboundConfig({ enabled: true, identities: { alpha: { token: 'synthetic-docker-alpha' }, beta: { token: 'synthetic-docker-beta' } } });
-  const alpha = authenticateMcpInboundBearer(config, 'Bearer synthetic-docker-alpha')!;
-  const beta = authenticateMcpInboundBearer(config, 'Bearer synthetic-docker-beta')!;
+  const config = normalizeAccessConfig({ identities: { alpha: { token: 'synthetic-docker-alpha', surfaces: { mcp: {} } }, beta: { token: 'synthetic-docker-beta', surfaces: { mcp: {} } } } });
+  const alpha = authenticateAccessBearer(config, 'Bearer synthetic-docker-alpha')!;
+  const beta = authenticateAccessBearer(config, 'Bearer synthetic-docker-beta')!;
   const context = (externalId: string, id: string): ExternalExecutionContext =>
     ({ id, externalId, currentNode: 'master', cwd: null, selectionGeneration: 0 });
   const first = context('alpha', '44444444-4444-4444-8444-555555555555');

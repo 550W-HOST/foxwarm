@@ -46,7 +46,7 @@ export type ModelOption = {
 interface ChatComposerProps {
   compactModelSelector?: boolean
   sessionId: string
-  guestMode?: boolean
+  webUiIdentityMode?: boolean
   sessionMissing: boolean
   loading: boolean
   asrAvailable: boolean
@@ -666,7 +666,7 @@ function ModelSelector({
 const ChatComposer = memo(function ChatComposer({
   compactModelSelector,
   sessionId,
-  guestMode = false,
+  webUiIdentityMode = false,
   sessionMissing,
   loading,
   asrAvailable,
@@ -804,13 +804,13 @@ const ChatComposer = memo(function ChatComposer({
       }
     }
 
-    if (!guestMode) void fetchCommands()
+    if (!webUiIdentityMode) void fetchCommands()
     else { setAvailableCommands([]); setCommandsLoading(false); setCommandsError(null) }
 
     return () => {
       cancelled = true
     }
-  }, [guestMode])
+  }, [webUiIdentityMode])
 
   useEffect(() => {
     const savedDraft = loadedDraft
@@ -893,8 +893,8 @@ const ChatComposer = memo(function ChatComposer({
   }, [onHeightChange])
 
   const slashCompletion = useMemo(
-    () => guestMode || plainInput === null ? null : getSlashCommandCompletion(plainInput, availableCommands),
-    [availableCommands, guestMode, plainInput],
+    () => webUiIdentityMode || plainInput === null ? null : getSlashCommandCompletion(plainInput, availableCommands),
+    [availableCommands, webUiIdentityMode, plainInput],
   )
   const slashCommandSuggestions = slashCompletion?.suggestions || []
   const slashCommandHints = slashCompletion?.hints || []
@@ -1431,7 +1431,7 @@ const ChatComposer = memo(function ChatComposer({
           disabled={loading || sessionMissing || recordingLocked}
           placeholder={sessionMissing
             ? 'Session not found'
-            : guestMode ? 'Send a message' : 'Ask Foxwarm anything, + to add files, / for commands'}
+            : webUiIdentityMode ? 'Send a message' : 'Ask Foxwarm anything, + to add files, / for commands'}
           onChange={(nextDraft) => {
             commitDraft(nextDraft)
             setDismissedSlashQuery(null)
@@ -1474,7 +1474,7 @@ const ChatComposer = memo(function ChatComposer({
                 </button>
               )}
             </div>
-            {!guestMode && <ModelSelector
+            {!webUiIdentityMode && <ModelSelector
               compact={compactModelSelector}
               options={modelOptions}
               currentModelKey={currentModelKey}

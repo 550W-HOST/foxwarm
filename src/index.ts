@@ -44,7 +44,9 @@ import {
     getDefaultChannelConfigByType,
     getNormalizedChannelConfigs,
     MAIN_AGENT_MEMORY_DIR,
-    MCP_INBOUND_CONFIG,
+    ACCESS_CONFIG,
+    assertAccessTokensDoNotMatch,
+    hasAccessSurface,
     NODE_TOKEN_FILE,
     SESSION_WORKERS_CONFIG,
     SESSION_WORKERS_ENABLED,
@@ -402,8 +404,9 @@ async function start() {
     await initializeTimers();
 
     // The Node HTTP/WebSocket surface also serves headless inbound MCP deployments.
-    if (ENABLE_WEBUI || ENABLE_TRIGGER || MCP_INBOUND_CONFIG.enabled) {
+    if (ENABLE_WEBUI || ENABLE_TRIGGER || hasAccessSurface(ACCESS_CONFIG, 'mcp')) {
         const token = await ensureToken();
+        assertAccessTokensDoNotMatch(ACCESS_CONFIG, token);
         const nodeToken = await ensureNodeToken();
         await initializeNodeRegistry();
         
@@ -414,8 +417,8 @@ async function start() {
         // Add nodes WebSocket handler to HTTP server
         registerNodeWebSocket(httpServerInstance, nodeToken);
         registerNodeHttpRoutes(httpServerInstance);
-        if (MCP_INBOUND_CONFIG.enabled) {
-            mcpInboundHttp = new McpInboundHttpService(MCP_INBOUND_CONFIG, new McpInboundMcpCatalog());
+        if (hasAccessSurface(ACCESS_CONFIG, 'mcp')) {
+            mcpInboundHttp = new McpInboundHttpService(ACCESS_CONFIG, new McpInboundMcpCatalog());
             mcpInboundHttp.register(httpServerInstance);
         }
         

@@ -246,41 +246,41 @@ test('WebUiRealtimeHub authenticates through the real HTTP WebSocket upgrade pat
   }
 });
 
-test('guest realtime accepts only bound session subscriptions and never exposes list snapshots', async () => {
-  const makeGuestHub = () => new WebUiRealtimeHub({
+test('WebUI identity realtime accepts only bound session subscriptions and never exposes list snapshots', async () => {
+  const makeWebUiHub = () => new WebUiRealtimeHub({
     checkToken: () => false,
-    getAuthContext: async () => ({ role: 'guest' as const, tokenId: 'bound', sessionIds: ['guest/main'] }),
-    resolveIds: ids => ({ canonicalIds: ids.map(id => id === 'alias' ? 'guest/main' : id), missingIds: [],
-      requestedToCanonical: Object.fromEntries(ids.map(id => [id, id === 'alias' ? 'guest/main' : id])) }),
+    getAuthContext: async () => ({ role: 'webui' as const, identityId: 'bound', sessionIds: ['webui/main'] }),
+    resolveIds: ids => ({ canonicalIds: ids.map(id => id === 'alias' ? 'webui/main' : id), missingIds: [],
+      requestedToCanonical: Object.fromEntries(ids.map(id => [id, id === 'alias' ? 'webui/main' : id])) }),
     loadSessionState: async sessionId => ({ type: 'session-state', sessionId, session: { id: sessionId } }),
-    loadSessionList: async () => { throw new Error('A guest must never read the list snapshot'); },
+    loadSessionList: async () => { throw new Error('A WebUI identity must never read the list snapshot'); },
     keepaliveIntervalMs: 60_000,
   });
   for (const request of [
-    { sessionListActive: true, sessionListIds: ['guest/main'], sessionIds: [] as string[] },
+    { sessionListActive: true, sessionListIds: ['webui/main'], sessionIds: [] as string[] },
     { sessionListActive: false, sessionListIds: [] as string[], sessionIds: ['private/main'] },
   ]) {
-    const hub = makeGuestHub();
+    const hub = makeWebUiHub();
     const socket = new FakeSocket();
     await hub.handleConnection(socket as any, {} as http.IncomingMessage);
     socket.receive({ type: 'set-subscriptions', revision: 1, ...request });
     await flush();
-    assert.equal(hub.hasSessionSubscribers('guest/main'), false);
+    assert.equal(hub.hasSessionSubscribers('webui/main'), false);
     assert.equal(socket.sent.some(message => message.type === 'session-state' || message.type === 'session-list-delta'), false);
     assert.equal(socket.sent.some(message => message.type === 'protocol-error'), true);
     socket.close();
   }
-  const hub = makeGuestHub();
+  const hub = makeWebUiHub();
   const socket = new FakeSocket();
   await hub.handleConnection(socket as any, {} as http.IncomingMessage);
-  socket.receive({ type: 'set-subscriptions', revision: 1, sessionListActive: false, sessionListIds: [], sessionIds: ['guest/main'] });
+  socket.receive({ type: 'set-subscriptions', revision: 1, sessionListActive: false, sessionListIds: [], sessionIds: ['webui/main'] });
   await flush();
-  assert.equal(hub.hasSessionSubscribers('guest/main'), true);
-  assert.equal(socket.sent.some(message => message.type === 'session-state' && message.sessionId === 'guest/main'), true);
+  assert.equal(hub.hasSessionSubscribers('webui/main'), true);
+  assert.equal(socket.sent.some(message => message.type === 'session-state' && message.sessionId === 'webui/main'), true);
   hub.broadcastSession('private/main', { type: 'message', message: { role: 'model', parts: [{ text: 'secret' }] } });
-  hub.broadcastSession('guest/main', { type: 'message', message: { role: 'model', parts: [{ text: 'hello' }] } });
+  hub.broadcastSession('webui/main', { type: 'message', message: { role: 'model', parts: [{ text: 'hello' }] } });
   assert.equal(socket.sent.some(message => message.sessionId === 'private/main'), false);
-  assert.equal(socket.sent.some(message => message.type === 'message' && message.sessionId === 'guest/main'), true);
+  assert.equal(socket.sent.some(message => message.type === 'message' && message.sessionId === 'webui/main'), true);
   socket.close();
 
   const oldId = new FakeSocket();
@@ -288,15 +288,15 @@ test('guest realtime accepts only bound session subscriptions and never exposes 
   oldId.receive({ type: 'set-subscriptions', revision: 1, sessionListActive: false, sessionListIds: [], sessionIds: ['alias'] });
   await flush();
   assert.equal(oldId.sent.some(message => message.type === 'protocol-error'), false);
-  assert.equal(oldId.sent.some(message => message.type === 'session-state' && message.sessionId === 'guest/main'), true);
+  assert.equal(oldId.sent.some(message => message.type === 'session-state' && message.sessionId === 'webui/main'), true);
   oldId.close();
 });
 
-test('guest realtime periodically revalidates revoked credentials and releases presentation subscription', async () => {
+test('WebUI identity realtime periodically revalidates revoked credentials and releases presentation subscription', async () => {
   let valid = true;
   const hub = new WebUiRealtimeHub({
     checkToken: () => false,
-    getAuthContext: async () => valid ? { role: 'guest' as const, tokenId: 'revocable', sessionIds: ['guest/main'] } : null,
+    getAuthContext: async () => valid ? { role: 'webui' as const, identityId: 'revocable', sessionIds: ['webui/main'] } : null,
     resolveIds: ids => ({ canonicalIds: ids, missingIds: [], requestedToCanonical: Object.fromEntries(ids.map(id => [id, id])) }),
     loadSessionState: async sessionId => ({ type: 'session-state', sessionId, session: { id: sessionId } }),
     loadSessionList: async () => ({ type: 'session-list-delta' }),
@@ -304,67 +304,67 @@ test('guest realtime periodically revalidates revoked credentials and releases p
   });
   const socket = new FakeSocket();
   await hub.handleConnection(socket as any, {} as http.IncomingMessage);
-  socket.receive({ type: 'set-subscriptions', revision: 1, sessionListActive: false, sessionListIds: [], sessionIds: ['guest/main'] });
+  socket.receive({ type: 'set-subscriptions', revision: 1, sessionListActive: false, sessionListIds: [], sessionIds: ['webui/main'] });
   await flush();
-  assert.equal(hub.hasSessionSubscribers('guest/main'), true);
+  assert.equal(hub.hasSessionSubscribers('webui/main'), true);
   valid = false;
   for (let i = 0; i < 20 && socket.closes.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(socket.closes[0]?.code, 1008);
-  assert.equal(hub.hasSessionSubscribers('guest/main'), false);
+  assert.equal(hub.hasSessionSubscribers('webui/main'), false);
   assert.equal(hub.getConnectionCount(), 0);
 });
 
-test('guest realtime refreshes a snapshot when a Session moves during initialization', async () => {
-  let target = 'guest/main';
+test('WebUI identity realtime refreshes a snapshot when a Session moves during initialization', async () => {
+  let target = 'webui/main';
   let release!: () => void;
   const loading = new Promise<void>(resolve => { release = resolve; });
   const hub = new WebUiRealtimeHub({
     checkToken: () => false,
-    getAuthContext: async () => ({ role: 'guest' as const, tokenId: 'alias-retarget', sessionIds: ['guest/main'] }),
+    getAuthContext: async () => ({ role: 'webui' as const, identityId: 'webui-alias-retarget', sessionIds: ['webui/main'] }),
     resolveIds: ids => ({ canonicalIds: ids.map(() => target), missingIds: [],
       requestedToCanonical: Object.fromEntries(ids.map(id => [id, target])) }),
     loadSessionState: async sessionId => {
       await loading;
       return { type: 'session-state', sessionId, session: { id: target } };
     },
-    loadSessionList: async () => { throw new Error('Guest list must not be loaded'); },
+    loadSessionList: async () => { throw new Error('WebUI identity list must not be loaded'); },
     keepaliveIntervalMs: 60_000,
   });
   const socket = new FakeSocket();
   await hub.handleConnection(socket as any, {} as http.IncomingMessage);
-  socket.receive({ type: 'set-subscriptions', revision: 1, sessionListActive: false, sessionListIds: [], sessionIds: ['guest/main'] });
+  socket.receive({ type: 'set-subscriptions', revision: 1, sessionListActive: false, sessionListIds: [], sessionIds: ['webui/main'] });
   await flush();
   target = 'renamed/main';
   release();
   await flush();
   assert.equal(socket.sent.some(event => event.type === 'session-state'), false);
-  assert.equal(hub.hasSessionSubscribers('guest/main'), false);
+  assert.equal(hub.hasSessionSubscribers('webui/main'), false);
   assert.equal(socket.closes[0]?.code, 1011);
 });
 
-test('guest realtime reconnects a connected bound stream after a committed identity move', async () => {
-  let target = 'guest/main';
+test('WebUI identity realtime reconnects a connected bound stream after a committed identity move', async () => {
+  let target = 'webui/main';
   const hub = new WebUiRealtimeHub({
     checkToken: () => false,
-    getAuthContext: async () => ({ role: 'guest' as const, tokenId: 'alias-retarget', sessionIds: ['guest/main'] }),
+    getAuthContext: async () => ({ role: 'webui' as const, identityId: 'webui-alias-retarget', sessionIds: ['webui/main'] }),
     resolveIds: ids => ({ canonicalIds: ids.map(() => target), missingIds: [],
       requestedToCanonical: Object.fromEntries(ids.map(id => [id, target])) }),
     loadSessionState: async sessionId => ({ type: 'session-state', sessionId, session: { id: sessionId } }),
-    loadSessionList: async () => { throw new Error('Guest list must not be loaded'); },
+    loadSessionList: async () => { throw new Error('WebUI identity list must not be loaded'); },
     keepaliveIntervalMs: 10,
   });
   const socket = new FakeSocket();
   await hub.handleConnection(socket as any, {} as http.IncomingMessage);
-  socket.receive({ type: 'set-subscriptions', revision: 1, sessionListActive: false, sessionListIds: [], sessionIds: ['guest/main'] });
+  socket.receive({ type: 'set-subscriptions', revision: 1, sessionListActive: false, sessionListIds: [], sessionIds: ['webui/main'] });
   await flush();
-  assert.equal(hub.hasSessionSubscribers('guest/main'), true);
+  assert.equal(hub.hasSessionSubscribers('webui/main'), true);
   target = 'renamed/main';
   for (let attempt = 0; attempt < 20 && socket.closes.length === 0; attempt++) await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(socket.closes[0]?.code, 1012);
-  assert.equal(hub.hasSessionSubscribers('guest/main'), false);
+  assert.equal(hub.hasSessionSubscribers('webui/main'), false);
   const reconnect = new FakeSocket();
   await hub.handleConnection(reconnect as any, {} as http.IncomingMessage);
-  reconnect.receive({ type: 'set-subscriptions', revision: 1, sessionListActive: false, sessionListIds: [], sessionIds: ['guest/main'] });
+  reconnect.receive({ type: 'set-subscriptions', revision: 1, sessionListActive: false, sessionListIds: [], sessionIds: ['webui/main'] });
   await flush();
   assert.equal(reconnect.sent.some(message => message.type === 'session-state' && message.sessionId === 'renamed/main'), true);
   reconnect.close();

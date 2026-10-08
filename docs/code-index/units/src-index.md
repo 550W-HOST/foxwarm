@@ -35,7 +35,7 @@ None — this file is the application entry point and does not export any symbol
 - `./nodeExecution` / `./nodes/providers` — closed local Node execution service plus awaited provider initialization/shutdown
 - `./vector` — configured vector owner startup and graceful shutdown
 - `./channel` — `registerChannel`
-- `./config` — all configuration constants and helpers
+- `./config` — all configuration constants and helpers, including the shared `access.identities` contract
 - `./httpServer` — HttpServer class, `setHttpServer`
 - `./mcpInboundHttp` — stateful inbound HTTP service with identity-bound contexts and graceful transport shutdown.
 - `./mcpInboundCatalog` — Main-owned outbound MCP, compatible CLI Node and bounded Session wrapper adapter for verified external contexts. Worker ingress receives the optional process-local live-context assertion before durable mailbox admission.

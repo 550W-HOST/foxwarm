@@ -97,7 +97,7 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 - Shared thread-card geometry is independent from surface allocation: component hooks and `data-model-thread-tone` expose the semantic body/header family, while the selected component treatment owns raw surface composition without changing the shared 18px header rhythm.
 - Standard `system` ToolTags keep their established system background and derive the compact-label foreground from `info` plus `systemText`, with `infoBorder` for semantic blue separation. This restores the built-in Default tag's readable direction; custom manifests determine the resulting contrast from their own tokens and retain the existing advisory validation-warning contract. The low-emphasis `systemAccent` remains appropriate for thread lines and is not reused for Default's 10px standard tag text. Console treatment continues to override the same tone hook with its input/system-border/system-accent grammar.
 
-Guest image rendering uses the same deployment-relative API helper but selects the bound Session-scoped blob route from `GuestImageSessionContext`; administrator image references keep their existing global blob route.
+WebUI identity image rendering uses the same deployment-relative API helper but selects the bound Session-scoped blob route from `WebUiImageSessionContext`; administrator image references keep their existing global blob route.
 
 ## Integration
 

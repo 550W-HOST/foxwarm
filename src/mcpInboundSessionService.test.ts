@@ -6,7 +6,7 @@ import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { HttpServer } from './httpServer';
-import { normalizeMcpInboundConfig } from './mcpInboundConfig';
+import { normalizeAccessConfig } from './accessConfig';
 import { McpInboundMcpCatalog } from './mcpInboundCatalog';
 import { McpInboundHttpService } from './mcpInboundHttp';
 import { installAgentMetadataSnapshotForWorker, resetAgentMetadataForTests } from './session/agentMetadata';
@@ -19,8 +19,8 @@ import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import { SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
 import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from './toolAuthorization';
 
-const config = normalizeMcpInboundConfig({ enabled: true, identities: {
-  alpha: { token: 'synthetic-session-alpha-token' }, beta: { token: 'synthetic-session-beta-token' },
+const config = normalizeAccessConfig({ identities: {
+  alpha: { token: 'synthetic-session-alpha-token', surfaces: { mcp: {} } }, beta: { token: 'synthetic-session-beta-token', surfaces: { mcp: {} } },
 } });
 const policyFor = (sessionId: string) => parseToolAuthorizationPolicyBytes(`version: 1
 defaultAction: allow

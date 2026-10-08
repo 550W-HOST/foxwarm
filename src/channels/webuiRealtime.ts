@@ -120,7 +120,7 @@ export class WebUiRealtimeHub {
     this.dependencies = dependencies;
   }
 
-  private resolvedGuestBindings(auth: Extract<HttpAuthContext, { role: 'guest' }>): Set<string> {
+  private resolvedWebUiBindings(auth: Extract<HttpAuthContext, { role: 'webui' }>): Set<string> {
     const canonical = new Set<string>();
     for (let index = 0; index < auth.sessionIds.length; index += 200) {
       for (const id of this.dependencies.resolveIds(auth.sessionIds.slice(index, index + 200)).canonicalIds) canonical.add(id);
@@ -219,7 +219,7 @@ export class WebUiRealtimeHub {
 
     if (this.dependencies.getAuthContext) {
       const fresh = await this.dependencies.getAuthContext(client.request);
-      if (!fresh || (client.auth.role === 'guest' && (fresh.role !== 'guest' || fresh.tokenId !== client.auth.tokenId))) {
+      if (!fresh || (client.auth.role === 'webui' && (fresh.role !== 'webui' || fresh.identityId !== client.auth.identityId))) {
         throw new Error('Realtime credentials are no longer valid.');
       }
       client.auth = fresh;
@@ -228,14 +228,14 @@ export class WebUiRealtimeHub {
     if (client.logsId !== message.logs?.id) { client.stopLogs?.(); client.stopLogs = undefined; client.logsId = undefined; }
     const resolvedList = this.dependencies.resolveIds(message.sessionListIds);
     const resolvedSessions = this.dependencies.resolveIds(message.sessionIds);
-    if (client.auth.role === 'guest') {
-      const allowed = this.resolvedGuestBindings(client.auth);
-      // The guest UI never subscribes to the catalog. Reject rather than
+    if (client.auth.role === 'webui') {
+      const allowed = this.resolvedWebUiBindings(client.auth);
+      // The WebUI identity UI never subscribes to the catalog. Reject rather than
       // filtering to prevent list snapshots or invalidations leaking topology.
       if (message.sessionListActive || message.sessionListIds.length
         || message.sessionIds.some(id => !resolvedSessions.requestedToCanonical[id]
           || !allowed.has(resolvedSessions.requestedToCanonical[id]))) {
-        throw new Error('Guest subscription is not bound to this session.');
+        throw new Error('WebUI subscription is not bound to this session.');
       }
     }
     const previousSessionIds = client.sessionIds;
@@ -267,15 +267,15 @@ export class WebUiRealtimeHub {
     if (client.closed || client.revision !== revision || client.requestedRevision !== revision) {
       return;
     }
-    if (client.auth.role === 'guest') {
+    if (client.auth.role === 'webui') {
       const latest = this.dependencies.resolveIds(message.sessionIds);
-      const allowed = this.resolvedGuestBindings(client.auth);
+      const allowed = this.resolvedWebUiBindings(client.auth);
       if (message.sessionIds.some(id => !latest.requestedToCanonical[id]
         || !allowed.has(latest.requestedToCanonical[id])
         || latest.requestedToCanonical[id] !== resolvedSessions.requestedToCanonical[id])
         || sessionSnapshots.some((snapshot, index) => snapshot.type === 'session-state'
           && (snapshot.session as { id?: string } | undefined)?.id !== resolvedSessions.canonicalIds[index])) {
-        throw new Error('Guest session binding changed during subscription.');
+        throw new Error('WebUI session binding changed during subscription.');
       }
     }
 
@@ -339,18 +339,18 @@ export class WebUiRealtimeHub {
         if (client.closed || !socketIsOpen(client.socket)) return;
         try { client.socket.ping(); } catch { this.cleanupClient(client); }
       };
-      if (client.auth.role !== 'guest' || !this.dependencies.getAuthContext) return ping();
-      const tokenId = client.auth.tokenId;
+      if (client.auth.role !== 'webui' || !this.dependencies.getAuthContext) return ping();
+      const identityId = client.auth.identityId;
       if (checking) return;
       checking = true;
       void this.dependencies.getAuthContext(client.request).then(auth => {
         if (client.closed) return;
-        if (auth?.role !== 'guest' || auth.tokenId !== tokenId) {
+        if (auth?.role !== 'webui' || auth.identityId !== identityId) {
           try { client.socket.close(1008, 'Unauthorized'); } catch {}
           this.cleanupClient(client);
           return;
         }
-        const bound = this.resolvedGuestBindings(auth);
+        const bound = this.resolvedWebUiBindings(auth);
         if ([...client.sessionIds].some(id => {
           const current = this.dependencies.resolveIds([id]).requestedToCanonical[id];
           return !current || !bound.has(current) || current !== id;

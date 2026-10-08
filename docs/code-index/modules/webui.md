@@ -6,7 +6,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 
 ## Units
 
-- [webui-app](../units/webui-app.md) — authenticated entry, routing, guest-only chat root, global administrator list state, embedded leaf roots, URL helpers, and Code frame host.
+- [webui-app](../units/webui-app.md) — authenticated entry, routing, restricted WebUI identity chat root, global administrator list state, embedded leaf roots, URL helpers, and Code frame host.
 - [webui-session-list](../units/webui-session-list.md) — hierarchy, search, order, pinning, and drag behavior.
 - [webui-architecture-view](../units/webui-architecture-view.md) — agent/session architecture.
 - [webui-chat](../units/webui-chat.md) — per-session history, logical realtime events, sending/commands, ASR, and viewport state.
@@ -21,7 +21,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 - [webui-terminal](../units/webui-terminal.md) — xterm browser client.
 - [webui-editor](../units/webui-editor.md), [small components](../units/webui-small-components.md).
 - [src-channels-webui](../units/src-channels-webui.md) — authenticated HTTP/WS/SSE/upload/setup/terminal routes.
-- [src-webui-guest-tokens](../units/src-webui-guest-tokens.md) — persisted, hashed guest tokens bound to existing Session IDs.
+- WebUI identity access is defined by `access.identities.<identityId>.surfaces.webui`; there is no persisted WebUI identity-token storage layer.
 - Session list/state/history/settings routes and session update streams consume immutable SessionRuntime DTOs; destructive lifecycle and channel-attachment routes retain their explicit manager-owned coordination boundary.
 - [VS Code Web routes](../units/src-vscode-web-routes.md) and [extensions](../units/vscode-web-extensions.md).
 
@@ -67,7 +67,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 
 ## Compatibility
 
-- Existing administrator instance tokens retain their authority; guest tokens do not create Sessions or Agents and do not grant agent tool permissions. The scoped browser contract is [D-webui-guest-session-scope](#d-webui-guest-session-scope).
+- Existing administrator instance tokens retain their authority; WebUI identity tokens do not create Sessions or Agents and do not grant agent tool permissions. The scoped browser contract is [D-webui-identity-session-scope](#d-webui-identity-session-scope).
 
 - Supported legacy bracketed system/source history remains renderable.
 - Old workbench `workspace`/`file` tabs are removed during read normalization; current writes never recreate them.
@@ -135,9 +135,9 @@ The Chat model popup reuses the page-lifetime singleton `/api/models` result; op
 
 The former custom workspace/file browser remains removed. Persisted records are discarded; Code is the supported browser editing integration.
 
-### D-webui-guest-session-scope
+### D-webui-identity-session-scope
 
-[2026-09-27] A guest token grants browser chat, history, live events, and attachment uploads for explicitly bound existing Sessions, including their committed old-to-current ID aliases. Token storage retains the issued ID spelling; authorization resolves both that binding and the requested ID to the same current live Session. Successful identity moves preserve access through old and new IDs, while missing or ambiguous references do not grant access. Other WebUI routes and WebSocket streams remain administrator-only unless explicitly scoped; the guest root cannot mount workbench, popup, embedded, Setup, Code, terminal, sidebar, model, debug, or management surfaces. Guest messages reject leading slash and mention-prefixed slash commands before router dispatch, and guest uploads bind the uploaded file to the same token and Session before message ingestion. Existing administrator instance-token behavior is unchanged. The token grants no agent execution/tool permissions: tool results in a bound Session are visible as ordinary chat content and are not content-redacted. Browser image blobs require both a bound Session and a reference in that Session's committed history; arbitrary filesystem downloads remain administrator-only.
+[2026-10-08] A `webui` access identity grants browser chat, history, live events, and attachment uploads for explicitly bound existing Sessions in `access.identities.<identityId>.surfaces.webui.sessions`, including their committed old-to-current ID aliases. Authorization resolves both the configured binding and the requested ID to the same current live Session. Successful identity moves preserve access through old and new IDs, while missing or ambiguous references do not grant access. Other WebUI routes and WebSocket streams remain administrator-only unless explicitly scoped; the restricted identity root cannot mount workbench, popup, embedded, Setup, Code, terminal, sidebar, model, debug, or management surfaces. WebUI identity messages reject leading slash and mention-prefixed slash commands before router dispatch, and uploads bind the file to the same identity and Session before message ingestion. Existing administrator instance-token behavior is unchanged. The identity grants no agent execution/tool permissions: tool results in a bound Session are visible as ordinary chat content and are not content-redacted. Browser image blobs require both a bound Session and a reference in that Session's committed history; arbitrary filesystem downloads remain administrator-only.
 
 ## Canonical ownership
 

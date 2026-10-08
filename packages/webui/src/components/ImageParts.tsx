@@ -2,21 +2,21 @@ import { createContext, memo, useContext, useState } from 'react'
 import type { MessagePart } from './chatShared'
 import { makeApiUrl } from '../config'
 
-export const GuestImageSessionContext = createContext<string | null>(null)
+export const WebUiImageSessionContext = createContext<string | null>(null)
 
 const SAFE_RASTER_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 
 export function ImageItem({ part, label, imageClassName = 'max-w-[300px] max-h-[200px]' }: { part: MessagePart; label: string; imageClassName?: string }) {
   const [failed, setFailed] = useState(false)
-  const guestSessionId = useContext(GuestImageSessionContext)
+  const webUiSessionId = useContext(WebUiImageSessionContext)
   const mimeType = part.inlineDataRef?.mimeType
     || part.inlineData?.mimeType
     || part.inlineDataUnavailable?.mimeType
     || part.inlineDataUnavailable?.mime_type
     || 'application/octet-stream'
   const src = part.inlineDataRef?.apiPath
-    ? makeApiUrl(guestSessionId && part.inlineDataRef.blobId
-      ? `/sessions/${encodeURIComponent(guestSessionId)}/blobs/${encodeURIComponent(part.inlineDataRef.blobId)}`
+    ? makeApiUrl(webUiSessionId && part.inlineDataRef.blobId
+      ? `/sessions/${encodeURIComponent(webUiSessionId)}/blobs/${encodeURIComponent(part.inlineDataRef.blobId)}`
       : part.inlineDataRef.apiPath).toString()
     : part.inlineData
       ? `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`

@@ -11,7 +11,7 @@ Queue-origin history deltas update committed and queued timelines through one re
 
 ## Export
 
-- default memoized `Chat` component; guest mode retains normal history, tool cards, live stream, and sending while hiding administrator controls/model picker/debug/ASR.
+- default memoized `Chat` component; WebUI identity mode retains normal history, tool cards, live stream, and sending while hiding administrator controls/model picker/debug/ASR.
 - `SessionDebugModal` owns the explicitly mounted diagnostic snapshot lifecycle, including fetch invalidation, serialization, copy state, and release on close.
 - `chatHistoryState.ts`, `chatViewportState.ts`, and `sessionHeader.ts` export pure tested reconciliation, viewport, and state/format helpers; `modelOptionsLoader.ts` owns latest-consumer publication gates, the parsed-result Promise cache for the three bootstrap endpoints, and the models-only refresh signal.
 - `chatSessionSearch.ts` derives only rendered/searchable text fields from loaded committed top-level rows when the pane-local Search opens; `findSessionSearchMatches` performs literal query filtering, while `findSearchSurface`/`findRenderedMatchRange` locate the selected mounted text without mutating it.
@@ -22,7 +22,7 @@ Queue-origin history deltas update committed and queued timelines through one re
 - `handleSend({ text, attachments })`:
   1. rejects missing/empty/loading submissions;
   2. retains any active model-stream draft, leaving its request/stream reconciliation independent of send acceptance;
-  3. uploads each stable `{ ref, file }` attachment to `POST /api/upload` with multipart filename `attachmentN_${originalFileName}` (also its bound Session ID in guest mode), failing the send if any upload fails;
+  3. uploads each stable `{ ref, file }` attachment to `POST /api/upload` with multipart filename `attachmentN_${originalFileName}` (also its bound Session ID in WebUI identity mode), failing the send if any upload fails;
   4. builds marker-bearing request parts plus the unchanged legacy `{ path, filename, mimeType }` upload entries (no backend ref field);
   5. creates one browser `clientMessageId` and appends an optimistic user row with the same ordinary appended descriptor shape used by canonical history; frontend presentation correlates the numeric filename prefix back to the marker;
   6. awaits `POST /api/sessions/:id/message`; non-2xx removes only an unreconciled optimistic row and returns rejected send so the composer retains its draft, while busy/queued success schedules targeted queue-preview refresh.

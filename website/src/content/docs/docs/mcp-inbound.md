@@ -3,7 +3,7 @@ title: Connect an external MCP client
 description: Enable Foxwarm's MCP endpoint and grant an external client access to selected tools, Nodes, or Sessions.
 ---
 
-Foxwarm exposes a Streamable HTTP MCP endpoint at `/mcp` on the **same HTTP port as the WebUI**. Each external identity has its own token, and tool rules determine what it can use. The endpoint is disabled by default.
+Foxwarm exposes a Streamable HTTP MCP endpoint at `/mcp` on the **same HTTP port as the WebUI**. Access identities are shared with the WebUI, while each surface must be declared explicitly. Tool rules determine which MCP tools an identity can use. The endpoint is disabled unless at least one configured identity declares the `mcp` surface.
 
 This page is for clients connecting **to Foxwarm**. To connect Foxwarm to another tool server, see [outbound MCP](/docs/tools-skills-mcp/#connect-an-mcp-tool-server).
 
@@ -12,14 +12,15 @@ This page is for clients connecting **to Foxwarm**. To connect Foxwarm to anothe
 Add this block to `state/config.yaml` in your data directory:
 
 ```yaml
-mcpInbound:
-  enabled: true
+access:
   identities:
     editor:
       token: REPLACE_WITH_A_LONG_PRIVATE_TOKEN
+      surfaces:
+        mcp: {}
 ```
 
-Replace the token before starting Foxwarm. For another client identity, add another named entry with a different token. Do not reuse the WebUI or Node pairing token. These credentials are read from YAML, not from environment variables.
+Replace the token before starting Foxwarm. For another identity, add another named entry with a different token; one identity may declare both `webui` and `mcp` surfaces. Do not reuse the instance superuser or Node pairing token. These credentials are read from YAML, not from environment variables.
 
 Restart Foxwarm after changing the configuration. With the default port, the endpoint is `http://localhost:3001/mcp`. Behind a reverse proxy, retain the deployment prefix, for example `https://your-host.example/foxwarm/mcp`. Use HTTPS when sending credentials over an untrusted network.
 
@@ -149,7 +150,7 @@ bot:
   enableTrigger: false
 ```
 
-With inbound MCP enabled, Foxwarm still starts its HTTP server and Node connections. You can leave both settings enabled when MCP shares a normal WebUI installation.
+With an identity declaring the `mcp` surface, Foxwarm still starts its HTTP server and Node connections even when the WebUI is disabled. You can leave both settings enabled when MCP shares a normal WebUI installation. An identity that declares only `webui` cannot authenticate to `/mcp`.
 
 To pair a CLI Node, an administrator supplies the existing token from the instance's private `state/node_token` file to that Node. An authorized MCP operator can then discover and call `node_pair_list` and `node_pair_approve`. The MCP endpoint never returns the bootstrap token. See [Nodes](/docs/nodes/) for client setup.
 

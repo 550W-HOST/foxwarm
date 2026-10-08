@@ -7,7 +7,7 @@ import {
   CallToolRequestSchema, ErrorCode, isInitializeRequest, ListToolsRequestSchema, McpError,
   type CallToolResult, type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { authenticateMcpInboundBearer, type NormalizedMcpInboundConfig, type VerifiedMcpInboundPrincipal } from './mcpInboundConfig';
+import { authenticateAccessBearer, type NormalizedAccessConfig, type VerifiedAccessIdentity } from './accessConfig';
 import type { HttpServer } from './httpServer';
 
 const IDLE_MS = 15 * 60_000;
@@ -35,9 +35,9 @@ export interface ExternalExecutionContext {
 
 /** Trusted process-local catalog; the application registers only implemented capabilities. */
 export interface McpInboundCatalog {
-  listTools(context: ExternalExecutionContext, principal: VerifiedMcpInboundPrincipal): Promise<Tool[]>;
-  callTool(context: ExternalExecutionContext, name: string, args: Record<string, unknown>, signal: AbortSignal, principal: VerifiedMcpInboundPrincipal): Promise<CallToolResult>;
-  releaseContext?(context: ExternalExecutionContext, principal: VerifiedMcpInboundPrincipal): void | Promise<void>;
+  listTools(context: ExternalExecutionContext, principal: VerifiedAccessIdentity): Promise<Tool[]>;
+  callTool(context: ExternalExecutionContext, name: string, args: Record<string, unknown>, signal: AbortSignal, principal: VerifiedAccessIdentity): Promise<CallToolResult>;
+  releaseContext?(context: ExternalExecutionContext, principal: VerifiedAccessIdentity): void | Promise<void>;
 }
 
 /** Only the trusted catalog may mark a diagnostic as safe to return to the external client. */
@@ -45,7 +45,7 @@ export class McpInboundSafeError extends Error {}
 
 type Connection = {
   id: string;
-  principal: VerifiedMcpInboundPrincipal;
+  principal: VerifiedAccessIdentity;
   context: ExternalExecutionContext;
   server: Server;
   transport: StreamableHTTPServerTransport;
@@ -77,13 +77,15 @@ export class McpInboundHttpService {
   private stopped = false;
 
   constructor(
-    private readonly config: NormalizedMcpInboundConfig,
+    private readonly config: NormalizedAccessConfig,
     private readonly catalog?: McpInboundCatalog,
     private readonly idleMs: number = IDLE_MS,
     private readonly maxSessions: number = MAX_SESSIONS,
     private readonly postDeadlineMs: number = POST_DEADLINE_MS,
   ) {
-    if (!config.enabled) throw new Error('Inbound MCP must be enabled before registration.');
+    if (!Object.values(config.identities).some(identity => identity.surfaces.mcp)) {
+      throw new Error('Inbound MCP requires an access identity with the mcp surface.');
+    }
     this.sweep = setInterval(() => this.expireIdle(), Math.min(idleMs, 60_000));
     this.sweep.unref();
   }
@@ -92,7 +94,7 @@ export class McpInboundHttpService {
     // The shared HTTP parser deliberately skips /mcp. Authenticate before parsing
     // request bytes, then bound and sanitize parser errors without changing WebUI.
     httpServer.app.use('/mcp', (req: Request, res: Response, next: NextFunction) => {
-      const principal = authenticateMcpInboundBearer(this.config, headerExactlyOnce(req, 'authorization'));
+      const principal = authenticateAccessBearer(this.config, headerExactlyOnce(req, 'authorization'));
       if (!principal) return sendError(res, 401, 'Unauthorized.');
       next();
     });
@@ -133,7 +135,7 @@ export class McpInboundHttpService {
     finally { await connection.server.close(); }
   }
 
-  private async open(principal: VerifiedMcpInboundPrincipal): Promise<Connection> {
+  private async open(principal: VerifiedAccessIdentity): Promise<Connection> {
     const id = randomUUID();
     const context: ExternalExecutionContext = { id, externalId: principal.externalId,
       currentNode: 'master', cwd: null, selectionGeneration: 0, disposed: false, externalExecNodes: new Set() };
@@ -202,7 +204,7 @@ export class McpInboundHttpService {
   private async handle(req: Request, res: Response): Promise<void> {
     if (this.stopped) return sendError(res, 503, 'MCP service unavailable.');
     // The main instance cookie/token never authenticates this route. Recheck for every HTTP request.
-    const principal = authenticateMcpInboundBearer(this.config, headerExactlyOnce(req, 'authorization'));
+    const principal = authenticateAccessBearer(this.config, headerExactlyOnce(req, 'authorization'));
     if (!principal) return sendError(res, 401, 'Unauthorized.');
     const origin = headerExactlyOnce(req, 'origin');
     if (req.headers.origin !== undefined && (!origin || !req.headers.host || !this.isSameOrigin(origin, req.headers.host))) {

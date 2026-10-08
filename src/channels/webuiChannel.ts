@@ -22,10 +22,9 @@ import { deleteSessionLifecycle } from '../sessionDeletion';
 import type { SessionRuntimeSessionDto } from '../sessionRuntime';
 import { buildSessionRuntimeSessionDto } from '../sessionRuntimeService';
 import { sessionCatalogStore } from '../session/catalogStore';
-import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, ProviderConfigValue, getActiveModelsConfigPath, getAgentDir, readAppConfigFile, resolveModelConfig, MODEL_EFFORTS, type ModelEffort, type ModelsConfig } from '../config';
+import { ACCESS_CONFIG, AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, ProviderConfigValue, getActiveModelsConfigPath, getAgentDir, readAppConfigFile, resolveModelConfig, MODEL_EFFORTS, type ModelEffort, type ModelsConfig, type NormalizedAccessConfig, authenticateAccessToken } from '../config';
 import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
 import { httpServer, type HttpAuthContext } from '../httpServer';
-import { createWebUiGuestToken, verifyWebUiGuestToken } from '../webuiGuestTokens';
 import { COMMANDS } from '../commands';
 import { listChannelRuntimeStatuses, reloadManagedChannels } from '../channelRuntime';
 import { requestLlmOnce } from '../llm';
@@ -63,7 +62,7 @@ import { buildQueuedPreviewMessages, MAX_QUEUED_PREVIEW_ITEMS, sanitizeQueuedPre
 import { listProviderModels, parseProviderModelListRequest, ProviderModelListError } from '../providerModelList';
 
 const WEBUI_UPLOAD_DIR = path.join(os.tmpdir(), 'foxwarm-uploads');
-const WEBUI_GUEST_FEATURES = {
+const WEBUI_IDENTITY_FEATURES = {
   chat: true,
   attachments: true,
   commands: false,
@@ -702,6 +701,7 @@ export interface WebUIChannelOptions {
   enableWebUI?: boolean;
   enableTrigger?: boolean;
   loadModelStreamSnapshot?: (sessionId: string) => Promise<unknown>;
+  accessConfig?: NormalizedAccessConfig;
 }
 
 function buildChildrenMap(allSessions: Map<string, any>): Map<string, string[]> {
@@ -878,10 +878,11 @@ export class WebUIChannel implements Channel {
   private token: string;
   private enableWebUI: boolean;
   private enableTrigger: boolean;
+  private accessConfig: NormalizedAccessConfig;
   private loadModelStreamSnapshot?: (sessionId: string) => Promise<unknown>;
   private sseClients: Map<string, express.Response[]> = new Map(); // sessionId -> clients
   private realtimeHub?: WebUiRealtimeHub;
-  private guestUploads = new Map<string, { tokenId: string; sessionId: string }>();
+  private webUiUploads = new Map<string, { identityId: string; sessionId: string }>();
   private logs = new WebUiLogFile(MAIN_LOG_PATH);
   private presentationSubscriberSessions = new Set<string>();
   private presentationSubscriptionListener?: (sessionId: string, active: boolean) => void | Promise<void>;
@@ -916,16 +917,14 @@ export class WebUIChannel implements Channel {
       return session ? [session.id] : [];
     }))];
     return {
-      role: 'guest' as const,
-      tokenId: auth.tokenId,
+      role: 'webui' as const,
+      identityId: auth.identityId,
       sessionIds,
-      label: auth.label || null,
-      expiresAt: auth.expiresAt || null,
-      features: WEBUI_GUEST_FEATURES,
+      features: WEBUI_IDENTITY_FEATURES,
     };
   }
 
-  private guestCanAccessSession(auth: HttpAuthContext, sessionId: string): boolean {
+  private webUiCanAccessSession(auth: HttpAuthContext, sessionId: string): boolean {
     if (auth.role === 'admin') return true;
     const session = sessionManager.getSessionCatalog(sessionId);
     return !!session && auth.sessionIds.some(id => sessionManager.getSessionCatalog(id)?.id === session.id);
@@ -937,8 +936,8 @@ export class WebUIChannel implements Channel {
       res.status(401).json({ error: 'Unauthorized' });
       return null;
     }
-    if (!this.guestCanAccessSession(auth, sessionId)) {
-      res.status(403).json({ error: 'Forbidden: guest token is not bound to this session', code: 'GUEST_SESSION_NOT_ALLOWED' });
+    if (!this.webUiCanAccessSession(auth, sessionId)) {
+      res.status(403).json({ error: 'Forbidden: WebUI identity is not bound to this session', code: 'WEBUI_SESSION_NOT_ALLOWED' });
       return null;
     }
     return auth;
@@ -986,6 +985,7 @@ export class WebUIChannel implements Channel {
     this.token = options.token;
     this.enableWebUI = options.enableWebUI !== false;
     this.enableTrigger = options.enableTrigger !== false;
+    this.accessConfig = options.accessConfig || ACCESS_CONFIG;
     this.loadModelStreamSnapshot = options.loadModelStreamSnapshot;
     
     // Add routes to HTTP server
@@ -1013,10 +1013,17 @@ export class WebUIChannel implements Channel {
   private setupRoutes() {
     // Add routes to HTTP server
     const httpServerInstance = httpServer;
-    httpServerInstance.setGuestTokenVerifier(async token => {
-      const guest = await verifyWebUiGuestToken(token);
-      return guest ? { ...guest, features: WEBUI_GUEST_FEATURES } : null;
-    });
+    const verifyWebUiIdentity = (token: string): HttpAuthContext | null => {
+      const identity = authenticateAccessToken(this.accessConfig, token, 'webui');
+      if (!identity?.surfaces.webui) return null;
+      return {
+        role: 'webui',
+        identityId: identity.identityId,
+        sessionIds: identity.surfaces.webui.sessions,
+        features: WEBUI_IDENTITY_FEATURES,
+      };
+    };
+    httpServerInstance.setWebUiIdentityVerifier(verifyWebUiIdentity);
     if (this.enableWebUI) registerWebUiTaskRoutes(httpServerInstance, taskService);
     this.realtimeHub = new WebUiRealtimeHub({
       checkToken: req => httpServerInstance.checkIncomingToken(req),
@@ -1107,8 +1114,16 @@ export class WebUIChannel implements Channel {
           if (token === this.token) {
             return res.json({ success: true, ...this.authSessionPayload({ role: 'admin' }) });
           }
-          const guest = await verifyWebUiGuestToken(token);
-          if (guest) return res.json({ success: true, ...this.authSessionPayload(guest) });
+          const identity = authenticateAccessToken(this.accessConfig, token, 'webui');
+          if (identity?.surfaces.webui) {
+            const response = { success: true, ...this.authSessionPayload({
+              role: 'webui',
+              identityId: identity.identityId,
+              sessionIds: identity.surfaces.webui.sessions,
+              features: WEBUI_IDENTITY_FEATURES,
+            }) };
+            return res.json(response);
+          }
           res.status(401).json({ error: 'Invalid token' });
         },
         noAuth: true,
@@ -1127,56 +1142,6 @@ export class WebUIChannel implements Channel {
         },
       });
 
-      httpServerInstance.addRoute({
-        path: '/api/guest-tokens',
-        method: 'POST',
-        handler: async (req: express.Request, res: express.Response) => {
-          try {
-            const rawSessionIds: string[] = Array.isArray(req.body?.sessionIds)
-              ? req.body.sessionIds
-                .map((item: unknown) => typeof item === 'string' ? item.trim() : '')
-                .filter((item: string) => item.length > 0)
-              : [];
-            const sessionIds: string[] = Array.from(new Set(rawSessionIds));
-            if (sessionIds.length === 0) {
-              return res.status(400).json({ error: 'sessionIds must be a non-empty array of existing session ids.' });
-            }
-
-            const missing: string[] = [];
-            for (const sessionId of sessionIds) {
-              if (!sessionManager.getSessionCatalog(sessionId)) {
-                missing.push(sessionId);
-              }
-            }
-            if (missing.length > 0) {
-              return res.status(400).json({ error: 'Some sessionIds do not exist.', missingSessionIds: missing });
-            }
-
-            const now = Date.now();
-            let expiresAt: number | undefined;
-            if (typeof req.body?.expiresAt === 'number' && Number.isFinite(req.body.expiresAt)) {
-              expiresAt = req.body.expiresAt;
-            } else if (typeof req.body?.expiresInSeconds === 'number' && Number.isFinite(req.body.expiresInSeconds) && req.body.expiresInSeconds > 0) {
-              expiresAt = now + Math.floor(req.body.expiresInSeconds * 1000);
-            }
-
-            const label = typeof req.body?.label === 'string' ? req.body.label.trim() : undefined;
-            const { token, record } = await createWebUiGuestToken({ sessionIds, label, expiresAt, now });
-            res.json({
-              success: true,
-              token,
-              tokenId: record.tokenId,
-              sessionIds: record.sessionIds,
-              label: record.label || null,
-              expiresAt: record.expiresAt || null,
-              loginHash: `#token=${encodeURIComponent(token)}`,
-            });
-          } catch (e: any) {
-            logger.error({ err: e }, 'Failed to create guest token');
-            res.status(400).json({ error: e.message });
-          }
-        },
-      });
 
       // Get available slash commands for WebUI autocomplete
       httpServerInstance.addRoute({
@@ -1832,8 +1797,8 @@ export class WebUIChannel implements Channel {
             const auth = await this.getAuthContext(req);
             if (!auth) return res.status(401).json({ error: 'Unauthorized' });
             const runtimeSessions = await sessionRuntime.listSessions();
-            if (auth.role === 'guest') {
-              return res.json({ sessions: runtimeSessions.filter(session => this.guestCanAccessSession(auth, session.id))
+            if (auth.role === 'webui') {
+              return res.json({ sessions: runtimeSessions.filter(session => this.webUiCanAccessSession(auth, session.id))
                 .map(session => ({ id: session.id, displayName: session.displayName || null, busy: session.busy })) });
             }
             const allSessions = new Map(runtimeSessions.map(session => [session.id, session]));
@@ -2181,15 +2146,15 @@ export class WebUIChannel implements Channel {
             if (!auth) return;
             const blobId = req.params.blobId as string;
             // A blob ID is content-derived, not a secret. Require a reference
-            // in the bound Session before serving it to a guest.
-            if (auth.role === 'guest') {
+            // in the bound Session before serving it to a WebUI identity.
+            if (auth.role === 'webui') {
               const snapshot = await sessionRuntime.getHistory(sessionId);
               if (!snapshot) return res.status(404).json({ error: 'Session not found' });
-              if (sessionManager.getSessionCatalog(sessionId)?.id !== snapshot.session.id || !this.guestCanAccessSession(auth, sessionId)) {
-                return res.status(403).json({ error: 'Guest session binding changed.' });
+              if (sessionManager.getSessionCatalog(sessionId)?.id !== snapshot.session.id || !this.webUiCanAccessSession(auth, sessionId)) {
+                return res.status(403).json({ error: 'WebUI identity session binding changed.' });
               }
               if (!snapshot.messages.some(message => message.parts.some(part => part.inlineDataRef?.blobId === blobId))) {
-                return res.status(403).json({ error: 'Image is not part of this guest session.' });
+                return res.status(403).json({ error: 'Image is not part of this WebUI identity session.' });
               }
             }
             const blobPath = resolveImageBlobPath(blobId);
@@ -2433,9 +2398,9 @@ export class WebUIChannel implements Channel {
             if (!snapshot) {
               return res.status(404).json({ error: 'Session not found' });
             }
-            if (auth.role === 'guest' && (sessionManager.getSessionCatalog(sessionId)?.id !== snapshot.session.id
-              || !this.guestCanAccessSession(auth, sessionId))) {
-              return res.status(403).json({ error: 'Guest session binding changed.' });
+            if (auth.role === 'webui' && (sessionManager.getSessionCatalog(sessionId)?.id !== snapshot.session.id
+              || !this.webUiCanAccessSession(auth, sessionId))) {
+              return res.status(403).json({ error: 'WebUI identity session binding changed.' });
             }
             const historyVersion = snapshot.session.historyVersion;
             if (expectedHistoryVersion !== undefined && expectedHistoryVersion !== historyVersion) {
@@ -3047,9 +3012,9 @@ export class WebUIChannel implements Channel {
             res.status(404).json({ error: 'Session not found' });
             return;
           }
-          if (auth.role === 'guest' && (sessionManager.getSessionCatalog(requestedSessionId)?.id !== session.id
-            || !this.guestCanAccessSession(auth, requestedSessionId))) {
-            return res.status(403).json({ error: 'Guest session binding changed.' });
+          if (auth.role === 'webui' && (sessionManager.getSessionCatalog(requestedSessionId)?.id !== session.id
+            || !this.webUiCanAccessSession(auth, requestedSessionId))) {
+            return res.status(403).json({ error: 'WebUI identity session binding changed.' });
           }
           const sessionId = session.id;
           
@@ -3079,10 +3044,10 @@ export class WebUIChannel implements Channel {
           
           // Keep-alive ping every 30 seconds
           const keepAliveInterval = setInterval(() => {
-            if (auth.role === 'guest') {
+            if (auth.role === 'webui') {
               void this.getAuthContext(req).then(fresh => {
-                if (fresh?.role !== 'guest' || fresh.tokenId !== auth.tokenId
-                  || !this.guestCanAccessSession(fresh, requestedSessionId)
+                if (fresh?.role !== 'webui' || fresh.identityId !== auth.identityId
+                  || !this.webUiCanAccessSession(fresh, requestedSessionId)
                   || sessionManager.getSessionCatalog(requestedSessionId)?.id !== sessionId) {
                   res.end();
                   clearInterval(keepAliveInterval);
@@ -3232,9 +3197,9 @@ export class WebUIChannel implements Channel {
 
               const auth = await this.getAuthContext(req);
               const uploadSessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : '';
-              if (!auth || (auth.role === 'guest' && (!uploadSessionId || !this.guestCanAccessSession(auth, uploadSessionId)))) {
+              if (!auth || (auth.role === 'webui' && (!uploadSessionId || !this.webUiCanAccessSession(auth, uploadSessionId)))) {
                 await fs.remove(req.file.path).catch(() => {});
-                res.status(!auth ? 401 : uploadSessionId ? 403 : 400).json({ error: 'Guest upload requires a bound sessionId.' });
+                res.status(!auth ? 401 : uploadSessionId ? 403 : 400).json({ error: 'WebUI identity upload requires a bound sessionId.' });
                 return;
               }
 
@@ -3248,7 +3213,7 @@ export class WebUIChannel implements Channel {
               
               logger.info({ filename, originalName, size: req.file.size }, 'File uploaded');
               
-              if (auth.role === 'guest') this.guestUploads.set(finalPath, { tokenId: auth.tokenId, sessionId: uploadSessionId });
+              if (auth.role === 'webui') this.webUiUploads.set(finalPath, { identityId: auth.identityId, sessionId: uploadSessionId });
 
               res.json({ 
                 path: finalPath,
@@ -3435,21 +3400,21 @@ export class WebUIChannel implements Channel {
             if (!existingSession) {
               return res.status(404).json({ error: 'Session not found' });
             }
-            if (auth.role === 'guest' && (sessionManager.getSessionCatalog(sessionId)?.id !== existingSession.id
-              || !this.guestCanAccessSession(auth, existingSession.id))) {
-              return res.status(403).json({ error: 'Guest session binding changed.' });
+            if (auth.role === 'webui' && (sessionManager.getSessionCatalog(sessionId)?.id !== existingSession.id
+              || !this.webUiCanAccessSession(auth, existingSession.id))) {
+              return res.status(403).json({ error: 'WebUI identity session binding changed.' });
             }
 
             // Support both old format (text) and new format (parts)
             let finalParts = parts || (text ? [{ text }] : []);
-            if (auth.role === 'guest') {
+            if (auth.role === 'webui') {
               if (!Array.isArray(finalParts) || finalParts.some(part => !part || typeof part !== 'object'
                 || Array.isArray(part) || typeof part.text !== 'string' || Object.keys(part).some(key => key !== 'text'))) {
-                return res.status(400).json({ error: 'Guest messages may only include text parts.' });
+                return res.status(400).json({ error: 'WebUI identity messages may only include text parts.' });
               }
               if (typeof text === 'string' && this.isSlashCommandText(text)
                 || this.isSlashCommandText(finalParts.map(part => part.text).join('\n'))) {
-                return res.status(403).json({ error: 'Guest tokens cannot use slash commands.', code: 'GUEST_COMMANDS_DISABLED' });
+                return res.status(403).json({ error: 'WebUI identity tokens cannot use slash commands.', code: 'WEBUI_COMMANDS_DISABLED' });
               }
             }
             
@@ -3501,14 +3466,14 @@ export class WebUIChannel implements Channel {
               ? uploadedFiles
               : (Array.isArray(filePaths) ? filePaths.map((filePath) => ({ path: filePath })) : []);
 
-            if (auth.role === 'guest') {
+            if (auth.role === 'webui') {
               for (const entry of uploadedEntries) {
                 const filePath = typeof entry === 'string' ? entry : entry?.path;
-                const owner = typeof filePath === 'string' ? this.guestUploads.get(filePath) : null;
-                if (!owner || owner.tokenId !== auth.tokenId
+                const owner = typeof filePath === 'string' ? this.webUiUploads.get(filePath) : null;
+                if (!owner || owner.identityId !== auth.identityId
                   || sessionManager.getSessionCatalog(owner.sessionId)?.id !== existingSession.id
-                  || !this.guestCanAccessSession(auth, owner.sessionId)) {
-                  return res.status(403).json({ error: 'Attachment is not bound to this guest session.' });
+                  || !this.webUiCanAccessSession(auth, owner.sessionId)) {
+                  return res.status(403).json({ error: 'Attachment is not bound to this WebUI identity session.' });
                 }
               }
             }
@@ -3521,8 +3486,8 @@ export class WebUIChannel implements Channel {
                 if (!tempPath) continue;
 
                 try {
-                  if (auth.role === 'guest' && !this.guestCanAccessSession(auth, sessionId)) {
-                    return res.status(403).json({ error: 'Guest session binding changed.' });
+                  if (auth.role === 'webui' && !this.webUiCanAccessSession(auth, sessionId)) {
+                    return res.status(403).json({ error: 'WebUI identity session binding changed.' });
                   }
                   const stats = await fs.stat(tempPath);
                   if (!stats.isFile()) continue;
@@ -3541,7 +3506,7 @@ export class WebUIChannel implements Channel {
                       : 'application/octet-stream');
                   const isImage = mimeType.startsWith('image/');
                   const saved = await saveInboundSessionFile({
-                    sessionId: auth.role === 'guest' ? existingSession.id : sessionId,
+                    sessionId: auth.role === 'webui' ? existingSession.id : sessionId,
                     platform: 'webui',
                     buffer: fileBuffer,
                     fileName: originalName,
@@ -3562,7 +3527,7 @@ export class WebUIChannel implements Channel {
                 } catch (err) {
                   logger.warn({ filePath: tempPath, err }, 'Failed to process uploaded file');
                 } finally {
-                  this.guestUploads.delete(tempPath);
+                  this.webUiUploads.delete(tempPath);
                   await fs.remove(tempPath).catch(() => {});
                 }
               }
@@ -3570,14 +3535,14 @@ export class WebUIChannel implements Channel {
             
             if (finalParts.length === 0) throw new Error('Missing message content');
 
-            if (auth.role === 'guest' && !this.guestCanAccessSession(auth, sessionId)) {
-              return res.status(403).json({ error: 'Guest session binding changed.' });
+            if (auth.role === 'webui' && !this.webUiCanAccessSession(auth, sessionId)) {
+              return res.status(403).json({ error: 'WebUI identity session binding changed.' });
             }
 
             // Attach webui channel if not already attached
             // Use sessionId as channelUserId so each session has its own channel
-            const attachmentSessionId = auth.role === 'guest' ? sessionManager.getSessionCatalog(sessionId)?.id : sessionId;
-            if (!attachmentSessionId) return res.status(403).json({ error: 'Guest session binding changed.' });
+            const attachmentSessionId = auth.role === 'webui' ? sessionManager.getSessionCatalog(sessionId)?.id : sessionId;
+            if (!attachmentSessionId) return res.status(403).json({ error: 'WebUI identity session binding changed.' });
             let existingSessionId = sessionManager.getSessionByChannel('webui', sessionId);
             if (!existingSessionId || existingSessionId !== attachmentSessionId) {
               sessionManager.attachChannel('webui', sessionId, attachmentSessionId);
