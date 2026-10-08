@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { Code2, ExternalLink, MessageSquareText, SquareTerminal } from 'lucide-react'
+import { Code2, ExternalLink, MessageSquareText, SquareTerminal, Search, X, ChevronUp, ChevronDown } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
 import type { ModelOption } from './ChatComposer'
@@ -231,6 +231,11 @@ const Chat = memo(function Chat({ sessionId, experimentalTextOnly = false, exper
   const [sessionRecord, setSessionRecord] = useState<SessionListRecord | null>(null)
   const [persistentMemorySnapshot, setPersistentMemorySnapshot] = useState('')
   const [showFullTimeline, setShowFullTimeline] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchIndex, setSearchIndex] = useState(0)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const searchHistoryRef = useRef<string[]>([])
   const [historyLoaded, setHistoryLoaded] = useState(false)
   const [isFullHistoryLoaded, setIsFullHistoryLoaded] = useState(false)
   const [earlierHistoryError, setEarlierHistoryError] = useState(false)
@@ -1966,6 +1971,40 @@ const Chat = memo(function Chat({ sessionId, experimentalTextOnly = false, exper
   }, [modelOptions, sessionRecord?.modelKey])
 
   const turnIncomplete = useMemo(() => isSessionTurnIncomplete(messages), [messages])
+  const searchMatches = useMemo(() => {
+    const query = searchQuery.trim().toLocaleLowerCase()
+    if (!query) return []
+    return messages.flatMap((message, index) => getMessagePlainText(message).toLocaleLowerCase().includes(query) ? [{ index, text: getMessagePlainText(message) }] : [])
+  }, [messages, searchQuery])
+  const openSearch = useCallback(() => {
+    const saved = localStorage.getItem('foxwarm_chat_search_history_v1')
+    searchHistoryRef.current = saved ? JSON.parse(saved) as string[] : []
+    setSearchOpen(true)
+    window.setTimeout(() => searchInputRef.current?.focus(), 0)
+  }, [])
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f' && !event.altKey && !event.shiftKey && !event.isComposing) {
+        event.preventDefault()
+        openSearch()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [openSearch])
+  useEffect(() => {
+    setSearchIndex(0)
+  }, [searchQuery, sessionId])
+  const closeSearch = useCallback(() => {
+    const query = searchQuery.trim()
+    if (query) {
+      const history = [query, ...searchHistoryRef.current.filter(item => item !== query)].slice(0, 20)
+      searchHistoryRef.current = history
+      localStorage.setItem('foxwarm_chat_search_history_v1', JSON.stringify(history))
+    }
+    setSearchOpen(false)
+    setSearchQuery('')
+  }, [searchQuery])
 
   return (
     <div ref={chatRootRef} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
@@ -2029,6 +2068,15 @@ const Chat = memo(function Chat({ sessionId, experimentalTextOnly = false, exper
           </>
         )}
       />
+
+      {searchOpen && <div className="flex shrink-0 items-center gap-2 border-b border-fw-border bg-fw-surface px-3 py-2" role="search">
+        <Search className="h-4 w-4 text-fw-text-muted" />
+        <input ref={searchInputRef} value={searchQuery} onChange={event => setSearchQuery(event.target.value)} onCompositionStart={event => event.currentTarget.dataset.composing = 'true'} onCompositionEnd={event => { delete event.currentTarget.dataset.composing }} onKeyDown={event => { if (event.key === 'Escape') closeSearch(); else if (event.key === 'Enter' && searchMatches.length) setSearchIndex(index => (index + (event.shiftKey ? -1 : 1) + searchMatches.length) % searchMatches.length) }} placeholder="Find in chat" className="min-w-0 flex-1 rounded border border-fw-border bg-fw-canvas px-2 py-1 text-sm" aria-label="Find in chat" />
+        <span className="text-xs text-fw-text-muted">{searchMatches.length ? `${searchIndex + 1}/${searchMatches.length}` : 'No matches'}</span>
+        <button type="button" className="rounded p-1 hover:bg-fw-hover" aria-label="Previous match" disabled={!searchMatches.length} onClick={() => setSearchIndex(index => (index - 1 + searchMatches.length) % searchMatches.length)}><ChevronUp className="h-4 w-4" /></button>
+        <button type="button" className="rounded p-1 hover:bg-fw-hover" aria-label="Next match" disabled={!searchMatches.length} onClick={() => setSearchIndex(index => (index + 1) % searchMatches.length)}><ChevronDown className="h-4 w-4" /></button>
+        <button type="button" className="rounded p-1 hover:bg-fw-hover" aria-label="Close search" onClick={closeSearch}><X className="h-4 w-4" /></button>
+      </div>}
 
       {connectionState !== 'connected' && (
         <div className={`sticky top-0 z-20 px-4 py-2 text-sm ${

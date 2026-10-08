@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ClipboardList, X } from 'lucide-react'
+import { ArrowLeft, ClipboardList, X, Plus, Send, UserRound } from 'lucide-react'
 import { makeApiUrl } from '../config'
 import { WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 
@@ -20,7 +20,8 @@ type TaskSummary = {
   parentTaskId: string | null
   ownerSessionId: string | null
   ownerAgent?: string | null
-  createdBySessionId: string
+  createdByKind?: 'session' | 'user'
+  createdBySessionId: string | null
   createdByAgent?: string | null
   updatedAt: number
 }
@@ -29,7 +30,7 @@ type TaskDetails = {
   task: TaskSummary & { description: string | null; result: string | null }
   children: { id: string; title: string; status: typeof STATUSES[number]; ownerSessionId: string | null }[]
   childrenOmitted: number
-  notes: { sessionId: string; text: string; createdAt: number }[]
+  notes: { authorKind?: 'session' | 'user'; sessionId: string | null; text: string; createdAt: number }[]
   notesOmitted: number
 }
 
@@ -58,6 +59,46 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
   const [agentFilter, setAgentFilter] = useState('')
   const [agentRelation, setAgentRelation] = useState<typeof AGENT_RELATIONS[number]>('ownerOrCreator')
   const [isNarrow, setIsNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 1024)
+  const [showCreate, setShowCreate] = useState(false)
+  const [createTitle, setCreateTitle] = useState('')
+  const [createDescription, setCreateDescription] = useState('')
+  const [comment, setComment] = useState('')
+  const [assignOwner, setAssignOwner] = useState('')
+  const [mutationError, setMutationError] = useState('')
+  const [mutationBusy, setMutationBusy] = useState(false)
+
+  const mutateTask = async (url: string, body: unknown) => {
+    setMutationBusy(true)
+    setMutationError('')
+    try {
+      const response = await fetch(makeApiUrl(url), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Task operation failed.')
+      setRefresh(value => value + 1)
+      return data
+    } catch (cause) {
+      setMutationError(cause instanceof Error ? cause.message : 'Task operation failed.')
+      return null
+    } finally { setMutationBusy(false) }
+  }
+
+  const createTask = async () => {
+    if (!createTitle.trim()) return
+    const result = await mutateTask('/tasks', { title: createTitle.trim(), description: createDescription || undefined })
+    if (result) { setCreateTitle(''); setCreateDescription(''); setShowCreate(false) }
+  }
+
+  const submitComment = async () => {
+    if (!selectedId || !comment.trim()) return
+    const result = await mutateTask(`/tasks/${encodeURIComponent(selectedId)}/comments`, { note: comment.trim() })
+    if (result) { setComment(''); setDetails(previous => previous ? { ...previous, task: result.task || previous.task } : previous) }
+  }
+
+  const submitAssignment = async () => {
+    if (!selectedId) return
+    const result = await mutateTask(`/tasks/${encodeURIComponent(selectedId)}/assign`, { ownerSessionId: assignOwner || null })
+    if (result?.task) setDetails(previous => previous ? { ...previous, task: result.task } : previous)
+  }
 
   useEffect(() => {
     const handleResize = () => setIsNarrow(window.innerWidth < 1024)
@@ -126,6 +167,7 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
         {(['table', 'board'] as const).map(mode => <button key={mode} type="button" aria-pressed={view === mode} onClick={() => setView(mode)} className={`${buttonClass} ${view === mode ? 'bg-fw-accent-surface text-fw-accent' : ''}`}>{mode === 'table' ? 'Table' : 'Board'}</button>)}
       </div>
       <button type="button" className={buttonClass} disabled={loading || (detailsLoading && !!selectedId)} onClick={() => setRefresh(value => value + 1)}>Refresh</button>
+      <button type="button" className={buttonClass} onClick={() => setShowCreate(value => !value)}><Plus className="mr-1 inline h-3.5 w-3.5" />Create task</button>
       <div className="flex min-w-0 basis-full flex-wrap items-center gap-2 border-t border-fw-border pt-3 sm:basis-auto sm:border-t-0 sm:pt-0" data-task-filters>
         <label className="flex items-center gap-2 text-xs text-fw-text-muted" htmlFor="task-agent-filter">
           <span className="whitespace-nowrap">Agent</span>
@@ -142,6 +184,12 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
         </label>
       </div>
     </header>
+    {showCreate && <form className="flex shrink-0 flex-wrap gap-2 border-b border-fw-border bg-fw-surface p-3" onSubmit={event => { event.preventDefault(); void createTask() }}>
+      <input aria-label="Task title" value={createTitle} onChange={event => setCreateTitle(event.target.value)} placeholder="Task title" maxLength={200} className="min-w-56 flex-1 rounded border border-fw-border bg-fw-canvas px-2 py-1.5 text-sm" />
+      <input aria-label="Task description" value={createDescription} onChange={event => setCreateDescription(event.target.value)} placeholder="Description (optional)" maxLength={20000} className="min-w-56 flex-[2] rounded border border-fw-border bg-fw-canvas px-2 py-1.5 text-sm" />
+      <button type="submit" disabled={mutationBusy || !createTitle.trim()} className={buttonClass}>Create</button>
+    </form>}
+    {mutationError && <p role="alert" className="border-b border-fw-border bg-fw-surface px-3 py-2 text-xs text-fw-danger">{mutationError}</p>}
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto lg:flex-row lg:overflow-hidden">
       <div className="min-w-0 shrink-0 overflow-x-auto p-3 lg:min-h-0 lg:flex-1 lg:overflow-auto">
         {loading ? <p role="status" className="text-sm text-fw-text-muted">Loading tasks…</p>
@@ -203,9 +251,11 @@ export default function TasksView({ onBack }: { onBack?: () => void }) {
             {details.children.length === 0 ? <p className="text-xs text-fw-text-muted">No child tasks</p> : <ul className="space-y-2">{details.children.map(child => <li key={child.id}><button type="button" onClick={() => setSelectedId(child.id)} className="break-words text-left text-sm text-fw-accent hover:underline">{child.title}</button><span className="ml-2 text-xs text-fw-text-muted">{STATUS_LABELS[child.status]}</span></li>)}</ul>}
             {details.childrenOmitted > 0 && <p className="mt-2 text-xs text-fw-text-muted">{details.childrenOmitted} more child tasks</p>}
             <h4 className="mb-2 mt-5 text-sm font-semibold">Notes</h4>
+            <div className="mb-3 flex gap-2"><input aria-label="Task comment" value={comment} onChange={event => setComment(event.target.value)} placeholder="Add a comment" maxLength={1000} className="min-w-0 flex-1 rounded border border-fw-border bg-fw-canvas px-2 py-1.5 text-sm" /><button type="button" disabled={mutationBusy || !comment.trim()} className={buttonClass} onClick={() => void submitComment()} title="Add comment"><Send className="h-3.5 w-3.5" /></button></div>
+            <div className="mb-3 flex items-center gap-2"><UserRound className="h-3.5 w-3.5 text-fw-text-muted" /><select aria-label="Task owner" value={assignOwner} onChange={event => setAssignOwner(event.target.value)} className="min-w-0 flex-1 rounded border border-fw-border bg-fw-canvas px-2 py-1.5 text-sm"><option value="">Unassigned</option>{tasks.flatMap(task => [task.ownerSessionId, task.createdBySessionId]).filter((id, index, all): id is string => !!id && all.indexOf(id) === index).map(id => <option key={id} value={id}>{id}</option>)}</select><button type="button" disabled={mutationBusy} className={buttonClass} onClick={() => void submitAssignment()}>Assign</button></div>
             {details.notes.length === 0 ? <p className="text-xs text-fw-text-muted">No notes</p> : <ul className="space-y-3">{details.notes.map((note, index) => <li key={index} className="rounded border border-fw-border p-2">
               <p className="whitespace-pre-wrap break-words text-sm [overflow-wrap:anywhere]">{note.text}</p>
-              <p className="mt-2 break-all text-xs text-fw-text-muted">{note.sessionId} · {formatTime(note.createdAt)}</p>
+              <p className="mt-2 break-all text-xs text-fw-text-muted">{note.authorKind === 'user' ? 'User' : note.sessionId || 'Session'} · {formatTime(note.createdAt)}</p>
             </li>)}</ul>}
             {details.notesOmitted > 0 && <p className="mt-2 text-xs text-fw-text-muted">{details.notesOmitted} more notes</p>}
           </>}

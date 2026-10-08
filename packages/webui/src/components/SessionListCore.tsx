@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, List, GitBranch, Server } from 'lucide-react'
+import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, List, GitBranch, Server, Copy } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
@@ -1413,6 +1413,12 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         icon: <Pencil size={14} />,
         label: 'Rename',
         onSelect: () => openRenameDialog(contextMenu.sessionId),
+      },
+      {
+        key: 'copy-id',
+        icon: <Copy size={14} />,
+        label: 'Copy ID',
+        onSelect: () => { void navigator.clipboard?.writeText(contextMenu.sessionId) },
       },
       {
         key: 'archive',
