@@ -111,6 +111,30 @@ rules:
   assert.equal(remote.action, 'deny');
 });
 
+test('Agent path tokens use the same canonical master path in policy facts and copy legs', async () => {
+  const root = getAgentDir('main');
+  const dir = path.join(root, 'tmp', `policy-token-${Date.now()}`);
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'policy-token-outside-'));
+  await fs.ensureDir(dir);
+  await fs.symlink(outside, path.join(dir, 'outside'), 'dir');
+  const session = { id: 'main/path-token', agent: 'main', cwd: outside };
+  try {
+    const policy = parseToolAuthorizationPolicyBytes(`version: 1\ndefaultAction: deny\nrules:\n- id: allowed-agent-tmp\n  match: { tool: read, path: { arg: filePath, allWithin: "${root}/tmp" } }\n  action: allow\n`);
+    setToolAuthorizationPolicyForTests(policy);
+    const allowed = buildToolAuthorizationRequest({ session, tool: { source: 'node', name: 'read' }, targetNode: 'master', args: { filePath: `$fw_tmp/${path.basename(dir)}/inside.txt` } });
+    assert.equal(allowed.paths[0].resolved, path.join(dir, 'inside.txt'));
+    assert.equal((await evaluateToolAuthorization(allowed)).action, 'allow');
+    const denied = buildToolAuthorizationRequest({ session, tool: { source: 'node', name: 'read' }, targetNode: 'master', args: { filePath: `$fw_tmp/${path.basename(dir)}/outside/new.txt` } });
+    assert.equal((await evaluateToolAuthorization(denied)).action, 'deny');
+    assert.equal(denied.paths[0].resolved, path.join(outside, 'new.txt'));
+    const copy = buildToolAuthorizationRequest({ session, tool: { source: 'builtin', name: 'copy_between_nodes' },
+      args: { sourceNode: 'master', sourcePath: `$fw_tmp/${path.basename(dir)}/inside.txt`, targetNode: 'remote-a', targetPath: '$fw_tmp/remote.txt' } });
+    assert.equal(copy.paths[0].resolved, path.join(dir, 'inside.txt'));
+    assert.equal(copy.paths[1].resolved, undefined, 'Core cannot resolve another Node against Main root');
+    assert.throws(() => buildToolAuthorizationRequest({ session, tool: { source: 'node', name: 'read' }, args: { filePath: '$OTHER/file' } }), /Unknown Agent path variable/);
+  } finally { await fs.remove(dir); await fs.remove(outside); }
+});
+
 
 test('visibility preserves ordered definite decisions and keeps conditional possible allows discoverable', () => {
   const session: any = { id: 'plain/main', agent: 'plain', currentNode: 'master' };
@@ -368,6 +392,62 @@ rules:
   assert.equal(evaluateToolAuthorizationSync(buildToolAuthorizationRequest({ session, tool: { source: 'builtin', name: 'wait' } })).action, 'allow');
 });
 
+test('generic policy deny covers session parent updates through direct and unified callers', async () => {
+  setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
+version: 1
+defaultAction: allow
+rules:
+- id: deny-session-management
+  match: { agent: plain, tool: { source: builtin, name: session } }
+  action: deny
+`));
+  const session: any = { id: 'plain/session-parent-policy', agent: 'plain', currentNode: 'master' };
+  const ctx: any = { sessionId: session.id, session };
+  await assert.rejects(
+    () => tools.callTool('session', { action: 'update-parent', parentSessionId: null }, ctx),
+    /denies builtin capability/i,
+  );
+  await assert.rejects(
+    () => tools.call_tool({ source: 'builtin', name: 'session', args: { action: 'update-parent', parentSessionId: null } }, ctx),
+    /denies builtin capability/i,
+  );
+});
+
+test('isolated session status stays owner-local while parent updates retain the existing boundary', async () => {
+  await sessionManager.loadSessions();
+  const agentName = `isolated_status_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const sessionId = `${agentName}/main`;
+  const sessionAlias = `${agentName}/alias`;
+  const targetId = `${agentName}/other`;
+  const session = await sessionManager.getSession(sessionId);
+  await sessionManager.getSession(targetId);
+  session.agent = agentName;
+  session.aliases = [sessionAlias];
+  await sessionManager.saveSession(sessionId);
+  await sessionManager.setAgentMetadata(agentName, { isolated: true, isolatedNode: 'remote-a', toolRules: [] });
+  const ctx: any = { sessionId, session };
+  try {
+    assert.match(String(await tools.callTool('session', { action: 'status' }, ctx)), new RegExp(sessionId));
+    assert.match(String(await tools.callTool('session', { action: 'status', sessionId: sessionAlias }, ctx)), new RegExp(sessionId));
+    await assert.rejects(
+      () => tools.callTool('session', { action: 'status', sessionId: targetId }, ctx),
+      /only use session status for its current session/i,
+    );
+    await assert.rejects(
+      () => tools.call_tool({ source: 'builtin', name: 'session', args: { action: 'status', sessionId: targetId } }, ctx),
+      /only use session status for its current session/i,
+    );
+    await assert.rejects(
+      () => tools.callTool('session', { action: 'update-parent', parentSessionId: null }, ctx),
+      /cannot use builtin capability `session`|isolated session cannot use session parent update/i,
+    );
+  } finally {
+    await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
+    await sessionManager.deleteSession(targetId).catch(() => {});
+    await sessionManager.deleteSession(sessionId).catch(() => {});
+  }
+});
+
 test('direct and unified Node calls share the same generic resolved identity', async () => {
   setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
 version: 1
@@ -468,7 +548,7 @@ test('policy unavailability preserves paired tool responses and requests a fatal
   let starts = 0;
   const message: any = await executeTools([
     { id: 'fatal-call', name: 'wait', args: { waitForInput: true } },
-    { id: 'skipped-call', name: 'set_goal', args: { goal: 'must not run' } },
+    { id: 'skipped-call', name: 'task', args: { action: 'create', title: 'must not run' } },
   ], { sessionId: session.id, session, onToolStart: () => { starts += 1; } }, session, {
     currentSessionEffects: {
       placement: 'local',

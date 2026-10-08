@@ -49,6 +49,17 @@ test('worker direct, unified, and ToolScript node dispatch retain exact owner wi
     assert.match(String(await tool_call_tool({ source: 'node', name: 'read', args: { filePath } }, ctx)), /exact-owner/);
     const script = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="node", name="read", args={"filePath": args["path"]})', args: { path: filePath } }, ctx);
     assert.match(JSON.stringify(script.result), /exact-owner/);
+    const scriptMessage = await executeTools([{ id: 'worker-script', name: 'call_tool', args: {
+      toolId: 'builtin:run_script', args: {
+        code: 'def main(args):\n    value = call_tool("read", {"filePath": args["path"]})\n    return len(value["content"])',
+        args: { path: filePath },
+      },
+    } }], { sessionId: session.id }, session, { currentSessionEffects: effects });
+    const scriptResponse = scriptMessage.parts[0].functionResponse!;
+    assert.equal(scriptResponse.response.status, 'completed');
+    assert.equal(scriptResponse.response.result, 'exact-owner'.length);
+    assert.deepEqual(Object.keys(scriptResponse.response).sort(), ['result', 'runId', 'status']);
+    assert.deepEqual(scriptResponse.__meta?.toolScriptSubCalls?.map(call => call.name), ['read']);
     assert.match(String(await callTool('get_archived_messages', { sessionId: session.id }, ctx)), /No archived messages/);
     assert.match(String(await callTool('get_archived_blocks', { sessionId: session.id }, ctx)), /No archived blocks/);
     assert.deepEqual(await catalogBytes(), before);
@@ -196,7 +207,7 @@ test('worker guards run before unsupported handlers and exact current state tool
   assert.match(String(await callTool('compact_session', {}, ctx)), /cannot start background compaction from a busy model tool call/);
   await assert.rejects(() => callTool('compact_session', { sessionId: 'other/session' }, ctx), /exact current session/);
   assert.match(String(await callTool('session', { action: 'status' }, ctx)), new RegExp(session.id));
-  assert.match(String(await callTool('set_goal', { goal: 'stay exact' }, ctx)), /ok/);
+  assert.match(String(await callTool('set_session_compact_threshold', { thresholdTokens: 12345 }, ctx)), /12345/);
   assert.match(String(await callTool('refresh_session_snapshot', {}, ctx)), /snapshot refreshed/);
   assert.match(String(await callTool('wait', { reason: 'pause', waitForInput: true }, ctx)), /object Object|stopCurrentTurn/);
   assert.match(String(await callTool('stop_session', { sessionId: session.id }, ctx)), /Stop signal set/);

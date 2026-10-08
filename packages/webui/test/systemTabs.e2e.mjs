@@ -13,7 +13,7 @@ let authToken
 let modelListRequestCount = 0
 
 async function waitForSystemTab(tabId, heading) {
-  await page.waitForSelector(`[data-tab-id=${JSON.stringify(tabId)}]`, { timeout: 15_000 })
+  await page.waitForSelector(`[data-tab-id=${JSON.stringify(tabId)}], [data-workbench-tab-handle=${JSON.stringify(tabId)}]`, { timeout: 15_000 })
   await page.waitForFunction((expected) => {
     if (expected === 'Agents') {
       return Array.from(document.querySelectorAll('h1')).some((element) => element.textContent?.trim() === 'System Architecture')
@@ -23,8 +23,8 @@ async function waitForSystemTab(tabId, heading) {
 }
 
 async function closeTab(tabId) {
-  await page.click(`[data-tab-id=${JSON.stringify(tabId)}] button[title="Close tab"]`)
-  await page.waitForFunction((id) => !document.querySelector(`[data-tab-id="${CSS.escape(id)}"]`), { timeout: 5_000 }, tabId)
+  await page.click(`[data-tab-id=${JSON.stringify(tabId)}] button[title="Close tab"], [data-workbench-tab-close=${JSON.stringify(tabId)}]`)
+  await page.waitForFunction((id) => !JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById[id], { timeout: 5_000 }, tabId)
   await new Promise((resolve) => setTimeout(resolve, 100))
   assert.equal(await page.$(`[data-tab-id=${JSON.stringify(tabId)}]`), null)
 }
@@ -299,13 +299,14 @@ test('forced OOBE Setup still rejects workbench close requests', async () => {
 
   try {
     await forcedPage.goto(`${baseUrl}/#token=${encodeURIComponent(authToken)}`, { waitUntil: 'networkidle2' })
-    await forcedPage.waitForSelector('[data-tab-id="system:setup"]', { timeout: 15_000 })
+    const closeSelector = '[data-tab-id="system:setup"] button[title="Close tab"], [data-workbench-tab-close="system:setup"]'
+    await forcedPage.waitForSelector(closeSelector, { timeout: 15_000 })
     await forcedPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm first-time setup'), { timeout: 15_000 })
     await forcedPage.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"][data-editor-ready="true"]', { timeout: 15_000 })
     assert.equal(await forcedPage.$('button::-p-text(Form)'), null)
-    await forcedPage.click('[data-tab-id="system:setup"] button[title="Close tab"]')
+    await forcedPage.click(closeSelector)
     await new Promise((resolve) => setTimeout(resolve, 150))
-    assert.ok(await forcedPage.$('[data-tab-id="system:setup"]'))
+    assert.ok(await forcedPage.$(closeSelector))
   } finally {
     await forcedPage.close()
   }

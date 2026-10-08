@@ -21,15 +21,16 @@ async function buildFixtureBundle() {
     import GlobalUiSettingsMenu from ${JSON.stringify(componentEntry)}
 
     import Sidebar from ${JSON.stringify(new URL('../src/components/Sidebar.tsx', import.meta.url).pathname)}
+    import SessionList from ${JSON.stringify(new URL('../src/components/SessionList.tsx', import.meta.url).pathname)}
 
     function SidebarFixture() {
       const [view, setView] = useState('session')
       const noop = () => {}
       return React.createElement('div', { style: { width: 'min(340px, 100vw)', height: '100dvh' } },
-        React.createElement(Sidebar, {
+        React.createElement(location.search === '?mobile-list' ? SessionList : Sidebar, {
           sessions: Array.from({ length: 50 }, (_, i) => ({ id: 'demo/s' + i, displayName: 'Session ' + i, messageCount: 2, lastMessageTime: 100-i, parentSessionId: null })),
           agents: [], currentSession: 'demo/s0', currentView: view,
-          onSelectSession: noop, onSelectArchitecture: noop, onSelectSetup: () => setView('setup'),
+          onSelectSession: noop, onSelectArchitecture: noop, onSelectSearch: noop, onSelectSetup: () => setView('setup'), onSelectLogs: () => setView('logs'),
           codePath: '/', codeNodeId: 'master', codeOpenInNewWindow: false, codeActive: false,
           nodeTargets: [], onRefreshNodeTargets: noop, onOpenCode: noop, onCodeNodeChange: noop,
           onCodePathChange: noop, onCodeOpenInNewWindowChange: noop, onCreateTerminalTab: noop,
@@ -56,13 +57,14 @@ async function buildFixtureBundle() {
           React.createElement(GlobalUiSettingsMenu, {
             menuAlign: align,
             onOpenSetup() {},
+            onOpenLogs() {},
           })
         ),
         React.createElement('button', { id: 'outside', type: 'button' }, 'Outside')
       )
     }
 
-    createRoot(document.getElementById('root')).render(React.createElement(location.search === '?sidebar' ? SidebarFixture : Fixture))
+    createRoot(document.getElementById('root')).render(React.createElement(location.search === '?sidebar' || location.search === '?mobile-list' ? SidebarFixture : Fixture))
   `
   const result = await build({
     stdin: { contents: source, resolveDir: new URL('..', import.meta.url).pathname, sourcefile: 'settings-menu-position-fixture.tsx' },
@@ -250,6 +252,8 @@ test('sidebar Settings lives in a fixed footer and opens upward on desktop and t
     await page.goto(fixtureUrl + '?sidebar', { waitUntil: 'load' })
     const trigger = '[data-sidebar-footer] button[aria-label="Open UI settings"]'
     await page.waitForSelector(trigger)
+    assert.deepEqual(await page.$$eval('[data-sidebar-footer] button', buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Search history', 'Open UI settings'])
+    assert.equal(await page.$$eval('button[title="Search history"]', buttons => buttons.length), 1)
     assert.equal(await page.$$eval('button[aria-label="Open UI settings"]', els => els.length), 1)
     const topBefore = await page.$eval(trigger, e => e.getBoundingClientRect().top)
     await page.$eval('[data-session-list-scroll-container]', e => { e.scrollTop = e.scrollHeight })
@@ -260,7 +264,7 @@ test('sidebar Settings lives in a fixed footer and opens upward on desktop and t
     await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-global-ui-settings-menu]')).visibility === 'visible')
     const geometry = await page.evaluate(() => {
       const menu = document.querySelector('[data-global-ui-settings-menu]').getBoundingClientRect()
-      const trigger = document.querySelector('[data-sidebar-footer] button').getBoundingClientRect()
+      const trigger = document.querySelector('[data-sidebar-footer] button[aria-label="Open UI settings"]').getBoundingClientRect()
       return { top: menu.top, bottom: menu.bottom, left: menu.left, right: menu.right, triggerTop: trigger.top, triggerBottom: trigger.bottom, height: innerHeight, width: innerWidth }
     })
     assert.ok(geometry.top >= 7.5 && geometry.bottom < geometry.triggerTop)
@@ -274,11 +278,12 @@ test('sidebar Settings lives in a fixed footer and opens upward on desktop and t
     if (mobile) await page.tap(trigger)
     else await page.click(trigger)
     await page.waitForSelector('[data-global-ui-settings-menu]')
-    await page.$$eval('[data-global-ui-settings-menu] button', buttons => buttons.find(e => e.textContent.includes('WebUI: Open setup')).click())
+    await page.$$eval('[data-global-ui-settings-menu] button', buttons => buttons.find(e => e.textContent.includes('Open setup')).click())
     assert.equal(await page.$eval(trigger, e => e.getAttribute('aria-pressed')), 'true')
     await page.click(trigger)
     assert.ok(await page.$('[data-global-ui-settings-menu]'))
-    assert.equal(await page.$$eval('[data-global-ui-settings-menu] button', buttons => buttons.some(e => e.textContent.includes('WebUI: reload'))), true)
+    assert.equal(await page.$$eval('[data-global-ui-settings-menu] button', buttons => buttons.some(e => e.textContent.includes('Reload WebUI'))), true)
+    assert.equal(await page.$$eval('[data-global-ui-settings-menu] button', buttons => buttons.some(e => e.textContent.trim() === 'Open logs')), true)
     await page.$$eval('[data-global-ui-settings-menu] button', buttons => buttons.find(e => e.textContent === 'dark').click())
     assert.equal(await page.$('[data-global-ui-settings-menu]'), null)
     assert.equal(await page.evaluate(() => document.documentElement.classList.contains('dark')), true)
@@ -286,4 +291,21 @@ test('sidebar Settings lives in a fixed footer and opens upward on desktop and t
     await page.click('h1')
     assert.equal(await page.$('[data-global-ui-settings-menu]'), null)
   }
+})
+
+test('mobile Session-list footer settings menu opens above its trigger inside the viewport', async () => {
+  await page.setViewport({ width: 320, height: 480, isMobile: true, hasTouch: true })
+  await page.goto(fixtureUrl + '?mobile-list', { waitUntil: 'load' })
+  const trigger = '[data-sidebar-footer] button[aria-label="Open UI settings"]'
+  await page.waitForSelector(trigger)
+  assert.deepEqual(await page.$$eval('[data-sidebar-footer] button', buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Search history', 'Open UI settings'])
+  await page.click(trigger)
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-global-ui-settings-menu]')).visibility === 'visible')
+  const geometry = await page.evaluate(() => {
+    const menu = document.querySelector('[data-global-ui-settings-menu]').getBoundingClientRect()
+    const trigger = document.querySelector('[data-sidebar-footer] button[aria-label="Open UI settings"]').getBoundingClientRect()
+    return { menuTop: menu.top, menuBottom: menu.bottom, menuLeft: menu.left, menuRight: menu.right, triggerTop: trigger.top, width: innerWidth }
+  })
+  assert.ok(geometry.menuTop >= 7.5 && geometry.menuBottom < geometry.triggerTop, JSON.stringify(geometry))
+  assert.ok(geometry.menuLeft >= 7.5 && geometry.menuRight <= geometry.width - 7.5, JSON.stringify(geometry))
 })

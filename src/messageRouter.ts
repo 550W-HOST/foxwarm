@@ -385,7 +385,20 @@ export class MessageRouter {
       return;
     }
 
-    const { sessionId, session } = resolvedSession || await this.resolveSessionForIncomingMessage(ctx);
+    let target: { sessionId: string; session: Session };
+    try {
+      target = resolvedSession || await this.resolveSessionForIncomingMessage(ctx);
+    } catch (error: any) {
+      const messageText = error instanceof Error ? error.message : String(error);
+      logger.error({ err: error, channelId: getChannelId(ctx), conversationId: getConversationId(ctx) }, 'Failed to resolve channel target session');
+      try {
+        await ctx.reply(messageText, { turnFinal: true });
+      } catch (replyError) {
+        logger.error({ err: replyError, channelId: getChannelId(ctx), conversationId: getConversationId(ctx) }, 'Failed to report unavailable channel target session');
+      }
+      return;
+    }
+    const { sessionId, session } = target;
 
     let routedMessage = message;
     if (authorizedAtIngress && message.materializeParts) {

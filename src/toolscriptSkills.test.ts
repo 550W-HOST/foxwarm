@@ -27,11 +27,8 @@ test('global ToolScript skills are visible and loadable', async () => {
   assert.match(automationText, /mode:\s*["']background["']/);
   assert.doesNotMatch(automationText, /start_toolscript_run/);
   assert.match(automationText, /call_tool\(/);
-  assert.match(automationText, /Every ToolScript defines `main\(args\)`/);
-  assert.match(automationText, /helpers may be defined before or after `main\(args\)`/i);
   assert.match(automationText, /operations that ask the host for files, environment, working-directory, clock, or process state are rejected/i);
   assert.doesNotMatch(automationText, /200,000 allocations/i);
-  assert.doesNotMatch(automationText, /should now|\blegacy\b|\bformerly\b|\bstill\b/i);
 
   const automationExample = await fs.readFile(
     path.join(__dirname, '..', 'examples', 'toolscript', 'automation_basic.py'),
@@ -111,13 +108,13 @@ test('bundled code-index ToolScript starts under the locked Monty runtime', asyn
     assert.equal(progress.args[0], 'exec');
     assert.equal((progress.args[1] as Map<string, unknown>)?.get('command'), 'pwd -P');
 
-    progress = await progress.resume('/workspace\n');
+    progress = await progress.resume({ content: '/workspace\n', truncated: false, status: 'completed' });
     assert.ok(progress instanceof FunctionSnapshot);
     assert.equal(progress.functionName, 'call_tool');
     assert.equal(progress.args[0], 'exec');
     assert.match(String((progress.args[1] as Map<string, unknown>)?.get('command')), /\$HOME/);
 
-    progress = await progress.resume('/home/toolscript\n');
+    progress = await progress.resume({ content: '/home/toolscript\n', truncated: false, status: 'completed' });
     assert.ok(progress instanceof FunctionSnapshot);
     assert.equal(progress.functionName, 'call_tool');
     assert.equal(progress.args[0], 'exec');

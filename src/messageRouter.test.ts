@@ -76,6 +76,33 @@ test('shouldBroadcastChannelText accepts non-empty trimmed text', () => {
   assert.equal(shouldBroadcastChannelText('\nhello\n'), true);
 });
 
+test('MessageRouter reports a missing attached target without creating a replacement session', async () => {
+  await sessionManager.loadSessions();
+  const channelId = makeRouterQueueTestId('missing_target_channel');
+  const conversationId = makeRouterQueueTestId('missing_target_conversation');
+  const missingSessionId = makeRouterQueueTestId('missing_target_session');
+  sessionManager.attachChannel(channelId, conversationId, missingSessionId);
+  const replies: string[] = [];
+  const router = new MessageRouter([{ platform: channelId, userId: 'bot' }]);
+
+  try {
+    await router.handleMessage({
+      channelId,
+      channelType: 'telegram',
+      platform: 'telegram',
+      channelUserId: conversationId,
+      conversationId,
+      senderId: 'bot',
+      reply: async text => { replies.push(text); },
+      sendTyping: async () => {},
+    }, { parts: [{ text: 'hello' }], channelUserId: conversationId, conversationId });
+    assert.deepEqual(replies, [`Attached channel target session "${missingSessionId}" is unavailable. Rebind this conversation to an existing session.`]);
+    assert.equal(sessionManager.getAllSessions().has(missingSessionId), false);
+  } finally {
+    sessionManager.detachChannel(channelId, conversationId);
+  }
+});
+
 test('MessageRouter materializes deferred channel media only after canonical authorization', async () => {
   const originalEnqueue = sessionManager.enqueueSessionItem;
   const router = new MessageRouter() as any;
@@ -182,21 +209,24 @@ test('MessageRouter top-level queue drain persists user and intersession inputs 
   }
 });
 
-test('MessageRouter outer owner sequences compact then turn then trailing compact under one claim', async () => {
+test('MessageRouter applies ready compaction before one ordinary batch across wake markers', async () => {
   const router = new MessageRouter() as any;
   const session = await createRouterQueueTestSession('top_level_queue_compact_boundary');
   const originalChat = llm.chat;
   const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
+  const originalHasCompletedCompactJob = sessionManager.hasCompletedCompactJob;
+  (sessionManager as any).hasCompletedCompactJob = () => session.queue.some(item => item.type === 'compact-commit');
   let compactApplies = 0;
   session.queue.push(
-    { type: 'compact-commit' },
     { type: 'user', parts: [{ text: 'queued before compact commit' }] },
+    { type: 'compact-commit' },
+    { type: 'background', parts: [{ text: 'queued after compact marker' }] },
     { type: 'compact-commit' },
   );
 
   (sessionManager as any).applyCompletedCompactJob = async () => {
     compactApplies += 1;
-    assert.equal(userTextOccurrences(session, 'queued before compact commit'), compactApplies === 1 ? 0 : 1);
+    assert.equal(userTextOccurrences(session, 'queued before compact commit'), 0);
     await sessionManager.appendSessionMessage(session, { role: 'user', parts: [{ system: `compact commit ${compactApplies} applied` }] });
     return true;
   };
@@ -204,6 +234,8 @@ test('MessageRouter outer owner sequences compact then turn then trailing compac
     assert.equal(compactApplies, 1);
     assert.equal(parts, null);
     assert.equal(userTextOccurrences(activeSession, 'queued before compact commit'), 1);
+    assert.equal(userTextOccurrences(activeSession, 'queued after compact marker'), 1);
+    assert.deepEqual(activeSession.history.slice(1).map(message => message.parts[0].text), ['queued before compact commit', 'queued after compact marker']);
     await appendMockChatMessages(activeSession, parts, [{ text: 'handled after compact commit' }]);
     return { text: 'handled after compact commit', allParts: [{ text: 'handled after compact commit' }] };
   };
@@ -211,12 +243,14 @@ test('MessageRouter outer owner sequences compact then turn then trailing compac
   try {
     await processOwnedTestQueue(router, session);
 
-    assert.equal(compactApplies, 2);
+    assert.equal(compactApplies, 1);
+    assert.equal(userTextOccurrences(session, 'queued after compact marker'), 1);
     assert.equal(userTextOccurrences(session, 'queued before compact commit'), 1);
     assert.equal(session.queue.length, 0);
   } finally {
     (llm as any).chat = originalChat;
     (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
+    (sessionManager as any).hasCompletedCompactJob = originalHasCompletedCompactJob;
     sessionManager.clearActiveSessionRuntimeState(session.id);
     await sessionManager.deleteSession(session.id).catch(() => {});
   }
@@ -504,6 +538,8 @@ test('MessageRouter applies pending auto-compaction before a late compatible fol
   const originalChat = llm.chat;
   const originalProcessSessionCompactionRequest = sessionManager.processSessionCompactionRequest;
   const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
+  const originalHasCompletedCompactJob = sessionManager.hasCompletedCompactJob;
+  (sessionManager as any).hasCompletedCompactJob = () => session.queue.some(item => item.type === 'compact-commit');
   const source: any = { platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-a', channelUserId: 'c2c:user-a', qqbotMessageId: 'qq-1' };
   let chatCalls = 0;
   let compactRequests = 0;
@@ -546,6 +582,7 @@ test('MessageRouter applies pending auto-compaction before a late compatible fol
     (llm as any).chat = originalChat;
     (sessionManager as any).processSessionCompactionRequest = originalProcessSessionCompactionRequest;
     (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
+    (sessionManager as any).hasCompletedCompactJob = originalHasCompletedCompactJob;
     sessionManager.clearActiveSessionRuntimeState(session.id);
     await sessionManager.deleteSession(session.id).catch(() => {});
   }
@@ -893,7 +930,7 @@ test('exact turn owner rejects continuation after a completed model answer follo
       role: 'user',
       parts: [
         { system: '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="none" currentSessionId="fixture/main" />' },
-        { system: '<foxwarm-system kind="goal-reminder">\nFinish the requested work\nKeep this long-term goal in mind when deciding what to do next.\n</foxwarm-system>' },
+        { system: '<foxwarm-system kind="goal-reminder" hint="Keep this long-term goal in mind when deciding what to do next.">\nFinish the requested work\n</foxwarm-system>' },
       ],
       __meta: { goalReminder: true, goalReminderKind: 'compact-completion' },
     },
@@ -1044,7 +1081,7 @@ test('busy async compaction starts snapshot planning directly without a compact 
   const originalProcessSessionCompactionRequest = sessionHistory.processSessionCompactionRequest;
   const modes: string[] = [];
   session.busy = true;
-  session.queue.push({ type: 'user', parts: [{ text: 'ordinary queued content' }] });
+  session.queue.push({ type: 'user', parts: [{ text: 'ordinary queued content' }] }, { type: 'compact-commit' });
   await sessionManager.saveSession(session.id);
   (sessionHistory as any).isAsyncCompactEnabled = () => true;
   (sessionHistory as any).processSessionCompactionRequest = async (_deps: any, _sessionId: string, _item: any, mode: string) => {
@@ -1058,10 +1095,82 @@ test('busy async compaction starts snapshot planning directly without a compact 
     assert.equal(result.runsInBackground, true);
     assert.equal(result.backgroundUnavailable, undefined);
     assert.deepEqual(modes, ['background']);
-    assert.deepEqual(session.queue.map(item => item.type), ['user']);
+    assert.deepEqual(session.queue.map(item => item.type), ['user', 'compact-commit']);
   } finally {
     (sessionHistory as any).isAsyncCompactEnabled = originalIsAsyncCompactEnabled;
     (sessionHistory as any).processSessionCompactionRequest = originalProcessSessionCompactionRequest;
+    session.busy = false;
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
+test('manual compact admission uses actual pending work rather than stale wake signals', async () => {
+  const session = await createRouterQueueTestSession('manual_compact_actual_admission');
+  await sessionManager.appendSessionMessages(session, [
+    { role: 'user', parts: [{ text: 'older user context '.repeat(2000) }] },
+    { role: 'model', parts: [{ text: 'older model context '.repeat(2000) }] },
+    { role: 'user', parts: [{ text: 'recent user context' }] },
+    { role: 'model', parts: [{ text: 'recent model context' }] },
+  ]);
+  const originalIsAsync = sessionHistory.isAsyncCompactEnabled;
+  const originalChat = llm.chat;
+  let releasePlanning = () => {};
+  let providerCalls = 0;
+  try {
+    for (const asyncEnabled of [true, false]) {
+      let enteredPlanning!: () => void;
+      const entered = new Promise<void>(resolve => { enteredPlanning = resolve; });
+      const release = new Promise<void>(resolve => { releasePlanning = resolve; });
+      (sessionHistory as any).isAsyncCompactEnabled = () => asyncEnabled;
+      (llm as any).chat = async (_parts: any, _owner: Session, _iteration: number, options: any) => {
+        providerCalls += 1;
+        enteredPlanning();
+        await release;
+        const toolCall = { id: 'manual-compact-admission', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
+          level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'manual compaction admitted',
+        }] } };
+        await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+        return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+      };
+      session.queue.push({ type: 'compact-commit' });
+      const admitted = await sessionManager.requestSessionCompaction(session.id, { keepPercent: 0.5 });
+      assert.equal(admitted.alreadyQueued, false);
+      assert.equal(admitted.startedImmediately, true);
+      assert.equal(admitted.runsInBackground, asyncEnabled);
+      await entered;
+      assert.equal(sessionHistory.hasPendingCompactWork(session.id), asyncEnabled);
+      assert.equal(sessionHistory.getCompactOperationPhase(session.id), 'planning');
+      const duplicate = await sessionManager.requestSessionCompaction(session.id);
+      assert.equal(duplicate.alreadyQueued, true, 'both background jobs and awaited operations block duplicate admission');
+      assert.equal(duplicate.startedImmediately, false);
+      releasePlanning();
+      if (asyncEnabled) {
+        for (let index = 0; index < 100 && !sessionHistory.hasCompletedCompactJob(session.id); index += 1) {
+          await new Promise(resolve => setTimeout(resolve, 5));
+        }
+        assert.equal(sessionHistory.hasCompletedCompactJob(session.id), true);
+        await sessionManager.cancelSessionCompaction(session.id);
+      } else {
+        for (let index = 0; index < 100 && session.busy; index += 1) {
+          await new Promise(resolve => setTimeout(resolve, 5));
+        }
+        assert.equal(session.busy, false, 'standalone awaited compaction keeps its ordinary durable release');
+        assert.equal(sessionHistory.getCompactOperationPhase(session.id), undefined);
+      }
+    }
+    assert.equal(providerCalls, 2);
+    session.queue.push({ type: 'user', parts: [{ text: 'ordinary queued work still blocks idle awaited compaction' }] });
+    const unavailable = await sessionManager.requestSessionCompaction(session.id);
+    assert.equal(unavailable.alreadyQueued, false);
+    assert.equal(unavailable.backgroundUnavailable, true);
+    assert.equal(unavailable.startedImmediately, false);
+    assert.equal(providerCalls, 2);
+    assert(session.queue.some(item => item.type === 'user'));
+  } finally {
+    releasePlanning();
+    (llm as any).chat = originalChat;
+    (sessionHistory as any).isAsyncCompactEnabled = originalIsAsync;
+    await sessionManager.cancelSessionCompaction(session.id).catch(() => {});
     session.busy = false;
     await sessionManager.deleteSession(session.id).catch(() => {});
   }
@@ -1166,6 +1275,8 @@ test('stop commits content and applies a ready compact commit', async () => {
   const originalChat = llm.chat;
   const originalExecuteTools = llm.executeTools;
   const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
+  const originalHasCompletedCompactJob = sessionManager.hasCompletedCompactJob;
+  (sessionManager as any).hasCompletedCompactJob = () => session.queue.some(item => item.type === 'compact-commit');
   let chatCallCount = 0;
   let compactCommitCalls = 0;
 
@@ -1194,6 +1305,9 @@ test('stop commits content and applies a ready compact commit', async () => {
   };
   (sessionManager as any).applyCompletedCompactJob = async () => {
     compactCommitCalls += 1;
+    assert.equal(userTextOccurrences(session, 'queued user first'), 0);
+    assert.equal(userTextOccurrences(session, 'queued structured second'), 0);
+    assert(session.history.at(-1)?.parts.some(part => part.functionResponse?.tool_use_id === 'stop-mixed-tool'));
     return true;
   };
 
@@ -1219,6 +1333,7 @@ test('stop commits content and applies a ready compact commit', async () => {
     (llm as any).chat = originalChat;
     (llm as any).executeTools = originalExecuteTools;
     (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
+    (sessionManager as any).hasCompletedCompactJob = originalHasCompletedCompactJob;
     sessionManager.clearActiveSessionRuntimeState(session.id);
     await sessionManager.deleteSession(session.id).catch(() => {});
   }
@@ -1340,7 +1455,7 @@ test('input after the stop boundary is handed to a fresh processor instead of lo
   }
 });
 
-test('dequeue signal drains queued work once after a compact-commit boundary', async () => {
+test('dequeue applies ready compaction before resuming the whole ordinary batch', async () => {
   const router = new MessageRouter() as any;
   const sessionId = `dequeue_continue_queue_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const session = await sessionManager.getSession(sessionId) as Session;
@@ -1353,6 +1468,17 @@ test('dequeue signal drains queued work once after a compact-commit boundary', a
 
   const originalChat = llm.chat;
   const originalExecuteTools = llm.executeTools;
+  const originalApply = sessionManager.applyCompletedCompactJob;
+  const originalHasCompleted = sessionManager.hasCompletedCompactJob;
+  let compactCalls = 0;
+  (sessionManager as any).hasCompletedCompactJob = () => session.queue.some(item => item.type === 'compact-commit');
+  (sessionManager as any).applyCompletedCompactJob = async () => {
+    compactCalls += 1;
+    assert.equal(userTextOccurrences(session, 'queued for dequeue from WeWork'), 0);
+    assert.equal(userTextOccurrences(session, 'queued for dequeue from QQ'), 0);
+    assert(session.history.at(-1)?.parts.some(part => part.functionResponse?.tool_use_id === 'dequeue-tool'));
+    return true;
+  };
   const seenParts: any[] = [];
 
   (llm as any).chat = async (parts: any) => {
@@ -1364,11 +1490,11 @@ test('dequeue signal drains queued work once after a compact-commit boundary', a
     return { text: 'queued response', allParts: [{ text: 'queued response' }] };
   };
   (llm as any).executeTools = async () => {
-    await sessionManager.enqueueSessionItem(sessionId, { type: 'compact-commit' });
     await sessionManager.enqueueSessionItem(sessionId, {
       type: 'user', source: { platform: 'wework', channelId: 'wework-a', channelUserId: 'chat-a', conversationId: 'chat-a' },
       parts: [{ text: 'queued for dequeue from WeWork' }],
     });
+    await sessionManager.enqueueSessionItem(sessionId, { type: 'compact-commit' });
     await sessionManager.enqueueSessionItem(sessionId, {
       type: 'user', source: { platform: 'qqbot', channelId: 'qq-a', channelUserId: 'c2c:user-a', conversationId: 'c2c:user-a' },
       parts: [{ text: 'queued for dequeue from QQ' }],
@@ -1382,6 +1508,7 @@ test('dequeue signal drains queued work once after a compact-commit boundary', a
     await processOwnedTestQueue(router, session);
 
     assert.equal(seenParts.length, 2);
+    assert.equal(compactCalls, 1);
     assert.equal(seenParts[1], null);
     assert.equal(userTextOccurrences(session, 'queued for dequeue from WeWork'), 1);
     assert.equal(userTextOccurrences(session, 'queued for dequeue from QQ'), 1);
@@ -1390,6 +1517,8 @@ test('dequeue signal drains queued work once after a compact-commit boundary', a
   } finally {
     (llm as any).chat = originalChat;
     (llm as any).executeTools = originalExecuteTools;
+    (sessionManager as any).applyCompletedCompactJob = originalApply;
+    (sessionManager as any).hasCompletedCompactJob = originalHasCompleted;
     sessionManager.clearActiveSessionRuntimeState(session.id);
     await sessionManager.deleteSession(session.id).catch(() => {});
   }
@@ -1401,7 +1530,13 @@ test('MessageRouter does not replay dispatched parts after an async compact comm
   const originalChat = llm.chat;
   const originalExecuteTools = llm.executeTools;
   const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
+  const originalHasCompletedCompactJob = sessionManager.hasCompletedCompactJob;
+  (sessionManager as any).hasCompletedCompactJob = () => session.queue.some(item => item.type === 'compact-commit');
   const seenParts: Array<MessagePart[] | null> = [];
+  let toolEntered!: () => void; let releaseTool!: () => void;
+  const entered = new Promise<void>(resolve => { toolEntered = resolve; });
+  const release = new Promise<void>(resolve => { releaseTool = resolve; });
+  let compactCalls = 0;
 
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
     seenParts.push(parts);
@@ -1410,21 +1545,37 @@ test('MessageRouter does not replay dispatched parts after an async compact comm
       await appendMockChatMessages(activeSession, parts, [{ functionCall: toolCall }]);
       return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
     }
+    assert.equal(compactCalls, 1);
+    assert.equal(userTextOccurrences(activeSession, 'tool-time input before marker'), 1);
+    assert.equal(userTextOccurrences(activeSession, 'tool-time input after marker'), 1);
     await appendMockChatMessages(activeSession, parts, [{ text: 'continued after compact commit' }]);
     return { text: 'continued after compact commit', allParts: [{ text: 'continued after compact commit' }] };
   };
   (llm as any).executeTools = async () => {
+    await sessionManager.enqueueSessionItem(session.id, { type: 'user', parts: [{ text: 'tool-time input before marker' }] });
     await sessionManager.enqueueSessionItem(session.id, { type: 'compact-commit' });
+    await sessionManager.enqueueSessionItem(session.id, { type: 'background', parts: [{ text: 'tool-time input after marker' }] });
+    toolEntered();
+    await release;
     return { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'compact-race-tool', name: 'read', response: { output: 'ok' } } }] };
   };
   (sessionManager as any).applyCompletedCompactJob = async () => {
+    compactCalls += 1;
+    assert(session.history.at(-1)?.parts.some(part => part.functionResponse?.tool_use_id === 'compact-race-tool'));
+    assert.equal(userTextOccurrences(session, 'tool-time input before marker'), 0);
+    assert.equal(userTextOccurrences(session, 'tool-time input after marker'), 0);
     await sessionManager.appendSessionMessage(session, { role: 'user', parts: [{ system: 'compact commit applied' }] });
     return true;
   };
 
   try {
     session.queue.push({ type: 'user', parts: [{ text: 'A' }] });
-    await processOwnedTestQueue(router, session);
+    const processing = processOwnedTestQueue(router, session);
+    await entered;
+    assert.equal(compactCalls, 0, 'an unfinished tool exchange cannot be split by compaction');
+    assert(session.history.at(-1)?.parts.some(part => part.functionCall?.id === 'compact-race-tool'));
+    releaseTool();
+    await processing;
 
     assert.equal(seenParts[0], null, 'owned queued input is already canonical before the provider call');
     assert.equal(seenParts[1], null);
@@ -1432,9 +1583,11 @@ test('MessageRouter does not replay dispatched parts after an async compact comm
     assert.equal(session.history.every(message => Number.isSafeInteger(message.__meta?.seq)), true);
     assert.equal(session.queue.length, 0);
   } finally {
+    releaseTool();
     (llm as any).chat = originalChat;
     (llm as any).executeTools = originalExecuteTools;
     (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
+    (sessionManager as any).hasCompletedCompactJob = originalHasCompletedCompactJob;
     sessionManager.clearActiveSessionRuntimeState(session.id);
     await sessionManager.deleteSession(session.id).catch(() => {});
   }
@@ -1446,6 +1599,8 @@ test('MessageRouter keeps a queued user item behind compact commit separate from
   const originalChat = llm.chat;
   const originalExecuteTools = llm.executeTools;
   const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
+  const originalHasCompletedCompactJob = sessionManager.hasCompletedCompactJob;
+  (sessionManager as any).hasCompletedCompactJob = () => session.queue.some(item => item.type === 'compact-commit');
   const seenParts: Array<MessagePart[] | null> = [];
 
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
@@ -1482,6 +1637,7 @@ test('MessageRouter keeps a queued user item behind compact commit separate from
     (llm as any).chat = originalChat;
     (llm as any).executeTools = originalExecuteTools;
     (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
+    (sessionManager as any).hasCompletedCompactJob = originalHasCompletedCompactJob;
     sessionManager.clearActiveSessionRuntimeState(session.id);
     await sessionManager.deleteSession(session.id).catch(() => {});
   }
@@ -1541,6 +1697,8 @@ test('MessageRouter preserves an already-consumed follow-up once when compact co
   const originalChat = llm.chat;
   const originalExecuteTools = llm.executeTools;
   const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
+  const originalHasCompletedCompactJob = sessionManager.hasCompletedCompactJob;
+  (sessionManager as any).hasCompletedCompactJob = () => session.queue.some(item => item.type === 'compact-commit');
   const seenParts: Array<MessagePart[] | null> = [];
 
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
@@ -1583,6 +1741,7 @@ test('MessageRouter preserves an already-consumed follow-up once when compact co
     (llm as any).chat = originalChat;
     (llm as any).executeTools = originalExecuteTools;
     (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
+    (sessionManager as any).hasCompletedCompactJob = originalHasCompletedCompactJob;
     sessionManager.clearActiveSessionRuntimeState(session.id);
     await sessionManager.deleteSession(session.id).catch(() => {});
   }
@@ -1593,6 +1752,8 @@ test('MessageRouter preserves owned queued input across a leading compact action
   const session = await createRouterQueueTestSession('pre_llm_compact_keeps_parts');
   const originalChat = llm.chat;
   const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
+  const originalHasCompletedCompactJob = sessionManager.hasCompletedCompactJob;
+  (sessionManager as any).hasCompletedCompactJob = () => session.queue.some(item => item.type === 'compact-commit');
   const seenParts: Array<MessagePart[] | null> = [];
   session.queue.push({ type: 'compact-commit' });
 
@@ -1616,6 +1777,7 @@ test('MessageRouter preserves owned queued input across a leading compact action
   } finally {
     (llm as any).chat = originalChat;
     (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
+    (sessionManager as any).hasCompletedCompactJob = originalHasCompletedCompactJob;
     sessionManager.clearActiveSessionRuntimeState(session.id);
     await sessionManager.deleteSession(session.id).catch(() => {});
   }

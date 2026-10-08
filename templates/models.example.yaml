@@ -44,6 +44,10 @@ providers:
   # `previous_response_id`, `stream`, `type`, `background`, `context_management`,
   # `conversation`, and `stream_id`).
   # Use `openai-completions` when you explicitly need the older /chat/completions API.
+  # Optional on Responses SSE/WebSocket concrete models only (default false).
+  # A failed stream may retain completed encrypted reasoning for the next request;
+  # this is not a transport resume or a promise of less provider computation.
+  # keepReasoningOnError: true  # model object entries may override, including false
   # To enable hosted web search, first change providerType to openai-responses.
   # It is not sent for compact/setup-test requests:
   # webSearch: true  # or false, for default settings

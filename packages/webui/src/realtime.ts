@@ -35,6 +35,8 @@ type RealtimeOptions = {
 }
 
 type ListSubscription = { ids: Set<string>; handlers: WebUiRealtimeHandlers; registeredGeneration: number }
+export type WebUiLogCursor = { fileId: string; offset: number }
+type LogsSubscription = { handlers: WebUiRealtimeHandlers; registeredGeneration: number }
 type SessionSubscription = { sessionId: string; handlers: WebUiRealtimeHandlers; registeredGeneration: number }
 
 const SOCKET_OPEN = 1
@@ -53,6 +55,9 @@ export class WebUiRealtimeTransport {
   private readonly random: () => number
   private readonly listSubscriptions = new Map<number, ListSubscription>()
   private readonly sessionSubscriptions = new Map<number, SessionSubscription>()
+  private readonly logsSubscriptions = new Map<number, LogsSubscription>()
+  private logsId = ''
+  private logsCursor: WebUiLogCursor | undefined
   private socket: WebSocketLike | null = null
   private reconnectTimer: unknown = null
   private nextSubscriptionId = 1
@@ -93,6 +98,19 @@ export class WebUiRealtimeTransport {
     }
   }
 
+  subscribeLogs(handlers: WebUiRealtimeHandlers): () => void {
+    const subscriptionId = this.nextSubscriptionId++
+    if (!this.logsSubscriptions.size) { this.logsId = `logs:${subscriptionId}`; this.logsCursor = undefined }
+    this.logsSubscriptions.set(subscriptionId, { handlers, registeredGeneration: 0 })
+    this.subscriptionChanged()
+    handlers.onStatus?.(this.status)
+    return () => {
+      if (!this.logsSubscriptions.delete(subscriptionId)) return
+      if (!this.logsSubscriptions.size) { this.logsId = ''; this.logsCursor = undefined }
+      this.subscriptionChanged()
+    }
+  }
+
   suspend(): void {
     if (this.suspended) return
     this.suspended = true
@@ -111,6 +129,9 @@ export class WebUiRealtimeTransport {
     this.suspended = true
     this.listSubscriptions.clear()
     this.sessionSubscriptions.clear()
+    this.logsSubscriptions.clear()
+    this.logsId = ''
+    this.logsCursor = undefined
     this.cancelReconnect()
     this.closeSocket(1000, 'Realtime transport disposed')
     this.setStatus('disconnected')
@@ -133,7 +154,7 @@ export class WebUiRealtimeTransport {
   }
 
   private hasSubscriptions(): boolean {
-    return this.listSubscriptions.size > 0 || this.sessionSubscriptions.size > 0
+    return this.listSubscriptions.size > 0 || this.sessionSubscriptions.size > 0 || this.logsSubscriptions.size > 0
   }
 
   private ensureConnected(): void {
@@ -192,6 +213,11 @@ export class WebUiRealtimeTransport {
         subscription.registeredGeneration = generation
         subscription.handlers.onOpen?.(generation)
       }
+      for (const subscription of this.logsSubscriptions.values()) {
+        if (subscription.registeredGeneration === generation) continue
+        subscription.registeredGeneration = generation
+        subscription.handlers.onOpen?.(generation)
+      }
       return
     }
     if (message.type === 'subscriptions-applied') {
@@ -220,6 +246,16 @@ export class WebUiRealtimeTransport {
       return
     }
 
+    if (message.type.startsWith('logs-')) {
+      if (message.logsId !== this.logsId || !this.logsSubscriptions.size) return
+      const window = message.window
+      if (window?.fileId && (message.type === 'logs-snapshot' || message.type === 'logs-delta')) {
+        this.logsCursor = { fileId: window.fileId, offset: window.endOffset }
+      }
+      for (const subscription of this.logsSubscriptions.values()) subscription.handlers.onMessage(message)
+      return
+    }
+
     if (!message.sessionId) return
     for (const subscription of this.sessionSubscriptions.values()) {
       const canonical = this.sessionResolutions.get(subscription.sessionId) || subscription.sessionId
@@ -243,6 +279,7 @@ export class WebUiRealtimeTransport {
       sessionListActive: this.listSubscriptions.size > 0,
       sessionListIds: [...sessionListIds],
       sessionIds: [...sessionIds],
+      ...(this.logsSubscriptions.size ? { logs: { id: this.logsId, ...(this.logsCursor ? { cursor: this.logsCursor } : {}) } } : {}),
     }))
   }
 
@@ -291,6 +328,7 @@ export class WebUiRealtimeTransport {
   private forEachHandler(callback: (handlers: WebUiRealtimeHandlers) => void): void {
     for (const subscription of this.listSubscriptions.values()) callback(subscription.handlers)
     for (const subscription of this.sessionSubscriptions.values()) callback(subscription.handlers)
+    for (const subscription of this.logsSubscriptions.values()) callback(subscription.handlers)
   }
 }
 

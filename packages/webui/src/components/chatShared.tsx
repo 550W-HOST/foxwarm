@@ -131,7 +131,7 @@ export const formatToolLabel = (name: string, args?: any): string => {
 export interface FunctionResponse {
   tool_use_id?: string
   executionTiming?: { startedAt: number; completedAt: number; durationMs: number }
-  __meta?: { resolvedPaths: Array<{ raw: string; resolved: string; nodeId: string }> }
+  __meta?: { resolvedPaths?: Array<{ raw: string; resolved: string; nodeId: string }>; toolScriptSubCalls?: ToolScriptSubCall[] }
   name: string
   response: any
 }
@@ -162,6 +162,8 @@ export interface OpenAIResponsesAnnotation {
 }
 
 export interface MessagePartProviderMeta {
+  thinkingSummaries?: string[]
+  encryptedThinking?: string
   openaiResponses?: {
     annotations?: OpenAIResponsesAnnotation[]
     outputItem?: Record<string, unknown>
@@ -301,6 +303,7 @@ export interface Message {
       completedAt: number
       durationMs: number
     }
+    llmSegment?: { outputStart: number; outputEndExclusive: number; complete: boolean }
     contextBlock?: ContextBlockMessageMeta
     preservedFromBlockId?: number
     [key: string]: any

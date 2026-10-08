@@ -32,6 +32,8 @@ test('chat viewport state uses stable persisted message identities', async () =>
   assert.equal(getContextScrollbarAnchorKey(temporaryMessage), null)
   assert.equal(getMessageStableKey(streamingModelMessage, 8), 'llm-request-request-1')
   assert.equal(getMessageStableKey(committedModelMessage, 9), 'llm-request-request-1')
+  assert.equal(getMessageStableKey({ role: 'model', parts: [], __meta: { llmRequestId: 'request-1', llmSegment: { outputStart: 0, outputEndExclusive: 2, complete: false } } }, 9), 'llm-request-request-1')
+  assert.equal(getMessageStableKey({ role: 'model', parts: [], __meta: { llmRequestId: 'request-1', llmSegment: { outputStart: 2, outputEndExclusive: 3, complete: true } } }, 9), 'llm-request-request-1-output-2')
   assert.equal(getMessageStableKey({ role: 'model', parts: [], __meta: { llmRequestId: 'request-1', contextBlock: { id: 5, level: 1, sourceKind: 'message' } } }, 10), 'ctx-block-local-5')
   assert.equal(getContextScrollbarAnchorKey({ role: 'tool', parts: [], __meta: { synthetic: 'persistentMemorySnapshot' } }), 'persistent-memory-snapshot', 'snapshot gets a ContextScrollbar-only anchor without becoming a persisted viewport anchor')
   assert.equal(getMessageStableKey({ role: 'user', parts: [] }, 7), 'idx-7')

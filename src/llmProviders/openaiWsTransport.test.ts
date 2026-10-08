@@ -145,6 +145,30 @@ test('openai-ws sends a full first request then reuses the exact completed prefi
   second.finalize(false);
 });
 
+test('openai-ws forwards ordered reasoning and commentary progress through the shared Responses collector', async () => {
+  const progress: any[] = [];
+  setOpenAIWsTransportTestHooks({ socketFactory: () => new FakeSocket((_request, socket) => {
+    socket.frame({ type: 'response.output_item.added', output_index: 0, item: { type: 'reasoning', summary: [], encrypted_content: 'private-opaque' } });
+    socket.frame({ type: 'response.reasoning_summary_text.delta', output_index: 0, summary_index: 0, delta: 'before' });
+    socket.frame({ type: 'response.output_item.added', output_index: 1, item: { type: 'message', role: 'assistant', phase: 'commentary', content: [] } });
+    socket.frame({ type: 'response.output_text.delta', output_index: 1, content_index: 0, delta: 'Drawing' });
+    socket.frame({ type: 'response.output_item.added', output_index: 2, item: { type: 'image_generation_call', status: 'in_progress', result: 'private-image' } });
+    socket.frame({ type: 'response.reasoning_summary_text.delta', output_index: 3, summary_index: 0, delta: 'after' });
+    socket.frame({ type: 'response.completed', response: { id: 'response-ordered', status: 'completed', output: [], usage: { input_tokens: 1, output_tokens: 2 } } });
+  }) as any });
+  const result = await requestOpenAIResponsesWs({ url: 'https://example.test/v1/responses', headers: {}, concreteIdentity: 'model',
+    data: baseData([]), placement: 'local', signal: signal(), onProgress: snapshot => progress.push(structuredClone(snapshot)),
+  });
+  assert.deepEqual(result.response.output.map((item: any) => item.type), ['reasoning', 'message', 'image_generation_call', 'reasoning']);
+  assert.deepEqual(progress.at(-1).parts.map((part: any) => [part.outputIndex, part.kind, part.text, part.phase]), [
+    [0, 'reasoning', 'before', undefined], [1, 'text', 'Drawing', 'commentary'],
+    [2, 'image-generation', undefined, undefined], [3, 'reasoning', 'after', undefined],
+  ]);
+  assert.equal(JSON.stringify(progress).includes('private-opaque'), false);
+  assert.equal(JSON.stringify(progress).includes('private-image'), false);
+  result.finalize(false);
+});
+
 test('openai-ws diagnostics correlate fresh, reused, completion, discard, and close without request secrets', async () => {
   const diagnostics = captureDiagnostics();
   const sockets: FakeSocket[] = [];

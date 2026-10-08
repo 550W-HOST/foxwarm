@@ -230,7 +230,10 @@ function sanitizeSuggestedFileName(imageId: string): string {
 
 export function buildImageGuidanceLabel(meta: ImageMeta): string {
   const imageId = meta.imageId || 'image';
-  const sampleFileName = `${sanitizeSuggestedFileName(imageId)}.png`;
+  const extension = meta.mimeType === 'image/jpeg' ? 'jpg'
+    : ['image/png', 'image/webp', 'image/gif'].includes(meta.mimeType || '')
+      ? meta.mimeType!.slice('image/'.length) : 'png';
+  const sampleFileName = `${sanitizeSuggestedFileName(imageId)}.${extension}`;
   return `[IMAGE: id=${imageId}, size=${formatImageSize(meta)}] you can use image_crop({ id: \"${imageId}\", x: 0, y: 0, width: 100, height: 100 }) and image_write_to_file({ id: \"${imageId}\", filePath: \"artifacts/${sampleFileName}\" })`;
 }
 

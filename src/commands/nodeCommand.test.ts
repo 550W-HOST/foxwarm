@@ -4,6 +4,7 @@ import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 import { COMMANDS } from '../commands';
+import { buildNodePairHelp } from './helpers';
 import { nodesManager } from '../nodes/manager';
 import { nodeProviderRegistry } from '../nodes/providers';
 import {
@@ -101,6 +102,43 @@ test('/node default list includes pending approval info and flat approve command
     assert.match(output, /\/node move <old-id> <new-id>/);
     assert.doesNotMatch(output, /\/node pair approve/);
   });
+});
+
+test('/node create returns one per-node credential and direct-auth setup, and rejects duplicate IDs', async () => {
+  await withTempDir(async dirPath => {
+    const filePath = path.join(dirPath, 'nodes.json');
+    setNodeRegistryStoreForTests(createNodeRegistryStore(filePath));
+    const replies: string[] = [];
+    const reply = async (args: string[]) => {
+      await COMMANDS['/node'].handler(
+        { reply: (text: string) => { replies.push(String(text)); } } as any,
+        args, 'test/session', { agent: 'main', currentNode: 'master' } as any,
+      );
+      return replies.pop() || '';
+    };
+    const result = await reply(['create', 'new-node']);
+    const token = result.match(/--auth-token=([a-f0-9]{64})/)?.[1];
+    assert.ok(token);
+    assert.match(result, /--auth-token=[a-f0-9]{64}/);
+    assert.doesNotMatch(result, /--pairing=/);
+    assert.equal((await authenticateApprovedNode('new-node', token))?.nodeId, 'new-node');
+    assert.match(await reply(['create', 'new-node']), /already exists/);
+    assert.match(await reply(['create', 'master']), /reserved|currently online/);
+    assert.match(await reply(['create']), /Usage:.*\/node create/);
+    assert.equal(Object.keys((await fs.readJson(filePath)).approvedNodes).length, 1);
+  });
+});
+
+test('/node pair-help contains independently copyable quoted origin and deployment commands', () => {
+  for (const url of ["https://example.invalid/fox'base", 'https://example.invalid', '']) {
+    const help = buildNodePairHelp('global-fixture', url);
+    assert.doesNotMatch(help, /BASE_URL/);
+    assert.match(help, /--host='/);
+    assert.match(help, /-HostUrl '/);
+    assert.match(help, /cat > \.env <<'FOXWARM_NODE_ENV'/);
+    assert.match(help, /--pairing='global-fixture'/);
+    if (!url) assert.match(help, /http:\/\/YOUR_MASTER:/);
+  }
 });
 
 test('/node list keeps master first, uses checkmarks only for online status, and does not query provider topology', async () => {

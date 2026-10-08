@@ -69,6 +69,30 @@ test('file tools resolve relative paths from session cwd', async () => {
   }
 });
 
+test('native file tools record successful actual Agent paths in header order, not patch body', async () => {
+  const root = getAgentDir('main');
+  const unique = `path-meta-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const dir = path.join(root, 'tmp', unique);
+  const paths: Array<{ raw: string; resolved: string }> = [];
+  const ctx = { session: { agent: 'main', cwd: '/somewhere/else' }, onResolvedPaths: (items: typeof paths) => paths.push(...items) };
+  try {
+    await write({ filePath: `$fw_tmp/${unique}/first.txt`, content: 'first', createDirs: true }, ctx as any);
+    assert.deepEqual(paths.splice(0), [{ raw: `$fw_tmp/${unique}/first.txt`, resolved: path.join(dir, 'first.txt') }]);
+    await read({ filePath: `$fw_agentdir/tmp/${unique}/first.txt` }, ctx as any);
+    assert.equal(paths.splice(0)[0]?.resolved, path.join(dir, 'first.txt'));
+    await edit({ filePath: `$fw_tmp/${unique}/first.txt`, oldText: 'first', newText: 'second' }, ctx as any);
+    assert.equal(paths.splice(0)[0]?.resolved, path.join(dir, 'first.txt'));
+    await apply_patch({ input: `*** Begin Patch\n*** Update File: $fw_tmp/${unique}/first.txt\n@@\n-second\n+third $HOME\n*** Add File: $fw_tmp/${unique}/added.txt\n+new\n*** End Patch` }, ctx as any);
+    assert.deepEqual(paths.splice(0), [
+      { raw: `$fw_tmp/${unique}/first.txt`, resolved: path.join(dir, 'first.txt') },
+      { raw: `$fw_tmp/${unique}/added.txt`, resolved: path.join(dir, 'added.txt') },
+    ]);
+    assert.equal(await fs.readFile(path.join(dir, 'first.txt'), 'utf8'), 'third $HOME');
+    await assert.rejects(() => read({ filePath: '$unknown/file' }, ctx as any), /Unknown Agent path variable/);
+    assert.deepEqual(paths, []);
+  } finally { await fs.remove(dir); }
+});
+
 test('read lists directories with item-number pagination', async () => {
   const agentDir = getAgentDir('main');
   const baseDir = path.join(agentDir, '.temp', `read-dir-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);

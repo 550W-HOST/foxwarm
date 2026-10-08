@@ -245,3 +245,46 @@ test('all current list and Chat surfaces use the shared transport instead of Eve
   assert.match(sources[1], /webUiRealtime\.subscribeSessionList/)
   assert.match(sources[2], /webUiRealtime\.subscribeSession/)
 })
+
+test('Logs shares the existing socket, resumes its byte cursor, and ignores an obsolete logs lifetime', async () => {
+  const { WebUiRealtimeTransport } = await loadTransport()
+  const sockets = []
+  const clock = fakeClock()
+  const transport = new WebUiRealtimeTransport({
+    createSocket: () => { const socket = new FakeSocket(); sockets.push(socket); return socket },
+    setTimer: clock.setTimer, clearTimer: clock.clearTimer, random: () => 0.5,
+  })
+  const chat = []
+  const logs = []
+  const stopChat = transport.subscribeSession('main', { onMessage: message => chat.push(message) })
+  const stopLogs = transport.subscribeLogs({ onMessage: message => logs.push(message) })
+  sockets[0].open()
+  const first = sockets[0].sent.at(-1)
+  assert.deepEqual(first.sessionIds, ['main'])
+  assert.ok(first.logs.id)
+  assert.equal(sockets.length, 1)
+  sockets[0].receive({ type: 'logs-snapshot', logsId: first.logs.id, window: { fileId: 'file:one', startOffset: 0, endOffset: 27, text: 'synthetic' } })
+  sockets[0].receive({ type: 'typing', sessionId: 'main' })
+  assert.equal(logs.length, 1)
+  assert.equal(chat.length, 1)
+  sockets[0].drop()
+  clock.runNext()
+  sockets[1].open()
+  assert.deepEqual(sockets[1].sent.at(-1).logs.cursor, { fileId: 'file:one', offset: 27 })
+  sockets[1].receive({ type: 'logs-delta', logsId: first.logs.id, window: { fileId: 'file:one', startOffset: 27, endOffset: 43, text: 'next' } })
+  assert.equal(logs.length, 2)
+  stopLogs()
+  assert.equal(sockets[1].sent.at(-1).logs, undefined)
+  assert.equal(transport.getUnderlyingConnectionCount(), 1)
+  const fresh = []
+  const stopFresh = transport.subscribeLogs({ onMessage: message => fresh.push(message) })
+  const freshId = sockets[1].sent.at(-1).logs.id
+  assert.notEqual(freshId, first.logs.id)
+  assert.equal(sockets[1].sent.at(-1).logs.cursor, undefined)
+  sockets[1].receive({ type: 'logs-delta', logsId: first.logs.id, window: { endOffset: 1000 } })
+  assert.equal(fresh.length, 0)
+  sockets[1].receive({ type: 'logs-reset', logsId: freshId, message: 'changed' })
+  assert.equal(fresh.length, 1)
+  stopFresh(); stopChat(); transport.dispose()
+  assert.equal(transport.getUnderlyingConnectionCount(), 0)
+})

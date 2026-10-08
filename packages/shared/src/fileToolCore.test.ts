@@ -379,3 +379,54 @@ test('directory and image reads stay target-local through file operations', asyn
     await fs.remove(root);
   }
 });
+
+test('programmatic text reads expose exact data without changing ordinary display, directory or image results', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-programmatic-read-'));
+  const file = path.join(root, 'data.txt');
+  try {
+    for (const text of ['', '{"ok":true}', '\n\n', 'first\r\nsecond\rthird\n']) {
+      await fs.writeFile(file, text);
+      const ordinary = await readFileToolPath(file, 'data.txt');
+      const script: any = await readFileToolPath(file, 'data.txt', undefined, undefined, nativeFileOperations, true);
+      assert.equal(typeof ordinary, 'string');
+      assert.equal(script.output, ordinary);
+      assert.equal(script.content, text);
+      assert.equal(script.truncated, false);
+      assert.equal(script.selectedBytes, Buffer.byteLength(text));
+      assert.equal(script.filePath, file);
+    }
+    const selected: any = await readFileToolPath(file, 'data.txt', 2, 2, nativeFileOperations, true);
+    assert.equal(selected.content, 'second\r');
+    assert.equal(selected.startLine, 2); assert.equal(selected.endLine, 2); assert.equal(selected.totalLines, 3);
+    const absent: any = await readFileToolPath(file, 'data.txt', 9, 9, nativeFileOperations, true);
+    assert.equal(absent.content, ''); assert.equal(absent.selectedBytes, 0); assert.equal(absent.truncated, false);
+    assert.equal(await readFileToolPath(root, '.', undefined, undefined, nativeFileOperations, true), await readFileToolPath(root, '.'));
+    const image = path.join(root, 'image.png'); await fs.writeFile(image, Buffer.from([1, 2, 3]));
+    assert.deepEqual(await readFileToolPath(image, 'image.png', undefined, undefined, nativeFileOperations, true), await readFileToolPath(image, 'image.png'));
+  } finally { await fs.remove(root); }
+});
+
+test('programmatic read budget is inclusive source bytes and large-file ranges remain bounded', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-programmatic-read-budget-'));
+  const file = path.join(root, 'large.txt');
+  const exact = '🦊'.repeat(MAX_FULL_TEXT_READ_BYTES / 4);
+  try {
+    await fs.writeFile(file, exact);
+    const atLimit: any = await readFileToolPath(file, 'large.txt', undefined, undefined, nativeFileOperations, true);
+    assert.equal(atLimit.content, exact); assert.equal(atLimit.selectedBytes, MAX_FULL_TEXT_READ_BYTES); assert.equal(atLimit.truncated, false);
+    await fs.writeFile(file, `${exact}a\n{"n":2}\r\n`);
+    const reads: Array<{ offset: number; count: number }> = [];
+    const operations = recordingFileOperations(reads);
+    const over: any = await readFileToolPath(file, 'large.txt', undefined, undefined, operations, true);
+    assert.equal(Object.prototype.hasOwnProperty.call(over, 'content'), false); assert.equal(over.truncated, true);
+    assert.equal(over.filePath, file); assert.match(over.output, /middle omitted/);
+    assert.ok(reads.every(read => read.count <= 5000));
+    reads.length = 0;
+    const range: any = await readFileToolPath(file, 'large.txt', 2, 2, operations, true);
+    assert.equal(range.content, '{"n":2}\r\n'); assert.equal(range.selectedBytes, 9); assert.equal(range.truncated, false);
+    assert.equal(range.sizeBytes, Buffer.byteLength(`${exact}a\n{"n":2}\r\n`));
+    assert.ok(reads.every(read => read.count <= 64 * 1024));
+    const oversizedRange: any = await readFileToolPath(file, 'large.txt', 1, 1, operations, true);
+    assert.equal(Object.prototype.hasOwnProperty.call(oversizedRange, 'content'), false); assert.equal(oversizedRange.truncated, true);
+  } finally { await fs.remove(root); }
+});

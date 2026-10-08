@@ -304,13 +304,26 @@ test('fenced fork derives from the detached authority and archive stays Main-own
   try {
     const parent = await sessionManager.getSession(sessionId);
     await sessionManager.appendSessionMessage(sessionId, { role: 'user', parts: [{ text: 'fenced parent message' }] } as any);
+    const archiveStore = await import('./session/archiveStore');
+    await archiveStore.writeArchiveBlocks([{
+      v: 1, kind: 'block', sessionId, agent: 'main', id: 1, level: 1,
+      sourceKind: 'message', sourceStart: 1, sourceEnd: 1, rawStartSeq: 1, rawEndSeq: 1,
+      summary: 'Retained pre-clear block.', createdAt: 1000,
+    }]);
+    parent.nextBlockId = 1;
+    await sessionManager.saveSessionForSessionCritical(parent);
+
     // Simulate a ready fence with the Main stub unhydrated (production shape).
     fixture.store.beginGeneration(sessionId, 'inc-forktgt');
     fixture.store.registerCandidate(sessionId, 1, 'inc-forktgt', 999_999, 'fake-identity');
     fixture.store.activateCandidate(sessionId, 1, 'inc-forktgt', 999_999, 'fake-identity');
     parent.history = [];
-    sessionManager.setSessionWorkerForkSourceProvider(async id =>
-      fixture.store.findOwnership(id) ? readDetachedWorkerSession(id, sessionManager.getAllSessions().get(id)!) : undefined);
+    let detachedSource: Session | undefined;
+    sessionManager.setSessionWorkerForkSourceProvider(async id => {
+      if (!fixture.store.findOwnership(id)) return undefined;
+      detachedSource = await readDetachedWorkerSession(id, sessionManager.getAllSessions().get(id)!);
+      return detachedSource;
+    });
     const parentBytesBefore = await fs.readFile(getSessionHistoryFilePath(sessionId));
 
     const forkedId = await sessionManager.forkSession(sessionId, 'forktgt', false);
@@ -318,6 +331,12 @@ test('fenced fork derives from the detached authority and archive stays Main-own
     assert.ok(JSON.stringify(forked.history).includes('fenced parent message'), 'the fork inherits the fenced authority');
     assert.deepEqual(await fs.readFile(getSessionHistoryFilePath(sessionId)), parentBytesBefore, 'fork never writes the fenced authority');
     assert.equal(parent.history.length, 0, 'fork never hydrates the fenced stub into Main');
+    assert.equal(parent.nextBlockId, 1, 'Main does not repair the fenced stub counter');
+    assert.equal(detachedSource?.nextBlockId, 1, 'the detached source stays read-only');
+    assert.equal(forked.nextBlockId, 2);
+    assert.equal((await archiveStore.getSessionBranch(forkedId))?.forkBlockId, 1);
+    assert.deepEqual((await archiveStore.readEffectiveArchiveBlocks(forkedId)).map(block => block.id), [1]);
+
 
     // Archive is Main-owned presentation metadata: catalog-only writes stay open.
     assert.equal(await sessionManager.archiveSession(sessionId, true), true);

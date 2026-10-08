@@ -20,7 +20,6 @@ import {
     tool_get_archived_blocks,
     tool_recall,
     tool_delete_session,
-    tool_set_goal,
     tool_set_session_child_model,
     tool_set_session_compact_threshold,
     tool_refresh_session_snapshot,
@@ -37,6 +36,7 @@ import {
     tool_send_to_channel,
     tool_create_child_session,
     tool_list_agents,
+    tool_task,
     tool_create_timer,
     tool_list_timers,
     tool_update_timer,
@@ -152,12 +152,12 @@ export const send_file = tool_send_file;
 export const session = tool_session;
 export const list_agents: typeof tool_list_agents = (args, ctx) => tool_list_agents(args, ctx);
 export const skill = tool_skill;
+export const task: typeof tool_task = (args, ctx) => tool_task(args, ctx);
 export const get_session_messages = tool_get_session_messages;
 export const get_archived_messages = tool_get_archived_messages;
 export const get_archived_blocks = tool_get_archived_blocks;
 export const recall = tool_recall;
 export const delete_session = tool_delete_session;
-export const set_goal = tool_set_goal;
 export const set_session_child_model = tool_set_session_child_model;
 export const set_session_compact_threshold = tool_set_session_compact_threshold;
 export const refresh_session_snapshot = tool_refresh_session_snapshot;

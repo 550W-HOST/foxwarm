@@ -121,7 +121,27 @@ html.dark {
 }
 
 .foxwarm-chat-root {
+  container-name: foxwarm-chat;
   container-type: inline-size;
+}
+
+.foxwarm-chat-sm-label,
+.foxwarm-chat-md-label,
+.foxwarm-chat-lg-label { display: none; }
+
+.foxwarm-chat-root[data-compact-composer="true"] .foxwarm-inline-composer-editor {
+  min-height: 35px;
+}
+
+@container foxwarm-chat (min-width: 640px) {
+  .foxwarm-chat-sm-label { display: inline; }
+  .foxwarm-chat-code-button { padding-inline: 0.75rem; }
+}
+@container foxwarm-chat (min-width: 768px) {
+  .foxwarm-chat-md-label { display: inline; }
+}
+@container foxwarm-chat (min-width: 1024px) {
+  .foxwarm-chat-lg-label { display: inline; }
 }
 
 .foxwarm-display-effect-overlay {
@@ -249,7 +269,7 @@ html[data-foxwarm-display-effect="crt"] .foxwarm-display-effect-overlay::after {
   padding: 0.1em 0.25em;
 }
 
-@media (min-width: 769px) {
+@container foxwarm-chat (min-width: 768px) {
   .foxwarm-chat-message-region {
     display: flex;
   }
@@ -319,7 +339,7 @@ html[data-foxwarm-display-effect="crt"] .foxwarm-display-effect-overlay::after {
     padding-right: 0;
   }
 
-  @container (max-width: 1151px) {
+  @container foxwarm-chat (max-width: 1151px) {
     .foxwarm-chat-root .foxwarm-chat-composer-inner {
       max-width: calc(100% - 48px);
       margin-left: 0;
@@ -1883,23 +1903,18 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
   opacity: 1;
 }
 .session-compact-status {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
   flex-shrink: 0;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
 }
-.session-compact-status[data-session-status="requesting-model"],
-.session-compact-status[data-session-status="running-tool"] {
-  box-shadow: 0 0 5px 1px currentColor;
-  animation: session-compact-glow 2s ease-in-out infinite;
+.runtime-busy-spinner {
+  animation: runtime-busy-spin 1s steps(20, end) infinite;
 }
-@keyframes session-compact-glow {
-  50% { box-shadow: 0 0 2px 0 currentColor; }
+@keyframes runtime-busy-spin {
+  to { transform: rotate(360deg); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .session-compact-status { animation: none !important; }
+  .runtime-busy-spinner { animation: none; }
 }
 @media (pointer: coarse) {
   .session-compact-disclosure > button,
@@ -2015,20 +2030,20 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
   flex: 0 4 auto;
 }
 @media (max-width: 640px) {
-  .foxwarm-model-columns[data-model-columns="2"] {
+  .foxwarm-model-selector-popup:not([data-model-layout]) .foxwarm-model-columns[data-model-columns="2"] {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: repeat(2, minmax(0, 1fr));
   }
-  .foxwarm-model-column + .foxwarm-model-column {
+  .foxwarm-model-selector-popup:not([data-model-layout]) .foxwarm-model-column + .foxwarm-model-column {
     border-left: 0;
     border-top: 1px solid var(--foxwarm-color-border);
   }
 }
 @media (max-width: 420px) {
-  .foxwarm-model-child-trigger {
+  .foxwarm-model-selector-root:not([data-chat-layout]) .foxwarm-model-child-trigger {
     flex-shrink: 0;
   }
-  .foxwarm-model-child-trigger > span {
+  .foxwarm-model-selector-root:not([data-chat-layout]) .foxwarm-model-child-trigger > span {
     display: none;
   }
 }
@@ -2041,3 +2056,17 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
 }
 .foxwarm-model-effort-slider[data-unresolved="true"]::-webkit-slider-thumb { opacity: 0; }
 .foxwarm-model-effort-slider[data-unresolved="true"]::-moz-range-thumb { opacity: 0; }
+
+/* Portaled pickers receive their owning Chat's layout independently of clipping. */
+.foxwarm-model-selector-popup[data-model-layout="compact"] .foxwarm-model-columns[data-model-columns="2"] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+.foxwarm-model-selector-popup[data-model-layout="compact"] .foxwarm-model-column + .foxwarm-model-column {
+  border-left: 0;
+  border-top: 1px solid var(--foxwarm-color-border);
+}
+@container foxwarm-chat (max-width: 420px) {
+  .foxwarm-model-child-trigger { flex-shrink: 0; }
+  .foxwarm-model-child-trigger > span { display: none; }
+}

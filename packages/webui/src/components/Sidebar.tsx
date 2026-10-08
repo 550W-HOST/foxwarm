@@ -1,4 +1,4 @@
-import { ClipboardList, History, PanelLeftClose, PanelLeftOpen, Workflow } from 'lucide-react'
+import { PanelLeftClose, PanelLeftOpen, History, Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { BoundedSessionListPresentationProps, Session } from './SessionListCore'
 import type { SessionIdleNotificationMode } from '../sessionIdleNotifications'
@@ -13,14 +13,15 @@ interface SidebarProps {
   sessions: Session[]
   agents: AgentSummary[]
   currentSession: string
-  currentView: 'session' | 'agents' | 'setup'
+  currentView: 'session' | 'agents' | 'setup' | 'logs' | 'tasks'
   currentSessionRecord?: Session
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
-  onSelectSearch?: () => void
-  onSelectTasks?: () => void
+  onSelectSearch: () => void
   onSelectSetup: () => void
+  onSelectLogs?: () => void
+  onSelectTasks?: () => void
   codePath: string
   codeNodeId: string
   codeOpenInNewWindow: boolean
@@ -53,8 +54,9 @@ export default function Sidebar({
   onKeepSession,
   onSelectArchitecture,
   onSelectSearch,
-  onSelectTasks,
   onSelectSetup,
+  onSelectLogs,
+  onSelectTasks,
   codePath,
   codeNodeId,
   codeOpenInNewWindow,
@@ -156,12 +158,13 @@ export default function Sidebar({
         />
       </div>
       <div data-sidebar-footer className="flex shrink-0 justify-end gap-1 border-t border-fw-border bg-fw-surface p-2">
-        {onSelectSearch && <button type="button" onClick={onSelectSearch} title="Search history" aria-label="Search history" className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-fw-border text-fw-text transition hover:bg-fw-hover hover:text-fw-text-strong"><History className="h-4 w-4" /></button>}
-        {onSelectTasks && <button type="button" onClick={onSelectTasks} title="Tasks" aria-label="Tasks" className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-fw-border text-fw-text transition hover:bg-fw-hover hover:text-fw-text-strong"><ClipboardList className="h-4 w-4" /></button>}
+        <button type="button" onClick={onSelectSearch} title="Search history" aria-label="Search history" className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-fw-border text-fw-text transition hover:bg-fw-hover hover:text-fw-text-strong dark:border-fw-border dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse">
+          <History className="h-4 w-4" />
+        </button>
         <GlobalUiSettingsMenu
           menuAlign="end"
           menuSide="top"
-          onOpenSetup={onSelectSetup}
+          onOpenSetup={onSelectSetup} onOpenLogs={onSelectLogs} onOpenTasks={onSelectTasks}
           setupActive={currentView === 'setup'}
         />
       </div>

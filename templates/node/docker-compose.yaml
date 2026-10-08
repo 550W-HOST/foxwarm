@@ -68,6 +68,7 @@ services:
       NODE_URL: ${NODE_HOST}
       NODE_ID: ${NODE_ID:-foxwarm-node}
       NODE_TOKEN: ${NODE_PAIRING_TOKEN:-}
+      NODE_AUTH_TOKEN: ${NODE_AUTH_TOKEN:-}
       NODE_CREDENTIALS_FILE: ${NODE_CREDENTIALS_FILE:-/data/state/node_credentials.json}
       FOXWARM_DATA_DIR: /data
       HTTP_PROXY: ${HTTP_PROXY:-}

@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
+import { expandAgentPathVariable } from './agentPathVariables';
 
 export interface NodeTransferFilePayload {
   filePath: string;
@@ -59,7 +60,7 @@ export function getNodeAgentDir(agentName = 'main'): string {
 
 export function resolveNodePath(filePath: string, agentName = 'main', sessionCwd?: string): string {
   if (!filePath || typeof filePath !== 'string') throw new Error('filePath is required');
-  const expandedPath = expandHomePath(filePath);
+  const expandedPath = expandHomePath(expandAgentPathVariable(filePath, getNodeAgentDir(agentName)));
   if (path.isAbsolute(expandedPath)) return path.resolve(expandedPath);
   const base = typeof sessionCwd === 'string' && sessionCwd.trim() ? expandHomePath(sessionCwd.trim()) : getNodeAgentDir(agentName);
   return path.resolve(base, expandedPath);

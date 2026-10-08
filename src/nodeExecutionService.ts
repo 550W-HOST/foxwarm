@@ -31,6 +31,7 @@ export type NodeExecutionRequest = {
   toolName: string;
   args: Record<string, unknown>;
   routingSnapshot?: NodeExecutionRoutingSnapshot;
+  programmatic?: true;
 };
 
 export type NodeExecutionResponse = { result: unknown };
@@ -62,7 +63,7 @@ export type NodeLifecycleRequest = {
 };
 export type NodeLifecycleResponse = { result: NodeLifecycleResult };
 
-export const nodeExecutionServiceDescriptor = defineRpcService('node-execution', 4, {
+export const nodeExecutionServiceDescriptor = defineRpcService('node-execution', 5, {
   execute: rpcMethod<NodeExecutionRequest, NodeExecutionResponse>(),
   list: rpcMethod<NodeTopologyListRequest, NodeTopologyListResponse>(),
   select: rpcMethod<NodeSelectRequest, NodeSelectResponse>(),
@@ -240,7 +241,7 @@ export function createNodeExecutionServiceHandler(options: {
       if (!input || typeof input !== 'object' || Array.isArray(input)) {
         throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'Node execution request must be an object.');
       }
-      assertOnlyKeys(input, ['sourceSessionId', 'nodeId', 'toolName', 'args', 'routingSnapshot'], 'request');
+      assertOnlyKeys(input, ['sourceSessionId', 'nodeId', 'toolName', 'args', 'routingSnapshot', 'programmatic'], 'request');
       const sourceSessionId = requireString(input?.sourceSessionId, 'sourceSessionId');
       if (options.expectedSourceSessionId && sourceSessionId !== options.expectedSourceSessionId) {
         throw new RpcError('NODE_EXECUTION_SOURCE_MISMATCH', `Node execution reverse source must be \`${options.expectedSourceSessionId}\`.`);
@@ -249,6 +250,9 @@ export function createNodeExecutionServiceHandler(options: {
       const toolName = requireString(input?.toolName, 'toolName');
       const args = normalizeArgs(input?.args);
       const routingSnapshot = normalizeRoutingSnapshot(input?.routingSnapshot);
+      if (input.programmatic !== undefined && input.programmatic !== true) {
+        throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'programmatic must be true when provided.');
+      }
       if (nodeId === 'master') {
         throw new RpcError('NODE_EXECUTION_MASTER_FORBIDDEN', 'The colocated master node must execute directly without Node execution RPC.');
       }
@@ -267,6 +271,7 @@ export function createNodeExecutionServiceHandler(options: {
             args,
             context: {
               agent: source.agent || 'main',
+              ...(input.programmatic ? { programmatic: true } : {}),
               ...(providerRouting ? {
                 currentNode: providerRouting.currentNode,
                 ...(providerRouting.cwd !== undefined ? { cwd: providerRouting.cwd } : {}),

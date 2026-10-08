@@ -6,6 +6,7 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs-extra';
 import { getAgentDir } from '../config';
+import { expandAgentPathVariable } from '../../packages/shared/dist/agentPathVariables';
 
 /**
  * Expand `~` or `~/...` to the user's home directory.
@@ -25,12 +26,12 @@ export function expandHomePath(filePath: string): string {
  * Absolute paths and `~/...` are resolved directly.
  */
 export function resolveAgentPath(filePath: string, agentName: string = 'main', sessionCwd?: string): string {
-  const expandedPath = expandHomePath(filePath);
+  const agentDir = getAgentDir(agentName);
+  const expandedPath = expandHomePath(expandAgentPathVariable(filePath, agentDir));
   if (path.isAbsolute(expandedPath)) {
     return path.resolve(expandedPath);
   }
 
-  const agentDir = getAgentDir(agentName);
   const baseDir = (typeof sessionCwd === 'string' && sessionCwd.trim().length > 0)
     ? expandHomePath(sessionCwd.trim())
     : agentDir;

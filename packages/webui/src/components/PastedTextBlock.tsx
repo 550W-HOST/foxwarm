@@ -136,7 +136,7 @@ export function PastedTextModal({ text, onClose, onSave, onRestoreToText }: Past
   )
 }
 
-const PastedTextBlock = memo(function PastedTextBlock({ text }: { text: string }) {
+const PastedTextBlock = memo(function PastedTextBlock({ text, searchReveal = false, searchPartIndex, searchPastedIndex }: { text: string; searchReveal?: boolean; searchPartIndex?: number; searchPastedIndex?: number }) {
   const [open, setOpen] = useState(false)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const preview = useMemo(() => getPastedTextPreview(text), [text])
@@ -151,6 +151,7 @@ const PastedTextBlock = memo(function PastedTextBlock({ text }: { text: string }
     <>
       <button
         ref={triggerRef}
+        data-search-exclude
         type="button"
         onClick={() => setOpen(true)}
         className="foxwarm-pasted-text-block mx-0.5 inline-flex max-w-[min(24rem,100%)] items-center gap-1.5 rounded-md border border-fw-accent-border/60 bg-fw-accent-surface px-2 py-0.5 align-middle text-left text-xs leading-5 text-fw-accent shadow-sm hover:bg-fw-accent-surface-strong focus:outline-none focus:ring-2 focus:ring-fw-focus-ring dark:bg-fw-accent-surface-strong/25 dark:hover:bg-fw-accent-surface-strong/40"
@@ -160,6 +161,7 @@ const PastedTextBlock = memo(function PastedTextBlock({ text }: { text: string }
         <span className="min-w-0 truncate">{preview}</span>
         <span className="shrink-0 text-fw-text-muted">{count.toLocaleString()}</span>
       </button>
+      {searchReveal && <span data-search-surface="pasted" data-search-part-index={searchPartIndex} data-search-pasted-index={searchPastedIndex} className="block whitespace-pre-wrap break-words border-l-2 border-fw-accent-border px-2 py-1 text-sm leading-6 text-fw-text-strong">{text}</span>}
       {open && <PastedTextModal text={text} onClose={close} />}
     </>
   )

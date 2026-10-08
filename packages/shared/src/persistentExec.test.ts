@@ -20,6 +20,7 @@ import {
   type RunningExecEntry,
 } from './persistentExec';
 import { nativeProcessOperations, type ProcessOperations } from './processOperations';
+import { nativeFileOperations } from './fileOperations';
 
 function buildExecEntry(logPath: string, overrides: Partial<RunningExecEntry> = {}): RunningExecEntry {
   return {
@@ -743,4 +744,55 @@ test('persistent exec completion preserves both ends of a shortened command and 
   } finally {
     await fs.remove(root);
   }
+});
+
+test('programmatic exec data is a retained byte snapshot, not display text or status footers', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-programmatic-exec-'));
+  const log = path.join(root, 'capture.log');
+  const entry = buildExecEntry(log);
+  const manager = new PersistentExecManager({ getDefaultCwd: () => root, getExecTempDir: () => root });
+  const status = { exitCode: 7, finishedAt: new Date().toISOString() };
+  try {
+    for (const content of ['', '{"ok":true}', 'one\n\n', 'line\r\nlast']) {
+      await fs.writeFile(log, content);
+      const output = await manager.buildForegroundExecResult(entry, status);
+      const data = await manager.buildProgrammaticExecResult(entry, status, output);
+      assert.equal(data.output, output); assert.equal(data.content, content); assert.equal(data.truncated, false);
+      assert.equal(data.status, 'completed'); assert.equal(data.exitCode, 7);
+      assert.equal(data.execId, entry.id); assert.equal(data.logPath, log); assert.equal(data.sizeBytes, Buffer.byteLength(content));
+    }
+    const captured = '🦊'.repeat(MAX_FULL_LOG_READ_BYTES / 4);
+    await fs.writeFile(log, captured);
+    const output = await manager.buildForegroundExecResult(entry, status);
+    assert.ok(output.length < captured.length);
+    const exact = await manager.buildProgrammaticExecResult(entry, status, output);
+    assert.equal(exact.content, captured); assert.equal(exact.sizeBytes, MAX_FULL_LOG_READ_BYTES); assert.equal(exact.truncated, false);
+    await fs.appendFile(log, 'a');
+    const over = await manager.buildProgrammaticExecResult(entry, status, await manager.buildForegroundExecResult(entry, status));
+    assert.equal(Object.prototype.hasOwnProperty.call(over, 'content'), false); assert.equal(over.truncated, true); assert.equal(over.sizeBytes, MAX_FULL_LOG_READ_BYTES + 1);
+    await fs.writeFile(log, 'so far\n');
+    const running = await manager.buildProgrammaticExecResult(entry, null, await manager.buildBackgroundTimeoutResult(entry, 1));
+    assert.equal(running.content, 'so far\n'); assert.equal(running.status, 'running'); assert.equal(Object.prototype.hasOwnProperty.call(running, 'exitCode'), false);
+    await fs.appendFile(log, 'later\n'); assert.equal(running.content, 'so far\n');
+    const unknown = await manager.buildProgrammaticExecResult(entry, { ...status, exitCode: null }, 'unknown exit');
+    assert.equal(unknown.exitCode, null);
+    const originalStat = nativeFileOperations.stat;
+    const originalRead = nativeFileOperations.read;
+    const counts: number[] = [];
+    await fs.writeFile(log, 'prefix');
+    nativeFileOperations.stat = async filePath => {
+      const stat = await originalStat(filePath);
+      await fs.appendFile(log, 'x'.repeat(MAX_FULL_LOG_READ_BYTES + 1));
+      return stat;
+    };
+    nativeFileOperations.read = async (filePath, offset, count) => { counts.push(count); return originalRead(filePath, offset, count); };
+    try {
+      const snapshot = await manager.buildProgrammaticExecResult(entry, null, 'display');
+      assert.equal(snapshot.content, 'prefix'); assert.equal(snapshot.sizeBytes, 6); assert.deepEqual(counts, [6]);
+    } finally { nativeFileOperations.stat = originalStat; nativeFileOperations.read = originalRead; }
+    await fs.remove(log);
+    const unavailable = await manager.buildProgrammaticExecResult(entry, status, '(No output)');
+    assert.equal(unavailable.content, undefined); assert.equal(unavailable.sizeBytes, undefined); assert.equal(unavailable.truncated, true);
+
+  } finally { await manager.shutdown(); await fs.remove(root); }
 });

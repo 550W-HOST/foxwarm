@@ -1,3 +1,4 @@
+import { makeFoxwarmPopupUrl } from './popupWebUi'
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { DndContext } from '@dnd-kit/core'
 import { Bot, Workflow } from 'lucide-react'
@@ -12,9 +13,8 @@ import { postFoxwarmEmbedHostMessage, readEmbeddedSessionLink, readFoxwarmActive
 import { useSessionIdleNotifications } from './sessionIdleNotifications'
 import { useBoundedSessionList } from './boundedSessionList'
 import { useTheme } from './theme/useTheme'
-import { parseWebUiNodeTargets, getNodeTargetAvailability, type WebUiNodeTarget } from './nodeTargets'
 import { useChatPreferences } from './chatPreferences'
-import { makeFoxwarmPopupUrl } from './popupWebUi'
+import { getNodeTargetAvailability, parseWebUiNodeTargets, type WebUiNodeTarget } from './nodeTargets'
 
 const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
 const SetupView = lazy(() => import('./components/SetupView'))
@@ -139,6 +139,11 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
                 onOpenTasks={() => {
                   const popup = window.open(makeFoxwarmPopupUrl(window.location.href, { kind: 'tasks' }).toString(), '_blank', 'popup')
                   if (!popup) window.alert('Allow popups to open tasks in a new window.')
+                  else { try { popup.opener = null } catch {} }
+                }}
+                onOpenLogs={() => {
+                  const popup = window.open(makeFoxwarmPopupUrl(window.location.href, { kind: 'logs' }).toString(), '_blank', 'popup')
+                  if (!popup) window.alert('Allow popups to open logs in a new window.')
                   else { try { popup.opener = null } catch {} }
                 }}
                 setupActive={activeTarget?.kind === 'setup'}

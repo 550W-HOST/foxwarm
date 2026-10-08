@@ -249,7 +249,7 @@ export function formatTimerSummary(timer: timers.TimerView): string {
     ? `new session (${timer.agentName || 'main'} / ${timer.sessionPrefix || 'timer'})`
     : `session ${timer.sessionId}`;
 
-  return `Timer \`${timer.id}\` created.\nMode: ${mode}\nTarget: ${target}\nNext run: ${formatTimerTimestamp(timer.nextRunAt)}\nMessage: ${timer.message}`;
+  return `Timer \`${timer.id}\` created.\nMode: ${mode}\nTarget: ${target}\nNext run: ${formatTimerTimestamp(timer.nextRunAt)}`;
 }
 
 export function formatTimerUpdateSummary(timer: timers.TimerView): string {
@@ -260,7 +260,7 @@ export function formatTimerUpdateSummary(timer: timers.TimerView): string {
     ? `new session (${timer.agentName || 'main'} / ${timer.sessionPrefix || 'timer'})`
     : `session ${timer.sessionId}`;
 
-  return `Timer \`${timer.id}\` updated.\nMode: ${mode}\nTarget: ${target}\nNext run: ${formatTimerTimestamp(timer.nextRunAt)}\nMessage: ${timer.message}`;
+  return `Timer \`${timer.id}\` updated.\nMode: ${mode}\nTarget: ${target}\nNext run: ${formatTimerTimestamp(timer.nextRunAt)}`;
 }
 
 export function detectMimeType(filePath: string): string {
@@ -292,7 +292,7 @@ export type ForcedSessionModelEffort = {
 };
 
 const CREATE_CHILD_SESSION_KEYS = new Set([
-  'agentName', 'suffix', 'displayName', 'fork', 'message', 'node', 'forceModel', 'afterSend', 'noFurtherAssistantReply', 'waitAfterHandoff', 'confirmation',
+  'taskId',   'agentName', 'suffix', 'displayName', 'fork', 'handoffRecall', 'message', 'node', 'forceModel', 'afterSend', 'noFurtherAssistantReply', 'waitAfterHandoff', 'handoffConfirmation',
 ]);
 const CREATE_SESSION_KEYS = new Set([
   'agentName', 'sessionName', 'displayName', 'parentSessionId', 'node', 'forceModel', 'systemPromptFiles',
@@ -362,7 +362,10 @@ export function normalizeCreateChildSessionArgs(
   normalizeForceModel(args, 'create_child_session', makeError);
   const unknownKey = Object.keys(args).find(key => !CREATE_CHILD_SESSION_KEYS.has(key));
   if (unknownKey) {
-    throw makeError(`create_child_session accepts only agentName, suffix, displayName, fork, message, node, forceModel, afterSend, and confirmation; unknown key: ${unknownKey}.`);
+    throw makeError(`create_child_session accepts only agentName, suffix, displayName, fork, handoffRecall, message, node, forceModel, taskId, afterSend, and handoffConfirmation; unknown key: ${unknownKey}.`);
+  }
+  if (args.taskId !== undefined && (typeof args.taskId !== 'string' || !args.taskId.trim() || args.taskId.length > 128)) {
+    throw makeError('create_child_session taskId must be a bounded non-empty string.');
   }
   if (typeof args.suffix !== 'string' || !args.suffix.trim()) {
     throw makeError('create_child_session requires a non-empty suffix.');

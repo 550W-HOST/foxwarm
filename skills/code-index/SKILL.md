@@ -31,12 +31,11 @@ In the rest of this skill, `<index-root>` means that resolved directory.
 
 Before inspecting or modifying code:
 
-1. Resolve the index root and read `<index-root>/overview.md`.
-2. Search the index first: `rg "<term>" <index-root>`.
-3. Read relevant `modules/` and `threads/` docs.
-4. Read relevant `units/` docs for file and semantic-unit detail.
-5. Read code-index Markdown files as whole files by default. They should remain small enough to skim. If one is genuinely large, locate the needed section first, especially `## Design Decisions`.
-6. Verify important claims against source.
+1. Resolve the index root. A fresh Session must read relevant Code Index context before changing source or assigning implementation; a source search alone does not replace this step.
+2. Start at the smallest entry that covers the task. Read `overview.md` when the repository or subsystem is unfamiliar; otherwise use the relevant module, thread, or unit directly.
+3. Read the governing decisions and follow dependencies when the change crosses a boundary or leaves a material question unresolved. Do not visit every index layer merely to complete a sequence.
+4. Reuse relevant context already read in this Session when it is still current. Read the affected sections after a branch change, conflicting evidence, or new scope; a new small edit does not by itself require rereading unchanged documents.
+5. Verify material claims against source. If the index is missing or stale, say so and use source evidence; correct affected index content with the change.
 
 After changing source:
 

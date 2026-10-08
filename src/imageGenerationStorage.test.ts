@@ -99,9 +99,10 @@ test('canonical blob references rehydrate after a simulated restart without prov
 
     const hydrated = await hydrateMessagesForProvider(structuredClone(canonical));
     const input = convertToOpenAIResponsesFormat(hydrated, 'p/model');
-    assert.equal(input.length, 1);
+    assert.equal(input.length, 2);
     assert.equal(input[0].type, 'image_generation_call');
     assert.equal(input[0].result, png.toString('base64'));
+    assert.match(JSON.stringify(input[1]), /\[IMAGE: id=ig_restart/);
     assert.deepEqual(await readImageRef(ref), png);
   } finally {
     await fs.remove(resolveImageBlobPath(ref.blobId!));

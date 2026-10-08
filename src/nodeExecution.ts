@@ -76,6 +76,7 @@ export async function executeNodeTool(
   toolName: string,
   args: Record<string, unknown>,
   routingSnapshot?: NodeExecutionRoutingSnapshot,
+  programmatic?: true,
 ): Promise<any> {
   const response = await (await getClient()).call('execute', {
     sourceSessionId,
@@ -83,6 +84,7 @@ export async function executeNodeTool(
     toolName,
     args,
     ...(routingSnapshot ? { routingSnapshot } : {}),
+    ...(programmatic ? { programmatic } : {}),
   });
   return response.result;
 }

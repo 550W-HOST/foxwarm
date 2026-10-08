@@ -179,10 +179,14 @@ const COMPACT_REPLACEMENT_BLOCK_ITEM_SCHEMA = {
 export const COMPACT_PLAN_TOOL_DEFINITION: ToolDefinition = {
   name: COMPACT_PLAN_TOOL_NAME,
   defaultInject: true, // Keep compact/normal tool schemas stable for prompt-cache/KV-cache hits.
-  description: "Submit a plan to summarize older context into blocks and, where needed, remove previously preserved messages from active context. Use only the candidate ranges supplied in the compaction prompt. Items not covered by the plan remain unchanged.",
+  description: "Submit a plan to summarize older context into blocks and, where needed, remove previously preserved messages from active context. Use only the candidate ranges supplied in the compaction prompt. Supply direct plan fields or argsFilePath, not both. Items not covered by the plan remain unchanged.",
   parameters: {
     type: 'object',
     properties: {
+      argsFilePath: {
+        type: 'string',
+        description: "Submit the repaired JSON arguments file identified in this compaction operation's feedback. Supply this path alone, without direct plan fields.",
+      },
       replaceAsBlocks: {
         description: "Blocks to create from continuous candidate ranges. Supply an array, or a JSON string encoding the same array. Use an empty array when only removing previously preserved messages.",
         oneOf: [
@@ -201,7 +205,6 @@ export const COMPACT_PLAN_TOOL_DEFINITION: ToolDefinition = {
         description: "Previously preserved message sequence numbers to remove from active context. Only messages identified as preserved in the compaction prompt are eligible; their archive records and summary blocks are not deleted.",
       },
     },
-    required: ['replaceAsBlocks'],
   },
 };
 

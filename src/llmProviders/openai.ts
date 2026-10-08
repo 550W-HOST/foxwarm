@@ -1,9 +1,9 @@
 import { StringDecoder } from 'string_decoder';
 import { logger } from '../common';
-import { Message, MessagePart, OpenAIResponsesContent } from '../types';
+import { Message, MessagePart, ModelStreamPart, OpenAIResponsesContent } from '../types';
 import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { formatToolResponsePayload } from '../../packages/shared/dist/toolResponseFormatting';
-import { appendImageGuidanceText } from '../toolImages';
+import { appendImageGuidanceText, buildImageGuidanceText } from '../toolImages';
 import { deduplicateProviderRequestImages } from '../providerImageDedup';
 import { formatFoxwarmSystemTag } from '../utils/promptWrappers';
 import { formatSystemPartForModel } from '../utils/promptWrappers';
@@ -76,10 +76,14 @@ export type OpenAIStreamProgressSnapshot = {
     reasoning?: string;
     text?: string;
     toolCalls?: OpenAIStreamToolCallSnapshot[];
+    parts?: ModelStreamPart[];
 };
 
 type OpenAIStreamProgressOptions = {
     onProgress?: (snapshot: OpenAIStreamProgressSnapshot) => void;
+    /** Provider-complete output item; the caller owns any asynchronous canonical side effect. */
+    onOutputItemDone?: (entry: { outputIndex: number; item: any }) => void;
+    onResponseCompleted?: () => void;
     onMeaningfulProgress?: () => void;
     onSafetyBuffering?: (metadata: Record<string, unknown>) => void;
     /** Hosted image generation lifecycle; used for watchdog state only. */
@@ -426,7 +430,7 @@ export function convertToOpenAIFormat(
                     // Hosted image generation is Responses-only; describe a
                     // generated image honestly instead of replaying it as an
                     // assistant image_url on Chat Completions.
-                    content.push({ type: 'text', text: formatGeneratedImageModelPlaceholder() });
+                    content.push({ type: 'text', text: `${formatGeneratedImageModelPlaceholder()}\n${buildImageGuidanceText([part])}` });
                 } else {
                     content.push({
                         type: 'image_url',
@@ -655,6 +659,8 @@ export function convertToOpenAIResponsesFormat(contents: Message[], concreteMode
                     if (role === 'assistant' && typeof part.inlineData?.data === 'string' && part.inlineData.data.length > 0) {
                         responseInput.push(buildImageGenerationReplayItem(responsesMeta.outputItem, part.inlineData.data));
                         inlineConsumed = true;
+                        prepareMessageContent(role, content, part, fallbackPhase);
+                        content.push({ type: 'output_text', text: buildImageGuidanceText([part]) });
                     } else {
                         throw new GeneratedImageReplayError('Cannot replay a generated image call: the local image bytes are missing or unreadable.');
                     }
@@ -698,7 +704,7 @@ export function convertToOpenAIResponsesFormat(contents: Message[], concreteMode
                         // Incompatible concrete model: keep honest text context
                         // without leaking provider metadata or faking vision.
                         prepareMessageContent(role, content, part, fallbackPhase);
-                        content.push({ type: 'output_text', text: formatGeneratedImageModelPlaceholder() });
+                        content.push({ type: 'output_text', text: `${formatGeneratedImageModelPlaceholder()}\n${buildImageGuidanceText([part])}` });
                     } else {
                         logger.warn('Dropping assistant inlineData for Responses API history');
                     }
@@ -817,10 +823,51 @@ export async function collectOpenAIResponsesStream(
                     ...(typeof item.arguments === 'string' ? { arguments: item.arguments } : {}),
                 }));
 
+        const buildOrderedPartsSnapshot = (): ModelStreamPart[] =>
+            Array.from(outputItems.entries())
+                .sort(([left], [right]) => left - right)
+                .flatMap(([outputIndex, item]): ModelStreamPart[] => {
+                    if (item?.type === 'reasoning') {
+                        const streamed = Array.from(summaryParts.entries())
+                            .map(([key, text]) => {
+                                const [itemIndex, summaryIndex] = key.split(':').map(Number);
+                                return { itemIndex, summaryIndex, text };
+                            })
+                            .filter(entry => entry.itemIndex === outputIndex)
+                            .sort((left, right) => left.summaryIndex - right.summaryIndex);
+                        const summaries: Array<{ summaryIndex: number; text: string }> = streamed.length > 0 ? streamed : (Array.isArray(item.summary)
+                            ? item.summary.map((part: any, summaryIndex: number) => ({
+                                summaryIndex,
+                                text: typeof part?.text === 'string' ? part.text : '',
+                            })) : []);
+                        return summaries.length > 0
+                            ? summaries.map(entry => ({ outputIndex, kind: 'reasoning', summaryIndex: entry.summaryIndex, text: entry.text }))
+                            : [{ outputIndex, kind: 'reasoning' }];
+                    }
+                    if (item?.type === 'message' && item.role === 'assistant' && Array.isArray(item.content)) {
+                        return item.content.flatMap((part: any, contentIndex: number): ModelStreamPart[] => {
+                            const text = part?.type === 'output_text' ? part.text
+                                : part?.type === 'refusal' ? part.refusal : undefined;
+                            if (typeof text !== 'string') return [];
+                            return [{ outputIndex, kind: 'text', contentIndex, text,
+                                ...(item.phase === 'commentary' || item.phase === 'final_answer' ? { phase: item.phase } : {}),
+                            }];
+                        });
+                    }
+                    if (item?.type === 'function_call') return [{ outputIndex, kind: 'tool-call' }];
+                    if (item?.type === OPENAI_IMAGE_GENERATION_CALL_ITEM_TYPE) {
+                        return [{ outputIndex, kind: 'image-generation',
+                            ...(typeof item.status === 'string' ? { status: item.status } : {}),
+                        }];
+                    }
+                    return [];
+                });
+
         const buildProgressSnapshot = (): OpenAIStreamProgressSnapshot => ({
             reasoning: buildReasoningSummaryText(summaryParts),
             text: buildTextSnapshot(),
             toolCalls: buildToolCallSnapshot(),
+            parts: buildOrderedPartsSnapshot(),
         });
 
         const emitProgressUpdate = () => {
@@ -941,17 +988,31 @@ export async function collectOpenAIResponsesStream(
                             options?.onImageGenerationActivity?.();
                         }
                         emitProgressUpdate();
+                        if (event.type === 'response.output_item.done') {
+                            const completed = buildOutputEntries().find(entry => entry.outputIndex === event.output_index);
+                            if (completed) options?.onOutputItemDone?.({ outputIndex: event.output_index, item: structuredClone(completed.item) });
+                        }
                     }
                     return;
                 case 'response.image_generation_call.in_progress':
                 case 'response.image_generation_call.generating':
                 case 'response.image_generation_call.completed':
                 case 'response.image_generation_call.partial_image':
-                    // Lifecycle-only activity. The final bytes always come from
-                    // the complete output item, never from these events, so they
-                    // are reported as activity and their payload is discarded.
-                    // V1 never persists or forwards a partial preview either.
+                    // Report watchdog activity and status-only progress for a
+                    // known item. The final bytes come from the complete output
+                    // item; never store or forward a partial preview.
                     options?.onImageGenerationActivity?.();
+                    if (typeof event.output_index === 'number'
+                        && outputItems.get(event.output_index)?.type === OPENAI_IMAGE_GENERATION_CALL_ITEM_TYPE) {
+                        const previousStatus = outputItems.get(event.output_index)?.status;
+                        const status = event.type === 'response.image_generation_call.completed' || previousStatus === 'completed'
+                            ? 'completed' : 'in_progress';
+                        ensureOutputItem(event.output_index, {
+                            type: OPENAI_IMAGE_GENERATION_CALL_ITEM_TYPE,
+                            status,
+                        });
+                        if (status !== previousStatus) emitProgressUpdate();
+                    }
                     return;
                 case 'response.content_part.added':
                 case 'response.content_part.done':
@@ -1041,18 +1102,22 @@ export async function collectOpenAIResponsesStream(
                         }
                     }
                     return;
+                case 'response.reasoning_summary_part.added':
                 case 'response.reasoning_summary_part.done':
-                    if (event.part?.text) {
+                    if (typeof event.output_index === 'number') ensureOutputItem(event.output_index, { type: 'reasoning', summary: [] });
+                    if (typeof event.part?.text === 'string') {
                         summaryParts.set(key, event.part.text);
                         emitSummaryUpdate();
                     }
                     return;
                 case 'response.reasoning_summary_text.delta':
+                    if (typeof event.output_index === 'number') ensureOutputItem(event.output_index, { type: 'reasoning', summary: [] });
                     if (typeof event.delta === 'string' && event.delta.length > 0) options?.onMeaningfulProgress?.();
                     summaryParts.set(key, `${summaryParts.get(key) || ''}${event.delta || ''}`);
                     emitSummaryUpdate();
                     return;
                 case 'response.reasoning_summary_text.done':
+                    if (typeof event.output_index === 'number') ensureOutputItem(event.output_index, { type: 'reasoning', summary: [] });
                     summaryParts.set(key, event.text || summaryParts.get(key) || '');
                     emitSummaryUpdate();
                     return;
@@ -1063,6 +1128,7 @@ export async function collectOpenAIResponsesStream(
                     }
                     return;
                 case 'response.completed':
+                    options?.onResponseCompleted?.();
                     completedResponse = event.response;
                     if (completedResponse) {
                         completedResponse.output = mergeCompletedOutputItems(completedResponse.output);

@@ -31,7 +31,7 @@ function isCanonicalSystemOnlyPart(part: MessagePart, predicate: (value: unknown
 
 function isCompactCompletionGoalReminderText(value: unknown): boolean {
   if (typeof value !== 'string') return false
-  const match = value.match(/^<foxwarm-system kind="goal-reminder">\n([\s\S]+)\n<\/foxwarm-system>$/)
+  const match = value.match(/^<foxwarm-system kind="goal-reminder"(?: hint="[^"]*")?>\n([\s\S]+)\n<\/foxwarm-system>$/)
   return !!match && match[1].trim().length > 0
 }
 
@@ -162,6 +162,8 @@ export function isSessionTurnIncomplete(messages: readonly Message[]): boolean {
   if (lastMessage.role === 'model') {
     const hasOrdinaryText = lastMessage.parts.some(part => typeof part.text === 'string' && part.text.trim().length > 0)
     const hasFunctionCall = lastMessage.parts.some(part => !!part.functionCall)
+    if (lastMessage.__meta?.llmSegment?.complete === false) return true
+    if (lastMessage.__meta?.llmSegment?.complete === true) return hasFunctionCall
     return !hasOrdinaryText || hasFunctionCall
   }
 

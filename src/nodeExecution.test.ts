@@ -6,6 +6,7 @@ import * as nodeExecution from './nodeExecution';
 import { nodesManager } from './nodes/manager';
 import * as sessionManager from './sessionManager';
 import { call_tool } from './tools';
+import { tool_run_script, resetToolScriptRunsForTests } from './toolscript';
 import { createNodeExecutionServiceHandler, nodeExecutionServiceDescriptor } from './nodeExecutionService';
 import { LocalRpcTransport, RpcClient, RpcServiceRegistry } from './rpc';
 import { getAgentDir } from './config';
@@ -308,6 +309,9 @@ test('primitive Node backends derive canonical file tools and preserve provider-
     await registry.invokeTool({ ...base, toolName: 'read', args: { filePath: 'urn:existing' } }),
     'hello world\n---\nFile has 1 line.\nFile size: 12 bytes.',
   );
+  const scriptRead: any = await registry.invokeTool({ ...base, context: { ...base.context, programmatic: true }, toolName: 'read', args: { filePath: 'urn:existing' } });
+  assert.equal(scriptRead.content, 'hello world\n'); assert.equal(scriptRead.truncated, false); assert.equal(scriptRead.filePath, 'urn:existing');
+  assert.ok(observed.some(request => request.context.programmatic === true));
   await registry.invokeTool({ ...base, toolName: 'edit', args: { filePath: 'urn:existing', oldText: 'world', newText: 'primitive' } });
   await registry.invokeTool({ ...base, toolName: 'apply_patch', args: { input: '*** Begin Patch\n*** Update File: urn:existing\n@@\n-hello primitive\n+hello canonical\n*** Add File: urn:added\n+added\n*** End Patch' } });
   await registry.invokeTool({ ...base, toolName: 'write', args: { filePath: 'urn:new', content: 'new', overwrite: true, createDirs: true } });
@@ -318,6 +322,17 @@ test('primitive Node backends derive canonical file tools and preserve provider-
   assert.equal(observed.filter(request => request.operation === 'parent').length, 2);
   assert.ok(observed.filter(request => request.operation === 'mkdir').every(request => request.path === 'urn:provider-owned-parent'));
   assert.ok(observed.every(request => !Object.prototype.hasOwnProperty.call(request, 'toolName')));
+  const beforeTokens = observed.length;
+  for (const request of [
+    { toolName: 'read', args: { filePath: '$fw_tmp/a.txt' } },
+    { toolName: 'write', args: { filePath: '$fw_agentdir/a.txt', content: 'x' } },
+    { toolName: 'apply_patch', args: { input: '*** Begin Patch\n*** Add File: $fw_tmp/a.txt\n+one\n*** End Patch' } },
+  ]) {
+    await assert.rejects(() => registry.invokeTool({ ...base, ...request }), /unavailable in this execution environment/);
+  }
+  await assert.rejects(() => registry.invokeTool({ ...base, toolName: 'read', args: { filePath: '$OTHER/a.txt' } }), /Unknown Agent path variable/);
+  assert.equal(observed.length, beforeTokens, 'unsupported paths never reach provider primitives');
+  assert.equal(await registry.invokeTool({ ...base, toolName: 'read', args: { filePath: 'urn:new' } }).then(text => String(text).includes('new')), true);
   await assert.rejects(() => registry.invokeTool({ ...base, nodeId: 'primitive-ro', toolName: 'edit', args: { filePath: 'x', oldText: 'a', newText: 'b' } }),
     (error: any) => error?.code === 'NODE_EXECUTION_TOOL_UNAVAILABLE');
 });
@@ -335,6 +350,21 @@ test('primitive descriptors reject provider tool schemas and missing advertised 
     await assert.rejects(() => new NodeProviderRegistry([provider]).listNodes(),
       (error: any) => error?.code === 'NODE_PROVIDER_INVALID_DESCRIPTOR');
   }
+});
+
+test('primitive exec refuses Agent cwd tokens before invoking the provider', async () => {
+  let invoked = 0;
+  const descriptor: NodeProviderDescriptor = { id: 'primitive-exec', kind: 'sandbox', provider: 'primitive-exec',
+    type: 'memory', availability: 'ready', primitiveBackends: { exec: true } };
+  const registry = new NodeProviderRegistry([{ id: 'primitive-exec', listNodes: () => [descriptor],
+    getNode: nodeId => nodeId === descriptor.id ? descriptor : undefined,
+    invokeExec: async () => { invoked += 1; return { output: 'unchanged' }; } }]);
+  const base = { sourceSessionId: 'agent/main', nodeId: descriptor.id, toolName: 'exec', context: { agent: 'agent' } };
+  await assert.rejects(() => registry.invokeTool({ ...base, args: { command: 'pwd', cwd: '$fw_tmp' } }), /unavailable in this execution environment/);
+  await assert.rejects(() => registry.invokeTool({ ...base, args: { command: 'pwd', cwd: '${fw_tmp}' } }), /Unknown Agent path variable/);
+  assert.equal(invoked, 0);
+  assert.deepEqual(await registry.invokeTool({ ...base, args: { command: 'pwd', cwd: 'urn:provider-cwd' } }), { output: 'unchanged' });
+  assert.equal(invoked, 1);
 });
 
 test('primitive patch Add propagates invalid stat and performs no mutation', async () => {
@@ -700,4 +730,41 @@ test('terminal shutdown drains accepted Node execution and fences new calls', as
     (nodesManager as any).executeTool = originalExecuteTool;
     await cleanup(sourceId);
   }
+});
+
+test('trusted script data crosses exact-owner Node RPC without accepting an argument spoof', async () => {
+  const sessionId = makeId('script_data_rpc');
+  const session = await sessionManager.getSession(sessionId);
+  session.currentNode = 'script-data-node'; session.cwd = 'urn:working';
+  await sessionManager.saveSession(sessionId);
+  const content = Buffer.from('{"remote":true}\n');
+  const observed: any[] = [];
+  const descriptor: NodeProviderDescriptor = { id: 'script-data-node', kind: 'sandbox', provider: 'script-data-provider', type: 'memory', availability: 'ready', primitiveBackends: { filesystem: 'read' } };
+  const provider: NodeProvider = {
+    id: descriptor.provider, listNodes: () => [descriptor], getNode: nodeId => nodeId === descriptor.id ? descriptor : undefined,
+    async invokeFilesystem(request) {
+      observed.push(request);
+      if (request.operation === 'stat') return { kind: 'file', size: content.length, modifiedAtMs: 1 };
+      if (request.operation === 'read') return { dataBase64: content.subarray(request.offset, request.offset! + request.count!).toString('base64') };
+      throw new Error('unexpected primitive');
+    },
+  };
+  const registry = new RpcServiceRegistry();
+  registry.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ expectedSourceSessionId: sessionId, providerRegistry: new NodeProviderRegistry([provider]) }));
+  const transport = new LocalRpcTransport(registry);
+  await nodeExecution.initializeNodeExecution({ transport, placement: 'child-reverse' });
+  const ctx: any = { sessionId, session, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} };
+  try {
+    const ordinary: any = await call_tool({ source: 'node', name: 'read', args: { filePath: 'urn:data', programmatic: true } }, ctx);
+    assert.equal(typeof ordinary, 'string'); assert.ok(observed.every(request => request.context.programmatic === undefined));
+    observed.length = 0;
+    const script = await tool_run_script({ code: 'data = call_tool("read", {"filePath":"urn:data"})\nreturn data["content"]' }, ctx);
+    assert.equal(script.status, 'completed'); assert.equal(script.result, content.toString());
+    assert.ok(observed.length > 0); assert.ok(observed.every(request => request.context.programmatic === true && request.sourceSessionId === sessionId && request.context.cwd === 'urn:working'));
+    const before = observed.length;
+    const client = new RpcClient(nodeExecutionServiceDescriptor, transport);
+    await assert.rejects(() => client.call('execute', { sourceSessionId: 'not-owner', nodeId: descriptor.id, toolName: 'read', args: {}, programmatic: true }), { code: 'NODE_EXECUTION_SOURCE_MISMATCH' });
+    await assert.rejects(() => client.call('execute', { sourceSessionId: sessionId, nodeId: descriptor.id, toolName: 'read', args: {}, programmatic: 'true' } as any), { code: 'NODE_EXECUTION_INVALID_REQUEST' });
+    assert.equal(observed.length, before);
+  } finally { await resetToolScriptRunsForTests(); await transport.drain(); transport.close(); await cleanup(sessionId); }
 });

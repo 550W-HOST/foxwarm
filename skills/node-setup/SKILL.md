@@ -29,6 +29,7 @@ Examples in this area include:
 
 - `/node`
 - `/node approve ...`
+- `/node create <node-id>`
 - `/node reject ...`
 - `/node pair-help`
 - `/agent create ... --isolated ...`
@@ -70,7 +71,7 @@ This skill matches the current bootstrap surfaces exposed by a running master:
 - `/node/docker-compose.yaml`
 - `/node/source.tar.gz`
 
-It does **not** use the removed old direct-registration flow.
+It does **not** use the removed unauthenticated direct-registration flow. `/node create` is a separate pre-approved, per-node-credential flow.
 
 ## Mental model
 
@@ -125,7 +126,13 @@ So isolated agents are a practical containment tool for higher-risk workflows.
 
 ## Base URL principle
 
-Foxwarm cannot reliably know one globally correct external base URL for every node bootstrap.
+Foxwarm cannot infer one globally correct external base URL for every node bootstrap unless the operator supplies a public URL in top-level config:
+
+```yaml
+url: https://foxwarm.example.invalid/foxwarm
+```
+
+The configured URL supplies `/node pair-help` and `node_bootstrap_info` examples, including the deployment path. It must be an absolute HTTP(S) URL without credentials, query or fragment; edits require a restart. Without it, each example contains a replaceable `YOUR_MASTER` address and can be copied independently.
 
 Depending on where the node runs, the reachable master URL might be:
 
@@ -139,29 +146,37 @@ What Foxwarm **can** do is:
 
 - when serving `/node/run.sh`, `/node/run-docker.sh`, or `/node/run.ps1`
 - look at the **current HTTP request** (for example `Host` / forwarded proto)
-- fill that request-derived URL into the downloaded script as the **default** host
+- fill that request-derived **origin** into the downloaded script as the **default** host, even when `config.url` is set
 
 Tool note:
 
 - the `node_bootstrap_info` tool is intentionally **not** an API-style “tell me the exact external URL” interface
-- it returns `$BASE_URL` placeholders in the places where a real reachable master address is needed
-- it also explains that the caller/operator must choose `BASE_URL` from the node's point of view
-- this keeps the tool aligned with reality: Foxwarm does not know one unique globally correct external address
+- it returns complete configured addresses when available; otherwise replace `YOUR_MASTER` in the command you copy
+- commands are independently copyable; check that the address is reachable from the new Node
+- a configured public URL is not a guarantee that every node can reach it
 
 So the rule is:
 
-- if you fetch the bootstrap script from the same URL the node should later use, you usually do **not** need to pass `--host`
+- if you fetch the bootstrap script from the same origin the node should later use, you usually do **not** need to pass `--host`
+- if the public URL has a path prefix, pass `--host=YOUR_REACHABLE_URL` (or Windows `-HostUrl`) to preserve it; request headers cannot recover that path
 - if you fetched the script through a different address, pass `--host=...` explicitly
 
-Example of choosing a reachable URL first:
-
-```bash
-BASE_URL=http://YOUR_MASTER:3001
-```
+Copy a setup command from `/node pair-help` and replace its example address if necessary.
 
 ## Pairing / approval flow
 
+Two supported paths are available. For a Node created before the remote client runs, the master-side user command is:
+
+```text
+/node create my-node
+```
+
+It reserves `my-node` and returns the per-node auth token once. Do not confuse this with the shared pairing token. The token is not a six-digit pairing code; the server stores only its hash. Use it on a new host with `--node-id=my-node --auth-token=YOUR_PER_NODE_AUTH_TOKEN` (Windows `-NodeId my-node -AuthToken YOUR_PER_NODE_AUTH_TOKEN`). The client saves credentials on successful registration; later runs use the credentials file. For URLs with a deployment path also pass `--host=YOUR_REACHABLE_URL` or `-HostUrl`. `/node remove my-node` revokes the credential. The command is user-facing, not a model tool.
+
+For the existing request/approve path, start the Node with the shared pairing token:
+
 On first run, the node connects with a **pairing token** and creates a pending pairing request.
+The Node startup log includes the exact `/node approve <pending-id>` command; there is no six-digit pairing code to compare.
 
 ### Agent-facing approval
 
@@ -205,8 +220,7 @@ offline will not be usable for worker execution and may not appear there.
 Use this when you want a direct host-side node client.
 
 ```bash
-BASE_URL=http://YOUR_MASTER:3001
-curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+curl -fsSL 'http://YOUR_MASTER:3001/node/run.sh' | bash -s -- \
   --dir=/opt/foxwarm-node \
   --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-node
@@ -228,8 +242,7 @@ What it does:
 If you want background mode instead:
 
 ```bash
-BASE_URL=http://YOUR_MASTER:3001
-curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+curl -fsSL 'http://YOUR_MASTER:3001/node/run.sh' | bash -s -- \
   --dir=/opt/foxwarm-node \
   --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-node \
@@ -243,7 +256,7 @@ script prints the exact status/log/stop commands for the selected mode.
 For systemd-managed startup and restart supervision:
 
 ```bash
-curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+curl -fsSL 'http://YOUR_MASTER:3001/node/run.sh' | bash -s -- \
   --dir=/opt/foxwarm-node \
   --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-node \
@@ -273,8 +286,7 @@ curl -fsSL "http://127.0.0.1:3001/node/run.sh" | bash -s -- \
 Use this when every tool call should require local confirmation:
 
 ```bash
-BASE_URL=http://YOUR_MASTER:3001
-curl -fsSL "$BASE_URL/node/run-interactive.sh" | bash -s -- \
+curl -fsSL 'http://YOUR_MASTER:3001/node/run-interactive.sh' | bash -s -- \
   --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-cli-node
 ```
@@ -289,8 +301,7 @@ Optional extras:
 Use this when you want the node in a containerized environment.
 
 ```bash
-BASE_URL=http://YOUR_MASTER:3001
-curl -fsSL "$BASE_URL/node/run-docker.sh" | bash -s -- \
+curl -fsSL 'http://YOUR_MASTER:3001/node/run-docker.sh' | bash -s -- \
   --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-node
 ```
@@ -306,28 +317,46 @@ That path:
 If you want it to return immediately without following logs:
 
 ```bash
-BASE_URL=http://YOUR_MASTER:3001
-curl -fsSL "$BASE_URL/node/run-docker.sh" | bash -s -- \
+curl -fsSL 'http://YOUR_MASTER:3001/node/run-docker.sh' | bash -s -- \
   --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-node \
   -d
 ```
+
+## Exec-only Shell Node
+
+For a device that needs only command execution without Node.js, use the independent POSIX-shell client. It requires `sh`, `curl`, and `mktemp`, `mkfifo`, `dd`, `wc`, `head`, `tail`, `cat`, `mv`, `rm`, `mkdir`, `chmod`, `sleep`, `date`, `sed`, and `tr`. Its startup checks are authoritative: BusyBox builds can omit applets, and this workflow does not promise compatibility with every router or install packages.
+
+First run `/node create my-shell` on the master and save the returned per-node token privately. The global pairing token is not a Shell Node credential. Run from the desired default command directory:
+
+```sh
+curl -fsSL 'https://foxwarm.example.invalid/foxwarm/node/run-shell.sh' -o run-shell.sh
+NODE_AUTH_TOKEN=YOUR_PER_NODE_AUTH_TOKEN sh ./run-shell.sh --host='https://foxwarm.example.invalid/foxwarm' --node-id=my-shell
+```
+
+Always passing `--host` preserves any deployment prefix. Curl retains certificate verification. The token is kept in an owner-only temporary curl config and Authorization headers, not URLs. The script installs no runtime or service and creates no Agent directories.
+
+Use the normal Node selector or `/node my-shell`; ordinary `exec` then targets this Node. Only `exec` is advertised. Omitted and relative cwd use its startup directory; `cd` does not carry over between calls. File tools, Code/Git/PTY/backend services and external-owner execution are unavailable.
+
+The foreground wait defaults to 15 seconds, clamps above 60, and rounds fractions upward to a whole second. Timeout returns an exec ID without killing the command. Normal `wait` can use that ID; completion goes to the originating Session and includes bounded first/last 4096-byte samples, total output bytes and exit code. The initial background response contains the continuation notice, not a running-output snapshot. Full logs and a read-exec API do not exist. The FIFO collector continuously drains output without growing a full log or closing the command pipe during truncation.
+
+Each command's wrapper owns its foreground budget, background transition and report retries independently; the main loop keeps polling while jobs run. There is no additional client concurrency cap; Main bounds unfinished dispatches and output stays bounded per command. Network errors retry reports only, never the command itself. Main/client restart can leave an unknown outcome; there is no durable queue, outbox or crash continuation. Revocation/stop does not kill active commands. The existing 24-hour completion boundary stops reporting but does not remove a still-running FIFO/collector. Restart the client explicitly after a lost registration. Revoke credentials through `/node remove my-shell` when finished. See [Node client quick start](../../docs/node-client.md#shell-only-node) for the complete limitations.
 
 ## Manual docker-compose template flow
 
 If you want to inspect or customize before starting:
 
 ```bash
-BASE_URL=http://YOUR_MASTER:3001
-curl -fsSL "$BASE_URL/node/docker-compose.yaml" -o docker-compose.yaml
-
-cat > .env <<'EOF'
-NODE_HOST=$BASE_URL
-NODE_SOURCE_URL=$BASE_URL/node/source.tar.gz
-NODE_PAIRING_TOKEN=YOUR_PAIRING_TOKEN
-NODE_ID=my-node
+curl -fsSL 'http://YOUR_MASTER:3001/node/docker-compose.yaml' -o docker-compose.yaml
+umask 077
+cat > .env <<'FOXWARM_NODE_ENV'
+NODE_HOST='http://YOUR_MASTER:3001'
+NODE_SOURCE_URL='http://YOUR_MASTER:3001/node/source.tar.gz'
+NODE_PAIRING_TOKEN='YOUR_PAIRING_TOKEN'
+NODE_ID='my-node'
 NODE_DATA_DIR=./data
-EOF
+FOXWARM_NODE_ENV
+chmod 600 .env
 
 docker compose up -d --build
 ```
@@ -509,3 +538,9 @@ Use **`agent-management`** when the task is mainly about:
 Use **`isolated-worker`** when a coordinator should create a temporary isolated
 agent/session on an already-online Node or through a configured Docker-worktree
 provider for one exact existing worktree.
+
+## WebUI onboarding
+
+Open **System Architecture → Nodes**. This view shows Node identity, type, connection/compatibility status and available services without Session rows or inspectors. **New nodes** opens setup methods for Linux CLI, interactive CLI, Shell, Docker and Windows. The address defaults to `config.url`, or the current browser address including its deployment path. You can explicitly change it for the new Node's network.
+
+Copy a setup command and keep it private. CLI clients using pairing appear in **Pending approvals**; approve only requests you recognize. The button's pending count excludes already approved clients waiting to reconnect. Shell setup instead requires an explicit **Create** action, which reserves a Node name and shows its one-time per-node credential in the command. Copy that command before closing; closing the dialog discards its credentials.

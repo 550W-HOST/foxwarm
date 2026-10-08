@@ -13,6 +13,7 @@ import { installAgentMetadataSnapshotForWorker, resetAgentMetadataForTests } fro
 import { getSessionHistoryFilePath } from './session/metadataStore';
 import * as sessionManager from './sessionManager';
 import { initializeSessionRuntime, shutdownSessionRuntime } from './sessionRuntime';
+import { formatLocalTimestamp } from './utils/localTime';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import { SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
@@ -75,7 +76,8 @@ test('SDK external Session catalog, isolated target read and ordinary-source sen
   target.agent = 'mcp-session-isolated';
   installAgentMetadataSnapshotForWorker(target.agent, { isolated: true });
   target.persistentMemorySnapshot = 'PRIVATE_PROMPT_MUST_NOT_LEAK';
-  target.history.push({ role: 'user', parts: [{ text: 'visible committed message' }] });
+  const messageTime = new Date(2026, 9, 1, 8, 9, 10).getTime();
+  target.history.push({ role: 'user', parts: [{ text: 'visible committed message' }], __meta: { timestamp: messageTime } });
   target.queue.push({ type: 'user', parts: [{ text: 'PRIVATE_QUEUED_INPUT_MUST_NOT_LEAK' }] });
   await sessionManager.saveSession(sessionId);
   setToolAuthorizationPolicyForTests(policyFor(sessionId));
@@ -96,6 +98,7 @@ test('SDK external Session catalog, isolated target read and ordinary-source sen
     const read = await action(alpha.client, { action: 'read', sessionId, start: -1, count: 1, previewLength: 1000 });
     assert.equal(read.isError, undefined);
     assert.match((read.structuredContent as any).preview, /visible committed message/);
+    assert.ok((read.structuredContent as any).preview.includes(formatLocalTimestamp(messageTime)));
     assert.ok(!JSON.stringify(read.structuredContent).includes('PRIVATE_PROMPT'));
     assert.ok(!JSON.stringify(read.structuredContent).includes('PRIVATE_QUEUED'));
     assert.equal((await action(alpha.client, { action: 'send', sessionId: '<main>', message: 'invalid' })).isError, true);
@@ -163,7 +166,8 @@ test('SDK Session read/send use actual Worker owner and durable mailbox, with a 
   await sessionManager.loadSessions();
   const sessionId = `mcp_worker_${Date.now()}`;
   const { session: target } = await sessionManager.createEmptySession(sessionId);
-  target.history.push({ role: 'user', parts: [{ text: 'authority-owned worker history' }] });
+  const messageTime = new Date(2026, 9, 1, 9, 10, 11).getTime();
+  target.history.push({ role: 'user', parts: [{ text: 'authority-owned worker history' }], __meta: { timestamp: messageTime } });
   target.persistentMemorySnapshot = 'PRIVATE_WORKER_PROMPT';
   target.queue.push({ type: 'user', parts: [{ text: 'PRIVATE_WORKER_QUEUE' }] });
   await sessionManager.saveSession(sessionId);
@@ -186,7 +190,7 @@ test('SDK Session read/send use actual Worker owner and durable mailbox, with a 
   try {
     await supervisor.reconcileStartupOwnerships();
     sessionManager.setSessionWorkerEnqueueSink(
-      (id, item, guard) => ingress.enqueueEnsuringWorker(id, item, guard).then(() => {}));
+      (id, item, options, guard) => ingress.enqueueEnsuringWorker(id, item, options, guard).then(() => {}));
     await initializeSessionRuntime({ worker: { store, registry: supervisor.projectionRegistry, ingress, supervisor } });
     fixture = await serverFixture();
     alpha = await connect(fixture.port, 'synthetic-session-alpha-token');
@@ -194,6 +198,7 @@ test('SDK Session read/send use actual Worker owner and durable mailbox, with a 
     const read = await action(alpha.client, { action: 'read', sessionId, count: 1 });
     assert.equal(read.isError, undefined);
     assert.match((read.structuredContent as any).preview, /authority-owned worker history/);
+    assert.ok((read.structuredContent as any).preview.includes(formatLocalTimestamp(messageTime)));
     assert.ok(!JSON.stringify(read.structuredContent).includes('STALE_MAIN_HISTORY'));
     assert.ok(!JSON.stringify(read.structuredContent).includes('PRIVATE_WORKER_PROMPT'));
     assert.ok(!JSON.stringify(read.structuredContent).includes('PRIVATE_WORKER_QUEUE'));

@@ -275,11 +275,22 @@ export class TUIChannel implements Channel {
     });
     this.sessionList.setItems(items);
     
-    // Auto-select bound session if available, otherwise main
-    let selectSessionId = boundSessionId || 'main';
-    const currentIndex = sessionIds.indexOf(selectSessionId);
+    // Keep an existing/current selection when possible. Fall back to the
+    // configured binding, then main only when that live target exists.
+    const currentSessionIsAvailable = this.currentSessionId !== null && sessionIds.includes(this.currentSessionId);
+    if (this.currentSessionId && !currentSessionIsAvailable) {
+      this.currentSessionId = null;
+      this.inChatMode = false;
+    }
+    const defaultSessionId = sessionManager.getSessionCatalog('main')?.id;
+    const selectSessionId = (currentSessionIsAvailable ? this.currentSessionId : undefined)
+      || (boundSessionId && sessionIds.includes(boundSessionId) ? boundSessionId : undefined)
+      || (defaultSessionId && sessionIds.includes(defaultSessionId) ? defaultSessionId : undefined);
+    const currentIndex = selectSessionId ? sessionIds.indexOf(selectSessionId) : -1;
     if (currentIndex >= 0) {
       this.sessionList.select(currentIndex);
+    } else if (!selectSessionId) {
+      this.chatLog.setContent('{yellow-fg}No default session is available. Select an existing session to continue.{/yellow-fg}');
     }
     
     // Update preview if in chat mode

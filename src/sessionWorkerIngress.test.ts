@@ -12,7 +12,7 @@ import { LocalRpcTransport, RpcClient, RpcServiceRegistry } from './rpc';
 import { createChannelsStore, attachChannel, resetChannelsForTests, saveChannels, setChannelsStoreForTests } from './session/channels';
 import { getSessionHistoryFilePath, serializeSessionHistoryPayload } from './session/metadataStore';
 import * as sessionManager from './sessionManager';
-import { normalizeSessionWorkerIngressRequest, SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
+import { normalizeSessionWorkerIngressRequest, resumeSessionWorkerPendingIntents, SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
 import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
@@ -431,4 +431,51 @@ test('Main submitAndRun ensures, spawns, and owns exact worker ingress without M
     unregisterChannel('telegram-stage3'); resetChannelsForTests(); setChannelsStoreForTests(null);
     await fs.remove(root);
   }
+});
+
+test('passive Worker mailbox survives cold/stopped ingress and restart without spawn or run; ordinary input consumes it in order', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-passive-mailbox-'));
+  const sessionId = `worker-passive-${Date.now()}`;
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
+  const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
+  const supervisor = new SessionWorkerSupervisor({ store, idleMs: 60_000,
+    workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'), workerEnv: { FOXWARM_DATA_DIR: root },
+  });
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, id => id === sessionId);
+  await supervisor.reconcileStartupOwnerships();
+  const passive = { type: 'intersession' as const, sourceSessionId: 'creator', parts: [{ system: 'Task was released.' }] };
+  try {
+    const accepted = await ingress.enqueueEnsuringWorker(sessionId, passive, { trigger: false });
+    assert.equal(supervisor.getStatus(sessionId), undefined);
+    assert.equal(store.findOwnership(sessionId), undefined);
+    assert.equal((store.listPendingIntents(sessionId, 0)[0].payload as any).trigger, false);
+    assert.deepEqual(store.listSessionsWithPendingIntents(), [sessionId]);
+    assert.deepEqual(store.listSessionsWithPendingIntents(true), []);
+    await resumeSessionWorkerPendingIntents(store, supervisor);
+    assert.equal(supervisor.getStatus(sessionId), undefined);
+    assert.throws(() => normalizeSessionWorkerIngressRequest({ sessionId, item: { ...passive, trigger: false } }), /unknown field|unsupported/i);
+    const first = await ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'Continue normally' }] });
+    assert.ok(first.lastAppliedMailboxId > accepted.mailboxIntentId);
+    let durable = await fs.readJson(statePath);
+    const inputs = durable.history.filter((message: any) => message.parts.some((part: any) => part.system === 'Task was released.' || part.text === 'Continue normally'));
+    assert.ok(inputs[0].parts.some((part: any) => part.system === 'Task was released.'));
+    assert.equal(inputs[1].parts[0].text, 'Continue normally');
+    assert.deepEqual(inputs.map((message: any) => message.role), ['user', 'user']);
+    assert.equal(durable.history.filter((message: any) => message.role === 'model').length, 1);
+    const active = supervisor.getStatus(sessionId);
+    await ingress.enqueueEnsuringWorker(sessionId, passive, { trigger: false });
+    assert.equal(supervisor.getStatus(sessionId).pid, active.pid);
+    assert.equal((await fs.readJson(statePath)).lastAppliedMailboxId, durable.lastAppliedMailboxId, 'idle Worker is not asked to ingest or run');
+    const ownership = store.findOwnership(sessionId);
+    assert.equal((await supervisor.idleStatusActivated(sessionId, ownership)).queueLength, 0);
+    await supervisor.stopWorker(sessionId);
+    await ingress.enqueueEnsuringWorker(sessionId, passive, { trigger: false });
+    await resumeSessionWorkerPendingIntents(store, supervisor);
+    assert.equal(supervisor.getStatus(sessionId), undefined, 'stopped Worker stays stopped despite passive durable input');
+    await ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'Explicit new work' }] });
+    durable = await fs.readJson(statePath);
+    assert.equal(durable.history.filter((message: any) => message.parts.some((part: any) => part.system === 'Task was released.')).length, 3);
+    assert.equal(durable.history.at(-2).parts[0].text, 'Explicit new work');
+  } finally { await supervisor.shutdown(5_000); store.close(); await fs.remove(root); }
 });

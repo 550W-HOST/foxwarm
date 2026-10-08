@@ -359,9 +359,10 @@ test('canonical history is not mutated when a generated image is replayed', asyn
   };
   const before = JSON.stringify(message);
   const input = convertToOpenAIResponsesFormat([message], 'fixture/model');
-  assert.equal(input.length, 1);
+  assert.equal(input.length, 2);
   assert.equal(input[0].type, 'image_generation_call');
   assert.equal(input[0].result, base64);
+  assert.match(JSON.stringify(input[1]), /\[IMAGE: id=ig_replay/);
   assert.equal(JSON.stringify(message), before);
   // No duplicate assistant input_image for the same blob.
   assert.equal(input.some((item: any) => item.type === 'message' && JSON.stringify(item).includes('input_image')), false);
@@ -373,6 +374,7 @@ test('canonical history is not mutated when a generated image is replayed', asyn
   assert.equal(otherModel.some((item: any) => item.type === 'image_generation_call'), false);
   assert.equal(JSON.stringify(otherModel).includes(base64), false);
   assert.match(JSON.stringify(otherModel), /does not receive its image content/);
+  assert.match(JSON.stringify(otherModel), /\[IMAGE: id=ig_replay/);
 });
 
 // Section 6.4: a local recovery failure must surface as a clear non-retryable

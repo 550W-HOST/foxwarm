@@ -99,6 +99,24 @@ test('memory frontmatter include-session/exclude-session filters by canonical se
   assert.doesNotMatch(snapshot, /include-session: \[/);
 });
 
+test('legacy ONBOOT memory files remain excluded after startup trigger removal', async () => {
+  const { llm, config } = await loadModules();
+  const agentName = uniqueName('legacy_onboot_agent');
+  const memoryDir = config.getAgentMemoryDir(agentName);
+
+  try {
+    await fs.ensureDir(memoryDir);
+    await fs.writeFile(path.join(memoryDir, 'ONBOOT.md'), 'LEGACY_ONBOOT_MUST_STAY_OUT\n', 'utf8');
+    await fs.writeFile(path.join(memoryDir, 'NORMAL.md'), 'NORMAL_MEMORY_REMAINS\n', 'utf8');
+
+    const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName, sessionId: `${agentName}/session`, modelId: 'fixture/model' });
+    assert.match(snapshot, /NORMAL_MEMORY_REMAINS/);
+    assert.doesNotMatch(snapshot, /LEGACY_ONBOOT_MUST_STAY_OUT/);
+  } finally {
+    await fs.remove(path.join(config.AGENTS_DIR, agentName));
+  }
+});
+
 test('session creation passes session id to snapshot builder and fork keeps parent snapshot', async () => {
   const { llm, sessionManager, config } = await loadModules();
 

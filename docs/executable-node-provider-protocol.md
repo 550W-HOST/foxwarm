@@ -127,6 +127,8 @@ An `exec` request is complete because process persistence, background delivery, 
 }
 ```
 
+The optional `context.programmatic:true` hint identifies a trusted script invocation, not a tool argument or permission bypass. File primitives retain their byte-oriented contract; Core composes script read data above them. An exec backend honoring the hint should retain ordinary `output` and provide actual captured `content` within the inclusive 1,048,576-byte budget, `truncated`, `status` (`completed` or `running`), completion `exitCode`, and actual exec/log/byte metadata where available. Running content is only the current captured snapshot. If full data was not retained or exceeds the budget, omit `content` and report `truncated:true`; never reconstruct it from display text. Existing protocol payload/stream limits still apply. Older or custom backends remain responsible for reporting their capability gap; Foxwarm does not manufacture complete content.
+
 The provider returns the canonical exec result expected by Foxwarm. `deferSessionCwdSync` is trusted routing metadata, not a model argument. Providers without an exec backend omit `exec` from descriptors, and Foxwarm never falls back to master.
 
 ## Lifecycle

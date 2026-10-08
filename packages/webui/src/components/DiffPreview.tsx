@@ -3,6 +3,11 @@ import type { ReactNode, UIEvent } from 'react'
 import { Diff } from './chatShared'
 import { SyntaxHighlightedText } from './SyntaxHighlightedText'
 
+/** The unified renderer shows unchanged context once, not once per input side. */
+export const getUnifiedDiffSearchText = (oldText: string, newText: string): string => (
+  Diff.diffLines(oldText, newText).map(change => change.value).join('\u0000')
+)
+
 const DiffPreview = memo(function DiffPreview({ oldText, newText, diffViewMode, filePath }: { oldText: string; newText: string; diffViewMode: 'unified' | 'split'; filePath?: string }) {
   const lineChanges = useMemo(() => Diff.diffLines(oldText, newText), [oldText, newText])
   const diffOldScrollRefs = useRef<HTMLDivElement | null>(null)

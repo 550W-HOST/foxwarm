@@ -1,9 +1,11 @@
 #!/bin/sh
 
 set -eu
+umask 077
 
 HOST="__FOXWARM_DEFAULT_BASE_URL__"
 PAIRING=""
+AUTH_TOKEN=""
 NODE_ID="node-$(hostname 2>/dev/null || echo foxwarm-node)"
 STATE_DIR="./data"
 COMPOSE_FILE="./docker-compose.yaml"
@@ -26,6 +28,7 @@ Pass `--host=...` only when the container should connect to a different reachabl
 Options:
   --host=URL          Override Foxwarm master base URL (default: derived from request URL)
   --pairing=TOKEN     Pairing token from the master (required unless stored credentials already exist)
+  --auth-token=TOKEN  Per-node auth token from /node create (use with --node-id)
   --node-id=ID        Requested node name (default: node-<hostname>)
   --state-dir=DIR     Persistent data dir on the local machine (default: ./data)
   --compose-file=FILE docker compose file path to create (default: ./docker-compose.yaml)
@@ -39,6 +42,7 @@ for arg in "$@"; do
   case "$arg" in
     --host=*) HOST="${arg#*=}" ;;
     --pairing=*) PAIRING="${arg#*=}" ;;
+    --auth-token=*) AUTH_TOKEN="${arg#*=}" ;;
     --node-id=*) NODE_ID="${arg#*=}" ;;
     --state-dir=*) STATE_DIR="${arg#*=}" ;;
     --compose-file=*) COMPOSE_FILE="${arg#*=}" ;;
@@ -48,6 +52,11 @@ for arg in "$@"; do
     *) echo "Unknown argument: $arg" >&2; usage >&2; exit 1 ;;
   esac
 done
+
+if [ -n "$PAIRING" ] && [ -n "$AUTH_TOKEN" ]; then
+  echo "Error: use either --pairing or --auth-token, not both" >&2
+  exit 1
+fi
 
 if [ -z "$HOST" ]; then
   echo "Error: --host is required" >&2
@@ -70,24 +79,36 @@ else
 fi
 
 HOST="${HOST%/}"
+if [ -z "$PAIRING" ] && [ -z "$AUTH_TOKEN" ] && [ ! -s "$STATE_DIR/state/node_credentials.json" ]; then
+  echo "Error: --pairing or --auth-token is required for first-time setup when no stored credentials exist" >&2
+  exit 1
+fi
 mkdir -p "$STATE_DIR/state" "$STATE_DIR/agents" "$STATE_DIR/logs"
 
 curl -fsSL "$HOST/node/docker-compose.yaml" -o "$COMPOSE_FILE"
 
-cat > "$ENV_FILE" <<EOF
-NODE_HOST=$HOST
-NODE_SOURCE_URL=$HOST/node/source.tar.gz
-NODE_PAIRING_TOKEN=$PAIRING
-NODE_ID=$NODE_ID
-NODE_DATA_DIR=$STATE_DIR
-NODE_CREDENTIALS_FILE=/data/state/node_credentials.json
-HTTP_PROXY=${HTTP_PROXY:-}
-HTTPS_PROXY=${HTTPS_PROXY:-}
-NO_PROXY=${NO_PROXY:-}
-http_proxy=${http_proxy:-}
-https_proxy=${https_proxy:-}
-no_proxy=${no_proxy:-}
-EOF
+# Compose .env single-quoted values preserve literal dollar signs and paths.
+compose_quote() {
+  printf "'"
+  printf '%s' "$1" | sed "s/'/\\\\'/g"
+  printf "'"
+}
+
+{
+  printf 'NODE_HOST='; compose_quote "$HOST"; echo
+  printf 'NODE_SOURCE_URL='; compose_quote "$HOST/node/source.tar.gz"; echo
+  printf 'NODE_PAIRING_TOKEN='; compose_quote "$PAIRING"; echo
+  printf 'NODE_AUTH_TOKEN='; compose_quote "$AUTH_TOKEN"; echo
+  printf 'NODE_ID='; compose_quote "$NODE_ID"; echo
+  printf 'NODE_DATA_DIR='; compose_quote "$STATE_DIR"; echo
+  printf 'NODE_CREDENTIALS_FILE=/data/state/node_credentials.json\n'
+  printf 'HTTP_PROXY='; compose_quote "${HTTP_PROXY:-}"; echo
+  printf 'HTTPS_PROXY='; compose_quote "${HTTPS_PROXY:-}"; echo
+  printf 'NO_PROXY='; compose_quote "${NO_PROXY:-}"; echo
+  printf 'http_proxy='; compose_quote "${http_proxy:-}"; echo
+  printf 'https_proxy='; compose_quote "${https_proxy:-}"; echo
+  printf 'no_proxy='; compose_quote "${no_proxy:-}"; echo
+} > "$ENV_FILE"
 
 ABS_STATE_DIR="$(cd "$STATE_DIR" && pwd)"
 

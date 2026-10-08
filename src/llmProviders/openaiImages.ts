@@ -70,6 +70,17 @@ export type NormalizedGeneratedImages = {
   failures: GeneratedImageFailure[];
 };
 
+/** One physical Responses attempt's validation budget across streamed output segments. */
+export type GeneratedImageExternalizationBudget = {
+  usedImageIds: Set<string>;
+  accumulatedBytes: number;
+  externalizedCount: number;
+};
+
+export function createGeneratedImageExternalizationBudget(): GeneratedImageExternalizationBudget {
+  return { usedImageIds: new Set<string>(), accumulatedBytes: 0, externalizedCount: 0 };
+}
+
 /**
  * Build the native Responses `image_generation` tool from normalized config.
  * Returns `undefined` when the tool must not be sent. `enabled` only controls
@@ -239,22 +250,21 @@ export function deriveGeneratedImageId(callId: unknown, index: number): string {
  */
 export async function externalizeGeneratedImageItems(
   outputItems: unknown,
-  options: { sourceModelId: string },
+  options: { sourceModelId: string; budget?: GeneratedImageExternalizationBudget; outputIndexStart?: number },
 ): Promise<NormalizedGeneratedImages> {
   const images: NormalizedGeneratedImage[] = [];
   const failures: GeneratedImageFailure[] = [];
   const items = Array.isArray(outputItems) ? outputItems : [];
-  const usedImageIds = new Set<string>();
-  let accumulatedBytes = 0;
-  let externalizedCount = 0;
+  const budget = options.budget || createGeneratedImageExternalizationBudget();
 
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index];
     if (!isImageGenerationCallItem(item)) continue;
 
-    let imageId = deriveGeneratedImageId(item.id, index);
-    while (usedImageIds.has(imageId)) imageId = `${imageId}_${index + 1}`;
-    usedImageIds.add(imageId);
+    const absoluteIndex = (options.outputIndexStart || 0) + index;
+    let imageId = deriveGeneratedImageId(item.id, absoluteIndex);
+    while (budget.usedImageIds.has(imageId)) imageId = `${imageId}_${absoluteIndex + 1}`;
+    budget.usedImageIds.add(imageId);
 
     if (item.status !== undefined && item.status !== 'completed') {
       failures.push({ imageId, reason: `image generation item ended with status ${String(item.status)}` });
@@ -264,14 +274,14 @@ export async function externalizeGeneratedImageItems(
       failures.push({ imageId, reason: 'image generation result was missing or empty' });
       continue;
     }
-    if (externalizedCount >= IMAGE_GENERATION_MAX_IMAGE_ITEMS) {
+    if (budget.externalizedCount >= IMAGE_GENERATION_MAX_IMAGE_ITEMS) {
       failures.push({ imageId, reason: `response exceeded the ${IMAGE_GENERATION_MAX_IMAGE_ITEMS}-image limit` });
       continue;
     }
 
     try {
       const buffer = decodeStrictImageBase64(item.result, IMAGE_GENERATION_MAX_DECODED_BYTES);
-      if (accumulatedBytes + buffer.length > IMAGE_GENERATION_MAX_RESPONSE_BYTES) {
+      if (budget.accumulatedBytes + buffer.length > IMAGE_GENERATION_MAX_RESPONSE_BYTES) {
         throw new Error(`response exceeded the ${IMAGE_GENERATION_MAX_RESPONSE_BYTES}-byte cumulative limit`);
       }
       const detectedMime = detectImageMime(buffer);
@@ -288,8 +298,8 @@ export async function externalizeGeneratedImageItems(
         mimeType: declaredMime || detectedMime,
         imageId,
       });
-      accumulatedBytes += buffer.length;
-      externalizedCount += 1;
+      budget.accumulatedBytes += buffer.length;
+      budget.externalizedCount += 1;
 
       const outputItem = sanitizeImageGenerationOutputItem(item);
       if (!outputItem.output_format && detectedMime) {

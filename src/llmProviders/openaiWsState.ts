@@ -5,7 +5,7 @@ import type { Message } from '../types';
 const PREFIX_DOMAIN = 'foxwarm-openai-responses-ws-prefix-v1';
 
 export type OpenAIWsHistoryAppendOutcome =
-    | { appended: true; message: Message }
+    | { appended: true; messages: Message[] }
     | { appended: false };
 
 export type OpenAIWsHistoryAppendFinalizer = (outcome: OpenAIWsHistoryAppendOutcome) => void;

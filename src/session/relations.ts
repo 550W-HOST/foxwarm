@@ -1,7 +1,7 @@
 import fs from 'fs-extra';
 import { getSessionHistoryFilePath, getSessionHistoryStore } from './metadataStore';
 import { AgentMetadata } from './agentMetadata';
-import { MessagePart, QueueItem, Session } from '../types';
+import { MessagePart, QueueItem, SessionDeliveryOptions, SessionEnqueueOptions, Session } from '../types';
 import { formatFoxwarmMessage } from '../utils/promptWrappers';
 import { formatLocalTimestamp } from '../utils/localTime';
 
@@ -11,7 +11,7 @@ type SessionRelationsDeps = {
   getSessionCatalog?: (sessionId: string) => Session | undefined;
   saveSession: (sessionId: string) => Promise<void>;
   saveSessionCatalogEntries: (sessionIds: string[]) => Promise<void>;
-  enqueueSessionItem: (sessionId: string, item: QueueItem) => Promise<void>;
+  enqueueSessionItem: (sessionId: string, item: QueueItem, options?: SessionEnqueueOptions) => Promise<void>;
   getSessionsMap: () => Map<string, Session>;
   getAgentMetadata: (agentName: string) => AgentMetadata;
   notifySessionListUpdated: () => void;
@@ -319,7 +319,8 @@ export async function sendToSession(
   deps: Pick<SessionRelationsDeps, 'getExistingSession' | 'getSessionCatalog' | 'getAgentMetadata' | 'enqueueSessionItem'>,
   targetSessionId: string,
   message: string,
-  fromSessionId?: string
+  fromSessionId?: string,
+  options?: SessionDeliveryOptions
 ): Promise<{ requestedSessionId: string; resolvedSessionId: string }> {
   const { sourceSession: fromSession, targetSession, requestedTargetSessionId } = await resolvePermittedSessionTarget(deps, targetSessionId, fromSessionId);
   if (fromSession && fromSession.id === targetSession.id) {
@@ -330,7 +331,23 @@ export async function sendToSession(
   const replyTarget = sourceSessionId || 'unknown-session';
   const time = formatLocalTimestamp(Date.now());
   const parts: MessagePart[] = [{
-    system: sourceSessionId
+    system: options?.taskNotification
+      ? formatFoxwarmMessage({
+        type: 'task',
+        taskId: options.taskNotification.taskId.slice(0, 128),
+        event: options.taskNotification.event,
+        sourceSessionId,
+        time,
+        ...(options.taskNotification.sourceKind === 'user' ? { sourceKind: 'user' } : {}),
+        hint: options.taskNotification.sourceKind === 'user'
+          ? options.taskNotification.recipient === 'new'
+            ? 'Task notification from the user through Tasks. Complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report.'
+            : 'Task notification from the user through Tasks.'
+          : options.taskNotification.recipient === 'new'
+            ? 'Task assignment from Foxwarm, not direct user input. Complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report.'
+            : 'task notification from Foxwarm; not direct user input',
+      }, message || '')
+      : sourceSessionId
       ? formatFoxwarmMessage({
         type: 'inter-agent',
         sourceSessionId,
@@ -349,7 +366,7 @@ export async function sendToSession(
   await deps.enqueueSessionItem(targetSession.id, {
     type: 'intersession',
     sourceSessionId: fromSession?.id,
-    ...(fromSession ? {
+    ...(fromSession && !options?.taskNotification ? {
       sourceSessionRelation: fromSession.parentSessionId === targetSession.id
         ? 'direct-child' as const
         : targetSession.parentSessionId === fromSession.id
@@ -357,7 +374,7 @@ export async function sendToSession(
           : 'other' as const,
     } : {}),
     parts,
-  });
+  }, options ? { trigger: options.trigger } : undefined);
 
   return {
     requestedSessionId: requestedTargetSessionId,

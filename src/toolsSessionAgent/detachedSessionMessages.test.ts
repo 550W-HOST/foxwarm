@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as sessionManager from '../sessionManager';
 import type { Message, Session } from '../types';
+import { formatLocalTimestamp } from '../utils/localTime';
 import { tool_get_session_messages } from './archiveRecall';
 
 function createSession(id: string, history: Message[]): Session {
@@ -150,5 +151,30 @@ test('get_session_messages no-hook and mismatched contexts retain the legacy tar
     (sessionManager as any).getSessionMessages = originals.getMessages;
     (sessionManager as any).getSessionCatalog = originals.getCatalog;
     (sessionManager as any).isSessionEffectivelyIsolated = originals.isolated;
+  }
+});
+
+test('get_session_messages timestamps follow filtered page order without changing paging defaults', async () => {
+  const time = new Date(2026, 9, 1, 8, 9, 10).getTime();
+  const history: Message[] = Array.from({ length: 12 }, (_, index) => ({
+    role: 'user', parts: [{ text: index >= 8 ? 'keep' : 'omit' }], __meta: { timestamp: time + index * 1000 },
+  }));
+  const session = createSession('timestamp-page-owner', history);
+  const original = sessionManager.isSessionEffectivelyIsolated;
+  (sessionManager as any).isSessionEffectivelyIsolated = () => false;
+  const ctx: any = { sessionId: session.id, session, persistCurrentSession: async () => {} };
+  try {
+    const latest = String(await tool_get_session_messages({ sessionId: session.id }, ctx));
+    assert.ok(latest.includes(`[2 time ${formatLocalTimestamp(time + 2000)}]`));
+    assert.doesNotMatch(latest, /\[0 time|\[1 time/);
+    const countOnly = String(await tool_get_session_messages({ sessionId: session.id, count: 1 }, ctx));
+    assert.ok(countOnly.includes(`[0 time ${formatLocalTimestamp(time)}]`));
+    const filtered = String(await tool_get_session_messages({ sessionId: session.id, start: 6, count: 4, contentFilter: 'keep' }, ctx));
+    assert.ok(filtered.includes(`[8 time ${formatLocalTimestamp(time + 8000)}]`));
+    assert.ok(filtered.includes(`[9 time ${formatLocalTimestamp(time + 9000).slice(11)}]`));
+    const nextPage = String(await tool_get_session_messages({ sessionId: session.id, start: 9, count: 1 }, ctx));
+    assert.ok(nextPage.includes(`[9 time ${formatLocalTimestamp(time + 9000)}]`));
+  } finally {
+    (sessionManager as any).isSessionEffectivelyIsolated = original;
   }
 });

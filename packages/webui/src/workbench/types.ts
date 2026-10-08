@@ -9,8 +9,9 @@ export type WorkbenchTab =
   | (WorkbenchTabBase & { type: 'vscode' })
   | (WorkbenchTabBase & { type: 'agents' })
   | (WorkbenchTabBase & { type: 'search' })
-  | (WorkbenchTabBase & { type: 'setup' })
+  | (WorkbenchTabBase & { type: 'logs' })
   | (WorkbenchTabBase & { type: 'tasks' })
+  | (WorkbenchTabBase & { type: 'setup' })
 
 export type WorkbenchPaneNode = {
   id: string

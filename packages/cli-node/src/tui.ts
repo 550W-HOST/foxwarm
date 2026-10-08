@@ -192,7 +192,7 @@ function App({ opts }: { opts: Opts }) {
     if (input && !key.ctrl && !key.meta) setDraft(v => v + input);
   });
 
-  const statusText = `${status.event}${status.detail?.nodeId ? ` ${status.detail.nodeId}` : ''}${status.detail?.pairCode ? ` code:${status.detail.pairCode}` : ''}`;
+  const statusText = `${status.event}${status.detail?.nodeId ? ` ${status.detail.nodeId}` : ''}${status.detail?.approvalCommand ? ` — ${status.detail.approvalCommand}` : ''}`;
 
   return React.createElement(Box, { flexDirection: 'column' },
     React.createElement(Box, null,

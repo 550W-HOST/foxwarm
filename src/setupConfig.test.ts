@@ -54,6 +54,30 @@ providers:
   await fs.remove(dir);
 });
 
+test('raw models YAML preserves per-model encrypted-reasoning error policy without enabling it by default', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-setup-reasoning-'));
+  const filePath = path.join(dir, 'models.yaml');
+  try {
+    const rawYaml = `# retained exactly
+default: fixture/disabled
+providers:
+  fixture:
+    providerType: openai-responses
+    baseUrl: https://example.test/v1
+    keepReasoningOnError: true
+    models:
+      - id: disabled
+        keepReasoningOnError: false
+      - enabled
+`;
+    writeRawModelsConfig(rawYaml, filePath);
+    assert.equal(await fs.readFile(filePath, 'utf8'), rawYaml);
+    const parsed = loadModelsConfigFromObject(yaml.load(rawYaml));
+    assert.equal(parsed.models['fixture/disabled'].keepReasoningOnError, false);
+    assert.equal(parsed.models['fixture/enabled'].keepReasoningOnError, true);
+  } finally { await fs.remove(dir); }
+});
+
 test('raw models setup preserves virtual provider YAML byte-for-byte after validation', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-setup-virtual-models-'));
   const filePath = path.join(dir, 'models.yaml');
@@ -246,6 +270,7 @@ test('models setup form preserves unknown provider and model fields', () => {
           providerExtra: 'keep',
         },
         historyReasoningField: 'reasoning',
+        keepReasoningOnError: true,
         webSearch: {
           enabled: true,
           toolChoice: 'auto',
@@ -254,6 +279,7 @@ test('models setup form preserves unknown provider and model fields', () => {
           {
             id: 'gpt-5.2-codex',
             contextLimit: 400000,
+            keepReasoningOnError: false,
             customModelField: 'keep',
           },
           'gpt-5.3-codex',
@@ -281,9 +307,11 @@ test('models setup form preserves unknown provider and model fields', () => {
   assert.deepEqual(next.providers?.openai.extraFields, { providerExtra: 'keep' });
   assert.equal(next.providers?.openai.historyReasoningField, undefined);
   assert.deepEqual(next.providers?.openai.webSearch, { enabled: true, toolChoice: 'auto' });
+  assert.equal(next.providers?.openai.keepReasoningOnError, true);
   assert.deepEqual(next.providers?.openai.models?.[0], {
     id: 'gpt-5.2-codex',
     contextLimit: 400000,
+    keepReasoningOnError: false,
     customModelField: 'keep',
   });
   assert.equal(next.providers?.openai.models?.[1], 'gpt-5.4');
@@ -310,6 +338,7 @@ test('models setup removes concrete web search and stream timeout when convertin
       route: {
         providerType: 'openai-responses',
         webSearch: { enabled: true },
+        keepReasoningOnError: true,
         streamContentInactivityTimeoutMs: 300000,
         models: ['model-a'],
       },
@@ -318,6 +347,7 @@ test('models setup removes concrete web search and stream timeout when convertin
   });
 
   assert.equal((next.providers?.route as any).webSearch, undefined);
+  assert.equal(next.providers?.route.keepReasoningOnError, undefined);
   assert.equal(next.providers?.route.streamContentInactivityTimeoutMs, undefined);
   assert.doesNotThrow(() => loadModelsConfigFromObject(next));
 });

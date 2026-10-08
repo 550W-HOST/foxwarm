@@ -1,5 +1,6 @@
+import { WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, SquareTerminal } from 'lucide-react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -43,6 +44,7 @@ interface TerminalViewProps {
 }
 
 export default function TerminalView({ initialCwd, initialNodeId, initialTerminalId, createMode = 'reuse', onBack, onSessionsChanged, onTerminalReady, onTerminalClosed }: TerminalViewProps) {
+  const tabHeader = useWorkbenchTabHeader()
   const hostRef = useRef<HTMLDivElement | null>(null)
   const xtermRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -383,11 +385,16 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-fw-canvas">
-      <div className="border-b border-fw-border bg-fw-neutral-surface px-2.5 py-1.5 dark:border-fw-border dark:bg-fw-canvas">
+      <div data-terminal-header className="border-b border-fw-border bg-fw-neutral-surface px-2.5 py-1.5 dark:border-fw-border dark:bg-fw-canvas">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-fw-text">
-              {onBack && (
+              {tabHeader ? (
+                <span className="inline-flex shrink-0 items-center gap-2">
+                  <WorkbenchTabClose className="inline-flex items-center justify-center rounded text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong" iconClassName="h-3.5 w-3.5" />
+                  <WorkbenchTabIcon className="inline-flex items-center justify-center text-fw-text-muted"><SquareTerminal className="h-3.5 w-3.5" /></WorkbenchTabIcon>
+                </span>
+              ) : onBack && (
                 <button
                   type="button"
                   onClick={onBack}

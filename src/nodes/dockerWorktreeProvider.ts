@@ -692,6 +692,7 @@ export class DockerWorktreeNodeProvider implements NodeProvider {
       detachedReadOnlySession: true,
       skipExecPreSave: true,
       deferSessionCwdSync: request.context.deferSessionCwdSync === true,
+      ...(request.context.programmatic ? { programmatic: true } : {}),
       toolExecutionSnapshot: { currentNode: request.nodeId, ...(request.context.cwd ? { cwd: request.context.cwd } : {}) },
     });
   }

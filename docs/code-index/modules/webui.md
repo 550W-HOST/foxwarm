@@ -1,22 +1,26 @@
 # Module: React WebUI
 
-The browser client built from `packages/webui`. It renders sessions, streams, tools, tasks, settings, terminal, and Code workbench surfaces against the .NET host route contract. Browser state is not Session authority: committed history/queue/settings come from host responses and realtime events.
+The browser client built from `packages/webui`. It renders session navigation, Chat, history and realtime state, tasks, setup, logs, terminal, and Code workbench surfaces against the host route contract. Browser state is presentation state; Session authority and durable task state remain host-owned.
 
 ## Units
 
-- [Application shell, embedding, and transport configuration](../units/webui-app-shell.md)
-- [Chat composer, attachments, and session draft state](../units/webui-chat-composer.md)
-- [Chat timeline, message rendering, and tool cards](../units/webui-chat-timeline.md)
-- [Session list, architecture, search, and bounded replay](../units/webui-session-navigation.md)
-- [Task and collaboration UI](../units/webui-tasks.md)
-- [Workbench, Code launch, and VS Code Web frame](../units/webui-workbench.md)
-- [Terminal view and virtual keyboard](../units/webui-terminal.md)
-- [Setup, model configuration, and UI settings](../units/webui-settings-setup.md)
-- [Theme system and built-in themes](../units/webui-theme.md)
-- [Realtime transport and event timing](../units/webui-realtime.md)
-- [Browser/client tests and fixtures](../units/webui-webui-tests.md)
+- [Chat composer](../units/webui-chat-composer.md)
+- [Chat timeline](../units/webui-chat-timeline.md)
+- [Chat realtime transport](../units/webui-realtime.md)
+- [History search](../units/webui-history-search.md)
+- [Logs view](../units/webui-logs.md)
+- [Tasks view](../units/webui-tasks.md)
+- [Terminal view](../units/webui-terminal.md)
+- [Workbench and tab layout](../units/webui-workbench.md)
 
-## Boundary threads
+## Boundaries
 
-- [.NET WebUI boundary](../threads/dotnet-webui-boundary.md) owns host-side auth/routes/realtime ordering.
-- [Session ownership and persistence](../threads/session-ownership-and-persistence.md) owns which host response is authoritative.
+- The .NET host owns authentication, route authorization, Session authority, task persistence, and realtime event ordering. See [the .NET WebUI module](./dotnet-webui.md).
+- The browser derives API, WebSocket, popup, download, and Code URLs from the active deployment path and origin; site-root assumptions are invalid.
+- Chat history, queue state, task state, and settings shown in the browser are refreshed from host responses and realtime events rather than treated as independent authority.
+- Built-in and imported theme data follows one browser-local manifest/runtime path; rendering remains presentation-only.
+
+## Compatibility
+
+- Supported legacy message and workbench forms are normalized on read where the current WebUI still exposes that compatibility boundary.
+- Optional Code assets remain outside the main WebUI bundle.

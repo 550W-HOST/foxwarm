@@ -21,7 +21,7 @@ await esbuild.build({
   logLevel: 'silent',
 })
 
-const { createLatestRequestGate, loadPageOnce, runLatestModelOptionsRequest } = await import(pathToFileURL(bundledPath).href)
+const { createLatestRequestGate, loadPageOnce, MODEL_OPTIONS_CHANGED_EVENT, refreshModelOptions, runLatestModelOptionsRequest } = await import(pathToFileURL(bundledPath).href)
 
 function deferred() {
   let resolve
@@ -117,4 +117,49 @@ test('page-lifetime loads cache failures and a fresh module lifetime starts empt
     return [{ key: 'fresh/model' }]
   }), [{ key: 'fresh/model' }])
   assert.equal(freshRequests, 1)
+})
+
+test('model refresh shares a new request, fences the old response, and preserves other bootstrap caches', async () => {
+  const previousWindow = globalThis.window
+  const window = new EventTarget()
+  globalThis.window = window
+  try {
+    const asr = loadPageOnce('webui:asr-status', async () => true)
+    const commands = loadPageOnce('webui:commands', async () => ['help'])
+    const oldResponse = deferred()
+    const newResponse = deferred()
+    const gate = createLatestRequestGate()
+    const harness = stateHarness()
+    const oldRun = runLatestModelOptionsRequest(gate, () => loadPageOnce('webui:models', () => oldResponse.promise), harness.update)
+    let requests = 0
+    let refreshedRun
+    let sharedLoad
+    window.addEventListener(MODEL_OPTIONS_CHANGED_EVENT, () => {
+      refreshedRun = runLatestModelOptionsRequest(gate, () => loadPageOnce('webui:models', () => {
+        requests += 1
+        return newResponse.promise
+      }), harness.update)
+    })
+    window.addEventListener(MODEL_OPTIONS_CHANGED_EVENT, () => {
+      sharedLoad = loadPageOnce('webui:models', () => {
+        requests += 1
+        return newResponse.promise
+      })
+    })
+
+    refreshModelOptions()
+    newResponse.resolve([{ key: 'new/model' }])
+    await refreshedRun
+    assert.deepEqual(await sharedLoad, [{ key: 'new/model' }])
+    oldResponse.resolve([{ key: 'old/model' }])
+    await oldRun
+    assert.equal(requests, 1)
+    assert.deepEqual(harness.state, { options: [{ key: 'new/model' }], error: null, loading: false })
+    assert.deepEqual(await loadPageOnce('webui:models', async () => [{ key: 'unexpected' }]), [{ key: 'new/model' }])
+    assert.equal(loadPageOnce('webui:asr-status', async () => false), asr)
+    assert.equal(loadPageOnce('webui:commands', async () => []), commands)
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window
+    else globalThis.window = previousWindow
+  }
 })

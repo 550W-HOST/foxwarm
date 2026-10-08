@@ -4,6 +4,8 @@ export type FoxwarmPopupTarget =
   | { kind: 'chat'; sessionId: string; title?: string }
   | { kind: 'terminal'; terminalId: string; title?: string }
   | { kind: 'agents' }
+  | { kind: 'search' }
+  | { kind: 'logs' }
   | { kind: 'tasks' }
   | { kind: 'setup' }
 
@@ -21,6 +23,8 @@ export function parseFoxwarmPopupTarget(search: string): FoxwarmPopupTarget | nu
   const kind = params.get('foxwarmPopup')
   if (kind === 'agents') return { kind: 'agents' }
   if (kind === 'tasks') return { kind: 'tasks' }
+  if (kind === 'logs') return { kind: 'logs' }
+  if (kind === 'search') return { kind: 'search' }
   if (kind === 'setup') return { kind: 'setup' }
 
   const title = normalizeBoundedText(params.get('title'), 200)

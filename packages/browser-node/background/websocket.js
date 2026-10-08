@@ -21,6 +21,7 @@ let connectionState = 'disconnected'; // disconnected, connecting, connected, pa
 let pairingRejected = false;
 let protocolIncompatible = false;
 let currentNodeId = null;
+let currentPendingId = null;
 let manualDisconnect = false;
 let stateChangeCallback = null;
 
@@ -30,6 +31,7 @@ export function onStateChange(cb) {
 
 function setState(state, detail = {}) {
   connectionState = state;
+  currentPendingId = state === 'pair_pending' ? detail.pendingId : null;
   // Notify callback
   if (stateChangeCallback) {
     try { stateChangeCallback(state, detail); } catch {}
@@ -43,7 +45,7 @@ function setState(state, detail = {}) {
 }
 
 export function getState() {
-  return { state: connectionState, nodeId: currentNodeId };
+  return { state: connectionState, nodeId: currentNodeId, pendingId: currentPendingId };
 }
 
 function stopHeartbeat() {
@@ -129,8 +131,8 @@ async function handleMessage(data) {
       break;
 
     case 'pair_pending':
-      console.log(`[foxwarm-node] Pairing pending: ${data.pairCode}`);
-      setState('pair_pending', { pendingId: data.pendingId, pairCode: data.pairCode });
+      console.log(`[foxwarm-node] Pairing pending. Run /node approve ${data.pendingId}`);
+      setState('pair_pending', { pendingId: data.pendingId });
       break;
 
     case 'pair_approved':

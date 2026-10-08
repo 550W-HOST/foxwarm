@@ -7,7 +7,7 @@ import test from 'node:test';
 
 const CHILD_TIMEOUT_MS = 5_000;
 
-async function runLoggerChild(dataRoot: string, marker: string): Promise<{ stdout: string; stderr: string }> {
+async function runLoggerChild(dataRoot: string, marker: string, sync = false): Promise<{ stdout: string; stderr: string }> {
     const commonPath = require.resolve('./common');
     const script = `
         const { logger } = require(${JSON.stringify(commonPath)});
@@ -21,6 +21,8 @@ async function runLoggerChild(dataRoot: string, marker: string): Promise<{ stdou
         'FOXWARM_TEST_PROCESS_ROOT',
         'NODE_TEST_CONTEXT',
     ]) delete env[key];
+
+    if (sync) env.FOXWARM_SYNC_FILE_LOG = '1';
 
     const child = spawn(process.execPath, ['-e', script], {
         cwd: path.dirname(__dirname),
@@ -65,6 +67,26 @@ test('async logger creates its file directory, preserves the final record, and e
         assert.match(result.stdout, new RegExp(marker));
         const fileLog = await fs.readFile(path.join(dataRoot, 'state', 'logs', 'foxwarm.log'), 'utf8');
         assert.match(fileLog, new RegExp(marker));
+        assert.match(fileLog, /\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} [+-]\d{4}\]/);
+        assert.ok(!fileLog.includes('\u001b'));
+        assert.match(result.stdout, /\[\d{2}:\d{2}:\d{2}\.\d{3}\]/);
+    } finally {
+        await fs.rm(dataRoot, { recursive: true, force: true });
+    }
+});
+
+
+test('synchronous short-lived logger keeps JSON time and natural exit', async () => {
+    const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-sync-logger-'));
+    const marker = `sync-logger-final-${process.pid}`;
+    try {
+        const result = await runLoggerChild(dataRoot, marker, true);
+        assert.equal(result.stdout, '');
+        const fileLog = await fs.readFile(path.join(dataRoot, 'state', 'logs', 'foxwarm.log'), 'utf8');
+        const record = JSON.parse(fileLog.trim());
+        assert.equal(record.msg, marker);
+        assert.equal(record.marker, marker);
+        assert.equal(typeof record.time, 'number');
     } finally {
         await fs.rm(dataRoot, { recursive: true, force: true });
     }

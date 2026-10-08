@@ -12,6 +12,8 @@ import { setNodeProcessTitle } from './processTitle';
 import WebSocket from 'ws';
 import { initializeNodeToolExecRecovery, nodeTools, setNodeToolSessionEventDispatcher, type NodeSessionEventMetadata } from '../../shared/dist/nodeTools';
 import { expandHomePath } from '../../shared/dist/execCwd';
+import { withResolvedPathSidecar, type ResolvedToolPath } from '../../shared/dist/resolvedPathMetadata';
+import { rejectUnsupportedAgentPathVariable } from '../../shared/dist/agentPathVariables';
 import { PersistentExecManager } from '../../shared/dist/persistentExec';
 import { nativeFileOperations } from '../../shared/dist/fileOperations';
 import { CLI_NODE_CAPABILITIES } from '../../shared/dist/nodeCapabilities';
@@ -158,6 +160,7 @@ export class NodeClient {
   private requestedName: string;
   private pairingToken?: string;
   private credentialsFile?: string;
+  private initialAuthCredentialsPending = false;
   private connectedNodeId: string | null = null;
   private authToken?: string;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -197,6 +200,7 @@ export class NodeClient {
     this.credentialsFile = options.credentialsFile;
     this.connectedNodeId = options.authToken && options.nodeId ? options.nodeId : null;
     this.authToken = options.authToken;
+    this.initialAuthCredentialsPending = !!(options.authToken && options.nodeId);
     this.localTriggerEnabled = options.localTrigger !== false;
     this.localTriggerPort = typeof options.localTriggerPort === 'number' && Number.isFinite(options.localTriggerPort)
       ? options.localTriggerPort
@@ -218,7 +222,7 @@ export class NodeClient {
   private getNodeCapabilities() {
     return {
       ...CLI_NODE_CAPABILITIES,
-      features: { remoteExecBackgroundRegistration: true, ...(!this.toolCallInterceptor ? { externalToolOwner: 1 } : {}) },
+      features: { remoteExecBackgroundRegistration: true, programmaticToolData: true, ...(!this.toolCallInterceptor ? { externalToolOwner: 1 } : {}) },
       services: {
         ...CLI_NODE_CAPABILITIES.services,
         ...(this.nodePtyService ? { 'vscode-pty': 1 } : {}),
@@ -236,6 +240,9 @@ export class NodeClient {
   }
 
   private async loadStoredCredentials(): Promise<void> {
+    // An explicitly supplied initial credential must not be silently replaced
+    // by an older credentials file.
+    if (this.initialAuthCredentialsPending) return;
     if (!this.credentialsFile || !await fs.pathExists(this.credentialsFile)) {
       return;
     }
@@ -257,7 +264,8 @@ export class NodeClient {
       nodeId,
       authToken,
       pairedAt: Date.now(),
-    }, { spaces: 2 });
+    }, { spaces: 2, mode: 0o600 });
+    await fs.chmod(this.credentialsFile, 0o600);
   }
 
   private async clearStoredCredentials(): Promise<void> {
@@ -571,6 +579,10 @@ export class NodeClient {
         }
         this.protocolIncompatible = false;
         this.negotiatedNodeProtocol = negotiated;
+        if (this.initialAuthCredentialsPending && this.authToken && this.connectedNodeId === message.nodeId) {
+          await this.saveStoredCredentials(String(message.nodeId), this.authToken);
+          this.initialAuthCredentialsPending = false;
+        }
         logger.info({ nodeId: message.nodeId }, 'Node registered');
         this.onStatus?.('registered', { nodeId: message.nodeId });
         this.connectedNodeId = message.nodeId;
@@ -595,8 +607,8 @@ export class NodeClient {
         this.onStatus?.('protocol_incompatible', message);
         break;
       case 'pair_pending':
-        logger.info({ pendingId: message.pendingId, pairCode: message.pairCode, requestedName: message.requestedName }, 'Node pairing pending approval');
-        this.onStatus?.('pair_pending', { pendingId: message.pendingId, pairCode: message.pairCode });
+        logger.info({ pendingId: message.pendingId, requestedName: message.requestedName }, `Node pairing pending approval. Run /node approve ${String(message.pendingId)}`);
+        this.onStatus?.('pair_pending', { pendingId: message.pendingId, approvalCommand: `/node approve ${String(message.pendingId)}` });
         break;
       case 'pair_approved':
         logger.info({ nodeId: message.nodeId }, 'Node pairing approved, storing credentials');
@@ -778,8 +790,10 @@ export class NodeClient {
         throw new Error(`Tool \`${tool}\` not found`);
       }
 
+      const resolvedPaths: ResolvedToolPath[] = [];
       const ctx = {
         sessionId,
+        ...(message.programmatic === true ? { programmatic: true as const } : {}),
         session: {
           id: sessionId,
           agent: agentName,
@@ -799,6 +813,7 @@ export class NodeClient {
           });
         },
         fileOperations: nativeFileOperations,
+        onResolvedPaths: (paths: ResolvedToolPath[]) => { resolvedPaths.push(...paths); },
         broadcast: async (text: string) => {
           this.send({
             type: 'broadcast',
@@ -812,7 +827,7 @@ export class NodeClient {
       };
 
       const rawResult = await toolFn(args, ctx);
-      const result = this.normalizeToolResult(rawResult);
+      const result = withResolvedPathSidecar(this.normalizeToolResult(rawResult), resolvedPaths);
 
       this.send({
         type: 'tool_call_response',
@@ -862,6 +877,7 @@ export class NodeClient {
         runtimeNodeId: this.connectedNodeId || this.requestedName,
         fileOperations: nativeFileOperations,
         resolveFilePath: (filePath: string) => {
+          rejectUnsupportedAgentPathVariable(filePath);
           const expanded = expandHomePath(filePath);
           return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(cwd, expanded);
         },

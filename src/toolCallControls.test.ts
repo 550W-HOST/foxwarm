@@ -10,8 +10,10 @@ import { buildToolDefinitions } from './tools/definitions';
 import { tool_create_child_session, tool_send_to_session } from './toolsSessionAgent/interSession';
 import { tool_run_script } from './toolscript';
 import {
+  INTER_AGENT_HANDOFF_RECALL_PREFIX,
+  INTER_AGENT_HANDOFF_RECALL_PLACEHOLDER,
   INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX,
-  INTER_AGENT_HANDOFF_REVIEW_PLACEHOLDER,
+  INTER_AGENT_HANDOFF_CONFIRMATION_PLACEHOLDER,
   INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX,
   addToolCancellationSchema,
   validateInterAgentHandoffConfirmation,
@@ -25,6 +27,10 @@ function unique(prefix: string): string {
 
 function confirmation(review = 'The handoff is necessary, accurate, self-contained, scoped to the target, and follows the communication rules.'): string {
   return `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n${review}\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
+}
+
+function recall(review = 'I recalled the applicable communication rules, the user request, and the recipient scope for this handoff.'): string {
+  return `${INTER_AGENT_HANDOFF_RECALL_PREFIX}\n${review}`;
 }
 
 function responses(message: any): any[] {
@@ -57,21 +63,25 @@ test('default model-facing schemas omit handoff confirmation while always append
 
   for (const name of ['create_child_session', 'send_to_session']) {
     const definition = modelFacingDefinitions.find(item => item.name === name)!;
-    assert.equal(definition.parameters.properties.confirmation, undefined);
-    assert.equal(definition.parameters.required?.includes('confirmation'), false);
+    assert.equal(definition.parameters.properties.handoffRecall, undefined);
+    assert.equal(definition.parameters.properties.handoffConfirmation, undefined);
+    assert.equal(definition.parameters.required?.includes('handoffRecall'), false);
+    assert.equal(definition.parameters.required?.includes('handoffConfirmation'), false);
   }
 });
 
 test('enabled model-facing schemas require confirmation before unconditional cancellation controls', () => {
   const enabled = buildToolDefinitions(true).map(addToolCancellationSchema);
-  const requiredProtocolText = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n${INTER_AGENT_HANDOFF_REVIEW_PLACEHOLDER}\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
+    const requiredProtocolText = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n${INTER_AGENT_HANDOFF_CONFIRMATION_PLACEHOLDER}\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
   for (const name of ['create_child_session', 'send_to_session']) {
     const definition = enabled.find(item => item.name === name)!;
     const keys = Object.keys(definition.parameters.properties);
-    assert.equal(keys.at(-3), 'confirmation');
+    assert.equal(keys.at(-3), 'handoffConfirmation');
+    assert.ok(keys.indexOf('handoffRecall') < keys.indexOf('message'));
     assert.deepEqual(keys.slice(-2), ['__cancelTool', '__cancelAllToolsThisTurn']);
-    assert(definition.parameters.required?.includes('confirmation'));
-    assert.match(definition.parameters.properties.confirmation.description, new RegExp(`${requiredProtocolText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`));
+    assert(definition.parameters.required?.includes('handoffRecall'));
+    assert(definition.parameters.required?.includes('handoffConfirmation'));
+    assert.match(definition.parameters.properties.handoffConfirmation.description, new RegExp(`${requiredProtocolText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`));
   }
 });
 
@@ -147,7 +157,7 @@ test('a valid handoff reaches ordinary execution while a sibling still executes'
   const starts: string[] = [];
   try {
     const result = await executeTools([
-      { id: 'handoff', name: 'send_to_session', args: { sessionId: 'missing', message: 'confirmed', confirmation: confirmation() } },
+      { id: 'handoff', name: 'send_to_session', args: { sessionId: 'missing', handoffRecall: recall(), message: 'confirmed', handoffConfirmation: confirmation() } },
       { id: 'sibling', name: 'exec', args: { command: `touch ${JSON.stringify(marker)}` } },
     ], { sessionId, session, onToolStart: ({ name }: any) => starts.push(name) }, session);
     assert.match(String(responses(result)[0].error), /not found/i);
@@ -177,24 +187,27 @@ test('the same cancellation preflight works with an authoritative Session-worker
   }
 });
 
-test('handoff confirmation accepts optional review separators while preserving exact framing', () => {
-  const valid = { sessionId: 'target', message: 'hello', confirmation: confirmation() };
+test('handoff recall and confirmation preserve exact framing and argument placement', () => {
+  const valid = { sessionId: 'target', handoffRecall: recall(), message: 'hello', handoffConfirmation: confirmation() };
   assert.doesNotThrow(() => validateInterAgentHandoffConfirmation(valid));
-  assert.doesNotThrow(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}same-line review${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }));
-  assert.doesNotThrow(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX} review with spaces ${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }));
-  assert.doesNotThrow(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\r\nCRLF review\r\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }));
-  assert.doesNotThrow(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nmultiline\nreview\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }));
-  assert.throws(() => validateInterAgentHandoffConfirmation({ sessionId: 'target', message: 'hello' }), /prefix and suffix/);
-  assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `wrong\nreview\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /prefix and suffix/);
-  assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nreview\nwrong` }), /prefix and suffix/);
-  assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /non-empty/);
-  assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX} ${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /non-empty/);
-  assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n \n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /non-empty/);
-  assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}${INTER_AGENT_HANDOFF_REVIEW_PLACEHOLDER}${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /replace the documented placeholder/);
-  assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n${INTER_AGENT_HANDOFF_REVIEW_PLACEHOLDER}\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /replace the documented placeholder/);
-  assert.throws(() => validateInterAgentHandoffConfirmation({ confirmation: confirmation(), sessionId: 'target', message: 'hello' }), /final argument property/);
+  assert.doesNotThrow(() => validateInterAgentHandoffConfirmation({ ...valid, handoffConfirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}same-line review${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }));
+  assert.doesNotThrow(() => validateInterAgentHandoffConfirmation({ ...valid, handoffConfirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX} review with spaces ${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }));
+  assert.doesNotThrow(() => validateInterAgentHandoffConfirmation({ ...valid, handoffConfirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\r\nCRLF review\r\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }));
+  assert.doesNotThrow(() => validateInterAgentHandoffConfirmation({ ...valid, handoffConfirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nmultiline\nreview\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }));
+  assert.throws(() => validateInterAgentHandoffConfirmation({ sessionId: 'target', message: 'hello' }), /handoff recall/);
+  assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, handoffRecall: 'wrong\ncontext' }), /handoff recall/);
+  assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, handoffConfirmation: `wrong\nreview\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /prefix and suffix/);
+  assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, handoffConfirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nreview\nwrong` }), /prefix and suffix/);
+  assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, handoffConfirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /non-empty/);
+  assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, handoffConfirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX} ${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /non-empty/);
+  assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, handoffConfirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n \n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /non-empty/);
+  assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, handoffRecall: `${INTER_AGENT_HANDOFF_RECALL_PREFIX}\n${INTER_AGENT_HANDOFF_RECALL_PLACEHOLDER}` }), /placeholder/);
+  assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, handoffConfirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}${INTER_AGENT_HANDOFF_CONFIRMATION_PLACEHOLDER}${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /replace the documented placeholder/);
+  assert.throws(() => validateInterAgentHandoffConfirmation({ handoffRecall: recall(), handoffConfirmation: confirmation(), sessionId: 'target', message: 'hello' }), /final argument property/);
+  assert.doesNotThrow(() => validateInterAgentHandoffConfirmation({ sessionId: 'target', handoffRecall: recall(), message: 'hello', handoffConfirmation: confirmation() }));
+  assert.throws(() => validateInterAgentHandoffConfirmation({ sessionId: 'target', message: 'hello', handoffRecall: recall(), handoffConfirmation: confirmation() }), /before the message/);
   assert.doesNotThrow(() => validateInterAgentHandoffConfirmationForMode({ sessionId: 'target', message: 'hello' }, false));
-  assert.throws(() => validateInterAgentHandoffConfirmationForMode({ sessionId: 'target', message: 'hello' }, true), /prefix and suffix/);
+  assert.throws(() => validateInterAgentHandoffConfirmationForMode({ sessionId: 'target', message: 'hello' }, true), /handoff recall/);
 });
 
 test('direct handoff handlers accept valid confirmation, including child creation without a message', async () => {
@@ -204,10 +217,10 @@ test('direct handoff handlers accept valid confirmation, including child creatio
   await makeSession(targetId);
   let childId: string | undefined;
   try {
-    const sendResult: any = await tool_send_to_session({ sessionId: targetId, message: 'hello', confirmation: confirmation() }, { sessionId: parentId, session: parent });
+    const sendResult: any = await tool_send_to_session({ sessionId: targetId, handoffRecall: recall(), message: 'hello', handoffConfirmation: confirmation() }, { sessionId: parentId, session: parent });
     assert.match(typeof sendResult === 'string' ? sendResult : sendResult.output, /Message sent/);
 
-    const createResult: any = await tool_create_child_session({ suffix: 'confirmed', confirmation: confirmation() }, { sessionId: parentId, session: parent });
+    const createResult: any = await tool_create_child_session({ suffix: 'confirmed', handoffRecall: recall(), handoffConfirmation: confirmation() }, { sessionId: parentId, session: parent });
     const output = typeof createResult === 'string' ? createResult : createResult.output;
     childId = output.match(/`([^`]+)`/)?.[1];
     assert.match(output, /Child session created/);
@@ -243,18 +256,18 @@ test('unified and ToolScript handoffs accept valid confirmation', async () => {
     const unified: any = await call_tool({
       source: 'builtin',
       name: 'send_to_session',
-      args: { sessionId: targetId, message: 'confirmed unified', confirmation: confirmation() },
+      args: { sessionId: targetId, handoffRecall: recall(), message: 'confirmed unified', handoffConfirmation: confirmation() },
     }, { sessionId: sourceId, session: source });
     assert.match(String(unified?.output ?? unified), /Message sent/);
 
     await assert.rejects(() => call_tool({
       source: 'builtin',
       name: 'send_to_session',
-      args: { sessionId: targetId, message: 'nested control is concrete payload', __cancelTool: true, confirmation: confirmation() },
+      args: { sessionId: targetId, message: 'nested control is concrete payload', __cancelTool: true, handoffRecall: recall(), handoffConfirmation: confirmation() },
     }, { sessionId: sourceId, session: source }), /unsupported argument.*__cancelTool/);
 
     const confirmed = await tool_run_script({
-      code: `def main(args):\n    return call_tool(source="builtin", name="send_to_session", args={"sessionId":${JSON.stringify(targetId)},"message":"confirmed script","confirmation":${JSON.stringify(confirmation())}})`,
+      code: `def main(args):\n    return call_tool(source="builtin", name="send_to_session", args={"sessionId":${JSON.stringify(targetId)},"handoffRecall":${JSON.stringify(recall())},"message":"confirmed script","handoffConfirmation":${JSON.stringify(confirmation())}})`,
     }, { sessionId: sourceId, session: source });
     assert.equal(confirmed.status, 'completed');
     assert.match(String((confirmed.result as any)?.output ?? confirmed.result), /Message sent/);

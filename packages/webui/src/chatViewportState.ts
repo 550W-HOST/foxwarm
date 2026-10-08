@@ -66,7 +66,12 @@ export function getMessageStableKey(message: Message, fallbackIndex: number): st
   }
   // A live model draft and its one canonical provider message share this ID,
   // so the final commit can reuse the mounted timeline row.
-  if (message.role === 'model' && hasStableMetaValue(meta.llmRequestId)) return `llm-request-${String(meta.llmRequestId)}`
+  if (message.role === 'model' && hasStableMetaValue(meta.llmRequestId)) {
+    const start = meta.llmSegment?.outputStart
+    return typeof start === 'number' && Number.isSafeInteger(start) && start > 0
+      ? `llm-request-${String(meta.llmRequestId)}-output-${String(start)}`
+      : `llm-request-${String(meta.llmRequestId)}`
+  }
   if (hasStableMetaValue(meta.synthetic)) return `synthetic-${String(meta.synthetic)}`
   if (hasStableMetaValue(meta.clientMessageId)) return `client-${String(meta.clientMessageId)}`
   if (hasStableMetaValue(meta.seq)) {

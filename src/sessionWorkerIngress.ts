@@ -9,7 +9,7 @@ import type { SessionWorkerCatalogFieldsPatch } from './sessionWorkerRuntimeServ
 import type { SessionWorkerOwnershipRecord, SessionWorkerStore } from './sessionWorkerStore';
 import { stableSessionWorkerJson } from './sessionWorkerStableJson';
 import type { SessionWorkerProjection } from './sessionWorkerPersistence';
-import type { CompactionRequest, ImageMeta, InlineDataRef, Message, MessagePart, QueueItem } from './types';
+import type { CompactionRequest, ImageMeta, InlineDataRef, Message, MessagePart, QueueItem, SessionEnqueueOptions } from './types';
 import type { SessionWorkerHistoryMutationResult, SessionWorkerSettingsPatch, SessionWorkerSettingsResult } from './sessionWorkerRuntimeService';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 
@@ -155,7 +155,7 @@ export async function resumeSessionWorkerPendingIntents(
   busyCandidates?: () => string[],
 ): Promise<void> {
   const catalogCandidates = busyCandidates ? new Set(busyCandidates()) : undefined;
-  const resumable = new Set(store.listSessionsWithPendingIntents()
+  const resumable = new Set(store.listSessionsWithPendingIntents(true)
     .filter(sessionId => !catalogCandidates || catalogCandidates.has(sessionId)));
   // Eager crash recovery: an unconfirmed exit can leave an authority busy flag
   // with no pending mailbox intent, so also resume sessions whose authoritative
@@ -350,17 +350,19 @@ export class SessionWorkerIngressCoordinator {
    * failure leaves the durable intent retryable.
    */
   async enqueueEnsuringWorker(requestedSessionId: string, item: QueueItem,
-    assertAdmissionActive?: () => void): Promise<{ sessionId: string; mailboxIntentId: number }> {
-    const { sessionId, item: payload } = this.resolveExact(requestedSessionId, item);
+    options: SessionEnqueueOptions = {}, assertAdmissionActive?: () => void): Promise<{ sessionId: string; mailboxIntentId: number }> {
+    const { trigger: _untrustedTrigger, ...ordinaryItem } = item;
+    const { sessionId, item: validated } = this.resolveExact(requestedSessionId, ordinaryItem);
+    const payload = options.trigger === false ? { ...validated, trigger: false as const } : validated;
     const admitted = await this.withMutationAdmission(sessionId, 'accept queued work', async () => {
-      const expected = await this.ensureReadyOwner(sessionId);
-      this.supervisor.assertActivatedOwnership(sessionId, expected);
+      const expected = options.trigger === false ? undefined : await this.ensureReadyOwner(sessionId);
+      if (expected) this.supervisor.assertActivatedOwnership(sessionId, expected);
       assertAdmissionActive?.();
       const intent = this.store.enqueueIntent(sessionId, this.intentIdentity(payload), 'enqueue', payload);
       return { expected, intentId: intent.id };
     });
     this.notifyDurableIntentAccepted(sessionId, admitted.intentId);
-    void this.supervisor.runPendingActivated(sessionId, admitted.expected).catch(error => {
+    if (admitted.expected) void this.supervisor.runPendingActivated(sessionId, admitted.expected).catch(error => {
       logger.error({ err: error, sessionId }, 'Detached session worker runPending failed; durable mailbox work remains retryable');
     });
     return { sessionId, mailboxIntentId: admitted.intentId };

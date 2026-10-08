@@ -6,6 +6,7 @@ import path from 'path';
 import {
   approvePendingPairing,
   authenticateApprovedNode,
+  createApprovedNode,
   cleanupExpiredPendingPairings,
   createNodeRegistryStore,
   createPendingPairing,
@@ -50,6 +51,46 @@ test('node registry writes through DiskJsonData-backed persistence', async () =>
     const written = await fs.readJson(filePath);
     assert(written.pendingPairings[pending.id]);
     assert.equal(Object.keys(written.pendingPairings).length, 1);
+  });
+});
+
+test('direct Node creation writes only the credential hash, rejects collisions, and revokes it on removal', async () => {
+  await withTempDir(async dirPath => {
+    const filePath = path.join(dirPath, 'nodes.json');
+    setNodeRegistryStoreForTests(createNodeRegistryStore(filePath));
+    const created = await createApprovedNode('new-node');
+    assert.match(created.authToken, /^[a-f0-9]{64}$/);
+    const raw = await fs.readJson(filePath);
+    assert.equal(raw.approvedNodes['new-node'].tokenHash.length, 64);
+    assert.equal(JSON.stringify(raw).includes(created.authToken), false);
+    assert.equal(raw.approvedNodes['new-node'].nodeProtocol, undefined);
+    assert.equal((await authenticateApprovedNode('new-node', created.authToken))?.nodeId, 'new-node');
+    assert.equal(await authenticateApprovedNode('new-node', 'incorrect'), null);
+    for (const invalid of ['master', 'New Node', 'new-node']) {
+      await assert.rejects(createApprovedNode(invalid));
+    }
+    await removeApprovedNode('new-node');
+    assert.equal(await authenticateApprovedNode('new-node', created.authToken), null);
+  });
+});
+
+test('old pending pair code is ignored on load and dropped on write without losing offline approved handoff', async () => {
+  await withTempDir(async dirPath => {
+    const filePath = path.join(dirPath, 'nodes.json');
+    setNodeRegistryStoreForTests(createNodeRegistryStore(filePath));
+    const pending = await createPendingPairing({ requestedName: 'old', nodeType: 'cli-node', capabilities: capabilities('old') });
+    const approved = await approvePendingPairing(pending.id, 'offline-old');
+    const before = await fs.readJson(filePath);
+    before.pendingPairings[pending.id].pairCode = '123456';
+    await fs.writeJson(filePath, before);
+    resetNodeRegistryForTests();
+    const loaded = await listPendingPairings();
+    assert.equal(loaded[0].approvedAuthToken, approved.authToken);
+    assert.equal('pairCode' in loaded[0], false);
+    await createPendingPairing({ requestedName: 'new', nodeType: 'cli-node', capabilities: capabilities('new') });
+    const after = await fs.readJson(filePath);
+    assert.equal('pairCode' in after.pendingPairings[pending.id], false);
+    assert.equal(after.pendingPairings[pending.id].approvedAuthToken, approved.authToken);
   });
 });
 

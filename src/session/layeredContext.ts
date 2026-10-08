@@ -3,6 +3,7 @@ import { SessionArchiveCommitError } from './archive';
 import { formatLocalTimeRange } from '../utils/localTime';
 import {
   ensureSessionBranch,
+  getEffectiveArchiveBlockMaxId,
   readEffectiveArchiveBlocks,
   readLocalArchiveBlocks as readLocalArchiveBlocksFromStore,
   rollbackUncommittedArchiveBlocks,
@@ -140,25 +141,21 @@ export function shouldIgnoreMessageInCompactCandidates(message: Message): boolea
   return systemTexts.every(isIgnoredCompactLifecycleSystemText);
 }
 
-function getNextSessionBlockId(session: Session): number {
-  if (typeof session.nextBlockId === 'number' && session.nextBlockId > 0) {
-    return session.nextBlockId;
-  }
-
-  let maxId = 0;
+export async function resolveNextSessionBlockId(session: Pick<Session, 'id' | 'nextBlockId' | 'history'>): Promise<number> {
+  let maxId = await getEffectiveArchiveBlockMaxId(session.id);
   for (const message of session.history) {
     const id = message.__meta?.contextBlock?.id;
     if (typeof id === 'number' && id > maxId) maxId = id;
   }
-
-  session.nextBlockId = maxId + 1 || 1;
-  return session.nextBlockId;
+  const persisted = typeof session.nextBlockId === 'number' && session.nextBlockId > 0 ? session.nextBlockId : 1;
+  return Math.max(persisted, maxId + 1);
 }
 
 async function buildArchiveBlockRecords(session: Session, blocks: CreateArchiveBlockInput[]): Promise<ArchiveBlockRecord[]> {
+  session.nextBlockId = await resolveNextSessionBlockId(session);
   const createdAt = Date.now();
   return blocks.map((block) => {
-    const id = getNextSessionBlockId(session);
+    const id = session.nextBlockId!;
     session.nextBlockId = id + 1;
     return {
       v: 1,

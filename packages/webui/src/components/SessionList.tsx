@@ -1,4 +1,4 @@
-import { ClipboardList, History, Workflow } from 'lucide-react'
+import { History, Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { BoundedSessionListPresentationProps, Session } from './SessionListCore'
 import type { SessionIdleNotificationMode } from '../sessionIdleNotifications'
@@ -13,14 +13,15 @@ interface SessionListProps {
   sessions: Session[]
   agents: AgentSummary[]
   currentSession?: string
-  currentView: 'session' | 'agents' | 'setup'
+  currentView: 'session' | 'agents' | 'setup' | 'logs' | 'tasks'
   currentSessionRecord?: Session
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
-  onSelectSearch?: () => void
-  onSelectTasks?: () => void
+  onSelectSearch: () => void
   onSelectSetup: () => void
+  onSelectLogs?: () => void
+  onSelectTasks?: () => void
   codePath: string
   codeNodeId: string
   codeOpenInNewWindow: boolean
@@ -51,8 +52,9 @@ export default function SessionList({
   onKeepSession,
   onSelectArchitecture,
   onSelectSearch,
-  onSelectTasks,
   onSelectSetup,
+  onSelectLogs,
+  onSelectTasks,
   codePath,
   codeNodeId,
   codeOpenInNewWindow,
@@ -83,10 +85,6 @@ export default function SessionList({
       <div className="p-4 border-b border-fw-border bg-fw-surface">
         <div className="flex items-center justify-between gap-2">
           <h1 className="text-2xl font-bold text-fw-text-strong">🦊 Foxwarm</h1>
-          <GlobalUiSettingsMenu
-            onOpenSetup={onSelectSetup}
-            setupActive={currentView === 'setup'}
-          />
         </div>
 
         <div className="mt-2 flex items-stretch gap-1">
@@ -97,8 +95,6 @@ export default function SessionList({
             <Workflow className="w-4 h-4" />
             <span>Agents</span>
           </button>
-          {onSelectSearch && <button type="button" onClick={onSelectSearch} title="Search history" aria-label="Search history" className="inline-flex items-center justify-center rounded-lg bg-fw-neutral-surface px-3 py-2 text-fw-text hover:bg-fw-hover"><History className="h-4 w-4" /></button>}
-          {onSelectTasks && <button type="button" onClick={onSelectTasks} title="Tasks" aria-label="Tasks" className="inline-flex items-center justify-center rounded-lg bg-fw-neutral-surface px-3 py-2 text-fw-text hover:bg-fw-hover"><ClipboardList className="h-4 w-4" /></button>}
           <AgentCreationMenu
             agents={agents}
             currentAgent={currentSessionRecord?.agent}
@@ -150,6 +146,12 @@ export default function SessionList({
           toolbarContainerClassName="mx-auto w-full max-w-4xl p-2 sm:p-4 sm:pb-2"
           listContainerClassName="mx-auto w-full max-w-4xl p-2 sm:p-4 sm:pt-1"
         />
+      </div>
+      <div data-sidebar-footer className="flex shrink-0 justify-end gap-1 border-t border-fw-border bg-fw-surface p-2">
+        <button type="button" onClick={onSelectSearch} title="Search history" aria-label="Search history" className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-fw-border text-fw-text transition hover:bg-fw-hover hover:text-fw-text-strong dark:border-fw-border dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse">
+          <History className="h-4 w-4" />
+        </button>
+        <GlobalUiSettingsMenu menuSide="top" onOpenSetup={onSelectSetup} onOpenLogs={onSelectLogs} onOpenTasks={onSelectTasks} setupActive={currentView === 'setup'} />
       </div>
     </div>
   )

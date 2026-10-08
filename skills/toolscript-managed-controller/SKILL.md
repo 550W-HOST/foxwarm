@@ -16,12 +16,10 @@ Before grepping tests, read:
 
 As with normal ToolScript automation, first verify the target session and the surrounding tool/runtime flow in the regular agent loop, then encode the known controller flow into a script.
 
-ToolScript scripts should use an explicit entrypoint:
+Use ordinary top-level code with `args` as input. Existing files defining `main(args)` remain supported:
 
 ```python
-def main(args):
-    ...
-    return {...}
+return {"targetSessionId": args["child_session_id"]}
 ```
 
 ## Default first path
@@ -92,6 +90,7 @@ When this happens in a background ToolScript run:
 
 - the run enters `status="waiting"`
 - `waitingReason="managed_event"`
+- `waitingFor` identifies the awaited session/condition and has `autoResume=true`, without exposing lease/controller IDs in the execution response
 - the system can resume that controller run when the managed inbox receives new work
 
 ### `session_step(...)`
@@ -162,33 +161,32 @@ Use this to understand **why the step stopped**.
 ## Minimal controller example
 
 ```python
-def main(args):
-    child_id = args["child_session_id"]
+child_id = args["child_session_id"]
 
-    lease = open_managed_session(child_id)
+lease = open_managed_session(child_id)
 
-    event = wait_for_managed_event(
-        child_id,
-        lease["leaseId"],
-        lease["revision"],
-    )
+event = wait_for_managed_event(
+    child_id,
+    lease["leaseId"],
+    lease["revision"],
+)
 
-    result = session_step(
-        child_id,
-        lease["leaseId"],
-        event["revision"],
-        run_mode="idle",
-        inbox_order="before",
-        message="Controller processed your request.",
-    )
-    release = release_managed_session(
-        result["sessionId"],
-        result["leaseId"],
-        result["revision"],
-    )
-    result["releasedPendingInboxCount"] = release["releasedPendingInboxCount"]
+result = session_step(
+    child_id,
+    lease["leaseId"],
+    event["revision"],
+    run_mode="idle",
+    inbox_order="before",
+    message="Controller processed your request.",
+)
+release = release_managed_session(
+    result["sessionId"],
+    result["leaseId"],
+    result["revision"],
+)
+result["releasedPendingInboxCount"] = release["releasedPendingInboxCount"]
 
-    return result
+return result
 ```
 
 ## Typical outer run pattern

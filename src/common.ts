@@ -26,11 +26,14 @@ if (!suppressConsole) {
 
 // Always log to file
 const logFileName = `${BOT_NAME}.log`;
+export const MAIN_LOG_PATH = path.join(LOG_DIR, logFileName);
 targets.push({
     target: 'pino-pretty',
     options: {
         ...prettyBaseOptions,
-        destination: path.join(LOG_DIR, logFileName),
+        destination: MAIN_LOG_PATH,
+        translateTime: 'SYS:standard',
+        colorize: false,
         mkdir: true,
     }
 });
@@ -38,7 +41,7 @@ targets.push({
 export const logger = useSynchronousFileLogger
     ? pino(
         { level: 'info' },
-        pino.destination({ dest: path.join(LOG_DIR, logFileName), mkdir: true, sync: true }),
+        pino.destination({ dest: MAIN_LOG_PATH, mkdir: true, sync: true }),
     )
     : pino({
         level: 'info',

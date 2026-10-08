@@ -1,21 +1,15 @@
-# Unit: Realtime transport and event timing
+# Unit: WebUI realtime transport
 
-Files: `packages/webui/src/realtime.ts`
+Files: `packages/webui/src/realtime.ts`, `packages/webui/src/sessionContinuation.ts`, `packages/webui/test/realtimeTransport.test.mjs`
 
 ## Purpose
 
-Maintains the browser WebSocket/realtime transport and event timing used to merge host state/history/list updates with local UI state.
+Maintains page-scoped WebSocket transport and logical Session subscriptions for Chat and list updates.
 
-## Stable symbols and callers
+## Behavior
 
-`realtime.ts`; event subscription/ack and reconnect helpers.
-
-Callers and boundary: Host `WebUiRealtime`; session list/chat/timeline state.
-
-## Behavior and side effects
-
-`realtime.ts` owns WebSocket connect/reconnect, subscription filters, event sequence/ack, and close/error state. It merges host revisions into session/chat/task/list stores and requests bounded refresh after gaps; browser listeners are isolated from optimistic draft state and do not mark a turn committed by receipt of a delta alone.
+One physical connection multiplexes logical subscriptions. Revision and sequence checks reject stale events, while reconnect and refresh paths recover browser presentation from host snapshots. The transport does not replace Session owner serialization or durable persistence.
 
 ## Tests
 
-Realtime transport, stream follow, live session list, and event-ack tests.
+Realtime transport, continuation, reconnect, and bounded list fixtures cover event ordering and recovery.

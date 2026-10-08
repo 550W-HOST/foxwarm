@@ -11,7 +11,7 @@ import * as sessionManager from './sessionManager';
 import { checkPathAccess } from './isolatedCheck';
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './tools/placement';
 import { resolveObjectArgWithJsonFallback } from './jsonObjectArgs';
-import type { Message, MessagePart, Session, ToolScriptSubCall } from './types';
+import type { Message, MessagePart, Session, ToolScriptSubCall, LinkedTaskCompletion } from './types';
 import { RpcError } from './rpc';
 import { isToolAuthorizationPolicyUnavailable } from './toolAuthorization';
 
@@ -24,7 +24,10 @@ type ToolContext = {
   runtimeNodeId?: string;
   toolScriptRunId?: string;
   toolUseId?: string;
+  onToolScriptSubCalls?: (subCalls: ToolScriptSubCall[]) => void;
+  onLinkedTaskCompletion?: (completion: LinkedTaskCompletion) => void;
   sessionPlacement?: 'local' | 'session-worker';
+  programmatic?: true;
 };
 
 function assertManagedPlacement(ctx: ToolContext): void {
@@ -143,7 +146,13 @@ type ToolScriptResult = {
   error?: string;
   /** Canonical image parts promoted from the script result, handed to the tool-result image pipeline. */
   imageParts?: MessagePart[];
+  inlineData?: any;
+  inlineDataItems?: any[];
 };
+
+type ToolScriptExecutionResult = { stdout?: string } & Pick<ToolScriptResult,
+  'status' | 'runId' | 'result' | 'error' | 'waitingReason' | 'continuationId' | 'question' | 'waitingFor'
+  | 'imageParts' | 'inlineData' | 'inlineDataItems'> & { __toolPostAction?: { completedLinkedTask: LinkedTaskCompletion } };
 
 type RuntimeState = {
   stdoutParts: string[];
@@ -203,10 +212,9 @@ function importNativeMonty(): Promise<MontyModule> {
 }
 
 function buildToolScriptSource(code: string): string {
-  if (!/^\s*def\s+main\s*\(\s*args\b/m.test(code)) {
-    throw new Error('ToolScript scripts must define `def main(args):` and return a result explicitly.');
-  }
-  return `${code.trimEnd()}\n\nmain(args)\n`;
+  return /^\s*def\s+main\s*\(\s*args\b/m.test(code)
+    ? `${code.trimEnd()}\n\nmain(args)\n`
+    : code;
 }
 
 function parseTimeoutSecs(value: any, fallback = DEFAULT_TOOLSCRIPT_TIMEOUT_SECS): number {
@@ -709,6 +717,50 @@ function buildBaseResult(run: ToolScriptRunRecord): ToolScriptResult {
   };
 }
 
+/** Forward only completion receipts emitted by the Task facade in this execution slice. */
+async function executeWithTaskCompletion(ctx: ToolContext, execute: (context: ToolContext) => Promise<ToolScriptResult>): Promise<ToolScriptExecutionResult> {
+  let completion: LinkedTaskCompletion | undefined;
+  const result = await execute({ ...ctx, onLinkedTaskCompletion: signal => {
+    completion = { ...signal };
+    ctx.onLinkedTaskCompletion?.({ ...signal });
+  } });
+  return { ...projectExecutionResult(result, ctx),
+    ...(completion ? { __toolPostAction: { completedLinkedTask: completion } } : {}),
+  };
+}
+
+/** Keep execution responses lean; complete diagnostics remain in the persisted run. */
+function projectExecutionResult(result: ToolScriptResult, ctx: ToolContext): ToolScriptExecutionResult {
+  ctx.onToolScriptSubCalls?.((result.subCalls || []).map(subCall => ({ ...subCall })));
+  const projected: ToolScriptExecutionResult = {
+    status: result.status,
+    runId: result.runId,
+    ...(result.result !== undefined ? { result: result.result } : {}),
+    ...(result.stdout ? { stdout: result.stdout } : {}),
+    ...(result.error ? { error: result.error } : {}),
+    ...(result.inlineData !== undefined ? { inlineData: result.inlineData } : {}),
+    ...(result.inlineDataItems !== undefined ? { inlineDataItems: result.inlineDataItems } : {}),
+    ...(result.imageParts !== undefined ? { imageParts: result.imageParts } : {}),
+  };
+  if (result.status === 'waiting') {
+    projected.waitingReason = result.waitingReason;
+    if (result.waitingReason === 'agent' || result.waitingReason === 'timeout') {
+      projected.continuationId = result.continuationId;
+      if (result.waitingReason === 'agent') projected.question = result.question;
+    } else if (result.waitingReason === 'managed_event') {
+      const { sessionId, expectedRevision, runMode, inboxOrder } = result.waitingFor || {};
+      projected.waitingFor = {
+        sessionId,
+        ...(expectedRevision !== undefined ? { expectedRevision } : {}),
+        ...(runMode !== undefined ? { runMode } : {}),
+        ...(inboxOrder !== undefined ? { inboxOrder } : {}),
+        autoResume: result.mode === 'background',
+      };
+    }
+  }
+  return projected;
+}
+
 function stdoutDeltaSince(previousStdout: string, currentStdout: string): string {
   if (!previousStdout) {
     return currentStdout;
@@ -1102,7 +1154,9 @@ async function executeScriptHostCall(
     emitToolScriptProgress(ctx, state);
 
     try {
-      const result = await toolsModule.call_tool(wrapperArgs, ctx);
+      // Nested runs must not replace the outer invocation's presentation metadata.
+      const { onToolScriptSubCalls: _outerSubCalls, ...nestedContext } = ctx;
+      const result = await toolsModule.call_tool(wrapperArgs, { ...nestedContext, programmatic: true });
       state.executedTools.push(summaryName);
       finishHostCall('completed');
 
@@ -1519,7 +1573,7 @@ async function failRun(record: ToolScriptRunRecord, runtimeState: RuntimeState, 
     lastHostCall: runtimeState.lastHostCall,
     executedTools: runtimeState.executedTools,
   }, logMessage);
-  return buildBaseResult(record);
+  return { ...buildBaseResult(record), error: normalizeErrorMessage(error, record) };
 }
 
 function getSnapshotCompatibilityError(record: ToolScriptRunRecord): string | null {
@@ -1552,7 +1606,7 @@ async function failIncompatibleSnapshot(record: ToolScriptRunRecord, runtimeStat
   record.updatedAt = Date.now();
   await saveRun(record);
   logger.warn({ runId: record.runId, vmRuntime: record.vmRuntime }, 'ToolScript snapshot runtime is incompatible');
-  return buildBaseResult(record);
+  return { ...buildBaseResult(record), error: message };
 }
 
 async function startRun(record: ToolScriptRunRecord, code: string, scriptArgs: any, ctx: ToolContext): Promise<ToolScriptResult> {
@@ -1623,7 +1677,7 @@ function ensureRunOwnedBySession(record: ToolScriptRunRecord, sessionId: string)
   }
 }
 
-export async function tool_run_script(args: ToolArgs, ctx: ToolContext): Promise<ToolScriptResult> {
+export async function tool_run_script(args: ToolArgs, ctx: ToolContext): Promise<ToolScriptExecutionResult> {
   const { sessionId, session } = await requireSessionContext(ctx);
   const { filePath, code: inlineCode } = args || {};
   const mode = parseToolScriptRunMode(args?.mode ?? args?.runMode ?? args?.background);
@@ -1647,14 +1701,14 @@ export async function tool_run_script(args: ToolArgs, ctx: ToolContext): Promise
 
   const runId = newRunId();
   const record = createRunRecord({ runId, mode, session, filePath: filePath || '<inline>', scriptPath, timeoutSecs });
-  return await startRun(record, code, scriptArgs, { ...ctx, sessionId, session, toolScriptRunId: runId });
+  return executeWithTaskCompletion(ctx, context => startRun(record, code, scriptArgs, { ...context, sessionId, session, toolScriptRunId: runId }));
 }
 
-export async function tool_start_toolscript_run(args: ToolArgs, ctx: ToolContext): Promise<ToolScriptResult> {
+export async function tool_start_toolscript_run(args: ToolArgs, ctx: ToolContext): Promise<ToolScriptExecutionResult> {
   return await tool_run_script({ ...args, mode: args?.mode || 'background' }, ctx);
 }
 
-export async function tool_continue_script(args: ToolArgs, ctx: ToolContext): Promise<ToolScriptResult> {
+export async function tool_continue_script(args: ToolArgs, ctx: ToolContext): Promise<ToolScriptExecutionResult> {
   const { sessionId, session } = await requireSessionContext(ctx);
   const runId = typeof args?.runId === 'string' && args.runId.trim() ? args.runId.trim() : '';
   const continuationId = typeof args?.continuationId === 'string' && args.continuationId.trim() ? args.continuationId.trim() : '';
@@ -1682,10 +1736,10 @@ export async function tool_continue_script(args: ToolArgs, ctx: ToolContext): Pr
   const stdoutBeforeContinue = record.stdout || '';
 
   if (record.waiting.reason === 'agent') {
-    return withStdoutDelta(
-      await resumeRun(record, args?.input, { ...ctx, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue failed'),
+    return executeWithTaskCompletion(ctx, async context => withStdoutDelta(
+      await resumeRun(record, args?.input, { ...context, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue failed'),
       stdoutBeforeContinue,
-    );
+    ));
   }
 
   if (record.waiting.reason === 'timeout') {
@@ -1694,15 +1748,15 @@ export async function tool_continue_script(args: ToolArgs, ctx: ToolContext): Pr
       throw new Error(`ToolScript run \`${runId}\` is waiting on timeout but has no pending resume payload.`);
     }
     if (pendingResume.mode === 'return') {
-      return withStdoutDelta(
-        await resumeRun(record, pendingResume.value, { ...ctx, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue after timeout failed'),
+      return executeWithTaskCompletion(ctx, async context => withStdoutDelta(
+        await resumeRun(record, pendingResume.value, { ...context, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue after timeout failed'),
         stdoutBeforeContinue,
-      );
+      ));
     }
-    return withStdoutDelta(
-      await resumeRun(record, { __toolscriptResumeException: pendingResume.exception }, { ...ctx, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue after timeout failed'),
+    return executeWithTaskCompletion(ctx, async context => withStdoutDelta(
+      await resumeRun(record, { __toolscriptResumeException: pendingResume.exception }, { ...context, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue after timeout failed'),
       stdoutBeforeContinue,
-    );
+    ));
   }
 
   throw new Error(`ToolScript run \`${runId}\` is not waiting for continue_script.`);

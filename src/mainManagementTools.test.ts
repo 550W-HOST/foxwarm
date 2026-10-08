@@ -24,12 +24,14 @@ import {
 } from './tools';
 import { tool_run_script } from './toolscript';
 import {
+  INTER_AGENT_HANDOFF_RECALL_PREFIX,
   INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX,
   INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX,
 } from './toolCallControls';
 import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from './toolAuthorization';
 import { sessionCatalogStore } from './session/catalogStore';
 
+const TEST_HANDOFF_RECALL = `${INTER_AGENT_HANDOFF_RECALL_PREFIX}\nI recalled the applicable communication rules, the user request, and the recipient scope for this test handoff.`;
 const TEST_HANDOFF_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nThe test handoff is necessary, accurate, self-contained, scoped, and compliant with communication rules.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
 
 function makeId(prefix: string): string {
@@ -177,13 +179,13 @@ test('direct and unified send_to_session share delivery and afterSend control se
       sessionId: targetId,
       message: 'direct management delivery',
       afterSend: 'wait',
-      confirmation: TEST_HANDOFF_CONFIRMATION,
+      handoffConfirmation: TEST_HANDOFF_CONFIRMATION,
     }, { sessionId: sourceId, session: source });
     assert.equal(direct.__toolPostAction?.waitForReply, true);
 
     const unified: any = await call_tool({
       toolId: 'builtin:send_to_session',
-      args: { sessionId: targetId, message: 'unified management delivery', confirmation: TEST_HANDOFF_CONFIRMATION },
+      args: { sessionId: targetId, handoffRecall: TEST_HANDOFF_RECALL, message: 'unified management delivery', handoffConfirmation: TEST_HANDOFF_CONFIRMATION },
     }, { sessionId: sourceId, session: source });
     assert.match(String(unified?.output ?? unified), /Message sent to session/);
 
@@ -214,30 +216,30 @@ test('child display name is durable before initial delivery and independent of i
     return originalSend(targetId, message, fromId);
   };
   try {
-    await create_child_session({ suffix: 'direct', displayName: 'Direct child', message: 'start now', afterSend: 'finish', confirmation: TEST_HANDOFF_CONFIRMATION }, ctx);
+    await create_child_session({ suffix: 'direct', displayName: 'Direct child', handoffRecall: TEST_HANDOFF_RECALL, message: 'start now', afterSend: 'finish', handoffConfirmation: TEST_HANDOFF_CONFIRMATION }, ctx);
   } finally {
     (sessionManager as any).sendToSession = originalSend;
   }
   try {
     assert.equal(sessionManager.getSessionCatalog(directId)?.displayName, 'Direct child');
     assert.equal(sessionCatalogStore.get(directId)?.displayName, 'Direct child');
-    const forkResult = await create_child_session({ suffix: 'fork', fork: true, displayName: 'Fork child', confirmation: TEST_HANDOFF_CONFIRMATION }, ctx);
+    const forkResult = await create_child_session({ suffix: 'fork', fork: true, displayName: 'Fork child', handoffConfirmation: TEST_HANDOFF_CONFIRMATION }, ctx);
     assert.match(String(forkResult), /Child session created/);
     assert.equal(sessionCatalogStore.get(forkId)?.displayName, 'Fork child');
     assert.equal((await sessionManager.getSession(forkId)).displayName, 'Fork child');
     source.displayName = 'Parent name';
     await sessionManager.saveSession(sourceId);
-    await create_child_session({ suffix: 'unnamed-fork', fork: true, confirmation: TEST_HANDOFF_CONFIRMATION }, ctx);
+    await create_child_session({ suffix: 'unnamed-fork', fork: true, handoffConfirmation: TEST_HANDOFF_CONFIRMATION }, ctx);
     assert.equal((await sessionManager.getSession(unnamedForkId)).displayName, undefined);
-    await call_tool({ source: 'builtin', name: 'create_child_session', args: { suffix: 'unified', displayName: 'Unified child', confirmation: TEST_HANDOFF_CONFIRMATION } }, ctx);
+    await call_tool({ source: 'builtin', name: 'create_child_session', args: { suffix: 'unified', displayName: 'Unified child', handoffConfirmation: TEST_HANDOFF_CONFIRMATION } }, ctx);
     assert.equal(sessionCatalogStore.get(unifiedId)?.displayName, 'Unified child');
-    await create_child_session({ suffix: 'blank', displayName: '', confirmation: TEST_HANDOFF_CONFIRMATION }, ctx);
+    await create_child_session({ suffix: 'blank', displayName: '', handoffConfirmation: TEST_HANDOFF_CONFIRMATION }, ctx);
     assert.equal((await sessionManager.getSession(blankId)).displayName, '');
-    await create_child_session({ suffix: 'spaced', displayName: '  Kept spaces  ', confirmation: TEST_HANDOFF_CONFIRMATION }, ctx);
+    await create_child_session({ suffix: 'spaced', displayName: '  Kept spaces  ', handoffConfirmation: TEST_HANDOFF_CONFIRMATION }, ctx);
     assert.equal(sessionCatalogStore.get(spacedId)?.displayName, '  Kept spaces  ');
     for (const invalid of [null, 42, {}, []]) {
       const before = sessionManager.getAllSessions().size;
-      await assert.rejects(() => create_child_session({ suffix: 'invalid', displayName: invalid, confirmation: TEST_HANDOFF_CONFIRMATION }, ctx), /displayName must be a string/);
+      await assert.rejects(() => create_child_session({ suffix: 'invalid', displayName: invalid, handoffConfirmation: TEST_HANDOFF_CONFIRMATION }, ctx), /displayName must be a string/);
       assert.equal(sessionManager.getAllSessions().size, before);
     }
   } finally {
@@ -360,13 +362,13 @@ rules:
   try {
     await assert.rejects(
       () => create_child_session({
-        suffix: 'denied-master', node: 'master', confirmation: TEST_HANDOFF_CONFIRMATION,
+        suffix: 'denied-master', node: 'master', handoffConfirmation: TEST_HANDOFF_CONFIRMATION,
       }, ctx),
       /child node semantic test deny/,
     );
     assert.equal(sessionManager.getAllSessions().has(`${sourceId}_denied-master`), false);
 
-    await create_child_session({ suffix: 'inherited-node', confirmation: TEST_HANDOFF_CONFIRMATION }, ctx);
+    await create_child_session({ suffix: 'inherited-node', handoffConfirmation: TEST_HANDOFF_CONFIRMATION }, ctx);
     assert.equal((await sessionManager.getSession(inheritedId)).currentNode, 'dedicated-node');
     await create_session({ agentName: 'main', sessionName: directSessionId }, ctx);
     assert.equal((await sessionManager.getSession(directSessionId)).currentNode, 'dedicated-node');
@@ -375,7 +377,7 @@ rules:
     await sessionManager.saveSession(sourceId);
     await call_tool({
       source: 'builtin', name: 'create_child_session',
-      args: { suffix: 'unified-node', node: 'dedicated-node', confirmation: TEST_HANDOFF_CONFIRMATION },
+      args: { suffix: 'unified-node', node: 'dedicated-node', handoffConfirmation: TEST_HANDOFF_CONFIRMATION },
     }, ctx);
     assert.equal((await sessionManager.getSession(unifiedId)).currentNode, 'dedicated-node');
     await call_tool({
@@ -396,7 +398,7 @@ rules:
     assert.equal((await sessionManager.getSession(scriptSessionId)).currentNode, 'dedicated-node');
 
     await create_child_session({
-      suffix: 'worker-node', node: 'dedicated-node', confirmation: TEST_HANDOFF_CONFIRMATION,
+      suffix: 'worker-node', node: 'dedicated-node', handoffConfirmation: TEST_HANDOFF_CONFIRMATION,
     }, { ...ctx, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} });
     assert.equal((await sessionManager.getSession(workerId)).currentNode, 'dedicated-node');
     await create_session({

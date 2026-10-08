@@ -94,13 +94,13 @@ test('active tool presentation normalizes invalid previews without weakening pro
   try {
     setActiveSessionRuntimeState(session.id, {
       state: 'running-tool',
-      tool: { name: 'set_goal', argsPreview: true as any, startedAt: 1000 },
+      tool: { name: 'fixture_preview', argsPreview: true as any, startedAt: 1000 },
     });
     assert.equal(buildSessionRuntimeState(session).tool?.argsPreview, 'true');
 
     setActiveSessionRuntimeState(session.id, {
       state: 'running-tool',
-      tool: { name: 'set_goal', argsPreview: 'x'.repeat(5000), startedAt: 1000 },
+      tool: { name: 'fixture_preview', argsPreview: 'x'.repeat(5000), startedAt: 1000 },
     });
     const bounded = buildSessionRuntimeState(session).tool?.argsPreview;
     assert.equal(typeof bounded, 'string');

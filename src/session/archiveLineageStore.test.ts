@@ -248,3 +248,36 @@ test('catalog postcommit failure retains aligned authoritative history and archi
     await fs.remove(metadataStore.getSessionHistoryFilePath(session.id)).catch(() => {});
   }
 });
+
+
+test('block allocation highwater respects cumulative fork caps and aliases without changing the source', async () => {
+  const store = await import('./archiveStore');
+  const layered = await import('./layeredContext');
+  const block = (sessionId: string, id: number): any => ({
+    v: 1, kind: 'block', sessionId, agent: 'main', id, level: 1,
+    sourceKind: 'message', sourceStart: 1, sourceEnd: 1, rawStartSeq: 1, rawEndSeq: 1,
+    summary: 'Opaque block content is not allocation input.', createdAt: id,
+  });
+  await store.writeArchiveBlocks([1, 2, 99].map(id => block('highwater-grandparent', id)));
+  await store.ensureSessionBranch('highwater-parent', { parentSessionId: 'highwater-grandparent', forkMessageSeq: 10, forkBlockId: 2 });
+  await store.writeArchiveBlocks([3, 100].map(id => block('highwater-parent', id)));
+  await store.ensureSessionBranch('highwater-child', { parentSessionId: 'highwater-parent', forkMessageSeq: 10, forkBlockId: 3 });
+  assert.equal(await store.getEffectiveArchiveBlockMaxId('highwater-child'), 3);
+  await store.writeArchiveBlocks([block('highwater-child', 4)]);
+  await store.commitSessionIdRename('highwater-alias', 'highwater-child');
+  const branches = await Promise.all(['highwater-grandparent', 'highwater-parent', 'highwater-child'].map(id => store.getSessionBranch(id)));
+  assert.equal(await store.getEffectiveArchiveBlockMaxId('highwater-child'), 4);
+  assert.equal(await store.getEffectiveArchiveBlockMaxId('highwater-alias'), 4);
+  const source = { id: 'highwater-alias', nextBlockId: 1, history: [] as import('../types').Message[] };
+  const sourceBefore = structuredClone(source);
+  assert.equal(await layered.resolveNextSessionBlockId(source), 5);
+  assert.deepEqual(source, sourceBefore);
+  assert.equal(await layered.resolveNextSessionBlockId({ ...source, nextBlockId: 200 }), 200);
+  const active = { ...source, history: [layered.renderBlockMessage(block('highwater-child', 7))] };
+  const activeBefore = structuredClone(active);
+  assert.equal(await layered.resolveNextSessionBlockId(active), 8);
+  assert.deepEqual(active, activeBefore);
+  assert.deepEqual(await Promise.all(['highwater-grandparent', 'highwater-parent', 'highwater-child'].map(id => store.getSessionBranch(id))), branches);
+  await store.ensureSessionBranch('highwater-zero-cap', { parentSessionId: 'highwater-parent', forkMessageSeq: 10, forkBlockId: 0 });
+  assert.equal(await store.getEffectiveArchiveBlockMaxId('highwater-zero-cap'), 0, 'a zero inherited block cap does not expose ancestor IDs');
+});

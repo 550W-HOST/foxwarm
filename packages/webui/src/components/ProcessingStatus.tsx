@@ -1,4 +1,5 @@
 import { memo } from 'react'
+import RuntimeBusySpinner from './RuntimeBusySpinner'
 import { getRuntimeStateSummary, type SessionRuntimeState } from '../sessionRuntimeState'
 
 interface ProcessingStatusProps {
@@ -82,11 +83,7 @@ const ProcessingStatus = memo(function ProcessingStatus({
                 {runtimeStateName === 'waiting' ? (
                   <span className={`w-2 h-2 ${tone.dot} rounded-full`} data-processing-status-dot="static" />
                 ) : (
-                  <span className="flex space-x-1" data-processing-status-dots="animated">
-                    <span className={`w-2 h-2 ${tone.dot} rounded-full animate-bounce`} />
-                    <span className={`w-2 h-2 ${tone.dot} rounded-full animate-bounce`} style={{ animationDelay: '0.1s' }} />
-                    <span className={`w-2 h-2 ${tone.dot} rounded-full animate-bounce`} style={{ animationDelay: '0.2s' }} />
-                  </span>
+                  <RuntimeBusySpinner className={`h-4 w-4 ${tone.text}`} />
                 )}
                 <span className={`text-sm ${tone.text}`}>
                   {visibleRuntimeSummary}{queuedContinuation ? ` • ${queuedContinuation}` : ''}

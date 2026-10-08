@@ -155,7 +155,7 @@ export type SessionListProjectionBatchDto = {
 
 export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 12, {
   getSession: rpcMethod<{ sessionId: string }, { session: SessionRuntimeSessionDto | null }>(),
-  listSessions: rpcMethod<{ limit?: number; offset?: number }, { sessions: SessionRuntimeSessionDto[]; total: number }>(),
+  listSessions: rpcMethod<{ limit?: number; offset?: number; agent?: string }, { sessions: SessionRuntimeSessionDto[]; total: number }>(),
   getSessionListProjections: rpcMethod<{ sessionIds: string[]; includeVolatile?: boolean; currentOwnersOnly?: boolean }, SessionListProjectionBatchDto>(),
   getHistory: rpcMethod<{ sessionId: string }, SessionRuntimeHistoryDto | null>(),
   enqueue: rpcMethod<{ sessionId: string; item: QueueItem }, { accepted: true }>(),
@@ -527,18 +527,18 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       const limit = input.limit === undefined ? sessionManager.getAllSessions().size : Math.max(0, Math.min(1000, Math.floor(input.limit)));
       const offset = Math.max(0, Math.floor(input.offset || 0));
       if (!options?.worker) {
-        const page = sessionManager.listSessionCatalogPage(limit, offset);
+        const page = sessionManager.listSessionCatalogPage(limit, offset, input.agent);
         return {
           sessions: page.sessions.map(session => projectedDto(session)),
           total: page.total,
         };
       }
       const activeProjectionCount = options?.worker?.registry.list().length || 0;
-      const candidatePage = sessionManager.listSessionCatalogPage(limit + offset + activeProjectionCount, 0);
+      const candidatePage = sessionManager.listSessionCatalogPage(limit + offset + activeProjectionCount, 0, input.agent);
       const candidates = new Map(candidatePage.sessions.map(session => [session.id, withPendingWorkerIngress(projectedDto(session))]));
       for (const entry of options?.worker?.registry.list() || []) {
         const session = sessionManager.getAllSessions().get(entry.sessionId);
-        if (session) candidates.set(session.id, withPendingWorkerIngress(projectedDto(session)));
+        if (session && (input.agent === undefined || session.agent === input.agent)) candidates.set(session.id, withPendingWorkerIngress(projectedDto(session)));
       }
       return {
         sessions: [...candidates.values()]

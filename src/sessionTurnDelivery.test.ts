@@ -9,6 +9,9 @@ import { attachChannel, createChannelsStore, resetChannelsForTests, saveChannels
 import { createSessionTurnDeliveryServiceHandler, sessionTurnDeliveryServiceDescriptor } from './sessionTurnDelivery';
 import { QQBotChannel } from './channels/qqbotChannel';
 import { WeWorkWebhookChannel } from './channels/weworkChannel';
+import * as sessionManager from './sessionManager';
+import { putImageBlob, resolveImageBlobPath } from './imageBlobs';
+import sharp from 'sharp';
 
 test('turn delivery broadcasts without source targeting and sends empty finals only to lifecycle-capable channels', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'turn-delivery-'));
@@ -54,6 +57,46 @@ test('turn delivery broadcasts without source targeting and sends empty finals o
   } finally {
     transport.close(); for (const id of ['telegram', 'secondary', 'webui', 'wework']) unregisterChannel(id);
     resetChannelsForTests(); setChannelsStoreForTests(null); await fs.remove(root);
+  }
+});
+
+test('committed generated-image refs deliver each response to normal file channels via source-fenced Worker RPC', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'turn-generated-image-'));
+  const sessionId = 'generated-image-delivery-test';
+  const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#4488aa' } }).jpeg().toBuffer();
+  const first = await putImageBlob({ buffer: bytes, mimeType: 'image/jpeg', imageId: 'ig_first' });
+  const second = { ...first, imageId: 'ig_second' }; // distinct generations may share identical blob bytes
+  const sent: Array<{ id: string; name: string; data: Buffer }> = [];
+  const fakeChannel = (id: string, behavior: 'success' | 'unsupported' | 'failed'): Channel => ({
+    name: id, platform: id, start: async () => {}, stop: async () => {}, onMessage: () => {},
+    sendTyping: async () => {}, sendMessage: async () => {},
+    ...(behavior === 'unsupported' ? {} : { sendFile: async (_conversationId, file) => {
+      if (behavior === 'failed') throw new Error('synthetic adapter failure');
+      sent.push({ id, name: file.name, data: await fs.readFile(file.path) });
+    } }),
+  });
+  setChannelsStoreForTests(createChannelsStore(path.join(root, 'channels.json'))); resetChannelsForTests();
+  sessionManager.getAllSessions().set(sessionId, { id: sessionId } as any);
+  for (const [id, behavior] of [['normal', 'success'], ['send-only', 'success'], ['unsupported', 'unsupported'], ['failed', 'failed']] as const) {
+    registerChannel(id, fakeChannel(id, behavior));
+    attachChannel(id, 'room', sessionId, behavior === 'success' && id === 'send-only' ? { mode: 'send-only' } : undefined);
+  }
+  const registry = new RpcServiceRegistry();
+  registry.register(sessionTurnDeliveryServiceDescriptor, createSessionTurnDeliveryServiceHandler({ expectedSourceSessionId: sessionId }));
+  const transport = new LocalRpcTransport(registry);
+  const client = new RpcClient(sessionTurnDeliveryServiceDescriptor, transport);
+  try {
+    await assert.rejects(() => client.call('deliverGeneratedImages', { sourceSessionId: 'wrong', images: [first] }), { code: 'SESSION_TURN_DELIVERY_SOURCE_MISMATCH' });
+    assert.deepEqual(await client.call('deliverGeneratedImages', { sourceSessionId: sessionId, images: [first, second] }), { attempted: 4, delivered: 2 });
+    assert.deepEqual(sent.map(item => item.name), ['ig_first.jpg', 'ig_second.jpg']);
+    assert.ok(sent.every(item => item.id === 'normal' && item.data.equals(bytes)));
+    assert.deepEqual(await client.call('deliverGeneratedImages', { sourceSessionId: sessionId, images: [second] }), { attempted: 2, delivered: 1 }, 'a later committed response can reuse the same blob');
+    assert.equal(sent.length, 3);
+  } finally {
+    transport.close(); sessionManager.getAllSessions().delete(sessionId);
+    for (const id of ['normal', 'send-only', 'unsupported', 'failed']) unregisterChannel(id);
+    resetChannelsForTests(); setChannelsStoreForTests(null);
+    await fs.remove(resolveImageBlobPath(first.blobId!)); await fs.remove(root);
   }
 });
 

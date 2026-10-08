@@ -104,11 +104,21 @@ export function formatSessionListRow(s: SessionListItem, currentSessionId?: stri
 }
 
 export async function buildSessionListOutput(args: Record<string, any> = {}, currentSessionId?: string): Promise<string> {
+  if (args.scope !== undefined && args.scope !== 'current-agent' && args.scope !== 'all') {
+    throw new Error('session.scope must be "current-agent" or "all" for action="list".');
+  }
+  const scope = args.scope || 'current-agent';
+  let currentSession: SessionRuntimeSessionDto | null = null;
+  if (scope === 'current-agent') {
+    if (!currentSessionId) throw new Error('Cannot list current Agent sessions without current session context.');
+    currentSession = await sessionRuntime.getSession(currentSessionId);
+    if (!currentSession) throw new Error(`Current session \`${currentSessionId}\` not found.`);
+  }
   const rawStart = typeof args.start === 'number' && !Number.isNaN(args.start) ? Math.trunc(args.start) : 0;
   const rawCount = typeof args.count === 'number' && !Number.isNaN(args.count) ? Math.trunc(args.count) : 20;
   const requestedStart = Math.max(0, rawStart);
   const count = Math.max(0, Math.min(1000, rawCount));
-  const page = await sessionRuntime.listSessionsPage({ offset: requestedStart, limit: count });
+  const page = await sessionRuntime.listSessionsPage({ offset: requestedStart, limit: count, ...(scope === 'current-agent' ? { agent: currentSession!.agent } : {}) });
   const total = page.total;
   if (total === 0) return 'No sessions found.';
   const start = Math.min(requestedStart, total);
@@ -119,8 +129,7 @@ export async function buildSessionListOutput(args: Record<string, any> = {}, cur
   }
 
   const end = start + pageSessions.length;
-  const currentSession = currentSessionId ? await sessionRuntime.getSession(currentSessionId) : undefined;
-  const parentSessionId = currentSession?.parentSessionId;
+  const parentSessionId = (currentSession || (currentSessionId ? await sessionRuntime.getSession(currentSessionId) : null))?.parentSessionId;
 
   let result = '';
   if (currentSessionId) {
@@ -149,8 +158,12 @@ export async function buildSessionStatusInfo(
   suppliedSession?: Session | SessionRuntimeSessionDto,
   exactOwner = false,
   historyMessages?: Message[],
+  persistentMemorySnapshot?: string,
 ): Promise<SessionStatusInfo> {
-  const session = suppliedSession || await sessionManager.getSession(sessionId);
+  const session = suppliedSession || await sessionManager.getExistingSession(sessionId);
+  if (!session) {
+    throw new Error(`Session \`${sessionId}\` not found.`);
+  }
   const realSessionId = session.id || sessionId;
   const agentName = session.agent || 'main';
   const agentDir = getAgentDir(agentName);
@@ -159,6 +172,7 @@ export async function buildSessionStatusInfo(
     ? {
         ...runtimeDto,
         history: historyMessages || [],
+        persistentMemorySnapshot: persistentMemorySnapshot || '',
         stats: {
           totalCachedTokens: runtimeDto.tokenUsage.cachedTokens,
           totalInputTokens: runtimeDto.tokenUsage.inputTokens,

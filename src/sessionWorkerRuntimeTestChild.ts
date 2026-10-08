@@ -18,9 +18,10 @@ import { readSessionHistorySnapshot } from './session/metadataStore';
 import { initArchiveStore } from './session/archiveStore';
 import { appendMessagesToArchive, readArchiveMessagesBySeqRange } from './session/archive';
 import { COMPACT_PLAN_TOOL_NAME } from './session/compactPlan';
-import { INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX } from './toolCallControls';
+import { INTER_AGENT_HANDOFF_RECALL_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX } from './toolCallControls';
 
-const TEST_HANDOFF_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nThe worker test handoff is necessary, accurate, self-contained, scoped, and compliant with communication rules.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
+const TEST_HANDOFF_RECALL = `${INTER_AGENT_HANDOFF_RECALL_PREFIX}\nI recalled the worker communication rules, test request, and child or parent scope.`;
+const TEST_HANDOFF_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nThe worker test handoff is necessary and actionable, not duplicate or inherited-rule acknowledgement.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
 import {
   createSessionWorkerControlServiceHandler,
   SessionWorkerActivationGate,
@@ -31,7 +32,7 @@ import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity
 import { createSessionWorkerRuntimeServiceHandler, sessionWorkerRuntimeServiceDescriptor } from './sessionWorkerRuntimeService';
 import { clearModelStreamDraft, resetModelStreamDraft, updateModelStreamDraft } from './modelStreamDraft';
 import { SessionWorkerStore } from './sessionWorkerStore';
-import { tool_set_goal } from './toolsSessionAgent/settings';
+import { tool_set_session_compact_threshold } from './toolsSessionAgent/settings';
 import { tool_wait } from './toolsSessionAgent/interSession';
 import * as vector from './vector';
 import { tool_call_tool } from './tools/unifiedSearch';
@@ -82,7 +83,7 @@ async function start(): Promise<void> {
   }
   const failWrites = new Set(String(process.env.FOXWARM_TEST_FAIL_WRITE_AT || '').split(',').map(Number).filter(Boolean));
   const failReads = new Set(String(process.env.FOXWARM_TEST_FAIL_READ_AT || '').split(',').map(Number).filter(Boolean));
-  let writeCount = 0; let readCount = 0; let initializeCount = 0; let chatCount = 0; let failedGoal = false; let backgroundExecStarted = false;
+  let writeCount = 0; let readCount = 0; let initializeCount = 0; let chatCount = 0; let failedSetting = false; let backgroundExecStarted = false;
   if (process.env.FOXWARM_TEST_MOCK_AXIOS !== '1') (llm as any).chat = async (parts: any, session: any, _iteration: number, options: any) => {
     chatCount += 1;
     if (options?.purpose === 'btw') {
@@ -145,11 +146,11 @@ async function start(): Promise<void> {
       return { toolCalls: configuredMainTools };
     }
     if (crossSession.includes('create-child') && chatCount === 1 && !session.id.endsWith('_mp-child')) {
-      return { toolCalls: [{ name: 'create_child_session', args: { suffix: 'mp-child', message: 'hello child', afterSend: 'wait', confirmation: TEST_HANDOFF_CONFIRMATION } }] };
+      return { toolCalls: [{ name: 'create_child_session', args: { suffix: 'mp-child', handoffRecall: TEST_HANDOFF_RECALL, message: 'hello child', afterSend: 'wait', handoffConfirmation: TEST_HANDOFF_CONFIRMATION } }] };
     }
     if (crossSession.includes('reply') && chatCount === 1 && session.id.endsWith('_mp-child') && !session.id.endsWith('_mp-child_mp-child')) {
       const parentId = session.id.slice(0, -'_mp-child'.length);
-      return { toolCalls: [{ name: 'send_to_session', args: { sessionId: parentId, message: 'child reply to parent', confirmation: TEST_HANDOFF_CONFIRMATION } }] };
+      return { toolCalls: [{ name: 'send_to_session', args: { sessionId: parentId, handoffRecall: TEST_HANDOFF_RECALL, message: 'child reply to parent', handoffConfirmation: TEST_HANDOFF_CONFIRMATION } }] };
     }
     if (crossSession.includes('query') && chatCount === 3 && !session.id.endsWith('_mp-child')) {
       const listOut = await executeMainManagementTool('session_list', {}, { sessionId: session.id });
@@ -204,6 +205,33 @@ async function start(): Promise<void> {
       await options.appendMessage({ role: 'model', parts: [{ thinking: 'Starting the process' }, { functionCall: call }] });
       return { toolCalls: [call], allParts: [{ thinking: 'Starting the process' }, { functionCall: call }] };
     }
+    if (process.env.FOXWARM_TEST_STREAM_COMMITTED_PREFIX === '1'
+      && chatCount === Number(process.env.FOXWARM_TEST_STREAM_COMMITTED_PREFIX_AT || '1')) {
+      const base = { streamVersion: 2, streamId: 'committed-prefix-stream', iteration: 0,
+        startedAt: Date.now(), llmRequestId: 'worker-prefix-request' };
+      options.currentSessionEffects.notifySessionEvent(session.id, {
+        type: 'model-stream-update', ...base, sequenceStart: 1, sequence: 1,
+        partDeltas: [{ outputIndex: 0, kind: 'text', contentIndex: 0, added: true,
+          phase: 'commentary', textDelta: { offset: 0, text: 'Drawing' } }],
+        textDelta: { offset: 0, text: 'Drawing' },
+      } as any);
+      await options.appendMessage({ role: 'model', parts: [{ text: 'Drawing', phase: 'commentary' }],
+        __meta: { llmRequestId: 'worker-prefix-request', llmSegment: { outputStart: 0, outputEndExclusive: 1, complete: false } } });
+      options.currentSessionEffects.notifySessionEvent(session.id, {
+        type: 'model-stream-update', ...base, sequenceStart: 2, sequence: 2,
+        trimBeforeOutputIndex: 1, textDelta: { offset: 0, text: '' },
+      } as any);
+      options.currentSessionEffects.notifySessionEvent(session.id, {
+        type: 'model-stream-update', ...base, sequenceStart: 3, sequence: 3,
+        partDeltas: [{ outputIndex: 1, kind: 'reasoning', summaryIndex: 0, added: true,
+          textDelta: { offset: 0, text: 'After' } }, { outputIndex: 2, kind: 'text', contentIndex: 0,
+          added: true, phase: 'final_answer', textDelta: { offset: 0, text: 'Final' } }],
+        reasoningDelta: { offset: 0, text: 'After' }, textDelta: { offset: 0, text: 'Final' },
+      } as any);
+      await options.appendMessage({ role: 'model', parts: [{ thinking: 'After' }, { text: 'Final', phase: 'final_answer' }],
+        __meta: { llmRequestId: 'worker-prefix-request', llmSegment: { outputStart: 1, outputEndExclusive: 3, complete: true } } });
+      return { text: 'Final', allParts: [{ thinking: 'After' }, { text: 'Final', phase: 'final_answer' }] };
+    }
     // Simulates a slow provider request that honors its abort signal, like the
     // real runner: the controller is registered for the in-flight request and
     // the request rejects AbortError when interrupted.
@@ -240,10 +268,10 @@ async function start(): Promise<void> {
       await options.appendMessage({ role: 'model', parts: [{ text }] });
       return { text };
     }
-    if (process.env.FOXWARM_TEST_FAIL_GOAL === '1' && chatCount === 2) {
+    if (process.env.FOXWARM_TEST_FAIL_SETTING === '1' && chatCount === 2) {
       try {
-        await tool_set_goal(
-          { goal: 'must-not-commit', remindEvery: 2 },
+        await tool_set_session_compact_threshold(
+          { thresholdTokens: 4242 },
           { sessionId: session.id, session, persistCurrentSession: () => options.currentSessionEffects.persistSession(session) } as any,
         );
       } catch (error: any) {
@@ -290,7 +318,7 @@ async function start(): Promise<void> {
     }
     if (process.env.FOXWARM_TEST_PUBLICATION_TOOL === '1' && chatCount === 4) {
       try {
-        await tool_set_goal({ goal: 'committed-before-publication-loss', remindEvery: 2 },
+        await tool_set_session_compact_threshold({ thresholdTokens: 4243 },
           { sessionId: session.id, session, persistCurrentSession: () => options.currentSessionEffects.persistSession(session) } as any);
       } catch (error: any) {
         await options.appendMessage({ role: 'model', parts: [{ text: `folded publication failure: ${error.message}` }] });
@@ -346,9 +374,9 @@ async function start(): Promise<void> {
       },
       writeState: async session => {
         writeCount += 1;
-        if (process.env.FOXWARM_TEST_FAIL_GOAL === '1' && !failedGoal && session.goalState?.goal === 'must-not-commit') {
-          failedGoal = true;
-          throw new Error('test goal persistence failure');
+        if (process.env.FOXWARM_TEST_FAIL_SETTING === '1' && !failedSetting && session.compactThresholdTokens === 4242) {
+          failedSetting = true;
+          throw new Error('test setting persistence failure');
         }
         if (failWrites.delete(writeCount)) throw new Error(`test write failure ${writeCount}`);
         await writeAuthoritativeSessionState(session);

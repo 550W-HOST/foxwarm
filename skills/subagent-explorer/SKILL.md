@@ -40,7 +40,7 @@ Before delegating, decide:
 
 For read-only explorer work, multiple sessions may inspect the same checkout, but they should not edit files, restart shared services, install packages, or mutate git state.
 
-Use `wait({ reason, timeoutSeconds })` only when there is no useful main-thread work or user-facing reply to do until a report or timeout arrives.
+Use `wait({ reason, waitAnySessions: [childSessionId] })` only when no useful main-thread work or user-facing reply remains until the child reports. Add `wakeIfNoActivityAfterSeconds` only when the fallback has a useful next action. Use `waitAllSessions` only when the next step depends on every listed report.
 
 ## Fork choice
 

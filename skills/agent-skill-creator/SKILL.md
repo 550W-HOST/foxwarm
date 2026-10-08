@@ -1,10 +1,8 @@
 ---
 name: agent-skill-creator
 description: >-
-  Create reusable agent skills from workflow descriptions, existing docs, code,
-  transcripts, files, or rough process notes. Use when a user wants to create,
-  validate, package, migrate, or improve a skill. Adapted for Foxwarm from the
-  MIT-licensed Agent Skill Creator project.
+  Create or revise reusable agent skills from workflows, documents, or code. Use
+  for skill structure, activation descriptions, packaging, or focused validation.
 license: MIT
 activation: /agent-skill-creator
 metadata:
@@ -79,9 +77,11 @@ Complex skills may add `evals/`, `examples/`, or other resources, but keep the m
 
 ## Core workflow
 
+Use the following sections as a guide for a new skill, not mandatory approval stages. For an existing skill, work on the affected description, instructions, or resources directly; revisit design only when its purpose or behavior changes. Complete the authorized deliverable without pausing between routine steps.
+
 ### Phase 1: Discovery
 
-Read all material before deciding what to build.
+Read the supplied material relevant to the requested skill or change. Follow references when they resolve a requirement or uncertainty; do not load every companion document for a narrow edit.
 
 Classify the input:
 
@@ -164,9 +164,9 @@ For executable skills, prefer one clear command or script entry point. If severa
 
 ## Validation
 
-Always run the strongest practical validation before delivery.
+Validate the changed behavior and structure. For description or documentation edits, check frontmatter, relevant links, and the intended activation scope. For executable changes, run the affected script or representative end-to-end path. Reuse valid results from the same revision and environment; repeat or broaden checks only for changed behavior, a required gate, or unresolved evidence.
 
-Recommended checks:
+For a new or substantially changed skill, available checks include:
 
 ```bash
 python3 scripts/validate.py path/to/skill
@@ -174,7 +174,7 @@ python3 scripts/security_scan.py path/to/skill
 python3 scripts/check_pipeline.py path/to/skill
 ```
 
-Use the bundled scripts in this skill directory when available. If the current environment cannot run them, perform equivalent manual checks and clearly report the limitation.
+Select the bundled checks relevant to the change. If a necessary check cannot run, perform an appropriate manual check where possible and report the remaining limitation. A documentation-only edit does not require executing unrelated pipelines.
 
 Validation should check:
 

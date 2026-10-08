@@ -2,10 +2,12 @@ import { resolveObjectArgWithJsonFallback } from '../jsonObjectArgs';
 import * as mcpExternal from '../mcpExternalService';
 import { executeNodeTool } from '../nodeExecution';
 import { nodesManager } from '../nodes/manager';
+import path from 'path';
 import { checkToolPermission, checkToolPermissionForSession } from '../isolatedCheck';
 import { isPermissionNeutralBuiltinDispatcher } from '../permissions';
 import { builtinNodeArgumentSelectsPlacement, NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './placement';
 import type { ToolArgs, ToolContext, UnifiedToolSource } from './helpers';
+import { RESOLVED_PATH_SIDECAR, type ResolvedToolPath } from '../../packages/shared/dist/resolvedPathMetadata';
 
 export type ResolvedTool = {
   invocationName: string;
@@ -163,15 +165,30 @@ export async function executeResolvedTool(resolved: ResolvedTool, ctx: ToolConte
   if (!ctx.sessionId) throw new Error('Tool execution requires an active source session.');
   if (resolved.source === 'mcp') return mcpExternal.callMcpTool(ctx.sessionId, resolved.server, resolved.name, resolved.args);
   await checkPermission(resolved, ctx);
+  // Only a concrete file capability can report a path. Bind its Node identity to
+  // the trusted resolved target, never to a remote result or the current UI Node.
+  const { onResolvedPaths, ...toolCtx } = ctx;
   if (resolved.source === 'node') {
+    const fileTool = ['read', 'write', 'edit', 'apply_patch'].includes(resolved.name);
     if (resolved.executionNode !== 'master') {
-      return executeNodeTool(ctx.sessionId, resolved.executionNode, resolved.name, resolved.args,
+      const result = await executeNodeTool(ctx.sessionId, resolved.executionNode, resolved.name, resolved.args,
         resolved.routingSnapshot
           ? { ...resolved.routingSnapshot, ...(ctx.deferSessionCwdSync ? { deferSessionCwdSync: true } : {}) }
-          : (ctx.deferSessionCwdSync ? { currentNode: resolved.executionNode, deferSessionCwdSync: true } : undefined));
+          : (ctx.deferSessionCwdSync ? { currentNode: resolved.executionNode, deferSessionCwdSync: true } : undefined), ctx.programmatic);
+      if (!fileTool || !result || typeof result !== 'object' || Array.isArray(result)
+        || !Object.prototype.hasOwnProperty.call(result, RESOLVED_PATH_SIDECAR)) return result;
+      const { [RESOLVED_PATH_SIDECAR]: paths, ...visible } = result;
+      if (Array.isArray(paths) && paths.length > 0 && paths.length <= 100
+        && paths.every((item: any) => typeof item?.raw === 'string' && typeof item?.resolved === 'string'
+          && (path.posix.isAbsolute(item.resolved) || path.win32.isAbsolute(item.resolved))
+          && item.resolved.length <= 4096)) {
+        onResolvedPaths?.(paths.map((item: any): ResolvedToolPath => ({ raw: item.raw, resolved: item.resolved })));
+      }
+      return visible;
     }
-    return activeRuntime().dispatchBuiltin(resolved.localBuiltinName!, resolved.args, { ...ctx, runtimeNodeId: 'master' });
+    return activeRuntime().dispatchBuiltin(resolved.localBuiltinName!, resolved.args,
+      { ...toolCtx, runtimeNodeId: 'master', ...(fileTool && onResolvedPaths ? { onResolvedPaths } : {}) });
   }
   return activeRuntime().dispatchBuiltin(resolved.name, resolved.args,
-    resolved.targetNode ? { ...ctx, runtimeNodeId: resolved.targetNode } : ctx);
+    resolved.targetNode ? { ...toolCtx, runtimeNodeId: resolved.targetNode } : toolCtx);
 }

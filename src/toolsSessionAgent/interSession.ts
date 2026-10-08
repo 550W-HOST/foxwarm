@@ -16,6 +16,7 @@ import {
   isWebUiUnsupportedFileDelivery,
   buildSendFileResult,
 } from './helpers';
+import { taskService } from '../tools/taskTools';
 import * as sessionManager from '../sessionManager';
 import { armMainWaitLiveness, scheduleMainWaitTimeout, validateMainWaitExecIds, validateMainWaitSessions } from '../mainManagementTools';
 import { logger } from '../common';
@@ -28,20 +29,43 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
   await requireNotIsolated(ctx, 'create_child_session');
   validateInterAgentHandoffConfirmationForMode(args, HANDOFF_CONFIRMATION_ENABLED);
   const normalizedArgs = normalizeCreateChildSessionArgs(args);
-  const { agentName, suffix, displayName, fork = false, message, node } = normalizedArgs;
+  const { agentName, suffix, displayName, fork = false, message, node, taskId } = normalizedArgs;
   const afterSend = normalizeAfterSendBehavior(normalizedArgs, 'create_child_session');
   const forced = normalizeForceModel(normalizedArgs, 'create_child_session');
 
   if (!ctx || !ctx.sessionId) {
     throw new Error('Cannot create child session: missing context');
   }
-  if (afterSend === 'wait' && (typeof message !== 'string' || !message.trim())) {
+  if (afterSend === 'wait' && !taskId && (typeof message !== 'string' || !message.trim())) {
     throw new Error('create_child_session with afterSend="wait" requires a non-empty initial message.');
   }
 
   const currentSessionId = ctx.sessionId;
-  const childSessionId = await sessionManager.createChildSession(currentSessionId, suffix, fork,
-    { agentName, displayName, node, model: forced.model, effort: forced.effort, sourceOverride: (ctx as any).sourceOverride });
+  const create = () => sessionManager.createChildSession(currentSessionId, suffix, fork,
+    { agentName, displayName, node, taskId, model: forced.model, effort: forced.effort, sourceOverride: (ctx as any).sourceOverride });
+  let childSessionId: string;
+  let taskAssignmentDelivered = true;
+  let taskAssignmentWarning: string | undefined;
+  if (taskId) {
+    const attached = await taskService.createAttachedChild(taskId, currentSessionId, create, message);
+    childSessionId = attached.childSessionId;
+    taskAssignmentDelivered = attached.assignmentDelivered;
+    taskAssignmentWarning = attached.warning;
+  } else {
+    childSessionId = await create();
+  }
+
+  if (taskId) {
+    const output = taskAssignmentDelivered
+      ? `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'}). Task assignment sent${taskAssignmentWarning ? ` with warning: ${taskAssignmentWarning}` : ''}.`
+      : `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'}), but task assignment delivery failed${taskAssignmentWarning ? `: ${taskAssignmentWarning}` : '.'}`;
+    if (taskAssignmentDelivered && afterSend === 'wait') {
+      return { output, __toolPostAction: { waitForReply: true, successfulSendToSessionTarget: childSessionId } };
+    }
+    return taskAssignmentDelivered && afterSend === 'finish'
+      ? { ...buildEndTurnResult(), output, __toolPostAction: { finishAfterSend: true } }
+      : output;
+  }
 
   if (message) {
     if (afterSend === 'wait' || afterSend === 'finish') {
@@ -68,7 +92,7 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
 
 export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
   validateInterAgentHandoffConfirmationForMode(args, HANDOFF_CONFIRMATION_ENABLED);
-  const unknownKeys = Object.keys(args || {}).filter(key => !['sessionId', 'message', 'afterSend', 'noFurtherAssistantReply', 'waitAfterHandoff', 'confirmation'].includes(key));
+  const unknownKeys = Object.keys(args || {}).filter(key => !['sessionId', 'handoffRecall', 'message', 'afterSend', 'noFurtherAssistantReply', 'waitAfterHandoff', 'handoffConfirmation'].includes(key));
   if (unknownKeys.length) throw new Error(`send_to_session received unsupported argument${unknownKeys.length === 1 ? '' : 's'}: ${unknownKeys.join(', ')}.`);
   const { sessionId, message } = args;
   const afterSend = normalizeAfterSendBehavior(args, 'send_to_session');

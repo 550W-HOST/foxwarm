@@ -5,6 +5,7 @@ umask 077
 
 HOST="__FOXWARM_DEFAULT_BASE_URL__"
 PAIRING=""
+AUTH_TOKEN=""
 NODE_ID="node-$(hostname 2>/dev/null || echo foxwarm-node)"
 INSTALL_DIR=""
 PREPARE_ONLY=0
@@ -30,6 +31,7 @@ Options:
                       launcher, and generated service files stay under this dir
   --host=URL          Override Foxwarm master base URL (default: request-derived)
   --pairing=TOKEN     Pairing token for first setup; optional with stored credentials
+  --auth-token=TOKEN  Per-node auth token from /node create (use with --node-id)
   --node-id=ID        Requested node name (default: node-<hostname>)
   -d, --detach        Start in background; prefer tmux, otherwise use nohup
   --install           Install, enable, and start a systemd service. Root installs a
@@ -57,6 +59,8 @@ while [ "$#" -gt 0 ]; do
     --host) shift; require_value --host "${1-}"; HOST="$1" ;;
     --pairing=*) PAIRING="${1#*=}" ;;
     --pairing) shift; require_value --pairing "${1-}"; PAIRING="$1" ;;
+    --auth-token=*) AUTH_TOKEN="${1#*=}"; require_value --auth-token "$AUTH_TOKEN" ;;
+    --auth-token) shift; require_value --auth-token "${1-}"; AUTH_TOKEN="$1" ;;
     --node-id=*) NODE_ID="${1#*=}"; require_value --node-id "$NODE_ID" ;;
     --node-id) shift; require_value --node-id "${1-}"; NODE_ID="$1" ;;
     -d|--detach) DETACH=1 ;;
@@ -110,8 +114,12 @@ CREDENTIALS_FILE="$STATE_DIR/state/node_credentials.json"
 
 mkdir -p "$STATE_DIR/state" "$STATE_DIR/agents" "$STATE_DIR/logs" "$SOURCE_DIR" "$SYSTEMD_DIR"
 
-if [ -z "$PAIRING" ] && [ ! -s "$CREDENTIALS_FILE" ]; then
-  echo "Error: --pairing is required for first-time setup when no stored credentials exist at $CREDENTIALS_FILE" >&2
+if [ -n "$PAIRING" ] && [ -n "$AUTH_TOKEN" ]; then
+  echo "Error: use either --pairing or --auth-token, not both" >&2
+  exit 1
+fi
+if [ -z "$PAIRING" ] && [ -z "$AUTH_TOKEN" ] && [ ! -s "$CREDENTIALS_FILE" ]; then
+  echo "Error: --pairing or --auth-token is required for first-time setup when no stored credentials exist at $CREDENTIALS_FILE" >&2
   exit 1
 fi
 
@@ -171,6 +179,9 @@ NODE_BIN="$(command -v node)"
   printf ' --id '; shell_quote "$NODE_ID"
   if [ -n "$PAIRING" ]; then
     printf ' --token '; shell_quote "$PAIRING"
+  fi
+  if [ -n "$AUTH_TOKEN" ]; then
+    printf ' --auth-token '; shell_quote "$AUTH_TOKEN"
   fi
   printf ' --credentials-file '; shell_quote "$CREDENTIALS_FILE"
   echo

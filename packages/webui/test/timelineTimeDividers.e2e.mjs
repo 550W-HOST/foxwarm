@@ -23,24 +23,24 @@ before(async () => {
     const nestedRoot = createRoot(document.getElementById('nested'))
     const base = Date.UTC(2026, 8, 26, 14)
     const timed = (seq, parts, timestamp, extra = {}) => ({ role: 'model', parts, __meta: { seq, timestamp, ...extra } })
-    const call = (id, seq, timestamp) => timed(seq, [{ functionCall: { id, name: 'exec', args: { command: 'echo ' + id } } }], timestamp, { usage: { cachedTokens: 2, inputTokens: 3, outputTokens: 4 } })
+    const call = (id, seq, timestamp, startedAt) => timed(seq, [{ functionCall: { id, name: 'exec', args: { command: 'echo ' + id } } }], timestamp, { usage: { cachedTokens: 2, inputTokens: 3, outputTokens: 4 }, ...(startedAt !== undefined ? { llmRequestTiming: { startedAt, completedAt: timestamp, durationMs: timestamp - startedAt } } : {}) })
     const result = (id, seq, timestamp, output) => ({ role: 'tool', parts: [{ functionResponse: { tool_use_id: id, name: 'exec', response: { output } } }], __meta: { seq, timestamp } })
     const received = (seq, timestamp) => ({ role: 'user', parts: [{ text: 'A later user message' }], __meta: { seq, timestamp } })
     const mainProps = messages => ({ sessionId: 'fixture/timeline', messages, isMobile: false, groupTools: true, showUsageBadge: true })
     const groupMessages = () => {
       const aEnd = base + 40 * 60_000
       const bStart = aEnd + 59_999
-      const bEnd = bStart + 1000
+      const bEnd = bStart + 4 * 60_000
       const bResultEnd = bEnd + 1000
       const cStart = bResultEnd + 60_000
-      const cEnd = cStart + 8000
+      const cEnd = cStart + 5 * 60_000
       const cResultEnd = cEnd + 1000
       return [
         call('a', 11, base),
         { role: 'user', parts: [{ system: '<foxwarm-system kind="event">\\nA tool event\\n</foxwarm-system>' }], __meta: { seq: 12, timestamp: base + 20 * 60_000 } },
         result('a', 13, aEnd, 'A result'),
-        call('b', 14, bStart), result('b', 15, bResultEnd, 'B result'),
-        call('c', 16, cStart), result('c', 17, cResultEnd, 'C result'),
+        call('b', 14, bEnd, bStart), result('b', 15, bResultEnd, 'B result'),
+        call('c', 16, cEnd, cStart), result('c', 17, cResultEnd, 'C result'),
         timed(18, [{ thinking: 'FOLDED_AFTER_C' }, { text: 'FINAL OUTSIDE GROUP' }], cResultEnd + 6000),
         received(19, base + 12 * 3600_000),
       ]
@@ -85,7 +85,7 @@ after(async () => { await browser?.close(); await new Promise(resolve => server?
 const mount = async () => { await page.goto(fixtureUrl, { waitUntil: 'load' }); await page.waitForSelector('#main [data-tool-group]') }
 const labels = () => page.$$eval('#main [data-timeline-time-separator]', nodes => nodes.map(node => node.textContent.trim()))
 
-test('time lines remain siblings of complete tool groups, not folded content or paired responses', async () => {
+test('slow requests stay in their tool group while a real idle gap splits only complete pairs', async () => {
   await mount()
   const initial = await page.evaluate(() => ({
     groups: [...document.querySelectorAll('#main [data-tool-group]')].map(group => ({ key: group.dataset.toolGroup, header: group.querySelector('.foxwarm-tool-group-header')?.textContent, anchor: group.dataset.chatMessageAnchorKey })),
@@ -98,6 +98,7 @@ test('time lines remain siblings of complete tool groups, not folded content or 
   assert.ok(initial.dividers.every(row => !row.ancestors && !row.anchor), JSON.stringify(initial))
   assert.equal(initial.dividers[1].before, initial.groups[1].key, 'verified one-minute gap is ahead of the later group')
   assert.match((await labels())[1], /\d{2}:\d{2}$/)
+  assert.equal(await page.$$eval('#main [data-timeline-time-separator] time', nodes => nodes[1].dateTime), '2026-09-26T14:46:00.999Z', 'the divider shows the selected request start, not its completion')
   assert.ok((await labels()).every(label => !label.includes(' · ') && !label.includes(' later')), 'separators show only the timestamp')
   assert.equal(await page.$$eval('#main [data-usage-timing-kind="between"]', items => items.length), 0)
   if (process.env.FOXWARM_E2E_SCREENSHOT_PATH) await page.screenshot({ path: process.env.FOXWARM_E2E_SCREENSHOT_PATH })
