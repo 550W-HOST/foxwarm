@@ -680,7 +680,7 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
           className={`foxwarm-system-message-header -ml-2 -mr-2 ${THREAD_CARD_HEADER_ROW_CLASS} px-2 py-1 ${headerClass} ${expanded ? `mb-1 cursor-pointer ${headerHoverClass}` : ''}`}
           onClick={expanded ? (event) => { event.stopPropagation(); toggle() } : undefined}
         >
-          <ToolTag name="system" iconName={`system-${messageKind.kind}`} label={`${messageKind.kind}${messageKind.lineCount ? ` ×${messageKind.lineCount}` : ''}`} tone="system" className="foxwarm-system-message-tag" />
+          <ToolTag name="system" iconName={`system-${messageKind.kind}`} label={messageKind.kind === 'llm error' ? `LLM error ×${messageKind.lineCount || 1}` : `${messageKind.kind}${messageKind.lineCount ? ` ×${messageKind.lineCount}` : ''}`} tone="system" className="foxwarm-system-message-tag" />
           {!expanded && (
             <span ref={headerFade.ref} {...headerFade.overflowFadeProps} className={`foxwarm-system-message-preview ${THREAD_CARD_HEADER_PREVIEW_CLASS}`} title={messageKind.kind === 'inter-agent' && messageKind.previewSessionId ? `From ${messageKind.previewSessionId}:` : preview}>
               {messageKind.previewSessionId ? (

@@ -158,9 +158,9 @@ test('model-visible lightweight user metadata is estimated, while a display-only
   assert.equal(getContextScrollbarLegendStats(segments).reduce((sum, stat) => sum + stat.estimatedTokens, 0), segments[1].estimatedTokens)
 })
 
-test('LLM error model text keeps the context overview in the system/thread-card family', () => {
+test('LLM retry metadata keeps the context overview in the system/thread-card family', () => {
   const segments = buildContextScrollbarSegments([
-    message('model', 'llm error: provider unavailable\nretry exhausted', 1),
+    message('model', '⚠️ LLM Error: Attempt 1/5 failed: provider unavailable\nAttempt 2/5 failed: retry exhausted', 1, { noticeType: 'llm-retry' }),
   ])
   assert.equal(segments[0].tone, 'system')
   assert.equal(segments[0].category, 'system')

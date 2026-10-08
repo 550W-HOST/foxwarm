@@ -9,14 +9,14 @@ const timelineEntry = new URL('../src/components/ChatTimeline.tsx', import.meta.
 
 const call = (id, seq) => ({ role: 'model', parts: [{ functionCall: { id, name: 'exec', args: { command: `echo ${id}` } } }], __meta: { seq } })
 const result = (id, seq, response = { output: `${id} result` }) => ({ role: 'tool', parts: [{ functionResponse: { tool_use_id: id, name: 'exec', response } }], __meta: { seq } })
-const llmError = (text, seq) => ({ role: 'model', parts: [{ text }], __meta: { seq } })
+const llmRetry = (text, seq) => ({ role: 'model', modelVisible: false, parts: [{ text }], __meta: { seq, noticeType: 'llm-retry' } })
 
 const groupedMessages = [
   call('one', 1),
-  llmError('  LLM ERROR: first line\nsecond line\nthird line  ', 2),
+  llmRetry('⚠️ LLM Error: Attempt 1/5 failed: first line\nAttempt 2/5 failed: second line\n\nAttempt 3/5 failed: third line', 2),
   result('one', 3),
   call('two', 4),
-  llmError('llm error: one line', 5),
+  llmRetry('⚠️ LLM Error: Attempt 1/5 failed: one line', 5),
   result('two', 6),
   { role: 'model', parts: [{ text: 'ordinary answer' }], __meta: { seq: 7 } },
 ]
@@ -24,20 +24,21 @@ const groupedMessages = [
 const tailMessages = [
   call('tail', 11),
   result('tail', 12),
-  llmError('llm error: tail error', 13),
+  llmRetry('⚠️ LLM Error: Attempt 1/5 failed: tail error', 13),
 ]
 
 const ungroupedMessages = [
   call('off', 21),
-  llmError('llm error: visible without grouping', 22),
+  llmRetry('⚠️ LLM Error: Attempt 1/5 failed: visible without grouping', 22),
   result('off', 23, { error: 'llm error: tool response text' }),
   { role: 'model', parts: [{ text: 'assistant quote: llm error: not a prefix' }], __meta: { seq: 24 } },
   { role: 'user', parts: [{ text: 'quoted content: llm error: not a prefix' }], __meta: { seq: 25 } },
 ]
 
-const standaloneMessages = [llmError('\nllm error: standalone\n', 31)]
-const emptyMessages = [llmError('llm error:   ', 41)]
-const fixtureCases = { groupedMessages, tailMessages, ungroupedMessages, standaloneMessages, emptyMessages }
+const standaloneMessages = [llmRetry('⚠️ LLM Error: Attempt 1/5 failed: standalone', 31)]
+const missingPrefixMessages = [llmRetry('Attempt 1/5 failed without warning prefix\nsecond line', 41)]
+const ordinaryTextMessages = [{ role: 'model', parts: [{ text: 'ordinary assistant text mentions llm error but is not a retry notice' }], __meta: { seq: 51 } }]
+const fixtureCases = { groupedMessages, tailMessages, ungroupedMessages, standaloneMessages, missingPrefixMessages, ordinaryTextMessages }
 
 let browser
 let page
@@ -95,9 +96,9 @@ const cardSnapshot = async (selector) => page.$eval(selector, card => ({
 
 const groupTags = async (id) => page.$$eval(`#${id} [data-tool-group-card] [data-tool-tag-tone]`, tags => tags.map(tag => [tag.querySelector('span:last-child')?.textContent, tag.getAttribute('data-tool-tag-tone')]))
 
-test('LLM errors render as body-only thread cards and count body lines in tool groups', async () => {
+test('LLM retry notices render as body-only thread cards and count body lines in tool groups', async () => {
   assert.deepEqual(await groupTags('groupedMessages'), [
-    ['llm error ×4', 'system'],
+    ['LLM error ×5', 'system'],
     ['exec ×2', 'success'],
   ])
   assert.equal(await page.$$('#groupedMessages [data-system-message-card]').then(nodes => nodes.length), 0, 'collapsed groups hide the member card')
@@ -114,8 +115,8 @@ test('LLM errors render as body-only thread cards and count body lines in tool g
     insideGroup: !!card.closest('[data-tool-group-card]'),
   })))
   assert.deepEqual(cards, [
-    { kind: 'llm error', tag: 'llm error ×3', body: 'first line\nsecond line\nthird line', insideGroup: true },
-    { kind: 'llm error', tag: 'llm error ×1', body: 'one line', insideGroup: true },
+    { kind: 'llm error', tag: 'LLM error ×4', body: 'Attempt 1/5 failed: first line\nAttempt 2/5 failed: second line\n\nAttempt 3/5 failed: third line', insideGroup: true },
+    { kind: 'llm error', tag: 'LLM error ×1', body: 'Attempt 1/5 failed: one line', insideGroup: true },
   ])
   assert.equal(await page.$eval('#groupedMessages', root => root.textContent.includes('LLM ERROR:')), false, 'the source prefix is not rendered')
   assert.equal(await page.$eval('#groupedMessages', root => root.textContent.includes('llm error:')), false, 'the source prefix is not rendered in any case')
@@ -125,8 +126,8 @@ test('group tools off keeps the LLM error card and tool error response separate'
   const card = await cardSnapshot('#ungroupedMessages [data-system-message-card]')
   assert.deepEqual(card, {
     kind: 'llm error',
-    tag: 'llm error ×1',
-    preview: 'visible without grouping',
+    tag: 'LLM error ×1',
+    preview: 'Attempt 1/5 failed: visible without grouping',
     body: null,
   })
   assert.equal(await page.$$('#ungroupedMessages [data-system-message-card]').then(nodes => nodes.length), 1)
@@ -139,23 +140,30 @@ test('tail LLM errors stay in the forced-open historical group', async () => {
   const card = await cardSnapshot('#tailMessages [data-system-message-card]')
   assert.deepEqual(card, {
     kind: 'llm error',
-    tag: 'llm error ×1',
-    preview: 'tail error',
+    tag: 'LLM error ×1',
+    preview: 'Attempt 1/5 failed: tail error',
     body: null,
   })
   assert.equal(await page.$$('#tailMessages [aria-label="Expand tool group"]').then(nodes => nodes.length), 0)
   assert.equal(await page.$eval('#tailMessages [data-system-message-card]', node => !!node.closest('[data-tool-group]')), true)
 })
 
-test('a standalone LLM error is a normal thread card and an empty body stays ordinary text', async () => {
+test('a standalone LLM retry is a normal thread card and malformed prefix text remains intact', async () => {
   const card = await cardSnapshot('#standaloneMessages [data-system-message-card]')
   assert.deepEqual(card, {
     kind: 'llm error',
-    tag: 'llm error ×1',
-    preview: 'standalone',
+    tag: 'LLM error ×1',
+    preview: 'Attempt 1/5 failed: standalone',
     body: null,
   })
   assert.equal(await page.$$('#standaloneMessages [data-system-message-body]').then(nodes => nodes.length), 0)
-  assert.equal(await page.$$('#emptyMessages [data-system-message-card]').then(nodes => nodes.length), 0)
-  assert.ok(await page.$eval('#emptyMessages', root => root.textContent.includes('llm error:')))
+  const malformed = await cardSnapshot('#missingPrefixMessages [data-system-message-card]')
+  assert.deepEqual(malformed, {
+    kind: 'llm error',
+    tag: 'LLM error ×2',
+    preview: 'Attempt 1/5 failed without warning prefix',
+    body: null,
+  })
+  assert.equal(await page.$$('#ordinaryTextMessages [data-system-message-card]').then(nodes => nodes.length), 0)
+  assert.ok(await page.$eval('#ordinaryTextMessages', root => root.textContent.includes('ordinary assistant text mentions llm error')))
 })

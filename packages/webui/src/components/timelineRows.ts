@@ -169,7 +169,7 @@ const getMessageUsageAttribution = (msg: Message, timing: DerivedRequestTiming):
   messageSeqs: [getValidMessageSeq(msg)],
 })
 
-/** Whole event/reminder wrappers and display-only LLM errors may join a tool run; quoted content does not. */
+/** Whole event/reminder wrappers and metadata-classified display-only LLM retry notices may join a tool run; quoted content does not. */
 const getGroupableSystemKind = (msg: Message): 'event' | 'goal-reminder' | 'llm-error' | null => {
   if (getLlmErrorMessageDetails(msg)) return 'llm-error'
   if (msg.role !== 'user' || msg.parts.length !== 1) return null
@@ -338,7 +338,7 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
     if (systemKind === 'llm-error') {
       const details = getLlmErrorMessageDetails(msg)
       for (let line = 0; line < (details?.lineCount || 0); line++) {
-        items.push({ name: 'system-llm-error', label: 'llm error', tone: 'system' })
+        items.push({ name: 'system-llm-error', label: 'LLM error', tone: 'system' })
       }
     } else if (systemKind) {
       items.push({ name: `system-${systemKind}`, label: systemKind === 'event' ? 'Event' : 'Goal reminder', tone: 'system' })

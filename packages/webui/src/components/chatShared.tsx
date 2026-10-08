@@ -481,16 +481,18 @@ export interface LlmErrorMessageDetails {
   lineCount: number
 }
 
-const LLM_ERROR_PREFIX_RE = /^\s*llm[ \t]+error[ \t]*:[ \t]*/i
+const LLM_ERROR_PREFIX = '⚠️ LLM Error: '
 
 /**
- * Recognizes the display-only model-text shape used for LLM errors.
+ * Recognizes the persisted display-only model-text shape used for LLM retry notices.
+ * The notice metadata is authoritative; the warning prefix is presentation text only.
  * Mixed model parts, user text, and tool responses stay ordinary content.
  */
 export const getLlmErrorMessageDetails = (message: Message): LlmErrorMessageDetails | null => {
-  if (message.role !== 'model' || message.parts.length !== 1) return null
+  if (message.role !== 'model' || message.__meta?.noticeType !== 'llm-retry' || !Array.isArray(message.parts) || message.parts.length !== 1) return null
   const part = message.parts[0]
-  if (typeof part.text !== 'string'
+  if (!part || typeof part !== 'object'
+    || typeof part.text !== 'string'
     || part.system !== undefined
     || part.thinking !== undefined
     || part.functionCall !== undefined
@@ -500,14 +502,14 @@ export const getLlmErrorMessageDetails = (message: Message): LlmErrorMessageDeta
     || part.inlineDataRef !== undefined
     || part.inlineDataUnavailable !== undefined) return null
 
-  const prefix = part.text.match(LLM_ERROR_PREFIX_RE)
-  if (!prefix) return null
-  const bodyText = part.text.slice(prefix[0].length).trim()
-  if (!bodyText) return null
+  const bodyText = part.text.startsWith(LLM_ERROR_PREFIX)
+    ? part.text.slice(LLM_ERROR_PREFIX.length)
+    : part.text
+  const logicalBody = bodyText.trim()
 
   return {
     bodyText,
-    lineCount: bodyText.split(/\r\n|\r|\n/).length,
+    lineCount: logicalBody ? logicalBody.split(/\r\n|\r|\n/).length : 1,
   }
 }
 

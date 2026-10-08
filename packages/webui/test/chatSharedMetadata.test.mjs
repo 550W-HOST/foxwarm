@@ -204,26 +204,42 @@ test('system preview descriptors use only supported non-empty wrapper metadata',
   })
 })
 
-test('LLM error model text uses a case-insensitive prefix and counts trimmed body lines', () => {
-  const message = { role: 'model', parts: [{ text: '  LLM ERROR: first line\nsecond line\n\nthird line  ' }] }
+test('LLM retry metadata strips the warning prefix and counts logical body lines', () => {
+  const message = {
+    role: 'model',
+    modelVisible: false,
+    parts: [{ text: '⚠️ LLM Error: Attempt 1/5 failed\nAttempt 2/5 failed\n\nAttempt 3/5 failed' }],
+    __meta: { noticeType: 'llm-retry' },
+  }
   assert.deepEqual(getLlmErrorMessageDetails(message), {
-    bodyText: 'first line\nsecond line\n\nthird line',
+    bodyText: 'Attempt 1/5 failed\nAttempt 2/5 failed\n\nAttempt 3/5 failed',
     lineCount: 4,
   })
   assert.deepEqual(getSystemMessagePreviewDescriptor(message), {
-    kind: 'llm error', source: 'legacy', previewPrefix: '', bodyText: 'first line\nsecond line\n\nthird line', lineCount: 4,
+    kind: 'llm error', source: 'legacy', previewPrefix: '', bodyText: 'Attempt 1/5 failed\nAttempt 2/5 failed\n\nAttempt 3/5 failed', lineCount: 4,
   })
 })
 
-test('LLM error classification requires a model text part with non-empty body', () => {
+test('LLM retry metadata classifies malformed prefix text without deleting its body', () => {
+  const message = {
+    role: 'model',
+    parts: [{ text: 'Attempt 4/5 failed without warning prefix\nsecond line' }],
+    __meta: { noticeType: 'llm-retry' },
+  }
+  assert.deepEqual(getLlmErrorMessageDetails(message), {
+    bodyText: 'Attempt 4/5 failed without warning prefix\nsecond line',
+    lineCount: 2,
+  })
+})
+
+test('LLM error classification requires retry metadata and a single text-only model part', () => {
   const cases = [
-    { role: 'model', parts: [{ text: 'quoted: llm error: not a prefix' }] },
-    { role: 'model', parts: [{ text: 'llm error:' }] },
-    { role: 'model', parts: [{ text: 'llm error:   ' }] },
-    { role: 'model', parts: [{ text: 'llm error: body' }, { text: 'second part' }] },
-    { role: 'model', parts: [{ text: 'llm error: body', functionCall: { name: 'exec', args: {} } }] },
-    { role: 'user', parts: [{ text: 'llm error: user text' }] },
-    { role: 'tool', parts: [{ functionResponse: { name: 'exec', response: { error: 'llm error: tool failure' } } }] },
+    { role: 'model', parts: [{ text: '⚠️ LLM Error: ordinary text without retry metadata' }] },
+    { role: 'model', parts: [{ text: 'ordinary assistant text mentions llm error' }], __meta: { noticeType: 'other' } },
+    { role: 'model', parts: [{ text: '⚠️ LLM Error: body' }, { text: 'second part' }], __meta: { noticeType: 'llm-retry' } },
+    { role: 'model', parts: [{ text: '⚠️ LLM Error: body', functionCall: { name: 'exec', args: {} } }], __meta: { noticeType: 'llm-retry' } },
+    { role: 'user', parts: [{ text: '⚠️ LLM Error: user text' }], __meta: { noticeType: 'llm-retry' } },
+    { role: 'tool', parts: [{ functionResponse: { name: 'exec', response: { error: 'llm error: tool failure' } } }], __meta: { noticeType: 'llm-retry' } },
   ]
 
   for (const message of cases) {
