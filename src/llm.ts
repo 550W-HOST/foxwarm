@@ -1531,6 +1531,7 @@ function prepareHistoryForConcreteModel(contents: Message[], destinationModelId:
                     thinkingSummaries: _thinkingSummaries,
                     encryptedThinking: _encryptedThinking,
                     signature: _signature,
+                    redactedThinking: _redactedThinking,
                     openaiResponses: _openaiResponses,
                     ...remainingProviderMeta
                 } = providerMeta;
@@ -1603,10 +1604,15 @@ export function convertToAnthropicFormat(contents: Message[], config: ModelConfi
         
         for (const part of msg.parts || []) {
             // Handle thinking (with signature support)
-            if (part.thinking && part.providerMeta?.signature) {
+            if (typeof part.thinking === 'string' && part.providerMeta?.signature) {
                 const thinkingBlock: AnthropicContentBlock = { type: 'thinking', thinking: part.thinking };
                 thinkingBlock.signature = part.providerMeta?.signature;
                 content.push(thinkingBlock);
+            }
+
+            // Preserve opaque redacted thinking separately from ordinary thinking.
+            if (typeof part.providerMeta?.redactedThinking === 'string') {
+                content.push({ type: 'redacted_thinking', data: part.providerMeta.redactedThinking });
             }
 
             // Handle system/meta parts by merging them back into user text for providers without developer messages
@@ -3192,6 +3198,8 @@ async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: an
                 const thinkingPart: MessagePart = { thinking: block.thinking };
                 if (block.signature) thinkingPart.providerMeta = { signature: block.signature };
                 allParts.push(thinkingPart);
+            } else if (block.type === 'redacted_thinking' && typeof block.data === 'string') {
+                allParts.push({ providerMeta: { redactedThinking: block.data } });
             } else if (block.type === 'tool_use') {
                 allParts.push({ functionCall: { id: block.id, name: block.name, args: block.input } });
             }

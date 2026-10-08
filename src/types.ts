@@ -12,6 +12,7 @@ export interface MessagePart {
     thinkingSummaries?: string[]; // OpenAI Responses
     encryptedThinking?: string;  // OpenAI Responses
     signature?: string; // kimi-k2.5
+    redactedThinking?: string; // Anthropic Messages opaque redacted_thinking data
     /** Ordered, concrete-model-scoped OpenAI Responses output metadata. */
     openaiResponses?: OpenAIResponsesPartMeta;
   };
@@ -508,10 +509,11 @@ export interface OpenAIResponsesContent {
 }
 
 export interface AnthropicContentBlock {
-  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'image';
+  type: 'text' | 'thinking' | 'redacted_thinking' | 'tool_use' | 'tool_result' | 'image';
   text?: string;
   thinking?: string;
   signature?: string;  // For kimi-k2.5 thinking signature
+  data?: string; // Opaque Anthropic redacted_thinking payload
   id?: string;
   name?: string;
   input?: Record<string, any>;
