@@ -104,7 +104,7 @@ Code-embedded sidebar/chat/Agents/Setup are strict leaf roots with allowlisted m
 
 ### D-webui-app-persistent-code-frame
 
-The Code workbench tab is a launcher/slot. The portal-owned iframe starts only when Code is first visible in an active pane, persists across ordinary hiding after that first start, and is destroyed with its bridge state on explicit tab close. The full lifecycle contract is canonical in [D-code-persistent-workspace](../threads/code-integration.md#d-code-persistent-workspace).
+The Code workbench tab is a launcher/slot. The portal-owned iframe starts only when Code is first visible in an expanded pane and persists across ordinary tab switching after that first start. Pane collapse unmounts the kept frame without closing tab records or backend resources. The full lifecycle contract is canonical in [D-code-persistent-workspace](../threads/code-integration.md#d-code-persistent-workspace).
 
 ### D-webui-app-client-preferences
 

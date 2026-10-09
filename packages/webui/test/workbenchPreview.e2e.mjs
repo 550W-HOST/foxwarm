@@ -47,21 +47,26 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, themeId, codeNewWindow, responsiveChat = false, terminal = null, width = 1400 } = {}) {
+async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, codeNewWindow, responsiveChat = false, terminal = null, width = 1400 } = {}) {
   const page = await browser.newPage()
+  const pageErrors = []
+  page.on('pageerror', error => pageErrors.push(error.message))
   await page.setViewport({ width, height: 900 })
-  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat, themeId, codeNewWindow, responsiveChat, terminal }) => {
+  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat, splitDirection, initialLayout, themeId, codeNewWindow, responsiveChat, terminal }) => {
     if (window !== window.top) return
     const tabsById = Object.fromEntries(initialTabs.map(tab => [tab.id, tab]))
-    const root = splitPanes
-      ? { id: 'split-main', kind: 'split', direction: 'row', sizes: [50, 50], children: [
+    const root = initialLayout || (splitPanes
+      ? { id: 'split-main', kind: 'split', direction: splitDirection, sizes: [50, 50], children: [
         { id: 'pane-main', kind: 'pane', tabIds: splitSecondChat ? initialTabs.filter(tab => tab.id !== 'chat:e2e-b').map(tab => tab.id) : initialTabs.filter(tab => tab.id !== 'system:agents').map(tab => tab.id), activeTabId: activeId },
         { id: 'pane-other', kind: 'pane', tabIds: [splitSecondChat ? 'chat:e2e-b' : 'system:agents'], activeTabId: splitSecondChat ? 'chat:e2e-b' : 'system:agents' },
       ] }
-      : { id: 'pane-main', kind: 'pane', tabIds: initialTabs.map(tab => tab.id), activeTabId: activeId }
-    localStorage.setItem('foxwarm_workbench_state_v4', JSON.stringify({ state: { version: 4, tabsById, root, focusedPaneId: 'pane-main' }, version: 1 }))
-    localStorage.setItem('foxwarm_last_active_tab_v1', activeId)
-    localStorage.setItem('foxwarm_sidebar_collapsed_v1', 'false')
+      : { id: 'pane-main', kind: 'pane', tabIds: initialTabs.map(tab => tab.id), activeTabId: activeId })
+    if (!sessionStorage.getItem('workbench-fixture-initialized')) {
+      sessionStorage.setItem('workbench-fixture-initialized', 'true')
+      localStorage.setItem('foxwarm_workbench_state_v4', JSON.stringify({ state: { version: 4, tabsById, root, focusedPaneId: 'pane-main' }, version: 1 }))
+      localStorage.setItem('foxwarm_last_active_tab_v1', activeId)
+      localStorage.setItem('foxwarm_sidebar_collapsed_v1', 'false')
+    }
     if (themeId) localStorage.setItem('foxwarm_theme_selection_v2', JSON.stringify({ version: 2, themeId, colorMode: 'light' }))
     if (codeNewWindow !== undefined) localStorage.setItem('foxwarm_code_open_new_window_v1', String(codeNewWindow))
     const json = body => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }))
@@ -72,6 +77,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
     window.fetch = (input, options = {}) => {
       const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.href)
       const pathname = url.pathname
+      if (pathname.endsWith('/api/auth/session')) return json({ role: 'admin' })
       if (pathname.endsWith('/api/setup/status')) return json({ oobe: false, models: { exists: true, hasPlaceholderSecrets: false }, channels: [] })
       if (pathname.endsWith('/api/terminals') && options.method === 'POST' && terminalTemplate) {
         const request = JSON.parse(options.body)
@@ -127,9 +133,12 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       close() { this.readyState = 3; this.onclose?.({}) }
     }
     window.WebSocket = FixtureWebSocket
-  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, themeId, codeNewWindow, responsiveChat, terminal })
+  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, codeNewWindow, responsiveChat, terminal })
   await page.goto(`${baseUrl}${hash}`, { waitUntil: 'domcontentloaded' })
-  await page.waitForFunction(() => !!window.foxwarmTest)
+  await page.waitForFunction(() => !!window.foxwarmTest, { timeout: 8_000 }).catch(async error => {
+    const body = await page.evaluate(() => document.body.innerText).catch(() => '')
+    throw new Error(`${error.message}; page errors: ${pageErrors.join(' | ')}; body: ${body.slice(0, 500)}`)
+  })
   return page
 }
 
@@ -154,6 +163,205 @@ async function drag(page, from, to) {
   await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 12 })
   await page.mouse.up()
 }
+
+test('pane collapse follows the direct split direction, releases space, and restores on tab selection', async () => {
+  const layout = {
+    id: 'split-root', kind: 'split', direction: 'row', sizes: [40, 60], children: [
+      { id: 'pane-main', kind: 'pane', tabIds: ['system:agents', 'chat:e2e-a'], activeTabId: 'chat:e2e-a' },
+      { id: 'split-inner', kind: 'split', direction: 'column', sizes: [50, 50], children: [
+        { id: 'pane-inner-top', kind: 'pane', tabIds: ['chat:e2e-b'], activeTabId: 'chat:e2e-b' },
+        { id: 'pane-inner-bottom', kind: 'pane', tabIds: ['system:setup'], activeTabId: 'system:setup' },
+      ] },
+    ],
+  }
+  const page = await openFixture({
+    tabs: [system, chat('e2e-a', false), chat('e2e-b', false), { id: 'system:setup', type: 'setup', title: 'Setup' }],
+    activeTabId: 'chat:e2e-a',
+    layout,
+  })
+  try {
+    await page.waitForSelector('[data-tab-id="chat:e2e-a"]')
+    const divider = await page.$('[role="separator"][aria-orientation="vertical"]')
+    const dividerBox = await divider.boundingBox()
+    await page.mouse.move(dividerBox.x + dividerBox.width / 2, dividerBox.y + dividerBox.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(dividerBox.x + dividerBox.width / 2 + 80, dividerBox.y + dividerBox.height / 2, { steps: 10 })
+    await page.mouse.up()
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.sizes[0] > 40)
+    const before = await page.$eval('[data-pane-id="pane-main"]', el => ({ width: el.getBoundingClientRect().width, height: el.getBoundingClientRect().height }))
+    const neighborBefore = await page.$eval('[data-pane-id="pane-inner-top"]', el => el.getBoundingClientRect().width)
+    await page.click('[data-workbench-pane-collapse="pane-main"]')
+    await page.waitForSelector('[data-workbench-collapsed-pane="true"] [data-workbench-collapsed-tab="chat:e2e-a"]')
+    await page.waitForFunction(() => !document.querySelector('[data-pane-id="pane-main"] [role="textbox"][aria-label="Message"]'))
+    const collapsed = await page.$eval('[data-pane-id="pane-main"]', el => ({ width: el.getBoundingClientRect().width, height: el.getBoundingClientRect().height }))
+    const neighborCollapsed = await page.$eval('[data-pane-id="pane-inner-top"]', el => el.getBoundingClientRect().width)
+    assert.ok(collapsed.width < 100, `left/right split collapses to a vertical rail: ${collapsed.width}px`)
+    assert.ok(neighborCollapsed > neighborBefore + 200, 'the nested sibling receives the released width')
+    assert.equal(collapsed.height, before.height)
+    assert.equal((await state(page)).root.children[0].collapsed, true)
+    assert.deepEqual((await state(page)).root.children[0].tabIds, ['system:agents', 'chat:e2e-a'])
+    assert.equal(await page.$('[data-pane-id="pane-main"] [data-workbench-tab-close="chat:e2e-a"]'), null, 'collapsed tabs do not mount their content header')
+
+    await page.click('[data-workbench-collapsed-tab="system:agents"]')
+    await page.waitForSelector('[data-tab-id="system:agents"]')
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.children[0].collapsed === false)
+    await page.waitForFunction(() => document.querySelector('[data-pane-id="pane-main"]').getBoundingClientRect().width > 300)
+    const expanded = await page.$eval('[data-pane-id="pane-main"]', el => el.getBoundingClientRect().width)
+    assert.ok(Math.abs(expanded - before.width) < 40, `pane returns close to its prior width: ${expanded}px vs ${before.width}px`)
+    assert.equal((await state(page)).root.children[0].activeTabId, 'system:agents')
+    assert.ok(await page.$('[data-tab-id="chat:e2e-a"] button[title="Close tab"]'), 'ordinary tab Close remains available')
+    assert.ok(await page.$('[data-pane-id="pane-main"] button[title="Close pane"]'), 'a multi-pane workbench exposes Close pane')
+
+    const nestedBefore = await page.$eval('[data-pane-id="pane-inner-top"]', el => el.getBoundingClientRect().height)
+    await page.click('[data-workbench-pane-collapse="pane-inner-top"]')
+    await page.waitForSelector('[data-pane-id="pane-inner-top"][data-workbench-collapsed-pane="true"] [data-workbench-collapsed-tab="chat:e2e-b"]')
+    const nestedCollapsed = await page.$eval('[data-pane-id="pane-inner-top"]', el => el.getBoundingClientRect().height)
+    assert.ok(nestedCollapsed < 70, `nested up/down split uses a horizontal tab strip: ${nestedCollapsed}px`)
+    assert.ok(nestedBefore - nestedCollapsed > 100, 'nested lower sibling receives the released height')
+    await page.click('[data-workbench-collapsed-tab="chat:e2e-b"]')
+    await page.waitForSelector('[data-pane-id="pane-inner-top"] [role="textbox"][aria-label="Message"]')
+  } finally { await page.close() }
+})
+
+test('vertical split collapse remains a horizontal tab bar after reload and exposes pane close for a one-tab pane', async () => {
+  const layout = {
+    id: 'split-column', kind: 'split', direction: 'column', sizes: [45, 55], children: [
+      { id: 'pane-main', kind: 'pane', tabIds: ['chat:e2e-a'], activeTabId: 'chat:e2e-a' },
+      { id: 'pane-other', kind: 'pane', tabIds: ['system:agents'], activeTabId: 'system:agents' },
+    ],
+  }
+  const page = await openFixture({ tabs: [system, chat('e2e-a', false)], layout })
+  try {
+    await page.waitForSelector('[data-workbench-tab-handle="chat:e2e-a"]')
+    assert.ok(await page.$('[data-pane-id="pane-main"] button[title="Close pane"]'), 'each of two panes exposes Close pane even when it has only one tab')
+    const beforeHeight = await page.$eval('[data-pane-id="pane-main"]', el => el.getBoundingClientRect().height)
+    await page.click('[data-workbench-pane-collapse="pane-main"]')
+    await page.waitForSelector('[data-workbench-collapsed-pane="true"] [data-workbench-collapsed-tab="chat:e2e-a"]')
+    const collapsedHeight = await page.$eval('[data-pane-id="pane-main"]', el => el.getBoundingClientRect().height)
+    assert.ok(collapsedHeight < 70, `up/down split collapses to a horizontal strip: ${collapsedHeight}px`)
+    assert.ok(beforeHeight - collapsedHeight > 200, 'the lower pane receives the released height')
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('[data-workbench-collapsed-pane="true"] [data-workbench-collapsed-tab="chat:e2e-a"]')
+    assert.equal(await page.$('[role="textbox"][aria-label="Message"]'), null, 'persisted collapse reloads without mounting pane content')
+    await page.click('[data-workbench-collapsed-pane="true"] button[title="Expand pane"]')
+    await page.waitForSelector('[role="textbox"][aria-label="Message"]')
+    await page.waitForFunction(() => document.querySelector('[data-pane-id="pane-main"]').getBoundingClientRect().height > 200)
+    const restoredHeight = await page.$eval('[data-pane-id="pane-main"]', el => el.getBoundingClientRect().height)
+    assert.ok(Math.abs(restoredHeight - beforeHeight) < 40, 'reload keeps the original expanded size available')
+
+    await page.click('[data-workbench-pane-collapse="pane-main"]')
+    await page.waitForSelector('[data-workbench-collapsed-tab="chat:e2e-a"]')
+    await page.click('[data-workbench-pane-collapse="pane-other"]')
+    await page.waitForSelector('[data-workbench-collapsed-tab="system:agents"]')
+    assert.equal(await page.$('[data-workbench-tab-handle]'), null, 'both panes can stay collapsed without mounting content')
+    assert.equal((await state(page)).root.children.filter(pane => pane.collapsed).length, 2)
+    assert.equal(await page.$$eval('[data-workbench-collapsed-pane]', panes => panes.every(pane => pane.getBoundingClientRect().height < 70)), true, 'all-collapsed panes remain compact instead of filling the empty space')
+    await page.click('[data-workbench-collapsed-tab="system:agents"]')
+    await page.waitForSelector('[data-workbench-tab-handle="system:agents"]')
+    await page.click('[data-workbench-collapsed-tab="chat:e2e-a"]')
+    await page.waitForSelector('[role="textbox"][aria-label="Message"]')
+    await page.waitForFunction(() => document.querySelector('[data-pane-id="pane-main"]').getBoundingClientRect().height > 200)
+    assert.ok(Math.abs(await page.$eval('[data-pane-id="pane-main"]', el => el.getBoundingClientRect().height) - beforeHeight) < 40, 'expanding from the all-collapsed layout restores the original split')
+  } finally { await page.close() }
+})
+
+test('collapsing Terminal and kept Code unmounts the view without closing resources', async () => {
+  const terminal = { id: 'term-collapse', nodeId: 'master', cwd: '/workspace', pid: 42, cols: 80, rows: 24 }
+  const terminalTab = { id: 'terminal:term-collapse', type: 'terminal', terminalId: terminal.id, nodeId: terminal.nodeId, cwd: terminal.cwd, title: 'Terminal' }
+  const terminalPage = await openFixture({ tabs: [terminalTab], activeTabId: terminalTab.id, hash: `#tab/${encodeURIComponent(terminalTab.id)}`, terminal })
+  try {
+    await terminalPage.waitForFunction(() => document.querySelector('[data-terminal-header]')?.textContent.includes('status ready'))
+    await terminalPage.click('[data-workbench-pane-collapse="pane-main"]')
+    await terminalPage.waitForSelector('[data-workbench-collapsed-tab="terminal:term-collapse"]')
+    assert.equal(await terminalPage.$('[data-terminal-header]'), null, 'Terminal view unmounts while its tab record remains')
+    assert.ok((await state(terminalPage)).tabsById['terminal:term-collapse'])
+    assert.deepEqual(await terminalPage.evaluate(() => window.__terminalDeletes), [], 'collapse does not run terminal resource close')
+    await terminalPage.click('[data-workbench-collapsed-tab="terminal:term-collapse"]')
+    await terminalPage.waitForFunction(() => document.querySelector('[data-terminal-header]')?.textContent.includes('status ready'))
+    assert.equal((await state(terminalPage)).tabsById['terminal:term-collapse'].terminalId, 'term-collapse')
+    assert.deepEqual(await terminalPage.evaluate(() => window.__terminalCreates), [], 'expansion reattaches the existing terminal rather than creating a replacement')
+  } finally { await terminalPage.close() }
+
+  const codeTab = { id: 'vscode-web', type: 'vscode', title: 'Code' }
+  const codePage = await openFixture({ tabs: [codeTab, chat('e2e-a', false)], activeTabId: codeTab.id, hash: '#tab/vscode-web' })
+  try {
+    await codePage.waitForSelector('[data-foxwarm-vscode-web-frame="true"]')
+    assert.equal(await codePage.$('button[title="Close pane"]'), null, 'a single-pane workbench hides Close pane entirely')
+    await codePage.click('[data-tab-id="chat:e2e-a"]')
+    await codePage.waitForSelector('[role="textbox"][aria-label="Message"]')
+    assert.ok(await codePage.$('[data-foxwarm-vscode-web-frame="true"]'), 'ordinary switching keeps the inactive Code iframe')
+    await codePage.click('[data-workbench-pane-collapse="pane-main"]')
+    await codePage.waitForSelector('[data-workbench-collapsed-tab="vscode-web"]')
+    await codePage.waitForFunction(() => !document.querySelector('[data-foxwarm-vscode-web-frame="true"]'))
+    assert.ok((await state(codePage)).tabsById['vscode-web'], 'Code tab record stays available while its iframe is unmounted')
+    await codePage.click('[data-workbench-collapsed-tab="vscode-web"]')
+    await codePage.waitForSelector('[data-foxwarm-vscode-web-frame="true"]')
+  } finally { await codePage.close() }
+})
+
+function findFixturePane(root, paneId) {
+  if (root.kind === 'pane') return root.id === paneId ? root : null
+  return root.children.map(child => findFixturePane(child, paneId)).find(Boolean) || null
+}
+
+async function dragPane(page, sourcePaneId, targetPaneId, edge, { cancel = false } = {}) {
+  const source = await page.$(`[data-workbench-pane-drag-handle="${sourcePaneId}"]`)
+  const sourceBox = await source.boundingBox()
+  assert.ok(sourceBox)
+  await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(sourceBox.x + sourceBox.width / 2 + 12, sourceBox.y + sourceBox.height / 2, { steps: 4 })
+  await page.waitForSelector('[data-pane-drag-overlay]')
+  const target = await page.$(`[data-pane-id="${targetPaneId}"] [data-workbench-pane-drop="${edge}"]`)
+  const targetBox = await target.boundingBox()
+  assert.ok(targetBox)
+  await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, { steps: 12 })
+  if (cancel) await page.keyboard.press('Escape')
+  await page.mouse.up()
+  await page.waitForFunction(() => !document.querySelector('[data-pane-drag-overlay]'))
+}
+
+test('whole-pane dragging preserves its tabs and selection across splits, including collapsed dragging and cancellation', async () => {
+  const layout = {
+    id: 'split-root', kind: 'split', direction: 'row', sizes: [40, 60], children: [
+      { id: 'pane-main', kind: 'pane', tabIds: ['system:agents', 'chat:e2e-a'], activeTabId: 'chat:e2e-a' },
+      { id: 'split-inner', kind: 'split', direction: 'column', sizes: [50, 50], children: [
+        { id: 'pane-inner-top', kind: 'pane', tabIds: ['chat:e2e-b'], activeTabId: 'chat:e2e-b' },
+        { id: 'pane-inner-bottom', kind: 'pane', tabIds: ['system:setup'], activeTabId: 'system:setup' },
+      ] },
+    ],
+  }
+  const page = await openFixture({ tabs: [system, chat('e2e-a'), chat('e2e-b', false), { id: 'system:setup', type: 'setup', title: 'Setup' }], layout })
+  try {
+    await page.waitForSelector('[data-workbench-pane-drag-handle="pane-main"]')
+    const initial = await state(page)
+    await dragPane(page, 'pane-main', 'pane-inner-top', 'right', { cancel: true })
+    assert.deepEqual((await state(page)).root, initial.root, 'Escape leaves the entire layout unchanged')
+
+    await dragPane(page, 'pane-main', 'pane-inner-bottom', 'right')
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.id === 'split-inner')
+    const moved = await state(page)
+    assert.deepEqual(findFixturePane(moved.root, 'pane-main'), { ...layout.children[0], collapsed: false })
+    assert.deepEqual(moved.tabsById, initial.tabsById, 'moving a pane does not replace, promote, close, or duplicate its tabs')
+    assert.equal(moved.root.children[1].direction, 'row')
+    assert.deepEqual(moved.root.children[1].children.map(pane => pane.id), ['pane-inner-bottom', 'pane-main'])
+
+    await page.click('[data-workbench-pane-collapse="pane-main"]')
+    await page.waitForSelector('[data-workbench-collapsed-tab="chat:e2e-a"]')
+    await dragPane(page, 'pane-main', 'pane-inner-top', 'top')
+    const collapsedMoved = await state(page)
+    const collapsedPane = findFixturePane(collapsedMoved.root, 'pane-main')
+    assert.deepEqual(collapsedPane.tabIds, ['system:agents', 'chat:e2e-a'])
+    assert.equal(collapsedPane.activeTabId, 'chat:e2e-a')
+    assert.equal(collapsedPane.collapsed, true)
+    assert.equal(collapsedMoved.root.children[0].direction, 'column')
+    assert.deepEqual(collapsedMoved.root.children[0].children.map(pane => pane.id), ['pane-main', 'pane-inner-top'])
+    assert.equal(await page.$eval('[data-pane-id="pane-main"] [role="tablist"]', el => el.getAttribute('aria-orientation')), 'horizontal', 'moving to a new parent split updates the collapsed direction')
+    assert.equal(await page.$('[data-pane-id="pane-main"] [role="textbox"]'), null, 'collapsed dragging never mounts tab content')
+    await page.click('[data-workbench-collapsed-tab="chat:e2e-a"]')
+    await page.waitForSelector('[data-pane-id="pane-main"] [role="textbox"][aria-label="Message"]')
+  } finally { await page.close() }
+})
 
 test('preview ID follows Session; drafts and sending never Keep, direct links remain navigation', async () => {
   const page = await openFixture()
@@ -340,7 +548,7 @@ test('single pane with one tab omits its strip without leaving header height; Si
     await page.mouse.up()
     await page.waitForSelector('[data-pane-id="pane-main"] [data-tab-id="chat:e2e-b"]')
     assert.equal(await page.$$eval('[data-pane-id="pane-main"] [data-tab-id]', nodes => nodes.length), 2)
-    assert.equal(await page.$$eval(paneButtons, nodes => nodes.length), 3)
+    assert.equal(await page.$$eval(paneButtons, nodes => nodes.length), 2, 'a single-pane workbench omits Close pane rather than disabling it')
     assert.equal((await state(page)).tabsById['chat:e2e-b'].preview, false)
     // Wait for the drag's document-level click guard to clear before a real Close click.
     await page.waitForFunction(() => {
@@ -396,20 +604,22 @@ test('each single-tab pane uses its header while multi-tab panes retain their st
     await page.waitForSelector('[data-workbench-tab-handle="system:agents"]')
     assert.equal(await page.$('[data-tab-id]'), null)
     if (process.env.FOXWARM_SINGLE_TAB_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.FOXWARM_SINGLE_TAB_SCREENSHOT_DIR}/single-tab-panes.png` })
-    assert.equal(await page.$(paneButtons), null)
+    assert.equal(await page.$$eval('button[title="Close pane"]', nodes => nodes.length), 2)
+    assert.equal(await page.$('button[title="Split right with active tab"], button[title="Split down with active tab"]'), null)
     await page.evaluate(() => window.foxwarmTest.switchToSession('e2e-b'))
     await page.waitForSelector('[data-workbench-tab-handle="chat:e2e-b"]')
-    assert.equal(await page.$(paneButtons), null, 'replacing the preview keeps one tab in the pane')
+    assert.equal(await page.$$eval('button[title="Close pane"]', nodes => nodes.length), 2, 'replacing the preview keeps both panes and their Close actions')
     await page.click('[data-workbench-tab-handle="chat:e2e-b"]', { clickCount: 2 })
     await page.evaluate(() => window.foxwarmTest.switchToSession('e2e-c'))
     await page.waitForSelector('[data-pane-id="pane-main"] [data-tab-id="chat:e2e-c"]')
     assert.equal(await page.$$eval('[data-pane-id="pane-main"] [data-tab-id]', nodes => nodes.length), 2)
     assert.equal(await page.$$eval('[data-pane-id="pane-main"] button[title="Split right with active tab"], [data-pane-id="pane-main"] button[title="Split down with active tab"], [data-pane-id="pane-main"] button[title="Close pane"]', nodes => nodes.length), 3)
-    assert.equal(await page.$('[data-pane-id="pane-other"] ' + paneButtons.split(', ').join(', [data-pane-id="pane-other"] ')), null)
+    assert.ok(await page.$('[data-pane-id="pane-other"] button[title="Close pane"]'))
+    assert.equal(await page.$('[data-pane-id="pane-other"] button[title="Split right with active tab"], [data-pane-id="pane-other"] button[title="Split down with active tab"]'), null)
     await page.click('[data-pane-id="pane-main"] [data-tab-id="chat:e2e-c"] button[title="Close tab"]')
     await page.waitForFunction(() => !document.querySelector('[data-tab-id="chat:e2e-c"]'))
     assert.ok(await page.$('[data-workbench-tab-handle="chat:e2e-b"]'))
-    assert.equal(await page.$(paneButtons), null)
+    assert.equal(await page.$$eval('button[title="Close pane"]', nodes => nodes.length), 2)
   } finally { await page.close() }
 })
 

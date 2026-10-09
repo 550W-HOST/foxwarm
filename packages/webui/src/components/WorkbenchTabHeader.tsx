@@ -7,6 +7,7 @@ interface WorkbenchTabHeaderValue {
   tab: WorkbenchTab
   paneId: string
   dragEnabled: boolean
+  paneControls: ReactNode
   onCloseTab: (tabId: string) => void
   onKeepTab: (tabId: string) => void
   openContextMenu: (tabId: string, event: MouseEvent<HTMLElement>) => void
@@ -16,6 +17,11 @@ interface WorkbenchTabHeaderValue {
 const WorkbenchTabHeaderContext = createContext<WorkbenchTabHeaderValue | null>(null)
 export const WorkbenchTabHeaderProvider = WorkbenchTabHeaderContext.Provider
 export const useWorkbenchTabHeader = () => useContext(WorkbenchTabHeaderContext)
+
+export function WorkbenchPaneControls() {
+  const header = useWorkbenchTabHeader()
+  return header ? <div className="ml-auto flex shrink-0 items-center gap-1" data-workbench-pane-controls>{header.paneControls}</div> : null
+}
 
 export function WorkbenchTabClose({ className, iconClassName = 'h-5 w-5' }: { className: string; iconClassName?: string }) {
   const header = useWorkbenchTabHeader()

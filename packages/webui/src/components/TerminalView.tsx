@@ -1,4 +1,4 @@
-import { WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
+import { WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, SquareTerminal } from 'lucide-react'
 import { Terminal } from '@xterm/xterm'
@@ -424,6 +424,7 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
               </div>
             )}
           </div>
+          <WorkbenchPaneControls />
         </div>
       </div>
 
