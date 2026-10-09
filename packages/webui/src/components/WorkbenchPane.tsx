@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
-import { Columns2, GripVertical, PanelLeftClose, PanelLeftOpen, PanelTopClose, PanelTopOpen, Rows2, X } from 'lucide-react'
+import { Columns2, Move, PanelLeftClose, PanelLeftOpen, PanelTopClose, PanelTopOpen, Rows2, X } from 'lucide-react'
 import WorkbenchTabs from './WorkbenchTabs'
 import { WorkbenchTabHeaderProvider } from './WorkbenchTabHeader'
 import WorkbenchTabErrorBoundary from './WorkbenchTabErrorBoundary'
@@ -72,7 +72,7 @@ function PaneDragHandle({ paneId }: { paneId: string }) {
       title="Drag pane"
       aria-label="Drag pane"
     >
-      <GripVertical className="h-4 w-4" />
+      <Move className="h-4 w-4" />
     </button>
   )
 }
@@ -145,16 +145,18 @@ export default function WorkbenchPane({
     : 'border-transparent shadow-none'
   const paneControls = (
     <>
-      {dragEnabled && <PaneDragHandle paneId={paneId} />}
-      <ToolbarButton
-        title={collapsed ? 'Expand pane' : 'Collapse pane'}
-        collapseMarker={paneId}
-        onClick={() => onSetCollapsed(paneId, !collapsed)}
-      >
-        {verticalRail
-          ? collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />
-          : collapsed ? <PanelTopOpen className="h-4 w-4" /> : <PanelTopClose className="h-4 w-4" />}
-      </ToolbarButton>
+      {canClosePane && dragEnabled && <PaneDragHandle paneId={paneId} />}
+      {(canClosePane || collapsed) && (
+        <ToolbarButton
+          title={collapsed ? 'Expand pane' : 'Collapse pane'}
+          collapseMarker={paneId}
+          onClick={() => onSetCollapsed(paneId, !collapsed)}
+        >
+          {verticalRail
+            ? collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />
+            : collapsed ? <PanelTopOpen className="h-4 w-4" /> : <PanelTopClose className="h-4 w-4" />}
+        </ToolbarButton>
+      )}
       {canClosePane && (
         <ToolbarButton title="Close pane" onClick={onClosePane}>
           <X className="h-4 w-4" />

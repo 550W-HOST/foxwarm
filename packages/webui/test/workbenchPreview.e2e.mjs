@@ -262,16 +262,51 @@ test('vertical split collapse remains a horizontal tab bar after reload and expo
     await page.waitForSelector('[role="textbox"][aria-label="Message"]')
     await page.waitForFunction(() => document.querySelector('[data-pane-id="pane-main"]').getBoundingClientRect().height > 200)
     assert.ok(Math.abs(await page.$eval('[data-pane-id="pane-main"]', el => el.getBoundingClientRect().height) - beforeHeight) < 40, 'expanding from the all-collapsed layout restores the original split')
+
+    await page.click('[data-workbench-pane-collapse="pane-main"]')
+    await page.waitForSelector('[data-workbench-collapsed-tab="chat:e2e-a"]')
+    await page.click('[data-pane-id="pane-other"] button[title="Close pane"]')
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.kind === 'pane')
+    assert.equal(await page.$('[data-workbench-pane-drag-handle]'), null, 'closing the other pane removes the whole-pane drag control')
+    assert.equal(await page.$('button[title="Collapse pane"]'), null)
+    assert.equal(await page.$('[role="textbox"][aria-label="Message"]'), null)
+    await page.click('button[title="Expand pane"]')
+    await page.waitForSelector('[data-tab-id="system:agents"]')
+    assert.equal((await state(page)).root.collapsed, false)
+    await page.click('[data-tab-id="chat:e2e-a"]')
+    await page.waitForSelector('[role="textbox"][aria-label="Message"]')
+    assert.equal(await page.$('[data-workbench-pane-collapse]'), null, 'the restored lone pane has no collapse control')
+  } finally { await page.close() }
+})
+
+test('a persisted lone collapsed pane keeps its tab expansion entry without pane drag controls', async () => {
+  const layout = { id: 'pane-main', kind: 'pane', tabIds: ['chat:e2e-a'], activeTabId: 'chat:e2e-a', collapsed: true }
+  const page = await openFixture({ tabs: [chat('e2e-a', false)], layout })
+  try {
+    await page.waitForSelector('[data-workbench-collapsed-tab="chat:e2e-a"]')
+    assert.equal(await page.$('[data-workbench-pane-drag-handle]'), null)
+    assert.equal(await page.$('button[title="Collapse pane"]'), null)
+    assert.ok(await page.$('button[title="Expand pane"]'))
+    assert.equal(await page.$('[role="textbox"][aria-label="Message"]'), null)
+    await page.click('[data-workbench-collapsed-tab="chat:e2e-a"]')
+    await page.waitForSelector('[data-workbench-tab-handle="chat:e2e-a"]')
+    assert.equal((await state(page)).root.collapsed, false)
+    assert.equal(await page.$('[data-workbench-pane-collapse]'), null)
   } finally { await page.close() }
 })
 
 test('collapsing Terminal and kept Code unmounts the view without closing resources', async () => {
   const terminal = { id: 'term-collapse', nodeId: 'master', cwd: '/workspace', pid: 42, cols: 80, rows: 24 }
   const terminalTab = { id: 'terminal:term-collapse', type: 'terminal', terminalId: terminal.id, nodeId: terminal.nodeId, cwd: terminal.cwd, title: 'Terminal' }
-  const terminalPage = await openFixture({ tabs: [terminalTab], activeTabId: terminalTab.id, hash: `#tab/${encodeURIComponent(terminalTab.id)}`, terminal })
+  const terminalPage = await openFixture({ tabs: [terminalTab, chat('e2e-a', false), system], activeTabId: terminalTab.id, hash: `#tab/${encodeURIComponent(terminalTab.id)}`, split: true, terminal })
   try {
+    // Start the collapse probe from the existing Terminal tab after its ready event reconciles startup navigation.
+    await terminalPage.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById['terminal:term-collapse'].title === 'workspace')
+    await terminalPage.waitForSelector('[data-tab-id="terminal:term-collapse"]')
+    await terminalPage.click('[data-tab-id="terminal:term-collapse"]')
     await terminalPage.waitForFunction(() => document.querySelector('[data-terminal-header]')?.textContent.includes('status ready'))
-    await terminalPage.click('[data-workbench-pane-collapse="pane-main"]')
+    const terminalPaneId = await terminalPage.$eval('[data-tab-id="terminal:term-collapse"]', tab => tab.closest('[data-pane-id]').dataset.paneId)
+    await terminalPage.click(`[data-workbench-pane-collapse="${terminalPaneId}"]`)
     await terminalPage.waitForSelector('[data-workbench-collapsed-tab="terminal:term-collapse"]')
     assert.equal(await terminalPage.$('[data-terminal-header]'), null, 'Terminal view unmounts while its tab record remains')
     assert.ok((await state(terminalPage)).tabsById['terminal:term-collapse'])
@@ -283,10 +318,10 @@ test('collapsing Terminal and kept Code unmounts the view without closing resour
   } finally { await terminalPage.close() }
 
   const codeTab = { id: 'vscode-web', type: 'vscode', title: 'Code' }
-  const codePage = await openFixture({ tabs: [codeTab, chat('e2e-a', false)], activeTabId: codeTab.id, hash: '#tab/vscode-web' })
+  const codePage = await openFixture({ tabs: [codeTab, chat('e2e-a', false), system], activeTabId: codeTab.id, hash: '#tab/vscode-web', split: true })
   try {
     await codePage.waitForSelector('[data-foxwarm-vscode-web-frame="true"]')
-    assert.equal(await codePage.$('button[title="Close pane"]'), null, 'a single-pane workbench hides Close pane entirely')
+    assert.ok(await codePage.$('[data-pane-id="pane-main"] button[title="Close pane"]'))
     await codePage.click('[data-tab-id="chat:e2e-a"]')
     await codePage.waitForSelector('[role="textbox"][aria-label="Message"]')
     assert.ok(await codePage.$('[data-foxwarm-vscode-web-frame="true"]'), 'ordinary switching keeps the inactive Code iframe')
@@ -531,6 +566,9 @@ test('single pane with one tab omits its strip without leaving header height; Si
     await page.waitForSelector('[data-pane-id="pane-main"] [role="textbox"][aria-label="Message"]')
     assert.equal(await page.$('[data-pane-id="pane-main"] [data-tab-id]'), null)
     assert.equal(await page.$(paneButtons), null)
+    assert.equal(await page.$('[data-workbench-pane-drag-handle], [data-workbench-pane-collapse]'), null, 'a lone single-tab pane omits whole-pane drag and collapse controls')
+    assert.ok(await page.$('[data-workbench-tab-handle="chat:e2e-a"]'), 'ordinary tab drag remains available')
+    assert.ok(await page.$('[data-workbench-tab-close="chat:e2e-a"]'), 'ordinary tab Close remains available')
     const geometry = await page.$eval('[data-pane-id="pane-main"]', pane => {
       const content = pane.querySelector('.min-h-0.flex-1')
       return { contentTop: content.getBoundingClientRect().top, paneTop: pane.getBoundingClientRect().top, contentHeight: content.getBoundingClientRect().height, paneHeight: pane.getBoundingClientRect().height }
@@ -549,6 +587,7 @@ test('single pane with one tab omits its strip without leaving header height; Si
     await page.waitForSelector('[data-pane-id="pane-main"] [data-tab-id="chat:e2e-b"]')
     assert.equal(await page.$$eval('[data-pane-id="pane-main"] [data-tab-id]', nodes => nodes.length), 2)
     assert.equal(await page.$$eval(paneButtons, nodes => nodes.length), 2, 'a single-pane workbench omits Close pane rather than disabling it')
+    assert.equal(await page.$('[data-workbench-pane-drag-handle], [data-workbench-pane-collapse]'), null, 'adding another tab does not enable pane drag or collapse')
     assert.equal((await state(page)).tabsById['chat:e2e-b'].preview, false)
     // Wait for the drag's document-level click guard to clear before a real Close click.
     await page.waitForFunction(() => {
