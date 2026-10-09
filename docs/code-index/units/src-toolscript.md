@@ -21,6 +21,8 @@ ToolScript result/run types are internal, not exported TypeScript API types.
 
 ## Host API
 
+The default-injected `run_script` description includes the Python-subset syntax, synchronous `call_tool` usage, and a minimal inline example with `args` and `return`.
+
 - `call_tool(...)` — normalize shorthand or a unified descriptor, dynamically load `./tools`, and invoke the exported `call_tool` handler with the outer exact `ToolContext`, including its trusted placement/persist hooks and programmatic producer hint.
 - `request_model_without_context(prompt, model?)` — production one-shot model request using the current session's raw effort and optional model selection but not its history; returns the text plus canonical parts (text and Blob-referenced images) without reasoning, function calls, provider metadata, or image bytes.
 - `ask_agent(question)` — persist a snapshot and return an agent continuation.

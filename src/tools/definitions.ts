@@ -735,7 +735,7 @@ Example:
         {
             name: 'run_script',
             defaultInject: true,
-            description: "Run ToolScript code to coordinate tool calls. Supply a script file or inline code. Top-level code can read args and return a result; scripts defining main(args) are called automatically. Returns a runId for inspecting or resuming the run. A run paused at a safe time-budget checkpoint can be resumed with continue_script.",
+            description: "Run Python-subset ToolScript to coordinate tool calls. Supply code or filePath; args is the input dictionary. Call tools synchronously with call_tool (no await), and use return for the result. Example: code='return call_tool(\"read\", {\"filePath\": args[\"path\"], \"endLine\": 5})', args={\"path\": \"README.md\"}. Tools return their native values, not a common response envelope. Use call_tool for filesystem/process access rather than Python OS APIs. A defined main(args) is called automatically. Returns status and runId; resume a time-budget or agent-input pause with continue_script using runId and continuationId.",
             parameters: {
                 type: 'object',
                 properties: {
