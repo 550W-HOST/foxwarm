@@ -1783,7 +1783,7 @@ test('manual historical tool-response pruning is a true no-op for small response
   assert.deepEqual(session.history, before);
 });
 
-test('automatic pruning commits below 50% and skips layered provider planning', async () => {
+test('automatic pruning commits a material estimated reduction and skips layered provider planning', async () => {
   const { sessionHistory, llm } = await loadDeps();
   const session: Session = {
     id: makeSessionId('auto_tool_prune_commit'), agent: 'main', history: [], persistentMemorySnapshot: '',
@@ -1812,7 +1812,7 @@ test('automatic pruning commits below 50% and skips layered provider planning', 
   } finally { (llm as any).chat = originalChat; }
 });
 
-test('automatic pruning above 50% leaves byte-exact history and runs layered planning', async () => {
+test('automatic pruning declines a marginal estimated reduction and leaves byte-exact history for layered planning', async () => {
   const { sessionHistory, archive, llm } = await loadDeps();
   const session: Session = {
     id: makeSessionId('auto_tool_prune_fallback'), agent: 'main', history: [], persistentMemorySnapshot: 'S'.repeat(300000),
@@ -1843,6 +1843,36 @@ test('automatic pruning above 50% leaves byte-exact history and runs layered pla
     assert.equal(session.promptCacheKey, 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
     assert.equal(saves.count, 0);
   } finally { sessionHistory.discardPendingCompactWork(session.id); (llm as any).chat = originalChat; }
+});
+
+test('automatic pruning declines a marginal estimated reduction instead of rewriting the prompt prefix', async () => {
+  const { sessionHistory, archive } = await loadDeps();
+  const session: Session = {
+    id: makeSessionId('auto_tool_prune_marginal_budget'), agent: 'main', history: [], persistentMemorySnapshot: '',
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null }, busy: false, queue: [],
+    meta: { lastMessageTime: Date.now() }, historyVersion: 6, promptCacheKey: '99999999-aaaa-4bbb-8ccc-dddddddddddd',
+  } as Session;
+  const payload = 'marginal-tool '.repeat(160);
+  const messages: Message[] = [
+    { role: 'model', parts: [{ functionCall: { id: 'marginal-call', name: 'read', args: { unchanged: true } } }], __meta: { seq: 1, timestamp: 1 } },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'marginal-call', name: 'read', response: { output: payload } } }], __meta: { seq: 2, timestamp: 2 } },
+    ...Array.from({ length: 24 }, (_, index): Message => ({ role: index % 2 ? 'model' : 'user', parts: [{ text: `tail-block-${index} ${'x'.repeat(120)}` }], __meta: { seq: index + 3, timestamp: index + 3 } })),
+  ];
+  await archive.appendMessagesToArchive(session, messages);
+  session.history = messages;
+  const before = structuredClone(session.history);
+  const plan = await sessionHistory.buildToolResponsePrunePlan(session.id, session, 0.3);
+  assert.ok(plan.replacedFunctionResponses > 0, 'the session must actually contain a prunable response');
+  assert.ok(
+    plan.estimatedTokensAfter >= plan.estimatedTokensBefore * 0.6,
+    `the marginal reduction must stay above the commit ratio (${plan.estimatedTokensBefore} -> ${plan.estimatedTokensAfter})`,
+  );
+  const saves = { count: 0 };
+  assert.equal(await sessionHistory.tryAutomaticToolResponsePruning(makeDepsForSession(session, saves), session.id), false);
+  assert.deepEqual(session.history, before);
+  assert.equal(session.historyVersion, 6);
+  assert.equal(saves.count, 0);
+  assert.equal(JSON.stringify(session.history).includes('historical tool response pruned'), false);
 });
 
 test('prune commit accepts an appended suffix and rejects a changed prefix', async () => {

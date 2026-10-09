@@ -53,6 +53,14 @@ import { isSessionAuthorityPostCommitError } from './stateFile';
 const TOOL_RESPONSE_RETAIN_HEAD_CHARS = 500;
 const TOOL_RESPONSE_RETAIN_TAIL_CHARS = 500;
 const TOOL_RESPONSE_LINE_PREFERENCE_WINDOW = 100;
+/**
+ * Automatic pruning commits only when the estimated Session shrinks below this ratio of its
+ * previous size. A committed prune rewrites an earlier part of the request prefix, so provider
+ * prompt caching is invalidated after that point; a marginal reduction is not worth that
+ * rewrite. An absolute context budget is unreliable as the gate here because the estimate
+ * covers only history plus the memory snapshot, not the fixed request overhead.
+ */
+const TOOL_RESPONSE_PRUNE_MAX_ESTIMATED_RATIO = 0.6;
 const TOOL_RESPONSE_METADATA_KEYS = new Set([
   'status', 'node', 'nodeId', 'path', 'filePath', 'absolutePath', 'outputFullPath',
   'logPath', 'statusPath', 'runId', 'execId', 'sha256', 'hash', 'location',
@@ -1788,20 +1796,20 @@ export async function tryAutomaticToolResponsePruning(
   if (!session) return false;
   const plan = planOverride || await buildToolResponsePrunePlan(sessionId, session, COMPACT_KEEP_PERCENT);
   if (plan.replacedFunctionResponses === 0) return false;
-  const { contextLimit } = resolveModelConfig(session.model);
-  const recoveryTarget = Math.max(1, Math.floor(contextLimit * 0.5));
-  const commit = await commitToolResponsePrunePlan(deps, sessionId, plan, recoveryTarget);
+  const maximumEstimatedTokens = Math.max(0, Math.ceil(plan.estimatedTokensBefore * TOOL_RESPONSE_PRUNE_MAX_ESTIMATED_RATIO) - 1);
+  const commit = await commitToolResponsePrunePlan(deps, sessionId, plan, maximumEstimatedTokens);
   if (!commit.committed) {
     logger.info({
       sessionId, prunableResponses: plan.replacedFunctionResponses,
-      estimatedTokensAfter: commit.result.estimatedTokensAfter, recoveryTarget,
+      estimatedTokensBefore: commit.result.estimatedTokensBefore, estimatedTokensAfter: commit.result.estimatedTokensAfter,
+      maximumEstimatedTokens,
     }, 'Automatic historical tool-response pruning did not commit; continuing to layered compaction');
     return false;
   }
   logger.info({
     sessionId, prunedResponses: commit.result.replacedFunctionResponses, touchedMessages: commit.result.touchedMessages,
     estimatedTokensBefore: commit.result.estimatedTokensBefore, estimatedTokensAfter: commit.result.estimatedTokensAfter,
-    estimatedTokensSaved: commit.result.estimatedTokensSaved, recoveryTarget,
+    estimatedTokensSaved: commit.result.estimatedTokensSaved, maximumEstimatedTokens,
   }, 'Automatic historical tool-response pruning completed; layered compaction skipped for this trigger');
   return true;
 }
