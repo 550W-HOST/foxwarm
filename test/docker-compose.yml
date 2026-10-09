@@ -6,8 +6,6 @@ services:
       context: ..
       dockerfile: test/Dockerfile
     container_name: foxwarm-dotnet-test
-    env_file:
-      - ./.env
     environment:
       FOXWARM_DATA_DIR: /data
       FOXWARM_EXPERIMENT_BIND_ADDRESS: 0.0.0.0
@@ -18,7 +16,7 @@ services:
     ports:
       - "0.0.0.0:3003:3001"
     volumes:
-      - ./state:/data
+      - ./state:/data/state
       - ./workspace:/workspace
     restart: unless-stopped
     stop_grace_period: 5s

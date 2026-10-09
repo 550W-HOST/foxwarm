@@ -167,3 +167,15 @@ sudo docker compose up -d
 ```
 
 当前默认测试服务名为 `foxwarm-test`。
+
+### 测试环境登录
+
+`test/docker-compose.yml` 不再通过 `.env` 注入登录 token。容器内的数据目录 `/data` 只挂载宿主机的 `test/state/`，因此登录 token 位于 `test/state/token`（容器内为 `/data/state/token`）。该文件缺失时，服务启动会生成一个 32 字节随机十六进制 token，并以仅所有者可读写的权限保存。
+
+读取当前 token：
+
+```bash
+cat test/state/token
+```
+
+浏览器访问 `http://127.0.0.1:3003/`，在登录页粘贴该 token。修改 token 时替换该文件内容，然后重启服务使其生效。`FOXWARM_PUBLIC_BASE_URL` 仅在需要改变对外访问地址时设置，默认值为 `http://127.0.0.1:3003`；它不参与登录校验。

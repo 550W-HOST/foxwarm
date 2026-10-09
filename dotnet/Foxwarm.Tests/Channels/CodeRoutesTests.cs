@@ -256,7 +256,7 @@ public sealed class CodeRoutesTests
             Content = new ByteArrayContent([1]),
         };
         hostile.Headers.Add("Origin", "http://foreign.invalid");
-        Assert.Equal(HttpStatusCode.Forbidden, (await f.Client.SendAsync(hostile)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.SendAsync(hostile)).StatusCode);
         Assert.Equal("untouched", await File.ReadAllTextAsync(file));
         var remote = await f.Client.GetAsync(f.Fs("read-file", file) + "&nodeId=future");
         Assert.Equal(HttpStatusCode.BadRequest, remote.StatusCode);

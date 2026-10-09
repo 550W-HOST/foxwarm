@@ -211,8 +211,8 @@ def main():
     (data / 'state/models.yaml').write_text(json.dumps({'default': 'local-script', 'providers': {
         'local-script': {'providerType': 'openai-responses', 'baseUrl': f'http://127.0.0.1:{provider.server_port}',
                          'apiKey': PROVIDER_TOKEN, 'models': ['local-script']}}}) + '\n')
-    env = dict(os.environ, FOXWARM_EXPERIMENT_DATA_ROOT=str(data), FOXWARM_EXPERIMENT_TOOL_ROOT=str(tools),
-               FOXWARM_EXPERIMENT_API_TOKEN=TOKEN)
+    (data / 'state/token').write_text(TOKEN + '\n')
+    env = dict(os.environ, FOXWARM_EXPERIMENT_DATA_ROOT=str(data), FOXWARM_EXPERIMENT_TOOL_ROOT=str(tools))
     first = second = None
     try:
         first = start_host(dotnet, dll, env, port, logs, 'first')

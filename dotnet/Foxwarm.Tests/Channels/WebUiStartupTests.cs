@@ -73,7 +73,6 @@ public sealed class WebUiStartupTests
                 {
                     "FOXWARM_EXPERIMENT_PORT",
                     "FOXWARM_EXPERIMENT_BIND_ADDRESS",
-                    "FOXWARM_EXPERIMENT_API_TOKEN",
                     "FOXWARM_PUBLIC_BASE_URL",
                     "FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN",
                 }
@@ -197,7 +196,7 @@ public sealed class WebUiStartupTests
     }
 
     [Fact]
-    public async Task Actual_invalid_secret_evidence_is_not_replaced_and_explicit_override_does_not_touch_it()
+    public async Task Actual_invalid_secret_evidence_is_not_replaced()
     {
         await using var h = new Host();
         foreach (
@@ -226,13 +225,6 @@ public sealed class WebUiStartupTests
         File.Delete(h.TokenPath);
         Directory.CreateDirectory(h.TokenPath);
         h.Start();
-        await h.Failed();
-        Assert.True(Directory.Exists(h.TokenPath));
-        h.Start(new() { ["FOXWARM_EXPERIMENT_API_TOKEN"] = h.Token });
-        await h.Ready();
-        await h.Stop();
-        Assert.True(Directory.Exists(h.TokenPath));
-        h.Start(new() { ["FOXWARM_EXPERIMENT_API_TOKEN"] = " " });
         await h.Failed();
         Assert.True(Directory.Exists(h.TokenPath));
     }
@@ -318,37 +310,27 @@ public sealed class WebUiStartupTests
             var html = await h.Client.GetStringAsync("/public/main/");
             Assert.Contains("name=\"foxwarm-host\" content=\"dotnet\"", html);
             Assert.Contains("authenticated-app-fixture", html);
-            Assert.True(
-                (
-                    await h.Client.GetAsync("/public/main/api/sessions/main/history")
-                ).IsSuccessStatusCode
-            );
+            Assert.True((await h.Client.GetAsync("/public/main/api/sessions")).IsSuccessStatusCode);
         }
         h.Client.DefaultRequestHeaders.Remove("Cookie");
         h.Client.DefaultRequestHeaders.Add("Cookie", "foxwarm_token=bad");
         h.Client.DefaultRequestHeaders.Authorization = new("Bearer", h.Token);
         Assert.True((await h.Client.GetAsync("/api/sessions")).IsSuccessStatusCode);
         foreach (
-            var invalid in new[]
+            var otherOrigin in new[]
             {
                 "null",
                 "invalid",
                 "https://foreign.invalid",
                 origin + "/",
-                origin + ", " + origin,
+                origin,
             }
         )
         {
             h.Client.DefaultRequestHeaders.Remove("Origin");
-            h.Client.DefaultRequestHeaders.Add("Origin", invalid);
-            Assert.Equal(
-                HttpStatusCode.Forbidden,
-                (await h.Client.GetAsync("/public/main/assets/fixture.js")).StatusCode
-            );
+            h.Client.DefaultRequestHeaders.Add("Origin", otherOrigin);
+            Assert.True((await h.Client.GetAsync("/public/main/api/sessions")).IsSuccessStatusCode);
         }
-        h.Client.DefaultRequestHeaders.Remove("Origin");
-        h.Client.DefaultRequestHeaders.Add("Origin", origin);
-        Assert.True((await h.Client.GetAsync("/public/main/api/sessions")).IsSuccessStatusCode);
         await h.Stop();
         h.Start(new() { ["FOXWARM_PUBLIC_BASE_URL"] = origin + "/public/main/" });
         await h.Ready();
@@ -424,25 +406,26 @@ public sealed class WebUiStartupTests
     }
 
     [Fact]
-    public async Task Actual_explicit_public_authority_rejects_loopback_and_forged_forwarding_but_keeps_absent_origin_CLI()
+    public async Task Actual_login_from_any_origin_with_valid_token_sets_cookie_for_later_requests()
     {
         await using var h = new Host();
         await File.WriteAllTextAsync(h.TokenPath, h.Token);
         h.Start(new() { ["FOXWARM_PUBLIC_BASE_URL"] = "https://declared.example/main/" });
         await h.Ready();
+        h.Client.DefaultRequestHeaders.Authorization = null;
         h.Client.DefaultRequestHeaders.Add("Origin", "http://127.0.0.1:" + h.Port);
-        h.Client.DefaultRequestHeaders.Host = "declared.example";
-        h.Client.DefaultRequestHeaders.Add("x-forwarded-proto", "https");
-        h.Client.DefaultRequestHeaders.Add("x-forwarded-host", "declared.example");
         Assert.Equal(
-            HttpStatusCode.Forbidden,
+            HttpStatusCode.Unauthorized,
             (await h.Client.GetAsync("/api/sessions")).StatusCode
         );
-        h.Client.DefaultRequestHeaders.Remove("Origin");
-        h.Client.DefaultRequestHeaders.Add("Origin", "https://declared.example");
-        Assert.True((await h.Client.GetAsync("/api/sessions")).IsSuccessStatusCode);
         var login = await h.Client.PostAsJsonAsync("/api/auth", new { token = h.Token });
-        Assert.Contains("secure", Assert.Single(login.Headers.GetValues("Set-Cookie")));
+        Assert.True(login.IsSuccessStatusCode);
+        var cookie = Assert.Single(login.Headers.GetValues("Set-Cookie"));
+        Assert.Contains("secure", cookie);
+        h.Client.DefaultRequestHeaders.Remove("Origin");
+        h.Client.DefaultRequestHeaders.Add("Origin", "https://foreign.invalid");
+        h.Client.DefaultRequestHeaders.Add("Cookie", cookie.Split(';')[0]);
+        Assert.True((await h.Client.GetAsync("/api/sessions")).IsSuccessStatusCode);
         await h.Stop();
     }
 

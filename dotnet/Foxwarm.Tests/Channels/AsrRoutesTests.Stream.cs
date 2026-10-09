@@ -55,15 +55,12 @@ public sealed partial class AsrRoutesTests
     }
 
     [Fact]
-    public async Task WS_uses_normal_auth_and_origin_before_any_upstream_admission()
+    public async Task WS_uses_normal_auth_before_any_upstream_admission()
     {
         await using var f = await Fixture.Create(prefix: true);
         await Assert.ThrowsAsync<WebSocketException>(() => f.Connect(credential: null));
-        await Assert.ThrowsAsync<WebSocketException>(() =>
-            f.Connect(origin: "https://foreign.example")
-        );
         Assert.Equal(0, f.Requests);
-        using var socket = await f.Connect(origin: "https://public.example");
+        using var socket = await f.Connect(origin: "https://foreign.example");
         await Send(socket, new { type = "start" });
         Assert.Equal("ready", (await Json(socket))["type"]!.ToString());
     }

@@ -13,7 +13,7 @@ Browser WebUI fetch/WebSocket/PTY/Code request
 ```
 
 - **Producer:** React units issue deployment-relative API/WebSocket requests; realtime reconnect/ack code subscribes to host revisions. Browser optimistic composer/list state is not a durable write.
-- **Owner:** `HttpServer` performs normal token/cookie/auth/origin checks and route/static composition. `WebUIChannel` owns DTOs and route handlers; feature services own Session/task/Code/terminal/image semantics.
+- **Owner:** `HttpServer` performs normal token/cookie auth checks and route/static composition. `WebUIChannel` owns DTOs and route handlers; feature services own Session/task/Code/terminal/image semantics.
 - **Durable boundary:** Session routes delegate to exact owner/save-lane/authority/catalog; task routes delegate `TaskService`; file/image routes delegate `FileDelivery`/`ImageBlobStore`; Code and terminal routes delegate `CodeWorkbench`/`TerminalRegistry`; realtime publishes authenticated event envelopes/revisions after service state changes.
 - **Consumers:** React App shell, chat/composer/timeline, session-navigation, TasksView, workbench, terminal, settings, and theme units. Each keeps optimistic/local state distinct from committed host payloads.
 

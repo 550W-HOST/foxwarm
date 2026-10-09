@@ -98,15 +98,6 @@ internal sealed class HttpServer
                     await next();
                     return;
                 }
-                var origins = context.Request.Headers.Origin;
-                if (
-                    origins.Count > 1
-                    || (origins.ToString().Length > 0 && origins.ToString() != address.Origin)
-                )
-                {
-                    context.Response.StatusCode = 403;
-                    return;
-                }
                 if (
                     WebUiEnabled
                     && distRoot is not null

@@ -63,35 +63,36 @@ internal sealed record HttpServerSettings(
         var configuredUrl = SessionWait.Text(configuration.AppConfiguration["url"]);
         var address = PublicWebAddress.Capture(port, configuredUrl);
         var enabled = Enabled(configuration);
-        var token = Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_API_TOKEN");
-        if (token is null)
-        {
-            var path = Path.Combine(dataRoot, "state", "token");
-            try
-            {
-                token = SessionGoal.Trim(
-                    new UTF8Encoding(false, true).GetString(await File.ReadAllBytesAsync(path))
-                );
-            }
-            catch (Exception error)
-                when (error is FileNotFoundException or DirectoryNotFoundException)
-            {
-                token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
-                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                var options = new FileStreamOptions
-                {
-                    Mode = FileMode.CreateNew,
-                    Access = FileAccess.Write,
-                };
-                if (!OperatingSystem.IsWindows())
-                    options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-                await using var stream = new FileStream(path, options);
-                await stream.WriteAsync(Encoding.UTF8.GetBytes(token));
-            }
-        }
+        var token = await LoadOrCreateTokenAsync(dataRoot);
         if (string.IsNullOrWhiteSpace(token))
             throw new InvalidDataException("HTTP access token must not be blank.");
         return new(port, token, bindAddress, address, enabled);
+    }
+
+    private static async Task<string> LoadOrCreateTokenAsync(string dataRoot)
+    {
+        var path = Path.Combine(dataRoot, "state", "token");
+        try
+        {
+            return SessionGoal.Trim(
+                new UTF8Encoding(false, true).GetString(await File.ReadAllBytesAsync(path))
+            );
+        }
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
+        {
+            var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var options = new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+            };
+            if (!OperatingSystem.IsWindows())
+                options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            await using var stream = new FileStream(path, options);
+            await stream.WriteAsync(Encoding.UTF8.GetBytes(token));
+            return token;
+        }
     }
 }
 
