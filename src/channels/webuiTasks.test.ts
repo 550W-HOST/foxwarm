@@ -70,6 +70,12 @@ test('authenticated task REST separates user actions from Session-targeted tool 
   assert.equal(owned.task.status, 'active');
   assert.equal(owned.task.assignmentNotificationStatus, 'sent');
   assert.equal(notices[4].target, 'worker');
+  const unassignedResponse = await request('/api/tasks', 'POST', { title: 'Unassigned global task' });
+  const unassigned = await unassignedResponse.json() as any;
+  assert.equal(unassignedResponse.status, 201);
+  assert.ok(((await (await request('/api/tasks')).json() as any).tasks).some((task: any) => task.id === unassigned.task.id),
+    'the WebUI list keeps its global behavior and includes unassigned user tasks');
+  assert.equal((await request('/api/tasks?scope=current-session')).status, 400, 'the model list scope does not narrow the WebUI route');
   const missing = await request('/api/tasks/missing');
   assert.equal(missing.status, 404);
   assert.equal((await missing.json() as any).code, 'TASK_NOT_FOUND');

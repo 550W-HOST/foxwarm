@@ -371,3 +371,58 @@ test('create can commit an existing owner and optional assignment notification w
   assert.equal(open.task.ownerSessionId, null);
   assert.equal(sends.length, 3, 'unowned creation has no notification recipient');
 });
+
+test('task list scopes match canonical Session creator or owner, use catalog Agent membership, and count after filtering', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-task-list-scope-'));
+  const filePath = path.join(root, 'tasks.sqlite');
+  const aliases = new Map([['old-one', 'session-one']]);
+  const agents = new Map([['session-one', 'agent-alpha'], ['session-two', 'agent-alpha'], ['outside', 'agent-beta']]);
+  const agentSessionIds = new Map([['agent-alpha', ['session-one', 'session-two']], ['agent-beta', ['outside']]]);
+  const legacyStore = new TaskStore(filePath);
+  const historicalAliasTask = legacyStore.execute({ action: 'create', title: 'Stored under old Session alias' }, 'old-one').task.id;
+  legacyStore.close();
+  const store = new TaskStore(filePath, {
+    resolveSessionId: id => aliases.get(id) || (agents.has(id) ? id : undefined),
+    sessionAliases: id => id === 'session-one' ? ['old-one'] : [],
+  });
+  t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const service = new TaskService(store, {
+    resolveSessionId: id => aliases.get(id) || (agents.has(id) ? id : undefined),
+    resolveSessionAgent: id => agents.get(aliases.get(id) || id),
+    listSessionIdsForAgent: agent => agentSessionIds.get(agent) || [],
+    sendToSession: async () => {},
+  });
+
+  const createdByAlias = (await service.execute({ action: 'create', title: 'Created by alias' }, 'old-one')).task.id;
+  const createdInAgent = (await service.execute({ action: 'create', title: 'Created by Agent Session' }, 'session-two')).task.id;
+  const assignedToCurrent = (await service.execute({ action: 'create', title: 'Assigned to current' }, 'outside')).task.id;
+  await service.execute({ action: 'assign', taskId: assignedToCurrent, ownerSessionId: 'old-one' }, 'outside');
+  const prefixLookalike = (await service.execute({ action: 'create', title: 'Not actually in Agent' }, 'agent-alpha/not-a-catalog-session')).task.id;
+  const userUnassigned = (await service.executeAsUser({ action: 'create', title: 'User task without owner' })).task.id;
+  const userAssigned = (await service.executeAsUser({ action: 'create', title: 'User task assigned to alias', ownerSessionId: 'old-one', notifySession: false })).task.id;
+
+  const current = service.list(undefined, undefined, false, 'current-session', 'old-one');
+  assert.deepEqual(new Set(current.tasks.map((task: any) => task.id)), new Set([createdByAlias, historicalAliasTask, assignedToCurrent, userAssigned]));
+  assert.equal(current.total, 4, 'old persisted Session IDs resolve into the current Session scope');
+
+  const currentAgent = service.list(undefined, undefined, false, 'current-agent', 'old-one');
+  assert.deepEqual(new Set(currentAgent.tasks.map((task: any) => task.id)), new Set([createdByAlias, historicalAliasTask, createdInAgent, assignedToCurrent, userAssigned]));
+  assert.equal(currentAgent.total, 5, 'Agent scope includes Session creator/owner matches and user-assigned tasks, but not unassigned user tasks');
+  assert.ok(!currentAgent.tasks.some((task: any) => task.id === prefixLookalike), 'Agent membership comes from the real catalog, not a Session ID prefix');
+  assert.ok(!currentAgent.tasks.some((task: any) => task.id === userUnassigned));
+  const limitedAgent = service.list(undefined, 2, false, 'current-agent', 'old-one');
+  assert.equal(limitedAgent.tasks.length, 2);
+  assert.equal(limitedAgent.total, 5, 'total is computed after the Agent and status filters');
+  assert.equal(limitedAgent.omitted, 3, 'omitted counts only tasks in the selected scope');
+
+  const completed = (await service.execute({ action: 'create', title: 'Completed in Agent' }, 'session-two')).task.id;
+  await service.execute({ action: 'complete', taskId: completed }, 'session-two');
+  const completedInScope = service.list('completed', undefined, false, 'current-agent', 'session-one');
+  assert.deepEqual(completedInScope.tasks.map((task: any) => task.id), [completed]);
+  assert.equal(completedInScope.total, 1, 'status filtering is applied within the chosen scope');
+
+  const all = service.list(undefined, undefined, false, 'all', 'session-one');
+  assert.ok(all.tasks.some((task: any) => task.id === userUnassigned));
+  assert.ok(all.tasks.some((task: any) => task.id === prefixLookalike));
+  assert.equal(all.total, 7, 'all scope includes unassigned user tasks and historical alias references');
+});

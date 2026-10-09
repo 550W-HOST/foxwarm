@@ -68,6 +68,7 @@ const baseDefinitions = [
                     parentTaskId: { type: 'string', maxLength: 128, description: "Existing parent task ID for a simple child task. Set only when creating." },
                     taskId: { type: 'string', maxLength: 128, description: "Existing task ID. Required for get, claim, update, complete, and cancel." },
                     status: { type: 'string', enum: ['open', 'active', 'completed', 'cancelled'], description: "For list, filter by task status. For update, set only open or active." },
+                    scope: { type: 'string', enum: ['current-session', 'current-agent', 'all'], description: "For list, choose tasks created by or assigned to the current Session (default), any Session in the current Agent, or all Sessions and users." },
                     notifySession: { type: 'boolean', description: "When true, send task notifications after the assignment is committed: notify the new owner, and notify the previous owner when ownership changes or is released." },
                     ownerSessionId: { type: ['string', 'null'], maxLength: 256, description: "For create, the optional existing Session ID to receive the new task. For assign, the existing Session ID to receive the task, or null to release the current owner." },
                     note: { type: 'string', maxLength: 1000, description: "Short progress note to append when updating a task." },
