@@ -47,9 +47,7 @@ export const COMMANDS: Record<string, CommandDef> = {
       const conversationId = getConversationId(ctx);
       await ctx.reply([
         `User ID: ${ctx.senderId || '(unavailable)'}`,
-        `Channel instance ID: ${channelInstanceId}`,
-        `Conversation ID: ${conversationId}`,
-        `channelTargetId: ${channelInstanceId}:${conversationId}`,
+        `Channel Target ID: ${channelInstanceId}:${conversationId}`,
       ].join('\n'), { turnFinal: true });
     },
   },

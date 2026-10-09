@@ -110,9 +110,7 @@ test('/whoami replies to an unauthorized, unattached group sender before guest, 
   });
   assert.equal(replies.length, 1);
   assert.match(replies[0].text, /^User ID: member-7$/m);
-  assert.match(replies[0].text, /^Channel instance ID: qq-identity$/m);
-  assert.match(replies[0].text, /^Conversation ID: group:room-42$/m);
-  assert.match(replies[0].text, /^channelTargetId: qq-identity:group:room-42$/m);
+  assert.match(replies[0].text, /^Channel Target ID: qq-identity:group:room-42$/m);
   assert.doesNotMatch(replies[0].text, /other-user|display-name|foxwarm-metadata/);
   assert.equal(replies[0].options.turnFinal, true);
   for (const call of [...forbiddenCalls, materialize]) assert.equal(call.mock.callCount(), 0);
@@ -133,7 +131,7 @@ test('/whoami also works on direct adapter command dispatch and never substitute
   assert.equal(await handler.handleCommand({ ...ctx, senderId: undefined }, '/whoami', []), true);
   const unavailable = replies.pop()!;
   assert.match(unavailable, /^User ID: \(unavailable\)$/m);
-  assert.match(unavailable, /^channelTargetId: telegram-identity:-10042$/m);
+  assert.match(unavailable, /^Channel Target ID: telegram-identity:-10042$/m);
   assert.doesNotMatch(unavailable, /^User ID: (?:-10042|display-name)$/m);
   assert.equal(lookup.mock.callCount(), 0);
 

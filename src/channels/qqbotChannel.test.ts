@@ -365,7 +365,7 @@ test('QQ Bot /whoami keeps group trigger requirements and replies with the actua
   assert.equal(sent.length, 1);
   assert.equal(sent[0].conversationId, 'group:group-42');
   assert.match(sent[0].text, /^User ID: member-7$/m);
-  assert.match(sent[0].text, /^channelTargetId: qq-whoami:group:group-42$/m);
+  assert.match(sent[0].text, /^Channel Target ID: qq-whoami:group:group-42$/m);
   assert.equal(sent[0].options.replyToId, 'mentioned-whoami');
   assert.equal(sent[0].options.turnFinal, true);
   assert.equal(sessionManager.getSessionByChannel(channel.name, 'group:group-42'), undefined);
