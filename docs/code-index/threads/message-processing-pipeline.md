@@ -6,8 +6,8 @@ The interactive turn flow from channel input through authorization, queueing, pr
 
 ## Flow
 
-1. A platform adapter converts native input to `ChannelContext` plus `ChannelMessage` and calls `MessageRouter.handleIncomingMessage`.
-2. Router performs channel authorization, normalizes source metadata/mentions, handles slash commands where applicable, and resolves the attached session.
+1. A platform adapter converts native input to `ChannelContext` plus `ChannelMessage` and calls `MessageRouter.handleMessage`; adapters with direct command dispatch use `CommandHandler`.
+2. `/whoami` replies directly before channel authorization or Session resolution. All other input retains channel authorization, source metadata/mention normalization, protected slash-command handling, and attached-session resolution.
 3. Ordinary input enters the session queue through the session-manager façade.
 4. The registered trigger invokes `MessageRouter.processSessionQueue`, which directly delegates to its `SessionTurnRunner`. One bound local turn-effects owner carries the exact Session through save, canonical append, busy/wait, and runtime/history events. One outer processor acquires the reentry guard and rollback-safe persisted busy claim once, then applies completed compact work at safe points and selects requested retry or all currently visible ordinary queued input. It performs the ordinary busy release once after the selected actions drain. Only a successfully completed processor may trigger the finish-window trailing handoff; failure in that intentionally spawned processor is logged once without retrying or consuming its durable queue.
 5. Each selected queued turn invokes `runSessionTurn` once and creates one ephemeral turn identity for that provider/tool loop. `llm.chat(parts, session, iteration, options)` carries that identity into each request while building the current model-visible history/prompt/tool schema, resolving concrete or virtual routing, streaming progress, recording the actual concrete provider-qualified model ID, and appending the model result. Model `extraFields` and `extraHeaders` may expand `${TURN_ID}` alongside `${SESSION_CACHE_KEY}`. Ordinary input consumed inside the same invocation keeps the identity; a later outer turn after a real lifecycle/control boundary gets a fresh one without recursively calling the queue processor. Virtual attempt semantics are canonical in [model routing](./model-routing.md).
@@ -32,6 +32,14 @@ An implemented Worker ingress alternative accepts one already-normalized ordinar
 - [LLM](../modules/llm.md)
 - [tools and permissions](../modules/tools-and-permissions.md)
 - [session context](../modules/session-context.md)
+
+## Channel identity discovery
+
+### D-pipeline-channel-identity-query
+
+[2026-10-09] `/whoami` is a source-only identity query available before allowlist authorization and without a Session attachment. It replies through the current `ChannelContext.reply` with the actual `senderId` as User ID, configured channel instance ID, conversation ID, and the directly usable `<instance>:<conversation>` channelTargetId. Missing sender identity is reported as unavailable, never inferred from conversation ID or display name. Arguments do not select another identity, and the reply contains no configured credentials or other users' data. Router command errors for this query are logged without echoing adapter error details into another channel reply.
+
+Both Router ingress and direct adapter command dispatch handle this exact command before guest provisioning, attachment/Session lookup or creation, queue/history/model work, and deferred media materialization. Adapter validation and group trigger requirements remain unchanged. Other commands and ordinary input retain their authorization behavior, including protected-command-as-chat handling for attachment-level allow-all users who lack direct authorization.
 
 ## Queue and source behavior
 

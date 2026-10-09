@@ -356,7 +356,7 @@ Example:
         {
             name: 'send_to_channel',
             defaultInject: true,
-            description: "Send a message to a specific channel destination. For a normal-mode channel attached to this session, reply directly instead: your assistant text is delivered automatically. Use this tool for send-only channels or when the task requires delivery to a different destination.",
+            description: "Send a message to a specific channel destination. The destination does not need a Session attachment. For a normal-mode channel attached to this session, reply directly instead: your assistant text is delivered automatically. Use this tool for send-only channels or when the task requires delivery to a different destination.",
             parameters: {
                 type: 'object',
                 properties: {

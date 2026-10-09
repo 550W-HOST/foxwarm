@@ -5,6 +5,7 @@ import WebSocket from 'ws';
 import { registerChannel, unregisterChannel } from '../channel';
 import * as llm from '../llm';
 import { MessageRouter } from '../messageRouter';
+import { CommandHandler } from '../commandHandler';
 import * as sessionManager from '../sessionManager';
 import type { MessagePart, Session } from '../types';
 import { parseQQBotConversationId, QQBotChannel } from './qqbotChannel';
@@ -345,6 +346,29 @@ test('QQ Bot mention mode keeps ordinary slash-shaped chatter as ambient context
 
   assert.equal(received.length, 1);
   assert.match(received[0].message.parts[0].text, /<foxwarm-qqbot-context count="1" untrusted="true">[\s\S]*\/stop[\s\S]*answer this$/);
+});
+
+test('QQ Bot /whoami keeps group trigger requirements and replies with the actual member identity without a Session', async (t) => {
+  const channel = new QQBotChannel({ appId: 'app-id', clientSecret: 'secret' }, 'qq-whoami');
+  const router = new MessageRouter();
+  const handler = new CommandHandler(router);
+  router.setCommandHandler((...args) => handler.handleCommand(...args));
+  channel.onMessage((ctx, message) => router.handleMessage(ctx, message));
+  const sent: Array<{ conversationId: string; text: string; options: any }> = [];
+  t.mock.method(channel, 'sendMessage', async (conversationId: string, text: string, options?: any) => {
+    sent.push({ conversationId, text, options });
+  });
+  const event = { content: '/whoami', group_openid: 'group-42', author: { member_openid: 'member-7' } };
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', { ...event, id: 'ordinary-whoami' });
+  assert.equal(sent.length, 0, 'mention-required groups must not dispatch ordinary slash chatter');
+  await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', { ...event, id: 'mentioned-whoami' });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].conversationId, 'group:group-42');
+  assert.match(sent[0].text, /^User ID: member-7$/m);
+  assert.match(sent[0].text, /^channelTargetId: qq-whoami:group:group-42$/m);
+  assert.equal(sent[0].options.replyToId, 'mentioned-whoami');
+  assert.equal(sent[0].options.turnFinal, true);
+  assert.equal(sessionManager.getSessionByChannel(channel.name, 'group:group-42'), undefined);
 });
 
 test('QQ Bot mention mode extracts the real platform previous-message payload without false attribution', async () => {

@@ -17,8 +17,8 @@ export class CommandHandler {
   }
 
   async handleCommand(ctx: ChannelContext, command: string, args: string[], rawArgs?: string): Promise<boolean> {
-    // Check authorization
-    if (!this.isAuthorized(ctx)) {
+    // /whoami only echoes this source identity, including before allowlist setup.
+    if (command !== '/whoami' && !this.isAuthorized(ctx)) {
       ctx.reply(this.router.buildUnauthorizedMessage(ctx));
       return true;
     }

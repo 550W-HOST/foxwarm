@@ -39,6 +39,20 @@ const messagesUsage = 'Usage: `/messages <num>` | `/messages <start> <end>`'
 const deleteMessagesUsage = 'Usage: `/delete-messages <num>` (positive: delete oldest, negative: delete newest)'
 
 export const COMMANDS: Record<string, CommandDef> = {
+  '/whoami': {
+    description: 'Show your user ID and current channel target',
+    requiresSession: false,
+    handler: async (ctx) => {
+      const channelInstanceId = getChannelId(ctx);
+      const conversationId = getConversationId(ctx);
+      await ctx.reply([
+        `User ID: ${ctx.senderId || '(unavailable)'}`,
+        `Channel instance ID: ${channelInstanceId}`,
+        `Conversation ID: ${conversationId}`,
+        `channelTargetId: ${channelInstanceId}:${conversationId}`,
+      ].join('\n'), { turnFinal: true });
+    },
+  },
   '/help': {
     description: 'Show help',
     requiresSession: false,
