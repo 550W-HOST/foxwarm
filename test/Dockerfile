@@ -5,6 +5,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY packages/webui/package.json packages/webui/package-lock.json packages/webui/
 RUN npm ci --prefix packages/webui
+COPY packages/shared/src/ packages/shared/src/
 COPY packages/webui/ packages/webui/
 RUN npm --prefix packages/webui run build
 

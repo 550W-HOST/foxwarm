@@ -73,7 +73,7 @@ int fw_session(fw_pty *h) { pid_t sid = tcgetsid(h->master); return sid < 0 ? -e
 int fw_foreground(fw_pty *h) { pid_t pg = tcgetpgrp(h->master); return pg < 0 ? -errno : pg; }
 int fw_resize(fw_pty *h, unsigned short cols, unsigned short rows) { struct winsize s = {.ws_row = rows, .ws_col = cols}; return ioctl(h->master, TIOCSWINSZ, &s) < 0 ? errno : 0; }
 int fw_waiting(fw_pty *h, int writing) { return atomic_load(writing ? &h->writing : &h->reading); }
-void fw_cancel(fw_pty *h) { if (!atomic_exchange(&h->cancelled, 1)) { uint64_t one = 1; (void)write(h->cancel, &one, sizeof(one)); } }
+void fw_cancel(fw_pty *h) { if (!atomic_exchange(&h->cancelled, 1)) { uint64_t one = 1; ssize_t n; do { n = write(h->cancel, &one, sizeof(one)); } while (n < 0 && errno == EINTR); } }
 static int ready(fw_pty *h, short events, atomic_int *waiting) {
     struct pollfd fds[] = {{h->master, events, 0}, {h->cancel, POLLIN, 0}};
     for (;;) { if (atomic_load(&h->cancelled)) return ECANCELED; atomic_store(waiting, 1); int rc = poll(fds, 2, -1); atomic_store(waiting, 0);
