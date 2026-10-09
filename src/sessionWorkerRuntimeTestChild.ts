@@ -122,6 +122,14 @@ async function start(): Promise<void> {
       };
     }
     if (parts) await options.appendMessage({ role: 'user', parts });
+    if (process.env.FOXWARM_TEST_CHANNEL_TARGET && chatCount === 1) {
+      const call = {
+        id: 'worker-unattached-send', name: 'send_to_channel',
+        args: { channelTargetId: process.env.FOXWARM_TEST_CHANNEL_TARGET, message: 'worker explicit send' },
+      };
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: call }] });
+      return { toolCalls: [call], allParts: [{ functionCall: call }] };
+    }
     if (process.env.FOXWARM_TEST_BACKGROUND_EXEC === '1' && !backgroundExecStarted && options?.purpose !== 'compact-plan') {
       backgroundExecStarted = true;
       const entry = await options.currentSessionEffects.execRuntime.startPersistentExec({

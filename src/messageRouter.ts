@@ -272,16 +272,8 @@ export class MessageRouter {
     return result.mainSessionId;
   }
 
-  private async handleCommandIfNeeded(ctx: ChannelContext, messageText: string): Promise<boolean> {
+  private async handleCommandIfNeeded(ctx: ChannelContext, messageText: string, whoamiOnly = false): Promise<boolean> {
     if (!this.commandHandler) return false;
-
-    // When channel-level allow-all-users is enabled, keep command access for
-    // directly authorized users only. Other users may chat normally but cannot
-    // use slash commands.
-    if (sessionManager.getChannelDangerouslyAllowAllUsers(getChannelId(ctx), getConversationId(ctx))
-      && !this.isDirectlyAuthorized(getChannelId(ctx), getChannelType(ctx), getConversationId(ctx), ctx.senderId)) {
-      return false;
-    }
 
     const normalizedMessageText = this.stripConfiguredSelfMention(ctx, messageText);
     const mentionCommandRegex = /^(?:@[a-zA-Z_\-.]+\s+)?(\/[a-zA-Z_\-.]+)(?:\s+(.*))?$/s;
@@ -289,6 +281,17 @@ export class MessageRouter {
     if (!commandMatch) return false;
 
     const command = commandMatch[1];
+    if (whoamiOnly && command !== '/whoami') return false;
+
+    // When channel-level allow-all-users is enabled, keep command access for
+    // directly authorized users only. Other users may chat normally but cannot
+    // use protected slash commands. /whoami only returns the current source.
+    if (command !== '/whoami'
+      && sessionManager.getChannelDangerouslyAllowAllUsers(getChannelId(ctx), getConversationId(ctx))
+      && !this.isDirectlyAuthorized(getChannelId(ctx), getChannelType(ctx), getConversationId(ctx), ctx.senderId)) {
+      return false;
+    }
+
     const rawArgs = commandMatch[2];
     const args = rawArgs ? rawArgs.trim().split(/\s+/) : [];
 
@@ -298,7 +301,10 @@ export class MessageRouter {
         await ctx.reply(`Unknown command: ${command}`, { turnFinal: true });
       }
     } catch (e: any) {
-      await ctx.reply(`Command error: ${e.message}`, { turnFinal: true });
+      // Identity discovery must not expose adapter error details to strangers.
+      if (command !== '/whoami') {
+        await ctx.reply(`Command error: ${e.message}`, { turnFinal: true });
+      }
       logger.error({ err: e }, 'Command error');
     }
 
@@ -364,6 +370,12 @@ export class MessageRouter {
   }
 
   async handleMessage(ctx: ChannelContext, message: ChannelMessage): Promise<void> {
+    const messageText = message.parts.map(p => p.text || '').join('\n');
+    // Identity discovery must not provision a guest or resolve an attachment.
+    if (await this.handleCommandIfNeeded(ctx, messageText, true)) {
+      return;
+    }
+
     let resolvedSession: { sessionId: string; session: Session } | null = null;
     const authorizedAtIngress = this.isAuthorized(getChannelId(ctx), getChannelType(ctx), getConversationId(ctx), ctx.senderId);
 
@@ -380,7 +392,6 @@ export class MessageRouter {
       }
     }
 
-    const messageText = message.parts.map(p => p.text || '').join('\n');
     if (await this.handleCommandIfNeeded(ctx, messageText)) {
       return;
     }

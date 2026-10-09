@@ -31,7 +31,7 @@ No runtime getter/setter aliases for `dangerouslyAllowAllGroupMembers` exist. Th
 
 ## Delivery behavior
 
-- Direct target sends resolve one registered channel instance and call its text/file method.
+- Direct target sends resolve one registered channel instance and call its text/file method, without requiring a Session attachment at the destination. Explicit `send_to_channel` retains caller tool authorization and the existing isolated-Session own-attachment restriction. Adapter passive-context/proactive-permission requirements still apply, and direct send failures propagate to the caller rather than becoming automatic broadcast logs.
 - Session file delivery reports delivered, skipped, and failed targets. `send-only` attachments and channels without file support are skipped.
 - Session broadcast is fire-and-forget: it can target one attached channel, omit excluded/send-only channels, optionally allow an empty platform-finalization message, and logs asynchronous send failures.
 - Worker committed-final attachment delivery applies the same target/exclusion/send-only/empty-final selection but awaits each selected channel once and returns bounded attempted/delivered/failure counts to its Main handler.

@@ -45,4 +45,4 @@ Production shutdown sets a terminal fence before awaiting initialization or drai
 
 ## Tests
 
-Focused coverage verifies the closed operation allowlist, missing/stale source failures, bounded structured-clone isolation, late handler replacement, direct/unified/ToolScript parity, real-child recall/archive/agent/session/node operations, real-child other-target deletion, read-only detached source inheritance, source-conversion fencing, wait-timeout scheduling, accepted-call drain, and lifecycle fences.
+Focused coverage verifies the closed operation allowlist, missing/stale source failures, bounded structured-clone isolation, late handler replacement, direct/unified/ToolScript parity, real-child recall/archive/agent/session/node operations, real-child explicit channel sending to an unattached destination, real-child other-target deletion, read-only detached source inheritance, source-conversion fencing, wait-timeout scheduling, accepted-call drain, and lifecycle fences.

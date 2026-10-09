@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MessageRouter, shouldBroadcastChannelText } from './messageRouter';
+import { CommandHandler } from './commandHandler';
 import * as sessionManager from './sessionManager';
+import * as sessionRuntime from './sessionRuntime';
 import * as sessionHistory from './session/history';
 import * as llm from './llm';
 import type { Message, MessagePart, Session } from './types';
@@ -74,6 +76,135 @@ test('shouldBroadcastChannelText accepts non-empty trimmed text', () => {
   assert.equal(shouldBroadcastChannelText('hello'), true);
   assert.equal(shouldBroadcastChannelText('  hello  '), true);
   assert.equal(shouldBroadcastChannelText('\nhello\n'), true);
+});
+
+test('/whoami replies to an unauthorized, unattached group sender before guest, Session, media, or model work', async (t) => {
+  const router = new MessageRouter();
+  const handler = new CommandHandler(router);
+  router.setCommandHandler((...args) => handler.handleCommand(...args));
+  const unexpected = (): never => { throw new Error('Identity discovery must not touch Session or model state'); };
+  const forbiddenCalls = [
+    t.mock.method(router as any, 'maybeCreateGuestSessionForUnauthorizedMessage', unexpected),
+    t.mock.method(sessionManager, 'getSessionByChannel', unexpected),
+    t.mock.method(sessionManager, 'getOrCreateSessionForChannel', unexpected),
+    t.mock.method(sessionManager, 'getChannelDangerouslyAllowAllUsers', unexpected),
+    t.mock.method(sessionManager, 'attachChannelDurably', unexpected),
+    t.mock.method(sessionManager, 'enqueueSessionItem', unexpected),
+    t.mock.method(sessionRuntime, 'getSession', unexpected),
+    t.mock.method(llm, 'chat', unexpected),
+  ];
+  const materialize = t.mock.fn(async (): Promise<MessagePart[]> => unexpected());
+  const replies: Array<{ text: string; options: any }> = [];
+  const ctx = {
+    channelId: 'qq-identity', channelType: 'qqbot', platform: 'qqbot',
+    channelUserId: 'group:room-42', conversationId: 'group:room-42',
+    senderId: 'member-7', username: 'display-name', selfName: 'identity bot',
+    reply: async (text: string, options?: any) => { replies.push({ text, options }); },
+    sendTyping: async () => unexpected(),
+  };
+  await router.handleMessage(ctx, {
+    parts: [{ text: '@identity bot /whoami other-user' }],
+    ingressMetadataParts: [{ system: GROUP_MENTIONED_METADATA }],
+    channelUserId: ctx.channelUserId,
+    materializeParts: materialize,
+  });
+  assert.equal(replies.length, 1);
+  assert.match(replies[0].text, /^User ID: member-7$/m);
+  assert.match(replies[0].text, /^Channel instance ID: qq-identity$/m);
+  assert.match(replies[0].text, /^Conversation ID: group:room-42$/m);
+  assert.match(replies[0].text, /^channelTargetId: qq-identity:group:room-42$/m);
+  assert.doesNotMatch(replies[0].text, /other-user|display-name|foxwarm-metadata/);
+  assert.equal(replies[0].options.turnFinal, true);
+  for (const call of [...forbiddenCalls, materialize]) assert.equal(call.mock.callCount(), 0);
+});
+
+test('/whoami also works on direct adapter command dispatch and never substitutes a conversation for missing sender identity', async (t) => {
+  const router = new MessageRouter();
+  const handler = new CommandHandler(router);
+  const lookup = t.mock.method(sessionManager, 'getSessionByChannel');
+  const replies: string[] = [];
+  const ctx = {
+    channelId: 'telegram-identity', channelType: 'telegram', platform: 'telegram',
+    channelUserId: '-10042', senderId: '12345', username: 'display-name',
+    reply: async (text: string) => { replies.push(text); }, sendTyping: async () => {},
+  };
+  assert.equal(await handler.handleCommand(ctx, '/whoami', []), true);
+  assert.match(replies.pop()!, /^User ID: 12345$/m);
+  assert.equal(await handler.handleCommand({ ...ctx, senderId: undefined }, '/whoami', []), true);
+  const unavailable = replies.pop()!;
+  assert.match(unavailable, /^User ID: \(unavailable\)$/m);
+  assert.match(unavailable, /^channelTargetId: telegram-identity:-10042$/m);
+  assert.doesNotMatch(unavailable, /^User ID: (?:-10042|display-name)$/m);
+  assert.equal(lookup.mock.callCount(), 0);
+
+  assert.equal(await handler.handleCommand(ctx, '/help', []), true);
+  assert.match(replies.pop()!, /unauthorized/i);
+  assert.equal(lookup.mock.callCount(), 0);
+});
+
+test('/whoami does not send adapter error details back to an unauthorized source', async () => {
+  const router = new MessageRouter();
+  const handler = new CommandHandler(router);
+  router.setCommandHandler((...args) => handler.handleCommand(...args));
+  const attemptedReplies: string[] = [];
+  const ctx = {
+    channelId: 'failed-identity', platform: 'telegram', channelUserId: 'room', senderId: 'sender',
+    reply: async (text: string) => {
+      attemptedReplies.push(text);
+      throw new Error('Adapter credential detail must stay out of replies');
+    },
+    sendTyping: async () => {},
+  };
+  await router.handleMessage(ctx, { parts: [{ text: '/whoami' }], channelUserId: 'room' });
+  assert.equal(attemptedReplies.length, 1);
+  assert.doesNotMatch(attemptedReplies[0], /Adapter credential detail/);
+});
+
+test('/whoami does not bypass authorization for other commands or ordinary input', async (t) => {
+  const router = new MessageRouter();
+  const handler = new CommandHandler(router);
+  const dispatch = t.mock.fn((...args: Parameters<CommandHandler['handleCommand']>) => handler.handleCommand(...args));
+  router.setCommandHandler(dispatch);
+  const guest = t.mock.method(router as any, 'maybeCreateGuestSessionForUnauthorizedMessage', async (): Promise<null> => null);
+  const resolve = t.mock.method(sessionManager, 'getOrCreateSessionForChannel');
+  const replies: string[] = [];
+  const ctx = {
+    channelId: 'locked-identity', channelType: 'telegram', platform: 'telegram',
+    channelUserId: 'room', senderId: 'stranger',
+    reply: async (text: string) => { replies.push(text); }, sendTyping: async () => {},
+  };
+  for (const text of ['/help', '/status', '/whoami-other', 'ordinary input']) {
+    await router.handleMessage(ctx, { parts: [{ text }], channelUserId: 'room' });
+    assert.match(replies.pop()!, /unauthorized/i);
+  }
+  assert.equal(guest.mock.callCount(), 4);
+  assert.equal(dispatch.mock.callCount(), 0);
+  assert.equal(resolve.mock.callCount(), 0);
+});
+
+test('/whoami remains an identity command under allow-all while protected commands retain ordinary-chat routing', async (t) => {
+  const router = new MessageRouter();
+  const handler = new CommandHandler(router);
+  const dispatch = t.mock.fn((...args: Parameters<CommandHandler['handleCommand']>) => handler.handleCommand(...args));
+  router.setCommandHandler(dispatch);
+  t.mock.method(sessionManager, 'getChannelDangerouslyAllowAllUsers', () => true);
+  const session = { id: 'allow-all-identity-session', busy: true, queue: [], meta: {} } as Session;
+  t.mock.method(sessionManager, 'getOrCreateSessionForChannel', async () => ({ sessionId: session.id, session }));
+  const queued: any[] = [];
+  t.mock.method(sessionManager, 'enqueueSessionItem', async (_id: string, item: any) => { queued.push(item); });
+  const replies: string[] = [];
+  const ctx = {
+    channelId: 'allow-all-identity', channelType: 'qqbot', platform: 'qqbot',
+    channelUserId: 'group:room', senderId: 'member',
+    reply: async (text: string) => { replies.push(text); }, sendTyping: async () => {},
+  };
+  await router.handleMessage(ctx, { parts: [{ text: '/whoami' }], channelUserId: ctx.channelUserId });
+  assert.match(replies.pop()!, /^User ID: member$/m);
+  assert.equal(queued.length, 0);
+  await router.handleMessage(ctx, { parts: [{ text: '/help' }], channelUserId: ctx.channelUserId });
+  assert.equal(dispatch.mock.callCount(), 1);
+  assert.equal(queued.length, 1);
+  assert.match(queued[0].parts.map((part: MessagePart) => part.text || part.system || '').join('\n'), /\/help/);
 });
 
 test('MessageRouter reports a missing attached target without creating a replacement session', async () => {
