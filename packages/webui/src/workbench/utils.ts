@@ -9,12 +9,13 @@ export function createWorkbenchId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`
 }
 
-export function createPaneNode(tabIds: string[] = [], activeTabId: string | null = tabIds[0] || null, id: string = createWorkbenchId('pane')): WorkbenchPaneNode {
+export function createPaneNode(tabIds: string[] = [], activeTabId: string | null = tabIds[0] || null, id: string = createWorkbenchId('pane'), collapsed = false): WorkbenchPaneNode {
   return {
     id,
     kind: 'pane',
     tabIds: [...tabIds],
     activeTabId: activeTabId && tabIds.includes(activeTabId) ? activeTabId : (tabIds[0] || null),
+    collapsed,
   }
 }
 
@@ -139,6 +140,7 @@ export function normalizeLayoutNode(node: WorkbenchLayoutNode): WorkbenchLayoutN
       activeTabId: node.activeTabId && uniqueTabIds.includes(node.activeTabId)
         ? node.activeTabId
         : (uniqueTabIds[0] || null),
+      collapsed: node.collapsed === true,
     }
   }
 
@@ -247,7 +249,7 @@ function filterLayoutToValidTabs(node: WorkbenchLayoutNode, validTabIds: Set<str
     if (tabIds.length === 0) {
       return null
     }
-    return createPaneNode(tabIds, node.activeTabId && tabIds.includes(node.activeTabId) ? node.activeTabId : tabIds[0], node.id)
+    return createPaneNode(tabIds, node.activeTabId && tabIds.includes(node.activeTabId) ? node.activeTabId : tabIds[0], node.id, node.collapsed)
   }
 
   const children: WorkbenchLayoutNode[] = []

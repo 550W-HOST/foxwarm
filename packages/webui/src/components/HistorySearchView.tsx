@@ -1,4 +1,4 @@
-import { WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
+import { WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ArrowUpRight, ChevronDown, ChevronUp, History, Search } from 'lucide-react'
 import ChatTimeline from './ChatTimeline'
@@ -253,6 +253,7 @@ export default function HistorySearchView({ isMobile, groupTools, showUsageBadge
             <WorkbenchTabIcon className="inline-flex items-center text-fw-text-muted"><History className="h-5 w-5" /></WorkbenchTabIcon>
           </> : onBack && <button type="button" onClick={onBack} className="rounded px-2 py-1 hover:bg-fw-hover">Back</button>}
           <h2 className="text-lg font-semibold text-fw-text-strong">Search history</h2>
+          <WorkbenchPaneControls />
         </div>
         <form onSubmit={submit} className="space-y-3 rounded-lg border border-fw-border bg-fw-surface p-4">
           <label className="block text-sm font-medium" htmlFor="history-search-query">Search or message reference</label>

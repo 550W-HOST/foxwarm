@@ -157,6 +157,32 @@ test('workbench normalization persists Agents, Setup, Logs and Tasks tabs', asyn
   assert.equal(normalized.tabsById['system:tasks'].type, 'tasks')
 })
 
+test('workbench pane collapse survives normalization and older panes default to expanded', async () => {
+  const { normalizePersistedWorkbenchState } = await loadTypeScriptModule('../src/workbench/utils.ts')
+  const normalized = normalizePersistedWorkbenchState({
+    version: 4,
+    tabsById: {
+      'system:agents': { id: 'system:agents', type: 'agents', title: 'Agents' },
+      'system:setup': { id: 'system:setup', type: 'setup', title: 'Setup' },
+    },
+    root: {
+      id: 'split-main',
+      kind: 'split',
+      direction: 'row',
+      sizes: [48, 52],
+      children: [
+        { id: 'pane-collapsed', kind: 'pane', tabIds: ['system:agents'], activeTabId: 'system:agents', collapsed: true },
+        { id: 'pane-legacy', kind: 'pane', tabIds: ['system:setup'], activeTabId: 'system:setup' },
+      ],
+    },
+    focusedPaneId: 'pane-collapsed',
+  })
+
+  assert.equal(normalized.root.children[0].collapsed, true)
+  assert.equal(normalized.root.children[1].collapsed, false, 'missing collapse state in existing v4 data means expanded')
+  assert.deepEqual(normalized.root.children.map(pane => pane.tabIds), [['system:agents'], ['system:setup']])
+})
+
 test('Code workspace URLs preserve paths and reverse-proxy base paths', async () => {
   const { getVscodeWebPath, makeCodeWorkspaceUri, makeVscodeWebUrl, normalizeCodePath } = await loadTypeScriptModule('../src/vscodeWeb.ts')
   assert.equal(getVscodeWebPath('/api'), '/vscode-web/')

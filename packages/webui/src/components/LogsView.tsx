@@ -1,4 +1,4 @@
-import { WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
+import { WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ArrowLeft, FileText } from 'lucide-react'
 import { makeApiUrl } from '../config'
@@ -155,7 +155,10 @@ export default function LogsView({ onBack }: { onBack?: () => void }) {
           <button type="submit" className={buttonClass} disabled={busy || !first?.fileId || !time} title="Approximate lookup. Older time-only logs cannot be located by date.">Jump</button>
         </form>
       </div>
-      <span data-logs-line-count className="whitespace-nowrap pt-1.5 text-right text-xs text-fw-text-muted">{lines} {lines === 1 ? 'line' : 'lines'} shown</span>
+      <div className="flex items-center gap-2">
+        <span data-logs-line-count className="whitespace-nowrap text-right text-xs text-fw-text-muted">{lines} {lines === 1 ? 'line' : 'lines'} shown</span>
+        <WorkbenchPaneControls />
+      </div>
     </div>
     {error && <div role="alert" className="shrink-0 border-b border-fw-border bg-fw-danger-surface px-3 py-2 text-sm text-fw-danger">{error}</div>}
     {locatedTime && <div className="shrink-0 px-3 py-2 text-xs text-fw-text-muted">Located near {new Date(locatedTime).toLocaleString()} (approximate)</div>}

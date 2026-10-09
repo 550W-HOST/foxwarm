@@ -18,6 +18,7 @@ export type WorkbenchPaneNode = {
   kind: 'pane'
   tabIds: string[]
   activeTabId: string | null
+  collapsed: boolean
 }
 
 export type WorkbenchSplitNode = {

@@ -56,6 +56,7 @@ function getDefaultWorkbenchState(): WorkbenchPersistedState {
 
 export type WorkbenchStoreState = WorkbenchPersistedState & {
   focusPane: (paneId: string) => void
+  setPaneCollapsed: (paneId: string, collapsed: boolean) => void
   activateTab: (tabId: string) => void
   setPaneActiveTab: (paneId: string, tabId: string | null) => void
   upsertTab: (tab: WorkbenchTab, options?: { paneId?: string; activate?: boolean; index?: number }) => void
@@ -67,6 +68,7 @@ export type WorkbenchStoreState = WorkbenchPersistedState & {
   splitPaneWithTab: (sourcePaneId: string, tabId: string, edge: 'left' | 'right' | 'top' | 'bottom') => string | null
   splitPaneWithNewTab: (sourcePaneId: string, tab: WorkbenchTab, edge: 'left' | 'right' | 'top' | 'bottom') => string | null
   dockTabToPaneEdge: (tabId: string, targetPaneId: string, edge: 'left' | 'right' | 'top' | 'bottom') => string | null
+  movePaneToEdge: (sourcePaneId: string, targetPaneId: string, edge: 'left' | 'right' | 'top' | 'bottom') => void
   closePane: (paneId: string) => void
   updateSplitSizes: (splitId: string, sizes: number[]) => void
   reconcileTabs: (updater: (tabsById: Record<string, WorkbenchTab>, root: WorkbenchLayoutNode) => { tabsById: Record<string, WorkbenchTab>; root: WorkbenchLayoutNode }) => void
@@ -130,6 +132,19 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
       if (!pane) return state
       return {
         focusedPaneId: pane.id,
+      }
+    })
+  },
+
+  setPaneCollapsed: (paneId, collapsed) => {
+    set((state) => {
+      const pane = findPaneNode(state.root, paneId)
+      if (!pane || pane.collapsed === collapsed) return state
+      return {
+        root: mapLayoutTree(state.root, (node) => {
+          if (node.kind !== 'pane' || node.id !== paneId) return node
+          return { ...node, collapsed }
+        }),
       }
     })
   },
@@ -397,6 +412,25 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
     return nextPaneId
   },
 
+  movePaneToEdge: (sourcePaneId, targetPaneId, edge) => {
+    if (sourcePaneId === targetPaneId) return
+
+    set((state) => {
+      const sourcePane = findPaneNode(state.root, sourcePaneId)
+      if (!sourcePane || !findPaneNode(state.root, targetPaneId)) return state
+
+      const result = removePaneFromLayout(state.root, sourcePaneId)
+      if (!result.removed || !findPaneNode(result.node, targetPaneId)) return state
+
+      const direction = edge === 'left' || edge === 'right' ? 'row' : 'column'
+      const position = edge === 'left' || edge === 'top' ? 'before' : 'after'
+      return {
+        root: replacePaneWithSplit(result.node, targetPaneId, direction, sourcePane, position),
+        focusedPaneId: sourcePaneId,
+      }
+    })
+  },
+
   closePane: (paneId) => {
     set((state) => {
       const pane = findPaneNode(state.root, paneId)
@@ -421,6 +455,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
     set((state) => ({
       root: mapLayoutTree(state.root, (node) => {
         if (node.kind !== 'split' || node.id !== splitId) return node
+        if (node.children.some((child) => child.kind === 'pane' && child.collapsed)) return node
         return {
           ...node,
           sizes: sizes.map((size) => Math.max(1, Number(size) || 1)),

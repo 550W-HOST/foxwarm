@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, Check, ClipboardList, Copy, X } from 'lucide-react'
 import { makeApiUrl } from '../config'
-import { WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
+import { WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import SessionSelector from './SessionSelector'
 import { copyTextToClipboard } from './chatShared'
 
@@ -345,6 +345,7 @@ export default function TasksView({ onBack, onOpenSession }: { onBack?: () => vo
           </select>
         </label>
       </div>
+      <WorkbenchPaneControls />
     </header>
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto lg:flex-row lg:overflow-hidden">
       <div className="min-w-0 shrink-0 overflow-x-auto p-3 lg:min-h-0 lg:flex-1 lg:overflow-auto">

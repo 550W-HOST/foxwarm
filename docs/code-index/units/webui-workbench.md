@@ -4,7 +4,7 @@ Files: packages/webui/src/components/WorkbenchLayout.tsx, packages/webui/src/com
 
 ## Purpose
 
-Manages a multi-pane workbench UI with tabbed panels, drag-and-drop tab reordering/moving, resizable split layouts, and persistent state. Provides the layout tree structure, tab management store, and rendering components for a VS Code-style tabbed shell.
+Manages a multi-pane workbench UI with tabbed panels, tab and whole-pane drag-and-drop, direction-aware pane collapse, resizable split layouts, and persistent state. Provides the layout tree structure, tab management store, and rendering components for a VS Code-style tabbed shell.
 
 ## Key Exports
 
@@ -12,7 +12,7 @@ Manages a multi-pane workbench UI with tabbed panels, drag-and-drop tab reorderi
 - `WorkbenchPane` — single pane component with tab bar, drop zones, toolbar controls, and tab-content error isolation
 - `WorkbenchTabErrorBoundary` — leaf boundary that contains one tab's render failure and offers explicit Retry/Close actions
 - `WorkbenchTabs` — single-row sortable tab strip with the shared tab menu
-- `WorkbenchTabHeaderProvider`, `WorkbenchTabClose`, `WorkbenchTabIcon` — pane-owned sole-tab controls and drag handle for content headers
+- `WorkbenchTabHeaderProvider`, `WorkbenchTabClose`, `WorkbenchTabIcon`, `WorkbenchPaneControls` — pane-owned sole-tab controls, tab drag handle, and pane toolbar for content headers
 - `useWorkbenchTabMenu` — existing Keep/copy/popout/close actions shared by strips and header icons
 - `useWorkbenchStore` — Zustand store with all workbench state and actions
 - `getWorkbenchTabById` — standalone accessor for a tab by ID
@@ -24,10 +24,13 @@ Manages a multi-pane workbench UI with tabbed panels, drag-and-drop tab reorderi
 | Function | Lines (approx) | Description |
 |----------|----------------|-------------|
 | `ResizeHandle({ direction })` | ~16–19 | Renders styled separator handle for resizable panels |
-| `WorkbenchLayout({ node, renderPane, onLayoutResize })` | ~21–42 | Recursively renders layout tree as resizable panel groups |
-| `PaneDropZone({ id, className, activeClassName, data })` | ~34–38 | Droppable zone overlay for drag-and-drop targeting |
+| `LayoutPanel(props)` | WorkbenchLayout.tsx | Applies fixed-pixel constraints to collapsed panels and restores the recorded expanded size after the panel library registers new constraints |
+| `WorkbenchLayout(props)` | WorkbenchLayout.tsx | Recursively renders split groups and passes each pane's direct parent direction to its chrome |
+| `PaneDropZone(props)` | WorkbenchPane.tsx | Droppable edge/center overlay for the existing DND context |
+| `PaneDropTargets(props)` | WorkbenchPane.tsx | Shows tab/session drop targets or edge-only whole-pane targets, excluding the dragged pane itself |
+| `PaneDragHandle(props)` | WorkbenchPane.tsx | Registers a separate grip with pane ID and `type: 'pane'` drag data |
 | `ToolbarButton({ title, disabled, onClick, children })` | ~40–50 | Styled icon button for pane toolbar actions |
-| `WorkbenchPane(props)` | ~55–145 | Full pane component with tabs, content boundary, drop zones, and toolbar |
+| `WorkbenchPane(props)` | WorkbenchPane.tsx | Renders expanded tabs/content or content-free collapsed chrome, plus shared pane controls and drop targets |
 | `WorkbenchTabErrorBoundary` | WorkbenchTabErrorBoundary.tsx | Contains one tab render failure, logs diagnostics, and exposes explicit Retry/Close controls |
 | `TabIcon({ type })` | ~38–42 | Returns icon component based on tab type |
 | `isHorizontallyFullyVisible(element, container)` | ~44–49 | Checks if element is fully visible within container bounds |
@@ -42,6 +45,9 @@ Manages a multi-pane workbench UI with tabbed panels, drag-and-drop tab reorderi
 | `WorkbenchTabClose(props)` | WorkbenchTabHeader.tsx | Calls the exact pane-owned tab close callback without starting a drag |
 | `TabDragHandle(props)` | WorkbenchTabHeader.tsx | Registers the sole-tab icon in the existing DND context and exposes tab actions |
 | `WorkbenchTabIcon(props)` | WorkbenchTabHeader.tsx | Uses a draggable icon only inside a single-tab Workbench provider |
+| `WorkbenchPaneControls()` | WorkbenchTabHeader.tsx | Places the pane-owned toolbar in the existing sole-tab content header |
+| `setPaneCollapsed(paneId, collapsed)` | store.ts | Changes only pane collapse state, preserving tab records and resource lifecycles |
+| `movePaneToEdge(sourcePaneId, targetPaneId, edge)` | store.ts | Removes the source pane's old layout position and docks the intact node beside the target |
 | `readJsonStorageItem(key)` | ~16–22 | Safely reads and parses JSON from localStorage |
 | `loadLegacyWorkbenchState()` | ~24–34 | Migrates legacy v3 tab storage to v4 layout format |
 | `getDefaultWorkbenchState()` | ~36–48 | Returns initial state, migrating legacy data if present |
@@ -50,7 +56,7 @@ Manages a multi-pane workbench UI with tabbed panels, drag-and-drop tab reorderi
 | `getPaneAfterTabRemoval(pane, tabId)` | ~91–100 | Computes pane state after removing a tab with fallback active |
 | `getInsertedPane(pane, tabId, options)` | ~102–118 | Computes pane state after inserting a tab at position |
 | `createWorkbenchId(prefix)` | ~5–10 | Generates unique ID with crypto.randomUUID or fallback |
-| `createPaneNode(tabIds, activeTabId, id)` | ~12–20 | Creates a new pane layout node |
+| `createPaneNode(tabIds, activeTabId, id, collapsed)` | utils.ts | Creates a pane node, defaulting collapse state to false |
 | `createSplitNode(direction, children, sizes, id)` | ~22–35 | Creates a new split layout node with normalized sizes |
 | `isPaneNode(node)` | ~37 | Type guard for pane nodes |
 | `isSplitNode(node)` | ~41 | Type guard for split nodes |
@@ -84,7 +90,8 @@ Manages a multi-pane workbench UI with tabbed panels, drag-and-drop tab reorderi
 - Drag-and-drop uses `@dnd-kit` with sortable tabs within rows and droppable zones on pane edges/center for cross-pane moves and splits.
 - The tab Close button stops its pointer-down event before the sortable tab drag listener; pointer motion within that small control cannot start a tab drag instead of closing it. The rest of the tab remains draggable.
 - Wheel events on tab strips are intercepted to enable horizontal scrolling, and active tabs are auto-scrolled into view.
-- A pane with exactly one tab hides its split and close-pane toolbar buttons. Sole non-Code tabs omit the strip in every pane, with content and pane drop zones still mounted. Code retains its single-tab strip; multi-tab strips and empty-pane controls are unchanged. Header behavior is owned by [Single-tab headers](#single-tab-headers).
+- Sole non-Code tabs omit the strip in every expanded pane and put pane controls in the existing content header. Code retains its single-tab strip. `Close pane` is absent when the entire workbench has only one pane, regardless of its tab count; ordinary tab Close remains available. Header behavior is owned by [Single-tab headers](#single-tab-headers).
+- Collapse and whole-pane movement are defined by [Pane collapse](#d-workbench-pane-collapse) and [Whole-pane dragging](#d-workbench-pane-drag). Neither operation invokes tab resource Close.
 - Each pane renders the active tab through a tab-keyed error boundary inside the content area. A thrown tab render leaves the tab strip, Sidebar, and other panes mounted; the fallback offers explicit Retry and ordinary tab Close actions when the active tab is closable. Forced Setup and empty-pane states do not show an ineffective Close control. Switching tab identity remounts the boundary, and Retry never loops automatically.
 - Context menus support keep (promote from preview), copy ID/path, close, and bulk close operations.
 - Context menus also expose `Move to new window` for every tab type. A terminal draft keeps the item disabled until it has a backend terminal ID. App owns popup/confirmation/route behavior and removes the tab through the ordinary layout-only store action without invoking its separate resource-close lifecycle.
@@ -100,18 +107,33 @@ Logs tab identity, bounded display and popout semantics are documented in [WebUI
 ### Single-tab headers
 
 - Each sole non-Code tab has a content-header Close control and an icon drag handle. Chat and Setup use `ContentHeader`; Terminal, Agents, History, Logs, and Tasks retain their own header layout. Terminal's compact X and adjacent terminal icon fit inside its existing status row.
-- A pane-owned context supplies the exact tab and ordinary close/menu callbacks only while the strip is hidden. It is absent from popup and Code-embedded leaf roots. Setup suppresses its duplicate right-side Close in this mode; forced OOBE still refuses closure through App's existing guard.
+- A pane-owned context supplies the exact tab, ordinary close/menu callbacks, and pane toolbar only while the strip is hidden. `WorkbenchPaneControls` places the grip, collapse, and optional pane Close beside the content header's existing actions without a second title bar or an overlapping floating toolbar. It is absent from popup and Code-embedded leaf roots. Setup suppresses its duplicate right-side tab Close in this mode; forced OOBE still refuses closure through App's existing guard.
 - Only the icon registers `useDraggable` with the existing tab ID and `{ type: 'tab', paneId }` data. The strip and icon never register the same ID simultaneously. Header/title/Close are not drag activators; Close isolates pointer-down. App's existing drag-end, Keep, overlay, and center/edge drop semantics remain unchanged.
 - Icon click, context menu, or Shift+F10 opens the shared existing tab menu, retaining Keep, copy, Move to new window, and close operations. A terminal without a backend ID retains the existing disabled popout action. Header X uses App's ordinary resource-close and route-fencing lifecycle, not Back navigation.
+
+### D-workbench-pane-collapse
+
+The pane toolbar exposes Collapse/Expand. A pane's direct parent split sets the direction: row splits use a narrow vertical tab list, column splits use a horizontal tab bar, and a single root pane defaults to the horizontal bar. Fixed-pixel panel constraints release space to siblings; expansion restores the pane's recorded size after the panel library applies its new constraints. Separator dragging does not silently collapse panes. Stored split sizes are not overwritten while a direct child pane is collapsed, so reload retains a reasonable expansion size. Live Group defaults are reseeded only when the child topology changes, not on every size publication. When all direct children are collapsed panes, compact chrome is rendered without a resizable Group rather than forcing a tab bar to fill the empty space.
+
+Collapsed chrome renders only tab labels, pane controls, and DND targets. It does not call the content renderer or mount the tab strip, content header, error boundary, or active tab component. Tab records and selection remain intact; clicking a collapsed tab selects it and expands the pane. Terminal component cleanup detaches its browser connection without deleting the PTY. The independent kept Code iframe follows the collapse exception in [D-code-persistent-workspace](../threads/code-integration.md#d-code-persistent-workspace).
+
+Pane `collapsed` state is saved in the existing v4 layout. Normalization defaults missing or non-true values to expanded and preserves true values while pruning obsolete tabs, without a new storage version.
+
+### D-workbench-pane-drag
+
+A dedicated grip drags the entire pane, including its ID, ordered tab records, active tab, and collapse state. The grip is separate from the ordinary tab/icon drag activator and is available in collapsed chrome. Pane dragging uses the existing DND context, overlay, pane edge highlights, and layout-tree removal/split helpers. Left/right/top/bottom edges dock the intact pane beside the target; center and tab-row targets do not merge or swap panes. Self-drops and cancellation leave the layout unchanged. A moved collapsed pane derives its chrome direction from its new direct parent split.
+
+Pane movement does not Keep previews, duplicate tabs, or close resources. Ordinary tab and Sidebar dragging retain their existing reorder, Keep, center, and edge behavior.
 
 ## Tests
 
 - `workbenchPreview.e2e.mjs` covers preview identity, route/close behavior, drag promotion, focused Chat search, and actual App header launches. The header probes verify the 550A console's single Code control, preference-selected new-tab versus embedded opening, and Terminal target dispatch. Application-menu probes cover leading icon geometry, Setup active state, Logs activation, and real reload navigation. Single-tab probes cover all normal leaf headers, Code strip retention, multi-pane hidden strips, actual icon drag/cancel/docking, Close pointer isolation, and Terminal status-row height plus backend DELETE, completed empty-root/empty-hash close, explicit reopen, and fallback to a still-open tab.
+- Pane browser probes cover row/column/nested collapse geometry, space release and size restoration, selected-tab expansion, reload, simultaneous collapsed panes, real Terminal/kept Code unmounting without resource Close, whole-pane movement across nested splits, collapsed direction after movement, and Escape cancellation. `sessionListAndWorkbenchState.test.mjs` covers collapse persistence and older v4 pane compatibility.
 
 ## Integration
 
 - `WorkbenchLayout` is the top-level layout renderer, receiving a `renderPane` callback that connects pane IDs to actual content components elsewhere in the app.
-- `useWorkbenchStore` is consumed by parent orchestration components to open chat, terminal, Agents, Setup, Search, Logs, Tasks, and Code tabs, manage focus, and handle drag-end events that call `moveTabToPane`, `dockTabToPaneEdge`, or `splitPaneWithTab`.
+- `useWorkbenchStore` is consumed by parent orchestration components to open chat, terminal, Agents, Setup, Search, Logs, Tasks, and Code tabs, manage focus/collapse, and handle drag-end events that call `moveTabToPane`, `dockTabToPaneEdge`, `splitPaneWithTab`, or `movePaneToEdge`.
 - The `reconcileTabs` action allows external systems (e.g., session managers) to bulk-update tabs and layout atomically.
 - `getWorkbenchTabById` provides non-reactive access for imperative code outside React components.
 - Drop target types (`WorkbenchDropTarget`) define the contract between drag-end handlers and store actions.
