@@ -166,11 +166,11 @@ sudo docker compose down
 sudo docker compose up -d
 ```
 
-当前默认测试服务名为 `foxwarm-test`。
+当前默认测试服务名为 `foxwarm-dotnet-test`，监听宿主机的 `0.0.0.0:3003`。
 
 ### 测试环境登录
 
-`test/docker-compose.yml` 不再通过 `.env` 注入登录 token。容器内的数据目录 `/data` 只挂载宿主机的 `test/state/`，因此登录 token 位于 `test/state/token`（容器内为 `/data/state/token`）。该文件缺失时，服务启动会生成一个 32 字节随机十六进制 token，并以仅所有者可读写的权限保存。
+`test/docker-compose.yml` 不再通过 `.env` 注入登录 token。宿主机的 `test/state/` 挂载到容器的 `/data/state/`，因此登录 token 位于 `test/state/token`（容器内为 `/data/state/token`）。该文件缺失时，服务启动会生成一个 32 字节随机十六进制 token，并以仅所有者可读写的权限保存。
 
 读取当前 token：
 
