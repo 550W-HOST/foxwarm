@@ -3,7 +3,7 @@ import { STATE_DIR } from '../config';
 import { TaskService } from '../taskService';
 import * as sessionManager from '../sessionManager';
 import { readSessionHistorySnapshot } from '../session/metadataStore';
-import { TaskStore } from '../taskStore';
+import { TaskStore, validateTaskArgs } from '../taskStore';
 import { sessionCatalogStore } from '../session/catalogStore';
 import type { ToolArgs, ToolContext } from './helpers';
 
@@ -35,6 +35,7 @@ function buildTaskMutationReceipt(result: any): Record<string, unknown> {
 
 /** Runs only at the Main-owned management boundary. */
 export async function tool_task(args: ToolArgs, ctx: ToolContext): Promise<any> {
+  if (args.action === 'list') validateTaskArgs(args);
   const result = args.action === 'list'
     ? taskService.list(args.status, undefined, false, args.scope === undefined ? 'current-session' : args.scope, ctx?.sessionId)
     : await taskService.execute(args, ctx?.sessionId, typeof ctx?.session?.nextMessageSeq === 'number' ? Math.max(0, ctx.session.nextMessageSeq - 1) : undefined);

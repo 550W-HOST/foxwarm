@@ -53,6 +53,9 @@ test('direct, unified and Worker task calls use exact context identity through M
     const ownerOnlyTask = readResult(await task({ action: 'create', title: 'Only visible to owner or wider scope' }, ownerCtx)).taskId;
     const creatorDefaultList = readResult(await task({ action: 'list' }, creatorCtx));
     assert.deepEqual(creatorDefaultList.tasks.map((entry: any) => entry.id), [taskId], 'direct list defaults to the current Session');
+    for (const extra of [{ title: 'unused' }, { taskId: 'unused' }, { ownerSessionId: owner.id }]) {
+      await assert.rejects(() => task({ action: 'list', ...extra } as any, creatorCtx), /is not allowed for task list/);
+    }
     const ownerSessionList = readResult(await call_tool({ source: 'builtin', name: 'task', args: { action: 'list', scope: 'current-session' } }, ownerCtx));
     assert.ok(ownerSessionList.tasks.some((entry: any) => entry.id === taskId));
     assert.ok(ownerSessionList.tasks.some((entry: any) => entry.id === ownerOnlyTask));
