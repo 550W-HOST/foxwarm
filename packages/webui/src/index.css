@@ -646,6 +646,37 @@ input, textarea, select {
     -webkit-overflow-scrolling: touch;
   }
 
+  .foxwarm-markdown .foxwarm-markdown-table-scroll {
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .foxwarm-markdown .foxwarm-markdown-table-scroll > table {
+    display: table;
+    width: max-content;
+    max-width: max(100%, 800px);
+    overflow-x: visible;
+    overflow-y: visible;
+    overflow-wrap: normal;
+    word-break: normal;
+    white-space: normal;
+  }
+
+  .foxwarm-markdown .foxwarm-markdown-table-scroll :where(th, td) {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .foxwarm-markdown .foxwarm-markdown-table-scroll :where(code):not(:where(pre *)) {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
   .foxwarm-markdown :where(.katex-display):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
     overflow-x: auto;
     overflow-y: hidden;

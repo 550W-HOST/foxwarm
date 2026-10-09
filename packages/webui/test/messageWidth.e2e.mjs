@@ -8,6 +8,12 @@ import puppeteer from 'puppeteer-core'
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
 const timelineEntry = new URL('../src/components/ChatTimeline.tsx', import.meta.url).pathname
 const assetsDirectory = new URL('../dist/assets/', import.meta.url)
+const shortTable = '| Name | Value |\n| --- | --- |\n| Alpha | 12 |'
+const wideTable = [
+  '| URL | Path | Inline code | URL two | Path two |',
+  '| --- | --- | --- | --- | --- |',
+  `| https://${'u'.repeat(100)}.example | /workspace/${'path-'.repeat(24)}file.ts | \`${'code_'.repeat(30)}\` | https://${'v'.repeat(100)}.example | /repo/${'deep/'.repeat(30)}file |`,
+].join('\n')
 
 let browser
 let page
@@ -24,6 +30,8 @@ async function buildFixtureBundle() {
     const cases = {
       shortModel: { messages: [{ role: 'model', parts: [{ text: 'Short model answer.' }], __meta: { seq: 1 } }] },
       longModel: { messages: [{ role: 'model', parts: [{ text: repeatedText }], __meta: { seq: 2 } }] },
+      shortModelTable: { messages: [{ role: 'model', parts: [{ text: ${JSON.stringify(shortTable)} }], __meta: { seq: 11 } }] },
+      wideModelTable: { messages: [{ role: 'model', parts: [{ text: ${JSON.stringify(wideTable)} }], __meta: { seq: 12 } }] },
       shortTool: { messages: [{ role: 'model', parts: [{ functionCall: { id: 'short-tool', name: 'wait', args: { reason: 'brief', timeoutSeconds: 1 } } }], __meta: { seq: 3 } }] },
       longTool: { messages: [{ role: 'model', parts: [{ functionCall: { id: 'long-tool', name: 'wait', args: { reason: repeatedText, timeoutSeconds: 1 } } }], __meta: { seq: 4 } }] },
       shortUser: { messages: [{ role: 'user', parts: [{ text: 'Short user message.' }], __meta: { seq: 5 } }] },
@@ -65,7 +73,7 @@ async function mountFixture({ width, height, style = 'default', dark = false }) 
     document.documentElement.classList.toggle('dark', dark)
     if (style === '550a') document.documentElement.setAttribute('data-foxwarm-component-treatment', 'console')
   }, { style, dark })
-  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-chat-timeline').length === 10)
+  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-chat-timeline').length === 12)
 }
 
 async function readWidths() {
@@ -76,6 +84,15 @@ async function readWidths() {
       const row = timeline.firstElementChild
       const message = row.firstElementChild
       const leaf = fixture.querySelector(leafSelector)
+      const tableWrapper = fixture.querySelector('.foxwarm-markdown-table-scroll')
+      const table = tableWrapper?.querySelector('table')
+      const cell = table?.querySelector('td')
+      const inlineCode = table?.querySelector('td code')
+      const cellLineBoxes = table ? [...table.querySelectorAll('tbody td')].slice(0, 3).map(cell => {
+        const range = document.createRange()
+        range.selectNodeContents(cell)
+        return range.getClientRects().length
+      }) : []
       const style = getComputedStyle(message)
       return {
         timeline: timeline.getBoundingClientRect().width,
@@ -84,11 +101,23 @@ async function readWidths() {
         maxWidth: style.maxWidth,
         overflow: fixture.scrollWidth - fixture.clientWidth,
         timelineOverflowX: getComputedStyle(timeline).overflowX,
+        table: table && tableWrapper && cell ? {
+          width: table.getBoundingClientRect().width,
+          wrapperWidth: tableWrapper.getBoundingClientRect().width,
+          wrapperClientWidth: tableWrapper.clientWidth,
+          wrapperScrollWidth: tableWrapper.scrollWidth,
+          whiteSpace: getComputedStyle(cell).whiteSpace,
+          overflowWrap: getComputedStyle(cell).overflowWrap,
+          inlineCodeOverflowWrap: inlineCode ? getComputedStyle(inlineCode).overflowWrap : null,
+          cellLineBoxes,
+        } : null,
       }
     }
     return {
       shortModel: read('shortModel', '.foxwarm-assistant-message-card'),
       longModel: read('longModel', '.foxwarm-assistant-message-card'),
+      shortModelTable: read('shortModelTable', '.foxwarm-assistant-message-card'),
+      wideModelTable: read('wideModelTable', '.foxwarm-assistant-message-card'),
       shortTool: read('shortTool', '.foxwarm-tool-card'),
       longTool: read('longTool', '.foxwarm-tool-card'),
       shortUser: read('shortUser', '.foxwarm-user-message-bubble'),
@@ -116,7 +145,7 @@ before(async () => {
 
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:900px;max-width:100%;min-width:0}</style></head><body><main>${['shortModel', 'longModel', 'shortTool', 'longTool', 'shortUser', 'longUser', 'nestedModel', 'nestedUser', 'systemMessage', 'nestedSystemMessage'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
+    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:1400px;max-width:100%;min-width:0}</style></head><body><main>${['shortModel', 'longModel', 'shortModelTable', 'wideModelTable', 'shortTool', 'longTool', 'shortUser', 'longUser', 'nestedModel', 'nestedUser', 'systemMessage', 'nestedSystemMessage'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -133,7 +162,7 @@ test('desktop preserves the longstanding 80% model/tool/system and capped user m
   await mountFixture({ width: 1200, height: 900 })
   const widths = await readWidths()
 
-  for (const key of ['shortModel', 'longModel', 'shortTool', 'longTool', 'systemMessage']) {
+  for (const key of ['shortModel', 'longModel', 'shortModelTable', 'wideModelTable', 'shortTool', 'longTool', 'systemMessage']) {
     assertRatio(widths[key], 0.8, key)
     assert.equal(widths[key].maxWidth, '80%')
   }
@@ -145,6 +174,15 @@ test('desktop preserves the longstanding 80% model/tool/system and capped user m
   assertRatio(widths.nestedUser, 0.85, 'nestedUser')
   assertRatio(widths.nestedSystemMessage, 1, 'nestedSystemMessage')
 
+  assert.ok(widths.shortModelTable.table.width < 800, 'a short assistant table should remain content-sized')
+  assert.equal(widths.shortModelTable.table.wrapperScrollWidth, widths.shortModelTable.table.wrapperClientWidth)
+  assert.ok(widths.wideModelTable.table.width > 800, 'wide content in a wide message may use the outer content width above 800px')
+  assert.ok(widths.wideModelTable.table.width <= Math.max(widths.wideModelTable.table.wrapperWidth, 800) + 1)
+  assert.equal(widths.wideModelTable.table.whiteSpace, 'normal')
+  assert.ok(['anywhere', 'break-word'].includes(widths.wideModelTable.table.overflowWrap))
+  assert.equal(widths.wideModelTable.table.inlineCodeOverflowWrap, 'anywhere')
+  assert.ok(widths.wideModelTable.table.cellLineBoxes.every(count => count > 1), 'long URL, path, and inline code cells should wrap')
+
   for (const sample of Object.values(widths).filter(value => typeof value === 'object')) {
     assert.ok(sample.overflow <= 1)
     assert.equal(sample.timelineOverflowX, 'visible')
@@ -152,10 +190,18 @@ test('desktop preserves the longstanding 80% model/tool/system and capped user m
   assert.ok(widths.documentOverflow <= 1)
 })
 
-test('mobile model/tool/system messages remain full-width without horizontal document overflow', async () => {
+test('mobile model tables scroll locally at the 800px cap without widening messages or the page', async () => {
   await mountFixture({ width: 390, height: 760, style: '550a', dark: true })
   const widths = await readWidths()
-  for (const key of ['shortModel', 'longModel', 'shortTool', 'longTool', 'systemMessage', 'nestedSystemMessage']) assertRatio(widths[key], 1, key)
+  for (const key of ['shortModel', 'longModel', 'shortModelTable', 'wideModelTable', 'shortTool', 'longTool', 'systemMessage', 'nestedSystemMessage']) assertRatio(widths[key], 1, key)
+  assert.ok(widths.shortModelTable.table.width < 800, 'short table should not be forced to the cap on mobile')
+  assert.ok(widths.wideModelTable.table.width <= 801, `table exceeded the narrow-content cap: ${widths.wideModelTable.table.width}px`)
+  assert.ok(widths.wideModelTable.table.width > widths.wideModelTable.table.wrapperWidth, 'a long table may use more than the narrow content width')
+  assert.ok(widths.wideModelTable.table.wrapperScrollWidth > widths.wideModelTable.table.wrapperClientWidth + 1, 'only the local table wrapper should scroll horizontally')
+  assert.equal(widths.wideModelTable.table.whiteSpace, 'normal')
+  assert.ok(['anywhere', 'break-word'].includes(widths.wideModelTable.table.overflowWrap))
+  assert.equal(widths.wideModelTable.table.inlineCodeOverflowWrap, 'anywhere')
+  assert.ok(widths.wideModelTable.table.cellLineBoxes.every(count => count > 1), 'long URL, path, and inline code cells should wrap')
   for (const sample of Object.values(widths).filter(value => typeof value === 'object')) {
     assert.ok(sample.overflow <= 1)
     assert.equal(sample.timelineOverflowX, 'visible')

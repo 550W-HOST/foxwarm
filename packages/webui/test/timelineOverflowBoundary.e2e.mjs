@@ -8,6 +8,11 @@ import puppeteer from 'puppeteer-core'
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
 const chatEntry = new URL('../src/components/Chat.tsx', import.meta.url).pathname
 const assetsDirectory = new URL('../dist/assets/', import.meta.url)
+const wideTable = [
+  '| URL | Path | Inline code | URL two | Path two |',
+  '| --- | --- | --- | --- | --- |',
+  `| https://${'u'.repeat(100)}.example | /workspace/${'path-'.repeat(24)}file.ts | \`${'code_'.repeat(30)}\` | https://${'v'.repeat(100)}.example | /repo/${'deep/'.repeat(30)}file |`,
+].join('\n')
 
 let browser
 let page
@@ -33,7 +38,7 @@ async function buildFixtureBundle() {
       },
       {
         role: 'model',
-        parts: [{ text: 'Final model row\\n\\n| heading one | heading two | heading three | heading four | heading five |\\n| --- | --- | --- | --- | --- |\\n| deliberately-wide-table-value-one | deliberately-wide-table-value-two | deliberately-wide-table-value-three | deliberately-wide-table-value-four | deliberately-wide-table-value-five |' }],
+        parts: [{ text: ${JSON.stringify(`Final model row\n\n${wideTable}`)} }],
         __meta: { seq: 3, timestamp: 1700000002000, modelId: 'fixture/model', usage: { cachedTokens: 11, inputTokens: 22, outputTokens: 33 } },
       },
     ]
@@ -58,7 +63,7 @@ async function buildFixtureBundle() {
       static CONNECTING = 0
       static OPEN = 1
       static CLOSED = 3
-      constructor() { this.readyState = FixtureWebSocket.CONNECTING; queueMicrotask(() => { this.readyState = FixtureWebSocket.OPEN; this.onopen?.({}) }) }
+      constructor() { this.readyState = FixtureWebSocket.CONNECTING; queueMicrotask(() => { this.readyState = FixtureWebSocket.OPEN; this.onopen?.({}); this.onmessage?.({ data: JSON.stringify({ type: 'connected' }) }) }) }
       close() { this.readyState = FixtureWebSocket.CLOSED }
       send(raw) {
         const payload = JSON.parse(raw)
@@ -209,22 +214,29 @@ test('outer native message scroller owns malformed-child containment without cli
     const outer = document.querySelector('.foxwarm-chat-messages')
     const modelRow = document.querySelector('[data-chat-message-anchor-key="seq-local-3"] > div')
     const table = document.querySelector('.foxwarm-assistant-message-markdown table')
+    const tableScroll = table?.closest('.foxwarm-markdown-table-scroll')
     return {
       documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
       outerOverflowX: getComputedStyle(outer).overflowX,
       outerHasOversizedContent: outer.scrollWidth > outer.clientWidth + 1000,
       modelWidth: modelRow.getBoundingClientRect().width,
       timelineWidth: timeline.getBoundingClientRect().width,
-      tableOverflowX: getComputedStyle(table).overflowX,
-      tableScrollable: table.scrollWidth > table.clientWidth + 1,
+      tableBoxWidth: table.getBoundingClientRect().width,
+      tableScrollWidth: tableScroll.scrollWidth,
+      tableScrollClientWidth: tableScroll.clientWidth,
+      tableScrollWidthBox: tableScroll.getBoundingClientRect().width,
+      tableCellWhiteSpace: getComputedStyle(table.querySelector('td')).whiteSpace,
+      tableInlineCodeOverflowWrap: getComputedStyle(table.querySelector('td code')).overflowWrap,
     }
   })
   assert.ok(widths.documentOverflow <= 1, `malformed child widened the document by ${widths.documentOverflow}px`)
   assert.equal(widths.outerOverflowX, 'hidden')
   assert.equal(widths.outerHasOversizedContent, true)
   assert.ok(widths.modelWidth <= widths.timelineWidth * 0.8 + 1, 'desktop model row keeps the 80% width contract')
-  assert.equal(widths.tableOverflowX, 'auto')
-  assert.equal(widths.tableScrollable, true)
+  assert.ok(widths.tableBoxWidth <= Math.max(widths.tableScrollWidthBox, 800) + 1)
+  assert.ok(widths.tableScrollWidth > widths.tableScrollClientWidth + 1, 'wide model table should scroll inside its own wrapper')
+  assert.equal(widths.tableCellWhiteSpace, 'normal')
+  assert.equal(widths.tableInlineCodeOverflowWrap, 'anywhere')
   await page.$eval('[data-usage-badge]', badge => badge.scrollIntoView({ block: 'center' }))
   await captureFixture('usage-badge-outer-boundary')
 })
@@ -249,5 +261,21 @@ test('mobile keeps the same gutter placement and interaction with a 14px hit wid
   await page.setViewport({ width: 390, height: 760, isMobile: true, hasTouch: true, deviceScaleFactor: 1 })
   await page.waitForFunction(() => document.querySelector('.foxwarm-system-message-thread-line')?.getBoundingClientRect().width === 14)
   await assertThreadLineContract('[data-chat-timeline="committed"] > .foxwarm-chat-timeline > div [data-system-message-card]', '.foxwarm-system-message-thread-line', { expectedWidth: 14, leftOffset: 8 })
+  const tableWidths = await page.$eval('.foxwarm-assistant-message-markdown table', table => {
+    const scroll = table.closest('.foxwarm-markdown-table-scroll')
+    return {
+      table: table.getBoundingClientRect().width,
+      scroll: scroll.getBoundingClientRect().width,
+      scrollWidth: scroll.scrollWidth,
+      clientWidth: scroll.clientWidth,
+      documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      inlineCodeOverflowWrap: getComputedStyle(table.querySelector('td code')).overflowWrap,
+    }
+  })
+  assert.ok(tableWidths.table <= 801, `narrow-content table exceeded the 800px cap: ${tableWidths.table}px`)
+  assert.ok(tableWidths.table > tableWidths.scroll, 'narrow content may show a table wider than its message')
+  assert.ok(tableWidths.scrollWidth > tableWidths.clientWidth + 1, 'the table wrapper owns local horizontal scrolling')
+  assert.equal(tableWidths.inlineCodeOverflowWrap, 'anywhere')
+  assert.ok(tableWidths.documentOverflow <= 1, `the model table widened the document by ${tableWidths.documentOverflow}px`)
   assert.ok(await page.$eval('.foxwarm-chat-messages', outer => document.documentElement.scrollWidth - document.documentElement.clientWidth <= 1 && getComputedStyle(outer).overflowX === 'hidden'))
 })
