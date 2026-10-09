@@ -3,7 +3,8 @@ import { STATE_DIR } from '../config';
 import { TaskService } from '../taskService';
 import * as sessionManager from '../sessionManager';
 import { readSessionHistorySnapshot } from '../session/metadataStore';
-import { TaskStore } from '../taskStore';
+import { TaskStore, validateTaskArgs } from '../taskStore';
+import { sessionCatalogStore } from '../session/catalogStore';
 import type { ToolArgs, ToolContext } from './helpers';
 
 export const taskService = new TaskService(new TaskStore(path.join(STATE_DIR, 'tasks.sqlite'), {
@@ -12,6 +13,7 @@ export const taskService = new TaskService(new TaskStore(path.join(STATE_DIR, 't
 }), {
   resolveSessionId: id => sessionManager.getSessionCatalog(id)?.id,
   resolveSessionAgent: id => sessionManager.getSessionCatalog(id)?.agent,
+  listSessionIdsForAgent: agent => sessionCatalogStore.listByAgent(agent).map(session => session.id),
   readSessionMessageSeq: async id => {
     const state = await readSessionHistorySnapshot(id);
     return typeof state?.nextMessageSeq === 'number' ? Math.max(0, state.nextMessageSeq - 1) : undefined;
@@ -33,7 +35,10 @@ function buildTaskMutationReceipt(result: any): Record<string, unknown> {
 
 /** Runs only at the Main-owned management boundary. */
 export async function tool_task(args: ToolArgs, ctx: ToolContext): Promise<any> {
-  const result = await taskService.execute(args, ctx?.sessionId, typeof ctx?.session?.nextMessageSeq === 'number' ? Math.max(0, ctx.session.nextMessageSeq - 1) : undefined);
+  if (args.action === 'list') validateTaskArgs(args);
+  const result = args.action === 'list'
+    ? taskService.list(args.status, undefined, false, args.scope === undefined ? 'current-session' : args.scope, ctx?.sessionId)
+    : await taskService.execute(args, ctx?.sessionId, typeof ctx?.session?.nextMessageSeq === 'number' ? Math.max(0, ctx.session.nextMessageSeq - 1) : undefined);
   const complete = args.action === 'complete';
   const sent = complete && result.task.completionNotificationStatus === 'sent';
   const linked = complete && result.task.attachedSessionId === ctx?.sessionId;

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
 import { DatabaseSync } from 'node:sqlite';
-import { TaskStore, TASK_CHILD_LIMIT, TASK_LIST_LIMIT, TASK_NOTE_LIMIT } from './taskStore';
+import { TaskStore, TASK_CHILD_LIMIT, TASK_LIST_LIMIT, TASK_LIST_SCOPES, TASK_NOTE_LIMIT } from './taskStore';
 
 function fixture(t: any): TaskStore {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-task-test-'));
@@ -162,12 +162,13 @@ test('runtime validates action-specific fields, types, required fields, sizes an
     { action: 'create', title: 'Bad', description: null }, { action: 'get' },
     { action: 'get', taskId: 'id', title: 'Unused' }, { action: 'claim', taskId: 'id', ownerSessionId: 'other' },
     { action: 'update', taskId: 'id' }, { action: 'update', taskId: 'id', status: 'completed' },
-    { action: 'update', taskId: 'id', note: '' }, { action: 'list', status: 'claimed' },
+    { action: 'update', taskId: 'id', note: '' }, { action: 'list', status: 'claimed' }, { action: 'list', scope: 'agent-prefix' }, { action: 'list', scope: null },
     { action: 'complete', taskId: 'id', note: 'Wrong field' }, { action: 'cancel', taskId: 'id', reason: 12 }];
   for (const args of invalid) assert.throws(() => store.execute(args as any, 'coordinator'));
   assert.throws(() => store.execute({ action: 'create', title: 'No actor' }, ''), /current Session/);
   assert.throws(() => store.execute({ action: 'get', taskId: 'missing' }, 'coordinator'), /Task missing not found/);
   assert.equal(store.execute({ action: 'list' }, 'coordinator').total, 0);
+  assert.deepEqual(TASK_LIST_SCOPES, ['current-session', 'current-agent', 'all']);
 });
 
 test('WebUI user actor is separate from Session actors for create, comment and owner changes', t => {

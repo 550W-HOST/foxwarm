@@ -9,6 +9,7 @@ export class TaskService {
   constructor(readonly store: TaskStore, private readonly deps: {
     resolveSessionId: (id: string) => string | undefined;
     resolveSessionAgent?: (id: string) => string | undefined;
+    listSessionIdsForAgent?: (agent: string) => string[];
     readSessionMessageSeq?: (id: string) => Promise<number | undefined>;
     sendToSession: (target: string, message: string, source?: string, options?: SessionDeliveryOptions) => Promise<unknown>;
   }) {}
@@ -146,11 +147,28 @@ export class TaskService {
   }
 
   /** Read-only callers do not need a Session actor. */
-  list(status?: string, limit?: number, includeSessionAgents = false): any {
+  list(status?: string, limit?: number, includeSessionAgents = false, scope?: string, sessionId?: string): any {
+    const args = { action: 'list', ...(status === undefined ? {} : { status }), ...(scope === undefined ? {} : { scope }) };
+    validateTaskArgs(args);
     if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 50)) {
       throw new TaskError('TASK_INVALID_ARGS', 'limit must be an integer from 1 to 50.');
     }
-    const result = this.store.execute({ action: 'list', ...(status === undefined ? {} : { status }) }, undefined, limit);
+    let canonicalSessionId: string | undefined;
+    let scopeSessionIds: string[] | undefined;
+    if (scope !== undefined && scope !== 'all') {
+      if (!sessionId?.trim()) throw new TaskError('TASK_SESSION_REQUIRED', 'A current Session is required for this task list scope.');
+      canonicalSessionId = this.deps.resolveSessionId(sessionId) || sessionId;
+      if (scope === 'current-session') scopeSessionIds = [canonicalSessionId];
+      else if (scope === 'current-agent') {
+        const agent = this.deps.resolveSessionAgent?.(canonicalSessionId);
+        if (!agent || !this.deps.listSessionIdsForAgent) {
+          throw new TaskError('TASK_SESSION_NOT_FOUND', 'The current Session Agent could not be resolved for this task list scope.', 404);
+        }
+        scopeSessionIds = this.deps.listSessionIdsForAgent(agent)
+          .map(id => this.deps.resolveSessionId(id) || id);
+      }
+    }
+    const result = this.store.execute(args, canonicalSessionId, limit, undefined, scopeSessionIds);
     if (!includeSessionAgents || !this.deps.resolveSessionAgent) return result;
     return {
       ...result,
