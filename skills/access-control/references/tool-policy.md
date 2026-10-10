@@ -43,7 +43,16 @@ Choose the policy's purpose before writing rules:
 - A **deny patch** adds selected denials without defining the caller's remaining capabilities; those still follow later rules or the internal default. It does not establish an allowlist.
 - A **caller allowlist** grants specific capabilities and finishes with a deny for that caller, as in the first example. Earlier matching rules can still bypass that block, so review the complete ordering.
 
-For each builtin grant, assess both its target and effects: file/channel delivery, another Agent's skill catalog, timer ownership and new-session destination, Session reads/listing, lifecycle mutations, and recall scope. A familiar name in the legacy default list is not evidence that an unconditional allow is safe after isolation is removed. Use [the offline baseline generator](isolated-rules.md) when its conservative scope fits; review its omissions rather than treating it as an exact migration.
+Use a caller allowlist for restricted or untrusted Agents. Use a deny patch when you intentionally retain the caller's other existing access rather than defining a restricted capability set.
+
+Before granting a builtin, check:
+
+1. **Targets and defaults:** which parameters select an Agent, Session, Node, path, or channel? Follow the actual resolver; omission does not universally mean self.
+2. **Effects:** include reads, mutations, file delivery, notifications, and queued input. For example, task assignment, comments, and completion can notify another Session; granting task operations is not merely granting a private task list.
+3. **Isolation-dependent checks:** which guards stop running without the isolated flag? Validate the proposed policy with a non-isolated test caller so legacy guards do not mask missing restrictions.
+4. **Expressibility:** can existing matchers enforce the intended boundary? If not, omit the capability from the baseline or make it a separately reviewed grant; do not compensate with an unconditional allow.
+
+A familiar name in the legacy default list is not evidence that an unconditional allow is safe after isolation is removed. Use [the offline baseline generator](isolated-rules.md) when its conservative scope fits; review its omissions rather than treating it as an exact migration.
 
 ## Match fields
 
@@ -117,10 +126,12 @@ The `session` matcher supports `self: true`, `sameAgent: true`, and `relation: p
 | --- | --- |
 | `send_to_session` | Required `sessionId`; resolves `<main>`, `<parent>`, and catalog aliases. Self-send is rejected by the handler even if policy allows it. |
 | `send_file` | Session target defaults to self only without a non-empty channel target. Channel delivery has no Session relationship target. |
-| Timer CRUD | `sessionId` defaults to self. This matcher scopes the owner, not persisted timer settings or `agentName` for new-session delivery. |
+| `create_timer`, `list_timers`, `update_timer`, `delete_timer` | `sessionId` defaults to self. This matcher scopes the owner, not persisted timer settings or `agentName` for new-session delivery. |
 | `get_archived_messages`, `get_archived_blocks` | `sessionId` defaults to self. |
 | `recall` | Exact recall defaults to self. Vector search without `sessionId` has a self target only with `scope: current-session`; broader/default search has no single Session target. |
 | `get_session_messages` | Required `sessionId`; no universal default. |
+
+Each table row is a separate resolver family; combine names only within the same row when a rule uses the Session matcher. The parser's family registry is in `src/toolAuthorization.ts`, and target/default resolution is in `src/toolAuthorizationSessionTargets.ts`; see the [canonical policy contract](../../../docs/code-index/units/src-tool-authorization.md#policy-contract).
 
 Registered target resolution uses authoritative catalog IDs and direct-parent facts, not ID prefixes. Scalar argument matching instead compares the supplied value, before tool-local defaults/normalization. For example, `{ exists: false }` requires absence, not an empty string or `null` accepted as a default by some handlers. `session`, `skill.agentName`, timer new-session Agent fields, and channel attachment ownership do not gain relationship matching merely by having target-like arguments. A permitted Session list exposes its bounded catalog; individual read grants do not project that list into a private subset.
 
