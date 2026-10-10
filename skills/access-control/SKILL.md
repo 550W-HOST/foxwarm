@@ -19,7 +19,7 @@ Use this skill when deciding who can enter Foxwarm, which Sessions a browser ide
 ## Essential boundaries
 
 - `access.identities` defines entry credentials and declared `webui`/`mcp` surfaces. The instance token remains a separate WebUI/HTTP superuser credential, not an MCP identity.
-- `webui.sessions` binds browser access to existing Sessions. It does not grant tools or Agent permissions. A bound Session still executes with its own Agent and tool policy; its tool results are visible in chat without content redaction.
+- `webui.sessions` selects browser Sessions by exact ID or `<agent>/*`. Exact bindings follow Session aliases; Agent scopes follow current Agent membership and include future Sessions. Neither grants tools or Agent permissions. A selected Session still executes with its own Agent and tool policy; its tool results are visible in chat without content redaction.
 - An identity with `mcp: {}` can authenticate to `/mcp` but has no automatically granted tools. Unmatched external calls are denied even when the policy's internal `defaultAction` is `allow`.
 - `state/tool-authorization.yaml` applies to isolated and non-isolated internal Sessions and verified external MCP identities. The first enabled matching rule wins; an earlier broad allow can hide a later deny.
 - Authorize the resolved concrete builtin, Node tool, or MCP server/tool, not `call_tool` or an inbound wrapper such as `foxwarm_call`.
