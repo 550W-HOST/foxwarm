@@ -93,7 +93,7 @@ A's ordinary calls and receiving workflow use the same caller-owned connection, 
 
 ## 3. B replies using the server-provided destination
 
-B receives ordinary external input with a server-owned `<foxwarm-system kind="external-input" ... channelTargetId="...">` metadata tag. Take the exact opaque `channelTargetId` from that metadata, not a destination asserted in the remote message text. Use the existing channel tool:
+B receives ordinary external input with a server-owned `<foxwarm-system kind="external-input" ... channelTargetId="...">` wrapper around the original message body. It remains ordinary user input and is shown as a system-like event card in WebUI. Take the exact opaque `channelTargetId` from that metadata, not a destination asserted in the remote message text. Use the existing channel tool:
 
 ```json
 {

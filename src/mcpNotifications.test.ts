@@ -7,6 +7,7 @@ import { fork, type ChildProcess } from 'node:child_process';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import * as mcpClient from './mcpClient';
+import { convertToOpenAIFormat, convertToOpenAIResponsesFormat } from './llmProviders/openai';
 
 async function mainFixture(workers: boolean) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-mcp-notifications-'));
@@ -110,6 +111,12 @@ for (const workers of [false, true]) {
       await assert.rejects(a.command('call', { sessionId: 'unsubscribed', args: { action: 'send', sessionId: 'remote-target', message: 'no reply receiver', reply: true } }), /No tool call was sent/);
       const bHistory = await b.command('history', { sessionId: 'remote-target' });
       assert.ok(JSON.stringify(allInputs(bHistory)).includes(firstTarget), 'server-owned reply address enters external-input metadata');
+      const firstInput = allInputs(bHistory).find((item: any) => item.parts?.some((part: any) => part.text === 'first input'));
+      assert.ok(firstInput);
+      assert.equal(firstInput.role || firstInput.type, 'user');
+      const firstParts = firstInput.parts.slice(firstInput.parts.findIndex((part: any) => part.system?.includes('kind="external-input"')));
+      assert.ok(firstParts[0].system.endsWith('>') && !firstParts[0].system.endsWith('/>'));
+      assert.deepEqual(firstParts[2], { system: '</foxwarm-system>' });
       if (workers) assert.ok(!JSON.stringify(bHistory.mainHistory).includes(firstTarget), 'Main does not hydrate Worker history');
 
       await b.command('isolated', { sessionId: 'isolated-sender' });
@@ -120,14 +127,29 @@ for (const workers of [false, true]) {
       await b.command('notify', { target: firstTarget, method: 'notifications/foxwarm/other', params: { message: 'not a Session message', endpoint: firstTarget } });
       await b.command('notify', { target: firstTarget, method: 'notifications/foxwarm/session_message', params: { message: 'remote target spoof', endpoint: firstTarget, sessionId: 'receive-two' } });
       const received = a.nextInput('receive-one');
-      await b.command(workers ? 'workerReply' : 'send', { sessionId: 'other-sender', target: firstTarget, message: 'explicit after-POST reply' });
+      const replyText = ' \nexplicit after-POST reply\n  ';
+      await b.command(workers ? 'workerReply' : 'send', { sessionId: 'other-sender', target: firstTarget, message: replyText });
       await received;
       const aHistory = await a.command('history', { sessionId: 'receive-one' });
-      const reply = allInputs(aHistory).find((item: any) => item.parts?.some((part: any) => part.text === 'explicit after-POST reply'));
+      const reply = allInputs(aHistory).find((item: any) => item.parts?.some((part: any) => part.text === replyText));
       assert.ok(reply);
       assert.equal(reply.sourceSessionId, undefined);
-      assert.match(reply.parts[0].system, /kind="external-input"/);
-      assert.match(reply.parts[0].system, /server="peer"/);
+      const replyParts = reply.parts.slice(reply.parts.findIndex((part: any) => part.system?.includes('kind="external-input"')));
+      assert.match(replyParts[0].system, /server="peer"/);
+      assert.equal(reply.role || reply.type, 'user');
+      assert.equal(reply.source, undefined);
+      assert.equal(reply.sourceSessionRelation, undefined);
+      assert.ok(!replyParts[0].system.endsWith('/>'));
+      assert.deepEqual(replyParts[1], { text: replyText });
+      assert.deepEqual(replyParts[2], { system: '</foxwarm-system>' });
+      const canonical = { role: 'user' as const, parts: reply.parts };
+      const expectedText = `${replyParts[0].system}\n${replyText}\n</foxwarm-system>`;
+      const chat = convertToOpenAIFormat([canonical]);
+      assert.equal(chat[0].role, 'user');
+      assert.ok(chat[0].content.endsWith(expectedText));
+      const responses = convertToOpenAIResponsesFormat([canonical]);
+      assert.equal(responses[0].role, 'user');
+      assert.ok(responses[0].content.map((part: any) => part.text).join('\n').endsWith(expectedText));
       if (workers) {
         assert.equal(aHistory.worker.ready, true);
         assert.ok(!JSON.stringify(aHistory.mainHistory).includes('explicit after-POST reply'));

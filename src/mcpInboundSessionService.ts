@@ -5,7 +5,7 @@ import * as sessionManager from './sessionManager';
 import * as sessionRuntime from './sessionRuntime';
 import { buildExternalToolAuthorizationRequest, evaluateToolAuthorization, evaluateToolAuthorizationSync } from './toolAuthorization';
 import { formatLocalTimestamp } from './utils/localTime';
-import { formatFoxwarmSystemTag } from './utils/promptWrappers';
+import { formatFoxwarmSystemOpen, formatFoxwarmSystemClose } from './utils/promptWrappers';
 
 export class ExternalSessionBeforeAdmissionError extends Error {}
 
@@ -116,13 +116,14 @@ export async function sendExternalSession(principal: VerifiedAccessIdentity, con
   };
   checkAdmission();
   const input = { type: 'user' as const, parts: [
-    { system: formatFoxwarmSystemTag({ kind: 'external-input',
+    { system: formatFoxwarmSystemOpen({ kind: 'external-input',
       externalId: requireVerifiedAccessIdentity(principal), contextId: context.id,
       time: formatLocalTimestamp(Date.now()),
       ...(reply ? { channelTargetId: context.replyChannel!.targetId } : {}),
       hint: 'Message from an external MCP client.' + (reply
         ? ' For an explicit reply, use send_to_channel with the channelTargetId shown here. Ordinary assistant replies are not sent to this connection.' : '') }) },
     { text: message },
+    { system: formatFoxwarmSystemClose() },
   ] };
   if (Buffer.byteLength(JSON.stringify(input), 'utf8') > 1024 * 1024) {
     throw new ExternalSessionBeforeAdmissionError('Message exceeds the Session input limit.');
