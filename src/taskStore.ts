@@ -48,7 +48,7 @@ const ACTION_FIELDS: Record<typeof TASK_ACTIONS[number], string[]> = {
   get: ['taskId'],
   claim: ['taskId'],
   assign: ['taskId', 'ownerSessionId', 'notifySession'],
-  update: ['taskId', 'description', 'note', 'status'],
+  update: ['taskId', 'description', 'note', 'status', 'notifySession'],
   complete: ['taskId', 'result'],
   cancel: ['taskId', 'reason'],
 };
@@ -269,7 +269,7 @@ export class TaskStore {
 
   /** User authority is supplied only by the authenticated Tasks route. */
   executeAsUser(args: TaskArgs): any {
-    args = args.notifySession === undefined ? { ...args, notifySession: true } : args;
+    args = args.action !== 'comment' && args.notifySession === undefined ? { ...args, notifySession: true } : args;
     if (args.action === 'comment') {
       const { notifySession, ...comment } = args;
       // Reuse the existing note and task-ID bounds without extending the tool schema.
@@ -358,7 +358,7 @@ export class TaskStore {
       this.addNote(db, task.id, actor, args.note, now);
       db.prepare('UPDATE tasks SET updatedAt=? WHERE id=?').run(now, task.id);
       return { task: this.requireTask(db, task.id),
-        ...(args.notifySession !== false && task.ownerSessionId ? { commentNotification: { owner: task.ownerSessionId } } : {}) };
+        ...(args.notifySession === true && task.ownerSessionId ? { commentNotification: { owner: task.ownerSessionId } } : {}) };
     }
     const state = `status=${task.status}, owner=${task.ownerSessionId ?? 'unclaimed'}`;
     if (task.status === 'completed' || task.status === 'cancelled') {
@@ -405,7 +405,7 @@ export class TaskStore {
         if (args.status === 'active' && task.status !== 'active') db.prepare('UPDATE tasks SET reminderLastSeq=?,reminderMessageCount=0 WHERE id=?')
           .run(anchorSeq ?? null, task.id);
         if (args.note !== undefined) this.addNote(db, task.id, actor, args.note, now);
-        if (args.note !== undefined && task.ownerSessionId && task.ownerSessionId !== sessionId) {
+        if (args.note !== undefined && args.notifySession === true && task.ownerSessionId && task.ownerSessionId !== sessionId) {
           return { task: this.requireTask(db, task.id), commentNotification: { owner: task.ownerSessionId } };
         }
       } else if (args.action === 'complete') {

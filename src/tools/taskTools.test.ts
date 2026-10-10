@@ -65,7 +65,7 @@ test('direct, unified and Worker task calls use exact context identity through M
     const workerAgentList = readResult(await call_tool({ source: 'builtin', name: 'task', args: { action: 'list', scope: 'current-agent' } }, ownerCtx));
     assert.ok(workerAgentList.tasks.some((entry: any) => entry.id === taskId));
     assert.ok(workerAgentList.tasks.some((entry: any) => entry.id === ownerOnlyTask), 'Worker list resolves actual Agent catalog membership');
-    await task({ action: 'update', taskId, note: 'Creator progress note' }, creatorCtx);
+    await task({ action: 'update', taskId, note: 'Creator progress note', notifySession: true }, creatorCtx);
     await task({ action: 'update', taskId, note: 'Working' }, ownerCtx);
     assert.equal(JSON.stringify(creator), creatorBefore);
     const result = readResult(await task({ action: 'complete', taskId, result: 'Done' }, ownerCtx));
