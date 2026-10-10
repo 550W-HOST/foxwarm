@@ -64,13 +64,12 @@ After `state: "receiving"`:
 For dependent steps, an equivalent ToolScript for `run_script` is:
 
 ```python
-receiver = call_tool("call_tool", {
-    "toolId": "builtin:mcp_notifications",
-    "args": {"action": "start", "server": args["server"]}
+receiver = call_tool("builtin:mcp_notifications", {
+    "action": "start", "server": args["server"]
 })
 if receiver["state"] != "receiving":
     raise Exception("The notification receiver is not ready.")
-sent = call_tool("call_tool", {
+sent = call_tool({
     "source": "mcp",
     "server": args["server"],
     "name": "foxwarm_session",
