@@ -24,8 +24,6 @@ These are the things an agent can normally use directly when they are in the too
 
 - `create_agent`
 - `create_session`
-
-New Session names must contain only ASCII letters, digits, underscores, and hyphens. A display name is separate and can use ordinary descriptive text.
 - `move_session`
 - `set_agent_inherit`
 - `set_agent_isolated`
@@ -219,6 +217,8 @@ Useful fields in current implementation include:
 If you also need a separate extra session afterward, use:
 
 - `create_session`
+
+New Session names must contain only ASCII letters, digits, underscores, and hyphens. A display name is separate and can use ordinary descriptive text.
 
 For an isolated worker controlled by the current session, do not create an
 unrelated isolated agent main session and assume it can report back. The intended
