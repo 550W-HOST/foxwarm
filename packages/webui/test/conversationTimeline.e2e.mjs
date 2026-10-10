@@ -262,7 +262,7 @@ test('Activity statistics use scoped execution unions and recorded outcomes, not
     'Called 1 tool',
     'Called 1 tool',
   ])
-  assert.ok(!(await page.$eval('#timeline', root => root.textContent)).includes('Waited'), 'canonical history does not record completed waits')
+  assert.ok(!(await page.$eval('#timeline', root => root.textContent)).includes('Waited'), 'total/busy/waiting boundary-case decisions are still pending')
   assert.ok(!(await page.$eval('#timeline', root => root.textContent)).includes('Activity · Error'))
   await page.$eval('#timeline', root => [...root.querySelectorAll('[aria-label="Expand activity"]')][1].click())
   await page.waitForFunction(() => document.querySelector('[data-activity-details]').textContent.includes('SEND_FAILED'))

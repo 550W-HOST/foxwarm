@@ -323,7 +323,7 @@ Example:
         {
             name: 'wait',
             defaultInject: true,
-            description: "End the current turn and wait for more information before continuing. Specify what you are waiting for using at least one of the options below. Incoming messages or other events can resume the session even while the specified work is still pending. If another tool in the same batch returns an error, this wait is canceled so you can handle the error.",
+            description: "End the current turn and wait for more information before continuing. This tool registers the wait and returns; it does not remain running until messages arrive or work completes. It requests that the Session pause after the current tool batch. Specify what you are waiting for using at least one of the options below. Incoming messages or other events can resume the session even while the specified work is still pending. If another tool in the same batch returns an error, this wait is canceled so you can handle the error.",
             parameters: {
                 type: 'object',
                 // Anthropic-compatible gateways reject top-level schema combinators.
