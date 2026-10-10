@@ -188,6 +188,16 @@ The artifact is bound to the transient Session object and operation object, with
 
 Raw and block candidate quotas are computed after visibility, atomic grouping, and protection barriers. A plan may accumulate coverage across legal segments but one operation cannot cross a segment.
 
+### D-context-block-execution-friction
+
+[2026-10-11] Each new compact block is requested to carry an optional `frictionScore`: an integer from 0 (none observed) to 100 (severe or repeated execution friction). It is an improvement signal for workflows, skills, memory, or the framework, not Agent emotion, task difficulty, a probability, or an established defect diagnosis.
+
+- The planner judges only the summarized source range. Repeated errors, misunderstandings, authorization/tool-boundary confusion, user corrections, avoidable rework, and blocked progress may justify higher scores. Task complexity, long conversations, expected negative tests, and reasonable exploration alone do not. Later recovery does not erase historical friction or imply that it remains unresolved.
+- Missing or invalid values are unscored and omitted without failing an otherwise valid plan. Zero is a valid scored value. Existing active/archive blocks without the field stay unknown; there is no historical backfill or immutable-record rewrite.
+- Normalized scores flow through the existing compact job, immutable block record, nullable SQLite `friction_score` column, archive readers/export/import, and structured `__meta.contextBlock` metadata. Ordinary CTX-BLOCK text, summaries, headers, and recall text are unchanged.
+- Higher-level candidate prompts expose valid source scores from authoritative active-history metadata, never by rebuilding active input from Archive. The planner reassesses the new range using summaries and available scores; the backend does not average, maximize, accumulate, or rank by them.
+- This field adds no automatic optimization, memory/skill edits, UI scoring controls, separate storage/indexes, or logging/events. Candidate quotas, commit compatibility, lineage, token controls, and compact triggers remain unchanged; durable facts still use `memoryFacts`.
+
 ### D-context-block-associated-memory-facts
 
 Durable compact facts belong only in the `memoryFacts` array of their matching `replaceAsBlocks` entry.

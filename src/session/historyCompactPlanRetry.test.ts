@@ -2247,3 +2247,79 @@ test('cancelling a compact planner with a pending repair file cleans it and pres
     assert.equal(await fs.pathExists(path.dirname(filePath)), false);
   } finally { (llm as any).chat = originalChat; }
 });
+
+test('compact plan friction survives job commit, archive reads, and active authority persistence', async () => {
+  const { sessionHistory, archive, layeredContext, llm } = await loadDeps();
+  const { writeAuthoritativeSessionState } = await import('./stateFile');
+  const { readSessionHistorySnapshot } = await import('./metadataStore');
+  const originalChat = llm.chat;
+  try {
+    for (const frictionScore of [0, 67, undefined]) {
+      const session = await makeCompactableSession(archive, makeSessionId('compact_friction'));
+      (llm as any).chat = async (_parts: any, _active: Session, _iteration: number, options: any) => {
+        const block = {
+          level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2,
+          summary: 'Scored continuation summary.', ...(frictionScore !== undefined ? { frictionScore } : {}),
+        };
+        const call = { id: 'friction-plan', name: 'submit_compact_plan', args: { replaceAsBlocks: [block] } };
+        await options.appendMessage({ role: 'model', parts: [{ functionCall: call }] });
+        return { text: '', toolCalls: [call], allParts: [{ functionCall: call }] };
+      };
+      const deps = makeDepsForSession(session, { count: 0 });
+      deps.saveSession = async () => { await writeAuthoritativeSessionState(session); };
+      await sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.5 }, 'await');
+      const [record] = await layeredContext.readArchiveBlocksByIdRange(session.id);
+      assert.equal(record.frictionScore, frictionScore);
+      assert.equal(session.history[0].__meta?.contextBlock?.frictionScore, frictionScore);
+      const persisted = await readSessionHistorySnapshot(session.id);
+      assert.equal(persisted!.history[0].__meta?.contextBlock?.frictionScore, frictionScore);
+      if (frictionScore === undefined) {
+        assert.equal(Object.prototype.hasOwnProperty.call(record, 'frictionScore'), false);
+        assert.equal(Object.prototype.hasOwnProperty.call(persisted!.history[0].__meta!.contextBlock!, 'frictionScore'), false);
+      }
+    }
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('higher-level planning takes source scores from active metadata and stores its own assessment', async () => {
+  const { sessionHistory, archive, layeredContext, compactPlan, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_source_friction'));
+  const blocks = await layeredContext.appendBlocksToArchive(session, Array.from({ length: 10 }, (_, index) => ({
+    level: 1, sourceKind: 'message' as const, sourceStart: index + 1, sourceEnd: index + 1,
+    rawStartSeq: index + 1, rawEndSeq: index + 1, summary: `source-${index + 1} ${'block '.repeat(1800)}`,
+    frictionScore: 5,
+  })));
+  session.history = blocks.map(layeredContext.renderBlockMessage);
+  session.history[0].__meta!.contextBlock!.frictionScore = 0;
+  session.history[1].__meta!.contextBlock!.frictionScore = 83;
+  (session.history[2].__meta!.contextBlock! as any).frictionScore = 'invalid';
+  delete session.history[3].__meta!.contextBlock!.frictionScore;
+  const built = await sessionHistory.buildLayeredCompactCandidateEntries(session.history);
+  const candidates = built.candidateEntries.map(entry => entry.item);
+  assert.deepEqual(candidates.map(item => item.kind === 'block' ? item.frictionScore : null), [0, 83, undefined, undefined]);
+  const prompt = compactPlan.buildCompactPromptText({ forcedKeptCount: 0, candidateItems: candidates });
+  const sourceLines = prompt.split('\n').filter(line => line.startsWith('- B#'));
+  assert.match(sourceLines[0], /frictionScore=0/);
+  assert.match(sourceLines[1], /frictionScore=83/);
+  assert.doesNotMatch(sourceLines[2], /frictionScore/);
+  assert.doesNotMatch(sourceLines[3], /frictionScore/);
+  const originalChat = llm.chat;
+  try {
+    (llm as any).chat = async (parts: MessagePart[], _active: Session, _iteration: number, options: any) => {
+      const plannerSourceLines = flattenPrompt(parts).split('\n').filter(line => line.startsWith('- B#'));
+      assert.deepEqual(plannerSourceLines, sourceLines);
+      const call = { id: 'source-friction-plan', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
+        level: 2, sourceKind: 'block', sourceStart: blocks[0].id, sourceEnd: blocks[1].id,
+        summary: 'New range assessment.', frictionScore: 61,
+      }] } };
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: call }] });
+      return { text: '', toolCalls: [call], allParts: [{ functionCall: call }] };
+    };
+    await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0 }, 'await');
+    const [newBlock] = await layeredContext.readArchiveBlocksByIdRange(session.id, 11, 11);
+    assert.equal(newBlock.frictionScore, 61);
+    assert.equal(session.history[0].__meta?.contextBlock?.frictionScore, 61);
+    assert.equal((await layeredContext.readArchiveBlocksByIdRange(session.id, 1, 1))[0].frictionScore, 5,
+      'active source scores do not repair or rewrite immutable Archive records');
+  } finally { (llm as any).chat = originalChat; }
+});

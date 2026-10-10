@@ -190,6 +190,7 @@ type CompactJobOperation = {
   sourceBlockIds?: number[];
   summary: string;
   memoryFacts?: ExtractedMemoryFact[];
+  frictionScore?: number;
 };
 
 type CompactJobResult =
@@ -219,6 +220,7 @@ type CompactJobResult =
         rawEndTimestamp?: number;
         summary: string;
         memoryFacts?: ExtractedMemoryFact[];
+        frictionScore?: number;
       }>;
       preserveMessages: Array<{ seq: number; operationIndex: number }>;
       removePreservedMessages: number[];
@@ -872,7 +874,7 @@ export async function buildLayeredCompactCandidateEntries(olderHistory: Message[
         item: buildBlockCandidateItem(block.id, block.level, block.rawStartSeq, block.rawEndSeq,
           formatMessagePreviewText(message, Number.MAX_SAFE_INTEGER, { skipThinking: true }),
           estimateTokenCount(formatMessagePreviewText(message, Number.MAX_SAFE_INTEGER, { skipThinking: true })),
-          isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(olderHistory, historyIndex), compactSegmentId),
+          isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(olderHistory, historyIndex), compactSegmentId, block.frictionScore),
         historyStartIndex: historyIndex, historyEndIndex: historyIndex,
         rawStartTimestamp: normalizeActiveHistoryTimestamp(block.rawStartTimestamp),
         rawEndTimestamp: normalizeActiveHistoryTimestamp(block.rawEndTimestamp),
@@ -994,6 +996,7 @@ export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: La
       ...(sourceBlockIds.length > 0 ? { sourceBlockIds } : {}),
       summary: block.summary,
       memoryFacts: block.memoryFacts,
+      ...(block.frictionScore !== undefined ? { frictionScore: block.frictionScore } : {}),
     };
   });
 
@@ -1343,6 +1346,7 @@ async function runCompactJob(
       sourceBlockIds: operation.sourceBlockIds,
       summary: operation.summary,
       memoryFacts: operation.memoryFacts,
+      ...(operation.frictionScore !== undefined ? { frictionScore: operation.frictionScore } : {}),
     })),
     createdBlocks: operations.map(operation => ({
       level: operation.level,
@@ -1356,6 +1360,7 @@ async function runCompactJob(
       rawEndTimestamp: operation.rawEndTimestamp,
       summary: operation.summary,
       memoryFacts: operation.memoryFacts,
+      ...(operation.frictionScore !== undefined ? { frictionScore: operation.frictionScore } : {}),
     })),
     preserveMessages,
     removePreservedMessages,

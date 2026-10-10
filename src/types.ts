@@ -277,6 +277,7 @@ export interface SessionGoalState {
 }
 
 export interface ContextBlockMessageMeta {
+  frictionScore?: number;
   id: number;
   level: number;
   rawStartSeq: number;

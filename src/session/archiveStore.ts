@@ -8,7 +8,7 @@ import { streamUtf8JsonlLines } from '../jsonl';
 import type { Message } from '../types';
 import type { ArchiveMessageRecord } from './archive';
 import type { ArchiveBlockRecord } from './layeredContext';
-import type { ExtractedMemoryFact } from './compactPlan';
+import { normalizeFrictionScore, type ExtractedMemoryFact } from './compactPlan';
 import { loadSessionsMetadataSnapshot } from './metadataStore';
 import { syncDirectoryDurably } from '../utils/diskJsonData';
 import { formatSubstantiveMessageSearchText } from '../utils/messageFormat';
@@ -481,6 +481,7 @@ function openArchiveStore(): void {
       raw_end_timestamp INTEGER,
       summary TEXT NOT NULL,
       memory_facts_json TEXT,
+      friction_score INTEGER,
       created_at INTEGER NOT NULL,
       PRIMARY KEY (session_id, id)
     );
@@ -519,6 +520,9 @@ function openArchiveStore(): void {
   } catch {}
   try {
     db.exec(`ALTER TABLE archive_blocks ADD COLUMN memory_facts_json TEXT`);
+  } catch {}
+  try {
+    db.exec(`ALTER TABLE archive_blocks ADD COLUMN friction_score INTEGER`);
   } catch {}
 }
 
@@ -993,8 +997,8 @@ async function importSessionBlocksFromJsonl(sessionId: string): Promise<void> {
   const insert = database.prepare(`
     INSERT OR IGNORE INTO archive_blocks (
       session_id, agent, id, level, source_kind, source_start, source_end, source_block_ids_json,
-      raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, memory_facts_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, memory_facts_json, friction_score, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   let batch: ArchiveBlockRecord[] = [];
@@ -1022,6 +1026,7 @@ async function importSessionBlocksFromJsonl(sessionId: string): Promise<void> {
           record.rawEndTimestamp ?? null,
           record.summary,
           record.memoryFacts?.length ? JSON.stringify(record.memoryFacts) : null,
+          normalizeFrictionScore(record.frictionScore) ?? null,
           record.createdAt,
         );
       }
@@ -1268,12 +1273,12 @@ export async function writeArchiveBlocks(records: ArchiveBlockRecord[]): Promise
   await initArchiveStore();
   await ensureSessionBranch(records[0].sessionId);
   const database = getDb();
-  const select = database.prepare(`SELECT agent,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at FROM archive_blocks WHERE session_id=? AND id=?`);
+  const select = database.prepare(`SELECT agent,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,friction_score,created_at FROM archive_blocks WHERE session_id=? AND id=?`);
   const insert = database.prepare(`
     INSERT INTO archive_blocks (
       session_id, agent, id, level, source_kind, source_start, source_end, source_block_ids_json,
-      raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, memory_facts_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, memory_facts_json, friction_score, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const inserted: ArchiveBlockRecord[] = [];
   runInTransaction(() => {
@@ -1283,6 +1288,7 @@ export async function writeArchiveBlocks(records: ArchiveBlockRecord[]): Promise
         source_block_ids_json: record.sourceKind === 'block' && Array.isArray(record.sourceBlockIds) && record.sourceBlockIds.length > 0 ? JSON.stringify(record.sourceBlockIds) : null,
         raw_start_timestamp: record.rawStartTimestamp ?? null, raw_end_timestamp: record.rawEndTimestamp ?? null,
         memory_facts_json: record.memoryFacts?.length ? JSON.stringify(record.memoryFacts) : null,
+        friction_score: normalizeFrictionScore(record.frictionScore) ?? null,
       };
       const existing = select.get(record.sessionId, record.id) as any;
       if (existing) {
@@ -1291,7 +1297,7 @@ export async function writeArchiveBlocks(records: ArchiveBlockRecord[]): Promise
           && existing.source_block_ids_json === values.source_block_ids_json && existing.raw_start_seq === record.rawStartSeq
           && existing.raw_end_seq === record.rawEndSeq && existing.raw_start_timestamp === values.raw_start_timestamp
           && existing.raw_end_timestamp === values.raw_end_timestamp && existing.summary === record.summary
-          && existing.memory_facts_json === values.memory_facts_json && existing.created_at === record.createdAt;
+          && existing.memory_facts_json === values.memory_facts_json && existing.friction_score === values.friction_score && existing.created_at === record.createdAt;
         if (identical) continue;
         throw new Error(`Immutable archive block conflict for ${record.sessionId} B#${record.id}.`);
       }
@@ -1310,6 +1316,7 @@ export async function writeArchiveBlocks(records: ArchiveBlockRecord[]): Promise
         values.raw_end_timestamp,
         record.summary,
         values.memory_facts_json,
+        values.friction_score,
         record.createdAt,
       );
       inserted.push(record);
@@ -1341,7 +1348,7 @@ export async function rollbackUncommittedArchiveBlocks(records: ArchiveBlockReco
   const remove = getDb().prepare(`DELETE FROM archive_blocks WHERE
     session_id=? AND id=? AND agent=? AND level=? AND source_kind=? AND source_start=? AND source_end=?
     AND source_block_ids_json IS ? AND raw_start_seq=? AND raw_end_seq=?
-    AND raw_start_timestamp IS ? AND raw_end_timestamp IS ? AND summary=? AND memory_facts_json IS ? AND created_at=?`);
+    AND raw_start_timestamp IS ? AND raw_end_timestamp IS ? AND summary=? AND memory_facts_json IS ? AND friction_score IS ? AND created_at=?`);
   runInTransaction(() => {
     for (const record of records) {
       const result = remove.run(
@@ -1349,7 +1356,7 @@ export async function rollbackUncommittedArchiveBlocks(records: ArchiveBlockReco
         record.sourceStart, record.sourceEnd,
         record.sourceKind === 'block' && record.sourceBlockIds?.length ? JSON.stringify(record.sourceBlockIds) : null,
         record.rawStartSeq, record.rawEndSeq, record.rawStartTimestamp ?? null, record.rawEndTimestamp ?? null,
-        record.summary, record.memoryFacts?.length ? JSON.stringify(record.memoryFacts) : null, record.createdAt,
+        record.summary, record.memoryFacts?.length ? JSON.stringify(record.memoryFacts) : null, normalizeFrictionScore(record.frictionScore) ?? null, record.createdAt,
       );
       if (Number(result.changes) !== 1) throw new Error(`Unable to roll back uncommitted archive block ${record.sessionId} B#${record.id}.`);
     }
@@ -1561,7 +1568,7 @@ export async function readLocalArchiveBlocks(sessionId: string, startId?: number
   sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
 
   const rows = getDb().prepare(`
-    SELECT agent, id, level, source_kind, source_start, source_end, source_block_ids_json, raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, memory_facts_json, created_at
+    SELECT agent, id, level, source_kind, source_start, source_end, source_block_ids_json, raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, memory_facts_json, friction_score, created_at
     FROM archive_blocks
     WHERE session_id = ?
       AND (? IS NULL OR id >= ?)
@@ -1586,6 +1593,7 @@ export async function readLocalArchiveBlocks(sessionId: string, startId?: number
     rawEndTimestamp: row.raw_end_timestamp == null ? undefined : Number(row.raw_end_timestamp),
     summary: String(row.summary || ''),
     ...(parseMemoryFactsJson(row.memory_facts_json) ? { memoryFacts: parseMemoryFactsJson(row.memory_facts_json) } : {}),
+    ...(normalizeFrictionScore(row.friction_score) !== undefined ? { frictionScore: normalizeFrictionScore(row.friction_score) } : {}),
     createdAt: Number(row.created_at),
   }));
 }
@@ -1596,7 +1604,7 @@ export async function readLocalArchiveBlockBatch(sessionId: string, afterId: num
   const boundedLimit = Math.max(1, Math.min(500, Math.floor(limit) || 100));
   const rows = getDb().prepare(`
     SELECT agent, id, level, source_kind, source_start, source_end, source_block_ids_json,
-      raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, memory_facts_json, created_at
+      raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, memory_facts_json, friction_score, created_at
     FROM archive_blocks WHERE session_id = ? AND id > ? ORDER BY id ASC LIMIT ?
   `).all(sessionId, Math.max(0, Math.floor(afterId)), boundedLimit) as any[];
   return rows.map(row => ({
@@ -1606,6 +1614,7 @@ export async function readLocalArchiveBlockBatch(sessionId: string, afterId: num
     rawEndSeq: Number(row.raw_end_seq), rawStartTimestamp: row.raw_start_timestamp == null ? undefined : Number(row.raw_start_timestamp),
     rawEndTimestamp: row.raw_end_timestamp == null ? undefined : Number(row.raw_end_timestamp), summary: String(row.summary || ''),
     ...(parseMemoryFactsJson(row.memory_facts_json) ? { memoryFacts: parseMemoryFactsJson(row.memory_facts_json) } : {}),
+    ...(normalizeFrictionScore(row.friction_score) !== undefined ? { frictionScore: normalizeFrictionScore(row.friction_score) } : {}),
     createdAt: Number(row.created_at),
   }));
 }
@@ -1702,11 +1711,11 @@ export async function locateEffectiveArchiveCandidatesBySubstring(
   `);
   const blockWindowSql = `
     SELECT agent, id, level, source_kind, source_start, source_end, source_block_ids_json,
-      raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, memory_facts_json, created_at
+      raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, memory_facts_json, friction_score, created_at
     FROM (
       SELECT agent, id, level, source_kind, source_start, source_end, source_block_ids_json,
         raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, summary AS search_text,
-        memory_facts_json, created_at
+        memory_facts_json, friction_score, created_at
       FROM archive_blocks
       WHERE session_id = ? AND (? IS NULL OR id <= ?)
       ORDER BY id DESC
@@ -1798,6 +1807,7 @@ export async function locateEffectiveArchiveCandidatesBySubstring(
             rawEndTimestamp: row.raw_end_timestamp == null ? undefined : Number(row.raw_end_timestamp),
             summary: String(row.summary || ''),
             ...(parseMemoryFactsJson(row.memory_facts_json) ? { memoryFacts: parseMemoryFactsJson(row.memory_facts_json) } : {}),
+            ...(normalizeFrictionScore(row.friction_score) !== undefined ? { frictionScore: normalizeFrictionScore(row.friction_score) } : {}),
             createdAt: Number(row.created_at),
           },
         });
@@ -2013,7 +2023,7 @@ async function verifyLegacyBlockFile(filePath: string, preexistingKeys: Set<stri
     if (!record) throw new Error(`Invalid legacy session block record in ${filePath}`);
     const sessionId = await resolveArchivedRecordSessionId(record.sessionId);
     const select = getDb().prepare(`SELECT agent,id,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,
-      raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at FROM archive_blocks WHERE session_id=? AND id=?`);
+      raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,friction_score,created_at FROM archive_blocks WHERE session_id=? AND id=?`);
     let rowSessionId = sessionId;
     let row: any = select.get(rowSessionId, record.id);
     if (!row && rowSessionId !== record.sessionId) {
@@ -2025,14 +2035,14 @@ async function verifyLegacyBlockFile(filePath: string, preexistingKeys: Set<stri
       agent: record.agent || 'main', id: record.id, level: record.level, sourceKind: record.sourceKind, sourceStart: record.sourceStart,
       sourceEnd: record.sourceEnd, sourceBlockIds: record.sourceKind === 'block' ? record.sourceBlockIds : undefined,
       rawStartSeq: record.rawStartSeq, rawEndSeq: record.rawEndSeq, rawStartTimestamp: record.rawStartTimestamp,
-      rawEndTimestamp: record.rawEndTimestamp, summary: record.summary, memoryFacts: record.memoryFacts, createdAt: record.createdAt,
+      rawEndTimestamp: record.rawEndTimestamp, summary: record.summary, memoryFacts: record.memoryFacts, frictionScore: normalizeFrictionScore(record.frictionScore), createdAt: record.createdAt,
     };
     const actual = {
       agent: row.agent || 'main', id: Number(row.id), level: Number(row.level), sourceKind: row.source_kind, sourceStart: Number(row.source_start),
       sourceEnd: Number(row.source_end), sourceBlockIds: parseSourceBlockIdsJson(row.source_block_ids_json), rawStartSeq: Number(row.raw_start_seq),
       rawEndSeq: Number(row.raw_end_seq), rawStartTimestamp: row.raw_start_timestamp == null ? undefined : Number(row.raw_start_timestamp),
       rawEndTimestamp: row.raw_end_timestamp == null ? undefined : Number(row.raw_end_timestamp), summary: row.summary,
-      memoryFacts: parseMemoryFactsJson(row.memory_facts_json), createdAt: Number(row.created_at),
+      memoryFacts: parseMemoryFactsJson(row.memory_facts_json), frictionScore: normalizeFrictionScore(row.friction_score), createdAt: Number(row.created_at),
     };
     if (!preexistingKeys.has(`${rowSessionId}\0${record.id}`) && canonicalJson(expected) !== canonicalJson(actual)) throw new Error(`Conflicting legacy session block ${record.sessionId}#${record.id}`);
     count += 1;
@@ -2178,7 +2188,7 @@ export async function exportSessionArchivesJsonl(outputRoot: string): Promise<{ 
       writeRows(
         exportPath(`${branch.session_id}.blocks.jsonl`),
         exportDb.prepare(`SELECT agent,id,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,
-          raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at FROM archive_blocks WHERE session_id=? ORDER BY id`).iterate(branch.session_id) as Iterable<any>,
+          raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,friction_score,created_at FROM archive_blocks WHERE session_id=? ORDER BY id`).iterate(branch.session_id) as Iterable<any>,
         row => ({
           v: 1, kind: 'block', sessionId: branch.session_id, agent: row.agent || 'main', id: Number(row.id), level: Number(row.level),
           sourceKind: row.source_kind, sourceStart: Number(row.source_start), sourceEnd: Number(row.source_end),
@@ -2187,6 +2197,7 @@ export async function exportSessionArchivesJsonl(outputRoot: string): Promise<{ 
           ...(row.raw_start_timestamp == null ? {} : { rawStartTimestamp: Number(row.raw_start_timestamp) }),
           ...(row.raw_end_timestamp == null ? {} : { rawEndTimestamp: Number(row.raw_end_timestamp) }),
           summary: String(row.summary || ''), ...(parseMemoryFactsJson(row.memory_facts_json) ? { memoryFacts: parseMemoryFactsJson(row.memory_facts_json) } : {}),
+          ...(normalizeFrictionScore(row.friction_score) !== undefined ? { frictionScore: normalizeFrictionScore(row.friction_score) } : {}),
           createdAt: Number(row.created_at),
         }),
       );

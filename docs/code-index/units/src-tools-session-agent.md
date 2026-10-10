@@ -68,7 +68,7 @@ Compact-threshold settings, child-model settings, snapshot refresh, and current 
 | `buildRecallBlockDetail` | Returns detail for a specific block |
 | `buildRecallMessagesForBlock` | Returns messages covered by a block |
 | `buildRecallMessagesByRange` | Returns messages in a sequence range |
-| `renderContextBlockExpansion` | Read-only WebUI helper that expands one CTX-BLOCK layer into structured child block/raw message items without session queue/tool mutation |
+| `renderContextBlockExpansion` | Read-only WebUI helper that expands one CTX-BLOCK layer into structured child block/raw message items without session queue/tool mutation; optional friction scores remain metadata-only under [execution friction](../threads/context-compaction-and-recall.md#d-context-block-execution-friction) |
 | `searchStructuredRecallSources` | Shared ranked source-family retrieval and Archive reload used by model recall and the authenticated history viewer; caller supplies the already-authorized scope. The viewer requests bounded raw source reads and structured Timeline messages, while model recall retains its existing renderer and preview budget. |
 | `selectBoundedVectorRawMessageWindow` | Scans one raw source family by bounded effective Archive pages with the same message scorer and anchor tie-break as `selectVectorRawMessageWindow`, then reads a bounded neighborhood for the original atomic tool-group/window selector; I/O is proportional to matched source-family length but each SQL page and retained message set are bounded. |
 | `formatArchivedMessagePreview` | Formats archived rows through the shared renderer with valid Archive row timestamp precedence and persisted-message fallback |

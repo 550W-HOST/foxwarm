@@ -372,6 +372,10 @@ test('submit compact plan opts into the normal model-facing tool schema', () => 
   const blockSchema = replacementSchema.oneOf[0].items;
   assert.deepStrictEqual(blockSchema.required, ['level', 'sourceKind', 'sourceStart', 'sourceEnd', 'summary']);
   assert.deepStrictEqual(blockSchema.properties.sourceKind.enum, ['message', 'block']);
+  const scoreSchema = blockSchema.properties.frictionScore;
+  assert.equal(scoreSchema.type, 'integer');
+  assert.equal(scoreSchema.minimum, 0);
+  assert.equal(scoreSchema.maximum, 100);
   const factSchema = blockSchema.properties.memoryFacts.items;
   assert.deepStrictEqual(factSchema.required, ['kind', 'text']);
   assert.deepStrictEqual(factSchema.properties.kind.enum, ['decision', 'preference', 'fact', 'convention', 'environment']);
@@ -851,4 +855,20 @@ test('buildCompactPlanValidationFeedback explains invalid layered compact plans'
   assert.match(feedback, /summary must be a non-empty string/);
   assert.match(feedback, /Use only ranges shown in one Segment header/);
   assert.match(feedback, /Fix only the layered-context plan/);
+});
+
+test('replacement plans retain valid friction scores and omit invalid auxiliary values in both encodings', () => {
+  const block = { level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 4, summary: 'valid range' };
+  for (const encode of [(blocks: unknown[]) => blocks, (blocks: unknown[]) => JSON.stringify(blocks)]) {
+    for (const frictionScore of [0, 42, 100]) {
+      const plan = validateCompactPlanArgs({ replaceAsBlocks: encode([{ ...block, frictionScore }]) }, messageCandidates);
+      assert.equal(plan.createBlocks[0].frictionScore, frictionScore);
+      assert.deepEqual(plan.createBlocks[0].candidateRange, [0, 3]);
+    }
+    for (const frictionScore of [undefined, null, -1, 101, 1.5, '42', true, {}, [], NaN, Infinity]) {
+      const plan = validateCompactPlanArgs({ replaceAsBlocks: encode([{ ...block, frictionScore }]) }, messageCandidates);
+      assert.equal(Object.prototype.hasOwnProperty.call(plan.createBlocks[0], 'frictionScore'), false);
+      assert.equal(plan.createBlocks[0].summary, block.summary);
+    }
+  }
 });

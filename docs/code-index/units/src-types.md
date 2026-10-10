@@ -25,7 +25,7 @@ Defines the core TypeScript interfaces and type aliases used throughout the syst
 - `ChannelTurnProgress`, `ChannelTurnToolRef`, `ChannelTurnToolResult` — Transient per-turn channel display progress for LLM/tool status, currently consumed by WeWork stream-card aggregation; `tool-calls-start` can carry model text for atomic text+running-tool card updates.
 - `TokenUsage` / `SessionStats` / `SessionTokenTotals` — Token accounting. `TokenUsage.reasoningTokens` is an optional provider-reported component of `outputTokens`, never an additional total.
 - `AnthropicMessage` / `AnthropicContentBlock` / `OpenAIResponsesContent` — Provider-specific message formats
-- `ContextBlockMessageMeta` — Structured metadata attached to rendered CTX-BLOCK messages under `Message.__meta.contextBlock` for WebUI/API consumers.
+- `ContextBlockMessageMeta` — Structured metadata attached to rendered CTX-BLOCK messages under `Message.__meta.contextBlock` for provenance, WebUI/API consumers, and optional [execution-friction](../threads/context-compaction-and-recall.md#d-context-block-execution-friction) input to later compact planning.
 - `MaybePromise<T>`, `SessionReply`, `SessionBroadcast` — Utility types
 
 - `FunctionResponse.__meta.resolvedPaths` holds display-only `{ raw, resolved, nodeId }` targets per successful native file-tool call; see [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch.md#d-dispatch-native-agent-paths-and-code-targets).

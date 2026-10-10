@@ -1,6 +1,6 @@
 # Unit: src-session-archive-store
 
-Files: src/session/archiveStore.ts, src/session/archiveBootstrapImport.test.ts, src/session/archiveImportState.test.ts, src/session/archiveLexicalSearch.test.ts, src/session/archiveLexicalBatchReads.test.ts, src/session/archiveLineageStore.test.ts, src/session/archiveMessageStats.test.ts, src/session/archivePureReads.test.ts
+Files: src/session/archiveStore.ts, src/session/archiveBootstrapImport.test.ts, src/session/archiveBlockFriction.test.ts, src/session/archiveImportState.test.ts, src/session/archiveLexicalSearch.test.ts, src/session/archiveLexicalBatchReads.test.ts, src/session/archiveLineageStore.test.ts, src/session/archiveMessageStats.test.ts, src/session/archivePureReads.test.ts
 Secondary files: src/session/sessionIdAllocation.test.ts
 
 ## Purpose
@@ -55,7 +55,7 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 - Runtime message/block write batches are single-Session only. Immutable identity allows exact replay and rejects conflicts. Block-backed records may preserve decreasing/nonconsecutive source endpoint order only through a valid ordered `sourceBlockIds`; message-backed ranges stay ascending, including strict export/reimport migration validation.
 - `archive_session_id_reservations` — exact committed historical ID to current canonical-ID mappings mirrored by the durable ledger.
 - `archive_messages` — session-local sequence records and serialized message JSON.
-- `archive_blocks` — block level/source/range/summary records plus optional serialized normalized memory facts.
+- `archive_blocks` — block level/source/range/summary records plus optional serialized normalized memory facts and a nullable execution-friction score. Existing databases receive the nullable column without backfilling scores; see [execution friction](../threads/context-compaction-and-recall.md#d-context-block-execution-friction).
 - `archive_checkpoints` — raw tail and block vector-index progress.
 
 ## Behavior

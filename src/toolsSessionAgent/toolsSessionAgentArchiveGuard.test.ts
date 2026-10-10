@@ -94,10 +94,10 @@ async function createArchivedSession(deps: LoadedDeps, sessionId: string, firstM
   ]);
 
   await deps.layeredContext.appendBlocksToArchive(session, [
-    { level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 1, rawStartSeq: 1, rawEndSeq: 1, summary: 'block alpha' },
+    { level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 1, rawStartSeq: 1, rawEndSeq: 1, summary: 'block alpha', frictionScore: 0 },
     { level: 1, sourceKind: 'message', sourceStart: 2, sourceEnd: 2, rawStartSeq: 2, rawEndSeq: 2, summary: 'block beta' },
     { level: 1, sourceKind: 'message', sourceStart: 3, sourceEnd: 3, rawStartSeq: 3, rawEndSeq: 3, summary: 'block gamma' },
-    { level: 2, sourceKind: 'block', sourceStart: 1, sourceEnd: 2, rawStartSeq: 1, rawEndSeq: 2, summary: 'parent alpha beta block' },
+    { level: 2, sourceKind: 'block', sourceStart: 1, sourceEnd: 2, rawStartSeq: 1, rawEndSeq: 2, summary: 'parent alpha beta block', frictionScore: 72 },
   ]);
 }
 
@@ -455,11 +455,15 @@ test('renderContextBlockExpansion returns structured child block/raw message ite
     assert.equal(detail.expansionKind, 'child-blocks');
     assert.equal(detail.target, 'B#4');
     assert.equal(detail.block.id, 4);
+    assert.equal(detail.block.frictionScore, 72);
     assert.equal(detail.totalItems, 2);
     assert.equal(detail.items.length, 2);
     assert.equal(detail.messages.length, 2);
     assert.equal(detail.items[0].kind, 'block');
     assert.equal(detail.items[0].block?.id, 1);
+    assert.equal(detail.items[0].block?.frictionScore, 0);
+    assert.equal(detail.items[0].message.__meta?.contextBlock?.frictionScore, 0);
+    assert.equal(detail.items[1].message.__meta?.contextBlock?.frictionScore, undefined);
     assert.equal(detail.items[0].message.role, 'model');
     assert.equal(detail.items[0].message.__meta?.contextBlock?.id, 1);
     assert.equal(detail.items[1].message.__meta?.contextBlock?.id, 2);
@@ -482,6 +486,7 @@ test('renderContextBlockExpansion returns structured child block/raw message ite
     assert.deepEqual(messageReads, [{ startSeq: 1, endSeq: 1 }], 'immediate source messages should be read once');
     assert.equal(raw.expansionKind, 'messages');
     assert.equal(raw.target, 'B#1');
+    assert.equal(raw.block.frictionScore, 0);
     assert.equal(raw.totalItems, 1);
     assert.equal(raw.items[0].kind, 'message');
     assert.equal(raw.items[0].seq, 1);

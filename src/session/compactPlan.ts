@@ -26,6 +26,7 @@ export type CompactCandidateItem =
       rawEndSeq: number;
       preview: string;
       estimatedTokens: number;
+      frictionScore?: number;
       allowSingleBlockCompact?: boolean;
       segmentId?: number;
     };
@@ -44,6 +45,7 @@ export interface LayeredCreateBlockPlan {
   sourceEnd: number;
   summary: string;
   memoryFacts?: ExtractedMemoryFact[];
+  frictionScore?: number;
 }
 
 export type MemoryFactKind = 'decision' | 'preference' | 'fact' | 'convention' | 'environment';
@@ -156,6 +158,10 @@ const COMPACT_REPLACEMENT_BLOCK_ITEM_SCHEMA = {
     sourceStart: { type: 'integer', minimum: 1, description: "First message sequence number or block ID in the candidate range." },
     sourceEnd: { type: 'integer', minimum: 1, description: "Last message sequence number or block ID in the range, following its displayed history order." },
     summary: { type: 'string', description: "Summary of this range, retaining what is needed to continue the work." },
+    frictionScore: {
+      type: 'integer', minimum: 0, maximum: 100,
+      description: "Estimated execution friction in this range, as an integer from 0 (none observed) to 100 (severe or repeated friction). Flags possible workflow, skills, memory, or framework improvements; not task difficulty, a probability, or an established diagnosis.",
+    },
     memoryFacts: {
       type: 'array',
       description: "Durable facts supported by this range. Invalid fact entries are skipped.",
@@ -250,6 +256,10 @@ function normalizePositiveIntegerArray(rawArgs: Record<string, any>, key: 'prese
   return result;
 }
 
+export function normalizeFrictionScore(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 100 ? value : undefined;
+}
+
 export function normalizeMemoryFacts(rawValue: unknown, options: { seenTexts?: Set<string>; maxFacts?: number } = {}): ExtractedMemoryFact[] {
   if (!Array.isArray(rawValue)) return [];
 
@@ -311,7 +321,9 @@ export function buildBlockCandidateItem(
   estimatedTokens: number = estimateTokenCount(summary),
   allowSingleBlockCompact: boolean = false,
   segmentId?: number,
+  frictionScore?: number,
 ): CompactCandidateItem {
+  const score = normalizeFrictionScore(frictionScore);
   return {
     kind: 'block',
     key: `B#${id}`,
@@ -321,6 +333,7 @@ export function buildBlockCandidateItem(
     rawEndSeq,
     preview: summary,
     estimatedTokens,
+    ...(score !== undefined ? { frictionScore: score } : {}),
     allowSingleBlockCompact,
     ...(typeof segmentId === 'number' ? { segmentId } : {}),
   };
@@ -509,7 +522,8 @@ export function buildCompactPromptText(options: {
         lines.push(`- ${item.key} ${preview}`);
       } else {
         const preview = trimPreview(item.preview, limit) || '[empty block]';
-        lines.push(`- ${item.key} L${item.level} raw${formatSeqRange(item.rawStartSeq, item.rawEndSeq)} ${preview}`);
+        const score = normalizeFrictionScore(item.frictionScore);
+        lines.push(`- ${item.key} L${item.level} raw${formatSeqRange(item.rawStartSeq, item.rawEndSeq)}${score !== undefined ? ` frictionScore=${score}` : ''} ${preview}`);
       }
     }
   }
@@ -562,6 +576,11 @@ export function buildCompactPromptText(options: {
     '- Blocked range: "Tried X but failed because Y. Blocked on user input / external dependency Z. Next: wait for Z or try workaround W."',
     '- Validation range: "Tested X. Result supports/contradicts earlier B#N conclusion that Y. Next: Z."',
     '- Informational range: "User shared X. Key identifiers: Y, Z. No decision yet."',
+    '',
+    'Execution friction:',
+    'Provide a frictionScore from 0 to 100 for each new block. Judge only the source range being summarized. Use 0 when no meaningful friction is evident; 1–29 for minor isolated obstacles; 30–59 for repeated misunderstandings, retries, corrections, or avoidable work; 60–79 for substantial recurring friction or blocked progress; and 80–100 for severe or systemic friction with strong evidence that the workflow or supporting tools need review.',
+    'Look for observable difficulties that may suggest improvements to skills, memory, workflows, or the framework. Task complexity, conversation length, expected negative tests, and reasonable exploration alone are not friction. Do not infer a root cause or current unresolved failure from the score. Later recovery does not erase friction observed within the summarized range.',
+    'When summarizing existing blocks, use their summaries and available frictionScore values as evidence and assess the new range yourself. Do not mechanically average or accumulate scores, and do not dilute an important incident merely because it is surrounded by routine work. Missing scores mean unscored, not zero.',
     '',
     'Memory facts:',
     '- Put durable facts only in the memoryFacts array of their matching replaceAsBlocks entry: explicit user decisions, preferences, project conventions, technical discoveries, environment/deploy constraints, or stable identifiers. Do not include trivial chat, tool mechanics, transient progress, or stale TODOs.',
@@ -658,7 +677,8 @@ function normalizeReplacementBlocks(rawArgs: Record<string, any>, details: Compa
       maxFacts: remainingMemoryFacts,
     });
     remainingMemoryFacts -= memoryFacts.length;
-    return [{ level, sourceKind, sourceStart, sourceEnd, summary, ...(memoryFacts.length > 0 ? { memoryFacts } : {}) } as LayeredCreateBlockPlan];
+    const frictionScore = normalizeFrictionScore((entry as any).frictionScore);
+    return [{ level, sourceKind, sourceStart, sourceEnd, summary, ...(frictionScore !== undefined ? { frictionScore } : {}), ...(memoryFacts.length > 0 ? { memoryFacts } : {}) } as LayeredCreateBlockPlan];
   });
 }
 
