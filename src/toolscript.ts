@@ -480,8 +480,9 @@ function buildCallToolWrapperArgs(positionalArgs: any[], kwargs: Record<string, 
     }
 
     return {
-      source: metadata.source || (NODE_ENVIRONMENT_BUILTIN_NAMES.includes(first as any) ? 'node' : 'builtin'),
-      name: first,
+      ...(first.includes(':')
+        ? { toolId: first, ...(metadata.source !== undefined ? { source: metadata.source } : {}) }
+        : { source: metadata.source || (NODE_ENVIRONMENT_BUILTIN_NAMES.includes(first as any) ? 'node' : 'builtin'), name: first }),
       ...(metadata.toolId !== undefined ? { toolId: metadata.toolId } : {}),
       ...(metadata.server !== undefined ? { server: metadata.server } : {}),
       ...(metadata.nodeId !== undefined ? { nodeId: metadata.nodeId } : {}),

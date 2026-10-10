@@ -17,6 +17,7 @@ import { convertToOpenAIResponsesFormat } from './llmProviders/openai';
 import { ensureToolScriptMontyRuntimeForTests, tool_cancel_toolscript_run, tool_continue_script, tool_get_toolscript_run, tool_list_toolscript_runs, tool_run_script, tool_start_toolscript_run, forceToolScriptNativeImportFailureForTests, getToolScriptRunForTests, resetToolScriptMontyRuntimeForTests, resetToolScriptRunsForTests, setToolScriptMontyRuntimeFactoryForTests, shutdownToolScriptRuntime } from './toolscript';
 import type { Session } from './types';
 import { readSessionHistorySnapshot } from './session/metadataStore';
+import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from './toolAuthorization';
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -590,6 +591,89 @@ test('run_script supports unified call_tool descriptor shape for builtin tools',
   }
 });
 
+test('run_script string builtin tool IDs retain descriptor behavior and explicit toolId precedence', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_builtin_id');
+  const session = await sessionManager.getSession(sessionId);
+  try {
+    const result = await tool_run_script({ code: [
+      'params = {"query": "read", "sources": ["builtin"], "limit": 1, "includeSchema": False}',
+      'descriptor = call_tool({"toolId": "builtin:search_tools", "args": params})',
+      'string_id = call_tool("builtin:search_tools", params)',
+      'override = call_tool("unsupported:ignored", params, toolId="builtin:search_tools")',
+      'return [descriptor, string_id, override]',
+    ].join('\n') }, { sessionId, session });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(result.result[1], result.result[0]);
+    assert.deepEqual(result.result[2], result.result[0]);
+    assert.match(result.result[0].output, /^Showing 1 of \d+ matching tools\./);
+    assert.ok(Array.isArray(result.result[0].tools), 'string IDs retain programmatic search descriptors');
+    assert.deepEqual((await getToolScriptRunForTests(result.runId))?.executedTools, ['search_tools', 'search_tools', 'search_tools']);
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
+test('run_script string tool IDs use canonical format and capability errors without builtin fallback', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_invalid_id');
+  const session = await sessionManager.getSession(sessionId);
+  try {
+    for (const [toolId, error] of [
+      ['unsupported:probe', /Unsupported toolId source: unsupported:probe/],
+      ['mcp:fixture/', /Invalid mcp toolId: mcp:fixture\//],
+      ['node:/read', /Invalid node toolId: node:\/read/],
+      ['builtin:', /Invalid builtin toolId: builtin:/],
+      ['builtin:read', /is a node capability, not a builtin/],
+    ] as const) {
+      const result = await tool_run_script({ code: 'return call_tool(args["toolId"], {})', args: { toolId } }, { sessionId, session });
+      assert.equal(result.status, 'failed');
+      assert.match(result.error || '', error);
+      assert.doesNotMatch(result.error || '', /Unknown builtin tool/);
+    }
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
+test('run_script string tool IDs enforce concrete Node and MCP denies before adapter effects', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_denied_id');
+  const session = await sessionManager.getSession(sessionId);
+  const originalRemoteExecute = nodeExecution.executeNodeTool;
+  const originalMcpCall = mcpClient.callTool;
+  let effects = 0;
+  (nodeExecution as any).executeNodeTool = async () => { effects += 1; return {}; };
+  (mcpClient as any).callTool = async () => { effects += 1; return {}; };
+  setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
+version: 1
+defaultAction: allow
+rules:
+- id: deny-node-read
+  match: { tool: { source: node, name: read }, targetNode: remote-script }
+  action: deny
+- id: deny-mcp-build
+  match: { tool: { source: mcp, server: fixture, name: build_status } }
+  action: deny
+`));
+  try {
+    for (const toolId of ['node:remote-script/read', 'mcp:fixture/build_status']) {
+      const result = await tool_run_script({ code: 'return call_tool(args["toolId"], {})', args: { toolId } }, { sessionId, session });
+      assert.equal(result.status, 'failed');
+      assert.match(result.error || '', /denies .* capability/i);
+    }
+    assert.equal(effects, 0);
+  } finally {
+    setToolAuthorizationPolicyForTests(undefined);
+    (nodeExecution as any).executeNodeTool = originalRemoteExecute;
+    (mcpClient as any).callTool = originalMcpCall;
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
 test('run_script nested builtin calls use unified placement for session-owner tools', async () => {
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_placement');
@@ -713,12 +797,12 @@ test('run_script passes unified MCP and node call_tool descriptors through to to
   }
 });
 
-test('run_script nested dynamic node call uses the Node execution service', async () => {
+test('run_script string Node tool ID uses the Node execution service', async () => {
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_node_execution');
   const scriptName = `${makeId('script')}.py`;
   await writeScript(scriptName, asMain(
-    'return call_tool({"source": "node", "nodeId": "remote-script", "name": "dynamic_probe", "args": {"value": 7}})',
+    'return call_tool("node:remote-script/dynamic_probe", {"value": 7})',
   ));
   const session = await sessionManager.getSession(sessionId);
   const originalGetNode = nodesManager.getNode;
@@ -741,6 +825,9 @@ test('run_script nested dynamic node call uses the Node execution service', asyn
     assert.equal(response?.status, 'completed');
     assert.deepEqual((await getToolScriptRunForTests(response?.runId))?.executedTools, ['dynamic_probe']);
     assert.equal(response?.result?.sourceId, sessionId);
+    assert.equal(response?.result?.nodeId, 'remote-script');
+    assert.equal(response?.result?.toolName, 'dynamic_probe');
+    assert.deepEqual(response?.result?.args, { value: 7 });
   } finally {
     (nodesManager as any).getNode = originalGetNode;
     (nodesManager as any).executeTool = originalExecuteTool;
@@ -755,17 +842,17 @@ test('run_script nested remote builtin uses the Node execution service', async (
   const sessionId = makeId('toolscript_remote_builtin');
   const scriptName = `${makeId('script')}.py`;
   await writeScript(scriptName, asMain(
-    'return call_tool({"source": "node", "name": "read", "args": {"filePath": "remote.txt"}})',
+    'descriptor = call_tool({"source": "node", "name": "read", "args": {"filePath": "remote.txt"}})\nshorthand = call_tool("read", {"filePath": "remote.txt"})\nreturn call_tool("node:current/read", {"filePath": "remote.txt"})',
   ));
   const session = await sessionManager.getSession(sessionId);
   session.currentNode = 'remote-script';
   await sessionManager.saveSession(sessionId);
   const originalRemoteExecute = (nodeExecution as any).executeNodeTool;
-  let captured: any[] | undefined;
+  const captured: any[][] = [];
 
   try {
     (nodeExecution as any).executeNodeTool = async (...args: any[]) => {
-      captured = args;
+      captured.push(args);
       return { forwarded: true };
     };
     const toolMessage = await executeTools(
@@ -775,9 +862,13 @@ test('run_script nested remote builtin uses the Node execution service', async (
     );
     const response = toolMessage.parts[0].functionResponse?.response;
     assert.equal(response?.status, 'completed');
-    assert.deepEqual((await getToolScriptRunForTests(response?.runId))?.executedTools, ['read']);
+    assert.deepEqual((await getToolScriptRunForTests(response?.runId))?.executedTools, ['read', 'read', 'read']);
     assert.equal(response?.result?.forwarded, true);
-    assert.deepEqual(captured?.slice(0, 3), [sessionId, 'remote-script', 'read']);
+    assert.equal(captured.length, 3);
+    for (const call of captured) {
+      assert.deepEqual(call.slice(0, 4), [sessionId, 'remote-script', 'read', { filePath: 'remote.txt' }]);
+      assert.equal(call[5], true, 'all forms retain the trusted programmatic context');
+    }
   } finally {
     (nodeExecution as any).executeNodeTool = originalRemoteExecute;
     await resetToolScriptRunsForTests();
@@ -786,19 +877,23 @@ test('run_script nested remote builtin uses the Node execution service', async (
   }
 });
 
-test('run_script receives parsed MCP JSON text results through unified call_tool', async () => {
+test('run_script string MCP tool ID preserves argument merging and parsed JSON results', async () => {
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_mcp_json');
   const session = await sessionManager.getSession(sessionId);
   const originalCallTool = mcpClient.callTool;
 
-  (mcpClient as any).callTool = async () => mcpClient.normalizeMcpToolResult({
-    content: [{ type: 'text', text: '{"ok":true,"items":[{"name":"foxwarm"}]}' }],
-  });
+  let captured: any[] | undefined;
+  (mcpClient as any).callTool = async (...args: any[]) => {
+    captured = args;
+    return mcpClient.normalizeMcpToolResult({
+      content: [{ type: 'text', text: '{"ok":true,"items":[{"name":"foxwarm"}]}' }],
+    });
+  };
 
   try {
     const result = await tool_run_script({
-      code: asMain('return call_tool({"source": "mcp", "server": "github", "name": "search_repos", "args": {"query": "foxwarm"}})'),
+      code: 'return call_tool("mcp:fixture/search_repos", {"query": "positional", "limit": 1}, args={"query": "explicit", "page": 2}, query="foxwarm")',
     }, { sessionId, session });
 
     assert.equal(result.status, 'completed');
@@ -807,6 +902,7 @@ test('run_script receives parsed MCP JSON text results through unified call_tool
       ok: true,
       items: [{ name: 'foxwarm' }],
     });
+    assert.deepEqual(captured, ['fixture', 'search_repos', { query: 'foxwarm', limit: 1, page: 2 }]);
   } finally {
     (mcpClient as any).callTool = originalCallTool;
     await resetToolScriptRunsForTests();
