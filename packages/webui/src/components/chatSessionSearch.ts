@@ -7,7 +7,7 @@ import { getGroupedToolEntries, getToolCallSearchText, getToolResponseSearchText
 import { buildTimelineRows } from './timelineRows'
 import { splitCommitMarkers } from '../commitMarker'
 import { parsePastedTextSegments } from '../pastedText'
-import { findAttachmentCorrelations, getPartDisplayText, stripGeneratedDescriptorLines } from './ChatTimeline'
+import { findAttachmentCorrelations, getConversationUserPartText, getPartDisplayText, stripGeneratedDescriptorLines } from './ChatTimeline'
 import { getReasoningText, isReasoningPart } from './reasoningParts'
 
 export type SearchSurface = 'user' | 'pasted' | 'system' | 'model' | 'reasoning' | 'ctx' | 'call' | 'response'
@@ -88,9 +88,10 @@ export function projectSessionSearchFields(messages: Message[], timelineView: Ti
     if (msg.role === 'user') {
       const attachmentCorrelations = findAttachmentCorrelations(msg.parts)
       msg.parts.forEach((part, index) => {
-        const text = stripGeneratedDescriptorLines(getPartDisplayText(part), attachmentCorrelations)
+        const conversationText = row.literalUserText === undefined ? undefined : getConversationUserPartText(part, row.literalUserText)
+        const text = stripGeneratedDescriptorLines(conversationText?.text ?? getPartDisplayText(part), attachmentCorrelations)
         // Pasted content is opaque: metadata-looking tags inside it are literal visible text.
-        const segments = parsePastedTextSegments(text).map(segment => segment.kind === 'text' && !(row.literalUserText && part.text)
+        const segments = parsePastedTextSegments(text).map(segment => segment.kind === 'text' && !conversationText?.literalText
           ? { kind: 'text' as const, text: segment.text.replace(/<\/?(?:foxwarm-system|foxwarm-message)\b[^>]*>/gi, '') }
           : segment)
         add('user', index, segments.map(segment => segment.kind === 'text'

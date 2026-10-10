@@ -9,6 +9,11 @@ const chatEntry = new URL('../src/components/Chat.tsx', import.meta.url).pathnam
 const assets = new URL('../dist/assets/', import.meta.url)
 const firefox = process.env.FOXWARM_E2E_BROWSER === 'firefox'
 let browser, page, server
+const wrapperBodies = {
+  full: '\n  BEFORE\n<foxwarm-message type="timer" />\n<foxwarm-system kind="time" time="example" />\nAFTER\n\n<foxwarm-system kind="event">\nQUOTED_BODY\n</foxwarm-system>\n\n',
+  legacy: 'LEGACY_BEFORE\n<foxwarm-system kind="time" time="legacy-example" />\n<foxwarm-system kind="event">\nLEGACY_QUOTED\n</foxwarm-system>\nLEGACY_AFTER',
+  split: '<foxwarm-message type="channel" note="SPLIT_CHANNEL_XML">\nSPLIT_BODY\n</foxwarm-message>\n<foxwarm-system kind="time" time="split-example" />',
+}
 
 before(async () => {
   const cssName = (await readdir(assets)).find(name => /^index-.*\.css$/.test(name))
@@ -18,6 +23,7 @@ before(async () => {
     import React from 'react'
     import { createRoot } from 'react-dom/client'
     import Chat from ${JSON.stringify(chatEntry)}
+    import { formatFoxwarmMessage, formatFoxwarmMessageOpen, formatFoxwarmMessageClose } from '../../src/utils/promptWrappers'
     const old = Array.from({length: 108}, (_, i) => ({ role: i % 2 ? 'model' : 'user', parts: [{text: i === 4 ? 'OLD_ONLY_MATCH' : 'Earlier ordinary message ' + i}], __meta: { seq: i + 1, timestamp: 1700000000000 + i } }))
     old[10].parts[0].text = '<pasted-text>' + 'P'.repeat(95) + 'PASTED_DEEP_SEARCH <foxwarm-system kind="opaque" note="OPAQUE_TAG_TARGET">literal</foxwarm-system>' + '</pasted-text>'
     old[12].parts[0].text = 'See <attachment-ref ref="attachment1" />\\n<foxwarm-file name="attachment1_attachment-marker-only.txt" mime="text/plain" />'
@@ -41,11 +47,23 @@ before(async () => {
       {role:'model',parts:[{text:'start\\n\\n\\\\[\\nZ\\n\\\\]\\n\\nZ after'}],__meta:{seq:128,timestamp:1700000000128}},
       {role:'model',modelVisible:false,parts:[{text:'⚠️ LLM Error: Attempt 1/5 failed: LLM_RETRY_SEARCH_TARGET\\nAttempt 2/5 failed: second retry'}],__meta:{seq:129,timestamp:1700000000129,noticeType:'llm-retry'}},
     ]
+    const channelAttrs = {type:'channel',channelType:'webui',time:'METADATA_ONLY',hint:'direct user message via channel'}
+    const wrapperBodies = ${JSON.stringify(wrapperBodies)}
+    // Text-only channel ingress stores the complete envelope in one system part; attachments use split boundaries.
+    const wrappedHistory = [
+      {role:'user',parts:[{system:'<foxwarm-system kind="time" time="OUTER_TIME_METADATA" />'},{system:formatFoxwarmMessage(channelAttrs,wrapperBodies.full)}],__meta:{seq:501}},
+      {role:'user',parts:[{text:formatFoxwarmMessage(channelAttrs,wrapperBodies.legacy)}],__meta:{seq:502}},
+      {role:'user',parts:[{system:formatFoxwarmMessageOpen(channelAttrs)},{text:wrapperBodies.split},{system:formatFoxwarmMessageClose()}],__meta:{seq:503}},
+    ]
     window.fixture = { archiveRequests:0, get history(){return history}, emitStream(text){this.socket?.onmessage?.({data:JSON.stringify({type:'session-event',sessionId:'fixture/main',event:{type:'model-stream-update',streamId:'fixture-search-stream',text}})})} }
     window.fetch = async input => {
       const url = String(input)
       if (url.includes('/context-blocks/')) {window.fixture.archiveRequests++;return new Response('{}',{status:404})}
-      if (url.includes('/history')) return new Response(JSON.stringify({session:{id:'fixture/main',busy:false,runtimeState:{state:'idle'},queueLength:0,messageCount:history.length,historyVersion:0,modelKey:'fixture/model'},messages:history,queuedMessages:[],queueLength:0,latestSeq:129,historyVersion:0,prefixLength:0,historyComplete:true}),{status:200,headers:{'Content-Type':'application/json'}})
+      if (url.includes('/history')) {
+        const wrapped = url.includes('fixture%2Fwrapped')
+        const messages = wrapped ? wrappedHistory : history
+        return new Response(JSON.stringify({session:{id:wrapped?'fixture/wrapped':'fixture/main',busy:false,runtimeState:{state:'idle'},queueLength:0,messageCount:messages.length,historyVersion:0,modelKey:'fixture/model'},messages,queuedMessages:[],queueLength:0,latestSeq:wrapped?503:129,historyVersion:0,prefixLength:0,historyComplete:true}),{status:200,headers:{'Content-Type':'application/json'}})
+      }
       if (url.includes('/models')) return new Response(JSON.stringify({models:[{key:'fixture/model',contextLimit:128000}]}),{status:200})
       if (url.includes('/asr/status')) return new Response(JSON.stringify({configured:false,available:false}),{status:200})
       if (url.includes('/commands')) return new Response(JSON.stringify({commands:[]}),{status:200})
@@ -57,7 +75,14 @@ before(async () => {
       send(raw){const data=JSON.parse(raw);if(data.type==='set-subscriptions') queueMicrotask(()=>{this.onmessage?.({data:JSON.stringify({type:'subscriptions-accepted',revision:data.revision,sessionListResolutions:{},sessionResolutions:Object.fromEntries(data.sessionIds.map(id=>[id,id]))})});this.onmessage?.({data:JSON.stringify({type:'subscriptions-applied',revision:data.revision})})})}
     }
     window.WebSocket=Socket
-    function Fixture(){const [timelineView,setTimelineView]=React.useState('grouped');window.fixture.setTimelineView=setTimelineView;return React.createElement(Chat,{sessionId:'fixture/main',timelineView,showUsageBadge:false})}
+    function Fixture(){
+      const [timelineView,setTimelineView]=React.useState('grouped')
+      const [sessionId,setSessionId]=React.useState('fixture/main')
+      const [showUserMessageMetadata,setMetadata]=React.useState(false)
+      window.fixture.setTimelineView=setTimelineView
+      window.fixture.showWrappers=()=>{setSessionId('fixture/wrapped');setTimelineView('conversation')}
+      return React.createElement(Chat,{sessionId,timelineView,showUsageBadge:false,showUserMessageMetadata,onShowUserMessageMetadataChange:setMetadata})
+    }
     createRoot(document.getElementById('root')).render(React.createElement(Fixture))
   `
   const bundle = await build({ stdin: {contents:fixture,resolveDir:new URL('..',import.meta.url).pathname,sourcefile:'chat-search-fixture.tsx'}, bundle:true,format:'iife',platform:'browser',target:'chrome120',write:false,define:{'process.env.NODE_ENV':JSON.stringify('test')},logLevel:'silent' })
@@ -370,4 +395,54 @@ test('Conversation Search navigates body and CTX summaries without revealing act
   assert.ok(Math.abs((await snapshot()).scrollTop - 1200) < 4)
   await page.click('[aria-label="Close search"]')
   assert.ok((await snapshot()).distance > 500)
+})
+
+test('Conversation preserves literal channel bodies and Search indices for complete system, legacy text, and split sources', async () => {
+  await page.evaluate(() => window.fixture.showWrappers())
+  await page.waitForFunction(() => document.querySelector('[data-chat-timeline="committed"]').textContent.includes('SPLIT_BODY'))
+  const bodies = () => page.$$eval('[data-chat-timeline="committed"] [data-search-surface="user"]', nodes => nodes.map(node => node.textContent))
+  assert.deepEqual(await bodies(), Object.values(wrapperBodies), 'outer envelope separators are removed without trimming authored whitespace')
+  assert.ok(!(await page.$eval('[data-chat-timeline="committed"]', root => root.textContent)).includes('METADATA_ONLY'))
+  await page.click('button[aria-label="Find in chat"]')
+  for (const [term, seq, partIndex, hits] of [
+    ['<foxwarm-message type="timer" />', 501, 1, '1/1'],
+    ['<foxwarm-system kind="time" time="example" />', 501, 1, '1/1'],
+    ['<foxwarm-system kind="event">', 501, 1, '1/2'],
+    ['</foxwarm-system>', 501, 1, '1/2'],
+    ['<foxwarm-system kind="time" time="legacy-example" />', 502, 0, '1/1'],
+    ['SPLIT_CHANNEL_XML', 503, 1, '1/1'],
+    ['<foxwarm-system kind="time" time="split-example" />', 503, 1, '1/1'],
+  ]) {
+    await query(term)
+    await page.waitForFunction(value => [...CSS.highlights].some(([name, hits]) => name.startsWith('foxwarm-chat-search-') && [...hits][0]?.toString() === value), { timeout: 3000 }, term)
+    assert.equal((await snapshot()).hits, hits)
+    const target = await page.evaluate(() => {
+      const range = [...CSS.highlights].find(([name]) => name.startsWith('foxwarm-chat-search-'))[1].values().next().value
+      const node = range.startContainer.parentElement
+      return { row: node.closest('[data-search-row]')?.dataset.searchRow, partIndex: node.closest('[data-search-part-index]')?.dataset.searchPartIndex }
+    })
+    assert.deepEqual(target, { row: `seq-local-${seq}`, partIndex: String(partIndex) })
+  }
+  await query('METADATA_ONLY')
+  await page.waitForFunction(() => document.querySelector('[role="search"] [aria-live]')?.textContent === '0/0')
+  await page.click('[aria-label="Close search"]')
+  await page.click('[aria-label="Open session options"]')
+  await page.$eval('[data-session-ui-settings-menu]', menu => [...menu.querySelectorAll('button')].find(button => button.textContent.includes('Show user message metadata')).click())
+  await page.waitForFunction(() => document.querySelector('[data-chat-timeline="committed"]').textContent.includes('METADATA_ONLY'))
+  assert.deepEqual(await bodies(), Object.values(wrapperBodies), 'the metadata toggle does not change literal body content')
+  await page.click('[aria-label="Open session options"]')
+  await page.click('button[aria-label="Find in chat"]')
+  await query('METADATA_ONLY')
+  await page.waitForFunction(() => document.querySelector('[role="search"] [aria-live]')?.textContent === '0/0')
+  await query('</foxwarm-system>')
+  await page.waitForFunction(() => document.querySelector('[role="search"] [aria-live]')?.textContent === '1/2')
+  await page.waitForFunction(() => {
+    const range = [...CSS.highlights].find(([name]) => name.startsWith('foxwarm-chat-search-'))?.[1].values().next().value
+    const rect = range?.getBoundingClientRect()
+    const viewport = document.querySelector('.foxwarm-chat-messages').getBoundingClientRect()
+    return rect && rect.top >= viewport.top - 2 && rect.bottom <= viewport.bottom + 2
+  })
+  assert.equal((await snapshot()).visible, true)
+  await page.click('[aria-label="Close search"]')
+  assert.equal((await snapshot()).archive, 0)
 })

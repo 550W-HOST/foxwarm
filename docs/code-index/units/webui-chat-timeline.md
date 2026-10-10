@@ -52,6 +52,7 @@ Renders a chat conversation as a vertical timeline of message bubbles, handling 
 | `ModelThreadCard` | `ModelThreadCard.tsx` | Shared completed/processing thread-card chrome for Reasoning and Web Search. |
 | `useThreadCardHeightTransition` | `useThreadCardHeightTransition.ts` | Pins the existing card and its local in-flow parent slot before the toggle, measures the natural target without reducing the scroll range, then interpolates pixels and restores auto. |
 | `TimelineActivity` | `ChatTimeline.tsx` | Quiet collapsed Activity disclosure with a Detailed nested timeline of technical fragments only. |
+| `getConversationUserPartText` | `ChatTimeline.tsx` | Shares literal authored-body extraction for complete channel sources between rendering and Search, retaining outer metadata separately. |
 | `TimelineGroup` | `ChatTimeline.tsx` | Stable keyed counted tool-run wrapper inside a neutral in-flow measurement slot, first committed-row viewport anchor, ordinary model surfaces outside the historical Tool-style card, and local height transition. |
 | `getWebSearchAction` | `webSearchAction.ts` | Narrows persisted hosted items to proven search or HTTP(S) open-page display actions. |
 | `WebSearchCard` | `WebSearchCard.tsx` | Renders a normalized hosted action with the shared completed model-thread grammar. |

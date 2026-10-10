@@ -467,6 +467,25 @@ function isWrappedDirectChannelText(system: string): boolean {
     && system.endsWith('\n</foxwarm-message>')
 }
 
+/** Only the trusted source envelope is metadata; never interpret another source inside its body. */
+export function getConversationUserPartText(part: Message['parts'][number], literalUserText: boolean): {
+  text: string
+  literalText: boolean
+  wrapper?: { opening: string; closing: string }
+} {
+  const source = part.text ? literalUserText ? undefined : part.text : part.system
+  if (source && isWrappedDirectChannelText(source)) {
+    const openingEnd = source.indexOf('\n')
+    const closingStart = source.lastIndexOf('\n')
+    return {
+      text: source.slice(openingEnd + 1, closingStart),
+      literalText: true,
+      wrapper: { opening: source.slice(0, openingEnd), closing: source.slice(closingStart + 1) },
+    }
+  }
+  return { text: getPartDisplayText(part), literalText: literalUserText && !!part.text }
+}
+
 function getStandaloneUserChannelWrapperBoundary(part: Message['parts'][number]): 'open' | 'close' | null {
   if (typeof part.system !== 'string' || part.system.includes('\n') || part.system.trim() !== part.system) return null
   const tag = parseFoxwarmMetadataLine(part.system)
@@ -552,8 +571,10 @@ function AttachmentHistoryBlock({ correlation }: { correlation: AttachmentCorrel
   )
 }
 
-const CollapsibleUserText = memo(function CollapsibleUserText({ part, showUserMessageMetadata, correlations, inlineFlow = false, literalText = false, searchReveal = false, searchSurface, searchPartIndex, searchPastedIndex }: { part: Message['parts'][number]; showUserMessageMetadata: boolean; correlations: Map<string, AttachmentCorrelation>; inlineFlow?: boolean; literalText?: boolean; searchReveal?: boolean; searchSurface?: SessionSearchMatch['surface']; searchPartIndex?: number; searchPastedIndex?: number }) {
-  const text = stripGeneratedDescriptorLines(getPartDisplayText(part), correlations)
+const CollapsibleUserText = memo(function CollapsibleUserText({ part, showUserMessageMetadata, correlations, inlineFlow = false, conversationText, searchReveal = false, searchSurface, searchPartIndex, searchPastedIndex }: { part: Message['parts'][number]; showUserMessageMetadata: boolean; correlations: Map<string, AttachmentCorrelation>; inlineFlow?: boolean; conversationText?: ReturnType<typeof getConversationUserPartText>; searchReveal?: boolean; searchSurface?: SessionSearchMatch['surface']; searchPartIndex?: number; searchPastedIndex?: number }) {
+  const text = stripGeneratedDescriptorLines(conversationText?.text ?? getPartDisplayText(part), correlations)
+  const literalText = conversationText?.literalText ?? false
+  const wrapper = conversationText?.wrapper
   const segments = useMemo<Array<PastedTextSegment | { kind: 'attachment'; tagText: string; ref: string }>>(() => {
     const output: Array<PastedTextSegment | { kind: 'attachment'; tagText: string; ref: string }> = []
     for (const segment of parsePastedTextSegments(text)) {
@@ -584,6 +605,7 @@ const CollapsibleUserText = memo(function CollapsibleUserText({ part, showUserMe
 
   return (
     <div className={inlineFlow ? 'contents' : undefined}>
+      {wrapper && showUserMessageMetadata && <div data-search-exclude><InlineMetaPart systemText={wrapper.opening} isUser /></div>}
       <div className={`${shouldCollapse ? 'overflow-hidden' : ''} ${inlineFlow ? 'contents' : ''}`} style={shouldCollapse ? { maxHeight: 'calc(1.5em * 4)' } : {}}>
         <pre data-search-surface="user" data-search-part-index={searchPartIndex} className={`foxwarm-user-message-text foxwarm-user-line-layout max-w-full whitespace-pre-wrap break-words font-sans ${inlineFlow ? 'inline' : ''}`} style={{ lineHeight: 0 }}>
           {segments.map((segment, segmentIndex) => segment.kind === 'attachment'
@@ -611,6 +633,7 @@ const CollapsibleUserText = memo(function CollapsibleUserText({ part, showUserMe
             ))}
         </pre>
       </div>
+      {wrapper && showUserMessageMetadata && <div data-search-exclude><InlineMetaPart systemText={wrapper.closing} isUser /></div>}
       {isSystemMessage && (
         <button
           onClick={() => setExpanded(current => !current)}
@@ -982,7 +1005,7 @@ const MessageRow = memo(function MessageRow({
                   && !hasInlineAttachmentFlow
                   && !isWrappedDirectChannelText(part.system)
                   ? <InlineMetaPart systemText={formatStructuredSystemText(part.system)} isUser={true} showUserMessageMetadata={showUserMessageMetadata} />
-                  : <CollapsibleUserText part={part} literalText={row.literalUserText && !!part.text} showUserMessageMetadata={showUserMessageMetadata} correlations={attachmentCorrelations} inlineFlow={hasInlineAttachmentFlow} searchPartIndex={msg.parts.indexOf(part)} searchSurface={rowSearchTarget?.surface} searchPastedIndex={rowSearchTarget?.pastedIndex} searchReveal={(rowSearchTarget?.surface === 'user' || rowSearchTarget?.surface === 'pasted') && rowSearchTarget.partIndex === msg.parts.indexOf(part)} />}
+                  : <CollapsibleUserText part={part} conversationText={row.literalUserText === undefined ? undefined : getConversationUserPartText(part, row.literalUserText)} showUserMessageMetadata={showUserMessageMetadata} correlations={attachmentCorrelations} inlineFlow={hasInlineAttachmentFlow} searchPartIndex={msg.parts.indexOf(part)} searchSurface={rowSearchTarget?.surface} searchPastedIndex={rowSearchTarget?.pastedIndex} searchReveal={(rowSearchTarget?.surface === 'user' || rowSearchTarget?.surface === 'pasted') && rowSearchTarget.partIndex === msg.parts.indexOf(part)} />}
                 {showUserMessageMetadata && inlineUserWrapperBoundaries?.open === partIdx && <UserWrapperBoundaryBreak afterMetadata />}
               </div>
             ))}
