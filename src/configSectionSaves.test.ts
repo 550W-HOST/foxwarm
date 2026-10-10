@@ -152,22 +152,22 @@ test('queued Channels save preserves a preceding full Config token, URL, and raw
   } finally { await fixture.close(); }
 });
 
-test('queued structured Models save merges the latest providers and extension fields', { timeout: 30_000 }, async () => {
+test('queued structured Models save reads latest overrides while replacing the submitted provider set', { timeout: 30_000 }, async () => {
   const fixture = await heldReloadFixture();
   try {
     const { pending: first } = await fixture.beginHeldSave();
     const secondAdmitted = fixture.expectAdmission(2);
-    const second = fixture.save('models', { yaml: 'customSetting: latest\nproviders: { fresh: { providerType: openai, models: [new-model] }, seed: { providerType: openai, models: [old-model], customField: latest } }\ndefault: fresh/new-model\n' });
+    const second = fixture.save('models', { yaml: 'customSetting: latest\nproviders: { fresh: { providerType: openai, models: [new-model] }, seed: { providerType: openai, models: [{ id: structured-model, contextLimit: 8192 }], customField: latest } }\ndefault: fresh/new-model\n' });
     await secondAdmitted;
     const thirdAdmitted = fixture.expectAdmission(3);
     const third = fixture.save('models', { providerKey: 'seed', providerType: 'openai', models: 'structured-model', defaultModel: 'seed/structured-model' });
     await thirdAdmitted;
     await fixture.finish(first, second, third);
     const config = validateModelsConfigYaml(await fs.readFile(getActiveModelsConfigPath(), 'utf8'));
-    assert.deepEqual(Object.keys(config.providers).sort(), ['fresh', 'seed']);
+    assert.deepEqual(Object.keys(config.providers), ['seed']);
     assert.equal(config.providers.seed.customField, 'latest');
     assert.equal(config.customSetting, 'latest');
-    assert.deepEqual(config.providers.seed.models, ['structured-model']);
+    assert.deepEqual(config.providers.seed.models, [{ id: 'structured-model', contextLimit: 8192 }]);
     assert.equal(config.default, 'seed/structured-model');
   } finally { await fixture.close(); }
 });
