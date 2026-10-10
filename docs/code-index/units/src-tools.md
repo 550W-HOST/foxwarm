@@ -119,6 +119,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 | `executeResolvedTool` | Authorizes the resolved concrete target and dispatches through local, Node, or MCP owners; `call_tool` itself is permission-neutral |
 | `buildUnifiedToolId` | Constructs the source-qualified identifier used by discovery |
 | `parseUnifiedToolId` | Canonical source-qualified ID parser reused by internal and inbound MCP invocation |
+| `parseUnifiedToolCall` | Parses the canonical unified target reference and object/JSON-fallback arguments before placement resolution; reused for failed Node-selection batch classification |
 
 ### tools/definitions.ts — Tool definition array
 | Export | Description |

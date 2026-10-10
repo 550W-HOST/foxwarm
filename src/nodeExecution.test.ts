@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
 
 import { executeTools } from './llm';
 import * as nodeExecution from './nodeExecution';
@@ -11,6 +12,9 @@ import { createNodeExecutionServiceHandler, nodeExecutionServiceDescriptor } fro
 import { LocalRpcTransport, RpcClient, RpcServiceRegistry } from './rpc';
 import { getAgentDir } from './config';
 import { createHash } from 'node:crypto';
+import * as resolvedTools from './tools/resolvedTools';
+import * as mcpExternal from './mcpExternalService';
+import { setToolAuthorizationPolicyForTests, setToolAuthorizationPolicyPathForTests, TOOL_AUTH_POLICY_UNAVAILABLE } from './toolAuthorization';
 import {
   MasterNodeProvider,
   NodeProviderRegistry,
@@ -767,4 +771,173 @@ test('trusted script data crosses exact-owner Node RPC without accepting an argu
     await assert.rejects(() => client.call('execute', { sourceSessionId: sessionId, nodeId: descriptor.id, toolName: 'read', args: {}, programmatic: 'true' } as any), { code: 'NODE_EXECUTION_INVALID_REQUEST' });
     assert.equal(observed.length, before);
   } finally { await resetToolScriptRunsForTests(); await transport.drain(); transport.close(); await cleanup(sessionId); }
+});
+
+function batchResponses(message: any): any[] {
+  return message.parts.filter((part: any) => part.functionResponse).map((part: any) => part.functionResponse);
+}
+
+test('select and subsequent exec/file calls share the newly selected environment in Main and Worker batches', async () => {
+  for (const worker of [false, true]) {
+    const sourceId = makeId(worker ? 'select_batch_worker' : 'select_batch_main');
+    const globalSession = await sessionManager.getSession(sourceId);
+    globalSession.currentNode = 'master'; globalSession.cwd = '/previous/cwd';
+    await sessionManager.saveSession(sourceId);
+    const owner = worker ? { ...globalSession } : globalSession;
+    const requests: NodeToolRequest[] = [];
+    const descriptor: NodeDescriptor = {
+      id: 'batch-target', kind: 'sandbox', provider: 'batch-fixture', type: 'memory-fixture', availability: 'ready',
+      defaultCwd: '/target/default',
+      tools: ['exec', 'read'].map(name => ({ name, description: 'Batch fixture capability.', parameters: { type: 'object' } })),
+    };
+    const provider: NodeProvider = {
+      id: descriptor.provider,
+      listNodes: () => [descriptor],
+      getNode: id => id === descriptor.id ? descriptor : undefined,
+      invokeTool: async request => { requests.push(request); return { output: `${request.nodeId}:${request.toolName}` }; },
+    };
+    const registry = new RpcServiceRegistry();
+    registry.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({
+      providerRegistry: new NodeProviderRegistry([new MasterNodeProvider(), provider]),
+      ...(worker ? { expectedSourceSessionId: sourceId } : {}),
+    }));
+    const transport = new LocalRpcTransport(registry);
+    let persists = 0;
+    try {
+      await nodeExecution.initializeNodeExecution({ transport });
+      const selected = worker
+        ? { id: 'select', name: 'call_tool', args: { toolId: 'builtin:node', argsJson: '{"action":"select","nodeId":"batch-target"}' } }
+        : { id: 'select', name: 'node', args: { action: 'select', nodeId: descriptor.id } };
+      const result = await executeTools([
+        selected,
+        { id: 'exec-a', name: 'exec', args: { command: 'a' } },
+        { id: 'exec-b', name: 'exec', args: { command: 'b' } },
+        { id: 'file', name: 'read', args: { filePath: 'target.txt' } },
+      ], { sessionId: sourceId }, owner, worker ? { currentSessionEffects: {
+        placement: 'session-worker', persistSession: async () => { persists++; },
+      } as any } : undefined);
+      const responses = batchResponses(result);
+      assert.deepEqual(responses.map(item => item.tool_use_id), ['select', 'exec-a', 'exec-b', 'file']);
+      assert(responses.every(item => !item.response.error));
+      assert.equal(owner.currentNode, descriptor.id);
+      assert.equal(owner.cwd, undefined);
+      assert.deepEqual(requests.map(item => [item.nodeId, item.toolName]), [
+        [descriptor.id, 'exec'], [descriptor.id, 'exec'], [descriptor.id, 'read'],
+      ]);
+      assert(requests.every(item => item.context?.cwd === undefined), 'previous Node cwd must not leak');
+      if (worker) {
+        assert.equal(persists, 1);
+        assert.equal(globalSession.currentNode, 'master', 'Main projection is not Worker routing authority');
+        assert.equal(globalSession.cwd, '/previous/cwd');
+      }
+    } finally {
+      await cleanup(sourceId);
+      await transport.drain(); transport.close();
+    }
+  }
+});
+
+test('select failures in validation, availability, authorization, and canonical resolution skip the remaining batch without effects', async () => {
+  const sourceId = makeId('select_batch_failure');
+  const session = await sessionManager.getSession(sourceId);
+  session.currentNode = 'master'; session.cwd = '/previous/cwd';
+  await sessionManager.saveSession(sourceId);
+  const originalResolve = resolvedTools.resolveDirectTool;
+  const resolutions: string[] = [];
+  const starts: string[] = [];
+  const invalidPolicyPath = `${getAgentDir(session.agent || 'main')}/selection-invalid-policy.yaml`;
+  (resolvedTools as any).resolveDirectTool = async (...args: Parameters<typeof originalResolve>) => {
+    resolutions.push(args[0]); return originalResolve(...args);
+  };
+  const cases = [
+    { call: { name: 'node', args: { action: 'select' } }, error: /nodeId is required/ },
+    { call: { name: 'node', args: { action: 'select', nodeId: 'missing-batch-node' } }, error: /not available|not found/i, worker: true },
+    { call: { name: 'call_tool', args: { source: 'builtin', name: 'node', args: { action: 'select', nodeId: 'master' } } }, error: /denies/i, deny: true },
+    { call: { name: 'call_tool', args: { toolId: 'builtin:node', argsJson: '{"action":"select","nodeId":"master","node":"master"}' } }, error: /does not support node selection/ },
+    { call: { name: 'node', args: { action: 'select', nodeId: 'master' } }, error: /policy is unavailable/i, unavailablePolicy: true },
+  ];
+  try {
+    for (const scenario of cases) {
+      resolutions.length = 0; starts.length = 0;
+      if (scenario.unavailablePolicy) {
+        await fs.mkdir(getAgentDir(session.agent || 'main'), { recursive: true });
+        await fs.writeFile(invalidPolicyPath, 'broken: [');
+        setToolAuthorizationPolicyPathForTests(invalidPolicyPath);
+      }
+      setToolAuthorizationPolicyForTests(scenario.unavailablePolicy ? undefined : { version: 1, defaultAction: 'allow', rules: scenario.deny ? [{
+        id: 'deny-select', enabled: true, match: { tool: { source: 'builtin', name: 'node' } }, action: 'deny',
+      }] : [] });
+      let persists = 0;
+      const result = await executeTools([
+        { id: 'select', ...scenario.call },
+        { id: 'old-node-exec', name: 'exec', args: { command: 'printf must-not-run', cwd: '/' } },
+        { id: 'file', name: 'write', args: { filePath: 'must-not-write', content: 'unreachable' } },
+        { id: 'wait', name: 'wait', args: { waitForInput: true } },
+        { id: 'unresolved', name: 'call_tool', args: { toolId: 'invalid' } },
+        { id: 'canceled', name: 'exec', args: { command: 'canceled', __cancelTool: true } },
+      ], { sessionId: sourceId, onToolStart: ({ name }: any) => starts.push(name) }, session,
+      scenario.worker ? { currentSessionEffects: {
+        placement: 'session-worker', persistSession: async () => { persists++; },
+      } as any } : undefined);
+      const responses = batchResponses(result);
+      assert.deepEqual(responses.map(item => item.tool_use_id), ['select', 'old-node-exec', 'file', 'wait', 'unresolved', 'canceled']);
+      assert.match(responses[0].response.error, scenario.error);
+      assert.deepEqual(resolutions, [scenario.call.name], 'skipped tools must not even resolve');
+      assert(starts.length <= 1 && starts.every(name => name === scenario.call.name));
+      for (const response of responses.slice(1, -1)) {
+        assert.match(response.response.error, /not started because Node selection failed/);
+        assert.equal(response.executionTiming, undefined);
+      }
+      assert.equal(responses.at(-1).response.canceled, true);
+      assert.equal(session.currentNode, 'master');
+      assert.equal(session.cwd, '/previous/cwd');
+      assert.equal(persists, 0);
+      if (scenario.unavailablePolicy) {
+        assert.equal((result as any).__toolLoopControl?.fatalError.code, TOOL_AUTH_POLICY_UNAVAILABLE,
+          'existing fatal policy-unavailability behavior is preserved');
+      } else {
+        assert.equal((result as any).__toolLoopControl, undefined, 'selection failure is not a fatal turn boundary');
+      }
+      assert.equal((result as any).__toolPostAction, undefined, 'skipped wait must not arm or stop the turn');
+    }
+  } finally {
+    setToolAuthorizationPolicyForTests(undefined);
+    setToolAuthorizationPolicyPathForTests(undefined);
+    await fs.rm(invalidPolicyPath, { force: true });
+    (resolvedTools as any).resolveDirectTool = originalResolve;
+    await cleanup(sourceId);
+  }
+});
+
+test('ordinary errors, other node actions, external same-name tools, and canceled select do not stop the batch', async () => {
+  const sourceId = makeId('select_batch_identity');
+  const session = await sessionManager.getSession(sourceId);
+  session.currentNode = 'master';
+  const originalMcp = mcpExternal.callMcpTool;
+  const originalNodeExecute = nodeExecution.executeNodeTool;
+  (mcpExternal as any).callMcpTool = async () => ({ error: 'external select failure' });
+  (nodeExecution as any).executeNodeTool = async () => ({ error: 'custom node capability failure' });
+  try {
+    const result = await executeTools([
+      { id: 'external-node', name: 'call_tool', args: { source: 'mcp', server: 'fixture', name: 'node', args: { action: 'select' } } },
+      { id: 'custom-node', name: 'call_tool', args: { source: 'node', nodeId: 'fixture', name: 'node', args: { action: 'select' } } },
+      { id: 'other-action', name: 'node', args: { action: 'inspect' } },
+      { id: 'canceled-select', name: 'node', args: { action: 'select', __cancelTool: true } },
+      { id: 'read-error', name: 'read', args: { filePath: 'missing-batch-file' } },
+      { id: 'script', name: 'run_script', args: { code: 'try:\n    call_tool("node", {"action": "select"})\nexcept RuntimeError:\n    pass\nreturn "script continued"' } },
+      { id: 'surviving-exec', name: 'exec', args: { command: 'printf survived' } },
+    ], { sessionId: sourceId }, session);
+    const responses = batchResponses(result);
+    assert(responses[0].response.error);
+    assert(responses[1].response.error);
+    assert(responses[2].response.error);
+    assert.equal(responses[3].response.canceled, true);
+    assert(responses[4].response.error);
+    assert.equal(responses[5].response.result, 'script continued');
+    assert.match(responses[6].response.output, /survived/);
+  } finally {
+    (mcpExternal as any).callMcpTool = originalMcp;
+    (nodeExecution as any).executeNodeTool = originalNodeExecute;
+    await cleanup(sourceId);
+  }
 });

@@ -275,7 +275,7 @@ Example:
         {
             name: 'exec',
             defaultInject: true,
-            description: "Run a shell command on the current Node. Output is saved in a command log and shown as a bounded preview. If the command outlasts timeout, it continues in the background and returns an execId; a later event reports completion. The timeout does not kill the command. Avoid adding head or tail just to shorten the preview: that changes the captured output. If you need both a complete log and a filtered view, save the complete output separately or use tee with a filter that consumes the whole stream. For temporary files, prefer $fw_tmp ($env:fw_tmp in PowerShell) over /tmp; fw_agentdir gives the Agent directory. These environment variables are set for Agent-owned commands on Main and CLI Nodes.",
+            description: "Run a shell command on the current Node. Adjacent exec calls in the same response may run concurrently. Set cwd directly instead of using a preceding exec to change directories. Use one command with && for dependent shell steps, or run_script when later calls depend on earlier results. Output is saved in a command log and shown as a bounded preview. If the command outlasts timeout, it continues in the background and returns an execId; a later event reports completion. The timeout does not kill the command. Avoid adding head or tail just to shorten the preview: that changes the captured output. If you need both a complete log and a filtered view, save the complete output separately or use tee with a filter that consumes the whole stream. For temporary files, prefer $fw_tmp ($env:fw_tmp in PowerShell) over /tmp; fw_agentdir gives the Agent directory. These environment variables are set for Agent-owned commands on Main and CLI Nodes.",
             parameters: {
                 type: 'object',
                 properties: {
@@ -736,7 +736,7 @@ Example:
         {
             name: 'run_script',
             defaultInject: true,
-            description: "Run Python-subset ToolScript to coordinate tool calls. Supply code or filePath; args is the input dictionary. Call tools synchronously with call_tool (no await), and use return for the result. Example: code='return call_tool(\"read\", {\"filePath\": args[\"path\"], \"endLine\": 5})', args={\"path\": \"README.md\"}. Tools return their native values, not a common response envelope. Use call_tool for filesystem/process access rather than Python OS APIs. A defined main(args) is called automatically. Returns status and runId; resume a time-budget or agent-input pause with continue_script using runId and continuationId.",
+            description: "Run Python-subset ToolScript to coordinate tool calls. Use it for dependent tool calls, conditional steps, or stopping after a failed prerequisite; ordinary adjacent exec calls may run concurrently. Supply code or filePath; args is the input dictionary. Call tools synchronously with call_tool (no await), and use return for the result. Example: code='return call_tool(\"read\", {\"filePath\": args[\"path\"], \"endLine\": 5})', args={\"path\": \"README.md\"}. Tools return their native values, not a common response envelope. Use call_tool for filesystem/process access rather than Python OS APIs. A defined main(args) is called automatically. Returns status and runId; resume a time-budget or agent-input pause with continue_script using runId and continuationId.",
             parameters: {
                 type: 'object',
                 properties: {
@@ -851,7 +851,7 @@ Example:
         {
             name: 'node',
             defaultInject: true,
-            description: "List available Nodes, select this session's execution Node, or manage a Node through its configured provider. Provider operations may create or remove resources; inspect the provider's behavior before assuming what will be retained or deleted.",
+            description: "List available Nodes, select this session's execution Node, or manage a Node through its configured provider. For select, you may put exec or file calls after it in the same response. Those calls use the selected Node; if selection fails, the remaining calls in that batch are skipped. Provider operations may create or remove resources; inspect the provider's behavior before assuming what will be retained or deleted.",
             parameters: {
                 type: 'object',
                 properties: {

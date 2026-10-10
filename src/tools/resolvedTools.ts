@@ -120,7 +120,7 @@ function resolveBuiltin(invocationName: string, name: string, rawArgs: ToolArgs,
     permissionNode, ...(nodeSelectsPlacement ? { targetNode } : {}) }, ctx);
 }
 
-export async function resolveUnifiedTool(input: ToolArgs, ctx: ToolContext, invocationName = 'call_tool'): Promise<ResolvedTool> {
+export function parseUnifiedToolCall(input: ToolArgs) {
   const ref = input.toolId ? parseUnifiedToolId(String(input.toolId)) : {
     source: typeof input.source === 'string' ? input.source.trim() as UnifiedToolSource : undefined,
     name: typeof input.name === 'string' ? input.name : '',
@@ -130,6 +130,11 @@ export async function resolveUnifiedTool(input: ToolArgs, ctx: ToolContext, invo
   if (!ref.source || !['builtin', 'mcp', 'node'].includes(ref.source)) throw new Error('call_tool requires either toolId or a valid source (builtin, mcp, node).');
   if (!ref.name) throw new Error('call_tool requires a tool name.');
   const args = resolveObjectArgWithJsonFallback(input, 'args', 'argsJson', { required: true, label: 'call_tool args' })!;
+  return { ...ref, args };
+}
+
+export async function resolveUnifiedTool(input: ToolArgs, ctx: ToolContext, invocationName = 'call_tool'): Promise<ResolvedTool> {
+  const { args, ...ref } = parseUnifiedToolCall(input);
   const current = await currentNode(ctx);
   if (ref.source === 'node') return resolveNode(invocationName, ref.name, args, ctx, normalizeNodeId(ref.nodeId, current), current);
   if (ref.source === 'mcp') return resolveMcp(invocationName, ref.server, ref.name, args);
