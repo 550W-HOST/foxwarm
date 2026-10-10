@@ -1,3 +1,4 @@
+import type { TimelineView } from '../chatPreferences'
 import { WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ArrowUpRight, ChevronDown, ChevronUp, History, Search } from 'lucide-react'
@@ -89,9 +90,9 @@ function HistoryRangeRow({ result, direction, onLoad }: {
   ) : <div data-history-range className={className}>{content}</div>
 }
 
-export default function HistorySearchView({ isMobile, groupTools, showUsageBadge, showUserMessageMetadata, knownSessions = [], onBack, onOpenSession }: {
+export default function HistorySearchView({ isMobile, timelineView, showUsageBadge, showUserMessageMetadata, knownSessions = [], onBack, onOpenSession }: {
   isMobile: boolean
-  groupTools: boolean
+  timelineView: TimelineView
   showUsageBadge: boolean
   showUserMessageMetadata: boolean
   knownSessions?: string[]
@@ -297,7 +298,7 @@ export default function HistorySearchView({ isMobile, groupTools, showUsageBadge
                 <>
                   {result.hasEarlier && <div className="mb-3"><HistoryRangeRow result={result} direction="earlier" onLoad={() => void load(result.key, 'earlier')} /></div>}
                   {!result.hasEarlier && !result.hasLater && !!result.firstSeq && <div className="mb-3"><HistoryRangeRow result={result} /></div>}
-                  <ChatTimeline sessionId={result.sessionId} messages={result.messages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} />
+                  <ChatTimeline sessionId={result.sessionId} messages={result.messages} isMobile={isMobile} timelineView={timelineView} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} />
                   {result.hasLater && <div className="mt-3"><HistoryRangeRow result={result} direction="later" onLoad={() => void load(result.key, 'later')} /></div>}
                   {result.matchedFacts?.map((fact, factIndex) => <p key={factIndex} className="mt-2 text-xs text-fw-text-muted">Matched memory fact{fact.kind ? ` (${fact.kind})` : ''}: {fact.text}</p>)}
                   {result.error && <p role="alert" className="mt-2 text-sm text-fw-warning">{result.error}</p>}

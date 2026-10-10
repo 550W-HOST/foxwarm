@@ -47,7 +47,7 @@ async function buildFixtureBundle() {
         sessionId: 'fixture/main',
         messages: fixture.messages,
         isMobile: window.innerWidth < 768,
-        groupTools: false,
+        timelineView: 'detailed',
         showUsageBadge: false,
         nestedDepth: fixture.nestedDepth || 0,
       }))

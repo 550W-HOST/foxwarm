@@ -85,16 +85,16 @@ async function buildFixtureBundle() {
         sessionId: 'fixture/main',
         messages: fixture.messages,
         isMobile: window.innerWidth < 768,
-        groupTools: false,
+        timelineView: 'detailed',
         showUsageBadge: false,
         nestedDepth: fixture.nestedDepth || 0,
       }))
     }
     window.searchExternalInput = (id) => {
-      const matches = findSessionSearchMatches(projectSessionSearchFields(cases[id].messages, true), 'ordinary external user input')
+      const matches = findSessionSearchMatches(projectSessionSearchFields(cases[id].messages, 'grouped'), 'ordinary external user input')
       roots[id].render(React.createElement(ChatTimeline, {
         sessionId: 'fixture/main', messages: cases[id].messages, isMobile: false,
-        groupTools: true, showUsageBadge: false, searchTarget: matches[0],
+        timelineView: 'grouped', showUsageBadge: false, searchTarget: matches[0],
       }))
       return matches
     }

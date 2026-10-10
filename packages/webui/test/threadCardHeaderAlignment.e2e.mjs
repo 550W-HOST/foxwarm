@@ -35,7 +35,7 @@ async function buildFixtureBundle() {
     createRoot(document.getElementById('read-short')).render(React.createElement(ToolCallsBlock, { msg: shortRead, onOpenCodeFile: () => {} }))
     createRoot(document.getElementById('reasoning')).render(React.createElement(ReasoningCard, { thinking: 'reasoning preview', tone: 'message', defaultExpanded: false }))
     createRoot(document.getElementById('web-search')).render(React.createElement(WebSearchCard, { action: { type: 'search', query: 'web search preview', queries: ['web search preview'] } }))
-    createRoot(document.getElementById('event')).render(React.createElement(ChatTimeline, { sessionId: 'fixture/main', messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="event" type="wait-timeout">\\nevent preview\\n</foxwarm-system>' }] }], isMobile: window.innerWidth < 768, groupTools: false, showUsageBadge: false }))
+    createRoot(document.getElementById('event')).render(React.createElement(ChatTimeline, { sessionId: 'fixture/main', messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="event" type="wait-timeout">\\nevent preview\\n</foxwarm-system>' }] }], isMobile: window.innerWidth < 768, timelineView: 'detailed', showUsageBadge: false }))
     createRoot(document.getElementById('context')).render(React.createElement(ContextBlockCard, { sessionId: 'fixture/main', messageKey: 'context', block: { id: 1, level: 1, rawStartSeq: 1, rawEndSeq: 2 }, text: 'context summary', nestedDepth: 0, renderNestedMessages: () => null }))
   `
   const result = await build({

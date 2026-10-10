@@ -442,7 +442,7 @@ function App() {
     return Number.isFinite(saved) ? Math.min(420, Math.max(180, saved)) : 256
   })
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true')
-  const { sendKeyMode, setSendKeyMode, groupTools, setGroupTools, showUsageBadge, setShowUsageBadge, showUserMessageMetadata, setShowUserMessageMetadata } = useChatPreferences()
+  const { sendKeyMode, setSendKeyMode, timelineView, setTimelineView, showUsageBadge, setShowUsageBadge, showUserMessageMetadata, setShowUserMessageMetadata } = useChatPreferences()
   const [webUiSettings, setWebUiSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
   const [vscodeFrameStarted, setVscodeFrameStarted] = useState(false)
   const [vscodeFrameSlot, setVscodeFrameSlot] = useState<HTMLElement | null>(null)
@@ -1488,11 +1488,11 @@ function App() {
           onOpenCodeCommit={openCodeCommit}
           onOpenModelSettings={() => openSetupView({ focusModels: true })}
           sendKeyMode={sendKeyMode}
-          groupTools={groupTools}
+          timelineView={timelineView}
           showUsageBadge={showUsageBadge}
           showUserMessageMetadata={showUserMessageMetadata}
           onSendKeyModeChange={setSendKeyMode}
-          onGroupToolsChange={setGroupTools}
+          onTimelineViewChange={setTimelineView}
           onShowUsageBadgeChange={setShowUsageBadge}
           onShowUserMessageMetadataChange={setShowUserMessageMetadata}
         />
@@ -1505,7 +1505,7 @@ function App() {
 
     if (tab.type === 'search') return <HistorySearchView
       isMobile={isMobile}
-      groupTools={groupTools}
+      timelineView={timelineView}
       showUsageBadge={showUsageBadge}
       showUserMessageMetadata={showUserMessageMetadata}
       knownSessions={sidebarSessions.map(session => session.id)}

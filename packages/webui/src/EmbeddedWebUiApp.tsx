@@ -271,11 +271,11 @@ export function EmbeddedChatApp({ target }: { target: Extract<FoxwarmEmbeddedTar
         canonicalSessionId={target.sessionId}
         sessionDisplayName={target.title}
         sendKeyMode={preferences.sendKeyMode}
-        groupTools={preferences.groupTools}
+        timelineView={preferences.timelineView}
         showUsageBadge={preferences.showUsageBadge}
         showUserMessageMetadata={preferences.showUserMessageMetadata}
         onSendKeyModeChange={preferences.setSendKeyMode}
-        onGroupToolsChange={preferences.setGroupTools}
+        onTimelineViewChange={preferences.setTimelineView}
         onShowUsageBadgeChange={preferences.setShowUsageBadge}
         onShowUserMessageMetadataChange={preferences.setShowUserMessageMetadata}
         onOpenModelSettings={() => postFoxwarmEmbedHostMessage(target.nonce, { type: 'open-setup', focus: 'models' })}

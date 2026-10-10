@@ -1,3 +1,4 @@
+import type { TimelineView } from '../chatPreferences'
 import type { Message } from './chatShared'
 import { formatStructuredSystemText, getSystemMessagePreviewDescriptor, isSystemLikeText, renderAssistantMarkdownSegments, renderMarkdownSegments } from './chatShared'
 import { isCommittedHistoryMessage } from '../chatHistoryState'
@@ -49,7 +50,7 @@ const literalOccurrences = (text: string, query: string): Array<{ offset: number
 }
 
 /** Only called while Search is open; recompute on committed history changes, not on each keystroke. */
-export function projectSessionSearchFields(messages: Message[], groupTools: boolean): SearchField[] {
+export function projectSessionSearchFields(messages: Message[], timelineView: TimelineView): SearchField[] {
   const committed: Message[] = []
   const sourceIndices = new Map<Message, number>()
   messages.forEach((message, index) => {
@@ -57,12 +58,12 @@ export function projectSessionSearchFields(messages: Message[], groupTools: bool
     committed.push(message)
     sourceIndices.set(message, index)
   })
-  const input = { messages: committed, isMobile: false, groupTools, showUsageBadge: false, showTimeDividers: false, nestedDepth: 0, expandedGroupKeys: new Set<string>() }
+  const input = { messages: committed, isMobile: false, timelineView, showUsageBadge: false, showTimeDividers: false, nestedDepth: 0, expandedGroupKeys: new Set<string>() }
   const initial = buildTimelineRows(input, null)
   // The normal collapsed render omits whole Event/Goal reminder rows inside groups.
   // Reuse the same row builder in data-only expanded mode so their own row/group keys survive.
   const groupKeys = new Set(initial.rows.filter(row => row.group?.summaryItems.length && !row.group.keepExpanded).map(row => row.group!.key))
-  const rows = groupKeys.size
+  const rows = timelineView !== 'conversation' && groupKeys.size
     ? buildTimelineRows({ ...input, expandedGroupKeys: groupKeys }, initial.cache).rows
     : initial.rows
   const groupStarts = new Map<string, number>()
@@ -71,6 +72,7 @@ export function projectSessionSearchFields(messages: Message[], groupTools: bool
   })
   const fields: SearchField[] = []
   for (const row of rows) {
+    if (row.activity) continue
     const { msg, key: rowKey } = row
     const groupKey = row.group?.key
     const sourceIndex = sourceIndices.get(msg)!
@@ -88,7 +90,7 @@ export function projectSessionSearchFields(messages: Message[], groupTools: bool
       msg.parts.forEach((part, index) => {
         const text = stripGeneratedDescriptorLines(getPartDisplayText(part), attachmentCorrelations)
         // Pasted content is opaque: metadata-looking tags inside it are literal visible text.
-        const segments = parsePastedTextSegments(text).map(segment => segment.kind === 'text'
+        const segments = parsePastedTextSegments(text).map(segment => segment.kind === 'text' && !(row.literalUserText && part.text)
           ? { kind: 'text' as const, text: segment.text.replace(/<\/?(?:foxwarm-system|foxwarm-message)\b[^>]*>/gi, '') }
           : segment)
         add('user', index, segments.map(segment => segment.kind === 'text'
@@ -104,12 +106,14 @@ export function projectSessionSearchFields(messages: Message[], groupTools: bool
     const ctxIndex = msg.role === 'model' && getContextBlockMetaFromMessage(msg)
       ? msg.parts.findIndex(part => typeof part.text === 'string' && part.text.trim()) : -1
     msg.parts.forEach((part, index) => {
-      if (isReasoningPart(part)) add('reasoning', index, markdownText(getReasoningText(part), false))
-      if (msg.role === 'model' && part.text) {
+      if (row.conversationPartIndex !== undefined && index !== row.conversationPartIndex) return
+      if (timelineView !== 'conversation' && isReasoningPart(part)) add('reasoning', index, markdownText(getReasoningText(part), false))
+      if (msg.role === 'model' && part.text && (timelineView !== 'conversation' || (!part.toolUseId && !part.functionResponse))) {
         add(index === ctxIndex ? 'ctx' : 'model', index,
           index === ctxIndex ? markdownText(getContextBlockSummaryText(part.text), false) : assistantText(part.text))
       }
     })
+    if (timelineView === 'conversation') continue
     if (row.pairedToolResponse) {
       getGroupedToolEntries(msg, row.pairedToolResponse, rowKey).forEach((entry, toolIndex) => {
         if (entry.call) add('call', toolIndex, getToolCallSearchText(entry.call), toolIndex)

@@ -1,3 +1,4 @@
+import type { TimelineView } from '../chatPreferences'
 import {
   formatToolLabel,
   getLlmErrorMessageDetails,
@@ -13,6 +14,8 @@ import { getContextScrollbarAnchorKey, getMessageStableKey, getMessageViewportAn
 import { parsePastedTextSegments } from '../pastedText'
 import { deriveTimelineTimeMarkers, type TimelineTimeMarker } from './timelineTime'
 import { isReasoningPart } from './reasoningParts'
+import { getContextBlockMetaFromMessage } from './ContextBlockCard'
+import { getWebSearchAction } from '../webSearchAction'
 
 /**
  * Explicit view model for one `ChatTimeline` render pass.
@@ -68,6 +71,12 @@ export interface TimelineUsageBadgeView {
 export interface TimelineRowView {
   readonly key: string
   readonly msg: Message
+  /** Conversation body slice; original indices retain Search and streaming identity. */
+  readonly conversationPartIndex?: number
+  /** Undefined outside Conversation user rows; false retains legacy channel metadata rendering. */
+  readonly literalUserText?: boolean
+  /** Technical fragments only, in source order. Ordinary output is never duplicated here. */
+  readonly activity?: { readonly messages: Message[]; readonly hasError: boolean }
   readonly prevMsg: Message | null
   readonly nextMsg: Message | null
   readonly pairedToolResponse: Message | null
@@ -99,7 +108,7 @@ export interface TimelineRowsInput {
   readonly messages: Message[]
   readonly isRunningTool?: boolean
   readonly isMobile: boolean
-  readonly groupTools: boolean
+  readonly timelineView: TimelineView
   readonly showUsageBadge: boolean
   readonly showTimeDividers: boolean
   readonly nestedDepth: number
@@ -203,6 +212,41 @@ const isHeavySystemLikeMessage = (message: Message): boolean => {
     ))
   )
 }
+
+/** Structured ingress wins; legacy recognition is restricted to whole standalone wrappers. */
+const getConversationInputKind = (message: Message): 'activity' | 'user' | 'legacy-user' => {
+  if (message.__meta?.queuedPreview && message.__meta.queueType !== 'user') return 'activity'
+  let direct = !!message.__meta?.clientMessageId || message.__meta?.queueType === 'user'
+  for (const part of message.parts) {
+    if (!part.system) continue
+    const tag = parseFoxwarmMetadataLine(part.system)
+    if (tag?.tagName === 'foxwarm-message' && !tag.closing) {
+      if (tag.attrs.type !== 'channel') return 'activity'
+      direct = true
+    } else if (!isLightweightStructuredSystem(part.system)) return 'activity'
+    if (part.system.startsWith('The following message is a direct user message via channel;')) direct = true
+  }
+  if (direct) return 'user'
+  const textParts = message.parts.filter(part => part.text?.trim())
+  if (textParts.length === 0) return message.parts.some(part => part.inlineData || part.inlineDataRef || part.inlineDataUnavailable) ? 'user' : 'activity'
+  if (textParts.length !== 1) return 'user'
+  const text = textParts[0].text!.trim()
+  // Pasted blocks and inline/fenced/quoted examples are ordinary user content.
+  if (parsePastedTextSegments(text).some(segment => segment.kind === 'pasted-text')) return 'user'
+  const opening = text.match(/^(<foxwarm-(?:system|message)\b[^>]*>)(?:\r?\n|$)/i)?.[1]
+  const tag = opening ? parseFoxwarmMetadataLine(opening) : null
+  if (tag && !tag.closing && (text === opening || text.endsWith(`</${tag.tagName}>`))) {
+    return tag.tagName === 'foxwarm-message' && tag.attrs.type === 'channel' ? 'legacy-user' : 'activity'
+  }
+  return /^\[SYSTEM:[\s\S]*\]$/.test(text) && isHeavySystemTextLine(text.split('\n')[0]) ? 'activity' : 'user'
+}
+
+const hasConversationText = (part: Message['parts'][number]): boolean => (
+  !!part.text?.trim() && !part.toolUseId && !part.functionResponse
+)
+const hasConversationImage = (part: Message['parts'][number]): boolean => (
+  !!(part.inlineData || part.inlineDataRef || part.inlineDataUnavailable) && !part.toolUseId && !part.functionResponse
+)
 
 /** Ordinary model output breaks a tool run; tool-linked images stay with their tool response. */
 export const getGroupContentPartIndex = (msg: Message): number => msg.parts.findIndex((part) => (
@@ -451,6 +495,9 @@ const sameGroupView = (a: TimelineGroupView, b: TimelineGroupView): boolean => (
 const sameRowView = (a: TimelineRowView, b: TimelineRowView): boolean => (
   a.key === b.key
   && a.msg === b.msg
+  && a.conversationPartIndex === b.conversationPartIndex
+  && a.literalUserText === b.literalUserText
+  && a.activity === b.activity
   && a.prevMsg === b.prevMsg
   && a.nextMsg === b.nextMsg
   && a.pairedToolResponse === b.pairedToolResponse
@@ -477,7 +524,8 @@ const reuseWhenEqual = <T,>(previous: T | undefined, next: T, isEqual: (a: T, b:
 )
 
 export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRowsCache | null): TimelineRowsResult => {
-  const { messages, isRunningTool = false, isMobile, groupTools, showUsageBadge, showTimeDividers, nestedDepth, expandedGroupKeys } = input
+  const { messages, isRunningTool = false, isMobile, timelineView, showUsageBadge, showTimeDividers, nestedDepth, expandedGroupKeys } = input
+  const grouped = timelineView === 'grouped'
   const requestTimings = deriveRequestTimings(messages)
   const timeMarkers = showTimeDividers && nestedDepth === 0 ? deriveTimelineTimeMarkers(messages, isGroupableSystemMessage) : []
   const messageKeys = messages.map((msg, index) => getMessageStableKey(msg, index))
@@ -489,27 +537,28 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
   let previousIsThreadLike = false
   let foldedThinkingOwnerKey: string | null = null
 
-  const emitRow = (index: number, group: TimelineGroupView | null, isGroupStart: boolean, foldedOwnerKey: string | null): void => {
+  const anchoredMessages = new Set<number>()
+  const emitRow = (index: number, group: TimelineGroupView | null, isGroupStart: boolean, foldedOwnerKey: string | null, conversation?: { key: string; partIndex?: number; literalUserText?: boolean; activity?: TimelineRowView['activity'] }): void => {
     const msg = messages[index]
     const prevMsg = index > 0 ? messages[index - 1] : null
     const nextMsg = index < messages.length - 1 ? messages[index + 1] : null
-    const systemLikeMessage = isHeavySystemLikeMessage(msg)
+    const systemLikeMessage = conversation && !conversation.activity && msg.role === 'user' ? false : isHeavySystemLikeMessage(msg)
     const threadLikeMessage = systemLikeMessage || msg.role === 'model' || msg.role === 'tool'
     const shouldSkipMargin = threadLikeMessage && previousIsThreadLike
     previousIsThreadLike = threadLikeMessage
 
-    if (msg.role === 'tool' && isHandledByPreviousGroup(messages, index)) {
+    if (!conversation && msg.role === 'tool' && isHandledByPreviousGroup(messages, index)) {
       // The preceding call's card already renders this response.
       return
     }
 
     const activeGroup = group !== null && group.summaryItems.length > 0 ? group : null
     const groupExpanded = group !== null && expandedGroupKeys.has(group.key)
-    const collapsedGroup = groupTools && activeGroup !== null && !groupExpanded && !activeGroup.keepExpanded
+    const collapsedGroup = grouped && activeGroup !== null && !groupExpanded && !activeGroup.keepExpanded
     if (collapsedGroup && isGroupableSystemMessage(msg)) return
     const requestTiming = requestTimings[index]
     const ownUsage = getModelMessageUsage(msg)
-    const usageBadge: TimelineUsageBadgeView | null = !showUsageBadge
+    const usageBadge: TimelineUsageBadgeView | null = !showUsageBadge || conversation?.activity || (conversation && conversation.key !== messageKeys[index])
       ? null
       : collapsedGroup
         ? (isGroupStart && activeGroup !== null && activeGroup.usage
@@ -519,11 +568,14 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
           ? { usage: ownUsage, attribution: getMessageUsageAttribution(msg, requestTiming) }
           : null
 
-    const key = messageKeys[index]
+    const key = conversation?.key || messageKeys[index]
+    const ownsAnchor = !anchoredMessages.has(index)
+    anchoredMessages.add(index)
     const pairedToolResponse = nextPairedToolResponse(messages, index)
     const next: TimelineRowView = {
       key,
       msg,
+      ...(conversation ? { conversationPartIndex: conversation.partIndex, literalUserText: conversation.literalUserText, activity: conversation.activity } : {}),
       prevMsg,
       nextMsg,
       pairedToolResponse,
@@ -531,14 +583,14 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       requestTiming,
       group,
       collapsedGroup,
-      renderSummary: groupTools && isGroupStart && activeGroup !== null && !groupExpanded && !activeGroup.keepExpanded,
-      hideFoldedThinking: groupTools && foldedOwnerKey !== null && !expandedGroupKeys.has(foldedOwnerKey),
+      renderSummary: grouped && isGroupStart && activeGroup !== null && !groupExpanded && !activeGroup.keepExpanded,
+      hideFoldedThinking: grouped && foldedOwnerKey !== null && !expandedGroupKeys.has(foldedOwnerKey),
       // Web-search cards are content of the group, so they are hidden exactly while the group is
       // collapsed into its summary row. Reusing `collapsedGroup` keeps the keep-expanded tail group
       // from hiding its own cards.
       suppressWebSearchCards: collapsedGroup,
       usageBadge,
-      timeMarker: timeMarkers[index] ?? null,
+      timeMarker: ownsAnchor ? timeMarkers[index] ?? null : null,
       usageAnchorRelative: usageBadge !== null && !isMobile,
       systemLikeMessage,
       interleavedToolGroup: pairedToolResponse !== null,
@@ -550,13 +602,88 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
           : isMobile || nestedDepth > 0
             ? 'w-full'
             : 'w-full max-w-[80%]',
-      ...(nestedDepth === 0 ? { anchorKey: getMessageViewportAnchorKey(msg) || undefined } : {}),
-      ...(nestedDepth === 0 ? { scrollbarAnchorKey: getContextScrollbarAnchorKey(msg) || undefined } : {}),
+      ...(nestedDepth === 0 && ownsAnchor ? { anchorKey: getMessageViewportAnchorKey(msg) || undefined } : {}),
+      ...(nestedDepth === 0 && ownsAnchor ? { scrollbarAnchorKey: getContextScrollbarAnchorKey(msg) || undefined } : {}),
     }
 
     const cached = reuseWhenEqual(previous?.rows.get(key), next, sameRowView)
     rowCache.set(key, cached)
     rows.push(cached)
+  }
+
+  if (timelineView === 'conversation') {
+    let activityStart = -1
+    let activityKey = ''
+    let activityMessages: Message[] = []
+    let lastActivitySource = -1
+    const flushActivity = () => {
+      if (activityStart < 0) return
+      const old = previous?.rows.get(activityKey)?.activity
+      const activity = old && old.messages.length === activityMessages.length && old.messages.every((msg, i) => msg === activityMessages[i])
+        ? old : {
+          messages: activityMessages,
+          hasError: activityMessages.some(msg => !!getLlmErrorMessageDetails(msg) || msg.parts.some(part => part.functionResponse && getToolResponseStatus(part.functionResponse) === 'error')),
+        }
+      emitRow(activityStart, null, false, null, { key: activityKey, activity })
+      activityStart = -1
+      activityMessages = []
+      lastActivitySource = -1
+    }
+    const addActivity = (index: number, fragment: Message, partIndex = 0) => {
+      if (messages[index].__meta?.queuedPreview) return // Pending events belong to the existing queue status.
+      if (activityStart < 0) {
+        activityStart = index
+        activityKey = `${messageKeys[index]}-activity-${partIndex}`
+      }
+      if (lastActivitySource === index) {
+        const last = activityMessages[activityMessages.length - 1]
+        activityMessages[activityMessages.length - 1] = { ...last, parts: [...last.parts, ...fragment.parts] }
+      } else activityMessages.push(fragment)
+      lastActivitySource = index
+    }
+    messages.forEach((msg, index) => {
+      const contextBlock = msg.role === 'model' && getContextBlockMetaFromMessage(msg)
+      if (msg.role === 'user') {
+        const inputKind = getConversationInputKind(msg)
+        if (inputKind === 'activity') addActivity(index, msg)
+        else {
+          flushActivity()
+          emitRow(index, null, false, null, { key: messageKeys[index], literalUserText: inputKind === 'user' })
+        }
+        return
+      }
+      if (msg.role === 'tool' || getLlmErrorMessageDetails(msg)) {
+        addActivity(index, msg)
+        return
+      }
+      if (!contextBlock && !msg.parts.some(part => hasConversationText(part) || hasConversationImage(part))) {
+        if (msg.parts.length || getModelMessageUsage(msg)) addActivity(index, msg)
+        return
+      }
+      let visiblePartCount = 0
+      msg.parts.forEach((part, partIndex) => {
+        const visible = hasConversationText(part) || hasConversationImage(part)
+        const technical = part.system || part.functionCall || part.functionResponse || part.toolUseId || isReasoningPart(part) || getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem)
+        if (technical) {
+          const fragment = visible ? { ...part, text: undefined, inlineData: undefined, inlineDataRef: undefined, inlineDataUnavailable: undefined } : part
+          addActivity(index, { ...msg, parts: [fragment], __meta: { ...msg.__meta, usage: undefined, contextBlock: undefined } }, partIndex)
+        }
+        if (visible) {
+          flushActivity()
+          emitRow(index, null, false, null, {
+            key: visiblePartCount++ === 0 ? messageKeys[index] : `${messageKeys[index]}-part-${partIndex}`,
+            partIndex,
+          })
+        }
+      })
+      // Even an unusual empty CTX summary remains a real context card boundary.
+      if (contextBlock && visiblePartCount === 0) {
+        flushActivity()
+        emitRow(index, null, false, null, { key: messageKeys[index] })
+      }
+    })
+    flushActivity()
+    return { rows, cache: { rows: rowCache, groups: groupCache } }
   }
 
   let cursor = 0

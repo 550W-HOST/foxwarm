@@ -1,5 +1,6 @@
 import { memo } from 'react'
 import RuntimeBusySpinner from './RuntimeBusySpinner'
+import type { TimelineView } from '../chatPreferences'
 import { getRuntimeStateSummary, type SessionRuntimeState } from '../sessionRuntimeState'
 
 interface ProcessingStatusProps {
@@ -9,6 +10,7 @@ interface ProcessingStatusProps {
   turnIncomplete: boolean
   loading: boolean
   isMobile: boolean
+  timelineView?: TimelineView
   onStop?: () => void
   onRunQueued?: () => void
   onContinue?: () => void
@@ -23,6 +25,7 @@ const ProcessingStatus = memo(function ProcessingStatus({
   turnIncomplete,
   loading,
   isMobile,
+  timelineView,
   onStop,
   onRunQueued,
   onContinue,
@@ -33,7 +36,12 @@ const ProcessingStatus = memo(function ProcessingStatus({
   const showRuntimeStatus = runtimeStateName !== 'idle' && !loading
   const runtimeSummary = getRuntimeStateSummary(runtimeState, sessionBusy)
   const isCompacting = runtimeStateName === 'requesting-model' && runtimeState?.active?.phase === 'compaction'
-  const visibleRuntimeSummary = isCompacting
+  const visibleRuntimeSummary = timelineView === 'conversation' && (runtimeStateName === 'requesting-model' || runtimeStateName === 'running-tool')
+    ? isCompacting ? 'Compacting…' : 'Working…'
+    : timelineView === 'conversation' && runtimeStateName === 'waiting'
+    ? runtimeState?.waiting?.reason ? `Waiting · ${runtimeState.waiting.reason}`
+      : runtimeState?.waiting?.waitingFor === 'input' || runtimeState?.waiting?.waitForInput ? 'Waiting for input' : 'Waiting'
+    : isCompacting
     ? 'Compacting...'
     : runtimeStateName === 'requesting-model'
     ? runtimeSummary.replace(/^thinking\b/, 'Thinking...')

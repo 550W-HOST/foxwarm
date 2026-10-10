@@ -21,22 +21,22 @@ const EVENTS_BETWEEN_TOOLS = [
   call('one', 1), event('one', 2), result('one', 3), event('two', 4, 'text'), call('two', 5), result('two', 6), final(7),
 ]
 const CASES = {
-  collapsed: { messages: EVENTS_BETWEEN_TOOLS, groupTools: true },
-  ungrouped: { messages: EVENTS_BETWEEN_TOOLS, groupTools: false },
-  tail: { messages: [call('tail', 11), event('tail-first', 12), result('tail', 13), event('tail-last', 14, 'text')], groupTools: true },
-  standalone: { messages: [event('outside', 20, 'text'), call('standalone', 21), result('standalone', 22), final(23)], groupTools: true },
-  noTools: { messages: [event('alone', 30), event('still-alone', 31, 'text')], groupTools: true },
-  direct: { messages: [call('before', 40), result('before', 41), direct('Please explain the text <foxwarm-system kind="event" type="quote"> inside this message.', 42), call('after', 43), result('after', 44), final(45)], groupTools: true },
-  external: { messages: [call('external-before', 50), result('external-before', 51), { role: 'user', parts: [{ system: '<foxwarm-system kind="external-input" />' }, { text: 'actual external user input' }], __meta: { seq: 52 } }, call('external-after', 53), result('external-after', 54), final(55)], groupTools: true },
-  otherKind: { messages: [call('other-before', 60), result('other-before', 61), { role: 'user', parts: [{ system: '<foxwarm-system kind="child-reminder">\nOther system reminder.\n</foxwarm-system>' }], __meta: { seq: 62 } }, call('other-after', 63), result('other-after', 64), final(65)], groupTools: true },
-  userBoundary: { messages: [call('boundary', 70), result('boundary', 71), event('before-user', 72), direct('NEW USER INPUT', 73), final(74)], groupTools: true },
-  goal: { messages: [call('goal-one', 100), goalReminder('one', 101), result('goal-one', 102), goalReminder('two', 103, 'text'), goalReminder('three', 104), call('goal-two', 105), result('goal-two', 106), final(107)], groupTools: true },
-  goalUngrouped: { messages: [call('goal-one', 100), goalReminder('one', 101), result('goal-one', 102), goalReminder('two', 103, 'text'), call('goal-two', 105), result('goal-two', 106)], groupTools: false },
-  goalTail: { messages: [call('goal-tail', 110), goalReminder('tail-first', 111), result('goal-tail', 112), goalReminder('tail-last', 113, 'text')], groupTools: true },
-  goalStandalone: { messages: [goalReminder('outside', 120, 'text'), call('goal-standalone', 121), result('goal-standalone', 122), final(123)], groupTools: true },
-  goalNoTools: { messages: [goalReminder('alone', 130), goalReminder('still-alone', 131, 'text')], groupTools: true },
-  quotedGoal: { messages: [call('quoted-before', 140), result('quoted-before', 141), direct('Please explain <foxwarm-system kind="goal-reminder"> inside this message.', 142), call('quoted-after', 143), result('quoted-after', 144), final(145)], groupTools: true },
-  mixedGoal: { messages: [call('mixed-before', 150), result('mixed-before', 151), { role: 'user', parts: [{ system: '<foxwarm-system kind="session-boundary" event="compact-completed" />' }, { system: '<foxwarm-system kind="goal-reminder">\nMIXED REMINDER\n</foxwarm-system>' }], __meta: { seq: 152, goalReminder: true, goalReminderKind: 'compact-completion' } }, call('mixed-after', 153), result('mixed-after', 154), final(155)], groupTools: true },
+  collapsed: { messages: EVENTS_BETWEEN_TOOLS, timelineView: 'grouped' },
+  ungrouped: { messages: EVENTS_BETWEEN_TOOLS, timelineView: 'detailed' },
+  tail: { messages: [call('tail', 11), event('tail-first', 12), result('tail', 13), event('tail-last', 14, 'text')], timelineView: 'grouped' },
+  standalone: { messages: [event('outside', 20, 'text'), call('standalone', 21), result('standalone', 22), final(23)], timelineView: 'grouped' },
+  noTools: { messages: [event('alone', 30), event('still-alone', 31, 'text')], timelineView: 'grouped' },
+  direct: { messages: [call('before', 40), result('before', 41), direct('Please explain the text <foxwarm-system kind="event" type="quote"> inside this message.', 42), call('after', 43), result('after', 44), final(45)], timelineView: 'grouped' },
+  external: { messages: [call('external-before', 50), result('external-before', 51), { role: 'user', parts: [{ system: '<foxwarm-system kind="external-input" />' }, { text: 'actual external user input' }], __meta: { seq: 52 } }, call('external-after', 53), result('external-after', 54), final(55)], timelineView: 'grouped' },
+  otherKind: { messages: [call('other-before', 60), result('other-before', 61), { role: 'user', parts: [{ system: '<foxwarm-system kind="child-reminder">\nOther system reminder.\n</foxwarm-system>' }], __meta: { seq: 62 } }, call('other-after', 63), result('other-after', 64), final(65)], timelineView: 'grouped' },
+  userBoundary: { messages: [call('boundary', 70), result('boundary', 71), event('before-user', 72), direct('NEW USER INPUT', 73), final(74)], timelineView: 'grouped' },
+  goal: { messages: [call('goal-one', 100), goalReminder('one', 101), result('goal-one', 102), goalReminder('two', 103, 'text'), goalReminder('three', 104), call('goal-two', 105), result('goal-two', 106), final(107)], timelineView: 'grouped' },
+  goalUngrouped: { messages: [call('goal-one', 100), goalReminder('one', 101), result('goal-one', 102), goalReminder('two', 103, 'text'), call('goal-two', 105), result('goal-two', 106)], timelineView: 'detailed' },
+  goalTail: { messages: [call('goal-tail', 110), goalReminder('tail-first', 111), result('goal-tail', 112), goalReminder('tail-last', 113, 'text')], timelineView: 'grouped' },
+  goalStandalone: { messages: [goalReminder('outside', 120, 'text'), call('goal-standalone', 121), result('goal-standalone', 122), final(123)], timelineView: 'grouped' },
+  goalNoTools: { messages: [goalReminder('alone', 130), goalReminder('still-alone', 131, 'text')], timelineView: 'grouped' },
+  quotedGoal: { messages: [call('quoted-before', 140), result('quoted-before', 141), direct('Please explain <foxwarm-system kind="goal-reminder"> inside this message.', 142), call('quoted-after', 143), result('quoted-after', 144), final(145)], timelineView: 'grouped' },
+  mixedGoal: { messages: [call('mixed-before', 150), result('mixed-before', 151), { role: 'user', parts: [{ system: '<foxwarm-system kind="session-boundary" event="compact-completed" />' }, { system: '<foxwarm-system kind="goal-reminder">\nMIXED REMINDER\n</foxwarm-system>' }], __meta: { seq: 152, goalReminder: true, goalReminderKind: 'compact-completion' } }, call('mixed-after', 153), result('mixed-after', 154), final(155)], timelineView: 'grouped' },
 }
 
 let browser, page, server
@@ -48,20 +48,20 @@ before(async () => {
     import ChatTimeline from ${JSON.stringify(timelineEntry)}
     const cases = ${JSON.stringify(CASES)}
     const roots = {}
-    for (const [name, { messages, groupTools }] of Object.entries(cases)) {
+    for (const [name, { messages, timelineView }] of Object.entries(cases)) {
       roots[name] = createRoot(document.getElementById(name))
       roots[name].render(React.createElement(ChatTimeline, {
-        sessionId: 'fixture/main', messages, isMobile: false, groupTools, showUsageBadge: false,
+        sessionId: 'fixture/main', messages, isMobile: false, timelineView, showUsageBadge: false,
       }))
     }
     window.appendTailEvent = () => roots.tail.render(React.createElement(ChatTimeline, {
-      sessionId: 'fixture/main', messages: [...cases.tail.messages, ${JSON.stringify(event('streaming-tail', 15))}], isMobile: false, groupTools: true, showUsageBadge: false,
+      sessionId: 'fixture/main', messages: [...cases.tail.messages, ${JSON.stringify(event('streaming-tail', 15))}], isMobile: false, timelineView: 'grouped', showUsageBadge: false,
     }))
     window.restoreTail = () => roots.tail.render(React.createElement(ChatTimeline, {
-      sessionId: 'fixture/main', messages: cases.tail.messages, isMobile: false, groupTools: true, showUsageBadge: false,
+      sessionId: 'fixture/main', messages: cases.tail.messages, isMobile: false, timelineView: 'grouped', showUsageBadge: false,
     }))
     window.moveTailToHistory = () => roots.tail.render(React.createElement(ChatTimeline, {
-      sessionId: 'fixture/main', messages: [...cases.tail.messages, { role: 'model', parts: [{ text: 'NEW ANSWER' }], __meta: { seq: 15 } }], isMobile: false, groupTools: true, showUsageBadge: false,
+      sessionId: 'fixture/main', messages: [...cases.tail.messages, { role: 'model', parts: [{ text: 'NEW ANSWER' }], __meta: { seq: 15 } }], isMobile: false, timelineView: 'grouped', showUsageBadge: false,
     }))
   `
   const bundle = await build({

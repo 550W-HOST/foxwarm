@@ -1,3 +1,4 @@
+import type { TimelineView } from '../chatPreferences'
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp, Code2, MessageSquareText, Search, SquareTerminal, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
@@ -186,11 +187,11 @@ interface ChatProps {
   onOpenCodeCommit?: (target: CodeCommitTarget) => void | Promise<void>
   onOpenModelSettings?: () => void
   sendKeyMode?: 'modEnter' | 'enter'
-  groupTools?: boolean
+  timelineView?: TimelineView
   showUsageBadge?: boolean
   showUserMessageMetadata?: boolean
   onSendKeyModeChange?: (mode: 'modEnter' | 'enter') => void
-  onGroupToolsChange?: (enabled: boolean) => void
+  onTimelineViewChange?: (mode: TimelineView) => void
   onShowUsageBadgeChange?: (enabled: boolean) => void
   onShowUserMessageMetadataChange?: (enabled: boolean) => void
 }
@@ -236,7 +237,7 @@ type SessionListRecord = {
   isolated?: boolean
 }
 
-const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onGroupToolsChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', timelineView = 'detailed', showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onTimelineViewChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
   const [timelineState, dispatchTimeline] = useReducer(timelineReducer, { messages: [], queuedMessages: [] })
   const messages = timelineState.messages
   const queuedMessages = timelineState.queuedMessages
@@ -1617,7 +1618,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
 
   const hiddenMessageCount = messages.length - visibleMessages.length
 
-  const searchFields = useMemo(() => searchOpen ? projectSessionSearchFields(messages, groupTools) : [], [groupTools, messages, searchOpen])
+  const searchFields = useMemo(() => searchOpen ? projectSessionSearchFields(messages, timelineView) : [], [timelineView, messages, searchOpen])
   const searchMatches = useMemo(() => findSessionSearchMatches(searchFields, searchQuery), [searchFields, searchQuery])
   const currentSearchIndex = searchMatches.findIndex(match => match.id === searchMatchId)
   const selectedSearchMatch = searchMatches[currentSearchIndex >= 0 ? currentSearchIndex : 0] || null
@@ -2258,8 +2259,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
             <SessionUiSettingsMenu
               sendKeyMode={sendKeyMode}
               onSendKeyModeChange={onSendKeyModeChange}
-              groupTools={groupTools}
-              onGroupToolsChange={onGroupToolsChange}
+              timelineView={timelineView}
+              onTimelineViewChange={onTimelineViewChange}
               showUsageBadge={showUsageBadge}
               onShowUsageBadgeChange={onShowUsageBadgeChange}
               showUserMessageMetadata={showUserMessageMetadata}
@@ -2322,11 +2323,12 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
             <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full">
               <ThreadCardHeightContext.Provider value={cardHeightContext}>
                 <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-                  <ChatTimeline sessionId={sessionId} isRunningTool={sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} />
+                  <ChatTimeline sessionId={sessionId} isRunningTool={sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} />
                 </ToolScriptProgressContext.Provider>
               </ThreadCardHeightContext.Provider>
             </div>
             <ProcessingStatus
+              timelineView={timelineView}
               sessionBusy={sessionBusy}
               runtimeState={sessionRecord?.runtimeState}
               sessionQueueLength={sessionQueueLength}
@@ -2339,7 +2341,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
             />
             {queuedMessages.length > 0 && (
               <div className="foxwarm-queued-preview min-w-0 max-w-full" data-queued-preview="true" aria-label="Queued messages">
-                <ThreadCardHeightContext.Provider value={cardHeightContext}><ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={false} showTimeDividers={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} /></ThreadCardHeightContext.Provider>
+                <ThreadCardHeightContext.Provider value={cardHeightContext}><ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} timelineView={timelineView} showUsageBadge={false} showTimeDividers={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} /></ThreadCardHeightContext.Provider>
               </div>
             )}
             <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />
@@ -2423,7 +2425,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
             sessionBusy,
             sessionQueueLength,
             queuedPreviewCount: queuedMessages.length,
-            groupTools,
+            timelineView,
             showUsageBadge,
             showUserMessageMetadata,
             sendKeyMode,
@@ -2448,12 +2450,12 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   && prev.onOpenCodeCommit === next.onOpenCodeCommit
   && prev.onOpenModelSettings === next.onOpenModelSettings
   && prev.sendKeyMode === next.sendKeyMode
-  && prev.groupTools === next.groupTools
+  && prev.timelineView === next.timelineView
   && prev.showUsageBadge === next.showUsageBadge
   && prev.webUiIdentityMode === next.webUiIdentityMode
   && prev.showUserMessageMetadata === next.showUserMessageMetadata
   && prev.onSendKeyModeChange === next.onSendKeyModeChange
-  && prev.onGroupToolsChange === next.onGroupToolsChange
+  && prev.onTimelineViewChange === next.onTimelineViewChange
   && prev.onShowUsageBadgeChange === next.onShowUsageBadgeChange
   && prev.onShowUserMessageMetadataChange === next.onShowUserMessageMetadataChange
 ))

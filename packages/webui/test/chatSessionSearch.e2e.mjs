@@ -52,12 +52,12 @@ before(async () => {
       return new Response('{}',{status:404})
     }
     class Socket { static CONNECTING=0; static OPEN=1;static CLOSED=3;
-      constructor(){this.readyState=0;window.fixture.socket=this;queueMicrotask(()=>{this.readyState=1;this.onopen?.({})})}
+      constructor(){this.readyState=0;window.fixture.socket=this;queueMicrotask(()=>{this.readyState=1;this.onopen?.({});this.onmessage?.({data:JSON.stringify({type:'connected'})})})}
       close(){this.readyState=3}
       send(raw){const data=JSON.parse(raw);if(data.type==='set-subscriptions') queueMicrotask(()=>{this.onmessage?.({data:JSON.stringify({type:'subscriptions-accepted',revision:data.revision,sessionListResolutions:{},sessionResolutions:Object.fromEntries(data.sessionIds.map(id=>[id,id]))})});this.onmessage?.({data:JSON.stringify({type:'subscriptions-applied',revision:data.revision})})})}
     }
     window.WebSocket=Socket
-    function Fixture(){const [groupTools,setGroupTools]=React.useState(true);window.fixture.setGroupTools=setGroupTools;return React.createElement(Chat,{sessionId:'fixture/main',groupTools,showUsageBadge:false})}
+    function Fixture(){const [timelineView,setTimelineView]=React.useState('grouped');window.fixture.setTimelineView=setTimelineView;return React.createElement(Chat,{sessionId:'fixture/main',timelineView,showUsageBadge:false})}
     createRoot(document.getElementById('root')).render(React.createElement(Fixture))
   `
   const bundle = await build({ stdin: {contents:fixture,resolveDir:new URL('..',import.meta.url).pathname,sourcefile:'chat-search-fixture.tsx'}, bundle:true,format:'iife',platform:'browser',target:'chrome120',write:false,define:{'process.env.NODE_ENV':JSON.stringify('test')},logLevel:'silent' })
@@ -248,7 +248,7 @@ test('manual scroll is retained through an unrelated stream update and search cl
 })
 
 test('disabling Group tools leaves call and result matches searchable in their own cards',async()=>{
-  await page.evaluate(()=>window.fixture.setGroupTools(false))
+  await page.evaluate(()=>window.fixture.setTimelineView('detailed'))
   await page.waitForFunction(()=>document.querySelectorAll('[data-tool-group]').length===0)
   await page.click('button[aria-label="Find in chat"]')
   await query('json-needle')
@@ -258,7 +258,7 @@ test('disabling Group tools leaves call and result matches searchable in their o
 })
 
 test('historical grouped Event and Goal reminder bodies remain searchable without opening unrelated groups',async()=>{
-  await page.evaluate(()=>window.fixture.setGroupTools(true))
+  await page.evaluate(()=>window.fixture.setTimelineView('grouped'))
   await page.waitForFunction(()=>document.querySelectorAll('[data-tool-group]').length===2)
   await page.click('button[aria-label="Find in chat"]')
   try {
@@ -342,4 +342,32 @@ test('excluded display-math controls do not take the ordinary Markdown hit',asyn
     })
     assert.deepEqual(actual,{text:'Z',inSpecial:false})
   } finally { await page.click('[aria-label="Close search"]') }
+})
+
+test('Conversation Search navigates body and CTX summaries without revealing activity, and keeps the detached viewport', async () => {
+  await page.evaluate(() => window.fixture.setTimelineView('conversation'))
+  await page.waitForSelector('[data-timeline-activity]')
+  await page.click('button[aria-label="Find in chat"]')
+  for (const term of ['command-needle', 'CJK目标尾部', 'thought-needle', 'GROUP_EVENT_TARGET', 'LLM_RETRY_SEARCH_TARGET']) {
+    await query(term)
+    await page.waitForFunction(() => document.querySelector('[role="search"] [aria-live]')?.textContent === '0/0')
+    assert.equal(await page.$('[data-activity-details]'), null)
+  }
+  // Explicitly opening details does not turn them into this pane's Search corpus.
+  await page.$eval('[aria-label="Expand activity"]', button => button.click())
+  await page.waitForSelector('[data-activity-details]')
+  await query('command-needle')
+  assert.equal((await snapshot()).hits, '0/0')
+  for (const term of ['visible-needle', 'CTX摘要末尾', 'OLD_ONLY_MATCH']) {
+    await query(term)
+    await page.waitForFunction(value => [...CSS.highlights].some(([name, hits]) => name.startsWith('foxwarm-chat-search-') && [...hits][0]?.toString() === value), { timeout: 3000 }, term)
+    assert.equal((await snapshot()).visible, true)
+    assert.equal((await snapshot()).hits, '1/1')
+  }
+  assert.equal((await snapshot()).archive, 0)
+  await page.evaluate(() => { const container = document.querySelector('.foxwarm-chat-messages'); container.scrollTop = 1200; container.dispatchEvent(new Event('scroll')); window.fixture.emitStream('CONVERSATION_STREAM_UPDATE') })
+  await page.waitForFunction(() => document.querySelector('[data-chat-timeline="committed"]').textContent.includes('CONVERSATION_STREAM_UPDATE'))
+  assert.ok(Math.abs((await snapshot()).scrollTop - 1200) < 4)
+  await page.click('[aria-label="Close search"]')
+  assert.ok((await snapshot()).distance > 500)
 })

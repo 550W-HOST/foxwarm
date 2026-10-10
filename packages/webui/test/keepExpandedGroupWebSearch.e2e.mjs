@@ -41,14 +41,14 @@ async function buildFixtureBundle() {
 
     const cases = ${JSON.stringify(CASES)}
     const roots = new Map()
-    function render(id, messages, sessionId = 'fixture/main', searchTarget = null, { runtimeState = 'idle', groupTools = true } = {}) {
+    function render(id, messages, sessionId = 'fixture/main', searchTarget = null, { runtimeState = 'idle', timelineView = 'grouped' } = {}) {
       if (!roots.has(id)) roots.set(id, createRoot(document.getElementById(id)))
       roots.get(id).render(React.createElement(ChatTimeline, {
         sessionId,
         messages,
         searchTarget,
         isMobile: false,
-        groupTools,
+        timelineView,
         isRunningTool: runtimeState === 'running-tool',
         showUsageBadge: false,
       }))
@@ -212,7 +212,7 @@ test('tail execution uses the result area in collapsed and expanded cards, and r
   await page.waitForSelector(`${liveTool} .foxwarm-tool-result-preview`)
   assert.equal(await runningResultCount(), 1)
 
-  await renderLive(messages, 'fixture/running', null, { ...runningOptions, groupTools: false })
+  await renderLive(messages, 'fixture/running', null, { ...runningOptions, timelineView: 'detailed' })
   assert.equal(await runningResultCount(), 1, 'Group tools off retains the tail result indication')
   for (const runtimeState of ['idle', 'waiting', 'requesting-model']) {
     await page.evaluate(runtimeState => window.updateLiveRuntime(runtimeState), runtimeState)
@@ -244,10 +244,10 @@ test('responses end the placeholder independently, including empty results and e
 test('historical unmatched calls and streaming argument drafts are not running result cards', async () => {
   const historyCall = liveCall('history-pending', 60)
   const currentCall = liveCall('current-pending', 61)
-  await renderLive([historyCall, currentCall], 'fixture/history', null, { ...runningOptions, groupTools: false })
+  await renderLive([historyCall, currentCall], 'fixture/history', null, { ...runningOptions, timelineView: 'detailed' })
   const previews = await page.$$eval('#live .foxwarm-tool-card', nodes => nodes.map(node => node.querySelector('.foxwarm-tool-result-preview')?.textContent || ''))
   assert.deepEqual(previews, ['', 'Running...'])
-  await renderLive([historyCall, liveAnswer], 'fixture/history', null, { ...runningOptions, groupTools: false })
+  await renderLive([historyCall, liveAnswer], 'fixture/history', null, { ...runningOptions, timelineView: 'detailed' })
   assert.equal(await runningResultCount(), 0, 'ordinary output ends tail eligibility')
   for (const meta of [{ streaming: true }, { synthetic: 'streamingAssistantDraft' }]) {
     const draft = { ...currentCall, __meta: { ...currentCall.__meta, ...meta } }

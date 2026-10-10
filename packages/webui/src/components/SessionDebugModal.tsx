@@ -1,3 +1,4 @@
+import type { TimelineView } from '../chatPreferences'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Check, Copy, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
@@ -21,7 +22,7 @@ export type SessionDebugSource = {
   sessionBusy: boolean
   sessionQueueLength: number
   queuedPreviewCount: number
-  groupTools: boolean
+  timelineView: TimelineView
   showUsageBadge: boolean
   showUserMessageMetadata: boolean
   sendKeyMode: 'modEnter' | 'enter'
@@ -73,7 +74,7 @@ function buildSessionDebugSnapshotText(
       sessionBusy: source.sessionBusy,
       sessionQueueLength: source.sessionQueueLength,
       queuedPreviewCount: source.queuedPreviewCount,
-      groupTools: source.groupTools,
+      timelineView: source.timelineView,
       showUsageBadge: source.showUsageBadge,
       showUserMessageMetadata: source.showUserMessageMetadata,
       sendKeyBehavior: source.sendKeyMode === 'enter' ? 'Enter sends; Shift+Enter inserts a new line.' : 'Ctrl/Cmd+Enter sends; Enter inserts a new line.',

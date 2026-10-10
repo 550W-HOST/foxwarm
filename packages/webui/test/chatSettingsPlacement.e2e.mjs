@@ -38,13 +38,13 @@ async function buildFixtureBundle() {
 
     function Fixture() {
       const preferences = useChatPreferences()
-      const { sendKeyMode, setSendKeyMode, groupTools, setGroupTools, showUsageBadge, setShowUsageBadge, showUserMessageMetadata: showMetadata, setShowUserMessageMetadata: setShowMetadata } = preferences
+      const { sendKeyMode, setSendKeyMode, timelineView, setTimelineView, showUsageBadge, setShowUsageBadge, showUserMessageMetadata: showMetadata, setShowUserMessageMetadata: setShowMetadata } = preferences
       useEffect(() => { window.chatSettingsFixture = { ...preferences, showMetadata } }, [preferences, showMetadata])
       return React.createElement('div', { className: 'foxwarm-chat-root', style: { width: '100%', minWidth: 0, overflow: 'hidden' } },
         React.createElement('header', { style: { display: 'flex', justifyContent: 'flex-end', padding: '8px' } },
           React.createElement(SessionUiSettingsMenu, {
             sendKeyMode, onSendKeyModeChange: setSendKeyMode,
-            groupTools, onGroupToolsChange: setGroupTools,
+            timelineView, onTimelineViewChange: setTimelineView,
             showUsageBadge, onShowUsageBadgeChange: setShowUsageBadge,
             showUserMessageMetadata: showMetadata, onShowUserMessageMetadataChange: setShowMetadata,
             onOpenDebugInfo() {},
@@ -53,7 +53,7 @@ async function buildFixtureBundle() {
         React.createElement('main', null,
           React.createElement(ChatTimeline, {
             sessionId: 'fixture/main', messages, isMobile: window.innerWidth < 768,
-            groupTools, showUsageBadge, showUserMessageMetadata: showMetadata,
+            timelineView, showUsageBadge, showUserMessageMetadata: showMetadata,
           })
         )
       )
@@ -209,7 +209,7 @@ test('session menu owns Input and Chat settings and persists the metadata toggle
   await page.waitForFunction(() => window.chatSettingsFixture?.showUserMessageMetadata === false)
   await openMenu()
   const menuText = await page.$eval('[data-session-ui-settings-menu]', menu => menu.textContent || '')
-  for (const label of ['Input', 'Chat', 'Group tools', 'Show usage badges', 'Show minimap', 'Show user message metadata', 'debug info']) {
+  for (const label of ['Input', 'Chat', 'Timeline view', 'Detailed', 'Grouped', 'Conversation', 'Show usage badges', 'Show minimap', 'Show user message metadata', 'debug info']) {
     assert.equal(menuText.includes(label), true, `${label} is present`)
   }
   await page.evaluate(() => {
@@ -237,8 +237,8 @@ test('session menu owns Input and Chat settings and persists the metadata toggle
   assert.equal((await page.$eval('main', element => element.textContent || '')).includes('<foxwarm-system kind="time"'), true)
   await clickMenuLabel('Enter')
   await page.waitForFunction(() => localStorage.getItem('foxwarm_send_key_mode_v1') === 'enter')
-  await clickMenuLabel('Group tools')
-  await page.waitForFunction(() => localStorage.getItem('foxwarm_group_tools_v1') === 'true')
+  await clickMenuLabel('Grouped')
+  await page.waitForFunction(() => localStorage.getItem('foxwarm_timeline_view_v1') === 'grouped')
   await page.reload({ waitUntil: 'load' })
   await page.waitForFunction(() => !!window.chatSettingsFixture?.showMetadata)
   assert.equal((await page.$eval('main', element => element.textContent || '')).includes('<foxwarm-message type="channel">'), true)
@@ -282,7 +282,7 @@ test('session menu clamps inside a narrow left split pane instead of clipping pa
 test('outer and embedded Chat roots synchronize all relocated preferences in both directions', async () => {
   await mountFixture()
   await page.evaluate(() => {
-    for (const key of ['foxwarm_send_key_mode_v1', 'foxwarm_group_tools_v1', 'foxwarm_show_usage_badge_v1', 'foxwarm_show_user_message_metadata_v1']) localStorage.removeItem(key)
+    for (const key of ['foxwarm_send_key_mode_v1', 'foxwarm_group_tools_v1', 'foxwarm_timeline_view_v1', 'foxwarm_show_usage_badge_v1', 'foxwarm_show_user_message_metadata_v1']) localStorage.removeItem(key)
   })
   await page.reload({ waitUntil: 'load' })
   await page.waitForFunction(() => !!window.chatSettingsFixture)
@@ -298,8 +298,8 @@ test('outer and embedded Chat roots synchronize all relocated preferences in bot
 
   await openMenu()
   await clickMenuLabel('Enter')
-  await clickMenuLabel('Group tools')
-  await embeddedFrame.waitForFunction(() => window.chatSettingsFixture?.sendKeyMode === 'enter' && window.chatSettingsFixture?.groupTools === true)
+  await clickMenuLabel('Grouped')
+  await embeddedFrame.waitForFunction(() => window.chatSettingsFixture?.sendKeyMode === 'enter' && window.chatSettingsFixture?.timelineView === 'grouped')
 
   await embeddedFrame.$eval('button[aria-label="Open session options"]', button => button.click())
   await embeddedFrame.waitForSelector('[data-session-ui-settings-menu]')
@@ -314,8 +314,8 @@ test('outer and embedded Chat roots synchronize all relocated preferences in bot
   await page.waitForFunction(() => window.chatSettingsFixture?.showUsageBadge === false && window.chatSettingsFixture?.showUserMessageMetadata === true)
   assert.deepEqual(await page.evaluate(() => ({
     sendKeyMode: window.chatSettingsFixture.sendKeyMode,
-    groupTools: window.chatSettingsFixture.groupTools,
+    timelineView: window.chatSettingsFixture.timelineView,
     showUsageBadge: window.chatSettingsFixture.showUsageBadge,
     showUserMessageMetadata: window.chatSettingsFixture.showUserMessageMetadata,
-  })), { sendKeyMode: 'enter', groupTools: true, showUsageBadge: false, showUserMessageMetadata: true })
+  })), { sendKeyMode: 'enter', timelineView: 'grouped', showUsageBadge: false, showUserMessageMetadata: true })
 })

@@ -50,7 +50,7 @@ await writeFile(entryPath, `
             sessionId="fixture/main"
             messages={[{ role: 'model', parts: [{ text: assistantText }], __meta: assistantMeta }]}
             isMobile={false}
-            groupTools={false}
+            timelineView="detailed"
             showUsageBadge={false}
           />
         </section>
@@ -58,7 +58,7 @@ await writeFile(entryPath, `
           <ReasoningCard thinking={reasoningText} tone="processing" defaultExpanded={true} />
         </section>
         <section id="ordered-reasoning-fixture">
-          <ChatTimeline sessionId="fixture/main" messages={[orderedMessage]} isMobile={false} groupTools={false} showUsageBadge={false} />
+          <ChatTimeline sessionId="fixture/main" messages={[orderedMessage]} isMobile={false} timelineView="detailed" showUsageBadge={false} />
         </section>
       </main>,
     )

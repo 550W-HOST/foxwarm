@@ -37,7 +37,7 @@ async function buildFixtureBundle() {
       sessionId: 'fixture/main',
       messages: ${JSON.stringify(MESSAGES)},
       isMobile: false,
-      groupTools: true,
+      timelineView: 'grouped',
       showUsageBadge: false,
     }))
   `

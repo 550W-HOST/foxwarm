@@ -71,7 +71,7 @@ window.fetch = async (input, options = {}) => {
   if (url.pathname.endsWith('/context-blocks/3/expand')) return response({ sessionId: 'beta', blockId: 3, expansionKind: 'messages', messages: [msg('user', 20, [{ text: 'nested beta detail' }])] })
   return response({})
 }
-createRoot(document.getElementById('app')).render(<HistorySearchView isMobile={false} groupTools={true} showUsageBadge={false} showUserMessageMetadata={false} knownSessions={['alpha', 'beta']} />)
+createRoot(document.getElementById('app')).render(<HistorySearchView isMobile={false} timelineView="grouped" showUsageBadge={false} showUserMessageMetadata={false} knownSessions={['alpha', 'beta']} />)
 `
 
 before(async () => {
