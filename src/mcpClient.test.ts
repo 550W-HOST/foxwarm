@@ -4,7 +4,7 @@ import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 
-import { buildMcpHttpHeadersForTests, callTool, createMcpConfigStore, getServers, listServers, normalizeMcpToolResult, resetMcpConnectionsForTests, setMcpConfigStoreForTests, setMcpSdkForTests, setServerEnabled, summarizeServerConfig, summarizeServers, upsertServer } from './mcpClient';
+import { buildMcpHttpHeaders, callTool, createMcpConfigStore, getServers, listServers, normalizeMcpToolResult, resetMcpConnectionsForTests, setMcpConfigStoreForTests, setMcpSdkForTests, setServerEnabled, summarizeServerConfig, summarizeServers, upsertServer } from './mcpClient';
 
 async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
   const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-mcp-config-'));
@@ -244,17 +244,17 @@ test('MCP call timeout uses SDK RequestOptions and preserves pooled stdio reuse 
 
 test('MCP HTTP headers use the token as a default and let custom headers override it', () => {
   assert.deepEqual(
-    buildMcpHttpHeadersForTests({ token: 'token-only' }),
+    buildMcpHttpHeaders({ token: 'token-only' }),
     { Authorization: 'Bearer token-only' },
   );
 
   assert.deepEqual(
-    buildMcpHttpHeadersForTests({ headers: { 'X-Api-Key': 'headers-only' } }),
+    buildMcpHttpHeaders({ headers: { 'X-Api-Key': 'headers-only' } }),
     { 'X-Api-Key': 'headers-only' },
   );
 
   assert.deepEqual(
-    buildMcpHttpHeadersForTests({
+    buildMcpHttpHeaders({
       token: 'with-custom-header',
       headers: { 'X-Api-Key': 'custom-value' },
     }),
@@ -265,7 +265,7 @@ test('MCP HTTP headers use the token as a default and let custom headers overrid
   );
 
   assert.deepEqual(
-    buildMcpHttpHeadersForTests({
+    buildMcpHttpHeaders({
       token: 'must-not-win',
       headers: { Authorization: 'Basic custom-authorization' },
     }),
@@ -273,7 +273,7 @@ test('MCP HTTP headers use the token as a default and let custom headers overrid
   );
 
   assert.deepEqual(
-    buildMcpHttpHeadersForTests({
+    buildMcpHttpHeaders({
       token: 'must-not-win-with-different-casing',
       headers: { authorization: 'Basic lowercase-authorization' },
     }),

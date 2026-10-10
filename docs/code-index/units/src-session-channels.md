@@ -31,6 +31,7 @@ No runtime getter/setter aliases for `dangerouslyAllowAllGroupMembers` exist. Th
 
 ## Delivery behavior
 
+- Ephemeral inbound MCP reply endpoints are registered text-only adapters with no attachment. They reuse direct sends and remain excluded from automatic output delivery by having no attachment; isolated own-attachment checks remain unchanged. See [D-dispatch-mcp-explicit-notifications](../threads/tool-dispatch.md#d-dispatch-mcp-explicit-notifications).
 - Direct target sends resolve one registered channel instance and call its text/file method, without requiring a Session attachment at the destination. Explicit `send_to_channel` retains caller tool authorization and the existing isolated-Session own-attachment restriction. Adapter passive-context/proactive-permission requirements still apply, and direct send failures propagate to the caller rather than becoming automatic broadcast logs.
 - Session file delivery reports delivered, skipped, and failed targets. `send-only` attachments and channels without file support are skipped.
 - Session broadcast is fire-and-forget: it can target one attached channel, omit excluded/send-only channels, optionally allow an empty platform-finalization message, and logs asynchronous send failures.

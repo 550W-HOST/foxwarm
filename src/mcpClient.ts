@@ -1,6 +1,7 @@
 import { MCP_CONFIG_PATH } from './config';
 import { logger } from './common';
 import { DiskJsonData } from './utils/diskJsonData';
+import { closeMcpNotificationReceivers, getMcpReceivingClient } from './mcpNotificationConnections';
 
 type McpSdkModules = {
   Client: any;
@@ -322,7 +323,7 @@ function getHeaders(config: McpServerConfig): Record<string, string> | undefined
   return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
-export function buildMcpHttpHeadersForTests(config: McpServerConfig): Record<string, string> | undefined {
+export function buildMcpHttpHeaders(config: McpServerConfig): Record<string, string> | undefined {
   return getHeaders(config);
 }
 
@@ -334,6 +335,7 @@ export async function resetMcpConnectionsForTests(): Promise<void> {
   const entries = Array.from(stdioConnectionPool.values());
   stdioConnectionPool.clear();
   await Promise.all(entries.map(entry => closePooledStdioConnection(entry)));
+  await closeMcpNotificationReceivers();
   cachedMcpSdk = null;
 }
 
@@ -531,7 +533,9 @@ async function withStandardConnection<T>(config: McpServerConfig, fn: (connectio
   }
 }
 
-async function withServerConnection<T>(serverName: string, config: McpServerConfig, fn: (connection: StandardConnection) => Promise<T>): Promise<T> {
+async function withServerConnection<T>(serverName: string, config: McpServerConfig, fn: (connection: Pick<StandardConnection, 'client'>) => Promise<T>, sourceSessionId?: string): Promise<T> {
+  const receivingClient = getMcpReceivingClient(sourceSessionId, serverName);
+  if (receivingClient) return fn({ client: receivingClient });
   if (normalizeTransport(config) !== 'stdio') {
     return withStandardConnection(config, fn);
   }
@@ -655,14 +659,14 @@ export function normalizeMcpToolResult(result: any): any {
   return parsed !== undefined ? parsed : content[0].text;
 }
 
-export async function listTools(serverName?: string, signal?: AbortSignal) {
+export async function listTools(serverName?: string, signal?: AbortSignal, sourceSessionId?: string) {
   const { name, config } = await getServerConfig(serverName);
   return withServerConnection(name, config, async ({ client }) => {
     return signal ? await client.listTools(undefined, { signal }) : await client.listTools();
-  });
+  }, sourceSessionId);
 }
 
-export async function callTool(serverName: string | undefined, tool: string, args?: Record<string, any>, options: { signal?: AbortSignal; rawResult?: boolean } = {}) {
+export async function callTool(serverName: string | undefined, tool: string, args?: Record<string, any>, options: { signal?: AbortSignal; rawResult?: boolean; sourceSessionId?: string } = {}) {
   const { name, config } = await getServerConfig(serverName);
   return withServerConnection(name, config, async ({ client }) => {
     const params = { name: tool, arguments: args || {} };
@@ -681,7 +685,7 @@ export async function callTool(serverName: string | undefined, tool: string, arg
       if (options.signal?.aborted) await new Promise(resolve => setTimeout(resolve, 100));
       throw error;
     }
-  });
+  }, options.sourceSessionId);
 }
 
 export async function upsertServer(name: string, server: McpServerConfig) {
@@ -689,6 +693,7 @@ export async function upsertServer(name: string, server: McpServerConfig) {
     config.servers = config.servers || {};
     config.servers[name] = normalizeManagedMcpServerConfig({ ...config.servers[name], ...server });
   });
+  await closeMcpNotificationReceivers({ server: name });
 }
 
 export async function setServerEnabled(name: string, enable: boolean) {
@@ -699,6 +704,7 @@ export async function setServerEnabled(name: string, enable: boolean) {
     }
     config.servers[name].enable = enable;
   });
+  await closeMcpNotificationReceivers({ server: name });
 }
 
 export async function getServers() {

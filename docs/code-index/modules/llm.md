@@ -13,6 +13,7 @@ LLM owns model/provider configuration consumption, prompt snapshots, provider se
 - [src-llm-openai](../units/src-llm-openai.md) — OpenAI Responses/Chat Completions conversion and stream collectors.
 - [src-llm-openai-images](../units/src-llm-openai-images.md) — hosted Responses `image_generation` tool declaration, provider image validation, blob persistence, and same-model replay metadata.
 - [src-mcp-client](../units/src-mcp-client.md) — MCP config, connection lifecycle, discovery, invocation, and result normalization.
+- [src-mcp-notification-connections](../units/src-mcp-notification-connections.md) — explicitly started online receiving connections and two-instance local/Worker loopback coverage.
 - [src-mcp-external-service](../units/src-mcp-external-service.md) — fixed local RPC ownership boundary used by all current MCP callers.
 - [src-config](../units/src-config.md) — canonical provider/model expansion and path/default resolution.
 

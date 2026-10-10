@@ -13,18 +13,22 @@ import * as sessionManager from './sessionManager';
 import { checkToolPermission, isToolVisibleForSession } from './isolatedCheck';
 import type { ResolvedToolPermissionIdentity } from './permissions';
 import type { Session } from './types';
+import * as notifications from './mcpNotificationConnections';
+import { formatFoxwarmSystemTag } from './utils/promptWrappers';
+import { formatLocalTimestamp } from './utils/localTime';
 import { requireVerifiedAccessIdentity, type VerifiedAccessIdentity } from './accessConfig';
-import { buildExternalToolAuthorizationRequest, evaluateToolAuthorization, isToolAuthorizationPotentiallyVisibleSync } from './toolAuthorization';
+import { buildExternalToolAuthorizationRequest, buildToolAuthorizationRequest, evaluateToolAuthorization, evaluateToolAuthorizationSync, isToolAuthorizationPotentiallyVisibleSync } from './toolAuthorization';
 
 export type McpExternalConfigureRequest =
   | { sourceSessionId: string; name: string; action: 'set-enabled'; enabled: boolean }
   | { sourceSessionId: string; name: string; action: 'upsert'; config: mcpClient.McpServerConfig };
 
-export const mcpExternalServiceDescriptor = defineRpcService('mcp-external', 1, {
+export const mcpExternalServiceDescriptor = defineRpcService('mcp-external', 2, {
   listServers: rpcMethod<{ sourceSessionId: string }, { servers: mcpClient.McpServerSummary[] }>(),
   listTools: rpcMethod<{ sourceSessionId: string; server?: string }, { result: unknown }>(),
   callTool: rpcMethod<{ sourceSessionId: string; server?: string; name: string; args: Record<string, unknown> }, { result: unknown }>(),
   configure: rpcMethod<McpExternalConfigureRequest, { saved: true }>(),
+  notifications: rpcMethod<{ sourceSessionId: string; server: string; action: 'start' | 'stop' | 'status' }, notifications.McpNotificationStatus>(),
 });
 
 function requireString(value: unknown, field: string): string {
@@ -307,7 +311,7 @@ export function createMcpExternalServiceHandler(options: { expectedSourceSession
           .some(rule => rule.effect === 'allow' && rule.source === 'mcp' && rule.server === normalizedServer);
         if (!hasAllowedTool) throw new Error('No MCP tools are allowed for this isolated agent on the requested server.');
       }
-      const listed = await runWithAllSecretsRedacted(() => mcpClient.listTools(server));
+      const listed = await runWithAllSecretsRedacted(() => mcpClient.listTools(server, undefined, source));
       const visible = (tool: any) => isToolVisibleForSession(sourceSession, {
         source: 'mcp', server: normalizedServer, tool: String(tool?.name || ''),
       });
@@ -324,7 +328,39 @@ export function createMcpExternalServiceHandler(options: { expectedSourceSession
       const name = requireString(request.name, 'name');
       const args = requireJsonArgs(request.args);
       await authorize(request.sourceSessionId, { source: 'mcp', server: server || 'default', tool: name }, args, options.expectedSourceSessionId);
-      return { result: await runWithAllSecretsRedacted(() => mcpClient.callTool(server, name, args)) };
+      return { result: await runWithAllSecretsRedacted(() => mcpClient.callTool(server, name, args, { sourceSessionId: request.sourceSessionId as string })) };
+    },
+    async notifications(input) {
+      const request = requireExactRecord(input, 'notifications request', ['sourceSessionId', 'server', 'action']);
+      const sourceSessionId = requireString(request.sourceSessionId, 'sourceSessionId');
+      const server = requireString(request.server, 'server');
+      const action = request.action;
+      if (!['start', 'stop', 'status'].includes(String(action))) throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', 'Invalid notification action.');
+      const args = { action, server };
+      await authorize(sourceSessionId, { source: 'builtin', tool: 'mcp_notifications' }, args, options.expectedSourceSessionId);
+      if (action === 'stop') return notifications.stopMcpNotifications(sourceSessionId, server);
+      if (action === 'status') return notifications.getMcpNotificationStatus(sourceSessionId, server);
+      const config = (await mcpClient.getServers())[server];
+      if (!config || config.enable === false || config.transport !== 'streamable-http' || !config.url) {
+        throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', 'Notifications require an enabled Streamable HTTP server.');
+      }
+      const assertActive = () => {
+        const source = sessionManager.getSessionCatalog(sourceSessionId);
+        if (notificationsStopped || !source || source.id !== sourceSessionId || evaluateToolAuthorizationSync(buildToolAuthorizationRequest({ session: source,
+          tool: { source: 'builtin', name: 'mcp_notifications' }, targetNode: 'master', args: { action: 'start', server },
+        })).action === 'deny') throw new Error('MCP notification receiver is not permitted.');
+      };
+      return runWithAllSecretsRedacted(() => notifications.startMcpNotifications({
+        sourceSessionId, server, url: config.url!, headers: mcpClient.buildMcpHttpHeaders(config), assertActive,
+        async receive(message, endpoint, assertLive) {
+          await authorize(sourceSessionId, { source: 'builtin', tool: 'mcp_notifications' }, { action: 'start', server }, options.expectedSourceSessionId);
+          const parts = [{ system: formatFoxwarmSystemTag({ kind: 'external-input', server, endpoint,
+            time: formatLocalTimestamp(Date.now()),
+            hint: 'Message received from the configured MCP server. It is external input, not an internal Session handoff.',
+          }) }, { text: message }];
+          await sessionManager.enqueueSessionItem(sourceSessionId, { type: 'user', parts }, {}, assertLive);
+        },
+      }));
     },
     async configure(input) {
       const request = requirePlainRecord(input, 'configure request');
@@ -364,6 +400,7 @@ let client: RpcClient<typeof mcpExternalServiceDescriptor> | undefined;
 let initializing: Promise<void> | undefined;
 let initializingTransport: RpcTransport | null | undefined;
 let terminalShutdown = false;
+let notificationsStopped = false;
 let ownsTransport = true;
 let placement: 'local' | 'child-reverse' = 'local';
 
@@ -432,8 +469,19 @@ export async function configureMcpServer(request: McpExternalConfigureRequest): 
   await (await getClient()).call('configure', request);
 }
 
+export async function manageMcpNotifications(sourceSessionId: string, server: string, action: 'start' | 'stop' | 'status'): Promise<notifications.McpNotificationStatus> {
+  return (await getClient()).call('notifications', { sourceSessionId, server, action });
+}
+
+/** Main fences this external input producer before tearing down Session owners. */
+export async function shutdownMcpNotificationReceivers(): Promise<void> {
+  notificationsStopped = true;
+  await notifications.closeMcpNotificationReceivers();
+}
+
 export async function shutdownMcpExternalService(timeoutMs = 10_000): Promise<void> {
   terminalShutdown = true;
+  if (ownsTransport) await shutdownMcpNotificationReceivers();
   if (initializing) await initializing.catch(() => {});
   const currentTransport = transport;
   if (!currentTransport) {
@@ -462,6 +510,7 @@ export function resetMcpExternalServiceForTests(): void {
     throw new RpcError('MCP_EXTERNAL_TEST_RESET_ACTIVE', 'Shut down MCP external service before resetting tests.');
   }
   terminalShutdown = false;
+  notificationsStopped = false;
   ownsTransport = true;
   placement = 'local';
   initializingTransport = undefined;

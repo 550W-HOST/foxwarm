@@ -594,6 +594,8 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
         void Promise.resolve()
             .then(() => mcpInboundHttp?.stop())
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to stop MCP inbound cleanly'))
+            .then(() => mcpExternal.shutdownMcpNotificationReceivers())
+            .catch((err: Error) => logger.error({ err, signal }, 'Failed to stop MCP notification receivers cleanly'))
             .then(() => shutdownToolScriptRuntime())
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down ToolScript runtime cleanly'))
             .then(() => nodeExecution.shutdownNodeExecution())

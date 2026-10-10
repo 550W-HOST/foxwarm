@@ -73,6 +73,7 @@ const sessionTool: Tool = {
       count: { type: 'integer', minimum: 1, maximum: 50, description: 'Maximum entries to return. Defaults to 20 for list and 10 for read.' },
       previewLength: { type: 'integer', minimum: 1000, maximum: 20000, description: 'Total character budget for the read preview. Omit to use the normal preview budget.' },
       message: { type: 'string', description: 'Non-empty message to queue when action is send.' },
+      reply: { type: 'boolean', description: 'For send, include a temporary channel target for explicit replies over this MCP connection. Requires an active Foxwarm notification receiver on the client.' },
     },
   },
 };
@@ -147,10 +148,11 @@ export class McpInboundMcpCatalog implements McpInboundCatalog {
     const action = args.action;
     const fields = action === 'list' ? ['action', 'start', 'count']
       : action === 'read' ? ['action', 'sessionId', 'start', 'count', 'previewLength']
-        : action === 'send' ? ['action', 'sessionId', 'message'] : [];
+        : action === 'send' ? ['action', 'sessionId', 'message', 'reply'] : [];
     if (!fields.length || !fieldsOnly(args, fields)
       || (action !== 'list' && (typeof args.sessionId !== 'string' || !args.sessionId))
       || (action === 'send' && (typeof args.message !== 'string' || !args.message.trim()))
+      || (args.reply !== undefined && typeof args.reply !== 'boolean')
       || (action !== 'send' && ((args.start !== undefined && (!Number.isSafeInteger(args.start) || (action === 'list' && (args.start as number) < 0)))
         || (args.count !== undefined && (!Number.isInteger(args.count) || (args.count as number) < 1 || (args.count as number) > 50))
         || (args.previewLength !== undefined && (!Number.isInteger(args.previewLength) || (args.previewLength as number) < 1000 || (args.previewLength as number) > 20000))))) {
@@ -162,7 +164,7 @@ export class McpInboundMcpCatalog implements McpInboundCatalog {
         : action === 'read'
           ? await sessionExternal.readExternalSession(principal, context, args.sessionId as string,
             args.start as number | undefined, args.count as number | undefined, args.previewLength as number | undefined)
-          : await sessionExternal.sendExternalSession(principal, context, args.sessionId as string, args.message as string);
+          : await sessionExternal.sendExternalSession(principal, context, args.sessionId as string, args.message as string, args.reply === true);
       return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result as Record<string, unknown> };
     } catch (error) {
       if (isToolAuthorizationPolicyUnavailable(error)) return toolError('Tool policy is unavailable; Session action failed closed.');

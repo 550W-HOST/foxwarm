@@ -5,10 +5,12 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   CallToolRequestSchema, ErrorCode, isInitializeRequest, ListToolsRequestSchema, McpError,
-  type CallToolResult, type Tool,
+  type CallToolResult, type Tool, type ServerRequest, type Notification,
 } from '@modelcontextprotocol/sdk/types.js';
 import { authenticateAccessBearer, type NormalizedAccessConfig, type VerifiedAccessIdentity } from './accessConfig';
 import type { HttpServer } from './httpServer';
+import { registerChannel, unregisterChannel } from './channel';
+import { MCP_NOTIFICATION_CAPABILITY, MCP_SESSION_MESSAGE_METHOD, MAX_MCP_NOTIFICATION_BYTES } from './mcpNotificationConnections';
 
 const IDLE_MS = 15 * 60_000;
 const MAX_SESSIONS = 32;
@@ -31,6 +33,14 @@ export interface ExternalExecutionContext {
   currentNode: string;
   cwd: string | null;
   selectionGeneration: number;
+  /** Process-local reply endpoint; neither an internal Session nor persisted authority. */
+  replyChannel?: ExternalReplyChannel;
+}
+
+export interface ExternalReplyChannel {
+  readonly targetId: string;
+  acquire(): { commit(): void; release(): void };
+  assertAvailable(): void;
 }
 
 /** Trusted process-local catalog; the application registers only implemented capabilities. */
@@ -47,7 +57,7 @@ type Connection = {
   id: string;
   principal: VerifiedAccessIdentity;
   context: ExternalExecutionContext;
-  server: Server;
+  server: Server<ServerRequest, Notification>;
   transport: StreamableHTTPServerTransport;
   lastActivity: number;
   active: number;
@@ -55,6 +65,7 @@ type Connection = {
   activeSse?: Response;
   initialized: boolean;
   disposed: boolean;
+  replyChannelRegistered: boolean;
 };
 
 function headerExactlyOnce(req: Request, name: string): string | undefined {
@@ -129,6 +140,7 @@ export class McpInboundHttpService {
     if (connection.disposed) return;
     connection.disposed = true;
     connection.context.disposed = true;
+    unregisterChannel(`mcp-${connection.id}`);
     this.connections.delete(connection.id);
     this.live.delete(connection);
     try { await this.catalog?.releaseContext?.(connection.context, connection.principal); }
@@ -138,7 +150,7 @@ export class McpInboundHttpService {
   private async open(principal: VerifiedAccessIdentity): Promise<Connection> {
     const id = randomUUID();
     const context: ExternalExecutionContext = { id, externalId: principal.externalId,
-      currentNode: 'master', cwd: null, selectionGeneration: 0, disposed: false, externalExecNodes: new Set() };
+      currentNode: 'master', cwd: null, selectionGeneration: 0, disposed: false, externalExecNodes: new Set(), replyChannel: undefined };
     Object.defineProperties(context, {
       id: { writable: false }, externalId: { writable: false },
     });
@@ -153,7 +165,9 @@ export class McpInboundHttpService {
         this.connections.set(id, connection);
       },
     });
-    const server = new Server({ name: 'foxwarm', version: '1.0.0' }, { capabilities: { tools: {} } });
+    const server = new Server<ServerRequest, Notification>({ name: 'foxwarm', version: '1.0.0' }, {
+      capabilities: { tools: {}, experimental: { [MCP_NOTIFICATION_CAPABILITY]: { version: 1 } } },
+    });
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       try {
         const tools = this.catalog ? await this.catalog.listTools(context, principal) : [];
@@ -184,7 +198,52 @@ export class McpInboundHttpService {
     });
     const connection: Connection = {
       id, principal, context, server, transport, lastActivity: Date.now(), active: 0, activePosts: 0,
-      initialized: false, disposed: false,
+      initialized: false, disposed: false, replyChannelRegistered: false,
+    };
+    const channelName = `mcp-${id}`;
+    const targetId = `${channelName}:reply`;
+    let pendingReplies = 0;
+    let committedReply = false;
+    const assertAvailable = () => {
+      if (connection.disposed || !connection.initialized || !connection.activeSse || connection.activeSse.destroyed
+        || (server.getClientCapabilities()?.experimental?.[MCP_NOTIFICATION_CAPABILITY] as { version?: unknown })?.version !== 1) {
+        throw new McpInboundSafeError('An active Foxwarm notification receiver is required for replies.');
+      }
+    };
+    context.replyChannel = {
+      targetId, assertAvailable,
+      acquire() {
+        assertAvailable();
+        pendingReplies++;
+        if (!connection.replyChannelRegistered) {
+          registerChannel(channelName, {
+            name: channelName, platform: 'mcp',
+            start: async () => {}, stop: async () => { unregisterChannel(channelName); },
+            onMessage: () => {}, sendTyping: async () => {},
+            async sendMessage(conversationId, message) {
+              assertAvailable();
+              if (!connection.replyChannelRegistered || conversationId !== 'reply') throw new Error('MCP reply destination is unavailable.');
+              if (!message.trim() || Buffer.byteLength(message, 'utf8') > MAX_MCP_NOTIFICATION_BYTES) throw new Error('MCP reply message exceeds its limit.');
+              // No related request: JSON tool responses have already completed.
+              await server.notification({ method: MCP_SESSION_MESSAGE_METHOD, params: { message, endpoint: targetId } });
+            },
+          });
+          connection.replyChannelRegistered = true;
+        }
+        let released = false;
+        return {
+          commit() { committedReply = true; },
+          release() {
+            if (released) return;
+            released = true;
+            pendingReplies--;
+            if (!committedReply && !pendingReplies) {
+              unregisterChannel(channelName);
+              connection.replyChannelRegistered = false;
+            }
+          },
+        };
+      },
     };
     this.live.add(connection);
     try {

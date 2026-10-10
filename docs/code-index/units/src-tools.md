@@ -86,6 +86,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 |----------|-------------|
 | `tool_mcp_config` | Configures MCP server connections and an optional bounded per-server tool-call timeout (`0` clears to SDK default) |
 | `tool_list_mcp_servers` | Lists configured MCP servers |
+| `tool_mcp_notifications` | Discoverable, non-default-injected start/stop/status for the current Session's configured-server receiver through the Main MCP facade; see [explicit notifications](../threads/tool-dispatch.md#d-dispatch-mcp-explicit-notifications) |
 
 ### tools/nodeTools.ts — Generic Node management
 | Function | Description |

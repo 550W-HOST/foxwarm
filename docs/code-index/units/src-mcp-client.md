@@ -19,7 +19,8 @@ Owns persisted MCP server configuration, safe summaries, transport connection li
 - `getServers()` — raw configured server record for trusted runtime callers.
 - `listServers()` — sorted redacted summaries.
 - `normalizeMcpToolResult(result)` — canonical result cleanup.
-- `buildMcpHttpHeadersForTests(config)`, `setMcpSdkForTests(sdk)`, `resetMcpConnectionsForTests()` — focused test seams for header construction, SDK request options, and pooled-connection cleanup.
+- `buildMcpHttpHeaders(config)` — canonical HTTP headers for calls and notification receivers.
+- `setMcpSdkForTests(sdk)`, `resetMcpConnectionsForTests()` — focused test seams for SDK request options and connection cleanup.
 
 ## Stable-symbol index
 
@@ -41,12 +42,12 @@ Owns persisted MCP server configuration, safe summaries, transport connection li
 - Optional `timeoutSeconds` controls only `client.callTool`. Omission sends no request override and retains the installed SDK default (currently 60 seconds); managed input accepts finite 1-3600 seconds, while zero removes the persisted field and restores that default. Invocation converts the override to milliseconds and passes it through the SDK call's third `RequestOptions` argument. Connection setup, tool listing, retry/progress policy, and pool keys are unchanged.
 - The external inbound adapter can supply an SDK request AbortSignal to listing/calling and request the raw SDK result to preserve original text, structured content, images and `isError`. Internal callers pass no new options and keep canonical normalization. When an external HTTP call is cancelled, the short-lived outgoing transport waits briefly for the SDK's asynchronous best-effort cancellation notification before closing; completion of a remote effect is not guaranteed to stop.
 - `stdio` requires a command and uses a pooled client keyed by server name plus command/args/env/cwd/stderr signature. A config change selects a new key for later calls; the old keyed entry is not synchronously invalidated and closes through its idle TTL or transport `onclose` path.
-- `streamable-http` and `sse` require a URL and use short-lived standard connections.
+- `streamable-http` and `sse` require a URL and normally use short-lived standard connections. Internal discovery/calls can supply a trusted source Session ID; an explicitly started notification connection for that source/server is reused without per-call close. See [notification connections](./src-mcp-notification-connections.md).
 - `auto` tries streamable HTTP and falls back to SSE.
 - For HTTP transports, `token` supplies default `Authorization: Bearer <token>`. Configured custom headers are applied afterward; a custom `Authorization` key in any casing removes the generated default and wins with its configured casing/value.
 - Streamable HTTP, SSE, and both `auto` attempts use the same header builder.
 - `stdio` applies no HTTP token/headers. Its pool signature includes only server name plus command/args/env/cwd/stderr, so token/header-only edits neither change its key nor restart the process.
-- Disabled or unknown servers fail before invocation.
+- Disabled or unknown servers fail before invocation. Successful managed updates close notification receivers for that server after durable publication.
 - Safe server summaries expose `timeoutSeconds` as the configured override or `null` for the SDK default; no secret-bearing values are added.
 
 ## Result normalization

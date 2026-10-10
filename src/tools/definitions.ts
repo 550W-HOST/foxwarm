@@ -849,6 +849,18 @@ Example:
             }
         },
         {
+            name: 'mcp_notifications',
+            description: "Start, stop, or inspect message notifications from a configured MCP server for the current Session. Requires Streamable HTTP and Foxwarm notification support. After start succeeds, this Session's calls to that server reuse the receiving connection. Incoming messages enter this Session's normal queue; disconnected messages are not replayed.",
+            parameters: {
+                type: 'object',
+                properties: {
+                    action: { type: 'string', enum: ['start', 'stop', 'status'], description: 'Operation to perform.' },
+                    server: { type: 'string', description: 'Configured MCP server name.' }
+                },
+                required: ['action', 'server']
+            }
+        },
+        {
             name: 'node',
             defaultInject: true,
             description: "List available Nodes, select this session's execution Node, or manage a Node through its configured provider. For select, you may put exec or file calls after it in the same response. Those calls use the selected Node; if selection fails, the remaining calls in that batch are skipped. Provider operations may create or remove resources; inspect the provider's behavior before assuming what will be retained or deleted.",

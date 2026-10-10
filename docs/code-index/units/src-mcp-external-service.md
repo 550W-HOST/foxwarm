@@ -9,8 +9,10 @@ Provides the versioned RPC owner through which internal direct, unified, ToolScr
 
 ## Key exports
 
-- `mcpExternalServiceDescriptor` — fixed `mcp-external@1` methods for redacted server list, optional-server tool list, named call, and tagged managed configuration update.
+- `mcpExternalServiceDescriptor` — fixed `mcp-external@2` methods for redacted server list, optional-server tool list, named call, tagged managed configuration update and source-scoped notification management.
 - `listMcpServers()`, `listMcpTools()`, `callMcpTool()`, `configureMcpServer()` — local client facade used by production callers.
+- `manageMcpNotifications(sourceSessionId, server, action)` — concrete builtin authorization, source-scoped receiver lifecycle and ordinary durable notification ingress.
+- `shutdownMcpNotificationReceivers()` — terminally fence this external-input producer before Main tears down Session owners; ordinary outbound calls retain their separate drain.
 - `initializeMcpExternalService()`, `shutdownMcpExternalService()` — owned-local or borrowed-reverse initialization and terminal fencing.
 - `resetMcpExternalServiceForTests()` — explicit test-only reopening after a completed shutdown.
 - `listMcpServersForExternal(principal)`, `listMcpToolsForExternal(principal, externalSessionId, server, signal?)`, `callMcpToolForExternal(principal, externalSessionId, server, name, args, signal?)` — Main-local outbound MCP catalog/call entry points for real HTTP-verified external identity, never serialized as internal RPC objects.
@@ -23,7 +25,7 @@ Provides the versioned RPC owner through which internal direct, unified, ToolScr
 - Requests and results pass through local RPC structured cloning. Every envelope/tag has an exact key set; envelopes, config, args, env, and headers must be plain records, while nested call args must be finite JSON values. JSON/config arrays must be dense and may contain only canonical in-range index keys. No arbitrary builtin registry, Date/Map/Set value, or live Session object crosses the boundary. Call permission checks receive the complete nested tool args.
 - Server-list responses contain only `McpServerSummary`. Raw configuration is never returned. Connection/config error handling scans secret-bearing values from every current server plus the incoming upsert. Any match yields one stable generic message rather than substring replacement; wrapped `RpcError` code/retryability survive while unsafe details are omitted.
 - Managed upsert and enabled-toggle calls retain `mcpClient`'s mutation queue and persist-before-publish live snapshot semantics. The exact config DTO admits optional numeric `timeoutSeconds`; authoritative finite/range/clear normalization remains in `mcpClient`. Configuration/server-summary formatting and config argument parsing stay in `tools/mcpTools.ts` rather than being duplicated here.
-- Initialization is bound to one exact local/borrowed transport so a conflicting concurrent placement cannot silently join. Production shutdown is one-way: initialization and new calls are fenced, accepted local calls drain, and later callers cannot lazily reopen the service. Borrowed worker clients clear without draining/closing the channel-wide reverse transport. Stdio pool lifetime remains owned by the existing MCP client.
+- Initialization is bound to one exact local/borrowed transport so a conflicting concurrent placement cannot silently join. Production shutdown is one-way: initialization and new calls are fenced, accepted local calls drain, and later callers cannot lazily reopen the service. Owned Main shutdown also fences/closes every notification receiver. Borrowed worker clients clear without draining/closing the channel-wide reverse transport or Main-owned receivers. Stdio pool lifetime remains owned by the existing MCP client. Notification setup and input recheck the live source and `builtin:mcp_notifications` permission, without constructing an external verified principal. The full notification contract is [D-dispatch-mcp-explicit-notifications](../threads/tool-dispatch.md#d-dispatch-mcp-explicit-notifications).
 
 ## Integration
 
