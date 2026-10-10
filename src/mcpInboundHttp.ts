@@ -10,7 +10,7 @@ import {
 import { authenticateAccessBearer, type NormalizedAccessConfig, type VerifiedAccessIdentity } from './accessConfig';
 import type { HttpServer } from './httpServer';
 import { registerChannel, unregisterChannel } from './channel';
-import { MCP_NOTIFICATION_CAPABILITY, MCP_SESSION_MESSAGE_METHOD, MAX_MCP_NOTIFICATION_BYTES } from './mcpNotificationConnections';
+import { MCP_NOTIFICATION_CAPABILITY, MCP_SESSION_MESSAGE_METHOD, MAX_MCP_NOTIFICATION_BYTES } from './mcpCallerConnections';
 
 const IDLE_MS = 15 * 60_000;
 const MAX_SESSIONS = 32;

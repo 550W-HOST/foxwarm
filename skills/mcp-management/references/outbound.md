@@ -5,7 +5,7 @@ This reference covers Foxwarm connecting to another tool server. It does not con
 ## Outbound configuration lifecycle
 
 - Change MCP configuration only through the hidden `mcp_config` builtin, invoked with `call_tool`.
-- A successful `mcp_config` call updates the live runtime configuration immediately. Subsequent MCP discovery and calls use the change; **no Foxwarm restart is required**.
+- A successful `mcp_config` call updates the live runtime configuration immediately. Existing HTTP caller connections are closed after the update, and subsequent discovery/calls use the change; **no Foxwarm restart is required**.
 - Do **not** manually edit the MCP state/config file. Manual file edits do not update the live cached configuration immediately and can leave disk and runtime behavior inconsistent.
 - Never print, copy into chat, or commit real tokens, environment secrets, private headers, or credentials. Use values supplied through an approved secret-handling path and keep diagnostic output redacted.
 
@@ -101,6 +101,14 @@ Use `enable: true` to re-enable an existing server. List safe summaries afterwar
 - `stdio`: launches a local command. Specify `command`; optional fields include `args`, `env`, `cwd`, and `stderr`.
 - `auto`: HTTP mode that lets the client negotiate the supported standard HTTP behavior for the configured URL.
 
+### HTTP connection ownership
+
+HTTP/SSE discovery and calls from the same calling Session to one configured server share its connection, even before message reception is enabled. Different Sessions do not share the server's selected Node, working directory or exec-result context. An inbound external client forwarding a call has its own verified context owner, not a fabricated internal Session. Stdio retains its existing process-pool behavior.
+
+Ordinary HTTP connections are released after 15 minutes idle; active calls prevent idle cleanup. Explicit notification reception uses standard ping keepalive instead. Server updates/disable, source deletion, external-context disposal and shutdown also release connections. Streamable HTTP cleanup attempts session DELETE before close; legacy SSE uses its transport's close.
+
+A new connection after expiry, a closed context or a managed configuration change starts with the server's default context. Do not assume a previous Node/cwd selection or exec result belongs to it. A failed invocation is not automatically repeated, and a later new connection does not establish that the earlier effect was undone. Ordinary calls do not turn on message reception; use [explicit instance replies](instance-replies.md) for that opt-in workflow.
+
 Do not guess a URL, executable, arguments, or authentication format. Use the MCP server's own documentation or ask the user for the missing deployment-specific value.
 
 ## Discover and call tools after configuration
@@ -133,9 +141,16 @@ Example call descriptor:
 }
 ```
 
+## Internal result shape
+
+Normal MCP calls through `call_tool`, including ToolScript, use source normalization. Plain text JSON duplicating `structuredContent` is removed; a structured-only result returns its own fields at the top level rather than inside `structuredContent` or a new `output` wrapper. Fields defined by the tool itself are not flattened or renamed.
+
+Errors, additional explanations, meaningful block/result metadata and multimodal data are retained. Image promotion and output limits keep their existing behavior. External MCP passthrough returns the original wire result, so external clients may still see both text and `structuredContent`. Existing history is not rewritten.
+
 ## Failure handling
 
 - A disabled server must be enabled before discovery/calls.
 - For connection errors, verify transport and endpoint/command first; do not respond by editing the state file or restarting Foxwarm.
+- A closed/404 context may be rebuilt on a later operation, but do not repeat a possibly executed tool merely to restore the connection. Re-establish any required remote Node/cwd explicitly.
 - For authentication errors, verify that the expected token/header/environment key is configured, but never reveal its value.
 - `search_tools` may return warnings for one broken MCP server while preserving results from healthy servers. Treat the per-server warning as scoped rather than assuming all MCP integration is unavailable.

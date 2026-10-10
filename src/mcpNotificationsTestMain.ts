@@ -16,6 +16,7 @@ import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import { SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
 import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from './toolAuthorization';
 import { installAgentMetadataSnapshotForWorker } from './session/agentMetadata';
+import { mock } from 'node:test';
 import { STATE_DIR } from './config';
 
 async function start() {
@@ -59,9 +60,32 @@ async function start() {
     }
     next();
   });
+  let effects = 0;
+  const catalog = new McpInboundMcpCatalog();
+  const listTools = catalog.listTools.bind(catalog);
+  const callTool = catalog.callTool.bind(catalog);
+  const contextExecs = new Map<string, string[]>();
+  catalog.listTools = async (context, principal) => [...await listTools(context, principal), {
+    name: 'fixture_context', description: 'Synthetic context fixture.', inputSchema: { type: 'object' },
+  }];
+  catalog.callTool = async (context, name, args, signal, principal) => {
+    if (name !== 'fixture_context') return callTool(context, name, args, signal, principal);
+    if (typeof args.nodeId === 'string') context.currentNode = args.nodeId;
+    if (typeof args.cwd === 'string') context.cwd = args.cwd;
+    if (typeof args.execId === 'string') contextExecs.set(context.id, [...contextExecs.get(context.id) || [], args.execId]);
+    if (args.effect) effects++;
+    const value = { contextId: context.id, currentNode: context.currentNode, cwd: context.cwd, execIds: contextExecs.get(context.id) || [] };
+    return { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value, ...(args.fail ? { isError: true } : {}) };
+  };
+  const releaseContext = catalog.releaseContext.bind(catalog);
+  catalog.releaseContext = async (context, principal) => {
+    await releaseContext(context, principal);
+    contextExecs.delete(context.id);
+    process.send?.({ event: 'context-released', sessionId: context.id });
+  };
   const inbound = new McpInboundHttpService(normalizeAccessConfig({ identities: {
     peer: { token: 'synthetic-peer-token', surfaces: { mcp: {} } },
-  } }), new McpInboundMcpCatalog());
+  } }), catalog);
   inbound.register(http);
   await http.start();
   const port = ((http as any).httpServer.address() as { port: number }).port;
@@ -72,6 +96,17 @@ async function start() {
       let result: unknown;
       const ctx = { sessionId: command.sessionId };
       switch (command.action) {
+        case 'management':
+          result = await tool_call_tool(command.descriptor, ctx);
+          break;
+        case 'mockPing':
+          mock.timers.enable({ apis: ['setInterval'] });
+          result = true;
+          break;
+        case 'advancePing':
+          mock.timers.tick(5 * 60_000);
+          result = true;
+          break;
         case 'holdGet':
           getGate = new Promise<void>(resolve => { releaseGet = resolve; });
           result = true;
@@ -79,6 +114,17 @@ async function start() {
         case 'releaseGet':
           releaseGet?.(); getGate = undefined;
           result = true;
+          break;
+        case 'effects': result = effects; break;
+        case 'contexts':
+          result = [...(inbound as any).connections.values()].map((connection: any) => ({ id: connection.id, currentNode: connection.context.currentNode, cwd: connection.context.cwd }));
+          break;
+        case 'dropContexts':
+          await Promise.all([...(inbound as any).connections.values()].map(connection => (inbound as any).dispose(connection)));
+          result = true;
+          break;
+        case 'discover':
+          result = await mcp.listMcpTools(command.sessionId, 'peer');
           break;
         case 'notify': {
           const id = String(command.target).slice(4).split(':')[0];
@@ -103,10 +149,10 @@ async function start() {
           result = true;
           break;
         case 'notifications':
-          result = await tool_call_tool({ toolId: 'builtin:mcp_notifications', args: { server: 'peer', action: command.operation } }, ctx);
+          result = await tool_call_tool({ toolId: 'builtin:mcp_notifications', args: { server: command.server || 'peer', action: command.operation } }, ctx);
           break;
         case 'call':
-          result = await tool_call_tool({ toolId: 'mcp:peer/foxwarm_session', args: command.args }, ctx);
+          result = await tool_call_tool({ toolId: `mcp:peer/${command.tool || 'foxwarm_session'}`, args: command.args }, ctx);
           break;
         case 'send':
           result = await executeMainManagementTool('send_to_channel', { channelTargetId: command.target, message: command.message }, ctx);
@@ -136,6 +182,7 @@ async function start() {
           result = true;
           break;
         case 'stop':
+          mock.timers.reset();
           await inbound.stop();
           await mcp.shutdownMcpExternalService();
           await shutdownMainManagementTools();
