@@ -38,7 +38,7 @@ Use this descriptor with `search_tools`, then invoke the returned ID with `call_
 }
 ```
 
-Accepted means queued, not completed or answered. The receiving Session runs under its own Agent and tool permissions. To receive an explicit answer without polling, use [explicit instance replies](instance-replies.md): start notifications **before** sending with `reply: true`. Reading history is a separate permission and operation, not a mandatory reply mechanism.
+Accepted means queued, not completed or answered. The receiving Session runs under its own Agent and tool permissions. To receive an explicit answer without polling, use [explicit instance replies](instance-replies.md): start notifications **before** sending with `allowReply: true`. Reading history is a separate permission and operation, not a mandatory reply mechanism.
 
 ## Entry points and concrete permissions
 

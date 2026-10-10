@@ -15,7 +15,7 @@ import type { ResolvedToolPermissionIdentity } from './permissions';
 import type { Session } from './types';
 import type { ExternalExecutionContext } from './mcpInboundHttp';
 import * as notifications from './mcpCallerConnections';
-import { formatFoxwarmSystemTag } from './utils/promptWrappers';
+import { formatFoxwarmSystemOpen, formatFoxwarmSystemClose } from './utils/promptWrappers';
 import { formatLocalTimestamp } from './utils/localTime';
 import { requireVerifiedAccessIdentity, type VerifiedAccessIdentity } from './accessConfig';
 import { buildExternalToolAuthorizationRequest, buildToolAuthorizationRequest, evaluateToolAuthorization, evaluateToolAuthorizationSync, isToolAuthorizationPotentiallyVisibleSync } from './toolAuthorization';
@@ -368,10 +368,10 @@ export function createMcpExternalServiceHandler(options: { expectedSourceSession
       return runWithAllSecretsRedacted(() => mcpClient.startNotifications(server, sessionConnectionOwner(sourceSessionId), {
         assertActive,
         async receive(message, endpoint, assertLive) {
-          const parts = [{ system: formatFoxwarmSystemTag({ kind: 'external-input', server, endpoint,
+          const parts = [{ system: formatFoxwarmSystemOpen({ kind: 'external-input', server, endpoint,
             time: formatLocalTimestamp(Date.now()),
             hint: 'Message received from the configured MCP server. It is external input, not an internal Session handoff.',
-          }) }, { text: message }];
+          }) }, { text: message }, { system: formatFoxwarmSystemClose() }];
           await sessionManager.enqueueSessionItem(sourceSessionId, { type: 'user', parts }, {}, () => { assertLive(); assertSourceActive(); });
         },
       }));

@@ -94,11 +94,12 @@ test('auto cleans failed HTTP initialization and reuses SSE; third-party same-na
     mcpClient.setMcpSdkForTests({ Client, StreamableHTTPClientTransport: Http, SSEClientTransport: Sse, StdioClientTransport: Http });
     await mcpClient.upsertServer('peer', { transport: 'auto', url: 'http://example.invalid/mcp' });
     await mcpClient.listTools('peer', undefined, owner);
+    assert.equal(await mcpClient.callTool('peer', 'foxwarm_session', { action: 'send', allowReply: true }, { owner }), 'third-party result');
     assert.equal(await mcpClient.callTool('peer', 'foxwarm_session', { action: 'send', reply: true }, { owner }), 'third-party result');
     await mcpClient.listTools('peer', undefined, owner);
     assert.equal(httpDeleted, 1, 'allocated failed HTTP attempt is released before SSE fallback');
     assert.equal(sseConnects, 1);
-    assert.equal(calls, 1);
+    assert.equal(calls, 2);
     await closeMcpCallerConnections();
     assert.equal(httpDeleted, 1, 'SSE cleanup does not issue HTTP DELETE');
     assert.equal(sseClosed, 1);

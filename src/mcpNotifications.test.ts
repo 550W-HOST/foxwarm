@@ -7,6 +7,7 @@ import { fork, type ChildProcess } from 'node:child_process';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import * as mcpClient from './mcpClient';
+import { convertToOpenAIFormat, convertToOpenAIResponsesFormat } from './llmProviders/openai';
 
 async function mainFixture(workers: boolean) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-mcp-notifications-'));
@@ -98,7 +99,7 @@ for (const workers of [false, true]) {
       await b.command('releaseGet');
       assert.equal((await started).state, 'receiving');
       assert.equal((await a.command('notifications', { sessionId: 'receive-two', operation: 'start' })).state, 'receiving');
-      const first = await a.command('call', { sessionId: 'receive-one', args: { action: 'send', sessionId: 'remote-target', message: 'first input', reply: true } });
+      const first = await a.command('call', { sessionId: 'receive-one', args: { action: 'send', sessionId: 'remote-target', message: 'first input', allowReply: true } });
       const second = await a.command('call', { sessionId: 'receive-two', args: { action: 'send', sessionId: 'remote-target', message: 'second input', reply: true } });
       // Both JSON POST results have completed before any explicit response.
       const firstTarget = first.channelTargetId;
@@ -107,9 +108,19 @@ for (const workers of [false, true]) {
       assert.notEqual(firstTarget, secondTarget);
       assert.equal(allInputs(await a.command('history', { sessionId: 'receive-one' })).length, 0,
         'ordinary remote output is not subscribed or broadcast to the receiver');
-      await assert.rejects(a.command('call', { sessionId: 'unsubscribed', args: { action: 'send', sessionId: 'remote-target', message: 'no reply receiver', reply: true } }), /No tool call was sent/);
+      await assert.rejects(a.command('call', { sessionId: 'unsubscribed', args: { action: 'send', sessionId: 'remote-target', message: 'no reply receiver', allowReply: true } }), /No tool call was sent/);
+      await assert.rejects(a.command('call', { sessionId: 'unsubscribed', args: { action: 'send', sessionId: 'remote-target', message: 'legacy no receiver', reply: true } }), /No tool call was sent/);
+      await assert.rejects(a.command('call', { sessionId: 'receive-one', args: { action: 'send', sessionId: 'remote-target', message: 'conflicting reply options', allowReply: false, reply: true } }), /must agree.*No tool call was sent/);
       const bHistory = await b.command('history', { sessionId: 'remote-target' });
+      assert.ok(!JSON.stringify(allInputs(bHistory)).includes('conflicting reply options'));
+      assert.ok(!JSON.stringify(allInputs(bHistory)).includes('legacy no receiver'));
       assert.ok(JSON.stringify(allInputs(bHistory)).includes(firstTarget), 'server-owned reply address enters external-input metadata');
+      const firstInput = allInputs(bHistory).find((item: any) => item.parts?.some((part: any) => part.text === 'first input'));
+      assert.ok(firstInput);
+      assert.equal(firstInput.role || firstInput.type, 'user');
+      const firstParts = firstInput.parts.slice(firstInput.parts.findIndex((part: any) => part.system?.includes('kind="external-input"')));
+      assert.ok(firstParts[0].system.endsWith('>') && !firstParts[0].system.endsWith('/>'));
+      assert.deepEqual(firstParts[2], { system: '</foxwarm-system>' });
       if (workers) assert.ok(!JSON.stringify(bHistory.mainHistory).includes(firstTarget), 'Main does not hydrate Worker history');
 
       await b.command('isolated', { sessionId: 'isolated-sender' });
@@ -120,14 +131,29 @@ for (const workers of [false, true]) {
       await b.command('notify', { target: firstTarget, method: 'notifications/foxwarm/other', params: { message: 'not a Session message', endpoint: firstTarget } });
       await b.command('notify', { target: firstTarget, method: 'notifications/foxwarm/session_message', params: { message: 'remote target spoof', endpoint: firstTarget, sessionId: 'receive-two' } });
       const received = a.nextInput('receive-one');
-      await b.command(workers ? 'workerReply' : 'send', { sessionId: 'other-sender', target: firstTarget, message: 'explicit after-POST reply' });
+      const replyText = ' \nexplicit after-POST reply\n  ';
+      await b.command(workers ? 'workerReply' : 'send', { sessionId: 'other-sender', target: firstTarget, message: replyText });
       await received;
       const aHistory = await a.command('history', { sessionId: 'receive-one' });
-      const reply = allInputs(aHistory).find((item: any) => item.parts?.some((part: any) => part.text === 'explicit after-POST reply'));
+      const reply = allInputs(aHistory).find((item: any) => item.parts?.some((part: any) => part.text === replyText));
       assert.ok(reply);
       assert.equal(reply.sourceSessionId, undefined);
-      assert.match(reply.parts[0].system, /kind="external-input"/);
-      assert.match(reply.parts[0].system, /server="peer"/);
+      const replyParts = reply.parts.slice(reply.parts.findIndex((part: any) => part.system?.includes('kind="external-input"')));
+      assert.match(replyParts[0].system, /server="peer"/);
+      assert.equal(reply.role || reply.type, 'user');
+      assert.equal(reply.source, undefined);
+      assert.equal(reply.sourceSessionRelation, undefined);
+      assert.ok(!replyParts[0].system.endsWith('/>'));
+      assert.deepEqual(replyParts[1], { text: replyText });
+      assert.deepEqual(replyParts[2], { system: '</foxwarm-system>' });
+      const canonical = { role: 'user' as const, parts: reply.parts };
+      const expectedText = `${replyParts[0].system}\n${replyText}\n</foxwarm-system>`;
+      const chat = convertToOpenAIFormat([canonical]);
+      assert.equal(chat[0].role, 'user');
+      assert.ok(chat[0].content.endsWith(expectedText));
+      const responses = convertToOpenAIResponsesFormat([canonical]);
+      assert.equal(responses[0].role, 'user');
+      assert.ok(responses[0].content.map((part: any) => part.text).join('\n').endsWith(expectedText));
       if (workers) {
         assert.equal(aHistory.worker.ready, true);
         assert.ok(!JSON.stringify(aHistory.mainHistory).includes('explicit after-POST reply'));
@@ -150,7 +176,7 @@ for (const workers of [false, true]) {
       await assert.rejects(b.command('send', { sessionId: 'other-sender', target: secondTarget, message: 'disabled destination' }), /not found|unavailable/);
       await a.command('config', { sessionId: 'unsubscribed', config: { enable: true } });
       await a.command('notifications', { sessionId: 'unsubscribed', operation: 'start' });
-      const deleted = await a.command('call', { sessionId: 'unsubscribed', args: { action: 'send', sessionId: 'remote-target', message: 'delete receiver next', reply: true } });
+      const deleted = await a.command('call', { sessionId: 'unsubscribed', args: { action: 'send', sessionId: 'remote-target', message: 'delete receiver next', allowReply: true } });
       await a.command('delete', { sessionId: 'unsubscribed' });
       await assert.rejects(b.command('send', { sessionId: 'other-sender', target: deleted.channelTargetId, message: 'deleted receiver' }), /not found|unavailable/);
       await a.command('fenceReceivers');
@@ -183,15 +209,15 @@ test('caller-owned HTTP contexts survive repeated discovery, notification opt-in
     assert.equal(other.currentNode, 'master');
     assert.equal(other.cwd, null);
     assert.deepEqual(other.execIds, []);
-    await assert.rejects(a.command('call', { sessionId: 'owner-one', args: { action: 'send', sessionId: 'target', message: 'must not enqueue', reply: true } }), /No tool call was sent/);
+    await assert.rejects(a.command('call', { sessionId: 'owner-one', args: { action: 'send', sessionId: 'target', message: 'must not enqueue', allowReply: true } }), /No tool call was sent/);
     assert.equal((await b.command('history', { sessionId: 'target' })).queue.length, 0);
     await a.command('notifications', { sessionId: 'owner-one', operation: 'start' });
     assert.deepEqual((await probe('owner-one')), initial, 'start does not rebuild or lose Node/cwd/exec context');
     await a.command('policy', { policy: `version: 1\ndefaultAction: allow\nrules:\n- id: revoke-reception\n  match: { tool: { source: builtin, name: mcp_notifications } }\n  action: deny\n` });
-    await assert.rejects(a.command('call', { sessionId: 'owner-one', args: { action: 'send', sessionId: 'target', message: 'reception denied', reply: true } }), /not permitted/);
+    await assert.rejects(a.command('call', { sessionId: 'owner-one', args: { action: 'send', sessionId: 'target', message: 'reception denied', allowReply: true } }), /not permitted/);
     assert.equal((await b.command('history', { sessionId: 'target' })).queue.length, 0);
     await a.command('policy', { policy: 'version: 1\ndefaultAction: allow\nrules: []\n' });
-    const accepted = await a.command('call', { sessionId: 'owner-one', args: { action: 'send', sessionId: 'target', message: 'now reply explicitly', reply: true } });
+    const accepted = await a.command('call', { sessionId: 'owner-one', args: { action: 'send', sessionId: 'target', message: 'now reply explicitly', allowReply: true, reply: true } });
     const received = a.nextInput('owner-one');
     await b.command('send', { sessionId: 'target', target: accepted.channelTargetId, message: 'same-context reply' });
     await received;
@@ -277,7 +303,7 @@ test('notification authorization, exact server names and moved owners retain the
     await notify('receiver/main', 'start');
     await management('set_agent_isolated', { agentName: 'receiver', toolRules: toolRules.map(rule => rule.tool === 'mcp_notifications' ? { ...rule, effect: 'deny' } : rule) });
     await assert.rejects(notify('receiver/main', 'start'), /denies/);
-    await assert.rejects(a.command('call', { sessionId: 'receiver/main', args: { action: 'send', sessionId: 'target', message: 'revoked receiver', reply: true } }), /denies/);
+    await assert.rejects(a.command('call', { sessionId: 'receiver/main', args: { action: 'send', sessionId: 'target', message: 'revoked receiver', allowReply: true } }), /denies/);
     assert.equal((await b.command('history', { sessionId: 'target' })).queue.length, 0, 'legacy revocation is checked before remote side effect');
     // Stop uses the same policy; restore permission before explicit cleanup.
     await management('set_agent_isolated', { agentName: 'receiver', toolRules });

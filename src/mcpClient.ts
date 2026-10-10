@@ -615,10 +615,15 @@ export async function listTools(serverName?: string, signal?: AbortSignal, owner
 export async function callTool(serverName: string | undefined, tool: string, args?: Record<string, any>, options: { signal?: AbortSignal; rawResult?: boolean; owner?: McpConnectionOwner } = {}) {
   const { name, config } = await getServerConfig(serverName);
   return withServerConnection(name, config, async ({ client, reception }) => {
-    if (tool === 'foxwarm_session' && args?.action === 'send' && args?.reply === true
+    if (tool === 'foxwarm_session' && args?.action === 'send'
       && client.getServerCapabilities?.()?.experimental?.[MCP_NOTIFICATION_CAPABILITY]?.version === 1) {
-      if (!reception) throw new Error('Start mcp_notifications for this Session before requesting explicit replies. No tool call was sent.');
-      await reception.assertActive();
+      if (typeof args.allowReply === 'boolean' && typeof args.reply === 'boolean' && args.allowReply !== args.reply) {
+        throw new Error('allowReply and legacy reply must agree when both are provided. No tool call was sent.');
+      }
+      if (args.allowReply === true || args.reply === true) {
+        if (!reception) throw new Error('Start mcp_notifications for this Session before requesting explicit replies. No tool call was sent.');
+        await reception.assertActive();
+      }
     }
     const params = { name: tool, arguments: args || {} };
     const requestOptions = {
