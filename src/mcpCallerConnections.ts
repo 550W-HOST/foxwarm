@@ -17,7 +17,7 @@ export type McpConnectionOptions = {
   sdk: { Client: any; StreamableHTTPClientTransport: any; SSEClientTransport: any };
 };
 type Reception = {
-  assertActive(): void;
+  assertActive(): Promise<void>;
   receive(message: string, endpoint: string, assertLive: () => void): Promise<void>;
 };
 function deferred() {
@@ -149,9 +149,8 @@ async function connect(entry: McpCallerConnection, kind: 'streamable-http' | 'ss
     const assertReception = () => {
       assertLive(entry);
       if (entry.reception !== reception) throw new Error('MCP notification reception is stopped.');
-      reception.assertActive();
     };
-    try { assertReception(); await reception.receive(params.message, params.endpoint, assertReception); }
+    try { await reception.assertActive(); assertReception(); await reception.receive(params.message, params.endpoint, assertReception); }
     catch { logger.warn({ server: entry.options.server }, 'MCP notification was not admitted'); }
   };
   assertLive(entry);
@@ -206,9 +205,9 @@ export function getMcpNotificationStatus(owner: McpConnectionOwner, server: stri
 }
 export async function startMcpNotifications(options: McpConnectionOptions & Reception): Promise<McpNotificationStatus> {
   if (options.owner?.kind !== 'session' || options.mode !== 'streamable-http') throw new Error('Notifications require a Session-owned Streamable HTTP connection.');
-  options.assertActive();
+  await options.assertActive();
   return withMcpCallerConnection(options, async entry => {
-    if (entry.reception && entry.receiving) { options.assertActive(); return notificationStatus(entry); }
+    if (entry.reception && entry.receiving) { await entry.reception.assertActive(); return notificationStatus(entry); }
     if (entry.enabling) return entry.enabling;
     entry.enabling = (async () => {
       let deadline: NodeJS.Timeout;
@@ -223,14 +222,23 @@ export async function startMcpNotifications(options: McpConnectionOptions & Rece
           })]);
         }
         assertLive(entry);
-        options.assertActive();
-        entry.reception = options;
+        await options.assertActive();
+        assertLive(entry);
+        const reception: Reception = {
+          async assertActive() {
+            assertLive(entry);
+            await options.assertActive();
+            assertLive(entry);
+            if (entry.reception !== reception) throw new Error('MCP notification reception is stopped.');
+          },
+          receive: options.receive,
+        };
+        entry.reception = reception;
         if (!entry.ping) {
           entry.ping = setInterval(() => {
-            if (!entry.reception || !current(entry)) return;
-            try { entry.reception.assertActive(); }
-            catch { void dispose(entry); return; }
-            void entry.client.ping().catch(() => {});
+            if (entry.closed || !entry.reception) return;
+            if (!current(entry)) { void dispose(entry); return; }
+            void entry.reception.assertActive().then(() => entry.client.ping().catch(() => {}), () => { void dispose(entry); });
           }, PING_INTERVAL_MS);
           entry.ping.unref();
         }

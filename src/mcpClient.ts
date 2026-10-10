@@ -600,7 +600,7 @@ export async function callTool(serverName: string | undefined, tool: string, arg
     if (tool === 'foxwarm_session' && args?.action === 'send' && args?.reply === true
       && client.getServerCapabilities?.()?.experimental?.[MCP_NOTIFICATION_CAPABILITY]?.version === 1) {
       if (!reception) throw new Error('Start mcp_notifications for this Session before requesting explicit replies. No tool call was sent.');
-      reception.assertActive();
+      await reception.assertActive();
     }
     const params = { name: tool, arguments: args || {} };
     const requestOptions = {
@@ -650,10 +650,13 @@ export async function listServers() {
 }
 
 export async function startNotifications(server: string, owner: McpConnectionOwner, reception: {
-  assertActive(): void;
+  assertActive(): Promise<void>;
   receive(message: string, endpoint: string, assertLive: () => void): Promise<void>;
 }) {
-  const { name, config } = await getServerConfig(server);
+  const servers = await getServers();
+  if (!Object.prototype.hasOwnProperty.call(servers, server)) throw new Error(`MCP server "${server}" not found.`);
+  const config = servers[server];
+  if (config.enable === false) throw new Error(`MCP server "${server}" is disabled.`);
   if (normalizeTransport(config) !== 'streamable-http') throw new Error('Notifications require an enabled Streamable HTTP server.');
-  return startMcpNotifications({ ...httpOptions(name, config, owner), ...reception });
+  return startMcpNotifications({ ...httpOptions(server, config, owner), ...reception });
 }

@@ -16,6 +16,7 @@ import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import { SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
 import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from './toolAuthorization';
 import { installAgentMetadataSnapshotForWorker } from './session/agentMetadata';
+import { mock } from 'node:test';
 import { STATE_DIR } from './config';
 
 async function start() {
@@ -76,6 +77,12 @@ async function start() {
     const value = { contextId: context.id, currentNode: context.currentNode, cwd: context.cwd, execIds: contextExecs.get(context.id) || [] };
     return { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value, ...(args.fail ? { isError: true } : {}) };
   };
+  const releaseContext = catalog.releaseContext.bind(catalog);
+  catalog.releaseContext = async (context, principal) => {
+    await releaseContext(context, principal);
+    contextExecs.delete(context.id);
+    process.send?.({ event: 'context-released', sessionId: context.id });
+  };
   const inbound = new McpInboundHttpService(normalizeAccessConfig({ identities: {
     peer: { token: 'synthetic-peer-token', surfaces: { mcp: {} } },
   } }), catalog);
@@ -89,6 +96,17 @@ async function start() {
       let result: unknown;
       const ctx = { sessionId: command.sessionId };
       switch (command.action) {
+        case 'management':
+          result = await tool_call_tool(command.descriptor, ctx);
+          break;
+        case 'mockPing':
+          mock.timers.enable({ apis: ['setInterval'] });
+          result = true;
+          break;
+        case 'advancePing':
+          mock.timers.tick(5 * 60_000);
+          result = true;
+          break;
         case 'holdGet':
           getGate = new Promise<void>(resolve => { releaseGet = resolve; });
           result = true;
@@ -131,7 +149,7 @@ async function start() {
           result = true;
           break;
         case 'notifications':
-          result = await tool_call_tool({ toolId: 'builtin:mcp_notifications', args: { server: 'peer', action: command.operation } }, ctx);
+          result = await tool_call_tool({ toolId: 'builtin:mcp_notifications', args: { server: command.server || 'peer', action: command.operation } }, ctx);
           break;
         case 'call':
           result = await tool_call_tool({ toolId: `mcp:peer/${command.tool || 'foxwarm_session'}`, args: command.args }, ctx);
@@ -164,6 +182,7 @@ async function start() {
           result = true;
           break;
         case 'stop':
+          mock.timers.reset();
           await inbound.stop();
           await mcp.shutdownMcpExternalService();
           await shutdownMainManagementTools();

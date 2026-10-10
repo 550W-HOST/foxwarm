@@ -50,7 +50,7 @@ Owns persisted MCP server configuration, safe summaries, transport connection li
 - Disabled or unknown servers fail before invocation. Successful managed updates close all HTTP caller connections for that server after durable publication.
 - Safe server summaries expose `timeoutSeconds` as the configured override or `null` for the SDK default; no secret-bearing values are added.
 
-- `startNotifications` uses the same caller-owned connection and preserves prior Node/cwd/exec state. For a peer advertising the Foxwarm extension, `foxwarm_session` send with `reply:true` fails locally before `client.callTool` unless that connection has enabled reception. Third-party same-name tools without the capability are unaffected.
+- `startNotifications` resolves only the exact enabled server name, without ordinary discovery/call fallback, and uses the same caller-owned connection and preserves prior Node/cwd/exec state. For a peer advertising the Foxwarm extension, `foxwarm_session` send with `reply:true` fails locally before `client.callTool` unless that connection has enabled reception. Third-party same-name tools without the capability are unaffected.
 
 ## Result normalization
 

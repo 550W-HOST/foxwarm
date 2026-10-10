@@ -354,21 +354,25 @@ export function createMcpExternalServiceHandler(options: { expectedSourceSession
       await authorize(sourceSessionId, { source: 'builtin', tool: 'mcp_notifications' }, args, options.expectedSourceSessionId);
       if (action === 'stop') return notifications.stopMcpNotifications(sessionConnectionOwner(sourceSessionId), server);
       if (action === 'status') return notifications.getMcpNotificationStatus(sessionConnectionOwner(sourceSessionId), server);
-      const assertActive = () => {
+      const assertSourceActive = () => {
         const source = sessionManager.getSessionCatalog(sourceSessionId);
         if (notificationsStopped || !source || source.id !== sourceSessionId || evaluateToolAuthorizationSync(buildToolAuthorizationRequest({ session: source,
           tool: { source: 'builtin', name: 'mcp_notifications' }, targetNode: 'master', args: { action: 'start', server },
         })).action === 'deny') throw new Error('MCP notification receiver is not permitted.');
       };
+      const assertActive = async () => {
+        assertSourceActive();
+        await authorize(sourceSessionId, { source: 'builtin', tool: 'mcp_notifications' }, { action: 'start', server }, options.expectedSourceSessionId);
+        assertSourceActive();
+      };
       return runWithAllSecretsRedacted(() => mcpClient.startNotifications(server, sessionConnectionOwner(sourceSessionId), {
         assertActive,
         async receive(message, endpoint, assertLive) {
-          await authorize(sourceSessionId, { source: 'builtin', tool: 'mcp_notifications' }, { action: 'start', server }, options.expectedSourceSessionId);
           const parts = [{ system: formatFoxwarmSystemTag({ kind: 'external-input', server, endpoint,
             time: formatLocalTimestamp(Date.now()),
             hint: 'Message received from the configured MCP server. It is external input, not an internal Session handoff.',
           }) }, { text: message }];
-          await sessionManager.enqueueSessionItem(sourceSessionId, { type: 'user', parts }, {}, assertLive);
+          await sessionManager.enqueueSessionItem(sourceSessionId, { type: 'user', parts }, {}, () => { assertLive(); assertSourceActive(); });
         },
       }));
     },

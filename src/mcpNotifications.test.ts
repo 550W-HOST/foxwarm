@@ -249,3 +249,50 @@ test('caller-owned HTTP contexts survive repeated discovery, notification opt-in
     await b.close();
   }
 });
+
+
+test('notification authorization, exact server names and moved owners retain their supported fences', { timeout: 60000 }, async () => {
+  const a = await mainFixture(false);
+  const b = await mainFixture(false);
+  const management = (tool: string, args: Record<string, unknown>) => a.command('management', { sessionId: 'admin', descriptor: { toolId: `builtin:${tool}`, args } });
+  const notify = (sessionId: string, operation: string, server = 'peer') => a.command('notifications', { sessionId, operation, server });
+  try {
+    await a.command('create', { sessionId: 'admin' });
+    await a.command('create', { sessionId: 'before' });
+    await b.command('create', { sessionId: 'target' });
+    await b.command('policy', { policy: allowInbound });
+    await a.command('config', { sessionId: 'admin', config: { transport: 'streamable-http', url: `http://127.0.0.1:${b.port}/mcp`, token: 'synthetic-peer-token' } });
+    await a.command('policy', { policy: `version: 1\ndefaultAction: allow\nrules:\n- id: deny-peer\n  match: { tool: { source: builtin, name: mcp_notifications }, args: { action: start, server: peer } }\n  action: deny\n` });
+    await assert.rejects(notify('admin', 'start'), /denies|not permitted/);
+    await assert.rejects(notify('admin', 'start', 'missing-name'), /not found/);
+    assert.equal((await notify('admin', 'status', 'missing-name')).state, 'stopped');
+    assert.equal((await b.command('contexts')).length, 0);
+    await a.command('policy', { policy: 'version: 1\ndefaultAction: allow\nrules: []\n' });
+    await a.command('config', { sessionId: 'admin', config: { enable: false } });
+    await assert.rejects(notify('admin', 'start'), /disabled/);
+    await a.command('config', { sessionId: 'admin', config: { enable: true } });
+
+    const toolRules = [{ effect: 'allow', source: 'builtin', tool: 'mcp_notifications' }, { effect: 'allow', source: 'mcp', server: 'peer', tool: 'foxwarm_session' }];
+    await management('create_agent', { agentName: 'receiver', isolatedNode: 'synthetic-node', toolRules });
+    await notify('receiver/main', 'start');
+    await management('set_agent_isolated', { agentName: 'receiver', toolRules: toolRules.map(rule => rule.tool === 'mcp_notifications' ? { ...rule, effect: 'deny' } : rule) });
+    await assert.rejects(notify('receiver/main', 'start'), /denies/);
+    await assert.rejects(a.command('call', { sessionId: 'receiver/main', args: { action: 'send', sessionId: 'target', message: 'revoked receiver', reply: true } }), /denies/);
+    assert.equal((await b.command('history', { sessionId: 'target' })).queue.length, 0, 'legacy revocation is checked before remote side effect');
+    // Stop uses the same policy; restore permission before explicit cleanup.
+    await management('set_agent_isolated', { agentName: 'receiver', toolRules });
+    await notify('receiver/main', 'stop');
+    await a.command('mockPing');
+    await notify('before', 'start');
+    const previousId = (await b.command('contexts'))[0].id;
+    await management('move_session', { sessionId: 'before', newSessionId: 'after' });
+    const released = b.nextEvent('context-released', previousId);
+    await a.command('advancePing');
+    await released;
+    assert.equal((await b.command('contexts')).length, 0, 'next ping DELETEs the inactive pre-move owner');
+    await notify('after', 'start');
+    assert.equal((await b.command('contexts')).length, 1);
+    await notify('after', 'stop');
+    assert.equal((await b.command('contexts')).length, 0);
+  } finally { await a.close(); await b.close(); }
+});
