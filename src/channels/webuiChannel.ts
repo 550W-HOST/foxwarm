@@ -1316,10 +1316,11 @@ export class WebUIChannel implements Channel {
               // comments, key order, quoting, and custom formatting survive.
               await this.installer.install('models', String(req.body?.yaml ?? ''));
             } else {
-              const existingRaw = readRawTextFileIfExists(modelsPath);
-              const existingConfig = existingRaw.trim() ? ((yaml.load(existingRaw) as any) || {}) : {};
-              const config = buildModelsConfigFromSetupForm(req.body || {}, existingConfig);
-              await this.installer.install('models', dumpSetupYaml(config));
+              await this.installer.install('models', () => {
+                const existingRaw = readRawTextFileIfExists(modelsPath);
+                const existingConfig = existingRaw.trim() ? ((yaml.load(existingRaw) as any) || {}) : {};
+                return dumpSetupYaml(buildModelsConfigFromSetupForm(req.body || {}, existingConfig));
+              });
             }
 
             // Validate by resolving the newly written config.
@@ -1436,17 +1437,12 @@ export class WebUIChannel implements Channel {
             const nextChannels = req.body?.channels && typeof req.body.channels === 'object'
               ? req.body.channels
               : parseChannelsYaml(req.body?.yaml);
-            const current = readAppConfigFile();
-            const next: AppConfig = {
-              ...current,
-              channels: nextChannels,
-            };
-            const installation = await this.installer.install('config', buildAppConfigWithChannelsYaml(next.channels || {}, APP_CONFIG_PATH));
+            const installation = await this.installer.install('config', () => buildAppConfigWithChannelsYaml(nextChannels || {}, APP_CONFIG_PATH));
             const reload = installation.reload;
             res.json({
               success: true,
               configPath: APP_CONFIG_PATH,
-              channelsYaml: dumpSetupYaml(next.channels || {}),
+              channelsYaml: dumpSetupYaml(nextChannels || {}),
               ...installation,
               reload,
             });
@@ -1489,12 +1485,11 @@ export class WebUIChannel implements Channel {
             const setup = getWeixinSetupConfig(req.body || {});
             const result = await waitForWeixinQrLogin({ sessionKey, baseUrl: setup.baseUrl, routeTag: setup.routeTag, timeoutMs: 5000 });
             if (result.connected && result.botToken) {
-              const current = readAppConfigFile();
-              const existingChannels = current.channels || {};
-              const previous = (existingChannels as any)[setup.channelId] || {};
-              const next: AppConfig = {
-                ...current,
-                channels: {
+              const installation = await this.installer.install('config', () => {
+                const current = readAppConfigFile();
+                const existingChannels = current.channels || {};
+                const previous = (existingChannels as any)[setup.channelId] || {};
+                const channels: AppConfig['channels'] = {
                   ...existingChannels,
                   [setup.channelId]: {
                     ...previous,
@@ -1505,9 +1500,9 @@ export class WebUIChannel implements Channel {
                     routeTag: setup.routeTag,
                     allowedUsers: result.userId ? Array.from(new Set([...(previous.allowedUsers || []), result.userId])) : previous.allowedUsers,
                   },
-                },
-              };
-              const installation = await this.installer.install('config', buildAppConfigWithChannelsYaml(next.channels || {}, APP_CONFIG_PATH));
+                };
+                return buildAppConfigWithChannelsYaml(channels, APP_CONFIG_PATH);
+              });
               const reload = installation.reload;
               return res.json({ success: true, channelId: setup.channelId, connected: true, userId: result.userId || null, message: result.message, ...installation, reload });
             }

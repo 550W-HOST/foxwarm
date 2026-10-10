@@ -255,7 +255,7 @@ export function buildModelsConfigFromSetupForm(body: any, existingConfig: any = 
       ? 'models'
       : 'providers';
   const existingProviders = isPlainObject(existingConfig?.[rootKey]) ? existingConfig[rootKey] : {};
-  const nextProviders: Record<string, ProviderConfigEntry> = {};
+  const nextProviders = cloneConfigValue(existingProviders) as Record<string, ProviderConfigEntry>;
   const drafts = normalizeProviderDrafts(body);
 
   for (const [index, draft] of drafts.entries()) {

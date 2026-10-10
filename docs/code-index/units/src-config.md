@@ -1,6 +1,6 @@
 # Unit: src-config
 
-Files: src/config.ts, src/configInstaller.ts, src/configFile.ts, src/configInstaller.test.ts, src/configHotApply.test.ts, src/tools/configTools.ts, src/publicUrl.test.ts, src/compactionConfig.test.ts, src/setupConfig.ts, src/setupConfig.test.ts, src/modelsConfigSchema.test.ts, src/modelsConfigPath.test.ts, src/workerConfig.test.ts, src/imageGenerationConfig.test.ts
+Files: src/config.ts, src/configInstaller.ts, src/configFile.ts, src/configInstaller.test.ts, src/configHotApply.test.ts, src/configSectionSaves.test.ts, src/tools/configTools.ts, src/publicUrl.test.ts, src/compactionConfig.test.ts, src/setupConfig.ts, src/setupConfig.test.ts, src/modelsConfigSchema.test.ts, src/modelsConfigPath.test.ts, src/workerConfig.test.ts, src/imageGenerationConfig.test.ts
 Secondary files: packages/shared/src/configSchemas.ts, templates/models.example.yaml, README.md, docs/virtual-models.md, docs/vector-memory.md, docs/executable-node-provider-protocol.md, docs/docker-worktree-node-provider.md
 
 ## Purpose
@@ -32,7 +32,7 @@ Owns application/model configuration types, path resolution, YAML readers/writer
 
 ### Setup configuration
 
-- `configInstaller.install(target, bytes, authorize?)` — serialized Main-owned installation for Setup and `set_config`; reports saved, applied, not-applied, and restart-required settings.
+- `configInstaller.install(target, candidate, authorize?)` — serialized Main-owned installation for Setup and `set_config`; reports saved, applied, not-applied, and restart-required settings.
 - `replaceConfigFile` — same-directory mode-0600 temporary write, sync, and atomic replacement shared by all three configuration targets.
 - `validateModelsConfigYaml`, `writeRawModelsConfig`.
 - `readRawAppConfigFile`, `validateAppConfigYaml`, `writeRawAppConfig`.
@@ -167,9 +167,11 @@ The mutable models configuration has one active location: `<data-root>/state/mod
 
 ### D-config-live-install
 
-[2026-10-10] WebUI Setup and the hidden discoverable Main-management `set_config({ target, filePath })` share the serialized Main-owned configuration installer. Targets are `config`, `models`, and `tool-rules`; the tool reads one complete master-side regular-file candidate under the current setter and `node:master/read` permissions, then repeats those permissions at installation admission. Invalid candidates do not change files or live snapshots. All targets use a synced same-directory temporary file and atomic replacement, preserving raw bytes rather than parsing and redumping them. Structured Models compatibility generates YAML and uses this same validation/install path. Policy limits remain policy-specific; there is no new app/models limit borrowed from tool rules.
+[2026-10-10] WebUI Setup and the hidden discoverable Main-management `set_config({ target, filePath })` share the serialized Main-owned configuration installer. Targets are `config`, `models`, and `tool-rules`; the tool reads one complete master-side regular-file candidate under the current setter and `node:master/read` permissions, then repeats those permissions at installation admission. Invalid candidates do not change files or live snapshots. All targets use a synced same-directory temporary file and atomic replacement, preserving raw bytes rather than parsing and redumping them. Section-only Channels, Weixin login, and structured Models edits run their complete read/merge/build inside the same installation queue, after prior saves finish applying. Structured Models updates retain providers not named in the submitted form. The queued merge preserves the latest unrelated app settings, channels, providers, and custom fields; raw full-document saves retain complete replacement semantics. Structured Models compatibility generates YAML and uses this same validation/install path. Policy limits remain policy-specific; there is no new app/models limit borrowed from tool rules.
 
 App saves publish `access.identities` and reload managed channels. Models continue to resolve from the active file on later requests, and the current Setup page retains its existing picker refresh. Other app fields remain startup-owned: results compare them against startup configuration and continue to report pending restart settings across repeated saves. If Main has no HTTP listener, enabling an MCP identity is saved but reported as requiring restart. No file watcher, new service orchestrator, or cross-window model-cache synchronization is introduced.
+
+Real Setup HTTP regressions hold a local Weixin getupdates response during actual managed-channel stop, then queue Config/Channels, raw/structured Models, and QR-login channel saves. They verify the later section edit retains the preceding save's token, URL, raw surrounding text, unrelated channels/providers, and extension fields without changing queue internals.
 
 The result distinguishes `saved`, `applied`, `notApplied`, and `restartRequired`. Access snapshot publication and affected-transport fencing happen before asynchronous cleanup; connection cleanup or managed-channel failures after replacement are reported as saved with incomplete application, not as a successful rollback. Tool output does not echo YAML or secret-bearing validation details. Setup retains its administrator-only response fields and uses concise save/restart feedback.
 

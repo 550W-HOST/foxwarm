@@ -5,6 +5,8 @@ import { AccessConfigRuntime, hasAccessSurface, normalizeAccessConfig, assertAcc
 import { readRawTextFileIfExists, validateModelsConfigYaml, validateAppConfigYaml, writeRawAppConfig, writeRawModelsConfig } from './setupConfig';
 import { installToolAuthorizationPolicyBytes, parseToolAuthorizationPolicyBytes } from './toolAuthorization';
 
+type ConfigCandidate = string | Buffer | (() => string | Buffer);
+
 export type ConfigTarget = 'config' | 'models' | 'tool-rules';
 export type ConfigInstallResult = {
   saved: true;
@@ -44,8 +46,13 @@ export class ConfigInstaller {
 
   setHttpAvailable(available: boolean): void { this.httpAvailable = available; }
 
-  install(target: ConfigTarget, bytes: string | Buffer, authorize?: () => Promise<void>): Promise<ConfigInstallResult> {
-    const job = this.tail.then(async () => { await authorize?.(); return this.installNow(target, bytes); });
+  install(target: ConfigTarget, candidate: ConfigCandidate, authorize?: () => Promise<void>): Promise<ConfigInstallResult> {
+    const job = this.tail.then(async () => {
+      await authorize?.();
+      // Section edits read and merge only after earlier installs finish applying.
+      const bytes = typeof candidate === 'function' ? candidate() : candidate;
+      return this.installNow(target, bytes);
+    });
     this.tail = job.catch(() => {});
     return job;
   }
