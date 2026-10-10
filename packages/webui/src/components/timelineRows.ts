@@ -15,6 +15,8 @@ import { parsePastedTextSegments } from '../pastedText'
 import { deriveTimelineTimeMarkers, type TimelineTimeMarker } from './timelineTime'
 import { isReasoningPart } from './reasoningParts'
 import { getContextBlockMetaFromMessage } from './ContextBlockCard'
+import { isCommittedHistoryMessage } from '../chatHistoryState'
+import { buildConversationActivitySummary } from './conversationActivity'
 import { getWebSearchAction } from '../webSearchAction'
 
 /**
@@ -76,7 +78,7 @@ export interface TimelineRowView {
   /** Undefined outside Conversation user rows; false retains legacy channel metadata rendering. */
   readonly literalUserText?: boolean
   /** Technical fragments only, in source order. Ordinary output is never duplicated here. */
-  readonly activity?: { readonly messages: Message[]; readonly hasError: boolean }
+  readonly activity?: { readonly messages: Message[]; readonly summary: string }
   readonly prevMsg: Message | null
   readonly nextMsg: Message | null
   readonly pairedToolResponse: Message | null
@@ -112,6 +114,8 @@ export interface TimelineRowsInput {
   readonly showUsageBadge: boolean
   readonly showTimeDividers: boolean
   readonly nestedDepth: number
+  readonly activityDetails?: boolean
+  readonly historyMessages?: readonly Message[]
   readonly expandedGroupKeys: ReadonlySet<string>
 }
 
@@ -239,6 +243,12 @@ const getConversationInputKind = (message: Message): 'activity' | 'user' | 'lega
     return tag.tagName === 'foxwarm-message' && tag.attrs.type === 'channel' ? 'legacy-user' : 'activity'
   }
   return /^\[SYSTEM:[\s\S]*\]$/.test(text) && isHeavySystemTextLine(text.split('\n')[0]) ? 'activity' : 'user'
+}
+
+/** Call only with the complete loaded committed history, never a viewport or nested slice. */
+export function getHistoryTailLlmError(messages: readonly Message[]): Message | undefined {
+  const tail = messages.findLast(message => isCommittedHistoryMessage(message) && !message.__meta?.queuedPreview)
+  return tail && getLlmErrorMessageDetails(tail) ? tail : undefined
 }
 
 const hasConversationText = (part: Message['parts'][number]): boolean => (
@@ -524,7 +534,7 @@ const reuseWhenEqual = <T,>(previous: T | undefined, next: T, isEqual: (a: T, b:
 )
 
 export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRowsCache | null): TimelineRowsResult => {
-  const { messages, isRunningTool = false, isMobile, timelineView, showUsageBadge, showTimeDividers, nestedDepth, expandedGroupKeys } = input
+  const { messages, isRunningTool = false, isMobile, timelineView, showUsageBadge, showTimeDividers, nestedDepth, expandedGroupKeys, activityDetails, historyMessages } = input
   const grouped = timelineView === 'grouped'
   const requestTimings = deriveRequestTimings(messages)
   const timeMarkers = showTimeDividers && nestedDepth === 0 ? deriveTimelineTimeMarkers(messages, isGroupableSystemMessage) : []
@@ -594,7 +604,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       usageAnchorRelative: usageBadge !== null && !isMobile,
       systemLikeMessage,
       interleavedToolGroup: pairedToolResponse !== null,
-      marginClass: nestedDepth > 0 ? 'mt-2' : (shouldSkipMargin ? '' : 'mt-4'),
+      marginClass: activityDetails ? '' : nestedDepth > 0 ? 'mt-2' : (shouldSkipMargin ? '' : 'mt-4'),
       widthClass: systemLikeMessage
         ? (isMobile || nestedDepth > 0 ? 'w-full' : 'w-full max-w-[80%]')
         : msg.role === 'user'
@@ -612,17 +622,20 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
   }
 
   if (timelineView === 'conversation') {
+    const historyTailLlmError = historyMessages ? getHistoryTailLlmError(historyMessages) : undefined
+    const summaryForActivity = buildConversationActivitySummary(messages, historyMessages)
     let activityStart = -1
     let activityKey = ''
     let activityMessages: Message[] = []
     let lastActivitySource = -1
     const flushActivity = () => {
       if (activityStart < 0) return
+      const summary = summaryForActivity(activityMessages)
       const old = previous?.rows.get(activityKey)?.activity
-      const activity = old && old.messages.length === activityMessages.length && old.messages.every((msg, i) => msg === activityMessages[i])
+      const activity = old && old.summary === summary && old.messages.length === activityMessages.length && old.messages.every((msg, i) => msg === activityMessages[i])
         ? old : {
           messages: activityMessages,
-          hasError: activityMessages.some(msg => !!getLlmErrorMessageDetails(msg) || msg.parts.some(part => part.functionResponse && getToolResponseStatus(part.functionResponse) === 'error')),
+          summary,
         }
       emitRow(activityStart, null, false, null, { key: activityKey, activity })
       activityStart = -1
@@ -643,6 +656,11 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
     }
     messages.forEach((msg, index) => {
       const contextBlock = msg.role === 'model' && getContextBlockMetaFromMessage(msg)
+      if (nestedDepth === 0 && msg === historyTailLlmError) {
+        flushActivity()
+        emitRow(index, null, false, null, { key: messageKeys[index] })
+        return
+      }
       if (msg.role === 'user') {
         const inputKind = getConversationInputKind(msg)
         if (inputKind === 'activity') addActivity(index, msg)

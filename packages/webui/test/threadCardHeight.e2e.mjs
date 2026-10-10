@@ -77,7 +77,7 @@ before(async () => {
     class FixtureSocket {
       static CLOSED = 3
       static instances = []
-      constructor() { this.readyState = 0; FixtureSocket.instances.push(this); queueMicrotask(() => { this.readyState = 1; this.onopen?.({}) }) }
+      constructor() { this.readyState = 0; FixtureSocket.instances.push(this); queueMicrotask(() => { this.readyState = 1; this.onopen?.({}); this.emit({ type: 'connected' }) }) }
       close() { this.readyState = FixtureSocket.CLOSED }
       send(raw) { const payload = JSON.parse(raw); if (payload.type !== 'set-subscriptions') return; queueMicrotask(() => {
         this.emit({ type: 'subscriptions-accepted', revision: payload.revision, sessionListResolutions: {}, sessionResolutions: { 'fixture/height': 'fixture/height' } })

@@ -1,6 +1,6 @@
 import type { TimelineView } from '../chatPreferences'
 import type { Message } from './chatShared'
-import { formatStructuredSystemText, getSystemMessagePreviewDescriptor, isSystemLikeText, renderAssistantMarkdownSegments, renderMarkdownSegments } from './chatShared'
+import { formatStructuredSystemText, getLlmErrorMessageDetails, getSystemMessagePreviewDescriptor, isSystemLikeText, renderAssistantMarkdownSegments, renderMarkdownSegments } from './chatShared'
 import { isCommittedHistoryMessage } from '../chatHistoryState'
 import { getContextBlockMetaFromMessage, getContextBlockSummaryText } from './ContextBlockCard'
 import { getGroupedToolEntries, getToolCallSearchText, getToolResponseSearchText } from './ToolTimelineItems'
@@ -58,7 +58,7 @@ export function projectSessionSearchFields(messages: Message[], timelineView: Ti
     committed.push(message)
     sourceIndices.set(message, index)
   })
-  const input = { messages: committed, isMobile: false, timelineView, showUsageBadge: false, showTimeDividers: false, nestedDepth: 0, expandedGroupKeys: new Set<string>() }
+  const input = { messages: committed, isMobile: false, timelineView, showUsageBadge: false, showTimeDividers: false, nestedDepth: 0, historyMessages: messages, expandedGroupKeys: new Set<string>() }
   const initial = buildTimelineRows(input, null)
   // The normal collapsed render omits whole Event/Goal reminder rows inside groups.
   // Reuse the same row builder in data-only expanded mode so their own row/group keys survive.
@@ -72,7 +72,7 @@ export function projectSessionSearchFields(messages: Message[], timelineView: Ti
   })
   const fields: SearchField[] = []
   for (const row of rows) {
-    if (row.activity) continue
+    if (row.activity || timelineView === 'conversation' && getLlmErrorMessageDetails(row.msg)) continue
     const { msg, key: rowKey } = row
     const groupKey = row.group?.key
     const sourceIndex = sourceIndices.get(msg)!

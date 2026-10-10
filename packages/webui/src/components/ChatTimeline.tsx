@@ -68,6 +68,9 @@ interface ChatTimelineProps {
   sessionId: string
   messages: Message[]
   isRunningTool?: boolean
+  /** Supplied by Chat from full committed history, never inferred from a viewport or nested slice. */
+  historyMessages?: readonly Message[]
+  activityDetails?: boolean
   isMobile: boolean
   timelineView: TimelineView
   showUsageBadge: boolean
@@ -1125,7 +1128,7 @@ const TimelineActivity = memo(function TimelineActivity({ row, expanded, onToggl
       <button type="button" aria-expanded={expanded} aria-label={expanded ? 'Collapse activity' : 'Expand activity'}
         className="flex items-center gap-2 rounded px-2 py-1 text-xs text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong"
         onClick={() => { prepare(); onToggle(row.key, !expanded) }}>
-        <span aria-hidden="true">{expanded ? '⌄' : '›'}</span><span className={row.activity!.hasError ? 'text-fw-warning' : undefined}>{row.activity!.hasError ? 'Activity · Error' : 'Activity'}</span>
+        <span aria-hidden="true">{expanded ? '⌄' : '›'}</span><span>{row.activity!.summary}</span>
       </button>
       {expanded && <div className="min-w-0 pl-3" data-activity-details>
         {rowProps.renderNestedMessages(row.activity!.messages, row.key, rowProps.nestedDepth + 1, 'detailed')}
@@ -1143,7 +1146,7 @@ const TimelineTimeSeparator = memo(function TimelineTimeSeparator({ marker }: { 
   )
 })
 
-const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, isRunningTool = false, isMobile, timelineView, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget }: ChatTimelineProps) {
+const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, isRunningTool = false, isMobile, timelineView, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget, historyMessages, activityDetails }: ChatTimelineProps) {
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
   const [expandedTools, setExpandedTools] = useState<ExpandedTools>(new Map())
   const rowsCacheRef = useRef<TimelineRowsCache | null>(null)
@@ -1155,6 +1158,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, isR
       messages={nestedMessages}
       isMobile={isMobile}
       timelineView={overrideView || timelineView}
+      activityDetails={overrideView !== undefined}
       showUsageBadge={overrideView ? showUsageBadge : nextNestedDepth > 0 ? false : showUsageBadge}
       showTimeDividers={false}
       showUserMessageMetadata={showUserMessageMetadata}
@@ -1165,7 +1169,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, isR
   ), [timelineView, isMobile, onOpenCodeCommit, onOpenCodeFile, sessionId, showUsageBadge, showUserMessageMetadata])
 
   const rows = useMemo(() => {
-    const input = { messages, isRunningTool, isMobile, timelineView, showUsageBadge, showTimeDividers, nestedDepth, expandedGroupKeys: expandedToolGroups }
+    const input = { messages, isRunningTool, isMobile, timelineView, showUsageBadge, showTimeDividers, nestedDepth, activityDetails, historyMessages, expandedGroupKeys: expandedToolGroups }
     let result = buildTimelineRows(input, rowsCacheRef.current)
     // A search reveal is transient: include only its owning group without changing manual expansion state.
     if (searchTarget && timelineView === 'grouped' && nestedDepth === 0) {
@@ -1180,7 +1184,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, isR
     }
     rowsCacheRef.current = result.cache
     return result.rows
-  }, [expandedToolGroups, timelineView, isMobile, isRunningTool, messages, nestedDepth, searchTarget, showUsageBadge, showTimeDividers])
+  }, [expandedToolGroups, timelineView, isMobile, isRunningTool, messages, nestedDepth, activityDetails, historyMessages, searchTarget, showUsageBadge, showTimeDividers])
 
 
   const groupedRows = useMemo(() => {
