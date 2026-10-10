@@ -231,7 +231,7 @@ test('session identity moves reject journal-unsafe target ids before mutation', 
   try {
     await assert.rejects(
       sessionManager.moveSessionToTarget({ sourceSessionId: sourceId, newSessionId: '..' }),
-      /Invalid newSessionId in pending session identity move journal/,
+      /Invalid session name/,
     );
     assert.ok(await sessionManager.getExistingSession(sourceId));
     assert.equal(await fs.pathExists(path.join(process.env.FOXWARM_DATA_DIR || '', 'state', 'session-id-move-pending.json')), false);
@@ -852,8 +852,10 @@ test('channel creation rejects a failed durable attachment and rolls back its se
 test('archive reservations preserve exact session ids including trailing whitespace', async () => {
   await sessionManager.loadSessions();
   const sessionId = `${makeId('trailing_space')} `;
-  const created = await sessionManager.createEmptySession(sessionId);
-  await sessionManager.appendSessionMessage(created.session, {
+  // Persisted legacy identity, not a new nonconforming creation.
+  await fs.outputJson(getSessionHistoryFilePath(sessionId), { id: sessionId, agent: 'main', history: [], queue: [], busy: false });
+  const legacy = await sessionManager.getSession(sessionId);
+  await sessionManager.appendSessionMessage(legacy, {
     role: 'user',
     parts: [{ text: 'exact trailing-space identity' }],
     __meta: { timestamp: Date.now() },
@@ -1569,5 +1571,62 @@ test('startup finishes a move journal left after target persistence', () => {
     assert.equal(fs.pathExistsSync(path.join(tempRoot, 'state', 'session-id-move-pending.json')), false);
   } finally {
     fs.removeSync(tempRoot);
+  }
+});
+
+test('new Session targets reject non-ASCII name characters before creation or move effects', async () => {
+  await sessionManager.loadSessions();
+  const sourceId = makeId('name_validation_source');
+  const newAgent = makeId('name_validation_agent');
+  const source = await createParent(sourceId);
+  const beforeIds = [...sessionManager.getAllSessions().keys()];
+  const beforeSource = await fs.readFile(getSessionHistoryFilePath(sourceId), 'utf8');
+  try {
+    for (const name of ['', 'two words', 'dot.name', 'star*', 'question?', 'slash/name', '中文', 'é', 'name\n']) {
+      await assert.rejects(sessionManager.createSessionInAgent({ agentName: 'main', sessionName: name }));
+      await assert.rejects(sessionManager.forkSession(sourceId, name));
+      await assert.rejects(sessionManager.createChildSession(sourceId, name));
+      await assert.rejects(sessionManager.moveSessionToTarget({
+        sourceSessionId: sourceId, newSessionId: name, createAgent: true, newAgentName: newAgent,
+      }));
+      // These low-level façades accept composite internal IDs, not leaf names.
+      if (name && !name.includes('/')) {
+        await assert.rejects(sessionManager.createEmptySession(name));
+        await assert.rejects(sessionManager.createSession(name, { ...source, id: name }));
+      }
+    }
+    assert.deepEqual([...sessionManager.getAllSessions().keys()], beforeIds);
+    assert.equal(await fs.readFile(getSessionHistoryFilePath(sourceId), 'utf8'), beforeSource);
+    assert.equal(await fs.pathExists(getAgentDir(newAgent)), false);
+    const legalName = makeId('Legal_09-name');
+    const created = await sessionManager.createSessionInAgent({ agentName: 'main', sessionName: legalName, displayName: '中文 / Display name' });
+    assert.equal((await sessionManager.getExistingSession(created.sessionId))?.displayName, '中文 / Display name');
+    await sessionManager.deleteSession(created.sessionId);
+  } finally {
+    await sessionManager.deleteSession(sourceId).catch(() => {});
+  }
+});
+
+test('persisted nonconforming Session names still hydrate and move to legal names with aliases', async () => {
+  await sessionManager.loadSessions();
+  const legacyId = `${makeId('legacy_name')}. old 中文`;
+  const legalId = makeId('renamed_legacy');
+  await fs.outputJson(getSessionHistoryFilePath(legacyId), {
+    id: legacyId, agent: 'main', displayName: 'Display / name',
+    history: [{ role: 'user', parts: [{ text: 'persisted legacy content' }] }], queue: [], busy: false,
+  });
+  try {
+    const legacy = await sessionManager.getSession(legacyId);
+    await sessionManager.setSessionDisplayName(legacyId, 'Display / name');
+    assert.equal(legacy.history[0].parts[0].text, 'persisted legacy content');
+    assert.equal((await sessionManager.createEmptySession(legacyId)).created, false);
+    await sessionManager.moveSessionToTarget({ sourceSessionId: legacyId, newSessionId: legalId });
+    const moved = await sessionManager.getExistingSession(legacyId);
+    assert.equal(moved?.id, legalId);
+    assert.equal(moved?.displayName, 'Display / name');
+    assert.equal(moved?.history[0].parts[0].text, 'persisted legacy content');
+  } finally {
+    await sessionManager.deleteSession(legalId).catch(() => {});
+    await sessionManager.deleteSession(legacyId).catch(() => {});
   }
 });

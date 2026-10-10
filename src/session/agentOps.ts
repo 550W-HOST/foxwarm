@@ -246,8 +246,8 @@ export function validateAgentName(agentName: string): void {
 }
 
 export function validateSessionName(sessionName: string): void {
-  if (!sessionName || typeof sessionName !== 'string' || sessionName.includes('/')) {
-    throw new Error('Invalid session name. Session names cannot be empty or contain "/" character.');
+  if (typeof sessionName !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(sessionName)) {
+    throw new Error('Invalid session name. Use only ASCII letters, digits, underscores, and hyphens.');
   }
 }
 

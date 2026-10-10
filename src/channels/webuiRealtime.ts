@@ -1,3 +1,4 @@
+import { webUiSessionScopeAllows } from '../webuiSessionScope';
 import http from 'node:http';
 import type { WebSocket } from 'ws';
 import type { HttpAuthContext } from '../httpServer';
@@ -18,6 +19,7 @@ type ResolvedRealtimeIds = {
   canonicalIds: string[];
   missingIds: string[];
   requestedToCanonical: Record<string, string>;
+  agentsByCanonicalId?: Record<string, string>;
 };
 
 export type WebUiRealtimeSocket = Pick<WebSocket, 'readyState' | 'send' | 'close' | 'ping' | 'on'> & { bufferedAmount?: number };
@@ -120,12 +122,12 @@ export class WebUiRealtimeHub {
     this.dependencies = dependencies;
   }
 
-  private resolvedWebUiBindings(auth: Extract<HttpAuthContext, { role: 'webui' }>): Set<string> {
-    const canonical = new Set<string>();
-    for (let index = 0; index < auth.sessionIds.length; index += 200) {
-      for (const id of this.dependencies.resolveIds(auth.sessionIds.slice(index, index + 200)).canonicalIds) canonical.add(id);
-    }
-    return canonical;
+  private webUiCanAccessSession(auth: Extract<HttpAuthContext, { role: 'webui' }>, sessionId: string): boolean {
+    return webUiSessionScopeAllows(auth.sessionIds, sessionId, id => {
+      const resolved = this.dependencies.resolveIds([id]);
+      const canonicalId = resolved.requestedToCanonical[id];
+      return canonicalId ? { id: canonicalId, agent: resolved.agentsByCanonicalId?.[canonicalId] } : undefined;
+    });
   }
 
   hasSessionSubscribers(sessionId: string): boolean {
@@ -229,12 +231,11 @@ export class WebUiRealtimeHub {
     const resolvedList = this.dependencies.resolveIds(message.sessionListIds);
     const resolvedSessions = this.dependencies.resolveIds(message.sessionIds);
     if (client.auth.role === 'webui') {
-      const allowed = this.resolvedWebUiBindings(client.auth);
       // The WebUI identity UI never subscribes to the catalog. Reject rather than
       // filtering to prevent list snapshots or invalidations leaking topology.
-      if (message.sessionListActive || message.sessionListIds.length
+      if (message.logs || message.sessionListActive || message.sessionListIds.length
         || message.sessionIds.some(id => !resolvedSessions.requestedToCanonical[id]
-          || !allowed.has(resolvedSessions.requestedToCanonical[id]))) {
+          || !this.webUiCanAccessSession(client.auth as Extract<HttpAuthContext, { role: 'webui' }>, id))) {
         throw new Error('WebUI subscription is not bound to this session.');
       }
     }
@@ -269,9 +270,8 @@ export class WebUiRealtimeHub {
     }
     if (client.auth.role === 'webui') {
       const latest = this.dependencies.resolveIds(message.sessionIds);
-      const allowed = this.resolvedWebUiBindings(client.auth);
       if (message.sessionIds.some(id => !latest.requestedToCanonical[id]
-        || !allowed.has(latest.requestedToCanonical[id])
+        || !this.webUiCanAccessSession(client.auth as Extract<HttpAuthContext, { role: 'webui' }>, id)
         || latest.requestedToCanonical[id] !== resolvedSessions.requestedToCanonical[id])
         || sessionSnapshots.some((snapshot, index) => snapshot.type === 'session-state'
           && (snapshot.session as { id?: string } | undefined)?.id !== resolvedSessions.canonicalIds[index])) {
@@ -314,6 +314,13 @@ export class WebUiRealtimeHub {
 
   private safeSend(client: WebUiRealtimeClient, payload: WebUiRealtimeEnvelope): void {
     if (client.closed || !socketIsOpen(client.socket)) return;
+    if (client.auth.role === 'webui' && payload.sessionId
+      && (!this.webUiCanAccessSession(client.auth, payload.sessionId)
+        || this.dependencies.resolveIds([payload.sessionId]).requestedToCanonical[payload.sessionId] !== payload.sessionId)) {
+      try { client.socket.close(1012, 'Session identity changed'); } catch {}
+      this.cleanupClient(client);
+      return;
+    }
     try {
       client.socket.send(JSON.stringify(payload));
     } catch {
@@ -350,10 +357,9 @@ export class WebUiRealtimeHub {
           this.cleanupClient(client);
           return;
         }
-        const bound = this.resolvedWebUiBindings(auth);
         if ([...client.sessionIds].some(id => {
           const current = this.dependencies.resolveIds([id]).requestedToCanonical[id];
-          return !current || !bound.has(current) || current !== id;
+          return !current || !this.webUiCanAccessSession(auth, id) || current !== id;
         })) {
           // The old canonical stream has ended. Reconnect so its requested ID
           // can resolve through the committed alias to the new canonical ID.

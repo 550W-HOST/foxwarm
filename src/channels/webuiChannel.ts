@@ -1,3 +1,4 @@
+import { projectWebUiSessionScope, webUiSessionScopeAllows } from '../webuiSessionScope';
 import { registerWebUiTaskRoutes } from './webuiTasks';
 import { taskService } from '../tools/taskTools';
 /**
@@ -882,6 +883,7 @@ export class WebUIChannel implements Channel {
   private loadModelStreamSnapshot?: (sessionId: string) => Promise<unknown>;
   private sseClients: Map<string, express.Response[]> = new Map(); // sessionId -> clients
   private realtimeHub?: WebUiRealtimeHub;
+  private sseSessionAccess = new WeakMap<express.Response, () => boolean>();
   private webUiUploads = new Map<string, { identityId: string; sessionId: string }>();
   private logs = new WebUiLogFile(MAIN_LOG_PATH);
   private presentationSubscriberSessions = new Set<string>();
@@ -912,10 +914,8 @@ export class WebUIChannel implements Channel {
     if (auth.role === 'admin') {
       return { role: 'admin' as const, features: WEBUI_ADMIN_FEATURES };
     }
-    const sessionIds = [...new Set(auth.sessionIds.flatMap(id => {
-      const session = sessionManager.getSessionCatalog(id);
-      return session ? [session.id] : [];
-    }))];
+    const sessionIds = projectWebUiSessionScope(auth.sessionIds, sessionManager.getSessionCatalog,
+      agent => sessionCatalogStore.listByAgent(agent) as Array<{ id: string; agent: string }>);
     return {
       role: 'webui' as const,
       identityId: auth.identityId,
@@ -926,8 +926,7 @@ export class WebUIChannel implements Channel {
 
   private webUiCanAccessSession(auth: HttpAuthContext, sessionId: string): boolean {
     if (auth.role === 'admin') return true;
-    const session = sessionManager.getSessionCatalog(sessionId);
-    return !!session && auth.sessionIds.some(id => sessionManager.getSessionCatalog(id)?.id === session.id);
+    return webUiSessionScopeAllows(auth.sessionIds, sessionId, sessionManager.getSessionCatalog);
   }
 
   private async requireSessionAccess(req: express.Request, res: express.Response, sessionId: string): Promise<HttpAuthContext | null> {
@@ -941,6 +940,14 @@ export class WebUIChannel implements Channel {
       return null;
     }
     return auth;
+  }
+
+  private accessibleSseClients(sessionId: string): express.Response[] {
+    return [...(this.sseClients.get(sessionId) || [])].filter(client => {
+      if (this.sseSessionAccess.get(client)?.() !== false) return true;
+      client.end();
+      return false;
+    });
   }
 
   private isSlashCommandText(text: string): boolean {
@@ -1036,6 +1043,10 @@ export class WebUIChannel implements Channel {
             return resolution?.kind === 'exact' || resolution?.kind === 'alias' ? [resolution.sessionId] : [];
           }))],
           missingIds: ids.filter(id => resolved[id]?.kind !== 'exact' && resolved[id]?.kind !== 'alias'),
+          agentsByCanonicalId: Object.fromEntries(sessionCatalogStore.getMany(
+            [...new Set(Object.values(resolved).flatMap(resolution =>
+              resolution.kind === 'exact' || resolution.kind === 'alias' ? [resolution.sessionId] : []))],
+          ).map(session => [session.id, session.agent])),
           requestedToCanonical: Object.fromEntries(ids.flatMap(id => {
             const resolution = resolved[id];
             return resolution?.kind === 'exact' || resolution?.kind === 'alias' ? [[id, resolution.sessionId]] : [];
@@ -1836,7 +1847,7 @@ export class WebUIChannel implements Channel {
             const agentId = typeof req.body?.agentId === 'string' && req.body.agentId.trim()
               ? req.body.agentId.trim()
               : 'main';
-            const requestedSessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : '';
+            const requestedSessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId : '';
             sessionManager.validateAgentName(agentId);
 
             let sessionId: string;
@@ -2607,7 +2618,7 @@ export class WebUIChannel implements Channel {
             res.json({ success: true, newSessionId });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to fork session');
-            res.status(500).json({ error: e.message });
+            res.status(/^Invalid session name\./.test(e.message) ? 400 : 500).json({ error: e.message });
           }
         },
       });
@@ -3030,6 +3041,9 @@ export class WebUIChannel implements Channel {
             this.sseClients.set(sessionId, []);
           }
           this.sseClients.get(sessionId)!.push(res);
+          if (auth.role === 'webui') this.sseSessionAccess.set(res, () =>
+            this.webUiCanAccessSession(auth, requestedSessionId)
+            && sessionManager.getSessionCatalog(requestedSessionId)?.id === sessionId);
           this.refreshPresentationSubscription(sessionId);
           
           // logger.info({ sessionId, clientCount: this.sseClients.get(sessionId)!.length }, 'SSE client connected');
@@ -3636,7 +3650,7 @@ export class WebUIChannel implements Channel {
 
   // Broadcast new message to SSE clients
   broadcastMessage(sessionId: string, message: any) {
-    const clients = this.sseClients.get(sessionId);
+    const clients = this.accessibleSseClients(sessionId);
     const payload = { type: 'message', message: buildWebUiMessage(message) };
     logger.debug({ sessionId, clientCount: clients?.length || 0, messageRole: message.role }, 'Broadcasting message to SSE clients');
     if (clients && clients.length > 0) {
@@ -3654,7 +3668,7 @@ export class WebUIChannel implements Channel {
   }
 
   broadcastQueueHistoryAppend(sessionId: string, append: QueueHistoryAppendPresentation) {
-    const clients = this.sseClients.get(sessionId);
+    const clients = this.accessibleSseClients(sessionId);
     for (const message of append.messages) {
       const payload = { type: 'message', message: buildWebUiMessage(message) };
       const data = JSON.stringify(payload);
@@ -3672,7 +3686,7 @@ export class WebUIChannel implements Channel {
   }
 
   broadcastSessionEvent(sessionId: string, event: any) {
-    const clients = this.sseClients.get(sessionId);
+    const clients = this.accessibleSseClients(sessionId);
     const payload = { type: 'session-event', event };
     if (clients && clients.length > 0) {
       const data = JSON.stringify(payload);
@@ -3688,7 +3702,7 @@ export class WebUIChannel implements Channel {
   }
 
   broadcastSessionStateUpdate(sessionId: string, runtimeSession?: SessionRuntimeSessionDto | null) {
-    const clients = this.sseClients.get(sessionId);
+    const clients = this.accessibleSseClients(sessionId);
 
     // The production event bridge supplies an immutable DTO. The live-map
     // fallback remains only for direct compatibility callers and existing
