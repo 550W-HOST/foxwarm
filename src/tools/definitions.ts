@@ -930,7 +930,7 @@ Example:
                 type: 'object',
                 properties: {
                     agentName: { type: 'string', description: "Existing agent that will own the session." },
-                    sessionName: { type: 'string', description: "Session name without the agent prefix; it cannot contain /." },
+                    sessionName: { type: 'string', description: "Session name without the agent prefix. Use only ASCII letters, digits, underscores, and hyphens." },
                     displayName: { type: 'string', description: "Display name for the new session." },
                     parentSessionId: { type: 'string', description: "Existing session to record as the new session's parent." },
                     node: { type: 'string', description: "Node for the new session. Omit to inherit this session's current Node. An isolated target agent uses its bound Node." },
@@ -990,7 +990,7 @@ Example:
                 type: 'object',
                 properties: {
                     sessionId: { type: 'string', description: "Session to move. Defaults to this session." },
-                    newSessionId: { type: 'string', description: "New session name without an agent prefix or /. Defaults to main when createAgent is true." },
+                    newSessionId: { type: 'string', description: "New session name without an agent prefix. Use only ASCII letters, digits, underscores, and hyphens. Defaults to main when createAgent is true." },
                     createAgent: { type: 'boolean', description: "Create the destination agent. Defaults to false." },
                     newAgentName: { type: 'string', description: "Destination agent. Required when creating an agent or moving across agents; omit to rename within the source agent." },
                     createAgentInheritMemory: { type: 'boolean', description: "Copy source memory when creating the destination agent. Applies only when createAgent is true." },

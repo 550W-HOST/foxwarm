@@ -50,6 +50,11 @@ function plainRecord(value: unknown): value is Record<string, unknown> {
   return proto === Object.prototype || proto === null;
 }
 
+/** The only supported scope pattern is an exact Agent name followed by /*. */
+export function webUiScopeAgent(binding: string): string | undefined {
+  return /^([A-Za-z0-9_-]+)\/\*$/.exec(binding)?.[1];
+}
+
 function normalizeSessionIds(value: unknown): string[] {
   if (!Array.isArray(value) || value.length === 0 || value.length > MAX_SESSION_IDS) {
     throw new Error('access identity webui.sessions must be a non-empty array of Session IDs.');
@@ -57,7 +62,8 @@ function normalizeSessionIds(value: unknown): string[] {
   const sessions: string[] = [];
   const seen = new Set<string>();
   for (const sessionId of value) {
-    if (typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > MAX_SESSION_ID_LENGTH) {
+    if (typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > MAX_SESSION_ID_LENGTH
+      || (sessionId.includes('*') && webUiScopeAgent(sessionId) === undefined)) {
       throw new Error('access identity webui.sessions contains an invalid Session ID.');
     }
     if (seen.has(sessionId)) throw new Error('access identity webui.sessions must contain distinct Session IDs.');

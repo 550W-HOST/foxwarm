@@ -9,7 +9,8 @@ Validates the startup-only `access.identities` YAML block and creates verified p
 
 ## Key exports
 
-- `normalizeAccessConfig(value)` — validates bounded identity IDs, distinct Bearer tokens, explicit surfaces, WebUI Session bindings, empty MCP surface objects, and unknown fields without echoing secrets.
+- `normalizeAccessConfig(value)` — validates bounded identity IDs, distinct Bearer tokens, explicit surfaces, exact Session IDs or valid Agent wildcard scopes, empty MCP surface objects, and unknown fields without echoing secrets.
+- `webUiScopeAgent(binding)` — recognizes only `<agent>/*` with the supported Agent-name alphabet.
 - `authenticateAccessToken(config, token, surface)` — verifies one configured token for the requested surface and returns an opaque identity with `identityId`, policy-compatible `externalId`, and declared surfaces.
 - `authenticateAccessBearer(config, authorization, 'mcp')` — strict single-header Bearer authentication used by inbound MCP. Cookies and the instance token are not MCP identity sources.
 - `hasAccessSurface(config, surface)` — determines whether startup should expose a surface.
@@ -18,7 +19,7 @@ Validates the startup-only `access.identities` YAML block and creates verified p
 
 ## Integration
 
-`config.ts` adds `AppConfig.access` and exports the startup-normalized `ACCESS_CONFIG`; `setupConfig.ts` validates the same block before writing raw YAML. `HttpServer` uses a WebUI surface verifier for cookie/Bearer HTTP and WebSocket auth. `McpInboundHttpService` authenticates each `/mcp` request with the MCP surface and passes the verified identity to the existing external tool policy, where `externalId` is the configured identity ID. WebUI Session bindings are presentation scope only and do not grant MCP tools; MCP authorization does not grant WebUI management access.
+`config.ts` adds `AppConfig.access` and exports the startup-normalized `ACCESS_CONFIG`; `setupConfig.ts` validates the same block before writing raw YAML. `HttpServer` uses a WebUI surface verifier for cookie/Bearer HTTP and WebSocket auth. `McpInboundHttpService` authenticates each `/mcp` request with the MCP surface and passes the verified identity to the existing external tool policy, where `externalId` is the configured identity ID. WebUI Session bindings and Agent scopes are presentation scope only and do not grant MCP tools; MCP authorization does not grant WebUI management access.
 
 There is no persisted guest-token store, token-issuance route, legacy `mcpInbound` block, or hot-update system. Changes take effect on the existing process restart/startup lifecycle.
 
@@ -32,4 +33,4 @@ Focused tests cover omitted configuration, surface-specific authentication, dupl
 
 ### D-config-shared-access-identities
 
-[2026-10-08] Replace the unused separate inbound MCP identity block and persisted WebUI guest-token store with one top-level `access.identities.<identityId>` map. Each identity declares one token and one or both entry surfaces: `webui: { sessions: [...] }` and `mcp: {}`. Surface declaration is an entry-point capability, not a permission tier. The HTTP/WebUI instance token remains a superuser and is not automatically a valid MCP identity. WebUI bindings resolve through the canonical Session/alias path so committed Session moves preserve access; MCP still requires Bearer-only transport and its existing concrete tool policy.
+[2026-10-08] Replace the unused separate inbound MCP identity block and persisted WebUI guest-token store with one top-level `access.identities.<identityId>` map. Each identity declares one token and one or both entry surfaces: `webui: { sessions: [...] }` and `mcp: {}`. Surface declaration is an entry-point capability, not a permission tier. The HTTP/WebUI instance token remains a superuser and is not automatically a valid MCP identity. WebUI exact bindings and Agent scopes use the canonical [WebUI Session scope contract](../modules/webui.md#d-webui-identity-session-scope); MCP still requires Bearer-only transport and its existing concrete tool policy.

@@ -127,6 +127,16 @@ test('WebUI creation routes create agents and random or custom sessions', async 
 
     res = await request('/api/sessions', { method: 'POST', body: JSON.stringify({ agentId, sessionId: 'other/agent' }) });
     assert.equal(res.status, 400);
+    const beforeInvalidNames = [...sessionManager.getAllSessions().keys()];
+    for (const sessionId of [' leading', 'trailing ', 'dot.name', '*', '中文']) {
+      res = await request('/api/sessions', { method: 'POST', body: JSON.stringify({ agentId, sessionId }) });
+      assert.equal(res.status, 400);
+      res = await request(`/api/sessions/${encodeURIComponent(`${agentId}/custom`)}/fork`, {
+        method: 'POST', body: JSON.stringify({ suffix: sessionId }),
+      });
+      assert.equal(res.status, 400);
+    }
+    assert.deepEqual([...sessionManager.getAllSessions().keys()], beforeInvalidNames);
   } finally {
     await server.stop();
     setHttpServer(null);
@@ -456,6 +466,8 @@ test('bounded cursor and volatile union share SQLite BINARY UTF-8 tie ordering',
   const prefix = makeSessionId('webui_binary'); const ids = [`${prefix}_A`, `${prefix}_a`, `${prefix}_\uE000`, `${prefix}_😀`];
   const future = 8_000_000_000_000_000;
   for (const id of ids) {
+    // Persisted legacy IDs remain valid inputs to catalog ordering and reads.
+    await fs.outputJson(getSessionHistoryFilePath(id), { id, agent: 'main', history: [], queue: [], busy: false });
     const session = await sessionManager.getSession(id); session.pinned = true; session.meta.lastMessageTime = future;
     await sessionManager.saveSession(id);
   }

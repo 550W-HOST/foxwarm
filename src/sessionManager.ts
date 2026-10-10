@@ -467,11 +467,13 @@ async function generateAvailableSessionName(agentName: string = 'main'): Promise
 }
 
 async function allocateForkSessionId(sourceSessionId: string, suffix?: string, replaceMainLeaf = false): Promise<string> {
-  const requestedSuffix = (suffix || 'fork').trim() || 'fork';
+  const requestedSuffix = suffix === undefined ? 'fork' : suffix;
+  validateSessionName(requestedSuffix);
   const baseId = replaceMainLeaf
     ? buildChildSessionId(sourceSessionId, requestedSuffix)
     : `${sourceSessionId}_${requestedSuffix}`;
 
+  validateSessionName(baseId.split('/').at(-1)!);
   if (!await isSessionIdReserved(baseId)) {
     return baseId;
   }
@@ -505,6 +507,7 @@ async function allocateChildSessionId(parentSessionId: string, suffix: string): 
   const requestedSuffix = (suffix || 'child').trim() || 'child';
   const baseId = buildChildSessionId(parentSessionId, requestedSuffix);
 
+  validateSessionName(baseId.split('/').at(-1)!);
   if (!await isSessionIdReserved(baseId)) {
     return baseId;
   }
@@ -949,6 +952,7 @@ async function getSessionUnlocked(sessionId: string, persistNew: boolean = true)
     // A persisted live record may be hydrated here even though it already has
     // archive rows. Only the absence of live persistence starts a new lifetime.
     isNew = reservation === null;
+    if (isNew) validateSessionName(realId.split('/').at(-1)!);
     mustHydratePersistedLifetime = reservation === 'live';
     session = {
       id: realId,
@@ -1176,6 +1180,7 @@ export async function createSession(sessionId: string, sessionData: any): Promis
 }
 
 async function createSessionUnlocked(sessionId: string, sessionData: any): Promise<void> {
+  validateSessionName(sessionId.split('/').at(-1)!);
   await assertSessionIdAvailableForNewLifetime(sessionId);
   assertSessionDestructiveMutationAllowed([sessionData?.parentSessionId], 'receive a new child session');
   if (sessionData && typeof sessionData === 'object') {
@@ -1722,6 +1727,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
 }
 
 async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { displayName?: string; node?: string; model?: string; effort?: ModelEffort; taskId?: string; sourceOverride?: Session }): Promise<string> {
+  if (suffix !== undefined) validateSessionName(suffix);
   assertSessionDestructiveMutationAllowed([sourceSessionId], 'receive a new fork session');
   // sourceOverride lets a trusted caller (e.g. the Main management facade)
   // supply a detached read-only snapshot of a worker-owned authority instead

@@ -40,7 +40,7 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 | Function | Lines (approx) | Description |
 |----------|----------------|-------------|
 | `validateAgentName(agentName)` | ~25 | Regex check for valid agent name characters |
-| `validateSessionName(sessionName)` | ~30 | Rejects empty or slash-containing session names |
+| `validateSessionName(sessionName)` | ~30 | Requires ASCII letters, digits, underscores, and hyphens for new leaf names |
 | `buildSessionId(agentName, sessionName)` | ~35 | Constructs composite session ID from agent and name |
 | `initializeAgentDirectory(options)` | ~42 | Creates agent dir, optionally copies memory from source |
 | `renameSessionIdentity(options, deps)` | ~80 | Renames session ID, moves all associated files, updates aliases and children |

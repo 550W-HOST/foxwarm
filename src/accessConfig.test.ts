@@ -40,6 +40,17 @@ test('access is empty by default and validates each configured surface', () => {
   }
 });
 
+test('WebUI session scopes accept only exact IDs and Agent wildcards', () => {
+  const config = (sessions: string[]) => ({ identities: {
+    scope: { token: secretA, surfaces: { webui: { sessions } } },
+  } });
+  const sessions = ['main/*', 'Agent_2-name/*', 'legacy name.with.punctuation'];
+  assert.deepEqual(normalizeAccessConfig(config(sessions)).identities.scope.surfaces.webui?.sessions, sessions);
+  for (const scope of ['*', 'agent*', 'agent/**', 'agent/name*', 'a/b/*', 'bad.name/*', ' agent/*', 'agent/* ']) {
+    assert.throws(() => normalizeAccessConfig(config([scope])));
+  }
+});
+
 test('configured identities cannot reuse the instance superuser token', () => {
   const config = normalizeAccessConfig({ identities: { identity: { token: secretA, surfaces: { mcp: {} } } } });
   assert.doesNotThrow(() => assertAccessTokensDoNotMatch(config, secretB));
