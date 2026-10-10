@@ -34,7 +34,7 @@ This outbound update is live and needs no restart. Creating/changing B's identit
 
 Discover both `mcp_notifications` (`sources: ["builtin"]`, `limit: 1`) and B's `foxwarm_session` (`sources: ["mcp"]`, `server: "peer"`, `limit: 1`) to check current schemas and permitted visibility.
 
-## 2. Start A's current-Session receiver, then send with `reply: true`
+## 2. Start A's current-Session receiver, then send with `allowReply: true`
 
 The receiver belongs to the **current calling Session** and configured server. There is no remote target Session parameter. Ordinary calls already share this Session/server connection with reception disabled. Successful start waits for the actual receiving GET stream and peer capability negotiation, not just a successful POST; it enables that same connection without discarding an existing remote Node/cwd/exec context.
 
@@ -56,7 +56,7 @@ After `state: "receiving"`:
     "action": "send",
     "sessionId": "project/review",
     "message": "Review the change and send an explicit text reply to the channelTargetId in the server metadata.",
-    "reply": true
+    "allowReply": true
   }
 }
 ```
@@ -77,7 +77,7 @@ sent = call_tool({
         "action": "send",
         "sessionId": args["targetSessionId"],
         "message": args["message"],
-        "reply": True
+        "allowReply": True
     }
 })
 return {"receiver": receiver, "sent": sent}
@@ -89,7 +89,7 @@ Inspect the internal `call_tool` result: `isError: true` means send failed; a st
 
 A raw external MCP client still sees the protocol's `structuredContent.accepted`/`structuredContent.channelTargetId` and text content; that wire format is unchanged.
 
-A's ordinary calls and receiving workflow use the same caller-owned connection, preserving its remote context for replies. Starting from another A Session creates a separate binding and destination. For a peer advertising the Foxwarm extension, the official `foxwarm_session` send with `reply: true` is rejected locally before the remote tool call when A has not enabled reception. The peer capability declares support; it is not a server-side proof that a client processes messages.
+A's ordinary calls and receiving workflow use the same caller-owned connection, preserving its remote context for replies. Starting from another A Session creates a separate binding and destination. For a peer advertising the Foxwarm extension, the official `foxwarm_session` send with `allowReply: true` is rejected locally before the remote tool call when A has not enabled reception. The peer capability declares support; it is not a server-side proof that a client processes messages.
 
 ## 3. B replies using the server-provided destination
 

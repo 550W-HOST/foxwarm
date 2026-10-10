@@ -87,6 +87,9 @@ test('SDK external Session catalog, isolated target read and ordinary-source sen
   try {
     alpha = await connect(fixture.port, 'synthetic-session-alpha-token');
     beta = await connect(fixture.port, 'synthetic-session-beta-token');
+    const sendSchema = (await alpha.client.listTools()).tools.find(tool => tool.name === 'foxwarm_session')!.inputSchema;
+    assert.equal((sendSchema.properties?.allowReply as any)?.type, 'boolean');
+    assert.equal(sendSchema.properties?.reply, undefined, 'only the current parameter is advertised');
     const listed = await action(alpha.client, { action: 'list', count: 50 });
     assert.equal(listed.isError, undefined);
     assert.ok((listed.structuredContent as any).sessions.some((item: any) => item.id === sessionId));
@@ -114,6 +117,23 @@ rules:
     assert.equal((await action(alpha.client, { action: 'send', sessionId, message: 'must-not-enter-queue' })).isError, true);
     assert.ok(!JSON.stringify(target.queue).includes('must-not-enter-queue'));
     setToolAuthorizationPolicyForTests(policyFor(sessionId));
+    for (const options of [
+      { allowReply: true, reply: false }, { allowReply: false, reply: true },
+      { allowReply: 'true' }, { reply: 'true' },
+    ]) {
+      const rejected = await action(alpha.client, { action: 'send', sessionId, message: 'invalid reply options', ...options });
+      assert.equal(rejected.isError, true);
+      if (typeof options.allowReply === 'boolean') assert.match(JSON.stringify(rejected), /must agree/);
+    }
+    assert.ok(!JSON.stringify(target.queue).includes('invalid reply options'), 'invalid options fail before admission');
+    for (const options of [{ allowReply: false }, { reply: false }, { allowReply: false, reply: false }]) {
+      const accepted = await action(alpha.client, { action: 'send', sessionId, message: 'no reply destination', ...options });
+      assert.deepEqual(accepted.structuredContent, { accepted: true, sessionId });
+    }
+    assert.ok(target.queue.filter(item => item.parts?.some(part => part.text === 'no reply destination'))
+      .every(item => !JSON.stringify(item).includes('channelTargetId')));
+    assert.equal((await action(alpha.client, { action: 'list', allowReply: false })).isError, true);
+    assert.equal((await action(alpha.client, { action: 'read', sessionId, reply: false })).isError, true);
     target.meta.wait = { id: 'external-wait-all', startedAt: Date.now(), waitAll: {
       sessions: ['real-child-report'], satisfiedSessions: [], deferredQueue: [],
     } };

@@ -91,7 +91,7 @@ export async function readExternalSession(principal: VerifiedAccessIdentity, con
 
 /** One ordinary user input from an external owner, not a system send or a fabricated Session message. */
 export async function sendExternalSession(principal: VerifiedAccessIdentity, context: ExternalExecutionContext,
-  requestedId: string, message: string, reply = false): Promise<{ accepted: true; sessionId: string; channelTargetId?: string }> {
+  requestedId: string, message: string, allowReply = false): Promise<{ accepted: true; sessionId: string; channelTargetId?: string }> {
   assertActive(context, principal);
   if (typeof message !== 'string' || !message.trim() || Buffer.byteLength(message, 'utf8') > MAX_SEND_MESSAGE_BYTES) {
     throw new ExternalSessionBeforeAdmissionError('Message must be non-empty and fit in a bounded Session input.');
@@ -101,14 +101,14 @@ export async function sendExternalSession(principal: VerifiedAccessIdentity, con
   const permission = buildExternalToolAuthorizationRequest({ principal, sessionId: context.id,
     tool: { source: 'builtin', name: 'send_to_session' }, args: permissionArgs });
   await authorize(principal, context, 'send_to_session', permissionArgs);
-  if (reply && !context.replyChannel) throw new ExternalSessionBeforeAdmissionError('A Foxwarm notification receiver is required for replies.');
-  if (reply) {
+  if (allowReply && !context.replyChannel) throw new ExternalSessionBeforeAdmissionError('A Foxwarm notification receiver is required for replies.');
+  if (allowReply) {
     try { context.replyChannel!.assertAvailable(); }
     catch { throw new ExternalSessionBeforeAdmissionError('An active Foxwarm notification receiver is required for replies.'); }
   }
   const checkAdmission = () => {
     assertActive(context, principal);
-    if (reply) context.replyChannel!.assertAvailable();
+    if (allowReply) context.replyChannel!.assertAvailable();
     if (exactTarget(requestedId) !== sessionId) throw new ExternalSessionBeforeAdmissionError('Session is unavailable.');
     if (evaluateToolAuthorizationSync(permission).action !== 'allow') {
       throw new ExternalSessionBeforeAdmissionError('Session action is not permitted.');
@@ -119,8 +119,8 @@ export async function sendExternalSession(principal: VerifiedAccessIdentity, con
     { system: formatFoxwarmSystemOpen({ kind: 'external-input',
       externalId: requireVerifiedAccessIdentity(principal), contextId: context.id,
       time: formatLocalTimestamp(Date.now()),
-      ...(reply ? { channelTargetId: context.replyChannel!.targetId } : {}),
-      hint: 'Message from an external MCP client.' + (reply
+      ...(allowReply ? { channelTargetId: context.replyChannel!.targetId } : {}),
+      hint: 'Message from an external MCP client.' + (allowReply
         ? ' For an explicit reply, use send_to_channel with the channelTargetId shown here. Ordinary assistant replies are not sent to this connection.' : '') }) },
     { text: message },
     { system: formatFoxwarmSystemClose() },
@@ -128,10 +128,10 @@ export async function sendExternalSession(principal: VerifiedAccessIdentity, con
   if (Buffer.byteLength(JSON.stringify(input), 'utf8') > 1024 * 1024) {
     throw new ExternalSessionBeforeAdmissionError('Message exceeds the Session input limit.');
   }
-  const lease = reply ? context.replyChannel!.acquire() : undefined;
+  const lease = allowReply ? context.replyChannel!.acquire() : undefined;
   try {
     await sessionManager.enqueueSessionItem(sessionId, input, {}, checkAdmission);
     lease?.commit();
-    return { accepted: true, sessionId, ...(reply ? { channelTargetId: context.replyChannel!.targetId } : {}) };
+    return { accepted: true, sessionId, ...(allowReply ? { channelTargetId: context.replyChannel!.targetId } : {}) };
   } finally { lease?.release(); }
 }
