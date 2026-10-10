@@ -14,6 +14,7 @@ Use this entry to choose the relevant operation. Read only the linked section ne
 - Memory is stable operating context, not a progress log. Put task-specific procedures and detailed references in docs or skills, with short pointers from memory where needed.
 - Shared inheritance does not move files or private documents. Give another agent an accessible reference rather than assuming it has the source agent's files.
 - Agent isolation and Session Node selection are different operations. A routing choice does not create a security boundary or authorize another environment.
+- Before an approved removal of isolation, review the separate guards and persisted automation that will stop being restricted. [Access-control's offline rules generator](../access-control/references/isolated-rules.md) produces a conservative caller baseline, not incoming protection or a complete isolation replacement.
 - This skill owns Agent lifecycle, memory, inheritance, isolation, and Node binding. Entry identities, restricted WebUI Session scope, and generic MCP/internal tool policy belong to [access-control](../access-control/SKILL.md); access grants do not create or migrate Agents.
 - Destructive cleanup needs an explicit target and authority. Check dependencies and the current delete contract before deleting an agent or its data.
 

@@ -12,6 +12,7 @@ Use this skill when deciding who can enter Foxwarm, which Sessions a browser ide
 | --- | --- |
 | Add or change a WebUI/MCP identity, scope browser chat, or diagnose login | [Entry identities and WebUI scope](references/identities.md) |
 | Write ordered rules for internal Agents/Sessions or external MCP callers | [Tool policy syntax and examples](references/tool-policy.md) |
+| Generate a conservative isolated-like caller allowlist for review | [Offline generator and its limits](references/isolated-rules.md), using [the script](scripts/generate-isolated-rules.mjs) |
 | Read and merge the existing policy, install a candidate, and confirm behavior | [Safe updates and troubleshooting](references/policy-updates.md) |
 | Connect an MCP client/server or exchange explicit replies between instances | Load [mcp-management](../mcp-management/SKILL.md) |
 | Create/migrate an Agent, edit inheritance/memory, or bind/unbind isolation to a Node | Load [agent-management](../agent-management/SKILL.md) |
@@ -24,6 +25,7 @@ Use this skill when deciding who can enter Foxwarm, which Sessions a browser ide
 - `state/tool-authorization.yaml` applies to isolated and non-isolated internal Sessions and verified external MCP identities. The first enabled matching rule wins; an earlier broad allow can hide a later deny.
 - Authorize the resolved concrete builtin, Node tool, or MCP server/tool, not `call_tool` or an inbound wrapper such as `foxwarm_call`.
 - A policy allow does not override legacy isolated-Agent rules, bound-Node/path restrictions, or tool-local checks. Agent lifecycle and actual isolation creation/binding/migration belong to `agent-management`, not this skill.
+- An isolated-like rules fragment is not a complete isolation replacement. Removing isolation also removes incoming relationship guards and other tool-local restrictions; generating a fragment does not authorize that change.
 - Tool rules are not an operating-system or network sandbox. A permitted `exec` can use the chosen environment's commands, files, credentials, and network; path rules do not constrain arbitrary shell effects.
 
 Do not write live credentials into chat, public examples, or commits. Setup Config saves and `set_config` apply supported identity changes without restarting; other app settings can still require restart. Policy updates retain their per-process cache lifecycle. Loading this skill does not authorize an update or a restart.

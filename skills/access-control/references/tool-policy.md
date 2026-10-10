@@ -38,6 +38,13 @@ The first **enabled matching rule** wins. Present conditions within one rule are
 
 For unmatched internal calls, `defaultAction` applies. For unmatched external calls, the result is always deny, even with `defaultAction: allow`. A missing policy file preserves internal default-allow compatibility and denies unmatched external calls. Other read errors and invalid YAML fail closed after the loader's fresh retry; an old expired cache is not a fallback.
 
+Choose the policy's purpose before writing rules:
+
+- A **deny patch** adds selected denials without defining the caller's remaining capabilities; those still follow later rules or the internal default. It does not establish an allowlist.
+- A **caller allowlist** grants specific capabilities and finishes with a deny for that caller, as in the first example. Earlier matching rules can still bypass that block, so review the complete ordering.
+
+For each builtin grant, assess both its target and effects: file/channel delivery, another Agent's skill catalog, timer ownership and new-session destination, Session reads/listing, lifecycle mutations, and recall scope. A familiar name in the legacy default list is not evidence that an unconditional allow is safe after isolation is removed. Use [the offline baseline generator](isolated-rules.md) when its conservative scope fits; review its omissions rather than treating it as an exact migration.
+
 ## Match fields
 
 | Field | Meaning |
@@ -106,6 +113,23 @@ rules:
 
 The `session` matcher supports `self: true`, `sameAgent: true`, and `relation: parent | child | [parent, child]`. Present fields are AND; parent/child are direct canonical links and can cross Agents. Self does not include siblings or descendants. This is supported only for exact registered builtin families: `send_to_session`, `send_file`, timer CRUD, `recall`, archive reads, and `get_session_messages`. Names combined in one selector must share one registered target resolver. It is not available for arbitrary MCP/Node arguments or external callers. Missing-argument/alias behavior follows each tool, not a universal “missing means self” rule; channel-target file delivery has no Session target. Nonexistent or invalid targets do not match.
 
+| Registered family | Target/default behavior |
+| --- | --- |
+| `send_to_session` | Required `sessionId`; resolves `<main>`, `<parent>`, and catalog aliases. Self-send is rejected by the handler even if policy allows it. |
+| `send_file` | Session target defaults to self only without a non-empty channel target. Channel delivery has no Session relationship target. |
+| Timer CRUD | `sessionId` defaults to self. This matcher scopes the owner, not persisted timer settings or `agentName` for new-session delivery. |
+| `get_archived_messages`, `get_archived_blocks` | `sessionId` defaults to self. |
+| `recall` | Exact recall defaults to self. Vector search without `sessionId` has a self target only with `scope: current-session`; broader/default search has no single Session target. |
+| `get_session_messages` | Required `sessionId`; no universal default. |
+
+Registered target resolution uses authoritative catalog IDs and direct-parent facts, not ID prefixes. Scalar argument matching instead compares the supplied value, before tool-local defaults/normalization. For example, `{ exists: false }` requires absence, not an empty string or `null` accepted as a default by some handlers. `session`, `skill.agentName`, timer new-session Agent fields, and channel attachment ownership do not gain relationship matching merely by having target-like arguments. A permitted Session list exposes its bounded catalog; individual read grants do not project that list into a private subset.
+
+### Discovery visibility
+
+Discovery and default tool injection conservatively project the ordered policy without knowing every future argument or path. A definite identity-only deny can hide a tool; an argument/path/unknown-target denial does not prove that all invocations are denied. Conditional allows may keep the tool visible. Do not diagnose a rule by assuming every denied call removes its tool schema.
+
+`search_tools` has its own authorization and filters returned capabilities. Only `call_tool` is a permission-neutral dispatcher. ToolScript's nested `call_tool` uses the same resolved authorization boundary; that does not make `run_script` or all of its host functionality an unconditional grant.
+
 ### Node and path scope
 
 `targetNode` is the resolved Node for the actual effect. For inbound requests, it is absent for Session operations, outbound MCP calls, and pairing administration; it is not inferred as `master`. Adding `targetNode: master` to an external Session-send rule would prevent that rule from matching.
@@ -121,3 +145,5 @@ Even a permitted `exec` with a matched cwd can execute commands that access othe
 Generic deny applies to isolated and non-isolated Sessions. Generic allow passes only this policy layer: current legacy isolated-Agent exact tool rules, bound-Node restrictions, own-Agent master paths, Session relations, own channel attachment requirements, and tool-local validation remain separate checks. A denied call cannot be fixed merely by adding a generic allow if a later structural check rejects it.
 
 Use [agent-management](../../agent-management/SKILL.md) for actual isolation creation, binding, migration, and lifecycle operations. Do not remove existing isolation as a workaround for a policy mismatch.
+
+If a separately approved migration removes isolation, the generic policy still applies, but the legacy exact rules and isolated-only guards no longer do. Review lost path/target/incoming restrictions and persisted automation explicitly; [the generated baseline's limits](isolated-rules.md#differences-from-legacy-isolation) are not proof of full equivalence.
