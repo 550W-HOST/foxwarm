@@ -141,6 +141,12 @@ Example call descriptor:
 }
 ```
 
+## Internal result shape
+
+Normal MCP calls through `call_tool`, including ToolScript, use source normalization. Plain text JSON duplicating `structuredContent` is removed; a structured-only result returns its own fields at the top level rather than inside `structuredContent` or a new `output` wrapper. Fields defined by the tool itself are not flattened or renamed.
+
+Errors, additional explanations, meaningful block/result metadata and multimodal data are retained. Image promotion and output limits keep their existing behavior. External MCP passthrough returns the original wire result, so external clients may still see both text and `structuredContent`. Existing history is not rewritten.
+
 ## Failure handling
 
 - A disabled server must be enabled before discovery/calls.

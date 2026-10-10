@@ -101,8 +101,8 @@ for (const workers of [false, true]) {
       const first = await a.command('call', { sessionId: 'receive-one', args: { action: 'send', sessionId: 'remote-target', message: 'first input', reply: true } });
       const second = await a.command('call', { sessionId: 'receive-two', args: { action: 'send', sessionId: 'remote-target', message: 'second input', reply: true } });
       // Both JSON POST results have completed before any explicit response.
-      const firstTarget = first.structuredContent.channelTargetId;
-      const secondTarget = second.structuredContent.channelTargetId;
+      const firstTarget = first.channelTargetId;
+      const secondTarget = second.channelTargetId;
       assert.match(firstTarget, /^mcp-[\w-]+:reply$/);
       assert.notEqual(firstTarget, secondTarget);
       assert.equal(allInputs(await a.command('history', { sessionId: 'receive-one' })).length, 0,
@@ -152,7 +152,7 @@ for (const workers of [false, true]) {
       await a.command('notifications', { sessionId: 'unsubscribed', operation: 'start' });
       const deleted = await a.command('call', { sessionId: 'unsubscribed', args: { action: 'send', sessionId: 'remote-target', message: 'delete receiver next', reply: true } });
       await a.command('delete', { sessionId: 'unsubscribed' });
-      await assert.rejects(b.command('send', { sessionId: 'other-sender', target: deleted.structuredContent.channelTargetId, message: 'deleted receiver' }), /not found|unavailable/);
+      await assert.rejects(b.command('send', { sessionId: 'other-sender', target: deleted.channelTargetId, message: 'deleted receiver' }), /not found|unavailable/);
       await a.command('fenceReceivers');
       await assert.rejects(a.command('notifications', { sessionId: 'receive-one', operation: 'start' }), /not permitted/);
     } finally { await a.close(); await b?.close(); }
@@ -172,13 +172,13 @@ test('caller-owned HTTP contexts survive repeated discovery, notification opt-in
     await b.command('policy', { policy: allowInbound });
     const config = { transport: 'streamable-http', url: `http://127.0.0.1:${b.port}/mcp`, token: 'synthetic-peer-token' };
     await a.command('config', { sessionId: 'owner-one', config });
-    const initial = (await probe('owner-one', { nodeId: 'fake-node-one', cwd: '/workspace/one', execId: 'one' })).structuredContent;
+    const initial = (await probe('owner-one', { nodeId: 'fake-node-one', cwd: '/workspace/one', execId: 'one' }));
     for (let i = 0; i < 40; i++) {
       await a.command('discover', { sessionId: 'owner-one' });
-      assert.deepEqual((await probe('owner-one')).structuredContent, initial);
+      assert.deepEqual((await probe('owner-one')), initial);
     }
     assert.equal((await b.command('contexts')).length, 1, 'more than 32 calls and discoveries use one transport context');
-    const other = (await probe('owner-two')).structuredContent;
+    const other = (await probe('owner-two'));
     assert.notEqual(other.contextId, initial.contextId);
     assert.equal(other.currentNode, 'master');
     assert.equal(other.cwd, null);
@@ -186,19 +186,19 @@ test('caller-owned HTTP contexts survive repeated discovery, notification opt-in
     await assert.rejects(a.command('call', { sessionId: 'owner-one', args: { action: 'send', sessionId: 'target', message: 'must not enqueue', reply: true } }), /No tool call was sent/);
     assert.equal((await b.command('history', { sessionId: 'target' })).queue.length, 0);
     await a.command('notifications', { sessionId: 'owner-one', operation: 'start' });
-    assert.deepEqual((await probe('owner-one')).structuredContent, initial, 'start does not rebuild or lose Node/cwd/exec context');
+    assert.deepEqual((await probe('owner-one')), initial, 'start does not rebuild or lose Node/cwd/exec context');
     await a.command('policy', { policy: `version: 1\ndefaultAction: allow\nrules:\n- id: revoke-reception\n  match: { tool: { source: builtin, name: mcp_notifications } }\n  action: deny\n` });
     await assert.rejects(a.command('call', { sessionId: 'owner-one', args: { action: 'send', sessionId: 'target', message: 'reception denied', reply: true } }), /not permitted/);
     assert.equal((await b.command('history', { sessionId: 'target' })).queue.length, 0);
     await a.command('policy', { policy: 'version: 1\ndefaultAction: allow\nrules: []\n' });
     const accepted = await a.command('call', { sessionId: 'owner-one', args: { action: 'send', sessionId: 'target', message: 'now reply explicitly', reply: true } });
     const received = a.nextInput('owner-one');
-    await b.command('send', { sessionId: 'target', target: accepted.structuredContent.channelTargetId, message: 'same-context reply' });
+    await b.command('send', { sessionId: 'target', target: accepted.channelTargetId, message: 'same-context reply' });
     await received;
     assert.equal((await b.command('contexts')).length, 2);
     await a.command('notifications', { sessionId: 'owner-one', operation: 'stop' });
     assert.equal((await b.command('contexts')).length, 1, 'stop deletes the remote context, not just the GET stream');
-    const replacement = (await probe('owner-one')).structuredContent;
+    const replacement = (await probe('owner-one'));
     assert.notEqual(replacement.contextId, initial.contextId);
     assert.equal(replacement.cwd, null);
     const failure = await probe('owner-one', { effect: true, fail: true });
@@ -207,7 +207,7 @@ test('caller-owned HTTP contexts survive repeated discovery, notification opt-in
     await b.command('dropContexts');
     await assert.rejects(probe('owner-one', { effect: true }));
     assert.equal(await b.command('effects'), 1, '404 does not replay a tool invocation');
-    assert.notEqual((await probe('owner-one')).structuredContent.contextId, replacement.contextId);
+    assert.notEqual((await probe('owner-one')).contextId, replacement.contextId);
     await a.command('config', { sessionId: 'owner-one', config: { timeoutSeconds: 12 } });
     assert.equal((await b.command('contexts')).length, 0, 'successful config update releases ordinary contexts');
     await probe('owner-two');

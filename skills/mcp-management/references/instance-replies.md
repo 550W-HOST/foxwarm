@@ -85,7 +85,11 @@ return {"receiver": receiver, "sent": sent}
 
 Example `run_script` inputs are `args: {"server": "peer", "targetSessionId": "project/review", "message": "Review the change and send an explicit text reply."}`. Load [toolscript-automation](../../toolscript-automation/SKILL.md) if needed. Do not include connection configuration in every send: changing/disable of the server closes its current receivers.
 
-Inspect the returned MCP result: `isError: true` means send failed; success exposes `structuredContent.accepted: true` and the temporary `structuredContent.channelTargetId`. This confirms admission, not completion. A's ordinary calls and receiving workflow use the same caller-owned connection, preserving its remote context for replies. Starting from another A Session creates a separate binding and destination. For a peer advertising the Foxwarm extension, the official `foxwarm_session` send with `reply: true` is rejected locally before the remote tool call when A has not enabled reception. The peer capability declares support; it is not a server-side proof that a client processes messages.
+Inspect the internal `call_tool` result: `isError: true` means send failed; a structured-only success is unwrapped, exposing `accepted: true` and the temporary `channelTargetId` directly. ToolScript uses the same shape, for example `sent["accepted"]` and `sent["channelTargetId"]`. This confirms admission, not completion.
+
+A raw external MCP client still sees the protocol's `structuredContent.accepted`/`structuredContent.channelTargetId` and text content; that wire format is unchanged.
+
+A's ordinary calls and receiving workflow use the same caller-owned connection, preserving its remote context for replies. Starting from another A Session creates a separate binding and destination. For a peer advertising the Foxwarm extension, the official `foxwarm_session` send with `reply: true` is rejected locally before the remote tool call when A has not enabled reception. The peer capability declares support; it is not a server-side proof that a client processes messages.
 
 ## 3. B replies using the server-provided destination
 

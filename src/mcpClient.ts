@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { MCP_CONFIG_PATH } from './config';
 import { logger } from './common';
 import { DiskJsonData } from './utils/diskJsonData';
@@ -573,6 +574,23 @@ export function normalizeMcpToolResult(result: any): any {
   }
 
   result = normalizeMcpImageContent(result);
+
+  if (Object.prototype.hasOwnProperty.call(result, 'structuredContent')) {
+    if (Array.isArray(result.content)) {
+      const content = result.content.filter((item: any) => {
+        if (!isPlainTextContentBlock(item)) return true;
+        try { return !isDeepStrictEqual(JSON.parse(item.text), result.structuredContent); }
+        catch { return true; }
+      });
+      if (content.length !== result.content.length) result = { ...result, content };
+    }
+    const hasOtherMetadata = Object.keys(result).some(key => key !== 'structuredContent'
+      && key !== 'content' && !(key === 'isError' && result.isError !== true));
+    if (!hasOtherMetadata && (result.content === undefined || (Array.isArray(result.content) && result.content.length === 0))) {
+      return result.structuredContent;
+    }
+    return result;
+  }
 
   if (hasPreservableMcpResultMetadata(result)) {
     return result;
