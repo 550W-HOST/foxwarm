@@ -1,13 +1,15 @@
 # Unit: src-tool-authorization
 
-Files: src/toolAuthorization.ts, src/toolAuthorization.test.ts, src/tools/toolAuthorizationTools.ts
-Secondary files: src/isolatedCheck.ts, src/tools/resolvedTools.ts, src/tools/unifiedSearch.ts, src/nodeExecutionService.ts, src/mcpExternalService.ts, src/mainManagementToolService.ts, src/fileDeliveryService.ts, src/llm.ts, src/sessionTurnRunner.ts, src/toolscript.ts
+Files: src/toolAuthorization.ts, src/toolAuthorization.test.ts
+Secondary files: src/tools/configTools.ts, src/isolatedCheck.ts, src/tools/resolvedTools.ts, src/tools/unifiedSearch.ts, src/nodeExecutionService.ts, src/mcpExternalService.ts, src/mainManagementToolService.ts, src/fileDeliveryService.ts, src/llm.ts, src/sessionTurnRunner.ts, src/toolscript.ts
 
 ## Purpose
 
-Owns the instance-level ordered tool authorization policy, strict YAML parser, bounded per-process loader cache, canonical request/path facts, first-match evaluation, and the master-only atomic replacement tool. Generic rules apply independently of Agent isolation; current exact isolated-Agent rules and structural isolation guards remain a later compatibility layer.
+Owns the instance-level ordered tool authorization policy, strict YAML parser, bounded per-process loader cache, canonical request/path facts, first-match evaluation, and the master-only atomic policy replacement target. Generic rules apply independently of Agent isolation; current exact isolated-Agent rules and structural isolation guards remain a later compatibility layer.
 
 The removed builtin identity `update_session_snapshot` is rejected during policy parsing with a migration error. Operators must rename matching rules to `refresh_session_snapshot`; this prevents an old deny from silently falling through to the policy default.
+
+The removed `set_tool_rules` selector likewise fails explicit migration validation, whether used as a scalar, list, or matching builtin selector. A generic policy migration to `set_config` must deliberately constrain `args.target` to retain policy-only access; legacy Agent exact rules require permission review because they cannot express target constraints. The old command is not callable.
 
 ## Key exports
 
@@ -23,7 +25,7 @@ The removed builtin identity `update_session_snapshot` is rejected during policy
 - `isToolAuthorizationPotentiallyVisibleSync()` — bounded order-preserving visibility projection: definite identity-only decisions stop, conditional allow keeps a capability visible, and conditional deny alone does not claim universal denial. An optional `ToolAuthorizationVisibilityProjection.targetNodeUnknown` marks an unsupplied model-facing builtin Node selector; target-Node matchers then remain conditional. Concrete discovery and invocation retain their existing target facts.
 - `ToolAuthorizationPolicyUnavailableError` / `isToolAuthorizationPolicyUnavailable()` — trusted RPC-preserved fatal-current-turn classification used only after both policy load attempts fail.
 - `installToolAuthorizationPolicyBytes()` — validates and atomically replaces the fixed policy with the exact captured bytes, then invalidates the installing process cache.
-- `tool_set_tool_rules({ filePath })` — Main-owned master-only candidate installation after the current policy authorizes both the setter and `node:master/read` of the candidate path.
+- `tool_set_config({ target, filePath })` — Main-owned master-only candidate installation after the current policy authorizes both the setter and `node:master/read` of the candidate path.
 
 ## Policy contract
 
@@ -47,7 +49,7 @@ Policy-unavailable execution still returns ordered paired function responses for
 
 The bundled access-control skill (`skills/access-control/SKILL.md`) provides policy syntax, caller/target examples, and the complete-candidate update workflow. It navigates to Agent lifecycle/isolation guidance rather than maintaining another binding workflow.
 
-`set_tool_rules` accepts exactly one master-side `filePath`; it has no Node selector. The current policy must first allow the setter, then separately allow `node:master/read` for the exact candidate path. Existing isolated path guards still apply. The handler opens a regular file, bounds it to the policy byte limit, captures its bytes once, validates those exact bytes, writes a same-directory mode-0600 temporary file, syncs it, atomically renames it over the fixed authority, and invalidates Main's cache. Any read, validation, temporary-write, sync, or rename failure leaves the active file unchanged.
+`set_config` requires `target` and a master-side `filePath`; it has no Node selector. This unit owns the `tool-rules` target; app/models installation is canonical in [src-config](./src-config.md#d-config-live-install). The current policy must first allow the setter, then separately allow `node:master/read` for the exact candidate path. Existing isolated path guards still apply. For `target: tool-rules`, the handler opens a regular file, bounds it to the policy byte limit, captures its bytes once, validates those exact bytes, writes a same-directory mode-0600 temporary file, syncs it, atomically renames it over the fixed authority, and invalidates Main's cache. Any read, validation, temporary-write, sync, or rename failure leaves the active file unchanged.
 
 Each process owns its cache. Main observes a successful setter immediately; other Session workers observe the replacement after their own cache expires, no later than their first authorization after ten seconds. No cross-process generation protocol is introduced.
 
@@ -58,7 +60,7 @@ Each process owns its cache. Main observes a successful setter immediately; othe
 - Unified discovery uses the synchronous possible-match projection and rethrows policy unavailability instead of degrading it into a warning. It preserves ordered unconditional decisions without pretending to solve arbitrary argument/path conditions.
 - Default model injection uses the same projection through `isToolVisibleForSession`; permission-neutral `call_tool` remains present. The file builtins with unsupplied Node selectors retain potential isolated compatibility after generic filtering, structural restrictions and target-independent exact builtin rules, rather than treating one default Node's restriction as whole-tool denial. See the canonical [default-injection contract](../threads/tool-dispatch.md#d-dispatch-generic-tool-authorization).
 - Node execution and MCP external services repeat concrete target authorization at their Main-owned effect boundary.
-- Main Management repeats builtin authorization for its closed operations; `set_tool_rules` additionally performs its candidate-read check inside the authoritative handler.
+- Main Management repeats builtin authorization for its closed operations; `set_config` additionally performs its candidate-read check inside the authoritative handler.
 - Main-owned file delivery repeats `send_file` authorization with canonical Session/channel target semantics before reading or delivering the file.
 - `llm.ts`, `sessionTurnRunner.ts`, and `toolscript.ts` implement the narrow fatal-current-turn behavior while preserving function-call/result pairing.
 

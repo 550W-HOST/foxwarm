@@ -22,7 +22,7 @@ import type { Session } from './types';
 import type { SessionRuntimeHistoryDto } from './sessionRuntimeService';
 import { armWaitLivenessDiagnostic, initializeWaitLivenessDiagnostics } from './waitLiveness';
 import { hasRemoteExecLivenessClaim } from './nodes/remoteExecLiveness';
-import { tool_set_tool_rules } from './tools/toolAuthorizationTools';
+import { tool_set_config } from './tools/configTools';
 import { checkGenericToolAuthorizationForSession } from './isolatedCheck';
 import { resolveToolAuthorizationSessionTargetRequest } from './toolAuthorizationSessionTargets';
 import type { ToolAuthorizationSessionTarget } from './toolAuthorization';
@@ -51,7 +51,7 @@ export const MAIN_MANAGEMENT_TOOL_OPERATIONS = [
   'node_bootstrap_info',
   'node_pair_list',
   'node_pair_approve',
-  'set_tool_rules',
+  'set_config',
 ] as const;
 
 export type MainManagementToolOperation = typeof MAIN_MANAGEMENT_TOOL_OPERATIONS[number];
@@ -76,7 +76,7 @@ export type MigrateLegacyGoalRequest = { sourceSessionId: string; goal: string; 
 export type TaskContextRequest = { sourceSessionId: string; sequences: number[]; consume: boolean; retainedTaskIds?: string[] };
 export type TaskContextResponse = { tasks: { id: string; title: string; status: string }[]; omitted: number };
 
-export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 14, {
+export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 15, {
   migrateLegacyGoal: rpcMethod<MigrateLegacyGoalRequest, { taskId: string }>(),
   taskContext: rpcMethod<TaskContextRequest, TaskContextResponse>(),
   execute: rpcMethod<MainManagementToolRequest, MainManagementToolResponse>(),
@@ -145,7 +145,7 @@ async function invokeAllowedOperation(
     case 'node_bootstrap_info': return nodeTools.tool_node_bootstrap_info(args, ctx);
     case 'node_pair_list': return nodeTools.tool_node_pair_list(args, ctx);
     case 'node_pair_approve': return nodeTools.tool_node_pair_approve(args, ctx);
-    case 'set_tool_rules': return tool_set_tool_rules(args, ctx);
+    case 'set_config': return tool_set_config(args, ctx);
   }
 }
 
@@ -316,7 +316,7 @@ export function createMainManagementToolServiceHandler(options: {
           throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'session_update_parent requires action="update-parent" and an explicit parentSessionId.');
         }
       }
-      const needsExactSource = ['get_archived_messages', 'get_archived_blocks', 'recall', 'create_agent', 'create_session', 'set_tool_rules'].includes(operation);
+      const needsExactSource = ['get_archived_messages', 'get_archived_blocks', 'recall', 'create_agent', 'create_session', 'set_config'].includes(operation);
       return { result: await invokeAllowedOperation(
         operation as MainManagementToolOperation,
         args,

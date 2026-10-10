@@ -18,8 +18,8 @@ Use this skill to choose the MCP connection or messaging workflow. MCP tools are
 ## Keep the lifecycles separate
 
 - **Outbound connections:** use the hidden `mcp_config` builtin through `call_tool`. Successful updates apply to subsequent calls without restart. Do not edit the backing MCP state file manually.
-- **Inbound identities:** `access.identities` belongs to app configuration and takes effect at startup/restart. `mcp_config` does not create identities or change WebUI access. Follow `access-control` and the installation's approved service-control workflow.
-- **Tool policy:** use a merged complete candidate and `set_tool_rules`, not `mcp_config`. The policy update workflow and cache timing belong to `access-control`.
+- **Inbound identities:** `access.identities` belongs to app configuration; Setup Config and `set_config` with `target: config` apply supported identity changes without restart. `mcp_config` does not create identities or change WebUI access. Follow `access-control` and the installation's approved service-control workflow.
+- **Tool policy:** use a merged complete candidate and `set_config` with `target: tool-rules`, not `mcp_config`. The policy update workflow and cache timing belong to `access-control`.
 - **Notifications:** explicitly start reception for the current Session and one configured `streamable-http` server, then request `reply: true` when sending work. Normal assistant output is not automatically forwarded.
 
 Never print or commit real tokens, environment secrets, or private headers. Obtain endpoint and credential values through the installation's approved private path; redact diagnostics.

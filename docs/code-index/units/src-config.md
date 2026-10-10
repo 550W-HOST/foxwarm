@@ -1,6 +1,6 @@
 # Unit: src-config
 
-Files: src/config.ts, src/publicUrl.test.ts, src/compactionConfig.test.ts, src/setupConfig.ts, src/setupConfig.test.ts, src/modelsConfigSchema.test.ts, src/modelsConfigPath.test.ts, src/workerConfig.test.ts, src/imageGenerationConfig.test.ts
+Files: src/config.ts, src/configInstaller.ts, src/configFile.ts, src/configInstaller.test.ts, src/configHotApply.test.ts, src/tools/configTools.ts, src/publicUrl.test.ts, src/compactionConfig.test.ts, src/setupConfig.ts, src/setupConfig.test.ts, src/modelsConfigSchema.test.ts, src/modelsConfigPath.test.ts, src/workerConfig.test.ts, src/imageGenerationConfig.test.ts
 Secondary files: packages/shared/src/configSchemas.ts, templates/models.example.yaml, README.md, docs/virtual-models.md, docs/vector-memory.md, docs/executable-node-provider-protocol.md, docs/docker-worktree-node-provider.md
 
 ## Purpose
@@ -17,7 +17,7 @@ Owns application/model configuration types, path resolution, YAML readers/writer
 - `readAppConfigFile`, `writeAppConfigFile`.
 - `normalizePublicUrl`, `PUBLIC_BASE_URL` — optional top-level public HTTP(S) URL for Node bootstrap examples; no effect on HTTP bind or internal API origin.
 - `safeAppConfigYamlError()` — converts an app-config YAML parse failure to a non-secret error with its 1-based line/column when available; Setup uses the same formatter.
-- `ACCESS_CONFIG`, `normalizeAccessConfig`, and `authenticateAccessBearer` / `authenticateAccessToken` — startup-validated shared WebUI and inbound MCP identities, explicit surface declarations, and verified principal creation; the validator is shared with Setup. The implementation is owned by [src-access-config](./src-access-config.md).
+- `ACCESS_CONFIG`, `ACCESS_RUNTIME`, `normalizeAccessConfig`, and `authenticateAccessBearer` / `authenticateAccessToken` — validated shared WebUI and inbound MCP identities with a Main-owned live snapshot, explicit surface declarations, and verified principal creation; the validator is shared with Setup. The implementation is owned by [src-access-config](./src-access-config.md).
 - `ExecutableNodeProviderConfig`, `DockerWorktreeNodeProviderConfig`, normalized provider unions, `normalizeNodeProvidersConfig`, and `NODE_PROVIDERS_CONFIG` — strict startup definitions for trusted one-shot executable providers and resident Docker worktree providers.
 - `normalizeCompactionConfig`, `COMPACT_KEEP_PERCENT`, and `COMPACT_THRESHOLD_PERCENT` — finite `(0, 1]` keep/trigger fractions with current defaults and the narrow legacy keep-key fallback.
 - `normalizeProviderImageOutputFormat`, `PROVIDER_IMAGE_OUTPUT_FORMAT` — optimized provider-request output defaults to WebP; optional `llm.providerImageOutputFormat: jpeg` emits PNG when pixels are transparent.
@@ -32,9 +32,11 @@ Owns application/model configuration types, path resolution, YAML readers/writer
 
 ### Setup configuration
 
+- `configInstaller.install(target, bytes, authorize?)` — serialized Main-owned installation for Setup and `set_config`; reports saved, applied, not-applied, and restart-required settings.
+- `replaceConfigFile` — same-directory mode-0600 temporary write, sync, and atomic replacement shared by all three configuration targets.
 - `validateModelsConfigYaml`, `writeRawModelsConfig`.
 - `readRawAppConfigFile`, `validateAppConfigYaml`, `writeRawAppConfig`.
-- `writeAppConfigWithChannels` — replace only the top-level channels section.
+- `buildAppConfigWithChannelsYaml` / `writeAppConfigWithChannels` — replace only the top-level channels section without redumping the surrounding text.
 - `buildModelsConfigFromSetupForm` — preserve provider overrides while updating model lists/default.
 - `dumpSetupYaml`, raw-text helpers, and provider setup draft type.
 
@@ -56,7 +58,7 @@ Worker placement is startup configuration:
 - `sessionWorkers` is experimental and accepts a boolean or object. Omission/`false` keeps the default in-process session runtime. `true` enables default worker settings. An object enables workers unless `enabled:false`; `idleSeconds` defaults to 60 and accepts numeric YAML integers from 1 through 86,400 (boolean and string coercion is rejected).
 - `dbWorkers` is boolean, defaults to `true`, and currently moves only an enabled LanceDB/vector owner into a child process. It has no effect while Vector is disabled.
 - `handoffConfirmation` is a top-level startup boolean, defaults to `false`, and controls only the structured `handoffRecall` / `handoffConfirmation` review for `send_to_session` / `create_child_session`; cancellation controls are independent. Changing it requires restart.
-- `access.identities` is a strict startup-only shared identity map. Each identity declares a token and one or both of `surfaces.webui.sessions` and `surfaces.mcp: {}`. A configured `mcp` surface starts `/mcp`; a configured `webui` surface grants only the listed Session chat/history/live/upload scope. The instance token remains a WebUI/HTTP superuser token and does not imply MCP access. See [src-access-config](./src-access-config.md) and [D-mcp-inbound-http-transport](./src-mcp-inbound-http.md#d-mcp-inbound-http-transport).
+- `access.identities` is a strict shared identity map that supported configuration saves hot-apply. Each identity declares a token and one or both of `surfaces.webui.sessions` and `surfaces.mcp: {}`. A configured `mcp` surface enables authentication at `/mcp` on an existing Main HTTP listener; a configured `webui` surface grants only the listed Session chat/history/live/upload scope. The instance token remains a WebUI/HTTP superuser token and does not imply MCP access. See [src-access-config](./src-access-config.md) and [D-mcp-inbound-http-transport](./src-mcp-inbound-http.md#d-mcp-inbound-http-transport).
 - `vectorMaintenance` accepts `false`, `true`, or an options object; the normalized default is enabled with positive-integer `retentionHours` defaulting to `24`. Its exact-owner execution contract is canonical in [D-vector-owner-maintenance](src-vector.md#d-vector-owner-maintenance).
 - Worker placement changes require a process restart. Managed channel hot reload does not change process topology.
 - `nodeProviders` is a startup-only map keyed by bounded provider ID. `type: executable` accepts a fixed command/arguments and bounded request timeout. `type: docker-worktree` accepts a fixed Docker launcher/image, canonical allowed roots, allowed network modes, optional state location, and bounded resource defaults. Both variants reject unknown fields and require restart.
@@ -108,7 +110,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 - App YAML missing at read time yields an empty config.
 - App config validation normalizes both executable and Docker worktree Node providers through the same runtime/setup path; launcher/image/roots/resources remain trusted host configuration and are never model-facing mutation fields.
 - Runtime startup and Setup validate `url` as an absolute HTTP(S) address without credentials, query, or fragment, trim outer whitespace/trailing slash, and preserve an optional deployment path. Missing `url` retains placeholder-based Node instructions. Shared JSON schema exposes the field to config editors.
-- Setup writes validate by parsing through the same current config readers before replacing files.
+- Setup and `set_config` validate through the same current config readers and preserve submitted bytes with atomic replacement. See [D-config-live-install](#d-config-live-install).
 - Structured setup accepts virtual target/failover fields; Models Setup remains a raw-YAML surface for string aliases, and raw virtual/alias YAML remains byte-preserving after validation. When retained structured setup changes a concrete provider into a virtual entry, provider-only fields including `effort`, `webSearch`, and `imageGeneration` are removed before the result is reparsed.
 - `writeAppConfigWithChannels` preserves surrounding raw YAML text/comments when possible.
 - Template models config is a read fallback only and logs once; it is not silently copied into mutable state.
@@ -162,6 +164,14 @@ The mutable models configuration has one active location: `<data-root>/state/mod
 ### D-config-handoff-confirmation
 
 [2026-09-04] Top-level `handoffConfirmation` accepts only a boolean and defaults to `false`. It is resolved once at startup and requires restart to change. `true` enables the exact inter-agent `handoffRecall` / `handoffConfirmation` contract and its schema/reminder guidance; omission or `false` disables only that review requirement. Model tool-call cancellation controls remain enabled in both modes.
+
+### D-config-live-install
+
+[2026-10-10] WebUI Setup and the hidden discoverable Main-management `set_config({ target, filePath })` share the serialized Main-owned configuration installer. Targets are `config`, `models`, and `tool-rules`; the tool reads one complete master-side regular-file candidate under the current setter and `node:master/read` permissions, then repeats those permissions at installation admission. Invalid candidates do not change files or live snapshots. All targets use a synced same-directory temporary file and atomic replacement, preserving raw bytes rather than parsing and redumping them. Structured Models compatibility generates YAML and uses this same validation/install path. Policy limits remain policy-specific; there is no new app/models limit borrowed from tool rules.
+
+App saves publish `access.identities` and reload managed channels. Models continue to resolve from the active file on later requests, and the current Setup page retains its existing picker refresh. Other app fields remain startup-owned: results compare them against startup configuration and continue to report pending restart settings across repeated saves. If Main has no HTTP listener, enabling an MCP identity is saved but reported as requiring restart. No file watcher, new service orchestrator, or cross-window model-cache synchronization is introduced.
+
+The result distinguishes `saved`, `applied`, `notApplied`, and `restartRequired`. Access snapshot publication and affected-transport fencing happen before asynchronous cleanup; connection cleanup or managed-channel failures after replacement are reported as saved with incomplete application, not as a successful rollback. Tool output does not echo YAML or secret-bearing validation details. Setup retains its administrator-only response fields and uses concise save/restart feedback.
 
 ## Canonical ownership
 

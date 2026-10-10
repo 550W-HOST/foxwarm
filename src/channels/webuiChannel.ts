@@ -1,3 +1,5 @@
+import { AccessConfigRuntime, type NormalizedAccessIdentity } from '../accessConfig';
+import { configInstaller, type ConfigInstaller } from '../configInstaller';
 import { projectWebUiSessionScope, webUiSessionScopeAllows } from '../webuiSessionScope';
 import { registerWebUiTaskRoutes } from './webuiTasks';
 import { taskService } from '../tools/taskTools';
@@ -11,7 +13,7 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs-extra';
 import yaml from 'js-yaml';
-import { buildModelsConfigFromSetupForm, dumpSetupYaml, readRawAppConfigFile, readRawTextFileIfExists, validateAppConfigYaml, writeAppConfigWithChannels, writeRawAppConfig, writeRawModelsConfig } from '../setupConfig';
+import { buildModelsConfigFromSetupForm, dumpSetupYaml, readRawAppConfigFile, readRawTextFileIfExists, validateAppConfigYaml, buildAppConfigWithChannelsYaml } from '../setupConfig';
 import { buildSavedFileText, saveInboundSessionFile } from '../channelFiles';
 import { WebSocket } from 'ws';
 import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
@@ -23,11 +25,11 @@ import { deleteSessionLifecycle } from '../sessionDeletion';
 import type { SessionRuntimeSessionDto } from '../sessionRuntime';
 import { buildSessionRuntimeSessionDto } from '../sessionRuntimeService';
 import { sessionCatalogStore } from '../session/catalogStore';
-import { ACCESS_CONFIG, AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, ProviderConfigValue, getActiveModelsConfigPath, getAgentDir, readAppConfigFile, resolveModelConfig, MODEL_EFFORTS, type ModelEffort, type ModelsConfig, type NormalizedAccessConfig, authenticateAccessToken } from '../config';
+import { ACCESS_RUNTIME, AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, ProviderConfigValue, getActiveModelsConfigPath, getAgentDir, readAppConfigFile, resolveModelConfig, MODEL_EFFORTS, type ModelEffort, type ModelsConfig, type NormalizedAccessConfig, authenticateAccessToken } from '../config';
 import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
 import { httpServer, type HttpAuthContext } from '../httpServer';
 import { COMMANDS } from '../commands';
-import { listChannelRuntimeStatuses, reloadManagedChannels } from '../channelRuntime';
+import { listChannelRuntimeStatuses } from '../channelRuntime';
 import { requestLlmOnce } from '../llm';
 import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLogin, waitForWeixinQrLogin } from '../weixin/api';
 import { createAsrServiceWebSocket, getAsrServiceStatus, transcribeWithAsrService } from '../asrClient';
@@ -703,6 +705,8 @@ export interface WebUIChannelOptions {
   enableTrigger?: boolean;
   loadModelStreamSnapshot?: (sessionId: string) => Promise<unknown>;
   accessConfig?: NormalizedAccessConfig;
+  accessRuntime?: AccessConfigRuntime;
+  configInstaller?: ConfigInstaller;
 }
 
 function buildChildrenMap(allSessions: Map<string, any>): Map<string, string[]> {
@@ -879,7 +883,11 @@ export class WebUIChannel implements Channel {
   private token: string;
   private enableWebUI: boolean;
   private enableTrigger: boolean;
-  private accessConfig: NormalizedAccessConfig;
+  private access: AccessConfigRuntime;
+  private installer: ConfigInstaller;
+  private unsubscribeAccess: () => void;
+  private webUiAuthIdentities = new WeakMap<HttpAuthContext, NormalizedAccessIdentity>();
+  private identityResponses = new Map<express.Response, string>();
   private loadModelStreamSnapshot?: (sessionId: string) => Promise<unknown>;
   private sseClients: Map<string, express.Response[]> = new Map(); // sessionId -> clients
   private realtimeHub?: WebUiRealtimeHub;
@@ -926,7 +934,21 @@ export class WebUIChannel implements Channel {
 
   private webUiCanAccessSession(auth: HttpAuthContext, sessionId: string): boolean {
     if (auth.role === 'admin') return true;
-    return webUiSessionScopeAllows(auth.sessionIds, sessionId, sessionManager.getSessionCatalog);
+    return this.isAuthCurrent(auth) && webUiSessionScopeAllows(auth.sessionIds, sessionId, sessionManager.getSessionCatalog);
+  }
+
+  private isAuthCurrent(auth: HttpAuthContext): boolean {
+    if (auth.role === 'admin') return true;
+    const original = this.webUiAuthIdentities.get(auth);
+    const current = this.access.snapshot.identities[auth.identityId];
+    return !!original && !!current?.surfaces.webui && original.token === current.token
+      && JSON.stringify(auth.sessionIds) === JSON.stringify(current.surfaces.webui.sessions);
+  }
+
+  private trackIdentityResponse(auth: HttpAuthContext, res: express.Response): void {
+    if (auth.role !== 'webui') return;
+    this.identityResponses.set(res, auth.identityId);
+    res.once('close', () => { this.identityResponses.delete(res); });
   }
 
   private async requireSessionAccess(req: express.Request, res: express.Response, sessionId: string): Promise<HttpAuthContext | null> {
@@ -939,6 +961,7 @@ export class WebUIChannel implements Channel {
       res.status(403).json({ error: 'Forbidden: WebUI identity is not bound to this session', code: 'WEBUI_SESSION_NOT_ALLOWED' });
       return null;
     }
+    this.trackIdentityResponse(auth, res);
     return auth;
   }
 
@@ -992,7 +1015,25 @@ export class WebUIChannel implements Channel {
     this.token = options.token;
     this.enableWebUI = options.enableWebUI !== false;
     this.enableTrigger = options.enableTrigger !== false;
-    this.accessConfig = options.accessConfig || ACCESS_CONFIG;
+    this.access = options.accessRuntime || (options.accessConfig ? new AccessConfigRuntime(options.accessConfig) : ACCESS_RUNTIME);
+    this.access.reserveInstanceToken(options.token);
+    this.installer = options.configInstaller || configInstaller;
+    this.unsubscribeAccess = this.access.subscribe(change => {
+      this.realtimeHub?.revokeIdentities(change.webui);
+      for (const [response, id] of this.identityResponses) {
+        if (change.webui.has(id)) response.destroy();
+      }
+      const cleanup: Promise<void>[] = [];
+      for (const [filePath, owner] of this.webUiUploads) {
+        const old = change.previous.identities[owner.identityId];
+        const current = change.current.identities[owner.identityId];
+        if (!change.webui.has(owner.identityId) || (old?.token === current?.token && current?.surfaces.webui
+          && webUiSessionScopeAllows(current.surfaces.webui.sessions, owner.sessionId, sessionManager.getSessionCatalog))) continue;
+        this.webUiUploads.delete(filePath);
+        cleanup.push(fs.remove(filePath));
+      }
+      return Promise.all(cleanup).then(() => {});
+    });
     this.loadModelStreamSnapshot = options.loadModelStreamSnapshot;
     
     // Add routes to HTTP server
@@ -1021,20 +1062,23 @@ export class WebUIChannel implements Channel {
     // Add routes to HTTP server
     const httpServerInstance = httpServer;
     const verifyWebUiIdentity = (token: string): HttpAuthContext | null => {
-      const identity = authenticateAccessToken(this.accessConfig, token, 'webui');
+      const identity = authenticateAccessToken(this.access.snapshot, token, 'webui');
       if (!identity?.surfaces.webui) return null;
-      return {
+      const auth: HttpAuthContext = {
         role: 'webui',
         identityId: identity.identityId,
         sessionIds: identity.surfaces.webui.sessions,
         features: WEBUI_IDENTITY_FEATURES,
       };
+      this.webUiAuthIdentities.set(auth, this.access.snapshot.identities[identity.identityId]);
+      return auth;
     };
     httpServerInstance.setWebUiIdentityVerifier(verifyWebUiIdentity);
     if (this.enableWebUI) registerWebUiTaskRoutes(httpServerInstance, taskService);
     this.realtimeHub = new WebUiRealtimeHub({
       checkToken: req => httpServerInstance.checkIncomingToken(req),
       getAuthContext: req => httpServerInstance.getIncomingAuthContext(req),
+      isAuthCurrent: auth => this.isAuthCurrent(auth),
       resolveIds: ids => {
         const resolved = sessionCatalogStore.resolveMany(ids);
         return {
@@ -1125,7 +1169,7 @@ export class WebUIChannel implements Channel {
           if (token === this.token) {
             return res.json({ success: true, ...this.authSessionPayload({ role: 'admin' }) });
           }
-          const identity = authenticateAccessToken(this.accessConfig, token, 'webui');
+          const identity = authenticateAccessToken(this.access.snapshot, token, 'webui');
           if (identity?.surfaces.webui) {
             const response = { success: true, ...this.authSessionPayload({
               role: 'webui',
@@ -1270,12 +1314,12 @@ export class WebUIChannel implements Channel {
               // Raw mode is intentionally raw: validate first, then write the
               // user-provided text byte-for-byte instead of parse + dump, so
               // comments, key order, quoting, and custom formatting survive.
-              writeRawModelsConfig(String(req.body?.yaml ?? ''), modelsPath);
+              await this.installer.install('models', String(req.body?.yaml ?? ''));
             } else {
               const existingRaw = readRawTextFileIfExists(modelsPath);
               const existingConfig = existingRaw.trim() ? ((yaml.load(existingRaw) as any) || {}) : {};
               const config = buildModelsConfigFromSetupForm(req.body || {}, existingConfig);
-              fs.writeFileSync(modelsPath, dumpSetupYaml(config), 'utf8');
+              await this.installer.install('models', dumpSetupYaml(config));
             }
 
             // Validate by resolving the newly written config.
@@ -1366,13 +1410,15 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const rawYaml = String(req.body?.yaml ?? '');
-            const config = writeRawAppConfig(rawYaml, APP_CONFIG_PATH);
-            const reload = await reloadManagedChannels();
+            const config = validateAppConfigYaml(rawYaml);
+            const installation = await this.installer.install('config', rawYaml);
+            const reload = installation.reload;
             res.json({
               success: true,
               configPath: APP_CONFIG_PATH,
               rawYaml,
               channelCount: Object.keys(config.channels || {}).length,
+              ...installation,
               reload,
             });
           } catch (e: any) {
@@ -1395,12 +1441,13 @@ export class WebUIChannel implements Channel {
               ...current,
               channels: nextChannels,
             };
-            writeAppConfigWithChannels(next.channels || {}, APP_CONFIG_PATH);
-            const reload = await reloadManagedChannels();
+            const installation = await this.installer.install('config', buildAppConfigWithChannelsYaml(next.channels || {}, APP_CONFIG_PATH));
+            const reload = installation.reload;
             res.json({
               success: true,
               configPath: APP_CONFIG_PATH,
               channelsYaml: dumpSetupYaml(next.channels || {}),
+              ...installation,
               reload,
             });
           } catch (e: any) {
@@ -1460,9 +1507,9 @@ export class WebUIChannel implements Channel {
                   },
                 },
               };
-              writeAppConfigWithChannels(next.channels || {}, APP_CONFIG_PATH);
-              const reload = await reloadManagedChannels();
-              return res.json({ success: true, channelId: setup.channelId, connected: true, userId: result.userId || null, message: result.message, reload });
+              const installation = await this.installer.install('config', buildAppConfigWithChannelsYaml(next.channels || {}, APP_CONFIG_PATH));
+              const reload = installation.reload;
+              return res.json({ success: true, channelId: setup.channelId, connected: true, userId: result.userId || null, message: result.message, ...installation, reload });
             }
             res.json({ success: true, channelId: setup.channelId, connected: false, message: result.message });
           } catch (e: any) {
@@ -2134,7 +2181,7 @@ export class WebUIChannel implements Channel {
               const stream = fs.createReadStream(blobPath);
               stream.on('error', reject);
               res.on('finish', resolve);
-              res.on('close', resolve);
+              res.on('close', () => { stream.destroy(); resolve(); });
               stream.pipe(res);
             });
           } catch (e: any) {
@@ -2184,7 +2231,7 @@ export class WebUIChannel implements Channel {
               const stream = fs.createReadStream(blobPath);
               stream.on('error', reject);
               res.on('finish', resolve);
-              res.on('close', resolve);
+              res.on('close', () => { stream.destroy(); resolve(); });
               stream.pipe(res);
             });
           } catch (e: any) {
@@ -3227,6 +3274,11 @@ export class WebUIChannel implements Channel {
               
               logger.info({ filename, originalName, size: req.file.size }, 'File uploaded');
               
+              if (!this.isAuthCurrent(auth) || (auth.role === 'webui' && !this.webUiCanAccessSession(auth, uploadSessionId))) {
+                await fs.remove(finalPath).catch(() => {});
+                if (!res.destroyed) res.status(401).json({ error: 'Access changed.' });
+                return;
+              }
               if (auth.role === 'webui') this.webUiUploads.set(finalPath, { identityId: auth.identityId, sessionId: uploadSessionId });
 
               res.json({ 
@@ -3837,8 +3889,10 @@ export class WebUIChannel implements Channel {
 
   async stop(): Promise<void> {
     // HTTP server is managed globally, no need to stop here
+    this.unsubscribeAccess();
     this.logs.dispose();
     this.realtimeHub?.dispose();
+    for (const response of this.identityResponses.keys()) response.destroy();
     logger.info('WebUI channel stopped');
     return Promise.resolve();
   }

@@ -26,6 +26,7 @@ export type WebUiRealtimeSocket = Pick<WebSocket, 'readyState' | 'send' | 'close
 
 export type WebUiRealtimeDependencies = {
   checkToken: (req: http.IncomingMessage) => boolean;
+  isAuthCurrent?: (auth: HttpAuthContext) => boolean;
   getAuthContext?: (req: http.IncomingMessage) => Promise<HttpAuthContext | null>;
   resolveIds: (ids: string[]) => ResolvedRealtimeIds;
   loadSessionState: (canonicalSessionId: string) => Promise<WebUiRealtimeEnvelope>;
@@ -141,11 +142,19 @@ export class WebUiRealtimeHub {
     return this.clients.size;
   }
 
+  revokeIdentities(identityIds: ReadonlySet<string>): void {
+    for (const client of [...this.clients]) {
+      if (client.auth.role !== 'webui' || !identityIds.has(client.auth.identityId)) continue;
+      try { client.socket.close(1008, 'Access changed'); } catch {}
+      this.cleanupClient(client);
+    }
+  }
+
   async handleConnection(socket: WebUiRealtimeSocket, req: http.IncomingMessage): Promise<void> {
     const auth = this.dependencies.getAuthContext
       ? await this.dependencies.getAuthContext(req)
       : this.dependencies.checkToken(req) ? { role: 'admin' as const } : null;
-    if (!auth) {
+    if (!auth || this.dependencies.isAuthCurrent?.(auth) === false) {
       socket.close(1008, 'Unauthorized');
       return;
     }
@@ -314,6 +323,11 @@ export class WebUiRealtimeHub {
 
   private safeSend(client: WebUiRealtimeClient, payload: WebUiRealtimeEnvelope): void {
     if (client.closed || !socketIsOpen(client.socket)) return;
+    if (this.dependencies.isAuthCurrent?.(client.auth) === false) {
+      try { client.socket.close(1008, 'Access changed'); } catch {}
+      this.cleanupClient(client);
+      return;
+    }
     if (client.auth.role === 'webui' && payload.sessionId
       && (!this.webUiCanAccessSession(client.auth, payload.sessionId)
         || this.dependencies.resolveIds([payload.sessionId]).requestedToCanonical[payload.sessionId] !== payload.sessionId)) {

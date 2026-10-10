@@ -53,8 +53,8 @@ Unknown fields are rejected. These tokens are explicit YAML values, not environm
 
 1. Confirm authority to change entry access and the intended exact Session bindings, Agent scopes, and surfaces. An Agent scope also grants access to future Sessions in that Agent.
 2. Read the current app configuration without disclosing its secret values. Merge only the requested identity changes.
-3. Save through the installation's supported configuration workflow. Do not use `mcp_config`: that tool manages outbound connections only.
-4. Use the installation's approved startup/restart workflow. Access identities are startup-only; a successful file save alone does not update running authentication. Do not restart without the required approval.
+3. Save the complete app YAML through WebUI Setup's Config tab, or prepare a private complete candidate on `master` and invoke `set_config` with `target: config` and its `filePath`. The current permissions must allow the setter and reading the candidate. Do not use `mcp_config`: that tool manages outbound connections only.
+4. Inspect the result. Supported saves update running identities and close affected connections on token rotation, deletion, surface removal, or WebUI scope changes. Unrelated identities and MCP contexts are preserved; a WebUI-only scope change does not reset that identity's MCP context. Other app settings remain startup-owned and are reported as requiring restart. If Main has no HTTP listener, adding MCP requires an approved restart; an already-running HTTP listener can enable its first MCP identity immediately. Direct file edits do not trigger a reload.
 5. Check with the identity credential, not the administrator token, that the intended surface works and an unbound Session or undeclared surface is refused. Use a permitted read or another non-mutating operation when checking MCP tools.
 
 For inbound endpoint/client configuration, follow [mcp-management](../../mcp-management/SKILL.md) and its [inbound reference](../../mcp-management/references/inbound.md).
@@ -69,7 +69,7 @@ A WebUI binding is not a safe substitute for limiting the bound Agent's tool pol
 
 ## Troubleshooting
 
-- **Login denied:** check the token's declared surface, privately verify the token, and confirm the process restarted after the last configuration change.
+- **Login denied:** check the token's declared surface, privately verify the token, and confirm the change was applied through Setup Config or `set_config`, not only by editing the file.
 - **Browser login works but `/mcp` fails:** cookies are not MCP authentication. Send one `Authorization: Bearer <identity-token>` header and declare `mcp: {}`; the instance token is not a valid substitute.
 - **Login succeeds but a Session is absent:** for an exact binding, verify that it and the requested ID resolve to the same live Session. For an Agent scope, check the Session's current Agent membership and refresh the list.
 - **MCP authentication works but calls fail:** entry access and concrete tool permission are separate. Inspect the [ordered policy](tool-policy.md), including earlier identity-neutral rules.

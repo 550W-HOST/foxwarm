@@ -5,7 +5,7 @@ Secondary files: `src/config.ts`, `src/setupConfig.ts`, `src/httpServer.ts`, `sr
 
 ## Purpose
 
-Validates the startup-only `access.identities` YAML block and creates verified process-local identities shared by the WebUI and inbound MCP surfaces. A configured identity has one token and explicitly declares `surfaces.webui.sessions`, `surfaces.mcp: {}`, or both. The instance token remains the separate WebUI/HTTP superuser credential and does not imply MCP access.
+Validates the `access.identities` YAML block and creates verified process-local identities shared by the WebUI and inbound MCP surfaces, with a Main-owned live snapshot. A configured identity has one token and explicitly declares `surfaces.webui.sessions`, `surfaces.mcp: {}`, or both. The instance token remains the separate WebUI/HTTP superuser credential and does not imply MCP access.
 
 ## Key exports
 
@@ -13,21 +13,24 @@ Validates the startup-only `access.identities` YAML block and creates verified p
 - `webUiScopeAgent(binding)` — recognizes only `<agent>/*` with the supported Agent-name alphabet.
 - `authenticateAccessToken(config, token, surface)` — verifies one configured token for the requested surface and returns an opaque identity with `identityId`, policy-compatible `externalId`, and declared surfaces.
 - `authenticateAccessBearer(config, authorization, 'mcp')` — strict single-header Bearer authentication used by inbound MCP. Cookies and the instance token are not MCP identity sources.
-- `hasAccessSurface(config, surface)` — determines whether startup should expose a surface.
+- `hasAccessSurface(config, surface)` — determines whether a snapshot declares a surface.
+- `AccessConfigRuntime` — validates reserved instance-token separation, publishes snapshots, and notifies surface-specific affected-identity sets before awaiting connection cleanup.
 - `requireVerifiedAccessIdentity(principal)` — prevents caller-supplied lookalike principals from becoming policy identities.
 - `AccessConfig`, `NormalizedAccessConfig`, `VerifiedAccessIdentity` — configuration and verified-identity types.
 
 ## Integration
 
-`config.ts` adds `AppConfig.access` and exports the startup-normalized `ACCESS_CONFIG`; `setupConfig.ts` validates the same block before writing raw YAML. `HttpServer` uses a WebUI surface verifier for cookie/Bearer HTTP and WebSocket auth. `McpInboundHttpService` authenticates each `/mcp` request with the MCP surface and passes the verified identity to the existing external tool policy, where `externalId` is the configured identity ID. WebUI Session bindings and Agent scopes are presentation scope only and do not grant MCP tools; MCP authorization does not grant WebUI management access.
+`config.ts` adds `AppConfig.access` and exports the startup-normalized `ACCESS_CONFIG` and live `ACCESS_RUNTIME`; `setupConfig.ts` validates the same block before writing raw YAML. `HttpServer` uses a WebUI surface verifier for cookie/Bearer HTTP and WebSocket auth. `McpInboundHttpService` authenticates each `/mcp` request with the MCP surface and passes the verified identity to the existing external tool policy, where `externalId` is the configured identity ID. WebUI Session bindings and Agent scopes are presentation scope only and do not grant MCP tools; MCP authorization does not grant WebUI management access.
 
-There is no persisted guest-token store, token-issuance route, legacy `mcpInbound` block, or hot-update system. Changes take effect on the existing process restart/startup lifecycle.
+Setup Config and `set_config` share the [configuration installation contract](./src-config.md#d-config-live-install). HTTP/login verifiers read the live snapshot. WebUI identity changes close affected WS/SSE and in-flight scoped responses, remove revoked uploads, and fence previously captured authentication before subsequent attachment/message effects. Unchanged identities are not disconnected. Exact Session aliases and current-Agent scopes retain their existing semantics.
+
+MCP listeners compare only token and MCP-surface membership: adding another identity or changing WebUI scopes does not rebuild an unrelated MCP context, selected Node, cwd, caller endpoint, or live exec ownership. Removal, rotation, or MCP-surface withdrawal synchronously disposes affected contexts and closes their SSE. Started commands are not killed and durably accepted Session input is not undone. With an existing Main listener the first MCP identity can be enabled without restart; without a listener the installer reports that restart is needed. No persisted guest-token store, token-issuance route, legacy `mcpInbound` block, or arbitrary-file watcher exists.
 
 Operator guidance is available through the bundled access-control skill (`skills/access-control/SKILL.md`); MCP connection and use workflows are linked from mcp-management (`skills/mcp-management/SKILL.md`).
 
 ## Tests
 
-Focused tests cover omitted configuration, surface-specific authentication, duplicate and malformed identities, secret-safe setup validation, WebUI `/api/auth` and `/api/auth/session`, HTTP/WS Session isolation, MCP-only denial at WebUI, MCP SDK access, headless MCP startup, policy identity matching, and the existing superuser path.
+Focused tests cover omitted configuration, surface-specific authentication, duplicate and malformed identities, secret-safe setup validation, WebUI `/api/auth` and `/api/auth/session`, HTTP/WS Session isolation, MCP-only denial at WebUI, MCP SDK access, headless MCP startup, real Main first/last MCP hot activation, affected WS/SSE/context cleanup, unrelated context preservation, Setup/Worker setter parity, policy identity matching, and the existing superuser path.
 
 ## Design decisions
 

@@ -41,7 +41,7 @@ import {
     tool_list_timers,
     tool_update_timer,
     tool_delete_timer,
-    tool_set_tool_rules,
+    tool_set_config,
 } from './mainManagementTools';
 
 // Re-export types from helpers
@@ -187,7 +187,7 @@ export const node = tool_node;
 export const node_bootstrap_info = tool_node_bootstrap_info;
 export const node_pair_approve = tool_node_pair_approve;
 export const node_pair_list = tool_node_pair_list;
-export const set_tool_rules: typeof tool_set_tool_rules = (args, ctx) => tool_set_tool_rules(args, ctx);
+export const set_config: typeof tool_set_config = (args, ctx) => tool_set_config(args, ctx);
 
 // Re-export definitions and model-facing subset
 export { definitions };

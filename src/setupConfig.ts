@@ -1,6 +1,6 @@
 import fs from 'fs-extra';
-import path from 'path';
 import yaml from 'js-yaml';
+import { replaceConfigFile } from './configFile';
 import {
   APP_CONFIG_PATH,
   AppConfig,
@@ -86,10 +86,9 @@ export function validateModelsConfigYaml(rawYaml: string): Record<string, any> {
   return config;
 }
 
-export function writeRawModelsConfig(rawYaml: string, filePath: string = getActiveModelsConfigPath()): Record<string, any> {
-  const config = validateModelsConfigYaml(rawYaml);
-  fs.ensureDirSync(path.dirname(filePath));
-  fs.writeFileSync(filePath, rawYaml, 'utf8');
+export function writeRawModelsConfig(rawYaml: string | Buffer, filePath: string = getActiveModelsConfigPath()): Record<string, any> {
+  const config = validateModelsConfigYaml(rawYaml.toString());
+  replaceConfigFile(filePath, rawYaml);
   return config;
 }
 
@@ -120,10 +119,9 @@ export function validateAppConfigYaml(rawYaml: string): AppConfig {
   return config;
 }
 
-export function writeRawAppConfig(rawYaml: string, filePath: string = APP_CONFIG_PATH): AppConfig {
-  const config = validateAppConfigYaml(rawYaml);
-  fs.ensureDirSync(path.dirname(filePath));
-  fs.writeFileSync(filePath, rawYaml, 'utf8');
+export function writeRawAppConfig(rawYaml: string | Buffer, filePath: string = APP_CONFIG_PATH): AppConfig {
+  const config = validateAppConfigYaml(rawYaml.toString());
+  replaceConfigFile(filePath, rawYaml);
   return config;
 }
 
@@ -175,7 +173,7 @@ function replaceTopLevelSection(rawYaml: string, sectionKey: string, sectionText
   return `${nextLines.join('\n')}${hasFinalNewline ? '\n' : ''}`;
 }
 
-export function writeAppConfigWithChannels(channels: AppConfig['channels'], filePath: string = APP_CONFIG_PATH): AppConfig {
+export function buildAppConfigWithChannelsYaml(channels: AppConfig['channels'], filePath: string = APP_CONFIG_PATH): string {
   const rawYaml = filePath === APP_CONFIG_PATH ? readRawAppConfigFile(filePath) : readRawTextFileIfExists(filePath);
   const current = rawYaml.trim() ? validateAppConfigYaml(rawYaml) : {};
   const nextConfig: AppConfig = {
@@ -185,7 +183,11 @@ export function writeAppConfigWithChannels(channels: AppConfig['channels'], file
   const nextRawYaml = rawYaml.trim()
     ? replaceTopLevelSection(rawYaml, 'channels', buildTopLevelSectionText('channels', nextConfig.channels || {}))
     : dumpSetupYaml(nextConfig);
-  return writeRawAppConfig(nextRawYaml, filePath);
+  return nextRawYaml;
+}
+
+export function writeAppConfigWithChannels(channels: AppConfig['channels'], filePath: string = APP_CONFIG_PATH): AppConfig {
+  return writeRawAppConfig(buildAppConfigWithChannelsYaml(channels, filePath), filePath);
 }
 
 function splitModelIds(value: unknown): string[] {

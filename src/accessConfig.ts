@@ -201,3 +201,54 @@ export function requireVerifiedAccessIdentity(principal: VerifiedAccessIdentity)
   if (!principal || !verifiedPrincipals.has(principal)) throw new Error('Verified access identity is required.');
   return principal.externalId;
 }
+
+export type AccessConfigChange = {
+  previous: NormalizedAccessConfig;
+  current: NormalizedAccessConfig;
+  webui: ReadonlySet<string>;
+  mcp: ReadonlySet<string>;
+};
+
+/** Main's live entry identities. Listeners fence affected transports synchronously. */
+export class AccessConfigRuntime {
+  private listeners = new Set<(change: AccessConfigChange) => void | Promise<void>>();
+  private reservedToken = '';
+  constructor(public snapshot: NormalizedAccessConfig) {}
+
+  reserveInstanceToken(token: string): void {
+    assertAccessTokensDoNotMatch(this.snapshot, token);
+    this.reservedToken = token;
+  }
+
+  validate(config: NormalizedAccessConfig): void {
+    assertAccessTokensDoNotMatch(config, this.reservedToken);
+  }
+
+  subscribe(listener: (change: AccessConfigChange) => void | Promise<void>): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+
+  async apply(current: NormalizedAccessConfig): Promise<void> {
+    this.validate(current);
+    const previous = this.snapshot;
+    const webui = new Set<string>();
+    const mcp = new Set<string>();
+    for (const [id, old] of Object.entries(previous.identities)) {
+      const next = current.identities[id];
+      if (old.surfaces.webui && (!next?.surfaces.webui || old.token !== next.token
+        || JSON.stringify(old.surfaces.webui.sessions) !== JSON.stringify(next.surfaces.webui.sessions))) webui.add(id);
+      if (old.surfaces.mcp && (!next?.surfaces.mcp || old.token !== next.token)) mcp.add(id);
+    }
+    this.snapshot = current;
+    // Call every listener before waiting: cleanup must not leave another surface unfenced.
+    const results = [...this.listeners].map(listener => {
+      try { return Promise.resolve(listener({ previous, current, webui, mcp })); }
+      catch (error) { return Promise.reject(error); }
+    });
+    const settled = await Promise.allSettled(results);
+    if (settled.some(result => result.status === 'rejected')) {
+      throw new Error('Access identities updated, but some affected connections could not be closed.');
+    }
+  }
+}

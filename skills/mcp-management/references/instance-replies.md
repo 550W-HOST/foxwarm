@@ -30,7 +30,7 @@ Configure once through `call_tool`; replace the URL with B's actual deployment-r
 }
 ```
 
-This outbound update is live and needs no restart. Creating/changing B's identity does need B's startup/restart lifecycle; the outbound update does not create it. Use [outbound connections](outbound.md) for safe summaries and discovery.
+This outbound update is live and needs no restart. Create or change B's identity through B's Setup Config or `set_config` with `target: config`; supported identity changes apply live when B already has an HTTP listener. The outbound update does not create the identity. Use [outbound connections](outbound.md) for safe summaries and discovery.
 
 Discover both `mcp_notifications` (`sources: ["builtin"]`, `limit: 1`) and B's `foxwarm_session` (`sources: ["mcp"]`, `server: "peer"`, `limit: 1`) to check current schemas and permitted visibility.
 

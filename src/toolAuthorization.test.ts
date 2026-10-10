@@ -22,7 +22,7 @@ import {
 } from './toolAuthorization';
 import { resolveToolAuthorizationSessionTargetRequest } from './toolAuthorizationSessionTargets';
 import { checkToolPermissionForSession, isToolVisibleForSession } from './isolatedCheck';
-import { tool_set_tool_rules } from './tools/toolAuthorizationTools';
+import { tool_set_config } from './tools/configTools';
 import { executeTools } from './llm';
 import * as tools from './tools';
 import { tool_run_script } from './toolscript';
@@ -463,7 +463,7 @@ rules:
   await assert.rejects(() => tools.call_tool({ source: 'node', nodeId: 'master', name: 'exec', args: { command: 'true' } }, ctx), /denies node capability/i);
 });
 
-test('set_tool_rules uses the current policy, validates captured bytes, and leaves destination unchanged on invalid candidate', async () => {
+test('set_config uses the current policy, validates captured bytes, and leaves destination unchanged on invalid candidate', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tool-auth-setter-'));
   const active = path.join(dir, 'active.yaml');
   const candidate = path.join(dir, 'candidate.yaml');
@@ -473,13 +473,13 @@ test('set_tool_rules uses the current policy, validates captured bytes, and leav
   setToolAuthorizationPolicyPathForTests(active);
   setToolAuthorizationPolicyForTests(allowPolicy());
   const session: any = { id: 'plain/main', agent: 'plain', currentNode: 'master', cwd: dir };
-  await tool_set_tool_rules({ filePath: candidate }, { sessionId: session.id, session } as any);
+  await tool_set_config({ target: 'tool-rules', filePath: candidate }, { sessionId: session.id, session } as any);
   assert.equal(parseToolAuthorizationPolicyBytes(await fs.readFile(active)).defaultAction, 'deny');
 
   setToolAuthorizationPolicyForTests(allowPolicy());
   await fs.writeFile(candidate, 'broken: [');
   const before = await fs.readFile(active);
-  await assert.rejects(() => tool_set_tool_rules({ filePath: candidate }, { sessionId: session.id, session } as any), /YAML|flow collection|unexpected/i);
+  await assert.rejects(() => tool_set_config({ target: 'tool-rules', filePath: candidate }, { sessionId: session.id, session } as any), /YAML|flow collection|unexpected/i);
   assert.deepEqual(await fs.readFile(active), before);
 
   setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
@@ -487,23 +487,23 @@ version: 1
 defaultAction: allow
 rules:
 - id: deny-setter
-  match: { tool: { source: builtin, name: set_tool_rules } }
+  match: { tool: { source: builtin, name: set_config } }
   action: deny
 `));
-  await assert.rejects(() => tool_set_tool_rules({ filePath: candidate }, { sessionId: session.id, session } as any), /denies builtin capability/i);
+  await assert.rejects(() => tool_set_config({ target: 'tool-rules', filePath: candidate }, { sessionId: session.id, session } as any), /denies builtin capability/i);
 
   setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
 version: 1
 defaultAction: allow
 rules:
 - id: allow-setter
-  match: { tool: { source: builtin, name: set_tool_rules } }
+  match: { tool: { source: builtin, name: set_config } }
   action: allow
 - id: deny-candidate-read
   match: { tool: { source: node, name: read }, targetNode: master }
   action: deny
 `));
-  await assert.rejects(() => tool_set_tool_rules({ filePath: candidate }, { sessionId: session.id, session } as any), /denies node capability/i);
+  await assert.rejects(() => tool_set_config({ target: 'tool-rules', filePath: candidate }, { sessionId: session.id, session } as any), /denies node capability/i);
 
   const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tool-auth-setter-outside-'));
   const outsideCandidate = path.join(outsideDir, 'candidate.yaml');
@@ -515,13 +515,13 @@ version: 1
 defaultAction: deny
 rules:
 - id: allow-setter
-  match: { tool: { source: builtin, name: set_tool_rules } }
+  match: { tool: { source: builtin, name: set_config } }
   action: allow
 - id: allow-contained-read
   match: { tool: { source: node, name: read }, path: { allWithin: "${dir}" } }
   action: allow
 `));
-  await assert.rejects(() => tool_set_tool_rules({ filePath: candidateLink }, { sessionId: session.id, session } as any), /denies node capability/i);
+  await assert.rejects(() => tool_set_config({ target: 'tool-rules', filePath: candidateLink }, { sessionId: session.id, session } as any), /denies node capability/i);
   await fs.remove(outsideDir);
   await fs.remove(dir);
 });
@@ -681,4 +681,14 @@ test('missing policy denies external requests while preserving internal default 
   } finally {
     await fs.remove(dir);
   }
+});
+
+
+test('persisted former policy setters fail explicit migration validation without widening allow or losing deny', () => {
+  for (const action of ['allow', 'deny']) {
+    for (const selector of ['set_tool_rules', '[read, set_tool_rules]', '{ source: builtin, name: set_tool_rules }', '{ source: { oneOf: [builtin, mcp] }, name: { oneOf: [set_tool_rules] } }']) {
+      assert.throws(() => parseToolAuthorizationPolicyBytes(`version: 1\nrules:\n- id: old-setter\n  match: { tool: ${selector} }\n  action: ${action}\n`), /obsolete builtin `set_tool_rules`.*explicit target/);
+    }
+  }
+  assert.doesNotThrow(() => parseToolAuthorizationPolicyBytes('version: 1\nrules:\n- id: external-same-name\n  match: { tool: { source: mcp, name: set_tool_rules } }\n  action: allow\n'));
 });

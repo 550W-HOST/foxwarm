@@ -5,7 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
 import { HttpServer } from './httpServer';
-import { normalizeAccessConfig } from './accessConfig';
+import { AccessConfigRuntime, normalizeAccessConfig } from './accessConfig';
 import { McpInboundHttpService, type ExternalExecutionContext, type McpInboundCatalog } from './mcpInboundHttp';
 
 const alphaToken = 'synthetic-inbound-token-alpha';
@@ -297,4 +297,64 @@ test('bounded MCP session capacity is released on DELETE without adopting anothe
     try { assert.notEqual(b.transport.sessionId, id); }
     finally { await b.client.close(); }
   }, 60_000, 1);
+});
+
+
+test('hot identity updates close only revoked MCP SSE owners and preserve unrelated transport state', async () => {
+  const port = await freePort();
+  const server = new HttpServer(port, 'synthetic-superuser');
+  const runtime = new AccessConfigRuntime(config);
+  const contexts: ExternalExecutionContext[] = [];
+  const inbound = new McpInboundHttpService(runtime, {
+    async listTools(context) { contexts.push(context); return tools; },
+    async callTool() { return { content: [] }; },
+  });
+  inbound.register(server);
+  await server.start();
+  const url = new URL(`http://127.0.0.1:${port}/mcp`);
+  const controllers: AbortController[] = [];
+  try {
+    const initialize = async (token: string) => {
+      const response = await fetch(url, { method: 'POST', headers: rawHeaders(token), body: JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'initialize', params: { clientInfo: { name: 'synthetic-sse-update', version: '1' }, protocolVersion: '2025-03-26', capabilities: {} },
+      }) });
+      assert.equal(response.status, 200);
+      await response.json();
+      return response.headers.get('mcp-session-id')!;
+    };
+    const alphaId = await initialize(alphaToken);
+    const betaId = await initialize(betaToken);
+    let betaEnded = false;
+    const stream = async (token: string, id: string) => {
+      const abort = new AbortController(); controllers.push(abort);
+      const response = await fetch(url, { headers: { ...rawHeaders(token, id), Accept: 'text/event-stream' }, signal: abort.signal });
+      assert.equal(response.status, 200);
+      const reader = response.body!.getReader();
+      return { ended: (async () => { try { while (!(await reader.read()).done) {} } catch {} })() };
+    };
+    const alphaStream = await stream(alphaToken, alphaId);
+    const betaStream = await stream(betaToken, betaId);
+    void betaStream.ended.then(() => { betaEnded = true; });
+    await runtime.apply(normalizeAccessConfig({ identities: {
+      alpha: { token: 'rotated-alpha-token', surfaces: { mcp: {} } },
+      beta: { token: betaToken, surfaces: { mcp: {}, webui: { sessions: ['main/*'] } } },
+      added: { token: 'added-token', surfaces: { mcp: {} } },
+    } }));
+    await alphaStream.ended;
+    assert.equal(betaEnded, false);
+    assert.equal((await fetch(url, { headers: { ...rawHeaders(alphaToken, alphaId), Accept: 'text/event-stream' } })).status, 401);
+    assert.equal((await fetch(url, { headers: { ...rawHeaders('rotated-alpha-token', alphaId), Accept: 'text/event-stream' } })).status, 404);
+    const listed = await fetch(url, { method: 'POST', headers: rawHeaders(betaToken, betaId), body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }) });
+    assert.equal(listed.status, 200);
+    await listed.json();
+    assert.equal(contexts[0].id, betaId);
+    assert.equal(contexts[0].disposed, false);
+    await runtime.apply(normalizeAccessConfig(undefined));
+    await betaStream.ended;
+    assert.equal(contexts[0].disposed, true);
+  } finally {
+    controllers.forEach(controller => controller.abort());
+    await inbound.stop();
+    await server.stop();
+  }
 });

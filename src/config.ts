@@ -5,7 +5,7 @@ import path from 'path';
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import yaml from 'js-yaml';
-import { normalizeAccessConfig, type AccessConfig } from './accessConfig';
+import { AccessConfigRuntime, normalizeAccessConfig, type AccessConfig } from './accessConfig';
 
 export { normalizeAccessConfig, assertAccessTokensDoNotMatch, authenticateAccessBearer, authenticateAccessToken, hasAccessSurface } from './accessConfig';
 export type { AccessConfig, NormalizedAccessConfig, VerifiedAccessIdentity } from './accessConfig';
@@ -766,6 +766,7 @@ export function normalizeProviderImageOutputFormat(value: unknown): 'webp' | 'jp
 export const PROVIDER_IMAGE_OUTPUT_FORMAT = normalizeProviderImageOutputFormat(APP_CONFIG.llm?.providerImageOutputFormat);
 
 export const ACCESS_CONFIG = normalizeAccessConfig(APP_CONFIG.access);
+export const ACCESS_RUNTIME = new AccessConfigRuntime(ACCESS_CONFIG);
 export const NODE_PROVIDERS_CONFIG = normalizeNodeProvidersConfig(APP_CONFIG.nodeProviders);
 export const COMPACTION_CONFIG = normalizeCompactionConfig(APP_CONFIG.llm);
 export const VECTOR_CONFIG = normalizeVectorConfig(APP_CONFIG.vector, APP_CONFIG.llm?.ollamaBaseUrl);

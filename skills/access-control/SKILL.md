@@ -26,4 +26,4 @@ Use this skill when deciding who can enter Foxwarm, which Sessions a browser ide
 - A policy allow does not override legacy isolated-Agent rules, bound-Node/path restrictions, or tool-local checks. Agent lifecycle and actual isolation creation/binding/migration belong to `agent-management`, not this skill.
 - Tool rules are not an operating-system or network sandbox. A permitted `exec` can use the chosen environment's commands, files, credentials, and network; path rules do not constrain arbitrary shell effects.
 
-Do not write live credentials into chat, public examples, or commits. Identity changes require startup/restart; policy updates have their own atomic installation and per-process cache lifecycle. Loading this skill does not authorize an update or a restart.
+Do not write live credentials into chat, public examples, or commits. Setup Config saves and `set_config` apply supported identity changes without restarting; other app settings can still require restart. Policy updates retain their per-process cache lifecycle. Loading this skill does not authorize an update or a restart.

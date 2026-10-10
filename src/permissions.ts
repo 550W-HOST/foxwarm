@@ -93,6 +93,9 @@ export function normalizeAgentToolRules(value: unknown): AgentToolRule[] {
       if (tool === 'update_session_snapshot') {
         throw new Error(`toolRules[${index}].tool uses obsolete builtin \`update_session_snapshot\`; migrate it to \`refresh_session_snapshot\`.`);
       }
+      if (tool === 'set_tool_rules') {
+        throw new Error(`toolRules[${index}].tool uses obsolete builtin \`set_tool_rules\`; review permissions before migrating to the broader \`set_config\` capability. Use the generic policy to constrain its target.`);
+      }
       if (isPermissionNeutralBuiltinDispatcher(tool)) {
         throw new Error(`toolRules[${index}].tool cannot target dispatcher/container builtin \`${tool}\`; authorize its resolved concrete capability instead.`);
       }

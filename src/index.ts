@@ -1,3 +1,4 @@
+import { configInstaller } from './configInstaller';
 import { logger } from './common';
 import { TelegramChannel } from './channels/telegramChannel';
 import { MatrixChannel } from './channels/matrixChannel';
@@ -45,7 +46,7 @@ import {
     getNormalizedChannelConfigs,
     MAIN_AGENT_MEMORY_DIR,
     ACCESS_CONFIG,
-    assertAccessTokensDoNotMatch,
+    ACCESS_RUNTIME,
     hasAccessSurface,
     NODE_TOKEN_FILE,
     SESSION_WORKERS_CONFIG,
@@ -406,7 +407,7 @@ async function start() {
     // The Node HTTP/WebSocket surface also serves headless inbound MCP deployments.
     if (ENABLE_WEBUI || ENABLE_TRIGGER || hasAccessSurface(ACCESS_CONFIG, 'mcp')) {
         const token = await ensureToken();
-        assertAccessTokensDoNotMatch(ACCESS_CONFIG, token);
+        ACCESS_RUNTIME.reserveInstanceToken(token);
         const nodeToken = await ensureNodeToken();
         await initializeNodeRegistry();
         
@@ -417,10 +418,11 @@ async function start() {
         // Add nodes WebSocket handler to HTTP server
         registerNodeWebSocket(httpServerInstance, nodeToken);
         registerNodeHttpRoutes(httpServerInstance);
-        if (hasAccessSurface(ACCESS_CONFIG, 'mcp')) {
-            mcpInboundHttp = new McpInboundHttpService(ACCESS_CONFIG, new McpInboundMcpCatalog());
-            mcpInboundHttp.register(httpServerInstance);
-        }
+        // Register once on the existing listener. An empty live identity map
+        // rejects requests; later saves can enable the first MCP surface.
+        mcpInboundHttp = new McpInboundHttpService(ACCESS_RUNTIME, new McpInboundMcpCatalog());
+        mcpInboundHttp.register(httpServerInstance);
+        configInstaller.setHttpAvailable(true);
         
         // Start HTTP server
         await httpServerInstance.start();

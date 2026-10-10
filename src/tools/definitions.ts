@@ -971,15 +971,16 @@ Example:
             }
         },
         {
-            name: 'set_tool_rules',
+            name: 'set_config',
             defaultInject: false,
-            description: "Install a complete tool authorization policy from a file on master. The candidate is validated before atomically replacing state/tool-authorization.yaml. Your current permissions must allow both this operation and reading the candidate file. See the access-control skill for policy syntax and update workflows.",
+            description: "Install a complete YAML configuration from a file on master. Choose config, models, or tool-rules. The candidate is validated before replacing the active file. Supported changes are applied without restarting; the result identifies changes that require a restart. Your current permissions must allow both this operation and reading the candidate file. See the access-control skill for identity and tool-policy updates.",
             parameters: {
                 type: 'object',
                 properties: {
-                    filePath: { type: 'string', description: "Path on master to the complete candidate YAML policy. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory on master. Other leading $ names are rejected." }
+                    target: { type: 'string', enum: ['config', 'models', 'tool-rules'], description: "Configuration to replace: config for app settings, models for providers and models, or tool-rules for the instance tool authorization policy." },
+                    filePath: { type: 'string', description: "Path on master to the complete candidate YAML file. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory on master. Other leading $ names are rejected." }
                 },
-                required: ['filePath'],
+                required: ['target', 'filePath'],
                 additionalProperties: false
             }
         },

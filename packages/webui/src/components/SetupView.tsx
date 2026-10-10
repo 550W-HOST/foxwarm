@@ -318,7 +318,10 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
       const submissionIsCurrent = configRevisionRef.current === submittedRevision && configYamlRef.current === submittedYaml
       if (submissionIsCurrent) {
         const startedChannels = (data.reload?.started || []).join(', ')
-        setConfigSaveResult({ kind: 'success', message: startedChannels ? `Config saved. Active channels refreshed: ${startedChannels}.` : 'Config saved.' })
+        const message = data.notApplied?.length ? 'Saved. Some changes could not be applied.'
+          : data.restartRequired?.length ? 'Saved. Restart to apply the remaining changes.'
+          : startedChannels ? `Config saved. Active channels refreshed: ${startedChannels}.` : 'Config saved.'
+        setConfigSaveResult({ kind: 'success', message })
         if (typeof data.rawYaml === 'string') updateConfigYaml(data.rawYaml)
       }
       await loadStatus({ clearSaveResults: false, hydrateModels: false, expectedConfigRevision: submittedRevision })
@@ -390,8 +393,11 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || `Failed to check Weixin login (${res.status})`)
+      const channelSavedMessage = data.notApplied?.length
+        ? 'Channel config saved. Some changes could not be applied.'
+        : 'Channel config saved and reloaded.'
       setWeixinMessage(data.connected
-        ? `Connected as ${data.userId || 'Weixin user'}. Channel config saved and reloaded.`
+        ? `Connected as ${data.userId || 'Weixin user'}. ${channelSavedMessage}`
         : 'Login is not confirmed yet. Scan the QR code, then click Check login again.')
       if (data.connected) {
         await loadStatus()

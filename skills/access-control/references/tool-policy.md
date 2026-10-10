@@ -60,7 +60,7 @@ server: project-tools
 name: lookup_issue
 ```
 
-`source` accepts `builtin`, `node`, or `mcp`. `tool: read` matches the name alone across sources; it does not mean a master file read. Node-environment operations such as `read`, `write`, `edit`, `apply_patch`, and `exec` use `source: node`, including on `master`. Management operations such as `set_tool_rules` use `source: builtin`. Direct calls, unified `call_tool`, and ToolScript resolve to the same concrete identity. Do not grant a wrapper named `call_tool`, `foxwarm_call`, or `foxwarm_session` in place of the actual operation.
+`source` accepts `builtin`, `node`, or `mcp`. `tool: read` matches the name alone across sources; it does not mean a master file read. Node-environment operations such as `read`, `write`, `edit`, `apply_patch`, and `exec` use `source: node`, including on `master`. Management operations such as `set_config` use `source: builtin`. Direct calls, unified `call_tool`, and ToolScript resolve to the same concrete identity. Do not grant a wrapper named `call_tool`, `foxwarm_call`, or `foxwarm_session` in place of the actual operation.
 
 ### Session scope
 

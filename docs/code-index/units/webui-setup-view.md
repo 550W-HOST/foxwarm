@@ -20,7 +20,7 @@ All requests append to `API_BASE_PATH` and use normal authenticated WebUI routes
 | `GET /setup/status` | OOBE flag, model diagnostics/raw YAML, full app-config YAML, and channel runtime status |
 | `POST /setup/models` | Validate and save raw models YAML byte-for-byte |
 | `POST /setup/models/list` | List model IDs for one transient known concrete-provider connection during Monaco completion |
-| `POST /setup/config` | Validate/write full app config and call `reloadManagedChannels` |
+| `POST /setup/config` | Validate/install full app config, apply identities, reload managed channels, and report pending restart settings |
 | `POST /setup/weixin/login/start` | Start or replace a QR login session |
 | `POST /setup/weixin/login/wait` | Check one login session; on success update channel config and reload |
 
@@ -37,7 +37,7 @@ The server retains structured `/setup/models` request handling and `/setup/model
 - The two editors use distinct model URIs and static frontend schemas. Suggestions/markers are advisory and never disable Save; canonical behavior is [D-editor-local-yaml-assistance](./webui-editor.md#d-editor-local-yaml-assistance).
 - Models and Config use the full available Setup card width and a flex-owned editor region that grows with the active workbench/embedded pane instead of a fixed viewport cap. The active panel is the single Setup content scroller, keeps a bounded small-window editor minimum, and leaves Save/status and Config's later channel/Weixin sections scroll-reachable. Monaco and the plain-text fallback share the same container contract; Appearance keeps its narrower reading width.
 - Model suggestions are derived from current unsaved YAML: defaults include concrete and virtual keys, while virtual targets include concrete keys only.
-- App-config save reloads every managed channel and reports started results.
+- App-config save uses the shared Main installer, hot-applies access identities, reloads every managed channel, and reports started results. Feedback distinguishes saved changes from incomplete application or remaining settings requiring restart; it does not claim all app fields are live. See [D-config-live-install](./src-config.md#d-config-live-install).
 - Weixin login is the final section in the Config tab. Start renders image/base64/pairing payloads as a QR code without exposing internal session keys or pairing payload text; wait persists connected token/user/channel fields server-side.
 - Forced mode is closable only after the active models file exists. WebUI itself makes the channel-availability check non-blocking.
 - A positive `focusModelsRequest` activates the Models tab, scrolls to its panel, and focuses its Monaco editor.
@@ -53,7 +53,7 @@ The server retains structured `/setup/models` request handling and `/setup/model
 - Chat's model popup opens/activates this singleton and requests Models focus through App.
 - Code's Setup custom editor mounts the same non-forced leaf view, accepts only the nonce-bound fixed Models-focus signal, and lets the extension own close/restore identity.
 - `onSetupChanged` lets App refresh setup/OOBE status after successful model/config/login changes. Model-cache refresh belongs to the leaf’s Models save path, so embedded Setup uses it too without requiring an App callback.
-- `setupModels.e2e.mjs` verifies a successful Models save updates the existing Chat picker in a real production-preview split-pane App, rejected saves preserve choices, and explicit picker Refresh refetches.
+- `setupModels.e2e.mjs` authenticates its browser fixture as an administrator, checks saved-versus-restart/incomplete-application Config feedback, and verifies a successful Models save updates the existing Chat picker in a real production-preview split-pane App, rejected saves preserve choices, and explicit picker Refresh refetches.
 
 ## Function index
 

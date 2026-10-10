@@ -1,6 +1,6 @@
 # Outbound MCP connections
 
-This reference covers Foxwarm connecting to another tool server. It does not configure Foxwarm's inbound `access.identities`; for that startup-only configuration, load [access-control](../../access-control/SKILL.md). MCP configuration tools are discoverable builtins rather than default-injected tools.
+This reference covers Foxwarm connecting to another tool server. It does not configure Foxwarm's inbound `access.identities`; for entry-identity configuration and its supported live update path, load [access-control](../../access-control/SKILL.md). MCP configuration tools are discoverable builtins rather than default-injected tools.
 
 ## Outbound configuration lifecycle
 

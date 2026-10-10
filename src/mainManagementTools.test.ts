@@ -387,7 +387,7 @@ rules:
     assert.equal((await sessionManager.getSession(unifiedSessionId)).currentNode, 'dedicated-node');
 
     const script = await tool_run_script({
-      code: `def main(args):\n    return call_tool(source="builtin", name="create_child_session", args={"suffix":"script-node","node":"dedicated-node","confirmation":${JSON.stringify(TEST_HANDOFF_CONFIRMATION)}})`,
+      code: `def main(args):\n    return call_tool(source="builtin", name="create_child_session", args={"suffix":"script-node","node":"dedicated-node","handoffConfirmation":${JSON.stringify(TEST_HANDOFF_CONFIRMATION)}})`,
     }, ctx);
     assert.equal(script.status, 'completed');
     assert.equal((await sessionManager.getSession(scriptId)).currentNode, 'dedicated-node');

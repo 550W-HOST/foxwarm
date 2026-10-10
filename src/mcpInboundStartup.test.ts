@@ -79,3 +79,56 @@ test('headless inbound config starts real Main HTTP, Node bootstrap/WS and MCP w
     await fs.remove(dir);
   }
 });
+
+
+test('running Main enables the first MCP identity and rejects the last removal through Setup without restart', { timeout: 30_000 }, async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-hot-inbound-startup-'));
+  const port = await availablePort();
+  const admin = 'synthetic-hot-inbound-admin';
+  const token = 'synthetic-hot-inbound-token';
+  const base = `http://127.0.0.1:${port}`;
+  const startup = `bot:\n  httpPort: ${port}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nsessionWorkers: false\ndbWorkers: false\nchannels: {}\n`;
+  let child: ChildProcess | undefined;
+  let logs = '';
+  try {
+    await fs.outputFile(path.join(dir, 'state', 'config.yaml'), startup);
+    await fs.outputFile(path.join(dir, 'state', 'token'), admin);
+    child = spawn(process.execPath, [require.resolve('./index')], { env: { ...process.env, FOXWARM_DATA_DIR: dir }, stdio: ['ignore', 'pipe', 'pipe'] });
+    for (const stream of [child.stdout, child.stderr]) stream?.on('data', (chunk: Buffer) => { logs = (logs + chunk.toString()).slice(-30_000); });
+    let ready = false;
+    for (let attempt = 0; attempt < 90; attempt++) {
+      if (child.exitCode !== null) break;
+      try {
+        const response = await fetch(`${base}/api/setup/status`, { headers: { Authorization: `Bearer ${admin}` }, signal: AbortSignal.timeout(500) });
+        ready = response.status === 200;
+        await response.body?.cancel();
+        if (ready) break;
+      } catch {}
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    assert.equal(ready, true, `Main did not start: ${logs.slice(-6_000)}`);
+    assert.equal((await fetch(`${base}/mcp`, { headers: { Authorization: `Bearer ${token}` } })).status, 401);
+    const save = async (yaml: string) => {
+      const response = await fetch(`${base}/api/setup/config`, { method: 'POST', headers: { Authorization: `Bearer ${admin}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ yaml }) });
+      assert.equal(response.status, 200);
+      const result: any = await response.json();
+      assert.equal(result.saved, true);
+      assert.deepEqual(result.restartRequired, []);
+    };
+    await save(`${startup}access:\n  identities:\n    operator:\n      token: ${token}\n      surfaces: { mcp: {} }\n`);
+    const transport = new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } });
+    const client = new Client({ name: 'synthetic-hot-startup', version: '1' });
+    await client.connect(transport);
+    try {
+      assert.equal((await client.listTools()).tools.length, 5);
+      await save(startup);
+      assert.equal((await fetch(`${base}/mcp`, { headers: { Authorization: `Bearer ${token}` } })).status, 401);
+    } finally { await client.close(); }
+    await stop(child);
+    assert.equal(child.exitCode, 0, logs.slice(-6_000));
+    child = undefined;
+  } finally {
+    if (child) await stop(child);
+    await fs.remove(dir);
+  }
+});

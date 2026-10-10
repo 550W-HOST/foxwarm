@@ -7,7 +7,7 @@ import {
   CallToolRequestSchema, ErrorCode, isInitializeRequest, ListToolsRequestSchema, McpError,
   type CallToolResult, type Tool, type ServerRequest, type Notification,
 } from '@modelcontextprotocol/sdk/types.js';
-import { authenticateAccessBearer, type NormalizedAccessConfig, type VerifiedAccessIdentity } from './accessConfig';
+import { AccessConfigRuntime, authenticateAccessBearer, type NormalizedAccessConfig, type VerifiedAccessIdentity } from './accessConfig';
 import type { HttpServer } from './httpServer';
 import { registerChannel, unregisterChannel } from './channel';
 import { MCP_NOTIFICATION_CAPABILITY, MCP_SESSION_MESSAGE_METHOD, MAX_MCP_NOTIFICATION_BYTES } from './mcpCallerConnections';
@@ -86,17 +86,21 @@ export class McpInboundHttpService {
   private readonly live = new Set<Connection>();
   private readonly sweep: NodeJS.Timeout;
   private stopped = false;
+  private readonly access: AccessConfigRuntime;
+  private readonly unsubscribeAccess: () => void;
 
   constructor(
-    private readonly config: NormalizedAccessConfig,
+    config: NormalizedAccessConfig | AccessConfigRuntime,
     private readonly catalog?: McpInboundCatalog,
     private readonly idleMs: number = IDLE_MS,
     private readonly maxSessions: number = MAX_SESSIONS,
     private readonly postDeadlineMs: number = POST_DEADLINE_MS,
   ) {
-    if (!Object.values(config.identities).some(identity => identity.surfaces.mcp)) {
-      throw new Error('Inbound MCP requires an access identity with the mcp surface.');
-    }
+    this.access = config instanceof AccessConfigRuntime ? config : new AccessConfigRuntime(config);
+    this.unsubscribeAccess = this.access.subscribe(change => {
+      const affected = [...this.live].filter(connection => change.mcp.has(connection.principal.identityId));
+      return Promise.all(affected.map(connection => this.dispose(connection))).then(() => {});
+    });
     this.sweep = setInterval(() => this.expireIdle(), Math.min(idleMs, 60_000));
     this.sweep.unref();
   }
@@ -105,7 +109,7 @@ export class McpInboundHttpService {
     // The shared HTTP parser deliberately skips /mcp. Authenticate before parsing
     // request bytes, then bound and sanitize parser errors without changing WebUI.
     httpServer.app.use('/mcp', (req: Request, res: Response, next: NextFunction) => {
-      const principal = authenticateAccessBearer(this.config, headerExactlyOnce(req, 'authorization'));
+      const principal = authenticateAccessBearer(this.access.snapshot, headerExactlyOnce(req, 'authorization'));
       if (!principal) return sendError(res, 401, 'Unauthorized.');
       next();
     });
@@ -124,6 +128,7 @@ export class McpInboundHttpService {
     if (this.stopped) return;
     this.stopped = true;
     clearInterval(this.sweep);
+    this.unsubscribeAccess();
     await Promise.allSettled([...this.live].map(connection => this.dispose(connection)));
   }
 
@@ -140,6 +145,7 @@ export class McpInboundHttpService {
     if (connection.disposed) return;
     connection.disposed = true;
     connection.context.disposed = true;
+    connection.activeSse?.end();
     unregisterChannel(`mcp-${connection.id}`);
     this.connections.delete(connection.id);
     this.live.delete(connection);
@@ -170,6 +176,7 @@ export class McpInboundHttpService {
     });
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       try {
+        if (context.disposed) throw new Error('MCP session is unavailable.');
         const tools = this.catalog ? await this.catalog.listTools(context, principal) : [];
         if (!Array.isArray(tools) || tools.length > MAX_TOOLS || Buffer.byteLength(JSON.stringify(tools)) > MAX_CATALOG_BYTES) {
           throw new Error('Tool catalog exceeds size limit.');
@@ -182,6 +189,7 @@ export class McpInboundHttpService {
     server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       if (!this.catalog) return { isError: true, content: [{ type: 'text', text: 'No tools are available.' }] };
       try {
+        if (context.disposed) throw new Error('MCP session is unavailable.');
         const requestSignal = this.requestSignals.getStore();
         const signal = requestSignal ? AbortSignal.any([extra.signal, requestSignal]) : extra.signal;
         const result = await this.catalog.callTool(context, request.params.name, request.params.arguments || {}, signal, principal);
@@ -263,7 +271,7 @@ export class McpInboundHttpService {
   private async handle(req: Request, res: Response): Promise<void> {
     if (this.stopped) return sendError(res, 503, 'MCP service unavailable.');
     // The main instance cookie/token never authenticates this route. Recheck for every HTTP request.
-    const principal = authenticateAccessBearer(this.config, headerExactlyOnce(req, 'authorization'));
+    const principal = authenticateAccessBearer(this.access.snapshot, headerExactlyOnce(req, 'authorization'));
     if (!principal) return sendError(res, 401, 'Unauthorized.');
     const origin = headerExactlyOnce(req, 'origin');
     if (req.headers.origin !== undefined && (!origin || !req.headers.host || !this.isSameOrigin(origin, req.headers.host))) {
@@ -292,6 +300,7 @@ export class McpInboundHttpService {
     } else {
       return sendError(res, 400, 'MCP session header required.');
     }
+    if (connection.disposed) return sendError(res, 404, 'MCP session not found.');
     if (connection.active >= MAX_PARALLEL_REQUESTS) return sendError(res, 429, 'Too many concurrent requests.');
     if (req.method === 'GET' && connection.activeSse) return sendError(res, 409, 'MCP SSE stream already open.');
     if (req.method === 'POST' && req.body !== undefined && Buffer.byteLength(JSON.stringify(req.body)) > MAX_REQUEST_BYTES) {
