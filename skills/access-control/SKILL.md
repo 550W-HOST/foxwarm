@@ -24,7 +24,7 @@ Use this skill when deciding who can enter Foxwarm, which Sessions a browser ide
 - An identity with `mcp: {}` can authenticate to `/mcp` but has no automatically granted tools. Unmatched external calls are denied even when the policy's internal `defaultAction` is `allow`.
 - `state/tool-authorization.yaml` applies to isolated and non-isolated internal Sessions and verified external MCP identities. The first enabled matching rule wins; an earlier broad allow can hide a later deny.
 - Authorize the resolved concrete builtin, Node tool, or MCP server/tool, not `call_tool` or an inbound wrapper such as `foxwarm_call`.
-- A policy allow does not override legacy isolated-Agent rules, bound-Node/path restrictions, or tool-local checks. Agent lifecycle and actual isolation creation/binding/migration belong to `agent-management`, not this skill.
+- Legacy Agent `isolated` authorization is [deprecated and planned for removal](../../docs/code-index/modules/tools-and-permissions.md#d-tools-legacy-isolation-deprecation). While it remains implemented, a policy allow does not override its exact rules, bound-Node/path restrictions, or tool-local checks. Agent lifecycle and isolation migration belong to `agent-management`, not this skill.
 - An isolated-like rules fragment is not a complete isolation replacement. Removing isolation also removes incoming relationship guards and other tool-local restrictions; generating a fragment does not authorize that change.
 - Tool rules are not an operating-system or network sandbox. A permitted `exec` can use the chosen environment's commands, files, credentials, and network; path rules do not constrain arbitrary shell effects.
 

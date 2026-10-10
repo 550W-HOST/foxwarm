@@ -65,6 +65,12 @@ Tool resolution across builtin, MCP, and generic Node sources is documented in [
 
 ## Design decisions
 
+### D-tools-legacy-isolation-deprecation
+
+[2026-10-10] The legacy Agent `isolated` authorization mode is deprecated and planned for removal. The current invariants above still describe implemented behavior; deprecation does not itself disable existing guards or migrate an installation. Generic tool authorization is the migration direction, not a permanent second layer alongside legacy isolation.
+
+The isolated-like rule generator provides a conservative migration baseline, not a requirement to reproduce every legacy behavior. During removal, remaining differences require explicit decisions: express a boundary through generic policy, retain an independent invariant, or retire the old restriction. No removal date or complete migration contract is established by this decision.
+
 ### D-tools-unified-discovery
 
 Less frequently used builtins, MCP tools, and node tools are discovered through `search_tools` and invoked through `call_tool`. Direct provider calls, unified calls, and ToolScript nested calls share the canonical resolved-operation boundary in [D-dispatch-resolved-target](../threads/tool-dispatch.md#d-dispatch-resolved-target).

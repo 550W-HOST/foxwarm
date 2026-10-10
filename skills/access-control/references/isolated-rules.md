@@ -1,6 +1,6 @@
 # Generate an isolated-like tool allowlist
 
-Use [the offline generator](../scripts/generate-isolated-rules.mjs) to prepare a conservative, caller-scoped baseline using the existing version-1 policy engine. It produces a **rules fragment**, not an installed policy, an Agent configuration, or a complete replacement for isolation.
+Use [the offline generator](../scripts/generate-isolated-rules.mjs) to prepare a conservative, caller-scoped baseline for migration away from [deprecated legacy Agent isolation](../../../docs/code-index/modules/tools-and-permissions.md#d-tools-legacy-isolation-deprecation), using the existing version-1 policy engine. It produces a **rules fragment**, not an installed policy, an Agent configuration, or a complete replacement for isolation. The differences below inform migration decisions; they do not require every old restriction to be preserved or a permanent two-layer authorization system.
 
 **Do not disable isolation merely because this fragment parses.** Removing the flag removes separate tool-local and relationship guards. In particular, caller-only rules do not preserve the incoming restriction that prevents unrelated Sessions from contacting an isolated target. Other callers need a separate policy review. Permitted `exec` also retains full access to the selected environment's files, commands, credentials, and network. Tool authorization is not an operating-system or network sandbox.
 
