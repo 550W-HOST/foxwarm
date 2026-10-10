@@ -50,7 +50,7 @@ export function registerWebUiTaskRoutes(server: HttpServer, service: TaskService
       }
       const result = await service.executeAsUser({
         action: 'comment', taskId: String(req.params.id), note: req.body.note,
-        notifySession: req.body.notifySession === undefined ? true : req.body.notifySession,
+        ...(req.body.notifySession === undefined ? {} : { notifySession: req.body.notifySession }),
       });
       res.status(200).json(result);
     } catch (error) { failure(res, error); }

@@ -29,7 +29,7 @@ test('assign transfer and release use creator/owner authority and existing Sessi
   await assert.rejects(() => service.execute({ action: 'assign', taskId }, 'creator'), /ownerSessionId or null/);
 });
 
-test('note-only updates notify a different owner, skip the author owner, and record unowned notes without delivery', async t => {
+test('note-only updates notify a different owner only when requested, without changing note access', async t => {
   const sends: any[] = [];
   let fail = false;
   const service = fixture(t, async (target, message, source, options) => {
@@ -38,23 +38,30 @@ test('note-only updates notify a different owner, skip the author owner, and rec
   });
   const owned = (await service.execute({ action: 'create', title: 'Shared notes' }, 'creator')).task.id;
   await service.execute({ action: 'claim', taskId: owned }, 'first');
-  const noted = await service.execute({ action: 'update', taskId: owned, note: 'Reviewer update' }, 'creator');
+  const silent = await service.execute({ action: 'update', taskId: owned, note: 'Reviewer update' }, 'creator');
+  assert.equal(silent.warning, undefined);
+  assert.equal(sends.length, 0, 'omitting notifySession saves the note without notifying');
+  assert.equal(service.get(owned).notes.at(-1).text, 'Reviewer update');
+  await service.execute({ action: 'update', taskId: owned, note: 'Opted out', notifySession: false }, 'creator');
+  assert.equal(sends.length, 0, 'false saves the note without notifying');
+
+  const noted = await service.execute({ action: 'update', taskId: owned, note: 'Notify owner', notifySession: true }, 'creator');
   assert.equal(noted.warning, undefined);
   assert.equal(sends.length, 1);
   assert.equal(sends[0].target, 'first');
   assert.equal(sends[0].source, 'creator');
-  assert.match(sends[0].message, new RegExp(`Note on task ${owned} — Shared notes\\nReviewer update`));
+  assert.match(sends[0].message, new RegExp(`Note on task ${owned} — Shared notes\\nNotify owner`));
   assert.deepEqual(sends[0].taskNotification, { taskId: owned, event: 'note' });
-  await service.execute({ action: 'update', taskId: owned, note: 'Owner update' }, 'first');
+  await service.execute({ action: 'update', taskId: owned, note: 'Owner update', notifySession: true }, 'first');
   assert.equal(sends.length, 1, 'the owner does not receive a notification for its own note');
 
   const unowned = (await service.execute({ action: 'create', title: 'Unowned notes' }, 'creator')).task.id;
-  await service.execute({ action: 'update', taskId: unowned, note: 'No recipient' }, 'second');
+  await service.execute({ action: 'update', taskId: unowned, note: 'No recipient', notifySession: true }, 'second');
   assert.equal(sends.length, 1, 'an unowned task records notes without delivery');
   assert.equal(service.get(unowned).notes[0].text, 'No recipient');
 
   fail = true;
-  const failed = await service.execute({ action: 'update', taskId: owned, note: 'Delivery failure' }, 'creator');
+  const failed = await service.execute({ action: 'update', taskId: owned, note: 'Delivery failure', notifySession: true }, 'creator');
   assert.match(failed.warning, /Note saved, but the owner notification could not be delivered/);
   assert.equal(service.get(owned).notes.at(-1).text, 'Delivery failure');
 });
@@ -66,11 +73,14 @@ test('WebUI user notes use the same note event and failure semantics without rol
     throw new Error('synthetic note delivery failure');
   });
   const taskId = (await service.execute({ action: 'create', title: 'User note target', ownerSessionId: 'first' }, 'creator')).task.id;
-  const result = await service.executeAsUser({ action: 'comment', taskId, note: 'User note' });
+  const silent = await service.executeAsUser({ action: 'comment', taskId, note: 'Silent user note' });
+  assert.equal(silent.warning, undefined);
+  assert.equal(sends.length, 0, 'omitting notifySession does not notify for a user-authored comment');
+  const result = await service.executeAsUser({ action: 'comment', taskId, note: 'User note', notifySession: true });
   assert.match(result.warning, /Note saved, but the owner notification could not be delivered/);
   assert.deepEqual(sends[0].taskNotification, { taskId, event: 'note', sourceKind: 'user' });
-  assert.equal(service.get(taskId).notes[0].authorKind, 'user');
-  assert.equal(service.get(taskId).notes[0].text, 'User note');
+  assert.equal(service.get(taskId).notes.at(-1).authorKind, 'user');
+  assert.equal(service.get(taskId).notes.at(-1).text, 'User note');
 });
 
 test('user task actions preserve user source metadata and skip completion delivery without a Session creator', async t => {
@@ -84,7 +94,7 @@ test('user task actions preserve user source metadata and skip completion delive
   assert.equal(sends[0].target, 'first');
   assert.equal(sends[0].source, undefined);
   assert.deepEqual(sends[0].taskNotification, { taskId: created.task.id, event: 'assigned', recipient: 'new', sourceKind: 'user' });
-  const comment = await service.executeAsUser({ action: 'comment', taskId: created.task.id, note: 'A user comment' });
+  const comment = await service.executeAsUser({ action: 'comment', taskId: created.task.id, note: 'A user comment', notifySession: true });
   assert.equal(comment.warning, undefined);
   assert.equal(sends[1].source, undefined);
   assert.deepEqual(sends[1].taskNotification, { taskId: created.task.id, event: 'note', sourceKind: 'user' });

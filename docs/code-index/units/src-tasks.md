@@ -57,7 +57,7 @@ Exact tool description:
 | `scope` | For list, choose tasks created by or assigned to the current Session (default), any Session in the current Agent, or all Sessions and users. |
 | `note` | Short progress note to append when updating a task. |
 | `result` | Completion summary for a completed task. For long description or result text, use ToolScript to compose the operation so you do not regenerate duplicate content. |
-| `notifySession` | When true, send task notifications after the assignment is committed: notify the new owner, and notify the previous owner when ownership changes or is released. |
+| `notifySession` | When true, create/assign notify the new owner and, on transfer or release, the previous owner after the change is saved. For update with a note, notify the current owner unless it is the caller. Omitted or false saves without these notifications. |
 | `ownerSessionId` | For create, the optional existing Session ID to receive the new task. For assign, the existing Session ID to receive the task, or null to release the current owner. |
 | `reason` | Short reason for cancelling a task. |
 
@@ -68,7 +68,7 @@ Exact tool description:
 - `get`: Inspect one task and its bounded child/note summary. Requires taskId.
 - `claim`: Claim an unowned task for the current Session. A task owned by another Session is not transferred. Same-owner retries return the current task; a fresh claim sets active.
 - `assign`: Assign or transfer to an existing Session, or release its owner. Creator/current owner may assign; targets resolve through the real catalog. Null releases ownership and sets open; a target sets active. Changes record a short authored note. Optional `notifySession` defaults false. When true, the committed change notifies a new owner normally and a previous owner on transfer/release through queue-only delivery. New-owner notices for create-with-owner and assign/transfer include the complete stored description together with the original task ID, title, and status; previous-owner transfer/release notices remain brief and passive. Self targets are skipped. Each recipient has independent persisted pending/sent/failed/skipped state. Successful/pending retries do not resend; explicitly repeating a failed notification retries only that recipient. An assignment revision prevents an older delayed result from marking a newer assignment delivered. Null ownership may notify the released owner, but there is no new recipient. Notification failure warns without undoing assignment. Queue-only behavior is canonical in [the pipeline](../threads/message-processing-pipeline.md#d-pipeline-passive-task-notification).
-- `update`: Update an owned or otherwise permitted task description, status, or progress note. Description/status changes require the owner, or creator when unclaimed. A note-only update may be authored by any Session and appends a persistent note; when the task has a different current owner, the shared TaskService sends that owner a queue-backed `event="note"` Task notification after commit. The note author never receives a self-notification, and an unowned task records the note without delivery. Failed note delivery returns a warning without rolling back the note. Status accepts only open/active and never releases ownership.
+- `update`: Update an owned or otherwise permitted task description, status, or progress note. Description/status changes require the owner, or creator when unclaimed. A note-only update may be authored by any Session and appends a persistent note; `notifySession: true` sends a queue-backed `event="note"` Task notification to a different current owner after commit. Omitted or false saves the note without notifying; an owner does not receive their own note, and an unowned task has no recipient. Failed opted-in delivery returns a warning without rolling back the note. Status accepts only open/active and never releases ownership.
 - `complete`: Mark a task completed with an optional result summary. Only the owner, or creator when unclaimed, may complete. After commit, the shared service sends a Task notification to the creator through the existing inter-session queue. Delivery failure returns a warning without undoing completion. Self completion records skipped without a redundant self-send or warning. Pending/sent/failed/skipped state survives restart; repeated completion never resends. No background notification retry runs.
 - `cancel`: Cancel a task with an optional reason. Creator or owner may cancel; reason is recorded as an authored note.
 
@@ -93,7 +93,7 @@ Authenticated WebUI routes reuse the same TaskService; no separate role/identity
 - GET `/api/tasks?status=&limit=` returns bounded summaries, total/omitted; limit is 1–50 and the route retains its global task-list semantics. Authenticated WebUI list rows also include nullable catalog-resolved `createdByAgent` and `ownerAgent` fields for filtering; tool-facing list output remains unchanged apart from its caller-selected scope.
 - GET `/api/tasks/:id` returns task and bounded child/note details.
 - POST `/api/tasks` creates a user-authored task and accepts an optional existing `ownerSessionId`.
-- POST `/api/tasks/:id/comments` appends a user-authored note and, by default, notifies the current owner through the same note notification helper as Session `update(note)`.
+- POST `/api/tasks/:id/comments` appends a user-authored note and can notify the current owner through the same note notification helper as Session `update(note)` when `notifySession` is true.
 - POST `/api/tasks/:id/assign` changes or releases the owner; by default it notifies the new owner and passively notifies the old owner.
 - POST `/api/tasks/:id/claim`, `/complete`, `/cancel` and PATCH `/api/tasks/:id` retain the matching Session-targeted action.
 - PATCH `/api/tasks/:id` updates description/note/open-or-active status.
@@ -117,3 +117,7 @@ TaskStore persists a unique legacy Session mapping plus per-task visible-message
 ### D-task-list-scopes
 
 [2026-10-09] Model-facing `list` defaults to tasks created by or assigned to the current Session, with explicit `current-agent` and `all` scopes. Current-Agent membership comes from Session catalog Agent metadata, not Session ID naming. The authenticated WebUI list route retains its global listing behavior.
+
+### D-task-note-notification-opt-in
+
+[2026-10-10] Note and comment notifications are opt-in via `notifySession: true`. Omitting the field or setting it false saves the note without delivery; true notifies a different current owner after persistence. Owner-authored notes and notes on unowned tasks are not delivered, and failed delivery does not roll back the note. The WebUI supplies its existing checkbox value explicitly.
