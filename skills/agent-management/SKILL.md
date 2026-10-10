@@ -14,6 +14,7 @@ Use this entry to choose the relevant operation. Read only the linked section ne
 - Memory is stable operating context, not a progress log. Put task-specific procedures and detailed references in docs or skills, with short pointers from memory where needed.
 - Shared inheritance does not move files or private documents. Give another agent an accessible reference rather than assuming it has the source agent's files.
 - Agent isolation and Session Node selection are different operations. A routing choice does not create a security boundary or authorize another environment.
+- This skill owns Agent lifecycle, memory, inheritance, isolation, and Node binding. Entry identities, restricted WebUI Session scope, and generic MCP/internal tool policy belong to [access-control](../access-control/SKILL.md); access grants do not create or migrate Agents.
 - Destructive cleanup needs an explicit target and authority. Check dependencies and the current delete contract before deleting an agent or its data.
 
 ## Choose a workflow
@@ -41,6 +42,8 @@ An edit made in the current conversation normally needs no snapshot refresh: its
 
 ## Related workflows
 
+- Use [access-control](../access-control/SKILL.md) for `access.identities`, scoped WebUI access, concrete tool rules, and safe policy updates. Generic policy applies in addition to legacy Agent isolation; neither a browser binding nor a policy allow replaces it.
+- Use [mcp-management](../mcp-management/SKILL.md) for outbound/inbound MCP connections and explicit replies between instances.
 - Use `isolated-worker` for a temporary isolated worker on an existing Node or a configured provider-backed worktree Node.
 - Use `node-setup` for connection, pairing, approval, and bootstrap work.
 - Use `agent-skill-creator` when a reusable procedure belongs in a skill rather than always-loaded memory.

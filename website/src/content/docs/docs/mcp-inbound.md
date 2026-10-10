@@ -130,7 +130,27 @@ await client.callTool({
 });
 ```
 
-A successful result confirms that the message was queued, not that the Session has read or answered it. The Session runs under its own Agent and existing permissions. Reading the response requires a separate read permission and `foxwarm_session` call with `action: 'read'`.
+A successful result confirms that the message was queued, not that the Session has read or answered it. The Session runs under its own Agent and existing permissions. You can read history with a separate read permission and `foxwarm_session` call with `action: 'read'`, or request an explicit reply over a supported receiving connection.
+
+### Explicit replies between Foxwarm instances
+
+On the calling instance, load the bundled [mcp-management Skill](https://github.com/550W-HOST/foxwarm/blob/main/skills/mcp-management/SKILL.md), configure the receiver as a `streamable-http` server, and start `mcp_notifications` for the current Session before sending with `reply: true`:
+
+```js
+await client.callTool({
+  name: 'foxwarm_session',
+  arguments: {
+    action: 'send',
+    sessionId: 'existing-session-id',
+    message: 'Please check the build and send an explicit text reply.',
+    reply: true,
+  },
+});
+```
+
+Here `client` represents the active receiving connection, not the short-lived client closed in the earlier example. Both peers must negotiate Foxwarm notification support; the managed `mcp_notifications` tool handles this for a Foxwarm calling Session. The send result and receiving Session's server metadata include a temporary `channelTargetId`. An authorized replying Session sends text with `send_to_channel` using that exact destination. Normal assistant output, MCP logs, and progress are not forwarded. The destination needs no reverse URL or credential for the calling instance.
+
+Replies enter the calling Session's ordinary queue. Reception is online-only, with no offline replay; stopping or replacing the context invalidates its old destination. Normal channel authorization still applies, including isolated Sessions' own-attachment requirement; the temporary endpoint has no attachment. Follow the Skill's [explicit-reply reference](https://github.com/550W-HOST/foxwarm/blob/main/skills/mcp-management/references/instance-replies.md) for the full setup, status, and stop workflow. For identities and safe rule updates, load [access-control](https://github.com/550W-HOST/foxwarm/blob/main/skills/access-control/SKILL.md).
 
 ## Background commands
 

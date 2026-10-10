@@ -22,6 +22,8 @@ Validates the startup-only `access.identities` YAML block and creates verified p
 
 There is no persisted guest-token store, token-issuance route, legacy `mcpInbound` block, or hot-update system. Changes take effect on the existing process restart/startup lifecycle.
 
+Operator guidance is available through the bundled access-control skill (`skills/access-control/SKILL.md`); MCP connection and use workflows are linked from mcp-management (`skills/mcp-management/SKILL.md`).
+
 ## Tests
 
 Focused tests cover omitted configuration, surface-specific authentication, duplicate and malformed identities, secret-safe setup validation, WebUI `/api/auth` and `/api/auth/session`, HTTP/WS Session isolation, MCP-only denial at WebUI, MCP SDK access, headless MCP startup, policy identity matching, and the existing superuser path.

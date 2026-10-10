@@ -7,6 +7,8 @@ Secondary files: `src/mcpClient.ts`, `src/mcpExternalService.ts`, `src/mcpInboun
 
 Owns online, source-Session-scoped outbound MCP notification connections. The canonical cross-module contract is [D-dispatch-mcp-explicit-notifications](../threads/tool-dispatch.md#d-dispatch-mcp-explicit-notifications).
 
+The bundled mcp-management explicit-reply reference (`skills/mcp-management/references/instance-replies.md`) documents setup, current-Session start, remote `reply: true`, explicit channel sends, and status/stop. It links authorization to `access-control` without changing this unit's online-only contract.
+
 ## Stable symbols
 
 | Symbol | Responsibility |

@@ -850,7 +850,7 @@ Example:
         },
         {
             name: 'mcp_notifications',
-            description: "Start, stop, or inspect message notifications from a configured MCP server for the current Session. Requires Streamable HTTP and Foxwarm notification support. After start succeeds, this Session's calls to that server reuse the receiving connection. Incoming messages enter this Session's normal queue; disconnected messages are not replayed.",
+            description: "Start, stop, or inspect message notifications from a configured MCP server for the current Session. Requires Streamable HTTP and Foxwarm notification support. After start succeeds, this Session's calls to that server reuse the receiving connection. Incoming messages enter this Session's normal queue; disconnected messages are not replayed. See the mcp-management skill for setup and explicit replies between instances.",
             parameters: {
                 type: 'object',
                 properties: {
@@ -973,7 +973,7 @@ Example:
         {
             name: 'set_tool_rules',
             defaultInject: false,
-            description: "Install a complete tool authorization policy from a file on master. The candidate is validated before atomically replacing state/tool-authorization.yaml. Your current permissions must allow both this operation and reading the candidate file.",
+            description: "Install a complete tool authorization policy from a file on master. The candidate is validated before atomically replacing state/tool-authorization.yaml. Your current permissions must allow both this operation and reading the candidate file. See the access-control skill for policy syntax and update workflows.",
             parameters: {
                 type: 'object',
                 properties: {

@@ -22,7 +22,7 @@ You can inspect Skills with:
 /skill show <skill>
 ```
 
-Or ask the agent to load the relevant Skill. The bundled `about-foxwarm` Skill introduces the system; `mcp-management` covers MCP configuration; `node-setup` covers Node pairing. Loading a Skill does not grant tools or change operating-system permissions.
+Or ask the agent to load the relevant Skill. The bundled `about-foxwarm` Skill introduces the system; `mcp-management` covers outbound/inbound connections and explicit instance replies; `access-control` covers entry identities, scoped WebUI access, and concrete tool policy; `agent-management` covers Agent lifecycle, memory, inheritance, and Node isolation binding; `node-setup` covers Node pairing. Loading a Skill does not grant tools or change operating-system permissions.
 
 ## Connect an MCP tool server
 

@@ -17,6 +17,7 @@ test('global ToolScript skills are visible and loadable', async () => {
   assert.ok(names.includes('agent-skill-creator'));
   assert.ok(names.includes('web-search'));
   assert.ok(names.includes('mcp-management'));
+  assert.ok(names.includes('access-control'));
   assert.ok(!names.includes('ask-gemini'));
   assert.ok(!names.includes('agent-skill-creator/references/examples/weekly-crm-report'));
   assert.ok(!names.includes('agent-skill-creator/docs/superpowers/plans/2026-05-27-agent-skill-creator-v5-artifacts-first'));
@@ -75,13 +76,18 @@ test('global ToolScript skills are visible and loadable', async () => {
   assert.ok(webSearch.info.resourceFiles.includes('web-search.test.js'));
 
   const mcpManagement = await loadSkillDocuments('mcp-management', { agentName: 'main' });
-  const mcpText = mcpManagement.documents[0].content;
-  assert.match(mcpText, /builtin:mcp_config/);
-  assert.match(mcpText, /no Foxwarm restart is required/i);
-  assert.match(mcpText, /Do \*\*not\*\* manually edit the MCP state\/config file/i);
-  assert.match(mcpText, /builtin:list_mcp_servers/);
-  assert.match(mcpText, /streamable-http/);
-  assert.match(mcpText, /Never print.*real tokens/i);
+  assert.deepEqual(mcpManagement.info.documentFiles, ['SKILL.md']);
+  assert.equal(mcpManagement.documents.length, 1);
+  for (const resource of ['references/outbound.md', 'references/inbound.md', 'references/instance-replies.md']) {
+    assert.ok(mcpManagement.info.resourceFiles.includes(resource));
+  }
+
+  const accessControl = await loadSkillDocuments('access-control', { agentName: 'main' });
+  assert.deepEqual(accessControl.info.documentFiles, ['SKILL.md']);
+  assert.equal(accessControl.documents.length, 1);
+  for (const resource of ['references/identities.md', 'references/tool-policy.md', 'references/policy-updates.md']) {
+    assert.ok(accessControl.info.resourceFiles.includes(resource));
+  }
 });
 
 test('bundled code-index ToolScript starts under the locked Monty runtime', async () => {

@@ -45,6 +45,8 @@ Policy-unavailable execution still returns ordered paired function responses for
 
 ## Replacement boundary
 
+The bundled access-control skill (`skills/access-control/SKILL.md`) provides policy syntax, caller/target examples, and the complete-candidate update workflow. It navigates to Agent lifecycle/isolation guidance rather than maintaining another binding workflow.
+
 `set_tool_rules` accepts exactly one master-side `filePath`; it has no Node selector. The current policy must first allow the setter, then separately allow `node:master/read` for the exact candidate path. Existing isolated path guards still apply. The handler opens a regular file, bounds it to the policy byte limit, captures its bytes once, validates those exact bytes, writes a same-directory mode-0600 temporary file, syncs it, atomically renames it over the fixed authority, and invalidates Main's cache. Any read, validation, temporary-write, sync, or rename failure leaves the active file unchanged.
 
 Each process owns its cache. Main observes a successful setter immediately; other Session workers observe the replacement after their own cache expires, no later than their first authorization after ten seconds. No cross-process generation protocol is introduced.
