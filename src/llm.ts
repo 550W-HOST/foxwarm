@@ -18,7 +18,7 @@ import { checkGenericToolAuthorizationForSession, checkPathAccess, isToolVisible
 import { isPermissionNeutralBuiltinDispatcher } from './permissions';
 import { builtinNodeArgumentSelectsPlacement, NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './tools/placement';
 import type { ResolvedTool } from './tools/resolvedTools';
-import { executeResolvedTool, resolveDirectTool } from './tools/resolvedTools';
+import { executeResolvedTool, parseUnifiedToolCall, resolveDirectTool } from './tools/resolvedTools';
 import { expandHomePath } from './utils/pathResolve';
 import {
     collectOpenAIChatCompletionsStream as collectOpenAIChatCompletionsStreamProvider,
@@ -2097,6 +2097,19 @@ function buildSkippedToolCall(prepared: PreparedToolCall, message = 'Tool call w
     };
 }
 
+function isFailedNodeSelection(execution: ExecutedToolCall, planned: PlannedToolCall): boolean {
+    if (planned.presetResult !== undefined || !execution.result?.error) return false;
+    try {
+        // Resolution itself can reject arguments before returning a target.
+        // Reuse the canonical unified parser, without resolving or executing again.
+        const target = execution.resolved || (execution.call.name === 'call_tool'
+            ? parseUnifiedToolCall(execution.call.args || {})
+            : { source: 'builtin', name: execution.call.name, args: execution.call.args || {} });
+        return target.source === 'builtin' && target.name === 'node'
+            && typeof target.args.action === 'string' && target.args.action.trim().toLowerCase() === 'select';
+    } catch { return false; }
+}
+
 async function replayDeferredExecCwd(execution: ExecutedToolCall, toolContext: any): Promise<ExecutedToolCall> {
     if (!execution.deferredExecCwdSync) return execution;
     try {
@@ -2182,6 +2195,19 @@ export async function executeTools(
             const execution = await runPreparedToolCall(prepared, toolContext);
             executions.push(execution);
             cursor++;
+            if (isFailedNodeSelection(execution, planned)) {
+                fatalCurrentTurn = !!execution.fatalCurrentTurn;
+                const message = 'Tool call was not started because Node selection failed earlier in this batch.';
+                for (; cursor < plannedCalls.length; cursor++) {
+                    const skipped = plannedCalls[cursor];
+                    const skippedPrepared = await prepareToolCall(skipped.call, cursor, plannedCalls.length, toolContext, session,
+                        undefined, false, skipped.presetResult ?? { error: message });
+                    executions.push(skipped.presetResult !== undefined
+                        ? await runPreparedToolCall(skippedPrepared, toolContext)
+                        : buildSkippedToolCall(skippedPrepared, message));
+                }
+                break;
+            }
             if (execution.fatalCurrentTurn) {
                 fatalCurrentTurn = true;
                 for (; cursor < plannedCalls.length; cursor++) {
