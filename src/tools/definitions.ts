@@ -850,7 +850,7 @@ Example:
         },
         {
             name: 'mcp_notifications',
-            description: "Start, stop, or inspect message notifications from a configured MCP server for the current Session. Requires Streamable HTTP and Foxwarm notification support. After start succeeds, this Session's calls to that server reuse the receiving connection. Incoming messages enter this Session's normal queue; disconnected messages are not replayed. See the mcp-management skill for setup and explicit replies between instances.",
+            description: "Start, stop, or inspect message notifications from a configured MCP server for the current Session. Requires Streamable HTTP and Foxwarm notification support. Calls to the server share this Session's connection. Incoming messages enter this Session's normal queue only while reception is enabled; disconnected messages are not replayed. See the mcp-management skill for setup and explicit replies between instances.",
             parameters: {
                 type: 'object',
                 properties: {

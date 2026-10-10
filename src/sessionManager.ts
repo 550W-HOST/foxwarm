@@ -3276,7 +3276,7 @@ export async function setSessionCompactThreshold(sessionId: string, thresholdTok
 export async function deleteSession(sessionId: string, owningClaimId?: string): Promise<boolean> {
   assertSessionDestructiveMutationAllowed([sessionId], 'be deleted', owningClaimId);
   if (workerDeleteHandler) await workerDeleteHandler(sessionId);
-  await (await import('./mcpNotificationConnections')).closeMcpNotificationReceivers({ sourceSessionId: sessionId });
+  await (await import('./mcpCallerConnections')).closeMcpCallerConnections({ ownerKind: 'session', ownerId: sessionId });
   clearActiveSessionRuntimeState(sessionId);
 
   if (!sessions.has(sessionId)) {

@@ -138,8 +138,9 @@ export class McpInboundMcpCatalog implements McpInboundCatalog {
     return toolError('Tool is not available.');
   }
 
-  releaseContext(context: ExternalExecutionContext, principal: VerifiedAccessIdentity): void {
+  async releaseContext(context: ExternalExecutionContext, principal: VerifiedAccessIdentity): Promise<void> {
     nodeExternal.releaseExternalNodeContext(principal, context);
+    await mcpExternal.releaseMcpExternalContext(principal, context);
   }
 
   private async sessionAction(
@@ -206,7 +207,7 @@ export class McpInboundMcpCatalog implements McpInboundCatalog {
         if (signal.aborted) throw new McpInboundSafeError('Discovery was cancelled.');
         let tools: any[];
         try {
-          tools = await mcpExternal.listMcpToolsForExternal(principal, context.id, server.name, signal);
+          tools = await mcpExternal.listMcpToolsForExternal(principal, context, server.name, signal);
         } catch (error) {
           if (isToolAuthorizationPolicyUnavailable(error)) throw new McpInboundSafeError('Tool policy is unavailable; discovery failed closed.');
           totalKnown = false;
@@ -351,7 +352,7 @@ export class McpInboundMcpCatalog implements McpInboundCatalog {
     }
     try {
       // The authoritative Main service verifies the principal and the exact concrete policy on every call.
-      const result = await mcpExternal.callMcpToolForExternal(principal, context.id, resolved.server, resolved.name, args.args as Record<string, unknown> || {}, signal);
+      const result = await mcpExternal.callMcpToolForExternal(principal, context, resolved.server, resolved.name, args.args as Record<string, unknown> || {}, signal);
       if (result && typeof result === 'object' && Array.isArray(result.content)) return result as CallToolResult;
       const text = typeof result === 'string' ? result : JSON.stringify(result);
       return { content: [{ type: 'text', text: text || '' }] };

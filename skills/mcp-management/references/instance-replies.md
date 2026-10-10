@@ -36,7 +36,7 @@ Discover both `mcp_notifications` (`sources: ["builtin"]`, `limit: 1`) and B's `
 
 ## 2. Start A's current-Session receiver, then send with `reply: true`
 
-The receiver belongs to the **current calling Session** and configured server. There is no remote target Session parameter. Successful start waits for the actual receiving GET stream and peer capability negotiation, not just a successful POST.
+The receiver belongs to the **current calling Session** and configured server. There is no remote target Session parameter. Ordinary calls already share this Session/server connection with reception disabled. Successful start waits for the actual receiving GET stream and peer capability negotiation, not just a successful POST; it enables that same connection without discarding an existing remote Node/cwd/exec context.
 
 Use these descriptors with `call_tool` in order:
 
@@ -85,7 +85,7 @@ return {"receiver": receiver, "sent": sent}
 
 Example `run_script` inputs are `args: {"server": "peer", "targetSessionId": "project/review", "message": "Review the change and send an explicit text reply."}`. Load [toolscript-automation](../../toolscript-automation/SKILL.md) if needed. Do not include connection configuration in every send: changing/disable of the server closes its current receivers.
 
-Inspect the returned MCP result: `isError: true` means send failed; success exposes `structuredContent.accepted: true` and the temporary `structuredContent.channelTargetId`. This confirms admission, not completion. A's subsequent calls to this server reuse its receiving connection, preserving the MCP context for replies. Starting from another A Session creates a separate binding and destination. Sending with `reply: true` without an active Foxwarm receiver is rejected before admission.
+Inspect the returned MCP result: `isError: true` means send failed; success exposes `structuredContent.accepted: true` and the temporary `structuredContent.channelTargetId`. This confirms admission, not completion. A's ordinary calls and receiving workflow use the same caller-owned connection, preserving its remote context for replies. Starting from another A Session creates a separate binding and destination. For a peer advertising the Foxwarm extension, the official `foxwarm_session` send with `reply: true` is rejected locally before the remote tool call when A has not enabled reception. The peer capability declares support; it is not a server-side proof that a client processes messages.
 
 ## 3. B replies using the server-provided destination
 
@@ -125,6 +125,6 @@ Use `call_tool` for status or stop:
 }
 ```
 
-Status reports `receiving`, `disconnected`, `unavailable`, or `stopped`. Stop closes reception; server changes/disable, source deletion, and shutdown also close bindings. Use normal event-driven waiting for the expected input instead of polling B's history or repeatedly querying status.
+Status reports `receiving`, `disconnected`, `unavailable`, or `stopped`. Ordinary connection reuse can remain active while reception is `stopped`. Stop terminates the whole caller/server context and invalidates its reply targets; server changes/disable, source deletion, and shutdown also close bindings. Use normal event-driven waiting for the expected input instead of polling B's history or repeatedly querying status.
 
-There is no offline replay, durable outbox, delivery acknowledgement, or automatic retry of the original work request. The SDK can reconnect within its bounds, but disconnected messages are not replayed. Explicit start may replace an unavailable/disconnected context; old reply destinations are not carried over. If a connection breaks after admission, check the work outcome before deciding whether to resend, and request a new reply destination for a new context.
+There is no offline replay, durable outbox, delivery acknowledgement, or automatic retry of the original work request. The SDK can reconnect within its bounds, but disconnected messages are not replayed. Start reuses a live context, including one whose GET is reconnecting; it does not silently rebuild it to reset reception. After a closed/expired context, a later operation may establish a new context; old Node/cwd/exec state and reply destinations are not carried over. Start again and obtain a new reply destination when needed. If a connection breaks after admission, check the work outcome before deciding whether to resend, and request a new reply destination for a new context.

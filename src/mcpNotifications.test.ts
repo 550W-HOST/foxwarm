@@ -4,6 +4,9 @@ import fs from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
 import { fork, type ChildProcess } from 'node:child_process';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import * as mcpClient from './mcpClient';
 
 async function mainFixture(workers: boolean) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-mcp-notifications-'));
@@ -104,7 +107,7 @@ for (const workers of [false, true]) {
       assert.notEqual(firstTarget, secondTarget);
       assert.equal(allInputs(await a.command('history', { sessionId: 'receive-one' })).length, 0,
         'ordinary remote output is not subscribed or broadcast to the receiver');
-      assert.equal((await a.command('call', { sessionId: 'unsubscribed', args: { action: 'send', sessionId: 'remote-target', message: 'no reply receiver', reply: true } })).isError, true);
+      await assert.rejects(a.command('call', { sessionId: 'unsubscribed', args: { action: 'send', sessionId: 'remote-target', message: 'no reply receiver', reply: true } }), /No tool call was sent/);
       const bHistory = await b.command('history', { sessionId: 'remote-target' });
       assert.ok(JSON.stringify(allInputs(bHistory)).includes(firstTarget), 'server-owned reply address enters external-input metadata');
       if (workers) assert.ok(!JSON.stringify(bHistory.mainHistory).includes(firstTarget), 'Main does not hydrate Worker history');
@@ -155,3 +158,94 @@ for (const workers of [false, true]) {
     } finally { await a.close(); await b?.close(); }
   });
 }
+
+
+test('caller-owned HTTP contexts survive repeated discovery, notification opt-in and external forwarding, then release', { timeout: 60000 }, async () => {
+  const a = await mainFixture(false);
+  const b = await mainFixture(false);
+  const external: { client: Client; transport: StreamableHTTPClientTransport }[] = [];
+  let aClosed = false;
+  const probe = (sessionId: string, args: Record<string, unknown> = {}) => a.command('call', { sessionId, tool: 'fixture_context', args });
+  try {
+    for (const sessionId of ['owner-one', 'owner-two']) await a.command('create', { sessionId });
+    await b.command('create', { sessionId: 'target' });
+    await b.command('policy', { policy: allowInbound });
+    const config = { transport: 'streamable-http', url: `http://127.0.0.1:${b.port}/mcp`, token: 'synthetic-peer-token' };
+    await a.command('config', { sessionId: 'owner-one', config });
+    const initial = (await probe('owner-one', { nodeId: 'fake-node-one', cwd: '/workspace/one', execId: 'one' })).structuredContent;
+    for (let i = 0; i < 40; i++) {
+      await a.command('discover', { sessionId: 'owner-one' });
+      assert.deepEqual((await probe('owner-one')).structuredContent, initial);
+    }
+    assert.equal((await b.command('contexts')).length, 1, 'more than 32 calls and discoveries use one transport context');
+    const other = (await probe('owner-two')).structuredContent;
+    assert.notEqual(other.contextId, initial.contextId);
+    assert.equal(other.currentNode, 'master');
+    assert.equal(other.cwd, null);
+    assert.deepEqual(other.execIds, []);
+    await assert.rejects(a.command('call', { sessionId: 'owner-one', args: { action: 'send', sessionId: 'target', message: 'must not enqueue', reply: true } }), /No tool call was sent/);
+    assert.equal((await b.command('history', { sessionId: 'target' })).queue.length, 0);
+    await a.command('notifications', { sessionId: 'owner-one', operation: 'start' });
+    assert.deepEqual((await probe('owner-one')).structuredContent, initial, 'start does not rebuild or lose Node/cwd/exec context');
+    await a.command('policy', { policy: `version: 1\ndefaultAction: allow\nrules:\n- id: revoke-reception\n  match: { tool: { source: builtin, name: mcp_notifications } }\n  action: deny\n` });
+    await assert.rejects(a.command('call', { sessionId: 'owner-one', args: { action: 'send', sessionId: 'target', message: 'reception denied', reply: true } }), /not permitted/);
+    assert.equal((await b.command('history', { sessionId: 'target' })).queue.length, 0);
+    await a.command('policy', { policy: 'version: 1\ndefaultAction: allow\nrules: []\n' });
+    const accepted = await a.command('call', { sessionId: 'owner-one', args: { action: 'send', sessionId: 'target', message: 'now reply explicitly', reply: true } });
+    const received = a.nextInput('owner-one');
+    await b.command('send', { sessionId: 'target', target: accepted.structuredContent.channelTargetId, message: 'same-context reply' });
+    await received;
+    assert.equal((await b.command('contexts')).length, 2);
+    await a.command('notifications', { sessionId: 'owner-one', operation: 'stop' });
+    assert.equal((await b.command('contexts')).length, 1, 'stop deletes the remote context, not just the GET stream');
+    const replacement = (await probe('owner-one')).structuredContent;
+    assert.notEqual(replacement.contextId, initial.contextId);
+    assert.equal(replacement.cwd, null);
+    const failure = await probe('owner-one', { effect: true, fail: true });
+    assert.equal(failure.isError, true);
+    assert.equal(await b.command('effects'), 1, 'reported tool failure does not repeat its effect');
+    await b.command('dropContexts');
+    await assert.rejects(probe('owner-one', { effect: true }));
+    assert.equal(await b.command('effects'), 1, '404 does not replay a tool invocation');
+    assert.notEqual((await probe('owner-one')).structuredContent.contextId, replacement.contextId);
+    await a.command('config', { sessionId: 'owner-one', config: { timeoutSeconds: 12 } });
+    assert.equal((await b.command('contexts')).length, 0, 'successful config update releases ordinary contexts');
+    await probe('owner-two');
+    await a.command('delete', { sessionId: 'owner-one' });
+    await a.command('delete', { sessionId: 'owner-two' });
+    assert.equal((await b.command('contexts')).length, 0);
+
+    await a.command('create', { sessionId: 'config-owner' });
+    await a.command('policy', { policy: `version: 1\ndefaultAction: allow\nrules:\n- id: forward\n  match: { externalId: peer, tool: { source: mcp, server: peer, name: fixture_context } }\n  action: allow\n` });
+    for (let i = 0; i < 2; i++) {
+      const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${a.port}/mcp`), { requestInit: { headers: { Authorization: 'Bearer synthetic-peer-token' } } });
+      const client = new Client({ name: 'synthetic-external', version: '1' });
+      await client.connect(transport);
+      external.push({ client, transport });
+    }
+    const forward = async (index: number, args: Record<string, unknown> = {}) => external[index].client.callTool({ name: 'foxwarm_call', arguments: { toolId: 'mcp:peer/fixture_context', args } });
+    const forwarded: any = (await forward(0, { cwd: '/workspace/external', execId: 'external' })).structuredContent;
+    for (let i = 0; i < 35; i++) assert.deepEqual((await forward(0)).structuredContent, forwarded);
+    assert.notEqual(((await forward(1)).structuredContent as any).contextId, forwarded.contextId);
+    assert.equal((await b.command('contexts')).length, 2, 'external contexts are distinct owners and reuse discovery plus call');
+    await external[0].transport.terminateSession(); await external[0].client.close();
+    assert.equal((await b.command('contexts')).length, 1, 'disposing inbound external context deletes its outbound context');
+    await external[1].transport.terminateSession(); await external[1].client.close();
+    assert.equal((await b.command('contexts')).length, 0);
+
+    mcpClient.setMcpConfigStoreForTests(mcpClient.createMcpConfigStore(path.join(a.dir, 'anonymous-config.json')));
+    await mcpClient.upsertServer('anonymous', config as mcpClient.McpServerConfig);
+    for (let i = 0; i < 35; i++) await mcpClient.callTool('anonymous', 'fixture_context', {});
+    assert.equal((await b.command('contexts')).length, 0, 'unowned short-lived calls DELETE rather than leak 32 slots');
+    await probe('config-owner');
+    aClosed = true;
+    await a.close();
+    assert.equal((await b.command('contexts')).length, 0, 'Main shutdown releases ordinary outbound contexts');
+  } finally {
+    for (const peer of external) await peer.client.close();
+    await mcpClient.resetMcpConnectionsForTests();
+    mcpClient.setMcpConfigStoreForTests(null);
+    if (!aClosed) await a.close();
+    await b.close();
+  }
+});
