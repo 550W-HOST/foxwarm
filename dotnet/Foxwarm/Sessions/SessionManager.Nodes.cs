@@ -260,24 +260,14 @@ internal sealed partial class SessionManager
         node = string.IsNullOrWhiteSpace(node) ? null : node.Trim();
         if (updateNode && node is not null)
             RequireApprovedAgentNode(node);
-        if (
-            updateNode
-            && Owners()
-                .Any(owner =>
-                    owner.Agent == agent && (owner.Entry.Snapshot().Busy || owner.ToolActive)
-                )
-        )
-            throw new InvalidOperationException(
-                "Wait for the Agent's active tools and turns before changing its Node binding."
-            );
         await agents.SetIsolationAsync(agent, node, updateNode, rules);
-        if (updateNode)
+        if (updateNode && node is not null)
             foreach (
                 var row in Catalog.List().Where(row => SessionWait.Text(row["agent"]) == agent)
             )
             {
                 var owner = await RequiredAsync(row["id"]!.GetValue<string>());
-                await owner.Entry.SaveLane.CommitNodeAsync(node ?? "master");
+                await owner.Entry.SaveLane.CommitNodeAsync(node, clearCwd: false);
             }
         TopologyChanged?.Invoke();
     }

@@ -133,7 +133,7 @@ try {
   assert.equal((await saved(fork.body.newSessionId)).currentNode, 'official-cli')
   const directRoot = join(fixture.root, 'direct-official'); await mkdir(join(directRoot, 'agents/main'), { recursive: true })
   const directCredential = (await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: 'direct-official' })).body
-  const directClient = client(directRoot, ['--id', directCredential.nodeId, '--auth-token', directCredential.authToken, '--credentials-file', join(directRoot, 'credentials.json')]); await online('direct-official'); await stopClient(directClient)
+  const directClient = client(directRoot, ['--id', directCredential.nodeId, '--auth-token', directCredential.authToken, '--credentials-file', join(directRoot, 'credentials.json')]); await online('direct-official')
   // Concrete targetNode authorization is shared by model and native ToolScript dispatch.
   await writeFile(join(fixture.work, 'deny-node.yaml'), 'version: 1\nrules:\n  - id: deny-remote-write\n    action: deny\n    match:\n      tool: {source: node, name: write}\n      targetNode: official-cli\n')
   state = await turn(actor, 'install-policy', [call('policy', 'set_config', { target: 'tool-rules', filePath: 'deny-node.yaml' })]); assert(!pair(state, 'policy').error, JSON.stringify(pair(state, 'policy')))
@@ -142,17 +142,49 @@ try {
   assert(!await exists(join(remote, 'agents/main/denied'))); assert(!await exists(join(remote, 'agents/main/native-denied')))
   await writeFile(join(fixture.work, 'restore-policy.yaml'), 'version: 1\n')
   state = await turn(actor, 'restore-policy', [call('restore-policy', 'set_config', { target: 'tool-rules', filePath: 'restore-policy.yaml' })]); assert(!pair(state, 'restore-policy').error)
+  // A real active model may bind its own non-isolated Agent, preserving cwd for the next effect.
+  assert.equal((await fixture.api('POST', '/api/agents', { agentId: 'self-bound' })).status, 201)
+  const self = 'self-bound/main', selfCwd = join(remote, 'self-project')
+  await mkdir(selfCwd, { recursive: true })
+  assert.equal((await fixture.api('POST', route(self) + '/cwd', { cwd: selfCwd })).status, 200)
+  state = await turn(self, 'self-binding', [call('self-bind', 'call_tool', { toolId: 'builtin:set_agent_isolated', args: { agentName: 'self-bound', nodeId: 'official-cli' } }), call('self-write', 'write', { filePath: 'self-effect', content: 'self-on-Node' })])
+  assert(pair(state, 'self-bind').success, JSON.stringify(pair(state, 'self-bind')))
+  assert(!pair(state, 'self-write').error, JSON.stringify(pair(state, 'self-write')))
+  assert.equal(state.currentNode, 'official-cli'); assert.equal(state.cwd, selfCwd)
+  assert.equal(await readFile(join(selfCwd, 'self-effect'), 'utf8'), 'self-on-Node')
+  state = await turn(self, 'isolated-self-setter', [call('isolated-setter', 'call_tool', { toolId: 'builtin:set_agent_isolated', args: { agentName: 'self-bound', nodeId: '' } })])
+  assert.equal(pair(state, 'isolated-setter').error.type, 'tool_authorization_denied')
+  assert.equal((await fixture.api('PUT', '/api/agents/self-bound', { isolatedNode: null })).status, 200)
+  assert.equal((await saved(self)).currentNode, 'official-cli'); assert.equal((await saved(self)).cwd, selfCwd)
+  state = await turn(self, 'http-clear-next-write', [call('http-clear-write', 'write', { filePath: 'http-clear-effect', content: 'still-on-Node' })])
+  assert(!pair(state, 'http-clear-write').error); assert.equal(await readFile(join(selfCwd, 'http-clear-effect'), 'utf8'), 'still-on-Node')
+  assert(!await exists(join(fixture.work, 'agents/self-bound/http-clear-effect')))
   // Bound Agents are placed on the Node; explicit Main effects are denied, not locally executed.
   assert.equal((await fixture.api('POST', '/api/agents', { agentId: 'bound' })).status, 201)
+  const boundCwd = join(remote, 'bound-project'); await mkdir(boundCwd, { recursive: true })
+  assert.equal((await fixture.api('POST', route('bound/main') + '/cwd', { cwd: boundCwd })).status, 200)
   state = await turn(actor, 'model-binding', [call('bind-agent', 'call_tool', { toolId: 'builtin:set_agent_isolated', args: { agentName: 'bound', nodeId: 'official-cli', toolRules: [{ effect: 'deny', source: 'node', node: 'official-cli', tool: 'edit' }] } })])
   assert(pair(state, 'bind-agent').success, JSON.stringify(pair(state, 'bind-agent')))
   assert.equal((await saved('bound/main')).currentNode, 'official-cli')
   state = await turn('bound/main', 'legacy-rule', [call('legacy-denied', 'edit', { filePath: 'deny-before-effect', oldText: 'x', newText: 'y' })]); assert.match(JSON.stringify(pair(state, 'legacy-denied')), /denied|forbidden/i)
   state = await turn(actor, 'rules-only', [call('rules-only', 'call_tool', { toolId: 'builtin:set_agent_isolated', args: { agentName: 'bound', toolRules: [] } })])
-  assert(pair(state, 'rules-only').success); assert.equal((await saved('bound/main')).currentNode, 'official-cli')
+  assert(pair(state, 'rules-only').success); assert.equal((await saved('bound/main')).currentNode, 'official-cli'); assert.equal((await saved('bound/main')).cwd, boundCwd)
   state = await turn(actor, 'model-unbinding', [call('unbind-agent', 'call_tool', { toolId: 'builtin:set_agent_isolated', args: { agentName: 'bound', nodeId: '' } })])
-  assert(pair(state, 'unbind-agent').success); assert.equal((await saved('bound/main')).currentNode, 'master')
-  state = await turn(actor, 'model-rebinding', [call('rebind-agent', 'call_tool', { toolId: 'builtin:set_agent_isolated', args: { agentName: 'bound', nodeId: 'official-cli' } })]); assert(pair(state, 'rebind-agent').success)
+  assert(pair(state, 'unbind-agent').success); assert.equal((await saved('bound/main')).currentNode, 'official-cli'); assert.equal((await saved('bound/main')).cwd, boundCwd)
+  state = await turn('bound/main', 'model-clear-next-write', [call('model-clear-write', 'write', { filePath: 'model-clear-effect', content: 'retained-Node-cwd' })])
+  assert(!pair(state, 'model-clear-write').error); assert.equal(await readFile(join(boundCwd, 'model-clear-effect'), 'utf8'), 'retained-Node-cwd')
+  assert(!await exists(join(fixture.work, 'agents/bound/model-clear-effect')))
+  state = await turn(actor, 'model-rebinding', [call('rebind-agent', 'call_tool', { toolId: 'builtin:set_agent_isolated', args: { agentName: 'bound', nodeId: 'direct-official' } })]); assert(pair(state, 'rebind-agent').success)
+  assert.equal((await saved('bound/main')).currentNode, 'direct-official'); assert.equal((await saved('bound/main')).cwd, boundCwd)
+  state = await turn('bound/main', 'rebound-write', [call('rebound-write', 'write', { filePath: 'rebound-effect', content: 'rebound-Node' })]); assert(!pair(state, 'rebound-write').error)
+  assert.equal(await readFile(join(boundCwd, 'rebound-effect'), 'utf8'), 'rebound-Node')
+  assert.equal((await fixture.api('PUT', '/api/agents/bound', { isolatedNode: 'official-cli' })).status, 200)
+  assert.equal((await saved('bound/main')).currentNode, 'official-cli'); assert.equal((await saved('bound/main')).cwd, boundCwd)
+  // Only explicit selection has the cwd-clearing effect.
+  assert.equal((await fixture.api('PUT', '/api/agents/bound', { isolatedNode: null })).status, 200)
+  state = await turn('bound/main', 'explicit-select-clears', [call('explicit-select', 'node', { action: 'select', nodeId: 'official-cli' })]); assert.equal(state.cwd, undefined)
+  assert.equal((await fixture.api('PUT', '/api/agents/bound', { isolatedNode: 'official-cli' })).status, 200)
+  await stopClient(directClient)
   const createdBound = await fixture.api('POST', '/api/agents', { agentId: 'born-bound', isolatedNode: 'official-cli' }); assert.equal(createdBound.status, 201); assert.equal((await saved('born-bound/main')).currentNode, 'official-cli')
   const bound = await create('owned', 'bound'); await mkdir(join(remote, 'agents/bound'), { recursive: true })
   state = await turn(bound, 'bound', [call('bound-write', 'write', { filePath: 'bound-only', content: 'bound' }), call('main-denied', 'call_tool', { toolId: 'node:master/write', args: { filePath: 'bound-escape', content: 'no' } }), call('pair-denied', 'node_pair_list', {})])
@@ -179,13 +211,32 @@ try {
   // Protocol 1 legacy and 2 peers retain arbitrary JSON values. A Node without get_default_cwd stays unknown.
   const probeCredentials = (await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: 'probe-peer' })).body
   let probe = await socket(probeCredentials)
-  probe.send(offer(undefined)); assert.equal((await probe.take('registered')).nodeProtocol.negotiated, 1)
+  probe.send(offer(undefined, [{ name: 'probe' }, { name: 'write' }])); assert.equal((await probe.take('registered')).nodeProtocol.negotiated, 1)
   const begin = async (key, calls) => {
     scripts.set(key, [calls]); rounds.set(key, 0)
     assert.equal((await fixture.api('POST', route(actor) + '/message', { text: 'NODE:' + key })).status, 202)
   }
   const finish = key => until(async () => { const state = await saved(actor); return state.history.some(row => row.parts?.some(part => part.text === 'NODE-DONE-' + key)) && !(await fixture.api('GET', route(actor) + '/history')).body.session.busy ? state : null }, key)
   state = await turn(actor, 'unknown-default', [call('select-probe', 'node', { action: 'select', nodeId: 'probe-peer' })]); assert.equal(pair(state, 'select-probe').defaultCwd, 'unknown')
+  // Remote namespace cwd remains literal through bind/rule-only/clear and reaches the exact selected peer.
+  assert.equal((await fixture.api('POST', '/api/agents', { agentId: 'namespace' })).status, 201)
+  const namespace = 'namespace/main', namespaceCwd = 'C:\\owned-node\\project'
+  assert.equal((await fixture.api('POST', route(namespace) + '/cwd', { cwd: namespaceCwd })).status, 200)
+  for (const clearPath of ['http', 'model']) {
+    assert.equal((await fixture.api('PUT', '/api/agents/namespace', { isolatedNode: 'probe-peer' })).status, 200)
+    assert.equal((await saved(namespace)).currentNode, 'probe-peer'); assert.equal((await saved(namespace)).cwd, namespaceCwd)
+    state = await turn(actor, 'namespace-rules-' + clearPath, [call('namespace-rules', 'call_tool', { toolId: 'builtin:set_agent_isolated', args: { agentName: 'namespace', toolRules: [] } })]); assert(pair(state, 'namespace-rules').success)
+    assert.equal((await saved(namespace)).cwd, namespaceCwd)
+    if (clearPath === 'http') assert.equal((await fixture.api('PUT', '/api/agents/namespace', { isolatedNode: null })).status, 200)
+    else { state = await turn(actor, 'namespace-model-clear', [call('namespace-clear', 'call_tool', { toolId: 'builtin:set_agent_isolated', args: { agentName: 'namespace', nodeId: '' } })]); assert(pair(state, 'namespace-clear').success) }
+    assert.equal((await saved(namespace)).currentNode, 'probe-peer'); assert.equal((await saved(namespace)).cwd, namespaceCwd)
+    const effectId = 'namespace-effect-' + clearPath
+    const effect = turn(namespace, effectId, [call(effectId, 'write', { filePath: effectId, content: 'remote-namespace' })])
+    const invocation = await probe.take('tool_call'); assert.equal(invocation.tool, 'write'); assert.equal(invocation.sessionId, namespace); assert.equal(invocation.sessionCwd, namespaceCwd)
+    probe.send({ type: 'tool_call_response', callId: invocation.callId, result: { output: 'effect-on-exact-Node-' + clearPath } })
+    state = await effect; assert.equal(pair(state, effectId).output, 'effect-on-exact-Node-' + clearPath)
+    assert(!await exists(join(fixture.work, 'agents/namespace', effectId)))
+  }
   const defaultPeer = await socket(probeCredentials); defaultPeer.send(offer({ min: 1, max: 3 }, [{ name: 'probe' }, { name: 'get_default_cwd' }])); await defaultPeer.take('registered'); probe = defaultPeer
   await begin('unavailable-default', [call('select-unavailable-default', 'node', { action: 'select', nodeId: 'probe-peer' })])
   const unavailableDefault = await probe.take('tool_call'); assert.equal(unavailableDefault.tool, 'get_default_cwd')

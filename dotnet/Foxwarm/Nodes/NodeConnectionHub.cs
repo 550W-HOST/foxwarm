@@ -311,15 +311,37 @@ internal sealed class NodeConnectionHub : IDisposable
 
     internal void Remove(string id)
     {
-        Registry.Remove(id);
-        Disconnect(id, "Node credentials removed");
+        lock (gate)
+        {
+            try
+            {
+                Registry.Remove(id);
+            }
+            catch (AuthorityCommittedException)
+            {
+                Disconnect(id, "Node credentials removed");
+                throw;
+            }
+            Disconnect(id, "Node credentials removed");
+        }
         Changed?.Invoke();
     }
 
     internal void Rename(string oldId, string newId)
     {
-        Registry.Rename(oldId, newId);
-        Disconnect(oldId, "Node renamed; update client credentials");
+        lock (gate)
+        {
+            try
+            {
+                Registry.Rename(oldId, newId);
+            }
+            catch (AuthorityCommittedException)
+            {
+                Disconnect(oldId, "Node renamed; update client credentials");
+                throw;
+            }
+            Disconnect(oldId, "Node renamed; update client credentials");
+        }
         Changed?.Invoke();
     }
 
@@ -519,14 +541,15 @@ internal sealed class NodeConnectionHub : IDisposable
                             );
                         ValidateRegistration(message);
                         var protocol = Protocol(message);
-                        Registry.Touch(id, auth, message, protocol);
-                        connection.Id = id;
-                        connection.Type = message["nodeType"]!.GetValue<string>();
-                        connection.Capabilities = (JsonObject)message["capabilities"]!.DeepClone();
-                        connection.Protocol = protocol;
                         Connection? old;
                         lock (gate)
                         {
+                            // Trust validation and publication share revocation's lifecycle lock.
+                            Registry.Touch(id, auth, message, protocol);
+                            connection.Id = id;
+                            connection.Type = message["nodeType"]!.GetValue<string>();
+                            connection.Capabilities = (JsonObject)message["capabilities"]!.DeepClone();
+                            connection.Protocol = protocol;
                             nodes.TryGetValue(id, out old);
                             if (old is not null)
                                 old.Retired = true;

@@ -5,7 +5,8 @@ namespace Foxwarm.Sessions;
 public sealed partial class SessionSaveLane
 {
     internal async Task<(bool Changed, string? Previous, string? Current)> CommitNodeAsync(
-        string value
+        string value,
+        bool clearCwd = true
     )
     {
         var next = value;
@@ -30,13 +31,15 @@ public sealed partial class SessionSaveLane
                     envelope.Remove("currentNode");
                 else
                     envelope["currentNode"] = next;
-                envelope.Remove("cwd");
+                if (clearCwd)
+                    envelope.Remove("cwd");
                 return snapshot with { AuthorityEnvelope = envelope };
             });
 
             void Publish(SessionState state)
             {
-                state.AuthorityEnvelope.Remove("cwd");
+                if (clearCwd)
+                    state.AuthorityEnvelope.Remove("cwd");
                 if (next is null)
                     state.AuthorityEnvelope.Remove("currentNode");
                 else

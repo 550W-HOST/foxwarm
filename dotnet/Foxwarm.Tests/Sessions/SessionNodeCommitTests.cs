@@ -12,9 +12,22 @@ public sealed class SessionNodeCommitTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task Agent_binding_preserves_cwd_at_the_actual_authority_commit(bool renamed)
+    {
+        await AssertPlacementCommitAsync(renamed, clearCwd: false);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task Node_selection_and_cwd_clear_publish_together_at_the_actual_authority_commit(
         bool renamed
     )
+    {
+        await AssertPlacementCommitAsync(renamed, clearCwd: true);
+    }
+
+    private static async Task AssertPlacementCommitAsync(bool renamed, bool clearCwd)
     {
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
@@ -39,7 +52,7 @@ public sealed class SessionNodeCommitTests
         Directory.CreateDirectory(Path.GetDirectoryName(fault)!);
         await File.WriteAllTextAsync(fault, "fault");
         await Assert.ThrowsAnyAsync<Exception>(() =>
-            owner.Entry.SaveLane.CommitNodeAsync("approved-node")
+            owner.Entry.SaveLane.CommitNodeAsync("approved-node", clearCwd)
         );
         var persisted = JsonNode.Parse(
             await File.ReadAllTextAsync(Path.Combine(data, "state", "sessions", owner.Id + ".json"))
@@ -48,7 +61,7 @@ public sealed class SessionNodeCommitTests
             renamed ? "approved-node" : "master",
             persisted["currentNode"]!.GetValue<string>()
         );
-        Assert.Equal(renamed ? null : "old-directory", persisted["cwd"]?.GetValue<string>());
+        Assert.Equal(renamed && clearCwd ? null : "old-directory", persisted["cwd"]?.GetValue<string>());
         var current = owner.Entry.Snapshot();
         Assert.True(
             JsonNode.DeepEquals(persisted["currentNode"], current.AuthorityEnvelope["currentNode"])
