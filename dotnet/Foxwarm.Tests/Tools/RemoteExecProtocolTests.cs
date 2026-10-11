@@ -27,7 +27,7 @@ public sealed class RemoteExecProtocolTests
         internal string Data => Path.Combine(Temp.Path, "data");
         internal string Work => Path.Combine(Temp.Path, "work");
 
-        internal async Task Start(bool legacy = false, bool cancel = true)
+        internal async Task Start(bool legacy = false, bool cancel = true, bool advertiseExec = true)
         {
             Manager = new(Data, Work, Options, HostModels.ForTest(Options));
             await Manager.LoadAsync();
@@ -38,11 +38,11 @@ public sealed class RemoteExecProtocolTests
                 return Task.CompletedTask;
             };
             Credential = Manager.Nodes.Registry.Create("remote");
-            await Connect(legacy, cancel);
+            await Connect(legacy, cancel, advertiseExec);
             await Manager.SelectNodeAsync(Owner, "remote");
         }
 
-        internal async Task Connect(bool legacy = false, bool cancel = true)
+        internal async Task Connect(bool legacy = false, bool cancel = true, bool advertiseExec = true)
         {
             var builder = WebApplication.CreateBuilder();
             builder.Logging.ClearProviders();
@@ -60,13 +60,18 @@ public sealed class RemoteExecProtocolTests
                 ),
                 default
             );
+            var definitions = new JsonArray(
+                new JsonObject { ["name"] = "session", ["description"] = "peer collision" }
+            );
+            if (advertiseExec)
+                definitions.Add(new JsonObject { ["name"] = "exec" });
             var registration = new JsonObject
             {
                 ["type"] = "node_register",
                 ["nodeType"] = "protocol-peer",
                 ["capabilities"] = new JsonObject
                 {
-                    ["tools"] = new JsonArray(new JsonObject { ["name"] = "exec" }),
+                    ["tools"] = definitions,
                     ["features"] = new JsonObject
                     {
                         ["remoteExecBackgroundRegistration"] = true,
@@ -197,6 +202,43 @@ public sealed class RemoteExecProtocolTests
                 await Manager.DisposeAsync();
             Temp.Dispose();
         }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Selected_remote_exec_schema_requires_advertisement_and_current_policy(
+        bool advertiseExec
+    )
+    {
+        await using var fixture = new Fixture();
+        await fixture.Start(advertiseExec: advertiseExec);
+        var definitions = fixture.Manager.ModelDefinitions(fixture.Owner);
+        Assert.Equal(
+            advertiseExec,
+            definitions.Any(node => node?["name"]?.GetValue<string>() == "exec")
+        );
+        var session = Assert.Single(
+            definitions.OfType<JsonObject>(),
+            node => node["name"]?.GetValue<string>() == "session"
+        );
+        Assert.NotEqual("peer collision", session["description"]?.GetValue<string>());
+        var explicitOverride = new JsonArray(new JsonObject { ["name"] = "exec" });
+        Assert.True(
+            JsonNode.DeepEquals(
+                explicitOverride,
+                fixture.Manager.ModelDefinitions(fixture.Owner, explicitOverride)
+            )
+        );
+        await File.WriteAllTextAsync(
+            Path.Combine(fixture.Data, "state", "tool-authorization.yaml"),
+            "version: 1\nrules:\n- id: remote-exec\n  action: deny\n  match:\n    tool: {source: node, name: exec}\n    targetNode: remote\n"
+        );
+        fixture.Manager.Authorization.Invalidate();
+        Assert.DoesNotContain(
+            fixture.Manager.ModelDefinitions(fixture.Owner),
+            node => node?["name"]?.GetValue<string>() == "exec"
+        );
     }
 
     [Theory]
