@@ -11,7 +11,7 @@ Renders a chat conversation as a vertical timeline of message bubbles, handling 
 
 - `ChatTimeline` — default export, the main timeline component
 - `buildTimelineRows(input, previousCache)` — pure derivation of the render model; returns the row list plus the identity-reuse cache
-- `deriveTimelineTimeMarkers(messages, isGroupedEvent, isVisibleUnitStart?)` / `formatTimelineTimeMarker(marker)` — adjacent committed-message timestamps (structured CTX range start) and local English date/time presentation
+- `deriveTimelineTimeMarkers(messages, isGroupedEvent, isVisibleUnitStart?, getVisibleUnitStart?)` / `formatTimelineTimeMarker(marker)` — adjacent committed-message timestamps (structured CTX range start) and local English date/time presentation
 - `getMessageStableKey(msg, idx)` — shared helper in `chatViewportState.ts` that generates a stable React key for a message
 - `getMessageViewportAnchorKey(message)` — returns a stable viewport identity for non-temporary committed rows
 - `ContextBlockCard` — renders CTX-BLOCK model messages as tool/reasoning-style thread cards with local expand/collapse state and the read-only WebUI archive expansion endpoint
@@ -39,8 +39,9 @@ Renders a chat conversation as a vertical timeline of message bubbles, handling 
 | `formatUsageTitle(usage, attribution, callCount)` | `ChatTimeline.tsx` | Builds the token/API tooltip without an inter-request field. |
 | `formatUsageModel` / `formatUsageTimes` | ~107–150 | Derive route attribution and stable local time/range text from persisted message metadata. |
 | `formatUsageMessageSeq(seqs)` | `ChatTimeline.tsx` | Formats attributed model sequences as one message or an inclusive range, refusing incomplete attribution. |
+| `readPersistedRequestTiming(value)` | `usageTiming.ts` | Reads validated persisted start/end/duration for own-duration attribution and logical-request display clocks. |
 | `deriveRequestTimings(messages)` | `usageTiming.ts` | Validates each model request and exposes its own API duration without aggregating inter-request gaps. |
-| `deriveTimelineTimeMarkers(messages, isGroupedEvent, isVisibleUnitStart?)` / `formatTimelineTimeMarker(marker)` | `timelineTime.ts` | Compare the next valid request start (timestamp fallback) with the preceding persisted timestamp, keep strict structured CTX range starts, suppress non-independent tool/event dividers, and format the selected clock/date. |
+| `deriveTimelineTimeMarkers(messages, isGroupedEvent, isVisibleUnitStart?, getVisibleUnitStart?)` / `formatTimelineTimeMarker(marker)` | `timelineTime.ts` | Compare the next valid request start (timestamp fallback) with the preceding persisted timestamp, keep strict structured CTX range starts, accept Conversation unit-start selection without changing raw baselines, suppress non-independent tool/event dividers, and format the selected clock/date. |
 | `formatCompactDuration` / `formatDetailedDuration` | `usageTiming.ts` | Format compact API durations and exact millisecond details. |
 | `ModelUsageRow` | ~155 | Renders a single labeled token count with color tone |
 | `ModelUsageBadge` | `ChatTimeline.tsx` | Compact/expanded usage details and a separate expanded-only message-reference copy button. |
@@ -52,7 +53,7 @@ Renders a chat conversation as a vertical timeline of message bubbles, handling 
 | `ModelThreadCard` | `ModelThreadCard.tsx` | Shared completed/processing thread-card chrome for Reasoning and Web Search. |
 | `useThreadCardHeightTransition` | `useThreadCardHeightTransition.ts` | Pins the existing card and its local in-flow parent slot before the toggle, measures the natural target without reducing the scroll range, then interpolates pixels and restores auto. |
 | `buildConversationActivitySummary` | `conversationActivity.ts` | Scoped counts from direct committed calls/results, hosted search items, actual Task notification receipts, and communication sources; script tools remain ordinary top-level invocations. |
-| `applyConversationTimeMarkers` | `timelineRows.ts` | Assigns one source-derived clock before an Activity/ordinary-body display unit, preserving raw baselines, row/cache identity, and independent user/CTX surfaces. |
+| `applyConversationTimeMarkers` | `timelineRows.ts` | Assigns one clock before an Activity/ordinary-body display unit, linking loaded logical-request segments within CTX scope and starting continuations at their own visible boundary; preserves raw baselines, row/cache identity, and independent user/CTX surfaces. |
 | `applyConversationTiming` | `conversationTiming.ts` | Visible-boundary elapsed ranges, clipped/unioned measured and live busy evidence with per-gap waiting noise filtering, conservative missing-data fallback, untimed canonical compact maintenance, and final error/CTX cuts. |
 | `isCompactCompletionMaintenanceMessage` | `../sessionContinuation.ts` | Shares exact canonical marker/generated reminder recognition for timing without changing the continuation classifier's legacy/read behavior. |
 | `getHistoryTailLlmError` | `timelineRows.ts` | Selects only the full committed history tail retry, excluding queued/provisional rows. |

@@ -549,3 +549,76 @@ test('Activity omits each short overhead gap before summing waiting without chan
   await page.waitForFunction(() => document.querySelector('#timeline [data-timeline-activity] > button')?.textContent.includes('Waited for 2s'))
   assert.deepEqual(await headers(),['Worked for 40s · Waited for 2s · Called 1 tool'])
 })
+
+
+test('Conversation clocks share logical request timing across a commentary prefix and call suffix without rewinding', async () => {
+  await mode('conversation')
+  const base = Date.UTC(2026,9,11,11,53,22,945)
+  const stamp = (seq,offset,role,parts,extra={}) => ({role,parts,__meta:{seq,timestamp:base+offset,...extra}})
+  const request = (id,start,end) => ({llmRequestId:id,llmRequestTiming:{startedAt:base+start,completedAt:base+end,durationMs:end-start}})
+  const result = (id,name,start,end,output) => [{functionResponse:{name,tool_use_id:id,response:{output},executionTiming:{startedAt:base+start,completedAt:base+end,durationMs:end-start}}}]
+  const records = [
+    stamp(801,0,'user',[{text:'SEGMENT_START'}]),
+    stamp(802,74953,'model',[...Array.from({length:4},(_,index)=>({thinking:'SEGMENT_REASONING_'+index})),{text:'SEGMENT_COMMENTARY'}],{llmRequestId:'segmented-request',llmSegment:{outputStart:0,outputEndExclusive:5,complete:false}}),
+    stamp(803,95823,'model',[{functionCall:{id:'segment-task',name:'task',args:{action:'create',title:'Fixture task'}}}],{...request('segmented-request',68,95807),llmSegment:{outputStart:5,outputEndExclusive:6,complete:true}}),
+    stamp(804,95877,'tool',result('segment-task','task',95815,95877,'{"taskId":"fixture-task","status":"open","sentNotifications":0}')),
+    stamp(805,127872,'model',[{functionCall:{id:'segment-wait',name:'wait',args:{waitAnySessions:['fixture/worker']}}}],request('wait-request',95900,127872)),
+    stamp(806,127922,'tool',result('segment-wait','wait',127872,127922,'Waiting registered')),
+    stamp(807,1004404,'user',[{system:'<foxwarm-message type="task" taskId="fixture-task" event="completed" sourceSessionId="fixture/worker">\nFixture task complete\n</foxwarm-message>'}]),
+    stamp(808,1050000,'model',[call('segment-read')],request('read-request',1004500,1050000)),
+    stamp(809,1051000,'tool',result('segment-read','exec',1050000,1051000,'SEGMENT_RESULT')),
+    stamp(810,1074464,'model',[{text:'SEGMENT_FINAL'}],request('final-request',1051000,1074448)),
+    stamp(811,1597055,'user',[{text:'LATER_REAL_GAP'}]),
+    stamp(812,1657055,'model',[{thinking:'LATER_REASONING'},{text:'LATER_REPLY'}],request('later-request',1597155,1657039)),
+  ]
+  await setRecords(records,undefined,base+1700000)
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('LATER_REPLY'))
+  const expected = [base,base+1597055].map(value=>new Date(value).toISOString())
+  assert.deepEqual(await dividerTimes(),expected,'neither a 75-second generation gap nor the suffix whole-request rewind is an idle separator')
+  const unchanged = await headers()
+  assert.equal(unchanged[0],'Worked for 1m14s')
+  assert.equal(unchanged[1],'Worked for 2m2s · Waited for 14m36s · Received 1 message · Called 3 tools')
+  await page.evaluate(() => { window.segmentBody=document.querySelector('#timeline .foxwarm-assistant-message-card'); document.querySelectorAll('#timeline [aria-label="Expand activity"]').forEach(button=>button.click()) })
+  await page.waitForFunction(() => document.querySelectorAll('#timeline [data-activity-details]').length===3)
+  assert.deepEqual(await dividerTimes(),expected)
+  assert.deepEqual(await headers(),unchanged)
+  assert.equal(await page.evaluate(() => window.segmentBody===document.querySelector('#timeline .foxwarm-assistant-message-card')),true)
+  await page.evaluate(() => document.querySelectorAll('#timeline [aria-label="Collapse activity"]').forEach(button=>button.click()))
+  await page.waitForFunction(() => !document.querySelector('#timeline [data-activity-details]'))
+  assert.deepEqual(await dividerTimes(),expected)
+  // A cropped window still uses the suffix timing and commentary boundary in already-loaded history.
+  await page.evaluate(() => window.fixture.setSlice([1,2]))
+  await page.waitForFunction(() => !document.querySelector('#timeline').textContent.includes('SEGMENT_FINAL'))
+  assert.deepEqual(await dividerTimes(),[new Date(base+68).toISOString()])
+  await page.evaluate(() => window.fixture.setSlice([2,undefined]))
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('LATER_REPLY'))
+  assert.deepEqual(await dividerTimes(),[base+74953,base+1597055].map(value=>new Date(value).toISOString()),'a suffix starts its visible unit at the earlier commentary, not the whole request start or final body')
+  // Existing source-oriented modes retain their original rules, including the raw prefix/suffix clocks.
+  await page.evaluate(() => window.fixture.setSlice([0,undefined]))
+  for (const value of ['detailed','grouped']) {
+    await mode(value)
+    assert.deepEqual((await dividerTimes()).slice(0,3),[base,base+74953,base+68].map(value=>new Date(value).toISOString()))
+  }
+  await mode('conversation')
+  // Images and user interruptions remain independent visible cuts, not a reason to reuse the request origin.
+  const imageRecords=records.map((message,index)=>index===1?{...message,parts:[...message.parts.slice(0,4),image]}:message)
+  await setRecords(imageRecords,undefined,base+1700000)
+  await page.waitForFunction(() => !!document.querySelector('#timeline img'))
+  assert.deepEqual(await dividerTimes(),expected)
+  const interrupted=[...records.slice(0,2),stamp(0,80000,'user',[{text:'SEGMENT_INTERRUPT'}]),...records.slice(2)].map((message,index)=>({...message,__meta:{...message.__meta,seq:901+index}}))
+  await setRecords(interrupted,undefined,base+1700000)
+  await page.evaluate(() => window.fixture.setSlice([3,undefined]))
+  await page.waitForFunction(() => !document.querySelector('#timeline').textContent.includes('SEGMENT_COMMENTARY'))
+  assert.deepEqual(await dividerTimes(),[base+80000,base+1597055].map(value=>new Date(value).toISOString()))
+  // A summary prevents linking the earlier prefix to the suffix's clock. Its own clock stays strict raw-start.
+  const block=ctx(121); block.__meta={...block.__meta,timestamp:base+95000,contextBlock:{...block.__meta.contextBlock,rawStartTimestamp:base}}
+  const truncated=[...records.slice(0,2),block,...records.slice(2)].map((message,index)=>({...message,__meta:{...message.__meta,seq:1001+index}}))
+  await setRecords(truncated,undefined,base+1700000)
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('SUMMARY_121'))
+  assert.deepEqual(await dividerTimes(),[base,base,base+1597055].map(value=>new Date(value).toISOString()))
+  // An unavailable committed body boundary cannot be replaced with the later final reply's time.
+  delete records[1].__meta.timestamp
+  await setRecords(records,undefined,base+1700000)
+  await page.waitForFunction(() => document.querySelector('#timeline [data-timeline-activity] > button')?.textContent.slice(1)==='Activity')
+  assert.deepEqual(await dividerTimes(),expected)
+})

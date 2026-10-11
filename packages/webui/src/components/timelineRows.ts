@@ -9,7 +9,7 @@ import {
   type Message,
   type ToolTagItem,
 } from './chatShared'
-import { deriveRequestTimings, type DerivedRequestTiming, type DurationSample } from '../usageTiming'
+import { readPersistedRequestTiming, deriveRequestTimings, type DerivedRequestTiming, type DurationSample } from '../usageTiming'
 import { getContextScrollbarAnchorKey, getMessageStableKey, getMessageViewportAnchorKey } from '../chatViewportState'
 import { parsePastedTextSegments } from '../pastedText'
 import { deriveTimelineTimeMarkers, type TimelineTimeMarker } from './timelineTime'
@@ -536,7 +536,10 @@ const reuseWhenEqual = <T,>(previous: T | undefined, next: T, isEqual: (a: T, b:
 )
 
 /** Conversation disclosures and their immediately following ordinary text share one clock surface. */
-const applyConversationTimeMarkers = (rows: readonly TimelineRowView[], messages: readonly Message[]): TimelineRowView[] => {
+const applyConversationTimeMarkers = (
+  rows: readonly TimelineRowView[], messages: readonly Message[], history: readonly Message[],
+  boundary: (message: Message) => 'visible' | 'context' | undefined,
+): TimelineRowView[] => {
   const isBody = (row: TimelineRowView | undefined) => row?.msg.role === 'model'
     && !getContextBlockMetaFromMessage(row.msg) && row.conversationPartIndex !== undefined
     && hasConversationText(row.msg.parts[row.conversationPartIndex])
@@ -549,8 +552,44 @@ const applyConversationTimeMarkers = (rows: readonly TimelineRowView[], messages
     if (!sources.has(row.msg)) starts.add(row)
     sources.add(row.msg)
   })
+  // Resolve each logical origin within its CTX scope, then date later units from their visible cut.
+  const unitStarts = new Map<Message['__meta'], number | null>()
+  let scope: Message[] = []
+  const finishScope = () => {
+    const requestOrigins = new Map<string, number>()
+    for (const message of scope) {
+      if (message.role !== 'model' || !message.__meta?.llmRequestId) continue
+      const timing = readPersistedRequestTiming(message.__meta.llmRequestTiming)
+      if (timing && timing !== 'invalid') requestOrigins.set(message.__meta.llmRequestId, timing.startedAt)
+    }
+    let previousVisible: Message | undefined
+    const seenRequests = new Set<string>()
+    for (const message of scope) {
+      const id = message.role === 'model' ? message.__meta?.llmRequestId : undefined
+      if (id) {
+        if (previousVisible && (previousVisible.role === 'model' && previousVisible.__meta?.llmRequestId === id
+          || previousVisible.role === 'user' && seenRequests.has(id))) {
+          unitStarts.set(message.__meta, previousVisible.__meta?.timestamp ?? null)
+        } else if (message.__meta?.llmSegment && (!requestOrigins.has(id) || message.__meta.llmSegment.outputStart > 0 && !seenRequests.has(id))) {
+          unitStarts.set(message.__meta, null) // A missing prefix/origin cannot date this display segment.
+        } else if (requestOrigins.has(id)) unitStarts.set(message.__meta, requestOrigins.get(id)!)
+        seenRequests.add(id)
+      }
+      if (boundary(message) === 'visible' || message.role === 'model' && message.parts.some(hasConversationImage)) previousVisible = message
+    }
+    scope = []
+  }
+  for (const message of history) {
+    if (boundary(message) === 'context') {
+      finishScope()
+      continue
+    }
+    if (isCommittedHistoryMessage(message) && !message.__meta?.synthetic && !message.__meta?.queuedPreview) scope.push(message)
+  }
+  finishScope()
   // Keep every raw persisted baseline, but only visible unit starts can own a clock.
-  const markers = deriveTimelineTimeMarkers(messages, isGroupableSystemMessage, message => sources.has(message))
+  const markers = deriveTimelineTimeMarkers(messages, isGroupableSystemMessage, message => sources.has(message),
+    (message, fallback) => unitStarts.has(message.__meta) ? unitStarts.get(message.__meta)! : fallback)
   const byMessage = new Map(messages.map((message, index) => [message, markers[index]]))
   return rows.map(row => {
     const marker = starts.has(row) ? byMessage.get(row.msg) ?? null : null
@@ -734,7 +773,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       }
     })
     flushActivity()
-    const markedRows = showTimeDividers && nestedDepth === 0 ? applyConversationTimeMarkers(rows, messages).map(row => {
+    const markedRows = showTimeDividers && nestedDepth === 0 ? applyConversationTimeMarkers(rows, messages, historyMessages || messages, boundary).map(row => {
       const cached = reuseWhenEqual(previous?.rows.get(row.key), row, sameRowView)
       rowCache.set(row.key, cached)
       return cached

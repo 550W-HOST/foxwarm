@@ -17,6 +17,7 @@ const sameLocalDay = (left: number, right: number): boolean => {
 export const deriveTimelineTimeMarkers = (
   messages: readonly Message[], isGroupedEvent: (message: Message) => boolean,
   isVisibleUnitStart?: (message: Message) => boolean,
+  getVisibleUnitStart?: (message: Message, defaultStart: number | null) => number | null,
 ): Array<TimelineTimeMarker | null> => {
   let previous: number | null = null
   let showedClock = false
@@ -25,8 +26,9 @@ export const deriveTimelineTimeMarkers = (
     const end = validTimestamp(message.__meta?.contextBlock
       ? message.__meta.contextBlock.rawStartTimestamp
       : message.__meta?.timestamp)
+    const defaultStart = validTimestamp(message.__meta?.llmRequestTiming?.startedAt) ?? end
     const current = message.__meta?.contextBlock ? end
-      : validTimestamp(message.__meta?.llmRequestTiming?.startedAt) ?? end
+      : getVisibleUnitStart ? validTimestamp(getVisibleUnitStart(message, defaultStart)) : defaultStart
     const eligible = isVisibleUnitStart ? isVisibleUnitStart(message) : message.role !== 'tool' && !isGroupedEvent(message)
     let marker: TimelineTimeMarker | null = null
     if (eligible && current !== null) {
