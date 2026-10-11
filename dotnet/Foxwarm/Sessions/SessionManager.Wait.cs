@@ -30,7 +30,7 @@ internal sealed partial class SessionManager
         if (input == false)
             throw new InvalidDataException("waitForInput must be exactly true when provided.");
         double? seconds = null;
-        if (args.ContainsKey("wakeIfNoActivityAfterSeconds"))
+        if (args.ContainsKey("wakeIfNoActivityAfterSeconds") && args["wakeIfNoActivityAfterSeconds"] is not null)
         {
             seconds = SessionWait.Number(args["wakeIfNoActivityAfterSeconds"]);
             if (seconds is not double value || !double.IsFinite(value) || value <= 0)
@@ -38,6 +38,8 @@ internal sealed partial class SessionManager
                     "wakeIfNoActivityAfterSeconds must be a positive finite number."
                 );
         }
+        if (!args.ContainsKey("wakeIfNoActivityAfterSeconds") && exec is not null && input != true)
+            seconds = 600;
         if (all is null && any is null && exec is null && input != true && seconds is null)
             throw new InvalidDataException(
                 "wait requires at least one progress source or fallback; reason alone is not sufficient."

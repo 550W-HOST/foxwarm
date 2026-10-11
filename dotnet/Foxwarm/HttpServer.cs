@@ -211,6 +211,7 @@ internal sealed class HttpServer
                     return Results.Ok(new { success = true });
                 }
             );
+            app.MapGet("/api/auth/session", () => Results.Ok(new { role = "admin" }));
             code!.Register(app);
         }
         app.MapGet("/health", () => Results.Ok(new { status = "ready" }));

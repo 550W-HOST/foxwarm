@@ -69,7 +69,7 @@ internal static class AgentToolDefinitions
     private static JsonObject TaskDefinition() =>
         Tool(
             "task",
-            "Create and track a small task shared by Foxwarm Sessions. Use one action at a time to create, list, inspect, claim, update, complete, or cancel a task. The current Session is recorded automatically; do not provide another Session identity.",
+            "Create and track a small task shared by Foxwarm Sessions. Use one action at a time to create, list, inspect, claim, update, complete, or cancel a task. The current Session is recorded automatically as the creator and actor; do not use ownerSessionId to identify the caller. When creating a task, you may set ownerSessionId to assign it immediately; use assign only to transfer or release an existing task owner.",
             Parameters(
                 new JsonObject
                 {
@@ -86,7 +86,7 @@ internal static class AgentToolDefinitions
                     ),
                     ["title"] = String("Task title. Required when action is create."),
                     ["description"] = String(
-                        "Short problem or scope description for a new task, or replacement description when updating."
+                        "Problem or scope description for a new task, or replacement description when updating. For long description or result text, use ToolScript to compose the operation so you do not regenerate duplicate content."
                     ),
                     ["parentTaskId"] = String(
                         "Existing parent task ID for a simple child task. Set only when creating."
@@ -101,16 +101,17 @@ internal static class AgentToolDefinitions
                         "completed",
                         "cancelled"
                     ),
+                    ["scope"] = Choice("For list, choose tasks created by or assigned to the current Session (default), any Session in the current Agent, or all Sessions and users.", "current-session", "current-agent", "all"),
                     ["note"] = String("Short progress note to append when updating a task."),
-                    ["result"] = String("Short completion summary for a completed task."),
+                    ["result"] = String("Completion summary for a completed task. For long description or result text, use ToolScript to compose the operation so you do not regenerate duplicate content."),
                     ["notifySession"] = Boolean(
-                        "When true, send task notifications after the assignment is committed: notify the new owner, and notify the previous owner when ownership changes or is released."
+                        "When true, create/assign notify the new owner and, on transfer or release, the previous owner after the change is saved. For update with a note, notify the current owner unless it is the caller. Omitted or false saves without these notifications."
                     ),
                     ["ownerSessionId"] = new JsonObject
                     {
                         ["type"] = new JsonArray("string", "null"),
                         ["description"] =
-                            "Existing Session ID to receive the task, or null to release the current owner.",
+                            "For create, the optional existing Session ID to receive the task. For assign, the existing Session ID to receive the task, or null to release the current owner.",
                     },
                     ["reason"] = String("Short reason for cancelling a task."),
                 },

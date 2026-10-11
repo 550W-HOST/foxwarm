@@ -123,7 +123,9 @@ internal sealed class ToolRegistry(Foxwarm.McpClient mcp, Func<SessionOwner, str
         CancellationToken cancellationToken
     )
     {
+        cancellationToken.ThrowIfCancellationRequested();
         await owner.AuthorizeAsync(resolved, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         var result =
             resolved.Source == "mcp"
                 ? await mcp.CallAsync(

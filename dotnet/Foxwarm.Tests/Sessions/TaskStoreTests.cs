@@ -186,6 +186,7 @@ public sealed class TaskStoreTests
                 ["action"] = "update",
                 ["taskId"] = id,
                 ["note"] = "progress from a non-owner",
+                ["notifySession"] = true,
             },
             "observer"
         );

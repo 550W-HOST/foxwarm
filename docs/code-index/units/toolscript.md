@@ -33,6 +33,8 @@ Active cancellation requests the run token and lets the worker/host-call boundar
 
 `HostCallAsync` accepts only the supported names and normalizes `call_tool` descriptors into the unified tool path. Filesystem, exec, terminal, MCP, Node, Session, and authorization effects remain behind their ordinary tools/owners; Monty OS functions and mounts are not exposed. `request_model_without_context` uses the current owner’s prompt-cache/effort boundary and returns normalized text/parts, while ToolScript records keep run metadata separate from outer Session history.
 
+Short `call_tool` strings containing a qualified ID, such as `node:master/read` or `builtin:task`, use the same concrete registry path as descriptor calls. Cancellation is checked before host-call/tool admission and again after asynchronous authorization. Stop settles a launched exec wait without killing its shell, and no later script host effect is admitted. Both existing run modes still execute the initial segment before returning; waiting/time-budget pauses require explicit continuation in either mode.
+
 ## Tests
 
 `dotnet/Foxwarm.Tests/ToolScript/MainToolScriptTests.cs`; `ToolScriptBudgetTests.cs`; `ToolScriptHostTests.cs`; `ToolScriptLifecycleTests.cs`; `ToolScriptOwnershipTests.cs`; `ToolScriptRecordJson`/snapshot/cancellation coverage.

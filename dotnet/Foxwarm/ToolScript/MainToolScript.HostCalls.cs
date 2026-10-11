@@ -13,6 +13,7 @@ internal sealed partial class MainToolScript
         ToolScriptDataBudget budget
     )
     {
+        run.Token.ThrowIfCancellationRequested();
         var record = run.Record;
         var context = run.Context;
         record["hostCallCount"] = (int)Number(record["hostCallCount"], 0) + 1;
@@ -196,7 +197,7 @@ internal sealed partial class MainToolScript
         {
             Copy(kwargs, true);
             if (Text(first) is string name)
-                result["name"] = name;
+                result[name.Contains(':') ? "toolId" : "name"] = name;
             Arguments(second);
             Arguments(explicitArgs);
             Copy(kwargs, false);

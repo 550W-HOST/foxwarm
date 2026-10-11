@@ -177,6 +177,7 @@ internal sealed partial class SessionManager
                     var initialMessage = OptionalString(args, "message");
                     SessionOwner child;
                     var delivered = false;
+                    var sentNotifications = 0;
                     string? assignmentWarning = null;
                     if (taskId is null)
                     {
@@ -192,6 +193,7 @@ internal sealed partial class SessionManager
                         );
                         child = created.Child;
                         delivered = created.Delivered;
+                        sentNotifications = delivered ? 1 : 0;
                     }
                     else
                     {
@@ -216,23 +218,18 @@ internal sealed partial class SessionManager
                         child = attached.Child;
                         delivered = attached.AssignmentDelivered;
                         assignmentWarning = attached.Warning;
+                        sentNotifications = attached.SentNotifications;
                     }
-                    return (
-                        Output(
-                            $"Created child Session {child.Id} under Agent {child.Agent}; "
-                                + (
-                                    taskId is not null
-                                        ? delivered
-                                            ? $"task assignment delivered{(assignmentWarning is null ? "." : $" with warning: {assignmentWarning}")}"
-                                            : $"task assignment delivery failed{(assignmentWarning is null ? "." : $": {assignmentWarning}")}"
-                                        : delivered
-                                            ? "initial message delivered to its queue."
-                                            : "no initial message was supplied."
-                                ),
-                            delivered && after == "wait" ? child.Id : null
-                        ),
-                        taskId is null ? after == "finish" : delivered && after == "finish"
-                    );
+                    var childOutput = $"Child session created: `{child.Id}` ({(OptionalBool(args, "fork") == true ? "forked from parent" : "new session")})";
+                    if (taskId is not null)
+                        childOutput += delivered
+                            ? $". Task assignment sent{(assignmentWarning is not null ? " with warning: " + assignmentWarning : "")}."
+                            : $", but task assignment delivery failed{(assignmentWarning is not null ? ": " + assignmentWarning : ".")}";
+                    else if (delivered)
+                        childOutput += ". Initial message sent.";
+                    var childResult = Output(childOutput, delivered && after == "wait" ? child.Id : null);
+                    childResult["sentNotifications"] = sentNotifications;
+                    return (childResult, taskId is null ? after == "finish" : delivered && after == "finish");
                 }
                 case "send_to_session":
                 {
@@ -256,7 +253,7 @@ internal sealed partial class SessionManager
                     );
                     return (
                         Output(
-                            $"Delivered a message from {source.Id} to Session {target} (requested {requested}).",
+                            target == requested ? $"Message sent to session `{target}`" : $"Message sent to session `{target}` (requested `{requested}`)",
                             after == "wait" ? target : null
                         ),
                         after == "finish"

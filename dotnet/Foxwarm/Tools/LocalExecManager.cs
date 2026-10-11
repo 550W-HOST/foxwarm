@@ -256,7 +256,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         var running = new JsonObject
         {
             ["output"] =
-                $"Partial Output:\n{partial["output"]?.GetValue<string>()}\n---\n[Process running longer than {waitSeconds.ToString(CultureInfo.InvariantCulture)}s] Switched to background. A completion event will arrive in this Session.\n{warning}execId: {record.Id}\nRead complete output with read_exec({{execId: \"{record.Id}\"}}).",
+                $"Partial Output:\n{partial["output"]?.GetValue<string>()}\n---\n{(ct.IsCancellationRequested ? "[Foreground wait ended by Stop or Run queued]" : $"[Process running longer than {waitSeconds.ToString(CultureInfo.InvariantCulture)}s]")} Switched to background. A completion event will arrive in this Session.\n{warning}execId: {record.Id}\nRead complete output with read_exec({{execId: \"{record.Id}\"}}).",
         };
         if (programmatic is not null)
             await AddProgrammaticAsync(running, record, null, programmatic);
