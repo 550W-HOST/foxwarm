@@ -56,11 +56,6 @@ internal static class CodeFileService
         var id = string.IsNullOrWhiteSpace(value) ? "master" : value.Trim();
         if (!System.Text.RegularExpressions.Regex.IsMatch(id, "^[A-Za-z0-9._-]+$"))
             throw new CodeServiceException("InvalidNode", "Invalid node id.");
-        if (id != "master")
-            throw new CodeServiceException(
-                "UnsupportedNode",
-                "Code services are unavailable for this node."
-            );
         return id;
     }
 
@@ -75,7 +70,14 @@ internal static class CodeFileService
                 "InvalidPath",
                 "An absolute filesystem path is required."
             );
-        return Path.GetFullPath(value.Trim());
+        var parts = new List<string>();
+        foreach (var part in value.Trim().Split('/'))
+        {
+            if (part is "" or ".") continue;
+            if (part == "..") { if (parts.Count > 0) parts.RemoveAt(parts.Count - 1); }
+            else parts.Add(part);
+        }
+        return "/" + string.Join('/', parts);
     }
 
     internal static bool Bool(JsonNode? value) =>

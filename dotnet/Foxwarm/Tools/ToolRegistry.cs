@@ -200,7 +200,8 @@ internal sealed class ToolRegistry(
                     owner.ExecutionCwd,
                     owner.Programmatic,
                     cancellationToken,
-                    owner.Hosted
+                    owner.Hosted,
+                    owner.RemoteCodePaths(resolved)
                 )
             : await entries[resolved.Name].Execute(owner, resolved.Args, cancellationToken);
         if (owner.Programmatic)

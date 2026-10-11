@@ -13,7 +13,7 @@ Records administrator-approved trust in already-running Node environments, negot
 - `NodeRoutes.Register` supplies administrator list/inspect, onboarding/pending/commands/create/approve/reject, rename and removal APIs. `NodeBootstrap` serves the packaged official setup templates and source archive with deployment-prefixed addresses. `MessageRouter.HandleNodeCommandAsync` serves the existing `/node` administrator command family.
 - `SessionManager.SelectNodeAsync` validates placement and commits it through `SessionSaveLane.CommitNodeAsync`, which publishes `currentNode` and clears old `cwd` in one authority save. `SetAgentIsolationAsync` uses the same lane with cwd retention only for a nonempty binding. `ExecutionPlacement` captures Node/cwd together; `ExecutionEnvironment` renders the request-time connection context without rewriting persistent Agent memory.
 - `NodeToolDefinitions` provides only list/select/inspect and the approved pairing helpers. `ToolRegistry` and `UnifiedTools` consume advertised capabilities for current or explicit targets, while Main-local capabilities retain their existing implementation and authorization.
-- `RemoteNodeResult.Normalize` removes the private documented path sidecar and translates documented legacy Node image carriers at ingress. Arbitrary peer fields remain data and do not become Main paths, cwd mutations or control receipts.
+- `RemoteNodeResult.Normalize` removes the private documented path sidecar and translates documented legacy Node image carriers at ingress. For the four concrete remote file tools, a separately captured callback records bounded display-only paths with the authenticated execution Node before removing the sidecar. Arbitrary peer fields remain data and do not become Main paths, cwd mutations or control receipts.
 
 ## Current contracts
 
@@ -27,7 +27,7 @@ Agent Node binding uses existing Agent metadata and owner admission/creation. Ad
 
 ## Phase boundary
 
-Advertised external exec and authenticated Node Session events are connected through the [remote exec unit](./remote-exec.md), including transient start-time authority, durable completion ACK, waits and truthful Stop. Whole-file transfer/copy, remote ToolScript source, image export/delivery and bound-Agent attachments are connected through the [file consumers unit](./external-node-files.md). Code/PTY Node services and Shell HTTP remain unconnected. Inline native ToolScript can dispatch ordinary Node tools through the same concrete registry. Protocol 3 negotiation alone does not grant external-owner or Worker behavior; Session events use authenticated placement or the exact exec completion grant. Official CLI/browser/Android client code is unchanged.
+Advertised external exec and authenticated Node Session events are connected through the [remote exec unit](./remote-exec.md), including transient start-time authority, durable completion ACK, waits and truthful Stop. Whole-file transfer/copy, remote ToolScript source, image export/delivery and bound-Agent attachments are connected through the [file consumers unit](./external-node-files.md). Code/PTY Node consumers connect through the [fixed service transport](./external-node-services.md); Shell HTTP remains unconnected. Inline native ToolScript can dispatch ordinary Node tools through the same concrete registry. Protocol 3 negotiation alone does not grant external-owner or Worker behavior; Session events use authenticated placement or the exact exec completion grant. Official CLI/browser/Android client code is unchanged.
 
 ## Tests
 

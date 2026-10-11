@@ -80,7 +80,7 @@ Embedded Code uses one persistent multi-root workspace and an iframe that starts
 
 ### D-code-fixed-remote-services
 
-Filesystem, Git, PTY, and helper behavior use authenticated fixed versioned services, not model tools or shell credentials.
+Filesystem, Git, PTY, and helper behavior use authenticated fixed versioned services, not model tools or shell credentials. The .NET [service transport](../units/external-node-services.md) and [terminal router](../units/terminal.md#remote-router) implement the existing official-client boundary without a fabricated Session/model principal. Remote Git responses and helper requests use the captured authenticated Node namespace; peer identity fields never become Master path or control authority. Missing/old service versions reject without fallback.
 
 ### D-code-config-schema-assistance
 

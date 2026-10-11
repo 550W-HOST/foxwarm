@@ -12,7 +12,7 @@ internal sealed partial class TerminalRegistry
         internal sealed class TerminalClient : IAsyncDisposable
         {
             private readonly WebSocket socket;
-            private readonly TerminalRecord owner;
+            private readonly ITerminalStreamTarget owner;
             private readonly CancellationTokenSource lifetime;
             private readonly Channel<byte[]> queue = Channel.CreateUnbounded<byte[]>(
                 new UnboundedChannelOptions { SingleReader = true, SingleWriter = false }
@@ -28,7 +28,7 @@ internal sealed partial class TerminalRegistry
 
             internal TerminalClient(
                 WebSocket socket,
-                TerminalRecord owner,
+                ITerminalStreamTarget owner,
                 CancellationToken token,
                 bool controlOwner
             )
@@ -184,7 +184,7 @@ internal sealed partial class TerminalRegistry
                                 await owner.InputAsync(node["data"]?.GetValue<string>() ?? "");
                                 break;
                             case "resize":
-                                owner.Resize(
+                                await owner.ResizeAsync(
                                     node["cols"]?.GetValue<int>() ?? 0,
                                     node["rows"]?.GetValue<int>() ?? 0
                                 );

@@ -20,6 +20,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
     private sealed class Connection(WebSocket socket)
     {
         internal readonly WebSocket Socket = socket;
+        internal readonly Guid Generation = Guid.NewGuid();
         internal readonly SemaphoreSlim SendGate = new(1, 1);
         internal string? Id;
         internal string? PendingId;
@@ -35,7 +36,8 @@ internal sealed partial class NodeConnectionHub : IDisposable
         TaskCompletionSource<JsonNode?> Result,
         RemoteExecAuthority.Claim? Claim,
         bool SupportsRegistration,
-        SessionOwner? Owner
+        SessionOwner? Owner,
+        Action<JsonNode?>? PathMetadata
     );
 
     internal NodeConnectionHub(string root)
@@ -224,7 +226,9 @@ internal sealed partial class NodeConnectionHub : IDisposable
                 record["executable"] =
                     connection is { Retired: false, Executable: true }
                     && connection.Socket.State == WebSocketState.Open;
-                record["services"] = new JsonObject(); // Backend service dispatch is a later phase.
+                record["services"] = connection is { Retired: false, Executable: true }
+                    ? connection.Capabilities["services"]?.DeepClone() ?? new JsonObject()
+                    : new JsonObject();
                 record["tools"] = connection is { Retired: false, Executable: true }
                     ? ExecutableDefinitions(connection)
                     : new JsonArray();
@@ -369,6 +373,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
     private void FailCalls(Connection connection, string reason)
     {
         FailTransfers(connection, reason);
+        FailServices(connection, reason);
         foreach (var pair in calls)
             if (
                 ReferenceEquals(pair.Value.Connection, connection)
@@ -620,6 +625,16 @@ internal sealed partial class NodeConnectionHub : IDisposable
                     )
                     {
                         HandleFileReply(connection, message, type);
+                        continue;
+                    }
+                    if (type is "node_service_response" or "node_service_error")
+                    {
+                        HandleServiceReply(connection, message, type == "node_service_response");
+                        continue;
+                    }
+                    if (type == "node_service_event")
+                    {
+                        HandleServiceEvent(connection, message);
                         continue;
                     }
                     if (type is "tool_call_response" or "tool_call_error")

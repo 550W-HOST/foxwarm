@@ -43,6 +43,25 @@ internal sealed partial class SessionToolExecutor(
         : SessionWait.Text(hosted.Entry.Snapshot().AuthorityEnvelope["cwd"]);
 
     private readonly AsyncLocal<ExecSnapshot?> execSnapshot = new();
+    internal Action<JsonNode?>? RemoteCodePaths(ResolvedTool resolved)
+    {
+        var active = invocation.Value;
+        if (active is null || resolved.Name is not ("read" or "write" or "edit" or "apply_patch")) return null;
+        var nodeId = resolved.ExecutionNode;
+        return raw =>
+        {
+            if (raw is not JsonObject value || value["__foxwarmResolvedToolPaths"] is not JsonArray paths || paths.Count is < 1 or > 100) return;
+            var captured = new JsonArray();
+            foreach (var item in paths)
+            {
+                if (item is not JsonObject path || SessionWait.Text(path["raw"]) is not string original || SessionWait.Text(path["resolved"]) is not string remotePath || !remotePath.StartsWith('/') || remotePath.Contains('\0') || remotePath.Length > 4096) return;
+                captured.Add(new JsonObject { ["raw"] = original, ["resolved"] = remotePath, ["nodeId"] = nodeId });
+            }
+            // Display-only evidence in the captured remote namespace, never Main path/control authority.
+            active.ResolvedPaths = captured;
+        };
+    }
+
     internal string CurrentCallId => invocation.Value?.CallId ?? "";
     internal string? DirectExecWorkspace => execSnapshot.Value?.Cwd;
     private WorkspaceTools ExecFiles =>

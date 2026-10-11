@@ -191,7 +191,7 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
         stopping.Dispose();
     }
 
-    internal sealed partial class TerminalRecord : IAsyncDisposable
+    internal sealed partial class TerminalRecord : IAsyncDisposable, ITerminalStreamTarget
     {
         private readonly object gate = new();
         private readonly TerminalNative.Handle native;
@@ -307,7 +307,7 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
             return client;
         }
 
-        internal void Detach(TerminalClient client)
+        public void Detach(TerminalClient client)
         {
             lock (gate)
             {
@@ -324,7 +324,7 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
             }
         }
 
-        internal async Task InputAsync(string text)
+        public async Task InputAsync(string text)
         {
             if (text.Length == 0)
                 return;
@@ -340,6 +340,12 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
             {
                 input.Release();
             }
+        }
+
+        public Task ResizeAsync(int cols, int rows)
+        {
+            Resize(cols, rows);
+            return Task.CompletedTask;
         }
 
         internal void Resize(int cols, int rows)
@@ -361,7 +367,7 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
             }
         }
 
-        internal async Task CloseAsync(string reason)
+        public async Task CloseAsync(string reason)
         {
             if (Interlocked.Exchange(ref closed, 1) == 0)
             {
@@ -423,7 +429,7 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
             );
             lock (gate)
             {
-                var owner = clients.LastOrDefault(item => item.IsControlOwner);
+                var owner = clients.FirstOrDefault(item => item.IsControlOwner);
                 if (owner is null || closed != 0)
                     return new(false, null, "No Code terminal is attached to handle this request.");
                 pendingControls[requestId] = new(owner, completion);
@@ -464,7 +470,7 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
             }
         }
 
-        private void ResolveControl(
+        public void ResolveControl(
             TerminalClient client,
             string requestId,
             bool ok,

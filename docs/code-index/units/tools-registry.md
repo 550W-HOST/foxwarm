@@ -19,6 +19,8 @@ Definition discovery is not authorization: execution calls `ToolAuthorizationEva
 
 Default model requests project the selected compatible Node's advertised tools, including `exec`, through current concrete visibility policy. An absent capability or hidden tool is not injected from Master. Builtin name collisions remain source-qualified, and explicit schema overrides retain their existing projection behavior.
 
+For concrete remote `read`, `write`, `edit` and `apply_patch`, `SessionToolExecutor.RemoteCodePaths` binds the documented first-party path sidecar to the captured execution Node. It records bounded display-only absolute POSIX targets for the original WebUI's Code actions and strips the private carrier from model/ToolScript output. This metadata is not Main filesystem, cwd or model-control authority; ambiguous relative tool paths remain inert.
+
 ## Tests
 
 `dotnet/Foxwarm.Tests/Tools/MainLocalToolsTests.cs`; `ToolAuthorizationEffectsTests.cs`; `HandoffConfirmationTests.cs`; ToolScript tool tests. `RemoteExecProtocolTests.cs` covers selected-Node exec advertisement, policy hiding, builtin collisions and explicit overrides. `packages/webui/test/experimentHostRemoteExecSchemas.e2e.mjs` checks real provider request schemas before direct and adjacent exec effects through the unchanged official CLI, plus policy-hidden schemas and canonical pairs; its provider refuses undeclared calls.

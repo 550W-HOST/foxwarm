@@ -8,7 +8,7 @@ Exposes authenticated Session deletion/cleanup controls and terminal lifecycle/s
 
 ## Stable methods and callers
 
-Deletion routes delegate identity/deletion claims to `SessionManager`; terminal routes delegate PTY/session lookup, input, resize, stop, and event subscription to `TerminalRegistry`/`TerminalClient`. Neither route writes Session JSON or Archive directly.
+Deletion routes delegate identity/deletion claims to `SessionManager`; terminal routes delegate PTY/session lookup, input, resize, stop, and event subscription to `TerminalRouter`, with `TerminalRegistry`/`TerminalClient` preserving local behavior and advertised `vscode-pty` serving remote clients. Neither route writes Session JSON or Archive directly.
 
 ## Contract and side effects
 
@@ -16,4 +16,4 @@ Deletion returns committed/partial/error state and cannot remove immutable Archi
 
 ## Tests
 
-`SessionDeletionTests.cs`; `WebUiRealtimeRevisionTests.cs`; `SessionDeletionTests.cs`; terminal/realtime revision tests.
+`SessionDeletionTests.cs`; `WebUiRealtimeRevisionTests.cs`; `SessionDeletionTests.cs`; `NodeServiceTransportTests.cs`; `packages/webui/test/experimentHostNodeCode.e2e.mjs`.

@@ -4,11 +4,12 @@ Persistent administrator-approved trust, credential-authenticated WebSocket conn
 
 ## Boundaries
 
-This module connects existing CLI/browser/Android Node protocol clients to the .NET host. It does not create environments, grant OS isolation, or connect Code/PTY services or Shell HTTP. Whole-file consumers connect through the existing CLI transfer protocol. Remote exec authority is transient and bounded; the client owns its process and pending replay. [Remote Node integration](../threads/remote-node-compatibility.md#net-external-node-integration) owns the canonical connected contract and remaining phase boundaries.
+This module connects existing CLI/browser/Android Node protocol clients to the .NET host. It does not create environments, grant OS isolation, or connect Shell HTTP. Fixed Code/PTY services use advertised authenticated capabilities, not model-tool dispatch. Whole-file consumers connect through the existing CLI transfer protocol. Remote exec authority is transient and bounded; the client owns its process and pending replay. [Remote Node integration](../threads/remote-node-compatibility.md#net-external-node-integration) owns the canonical connected contract and remaining phase boundaries.
 
 ## Units
 
 - [External Node trust and ordinary tools](../units/external-nodes.md)
+- [External Node Code service transport](../units/external-node-services.md)
 - [External Node file consumers](../units/external-node-files.md)
 - [External exec authority and Node Session events](../units/remote-exec.md)
 - [Unified tools and Session tool execution](../units/tools-registry.md)

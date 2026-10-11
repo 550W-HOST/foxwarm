@@ -33,9 +33,9 @@ MessageRouter -> SessionRuntime -> SessionOwner / SessionTurnRunner
 
 Current integration boundaries:
   Vector-backed admission/search remains disabled or unsupported in the .NET host;
-  ordinary external Node tools, remote exec/completion and whole-file consumers connect
-  through .NET trust/transport/dispatch; Code/PTY services, Shell HTTP and Worker
-  ownership remain separate boundaries.
+  ordinary external Node tools, remote exec/completion, whole-file consumers and fixed
+  Code/PTY services connect through .NET trust/transport/dispatch; Shell HTTP and
+  Worker ownership remain separate boundaries.
 
 Optional remote and compatibility components:
   CLI Node, browser extension, Android Node, sandbox runtime, VS Code Web assets,
@@ -98,5 +98,5 @@ Optional remote and compatibility components:
 ## Current gaps and open questions
 
 - **Current gap:** .NET Vector admission/search is disabled or explicitly unsupported (`WebUIChannel.History` returns `VECTOR_DISABLED`; identity-move/configuration paths do not make Vector a runtime capability). The TypeScript Vector implementation remains a compatibility/reference boundary only.
-- **Current gap:** ordinary external Nodes, remote exec/completion and file transfer/delivery are connected. Code/PTY services, Shell HTTP and Worker ownership are not yet connected to the .NET Main owner chain.
+- **Current gap:** ordinary external Nodes, remote exec/completion, file transfer/delivery and fixed Code/PTY services are connected. Shell HTTP and Worker ownership are not yet connected to the .NET Main owner chain.
 - **Unconfirmed:** which remaining TypeScript Main routes and channel adapters will be retired versus retained as compatibility services after the .NET Main reaches production parity.

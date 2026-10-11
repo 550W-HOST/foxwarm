@@ -9,6 +9,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 ## Units
 
 - [Code workbench and Git/file services](../units/code-services.md)
+- [External Node Code service transport](../units/external-node-services.md)
 - [Terminal and Code helper services](../units/terminal.md)
 
 ## Tests and callers

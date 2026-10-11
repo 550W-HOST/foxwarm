@@ -55,7 +55,8 @@ internal sealed partial class NodeConnectionHub
         string? cwd,
         bool programmatic,
         CancellationToken token,
-        SessionOwner? owner = null
+        SessionOwner? owner = null,
+        Action<JsonNode?>? pathMetadata = null
     )
     {
         Connection connection;
@@ -81,7 +82,8 @@ internal sealed partial class NodeConnectionHub
                 programmatic,
                 token,
                 null,
-                owner
+                owner,
+                pathMetadata: pathMetadata
             );
         if (owner is null || owner.Id != sessionId || owner.Agent != agent)
             throw new InvalidOperationException(
@@ -148,7 +150,8 @@ internal sealed partial class NodeConnectionHub
         CancellationToken token,
         RemoteExecAuthority.Claim? claim,
         SessionOwner? owner,
-        IDisposable? dispatchAdmission = null
+        IDisposable? dispatchAdmission = null,
+        Action<JsonNode?>? pathMetadata = null
     )
     {
         var callId = "call_" + Guid.NewGuid().ToString("N");
@@ -163,7 +166,7 @@ internal sealed partial class NodeConnectionHub
             supportsRegistration
             && connection.Capabilities["features"]?["execWaitCancellation"]?.GetValue<bool>()
                 == true;
-        var call = new Invocation(connection, result, claim, supportsRegistration, owner);
+        var call = new Invocation(connection, result, claim, supportsRegistration, owner, pathMetadata);
         var attemptedSend = false;
         // Exec Stop is a wire handshake, not cancellation of its correlation or remote process.
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(
@@ -280,6 +283,7 @@ internal sealed partial class NodeConnectionHub
         {
             if (call.Claim is not null)
                 ExecClaims.Settle(call.Claim, call.SupportsRegistration);
+            call.PathMetadata?.Invoke(message["result"]);
             call.Result.TrySetResult(RemoteNodeResult.Normalize(message["result"]));
         }
         else

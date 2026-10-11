@@ -6,7 +6,7 @@
 Browser WebUI fetch/WebSocket/PTY/Code request
   -> HttpServer auth/prefix/static middleware
   -> WebUIChannel route registration and DTO validation
-  -> SessionManager/SessionRuntime/TaskService/CodeWorkbench/TerminalRegistry
+  -> SessionManager/SessionRuntime/TaskService/CodeWorkbench/TerminalRouter
   -> JSON authority/catalog/task/terminal/Code durable or live boundary
   -> WebUiRealtime event/revision
   -> React units merge committed response with optimistic state

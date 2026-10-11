@@ -56,7 +56,7 @@ internal sealed class HttpServer
             ? new Foxwarm.Code.CodeWorkbench(
                 sessions,
                 address,
-                Foxwarm.Terminal.TerminalRegistry.IsSupported
+                true // The extension also serves advertised remote PTYs on non-PTY Main hosts.
             )
             : null;
         app.Lifetime.ApplicationStopping.Register(sessions.BeginShutdown);

@@ -92,9 +92,6 @@ internal sealed partial class CodeWorkbench
 
     private static string Target(HttpContext context, JsonObject? body = null)
     {
-        CodeFileService.Node(
-            context.Request.Query["nodeId"].FirstOrDefault() ?? Text(body, "nodeId")
-        );
         return CodeFileService.PathValue(
             context.Request.Query["path"].FirstOrDefault() ?? Text(body, "path")
         );
@@ -102,8 +99,33 @@ internal sealed partial class CodeWorkbench
 
     private static string GitTarget(HttpContext context)
     {
-        CodeFileService.Node(context.Request.Query["nodeId"].FirstOrDefault());
         return CodeFileService.PathValue(context.Request.Query["workspace"].FirstOrDefault());
+    }
+
+    private static string NodeId(HttpContext context, JsonObject? body = null) =>
+        CodeFileService.Node(context.Request.Query["nodeId"].FirstOrDefault() ?? Text(body, "nodeId"));
+
+    private Task<JsonObject> Fs(HttpContext context, string operation, JsonObject args, Func<JsonObject> local, JsonObject? body = null) =>
+        NodeId(context, body) == "master" ? Task.FromResult(local()) : nodes.RequestServiceAsync(NodeId(context, body), "vscode-fs", operation, args, context.RequestAborted);
+
+    private async Task<JsonObject> Git(HttpContext context, string operation, JsonObject args, int minimumVersion = 1)
+    {
+        var nodeId = NodeId(context);
+        var result = await nodes.RequestServiceAsync(nodeId, "vscode-git", operation, args, context.RequestAborted, minimumVersion);
+        result["nodeId"] = nodeId;
+        return result;
+    }
+
+    private static byte[] Binary(JsonObject value, long limit)
+    {
+        var encoded = Text(value, "contentBase64");
+        if (encoded is null || encoded.Length > ((limit + 2) / 3) * 4)
+            throw new CodeServiceException("NodeServiceError", "Invalid or oversized Node content response.", 502);
+        byte[] bytes;
+        try { bytes = Convert.FromBase64String(encoded); }
+        catch (FormatException error) { throw new CodeServiceException("NodeServiceError", "Invalid Node content response.", 502, error); }
+        if (bytes.Length > limit) throw new CodeServiceException("PayloadTooLarge", "Node content exceeds the Code size limit.");
+        return bytes;
     }
 
     internal void Register(WebApplication app)
@@ -123,12 +145,12 @@ internal sealed partial class CodeWorkbench
         app.MapGet(
             "/api/vscode-web/fs/stat",
             context =>
-                Guard(context, () => Json(context, CodeFileService.StatFile(Target(context))))
+                Guard(context, async () => await Json(context, await Fs(context, "stat", new JsonObject { ["path"] = Target(context) }, () => CodeFileService.StatFile(Target(context)))))
         );
         app.MapGet(
             "/api/vscode-web/fs/read-directory",
             context =>
-                Guard(context, () => Json(context, CodeFileService.ReadDirectory(Target(context))))
+                Guard(context, async () => await Json(context, await Fs(context, "read-directory", new JsonObject { ["path"] = Target(context) }, () => CodeFileService.ReadDirectory(Target(context)))))
         );
         app.MapGet(
             "/api/vscode-web/fs/read-file",
@@ -137,10 +159,9 @@ internal sealed partial class CodeWorkbench
                     context,
                     async () =>
                     {
-                        var bytes = await CodeFileService.ReadFileAsync(
-                            Target(context),
-                            context.RequestAborted
-                        );
+                        var bytes = NodeId(context) == "master"
+                            ? await CodeFileService.ReadFileAsync(Target(context), context.RequestAborted)
+                            : Binary(await nodes.RequestServiceAsync(NodeId(context), "vscode-fs", "read-file", new() { ["path"] = Target(context) }, context.RequestAborted), CodeFileService.MaxFileBytes);
                         context.Response.ContentType = "application/octet-stream";
                         context.Response.Headers.CacheControl = "no-store";
                         await context.Response.Body.WriteAsync(bytes, context.RequestAborted);
@@ -165,24 +186,20 @@ internal sealed partial class CodeWorkbench
                             { IsReadOnly: false } size
                         )
                             size.MaxRequestBodySize = CodeFileService.MaxFileBytes + 1;
-                        await Json(
-                            context,
-                            await CodeFileService.WriteFileAsync(
-                                path,
-                                context.Request.Body,
-                                CodeFileService.Bool(
-                                    JsonValue.Create(
-                                        context.Request.Query["create"].FirstOrDefault()
-                                    )
-                                ),
-                                CodeFileService.Bool(
-                                    JsonValue.Create(
-                                        context.Request.Query["overwrite"].FirstOrDefault()
-                                    )
-                                ),
-                                context.RequestAborted
-                            )
-                        );
+                        var create = CodeFileService.Bool(JsonValue.Create(context.Request.Query["create"].FirstOrDefault()));
+                        var overwrite = CodeFileService.Bool(JsonValue.Create(context.Request.Query["overwrite"].FirstOrDefault()));
+                        JsonObject result;
+                        if (NodeId(context) == "master")
+                            result = await CodeFileService.WriteFileAsync(path, context.Request.Body, create, overwrite, context.RequestAborted);
+                        else
+                        {
+                            var bytes = await CodeFileService.ReadBoundedAsync(context.Request.Body, CodeFileService.MaxFileBytes, context.RequestAborted);
+                            result = await nodes.RequestServiceAsync(NodeId(context), "vscode-fs", "write-file", new()
+                            {
+                                ["path"] = path, ["contentBase64"] = Convert.ToBase64String(bytes), ["create"] = create, ["overwrite"] = overwrite,
+                            }, context.RequestAborted);
+                        }
+                        await Json(context, result);
                     }
                 )
         );
@@ -194,7 +211,8 @@ internal sealed partial class CodeWorkbench
                     async () =>
                     {
                         var body = await Body(context);
-                        await Json(context, CodeFileService.CreateDirectory(Target(context, body)));
+                        var path = Target(context, body);
+                        await Json(context, await Fs(context, "create-directory", new() { ["path"] = path }, () => CodeFileService.CreateDirectory(path), body));
                     }
                 )
         );
@@ -206,13 +224,9 @@ internal sealed partial class CodeWorkbench
                     async () =>
                     {
                         var body = await Body(context);
-                        await Json(
-                            context,
-                            CodeFileService.Delete(
-                                Target(context, body),
-                                CodeFileService.Bool(body["recursive"])
-                            )
-                        );
+                        var path = Target(context, body);
+                        var recursive = CodeFileService.Bool(body["recursive"]);
+                        await Json(context, await Fs(context, "delete", new() { ["path"] = path, ["recursive"] = recursive }, () => CodeFileService.Delete(path, recursive), body));
                     }
                 )
         );
@@ -224,15 +238,10 @@ internal sealed partial class CodeWorkbench
                     async () =>
                     {
                         var body = await Body(context);
-                        CodeFileService.Node(Text(body, "nodeId"));
-                        await Json(
-                            context,
-                            CodeFileService.Rename(
-                                CodeFileService.PathValue(Text(body, "oldPath")),
-                                CodeFileService.PathValue(Text(body, "newPath")),
-                                CodeFileService.Bool(body["overwrite"])
-                            )
-                        );
+                        var oldPath = CodeFileService.PathValue(Text(body, "oldPath"));
+                        var newPath = CodeFileService.PathValue(Text(body, "newPath"));
+                        var overwrite = CodeFileService.Bool(body["overwrite"]);
+                        await Json(context, await Fs(context, "rename", new() { ["path"] = oldPath, ["newPath"] = newPath, ["overwrite"] = overwrite }, () => CodeFileService.Rename(oldPath, newPath, overwrite), body));
                     }
                 )
         );
@@ -245,10 +254,9 @@ internal sealed partial class CodeWorkbench
                     {
                         await Json(
                             context,
-                            await CodeGitService.StatusAsync(
-                                GitTarget(context),
-                                context.RequestAborted
-                            )
+                            NodeId(context) == "master"
+                                ? await CodeGitService.StatusAsync(GitTarget(context), context.RequestAborted)
+                                : await Git(context, "status", new() { ["workspace"] = GitTarget(context) })
                         );
                     }
                 )
@@ -263,11 +271,9 @@ internal sealed partial class CodeWorkbench
                         context.Response.Headers.CacheControl = "no-store";
                         await Json(
                             context,
-                            await CodeGitService.CommitAsync(
-                                GitTarget(context),
-                                context.Request.Query["id"].FirstOrDefault(),
-                                context.RequestAborted
-                            )
+                            NodeId(context) == "master"
+                                ? await CodeGitService.CommitAsync(GitTarget(context), context.Request.Query["id"].FirstOrDefault(), context.RequestAborted)
+                                : await Git(context, "commit", new() { ["workspace"] = GitTarget(context), ["id"] = context.Request.Query["id"].FirstOrDefault() }, 2)
                         );
                     }
                 )
@@ -279,13 +285,13 @@ internal sealed partial class CodeWorkbench
                     context,
                     async () =>
                     {
-                        var bytes = await CodeGitService.ContentAsync(
-                            GitTarget(context),
-                            context.Request.Query["path"].FirstOrDefault(),
-                            context.Request.Query["side"].FirstOrDefault(),
-                            context.Request.Query["ref"].FirstOrDefault(),
-                            context.RequestAborted
-                        );
+                        var bytes = NodeId(context) == "master"
+                            ? await CodeGitService.ContentAsync(GitTarget(context), context.Request.Query["path"].FirstOrDefault(), context.Request.Query["side"].FirstOrDefault(), context.Request.Query["ref"].FirstOrDefault(), context.RequestAborted)
+                            : Binary(await nodes.RequestServiceAsync(NodeId(context), "vscode-git", "content", new()
+                            {
+                                ["workspace"] = GitTarget(context), ["path"] = context.Request.Query["path"].FirstOrDefault(),
+                                ["side"] = context.Request.Query["side"].FirstOrDefault() ?? "base", ["ref"] = context.Request.Query["ref"].FirstOrDefault(),
+                            }, context.RequestAborted), 10 * 1024 * 1024);
                         context.Response.ContentType = "text/plain; charset=utf-8";
                         context.Response.Headers.CacheControl = "no-store";
                         await context.Response.Body.WriteAsync(bytes, context.RequestAborted);

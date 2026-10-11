@@ -259,9 +259,9 @@ public sealed class CodeRoutesTests
         Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.SendAsync(hostile)).StatusCode);
         Assert.Equal("untouched", await File.ReadAllTextAsync(file));
         var remote = await f.Client.GetAsync(f.Fs("read-file", file) + "&nodeId=future");
-        Assert.Equal(HttpStatusCode.BadRequest, remote.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, remote.StatusCode);
         Assert.Equal(
-            "UnsupportedNode",
+            "NodeUnavailable",
             JsonNode.Parse(await remote.Content.ReadAsStringAsync())!["code"]!.ToString()
         );
         var nodes = await f.Json(await f.Client.GetAsync("/api/nodes"));
@@ -494,10 +494,7 @@ public sealed class CodeRoutesTests
                 + config["workspaceUri"]!["authority"]!.ToString()
                 + config["workspaceUri"]!["path"]!.ToString()
         );
-        Assert.DoesNotContain(
-            "foxwarm-terminal",
-            config["additionalBuiltinExtensions"]!.ToJsonString()
-        );
+        Assert.Contains("foxwarm-terminal", config["additionalBuiltinExtensions"]!.ToJsonString());
         Assert.DoesNotContain("@@", html);
         var retained = JsonNode.Parse(await File.ReadAllTextAsync(workspace))!;
         Assert.True(retained["settings"]!["yaml.schemaStore.enable"]!.GetValue<bool>());
