@@ -46,7 +46,7 @@ const provider = createServer(async (request, response) => {
     record.followup = calls.length && calls.every(call => body.input.some(item => item.type === 'function_call_output' && item.call_id === call.call_id))
     if (key === 'held-background') { held.set(key, () => complete(final('DONE-' + key))); return }
     if (key === 'visibility') {
-      assert(!body.tools.some(value => value.name === 'exec')); assert(body.tools.some(value => value.name === 'write')); assert(body.tools.some(value => value.name === 'call_tool')); assert(!body.tools.some(value => value.name === 'set_tool_rules'))
+      assert(!body.tools.some(value => value.name === 'exec')); assert(body.tools.some(value => value.name === 'write')); assert(body.tools.some(value => value.name === 'call_tool')); assert(!body.tools.some(value => value.name === 'set_config'))
     }
     if (key === 'compact-schema' || key === 'held-background') assert(!body.tools.some(value => value.name === 'submit_compact_plan'))
     complete(record.followup || !calls.length ? final('DONE-' + key) : calls)
@@ -88,11 +88,11 @@ try {
   await replace('version: 1\nrules: [{id: read, action: deny, match: {tool: {source: node, name: read}}}]')
   const candidate = join(own, 'candidate.yaml'), original = await readFile(policy)
   await writeFile(candidate, '# exact captured policy\r\nversion: 1\r\nrules: []\r\n')
-  await run(current, 'setter-read-denied', [tool('setter-read-denied', 'set_tool_rules', { filePath: 'candidate.yaml' })]); assert.equal((await paired(current, 'setter-read-denied')).error.type, 'tool_authorization_denied'); assert.deepEqual(await readFile(policy), original)
+  await run(current, 'setter-read-denied', [tool('setter-read-denied', 'set_config', { target: 'tool-rules', filePath: 'candidate.yaml' })]); assert.equal((await paired(current, 'setter-read-denied')).error.type, 'tool_authorization_denied'); assert.deepEqual(await readFile(policy), original)
   await replace('version: 1\n')
-  await run(current, 'setter', [tool('discover-setter', 'search_tools', { sources: ['builtin'], query: 'set_tool_rules', limit: 5 }), invoke('install-policy', 'builtin:set_tool_rules', { filePath: 'candidate.yaml' })]); assert((await paired(current, 'discover-setter')).output.includes('builtin:set_tool_rules')); assert.deepEqual(await readFile(policy), await readFile(candidate))
+  await run(current, 'setter', [tool('discover-setter', 'search_tools', { sources: ['builtin'], query: 'set_config', limit: 5 }), invoke('install-policy', 'builtin:set_config', { target: 'tool-rules', filePath: 'candidate.yaml' })]); assert((await paired(current, 'discover-setter')).output.includes('builtin:set_config')); assert.deepEqual(await readFile(policy), await readFile(candidate))
   await writeFile(candidate, 'version: 1\nrules: null\n'); const installed = await readFile(policy)
-  await run(current, 'invalid-candidate', [tool('invalid-candidate', 'set_tool_rules', { filePath: 'candidate.yaml' }), tool('after-invalid', 'write', { filePath: 'after-invalid', content: 'normal nonfatal' })]); assert((await paired(current, 'invalid-candidate')).error); assert.deepEqual(await readFile(policy), installed); assert.equal(await readFile(join(own, 'after-invalid'), 'utf8'), 'normal nonfatal')
+  await run(current, 'invalid-candidate', [tool('invalid-candidate', 'set_config', { target: 'tool-rules', filePath: 'candidate.yaml' }), tool('after-invalid', 'write', { filePath: 'after-invalid', content: 'normal nonfatal' })]); assert((await paired(current, 'invalid-candidate')).error); assert.deepEqual(await readFile(policy), installed); assert.equal(await readFile(join(own, 'after-invalid'), 'utf8'), 'normal nonfatal')
 
   const compactPolicy = 'version: 1\nrules: [{id: compact-schema, action: deny, match: {tool: {source: builtin, name: submit_compact_plan}}}]\n'
   await replace(compactPolicy); await run(current, 'compact-schema')

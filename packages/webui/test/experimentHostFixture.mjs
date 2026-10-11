@@ -34,6 +34,7 @@ export async function createHostFixture(name, options = {}) {
   const socket = createServer(); socket.listen(0, '127.0.0.1'); await once(socket, 'listening')
   const port = socket.address().port; await new Promise(done => socket.close(done))
   const token = 'synthetic-' + name + '-api', origin = `http://127.0.0.1:${port}`, modelPath = join(data, 'state/models.yaml')
+  await writeFile(join(data, 'state/token'), token)
   let host, browser, page, ownedListener = false; const hostPids = []
   async function api(method, path, body) {
     assert(ownedListener && host?.child.exitCode === null && host.child.signalCode === null, 'Fixture API requires its own bound live child.')

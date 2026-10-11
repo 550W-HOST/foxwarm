@@ -50,12 +50,12 @@ async function turn(owner, key, calls, page) {
 }
 const exists = path => access(path).then(() => true, () => false)
 try {
-  await owned.start(); const page = await owned.openApp(), frames = []
+  await owned.start(); assert.equal((await owned.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'main' })).status, 200); const page = await owned.openApp(), frames = []
   page.on('response', async response => { if (response.url().includes('/history')) frames.push(response.url()) })
   let state = await turn('main', 'source', [call('source-run', 'run_script', { code: "x=call_tool('read', {'filePath':'input.txt'})\ncall_tool('write', {'filePath':'copy.txt','content':x['content']})\nx=call_tool('exec', {'command':'printf exec-raw', 'timeout':15})\ny=request_model_without_context('TOOL-SCRIPT-ONESHOT', model='a')\nz=call_tool({'toolId':'mcp:sdk/result_case', 'args':{'kind':'error_object','tag':'opaque'}})\nprint('before')\nanswer=ask_agent({'question':'continue'})\nprint('after')\nreturn [answer,y['text'],x['content'],z['error']['message']]\n" })], page)
   const paused = result(state, 'source-run'); assert.equal(paused.response.status, 'waiting', JSON.stringify(paused)); assert.equal(paused.response.stdout, 'before\n'); assert.equal(paused.response.question, '{"question":"continue"}'); assert(paused.__meta.toolScriptSubCalls.length >= 4); assert.equal(await readFile(join(owned.work, 'copy.txt'), 'utf8'), '  raw\r\nlast\n')
   await page.waitForFunction(() => document.body.innerText.includes('call_tool') && document.body.innerText.includes('read'))
-  await page.reload({ waitUntil: 'networkidle0' }); await page.waitForSelector('.foxwarm-chat-root'); await page.waitForFunction(() => document.body.innerText.includes('read'))
+  await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForSelector('.foxwarm-chat-root'); await page.waitForFunction(() => document.body.innerText.includes('read'))
   await owned.stop(); const requestCount = requests.length; await owned.start(); assert.equal(requests.length, requestCount)
   state = await turn('main', 'continue', [call('continued', 'continue_script', { runId: paused.response.runId, continuationId: paused.response.continuationId, input: false })]); const resumed = result(state, 'continued').response; assert.equal(resumed.status, 'completed'); assert.equal(resumed.stdout, 'after\n'); assert.deepEqual(resumed.result, [false, 'one-shot text', 'exec-raw', 'vendor-error'])
   assert.equal((await readFile(join(sdk, 'calls.ndjson'), 'utf8')).split('\n').filter(line => line.includes('"tag":"opaque"')).length, 1)

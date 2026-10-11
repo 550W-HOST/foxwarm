@@ -17,3 +17,5 @@ Tests establish source behavior for the checked revision, not release acceptance
 ## Solution
 
 `dotnet/Foxwarm.sln` includes `Foxwarm.Tests` and its linked parity/Responses fixtures.
+
+The original-App/local-peer `packages/webui/test/experimentHostOctoberAlignment.e2e.mjs` covers the fixed Testing `4f9b9198` Main-local alignment: task scopes/trusted Activity, exec wait fallbacks, qualified native ToolScript calls, nonstreaming Anthropic evidence/cache accounting, exact config installation, bounded patch errors, relative pruning, and scored compact/recall restart. It runs only disposable owned hosts and synthetic provider peers; it is not evidence for remote Node/Worker, inbound MCP, restricted access, or external channel runtime parity.
