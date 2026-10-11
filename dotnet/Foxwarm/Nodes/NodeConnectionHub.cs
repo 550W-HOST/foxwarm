@@ -612,7 +612,12 @@ internal sealed partial class NodeConnectionHub : IDisposable
                         throw new InvalidDataException("NODE_PROTOCOL_INCOMPATIBLE");
                     if (type == "node_register")
                         continue;
-                    if (type is "file_read_response" or "file_write_response" or "file_transfer_error")
+                    if (
+                        type
+                        is "file_read_response"
+                            or "file_write_response"
+                            or "file_transfer_error"
+                    )
                     {
                         HandleFileReply(connection, message, type);
                         continue;

@@ -9,9 +9,14 @@ internal sealed partial class SessionToolExecutor
     private static string RemoteSourcePath(string file, string? cwd)
     {
         // Only join strings here: the Node owns normalization, home/tokens and OS path rules.
-        if (string.IsNullOrWhiteSpace(cwd) || file.StartsWith('/') || file.StartsWith('\\')
-            || file.StartsWith('~') || file.StartsWith('$')
-            || file.Length > 1 && file[1] == ':')
+        if (
+            string.IsNullOrWhiteSpace(cwd)
+            || file.StartsWith('/')
+            || file.StartsWith('\\')
+            || file.StartsWith('~')
+            || file.StartsWith('$')
+            || file.Length > 1 && file[1] == ':'
+        )
             return file;
         var separator = cwd.Contains('\\') ? "\\" : "/";
         return cwd.TrimEnd('/', '\\') + separator + file;
@@ -105,9 +110,26 @@ internal sealed partial class SessionToolExecutor
                 if (node != "master")
                 {
                     var raw = RemoteSourcePath(file, cwd);
-                    await sessions.AuthorizeNodeFileAsync(hosted, node, raw, "read", files, currentToken);
-                    var source = await sessions.ReadNodeFileAsync(hosted, node, raw, files, currentToken, size => budget.Charge(checked(8L * size)));
-                    return (source.Path, new System.Text.UTF8Encoding(false, true).GetString(source.Bytes));
+                    await sessions.AuthorizeNodeFileAsync(
+                        hosted,
+                        node,
+                        raw,
+                        "read",
+                        files,
+                        currentToken
+                    );
+                    var source = await sessions.ReadNodeFileAsync(
+                        hosted,
+                        node,
+                        raw,
+                        files,
+                        currentToken,
+                        size => budget.Charge(checked(8L * size))
+                    );
+                    return (
+                        source.Path,
+                        new System.Text.UTF8Encoding(false, true).GetString(source.Bytes)
+                    );
                 }
                 var actual = files.Paths.FilePath(file);
                 await sessions.AuthorizeToolAsync(

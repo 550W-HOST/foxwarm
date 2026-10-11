@@ -36,7 +36,10 @@ internal sealed partial class SessionManager
             args,
             ["channelTargetId", "sessionId", "filePath", "node", "caption", "text"]
         );
-        var node = ToolRegistry.TargetNode(ToolRegistry.Text(args, "node"), selectedNode ?? CurrentNode(owner));
+        var node = ToolRegistry.TargetNode(
+            ToolRegistry.Text(args, "node"),
+            selectedNode ?? CurrentNode(owner)
+        );
         RequireFileNodeBoundary(owner, node);
         var raw = SessionGoal.Trim(ToolRegistry.Text(args, "filePath") ?? "");
         if (raw.Length == 0)
@@ -78,12 +81,22 @@ internal sealed partial class SessionManager
         {
             var file = await ReadNodeFileAsync(owner, node, raw, files, token);
             await WaitForIdentityMutationAsync(owner.Id, token);
-            await AuthorizeToolAsync(owner, new("send_file", "builtin", "send_file", args, ExecutionNode: node), IdentityWorkspace(owner), token);
+            await AuthorizeToolAsync(
+                owner,
+                new("send_file", "builtin", "send_file", args, ExecutionNode: node),
+                IdentityWorkspace(owner),
+                token
+            );
             CheckFileDestinations(owner, target, direct, bindings);
             name = Foxwarm.Nodes.NodeConnectionHub.RemoteFileName(file.Name);
             if (string.IsNullOrWhiteSpace(name) || name is "." or "..")
                 throw new InvalidDataException("Node file name is invalid.");
-            var directory = Path.Combine(AgentDirectory(owner.Agent), ".temp", "file-delivery", Guid.NewGuid().ToString("N"));
+            var directory = Path.Combine(
+                AgentDirectory(owner.Agent),
+                ".temp",
+                "file-delivery",
+                Guid.NewGuid().ToString("N")
+            );
             Directory.CreateDirectory(directory);
             path = Path.Combine(directory, name);
             await File.WriteAllBytesAsync(path, file.Bytes, token);
@@ -206,7 +219,10 @@ internal sealed partial class SessionManager
     )
     {
         ToolRegistry.Keys(args, ["id", "filePath", "overwrite", "node"]);
-        var node = ToolRegistry.TargetNode(ToolRegistry.Text(args, "node"), selectedNode ?? CurrentNode(owner));
+        var node = ToolRegistry.TargetNode(
+            ToolRegistry.Text(args, "node"),
+            selectedNode ?? CurrentNode(owner)
+        );
         RequireFileNodeBoundary(owner, node);
         var id = ToolRegistry.Text(args, "id");
         var raw = ToolRegistry.Text(args, "filePath");
@@ -239,7 +255,13 @@ internal sealed partial class SessionManager
             files = IdentityWorkspace(owner);
             await AuthorizeToolAsync(
                 owner,
-                new("image_write_to_file", "builtin", "image_write_to_file", args, ExecutionNode: node),
+                new(
+                    "image_write_to_file",
+                    "builtin",
+                    "image_write_to_file",
+                    args,
+                    ExecutionNode: node
+                ),
                 files,
                 token
             );

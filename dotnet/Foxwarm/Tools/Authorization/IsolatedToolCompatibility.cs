@@ -164,7 +164,11 @@ internal static class IsolatedToolCompatibility
             return true;
         return source == "node"
             ? node != "master" || name is "read" or "write" or "edit" or "apply_patch"
-            : source == "builtin" && (DefaultBuiltins.Contains(name) || node != "master" && name is "send_file" or "image_write_to_file");
+            : source == "builtin"
+                && (
+                    DefaultBuiltins.Contains(name)
+                    || node != "master" && name is "send_file" or "image_write_to_file"
+                );
     }
 
     internal static void Check(
@@ -200,7 +204,11 @@ internal static class IsolatedToolCompatibility
                                 ToolAuthorizationEvaluation.Within(path.Resolved, ownDirectory)
                             )
                     : request.Source == "builtin"
-                        && (DefaultBuiltins.Contains(request.Name) || request.TargetNode != "master" && request.Name is "send_file" or "image_write_to_file")
+                        && (
+                            DefaultBuiltins.Contains(request.Name)
+                            || request.TargetNode != "master"
+                                && request.Name is "send_file" or "image_write_to_file"
+                        )
                         && (
                             request.Name != "session"
                             || !request.Args.ContainsKey("action")
@@ -218,19 +226,25 @@ internal static class IsolatedToolCompatibility
                 && request.TargetNode == "master"
                 && request.Name is "read" or "write" or "edit" or "apply_patch"
             || request.Source == "builtin"
-                && request.Name is "set_config" or "send_file" or "image_write_to_file" or "copy_between_nodes"
+                && request.Name
+                    is "set_config"
+                        or "send_file"
+                        or "image_write_to_file"
+                        or "copy_between_nodes"
         )
             if (
                 request.Paths.Any(path =>
-                    path.Node == "master" && (
-                    !ToolAuthorizationEvaluation.Within(path.Resolved, ownDirectory)
-                    || request.Agent == "main"
-                        && ToolAuthorizationEvaluation.Within(
-                            path.Resolved,
-                            AuthorizationPaths.CanonicalPotential(
-                                Path.Combine(request.AgentDirectory!, "agents")
+                    path.Node == "master"
+                    && (
+                        !ToolAuthorizationEvaluation.Within(path.Resolved, ownDirectory)
+                        || request.Agent == "main"
+                            && ToolAuthorizationEvaluation.Within(
+                                path.Resolved,
+                                AuthorizationPaths.CanonicalPotential(
+                                    Path.Combine(request.AgentDirectory!, "agents")
+                                )
                             )
-                        ))
+                    )
                 )
             )
                 throw new ToolAuthorizationDeniedException(

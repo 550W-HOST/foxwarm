@@ -15,7 +15,9 @@ internal sealed partial class SessionManager
         owner.Entry.RequireIdentityAuthority();
         var bound = FileIngressNode(owner);
         if (bound != "master" && !Nodes.Online(bound))
-            throw new InvalidOperationException("Attachment Node is offline or incompatible: " + bound);
+            throw new InvalidOperationException(
+                "Attachment Node is offline or incompatible: " + bound
+            );
         if (!IsCurrentOwner(owner))
             throw new InvalidOperationException("Attachment Session owner is no longer current.");
     }

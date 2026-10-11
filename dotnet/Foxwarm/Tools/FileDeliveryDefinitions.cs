@@ -11,13 +11,29 @@ internal static class FileDeliveryDefinitions
                 "Copy a file between two Nodes, including master. Both paths are checked against the applicable permissions. Relative paths use this agent's directory on each Node, not the session working directory.",
                 new JsonObject
                 {
-                    ["sourceNode"] = String("Node containing the source file. Use master for the Main host."),
-                    ["sourcePath"] = String("Source path on sourceNode. Absolute paths, ~/ paths, and paths relative to the agent directory are accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."),
-                    ["targetNode"] = String("Node that will receive the file. Use master for the Main host."),
-                    ["targetPath"] = String("Destination path on targetNode. Absolute paths, ~/ paths, and paths relative to the agent directory are accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."),
-                    ["overwrite"] = new JsonObject { ["type"] = "boolean", ["description"] = "Allow replacement of an existing destination file. Defaults to false." },
+                    ["sourceNode"] = String(
+                        "Node containing the source file. Use master for the Main host."
+                    ),
+                    ["sourcePath"] = String(
+                        "Source path on sourceNode. Absolute paths, ~/ paths, and paths relative to the agent directory are accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
+                    ),
+                    ["targetNode"] = String(
+                        "Node that will receive the file. Use master for the Main host."
+                    ),
+                    ["targetPath"] = String(
+                        "Destination path on targetNode. Absolute paths, ~/ paths, and paths relative to the agent directory are accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
+                    ),
+                    ["overwrite"] = new JsonObject
+                    {
+                        ["type"] = "boolean",
+                        ["description"] =
+                            "Allow replacement of an existing destination file. Defaults to false.",
+                    },
                 },
-                "sourceNode", "sourcePath", "targetNode", "targetPath"
+                "sourceNode",
+                "sourcePath",
+                "targetNode",
+                "targetPath"
             ),
             Definition(
                 "send_file",
@@ -33,9 +49,7 @@ internal static class FileDeliveryDefinitions
                     ["filePath"] = String(
                         "Path on the selected Node. On master, relative paths use the current session working directory or, if unset, its agent directory. On other Nodes, they use that Node's agent directory. Absolute paths and ~/ paths are accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
                     ),
-                    ["node"] = String(
-                        "Node containing the file. Defaults to the current Node."
-                    ),
+                    ["node"] = String("Node containing the file. Defaults to the current Node."),
                     ["caption"] = String(
                         "Text to accompany the file, where the destination supports captions."
                     ),
