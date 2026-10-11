@@ -61,7 +61,10 @@ public sealed class SessionNodeCommitTests
             renamed ? "approved-node" : "master",
             persisted["currentNode"]!.GetValue<string>()
         );
-        Assert.Equal(renamed && clearCwd ? null : "old-directory", persisted["cwd"]?.GetValue<string>());
+        Assert.Equal(
+            renamed && clearCwd ? null : "old-directory",
+            persisted["cwd"]?.GetValue<string>()
+        );
         var current = owner.Entry.Snapshot();
         Assert.True(
             JsonNode.DeepEquals(persisted["currentNode"], current.AuthorityEnvelope["currentNode"])

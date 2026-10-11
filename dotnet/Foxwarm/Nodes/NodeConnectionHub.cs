@@ -548,7 +548,8 @@ internal sealed class NodeConnectionHub : IDisposable
                             Registry.Touch(id, auth, message, protocol);
                             connection.Id = id;
                             connection.Type = message["nodeType"]!.GetValue<string>();
-                            connection.Capabilities = (JsonObject)message["capabilities"]!.DeepClone();
+                            connection.Capabilities = (JsonObject)
+                                message["capabilities"]!.DeepClone();
                             connection.Protocol = protocol;
                             nodes.TryGetValue(id, out old);
                             if (old is not null)
