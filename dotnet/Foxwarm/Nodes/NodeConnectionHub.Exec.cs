@@ -166,7 +166,14 @@ internal sealed partial class NodeConnectionHub
             supportsRegistration
             && connection.Capabilities["features"]?["execWaitCancellation"]?.GetValue<bool>()
                 == true;
-        var call = new Invocation(connection, result, claim, supportsRegistration, owner, pathMetadata);
+        var call = new Invocation(
+            connection,
+            result,
+            claim,
+            supportsRegistration,
+            owner,
+            pathMetadata
+        );
         var attemptedSend = false;
         // Exec Stop is a wire handshake, not cancellation of its correlation or remote process.
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(

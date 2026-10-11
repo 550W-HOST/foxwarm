@@ -16,12 +16,17 @@ internal sealed partial class WebUIChannel(
 )
 {
     private readonly WebUiRealtime realtime = new(runtime);
-    private readonly Foxwarm.Terminal.TerminalRouter terminalRouter = new(terminals, sessions.Nodes);
+    private readonly Foxwarm.Terminal.TerminalRouter terminalRouter = new(
+        terminals,
+        sessions.Nodes
+    );
 
     public void Register(WebApplication app)
     {
         var models = sessions.Models;
-        app.Lifetime.ApplicationStopped.Register(() => terminalRouter.DisposeAsync().AsTask().GetAwaiter().GetResult());
+        app.Lifetime.ApplicationStopped.Register(() =>
+            terminalRouter.DisposeAsync().AsTask().GetAwaiter().GetResult()
+        );
         app.Use(
             async (context, next) =>
             {

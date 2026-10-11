@@ -1,8 +1,8 @@
 using System.Net.WebSockets;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Foxwarm.Terminal;
 using Foxwarm.Code;
+using Foxwarm.Terminal;
 
 namespace Foxwarm.Channels.WebUi;
 
@@ -16,7 +16,9 @@ internal sealed partial class WebUIChannel
                 Results.Ok(
                     new
                     {
-                        terminals = await terminalRouter.ListAsync(request.HttpContext.RequestAborted),
+                        terminals = await terminalRouter.ListAsync(
+                            request.HttpContext.RequestAborted
+                        ),
                         supported = terminalRouter.Supported,
                         owner = "master",
                     }
@@ -47,7 +49,8 @@ internal sealed partial class WebUIChannel
                     var cols = body["cols"]?.GetValue<int>() ?? 100;
                     var rows = body["rows"]?.GetValue<int>() ?? 30;
                     var record = await terminalRouter.CreateAsync(
-                        nodeId, cwd,
+                        nodeId,
+                        cwd,
                         cols,
                         rows,
                         request.HttpContext.RequestAborted
@@ -63,7 +66,10 @@ internal sealed partial class WebUIChannel
                 }
                 catch (CodeServiceException error)
                 {
-                    return Results.Json(new { error = error.Message, code = error.Code }, statusCode: error.Status);
+                    return Results.Json(
+                        new { error = error.Message, code = error.Code },
+                        statusCode: error.Status
+                    );
                 }
                 catch (Exception error)
                     when (error
@@ -78,24 +84,44 @@ internal sealed partial class WebUIChannel
                 }
             }
         );
-        app.MapGet("/api/terminals/{id}", async (string id, HttpContext context) =>
-        {
-            try
+        app.MapGet(
+            "/api/terminals/{id}",
+            async (string id, HttpContext context) =>
             {
-                var record = await terminalRouter.GetAsync(id, context.RequestAborted);
-                return record is null ? Results.NotFound(new { error = "Terminal not found." }) : Results.Ok(new { terminal = record });
+                try
+                {
+                    var record = await terminalRouter.GetAsync(id, context.RequestAborted);
+                    return record is null
+                        ? Results.NotFound(new { error = "Terminal not found." })
+                        : Results.Ok(new { terminal = record });
+                }
+                catch (CodeServiceException error)
+                {
+                    return Results.Json(
+                        new { error = error.Message, code = error.Code },
+                        statusCode: error.Status
+                    );
+                }
             }
-            catch (CodeServiceException error) { return Results.Json(new { error = error.Message, code = error.Code }, statusCode: error.Status); }
-        });
-        app.MapDelete("/api/terminals/{id}", async (string id, HttpContext context) =>
-        {
-            try
+        );
+        app.MapDelete(
+            "/api/terminals/{id}",
+            async (string id, HttpContext context) =>
             {
-                await terminalRouter.CloseAsync(id, "client", context.RequestAborted);
-                return Results.Ok(new { success = true, closed = true });
+                try
+                {
+                    await terminalRouter.CloseAsync(id, "client", context.RequestAborted);
+                    return Results.Ok(new { success = true, closed = true });
+                }
+                catch (CodeServiceException error)
+                {
+                    return Results.Json(
+                        new { error = error.Message, code = error.Code },
+                        statusCode: error.Status
+                    );
+                }
             }
-            catch (CodeServiceException error) { return Results.Json(new { error = error.Message, code = error.Code }, statusCode: error.Status); }
-        });
+        );
         app.MapGet(
             "/api/terminals/stream",
             async (HttpContext context) =>
@@ -116,14 +142,18 @@ internal sealed partial class WebUIChannel
                     if (await terminalRouter.GetAsync(id, context.RequestAborted) is null)
                     {
                         context.Response.StatusCode = 404;
-                        await context.Response.WriteAsJsonAsync(new { error = "Terminal not found." });
+                        await context.Response.WriteAsJsonAsync(
+                            new { error = "Terminal not found." }
+                        );
                         return;
                     }
                 }
                 catch (CodeServiceException error)
                 {
                     context.Response.StatusCode = error.Status;
-                    await context.Response.WriteAsJsonAsync(new { error = error.Message, code = error.Code });
+                    await context.Response.WriteAsJsonAsync(
+                        new { error = error.Message, code = error.Code }
+                    );
                     return;
                 }
                 using var socket = await context.WebSockets.AcceptWebSocketAsync(
@@ -136,7 +166,8 @@ internal sealed partial class WebUIChannel
                 try
                 {
                     await terminalRouter.AttachAsync(
-                        id, socket,
+                        id,
+                        socket,
                         context.RequestAborted,
                         context.Request.Query["control"] == "code"
                     );
@@ -145,8 +176,21 @@ internal sealed partial class WebUIChannel
                 {
                     if (socket.State == WebSocketState.Open)
                     {
-                        await socket.SendAsync(System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { type = "error", message = error.Message })), WebSocketMessageType.Text, true, CancellationToken.None);
-                        await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "Terminal unavailable", CancellationToken.None);
+                        await socket.SendAsync(
+                            System.Text.Encoding.UTF8.GetBytes(
+                                JsonSerializer.Serialize(
+                                    new { type = "error", message = error.Message }
+                                )
+                            ),
+                            WebSocketMessageType.Text,
+                            true,
+                            CancellationToken.None
+                        );
+                        await socket.CloseOutputAsync(
+                            WebSocketCloseStatus.NormalClosure,
+                            "Terminal unavailable",
+                            CancellationToken.None
+                        );
                     }
                 }
             }

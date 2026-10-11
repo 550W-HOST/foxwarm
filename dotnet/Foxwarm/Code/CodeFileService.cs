@@ -73,9 +73,15 @@ internal static class CodeFileService
         var parts = new List<string>();
         foreach (var part in value.Trim().Split('/'))
         {
-            if (part is "" or ".") continue;
-            if (part == "..") { if (parts.Count > 0) parts.RemoveAt(parts.Count - 1); }
-            else parts.Add(part);
+            if (part is "" or ".")
+                continue;
+            if (part == "..")
+            {
+                if (parts.Count > 0)
+                    parts.RemoveAt(parts.Count - 1);
+            }
+            else
+                parts.Add(part);
         }
         return "/" + string.Join('/', parts);
     }
