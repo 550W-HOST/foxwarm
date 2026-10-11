@@ -24,7 +24,6 @@ internal sealed class RemoteExecAuthority
     private readonly object gate = new();
     private readonly Dictionary<string, Claim> claims = new(StringComparer.Ordinal);
     private readonly byte[] secret;
-    internal Func<string>? GenerateId { get; set; }
 
     internal RemoteExecAuthority(string root)
     {
@@ -129,12 +128,9 @@ internal sealed class RemoteExecAuthority
     internal string NextId(bool legacy) =>
         (legacy ? "exec_" : "")
         + (
-            GenerateId?.Invoke()
-            ?? ExecPetnames.Adjectives[
-                RandomNumberGenerator.GetInt32(ExecPetnames.Adjectives.Length)
-            ]
-                + "-"
-                + ExecPetnames.Nouns[RandomNumberGenerator.GetInt32(ExecPetnames.Nouns.Length)]
+            ExecPetnames.Adjectives[RandomNumberGenerator.GetInt32(ExecPetnames.Adjectives.Length)]
+            + "-"
+            + ExecPetnames.Nouns[RandomNumberGenerator.GetInt32(ExecPetnames.Nouns.Length)]
         );
 
     internal Claim? Reserve(string node, SessionOwner owner, string id)
