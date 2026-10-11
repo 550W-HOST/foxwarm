@@ -87,6 +87,9 @@ export function applyConversationTiming(
       const live = runtime?.busy && (runtime.state === 'requesting-model' || runtime.state === 'running-tool') && activeStart !== undefined && context.now !== undefined
         ? { start: activeStart, end: context.now } : undefined
       if (live) spans.push(live)
+      const activeBatch = live && runtime?.state === 'running-tool' && runtime.tool?.id
+        ? segment.filter(message => message.role === 'model' && message.parts.some(part => part.functionCall)).slice(-1)[0] : undefined
+      const activeBatchConfirmed = activeBatch?.parts.some(part => part.functionCall?.id === runtime?.tool?.id)
       const covers = (time: number | undefined) => time !== undefined && spans.some(span => span.start <= time && span.end >= time)
       let complete = true
       const range = history.slice(Math.max(0, left.index), right.index + 1).filter(timingEvidence)
@@ -103,7 +106,11 @@ export function applyConversationTiming(
           if (part.functionResponse && !measured(part.functionResponse.executionTiming) && !liveCovers) complete = false
           if (part.functionCall) {
             const response = responses.get(part.functionCall.id)
-            if (!measured(response?.executionTiming) && !liveCovers) complete = false
+            // The runner publishes one receipt after the whole batch, including adjacent parallel execs.
+            // Runtime identity confirms this pending batch; only already-measured work/short dispatch gaps may precede it.
+            const awaitingReceipt = !liveCovers && !response && live && activeBatchConfirmed && message === activeBatch && time !== undefined
+              && measureIntervals(spans, time, Math.min(live.start, end)).waiting === 0
+            if (!measured(response?.executionTiming) && !liveCovers && !awaitingReceipt) complete = false
           }
         }
       }

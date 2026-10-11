@@ -63,7 +63,7 @@ before(async () => {
         const wrapped = url.includes('fixture%2Fwrapped')
         const compact = url.includes('fixture%2Fcompact-')
         const messages = compact ? window.fixture.compactHistory : wrapped ? wrappedHistory : history
-        return new Response(JSON.stringify({session:{id:compact?window.fixture.compactSessionId:wrapped?'fixture/wrapped':'fixture/main',busy:compact?window.fixture.compactRuntime.busy:false,runtimeState:compact?window.fixture.compactRuntime:{state:'idle'},queueLength:0,messageCount:messages.length,historyVersion:0,modelKey:'fixture/model'},messages,queuedMessages:[],queueLength:0,latestSeq:compact?messages.at(-1).__meta.seq:wrapped?503:129,historyVersion:0,prefixLength:0,historyComplete:true}),{status:200,headers:{'Content-Type':'application/json'}})
+        return new Response(JSON.stringify({session:{id:compact?window.fixture.compactSessionId:wrapped?'fixture/wrapped':'fixture/main',busy:compact?window.fixture.compactRuntime.busy:false,busyStartedAt:compact?window.fixture.compactBusyStartedAt:null,runtimeState:compact?window.fixture.compactRuntime:{state:'idle'},queueLength:0,messageCount:messages.length,historyVersion:0,modelKey:'fixture/model'},messages,queuedMessages:[],queueLength:0,latestSeq:compact?messages.at(-1).__meta.seq:wrapped?503:129,historyVersion:0,prefixLength:0,historyComplete:true}),{status:200,headers:{'Content-Type':'application/json'}})
       }
       if (url.includes('/models')) return new Response(JSON.stringify({models:[{key:'fixture/model',contextLimit:128000}]}),{status:200})
       if (url.includes('/asr/status')) return new Response(JSON.stringify({configured:false,available:false}),{status:200})
@@ -82,13 +82,18 @@ before(async () => {
       const [showUserMessageMetadata,setMetadata]=React.useState(false)
       window.fixture.setTimelineView=setTimelineView
       window.fixture.showWrappers=()=>{setSessionId('fixture/wrapped');setTimelineView('conversation')}
-      window.fixture.showCompactTiming=(messages,now,runtime)=>{
+      window.fixture.showCompactTiming=(messages,now,runtime,busyStartedAt=null)=>{
         window.fixture.compactHistory=messages
         window.fixture.now=now
         Date.now=()=>window.fixture.now
         window.fixture.compactRuntime=runtime
+        window.fixture.compactBusyStartedAt=busyStartedAt
         window.fixture.compactSessionId='fixture/compact-'+(window.fixture.compactSerial=(window.fixture.compactSerial||0)+1)
         setSessionId(window.fixture.compactSessionId);setTimelineView('conversation')
+      }
+      window.fixture.updateCompactTiming=(messages,now,runtime)=>{
+        window.fixture.compactHistory=messages;window.fixture.now=now;window.fixture.compactRuntime=runtime
+        window.fixture.socket.onmessage({data:JSON.stringify({type:'session-state',sessionId:window.fixture.compactSessionId,session:{id:window.fixture.compactSessionId,busy:runtime.busy,busyStartedAt:window.fixture.compactBusyStartedAt,runtimeState:runtime,queueLength:0,messageCount:messages.length,historyVersion:0,modelKey:'fixture/model'}})})
       }
       return React.createElement(Chat,{sessionId,timelineView,showUsageBadge:false,showUserMessageMetadata,onShowUserMessageMetadataChange:setMetadata})
     }
@@ -511,4 +516,57 @@ test('Actual Chat retains real idle coordination timing through maintenance and 
   await showCompact([compactStart,compactReply,maintenance,quote],30)
   await page.waitForFunction(()=>[...document.querySelectorAll('[data-search-surface="user"]')].some(node=>node.textContent.includes('compact-completed')))
   assert.equal(await page.$$eval('[data-search-surface="user"]',nodes=>nodes.filter(node=>node.textContent.includes('compact-completed')).length),1,'authored text stays a visible body, not maintenance details')
+})
+
+
+test('Actual Chat keeps a runtime-confirmed parallel tool batch Worked while receipts are pending, then uses measured results',async()=>{
+  const base=compactEpoch
+  const user={role:'user',parts:[{text:'LIVE_TOOL_REQUEST'}],__meta:{seq:401,timestamp:base}}
+  const model={role:'model',parts:['live-a','live-b'].map(id=>({functionCall:{id,name:'exec',args:{command:'echo '+id}}})),__meta:{seq:402,timestamp:base+10000,llmRequestId:'live-request',llmRequestTiming:{startedAt:base,completedAt:base+10000,durationMs:10000}}}
+  const running={state:'running-tool',busy:true,since:base+10030,tool:{id:'live-b',name:'exec',index:1,total:2,startedAt:base+10030},queueLength:0}
+  let serial=0
+  const show=async(records,runtime=running,now=base+20030,busyStartedAt=null)=>{
+    const text='LIVE_TOOL_REQUEST_'+(++serial)
+    records=[{...user,parts:[{text}]},...records.slice(1)]
+    await page.evaluate(({records,runtime,now,busyStartedAt})=>window.fixture.showCompactTiming(records,now,runtime,busyStartedAt),{records,runtime,now,busyStartedAt})
+    await page.waitForFunction(text=>[...document.querySelectorAll('[data-search-surface="user"]')].some(node=>node.textContent.includes(text)),{},text)
+    await page.waitForFunction(()=>document.querySelectorAll('[data-timeline-activity]').length===1)
+    return records
+  }
+  let records=await show([user,model])
+  assert.match((await compactHeaders()).join(' '),/Worked for 20s.*Called 2 tools/)
+  assert.doesNotMatch((await compactHeaders()).join(' '),/Elapsed|Waited/)
+  await page.click('[aria-label="Expand activity"]')
+  const receipt={role:'tool',parts:[['live-a',10020,10120],['live-b',10030,20030]].map(([id,start,end])=>({functionResponse:{name:'exec',tool_use_id:id,response:{output:'LIVE_BATCH_RESULT_'+id},executionTiming:{startedAt:base+start,completedAt:base+end,durationMs:end-start}}})),__meta:{seq:403,timestamp:base+20030}}
+  records=[...records,receipt]
+  await page.evaluate(({records,now})=>window.fixture.updateCompactTiming(records,now,{state:'requesting-model',busy:true,since:now,queueLength:0}),{records,now:base+20040})
+  await page.waitForFunction(()=>document.querySelector('[data-activity-details]')?.textContent.includes('LIVE_BATCH_RESULT_live-b'))
+  assert.match((await compactHeaders()).join(' '),/Worked for 20s.*Called 2 tools/)
+  assert.doesNotMatch((await compactHeaders()).join(' '),/Elapsed|Waited/)
+  const final={role:'model',parts:[{text:'LIVE_TOOL_DONE'}],__meta:{seq:404,timestamp:base+21000,llmRequestId:'live-final',llmRequestTiming:{startedAt:base+20040,completedAt:base+21000,durationMs:960}}}
+  records=[...records,final]
+  await page.evaluate(({records,now})=>window.fixture.updateCompactTiming(records,now,{state:'idle',busy:false,queueLength:0}),{records,now:base+21000})
+  await page.waitForFunction(()=>document.querySelector('.foxwarm-chat-messages').textContent.includes('LIVE_TOOL_DONE'))
+  assert.match((await compactHeaders()).join(' '),/Worked for 20s.*Called 2 tools/)
+  assert.doesNotMatch((await compactHeaders()).join(' '),/Elapsed|Waited/)
+  // The real session busy start is also transported by Chat; no extra phase-gap fix is needed for this case.
+  await show([user,model],{...running,since:base+15000,tool:{...running.tool,startedAt:base+15000}},base+20030,base)
+  assert.match((await compactHeaders()).join(' '),/Worked for 20s/)
+  // A busy flag or unrelated runtime identity cannot rescue unknown older work.
+  const laterModel={...model,__meta:{...model.__meta,timestamp:base+40000,llmRequestTiming:{startedAt:base+30000,completedAt:base+40000,durationMs:10000}}}
+  const laterRuntime={...running,since:base+40030,tool:{...running.tool,startedAt:base+40030}}
+  const unknownRequest={role:'model',parts:[{thinking:'UNKNOWN_OLDER_REQUEST'}],__meta:{timestamp:base+10000,llmRequestId:'older-unknown'}}
+  const oldCall={role:'model',parts:[{functionCall:{id:'old-tool',name:'exec',args:{command:'echo old'}}}],__meta:{timestamp:base+10000,llmRequestTiming:{startedAt:base,completedAt:base+10000,durationMs:10000}}}
+  const oldReceipt={role:'tool',parts:[{functionResponse:{name:'exec',tool_use_id:'old-tool',response:{output:'Legacy receipt without execution timing'}}}],__meta:{timestamp:base+20000}}
+  const retry={role:'model',parts:[{text:'⚠️ LLM Error: Older failed request'}],__meta:{timestamp:base+10000,noticeType:'llm-retry'}}
+  for(const past of [[unknownRequest],[oldCall,oldReceipt],[retry]]) {
+    const history=[user,...past,laterModel].map((message,index)=>({...message,__meta:{...message.__meta,seq:501+index}}))
+    await show(history,laterRuntime,base+50030)
+    assert.match((await compactHeaders()).join(' '),/Elapsed/)
+  }
+  await show([user,model],{...running,tool:{...running.tool,id:'unrelated-tool'}})
+  assert.match((await compactHeaders()).join(' '),/Elapsed/)
+  // If a prior batch slice is genuinely unmeasured, do not label its larger gap as waiting.
+  await show([user,model],{...running,since:base+20000,tool:{...running.tool,startedAt:base+20000}},base+30000)
+  assert.match((await compactHeaders()).join(' '),/Elapsed/)
 })
