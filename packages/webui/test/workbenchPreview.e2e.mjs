@@ -683,7 +683,7 @@ test('global history entry opens a persistent workbench tab without a chat compo
   const page = await openFixture()
   try {
     const footer = '[data-sidebar-footer]'
-    assert.deepEqual(await page.$$eval(`${footer} button`, buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Search history', 'Open UI settings'])
+    assert.deepEqual(await page.$$eval(`${footer} button`, buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Open tasks', 'Search history', 'Open UI settings'])
     assert.equal(await page.$$eval('button[title="Search history"]', buttons => buttons.length), 1)
     assert.equal(await page.$eval(`${footer} button[aria-label="Search history"]`, button => button.getBoundingClientRect().width), 36)
     assert.equal(await page.$eval(`${footer} button[aria-label="Search history"]`, button => button.textContent.trim()), '')
@@ -716,7 +716,7 @@ test('collapsed rail and mobile Session list place the Search icon in their foot
     assert.ok(await page.$('.w-12 [data-sidebar-footer] button[aria-label="Open UI settings"]'))
     await page.setViewport({ width: 390, height: 800 })
     await page.waitForSelector('[data-sidebar-footer] button[aria-label="Open UI settings"]')
-    assert.deepEqual(await page.$$eval('[data-sidebar-footer] button', buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Search history', 'Open UI settings'])
+    assert.deepEqual(await page.$$eval('[data-sidebar-footer] button', buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Open tasks', 'Search history', 'Open UI settings'])
     assert.equal(await page.$eval('[data-sidebar-footer] button[aria-label="Search history"]', button => button.textContent.trim()), '')
     assert.ok(await page.$('[data-sidebar-footer] button[aria-label="Search history"] svg.lucide-history'))
     await page.click('[data-sidebar-footer] button[aria-label="Search history"]')
@@ -865,6 +865,7 @@ test('Application menu icons precede their labels and retain Setup, Logs, and re
       await page.waitForSelector(menu, { visible: true })
     }
     await openMenu()
+    assert.equal(await page.$(`${menu} .lucide-clipboard-list`), null, 'Tasks is not duplicated in settings')
     const rows = await page.$$eval(`${menu} button`, buttons => buttons.filter(button => /Open setup|Reload WebUI|Open logs/.test(button.textContent)).map(button => {
       const label = button.firstElementChild
       const icon = label.firstElementChild
@@ -880,9 +881,9 @@ test('Application menu icons precede their labels and retain Setup, Logs, and re
       }
     }))
     assert.deepEqual(rows, [
-      { text: 'Open setup', icon: 'lucide-settings', svgCount: 1, width: 14, beforeText: true },
       { text: 'Reload WebUI', icon: 'lucide-refresh-cw', svgCount: 1, width: 14, beforeText: true },
       { text: 'Open logs', icon: 'lucide-file-text', svgCount: 1, width: 14, beforeText: true },
+      { text: 'Open setup', icon: 'lucide-settings', svgCount: 1, width: 14, beforeText: true },
     ])
     if (process.env.FOXWARM_APPLICATION_MENU_SCREENSHOT_PATH) {
       await page.screenshot({ path: process.env.FOXWARM_APPLICATION_MENU_SCREENSHOT_PATH })
@@ -1203,6 +1204,88 @@ test('Chat composer uses a smaller empty editor below 600px content height in De
   }
 })
 
+test('direct Tasks navigation opens one singleton from expanded, collapsed, and mobile footers', async () => {
+  for (const surface of ['expanded', 'collapsed', 'mobile']) {
+    const page = await openFixture({ width: surface === 'mobile' ? 320 : 1400 })
+    try {
+      if (surface === 'collapsed') await page.click('button[title="Collapse sidebar"]')
+      const entry = '[data-sidebar-footer] button[aria-label="Open tasks"]'
+      await page.waitForSelector(entry)
+      assert.ok(await page.$(`${entry} svg.lucide-clipboard-list`))
+      assert.equal(await page.$eval(entry, button => button.textContent.trim()), surface === 'collapsed' ? '' : 'Tasks')
+      const geometry = await page.evaluate(() => {
+        const footer = document.querySelector('[data-sidebar-footer]').getBoundingClientRect()
+        const tasks = document.querySelector('[aria-label="Open tasks"]').getBoundingClientRect()
+        const history = document.querySelector('[aria-label="Search history"]').getBoundingClientRect()
+        const settings = document.querySelector('[aria-label="Open UI settings"]').getBoundingClientRect()
+        return { leftGap: tasks.left - footer.left, rightGap: footer.right - settings.right, tasksRight: tasks.right, historyLeft: history.left, tasksBottom: tasks.bottom, historyTop: history.top, settingsRight: settings.right, viewportWidth: innerWidth }
+      })
+      assert.ok(geometry.settingsRight <= geometry.viewportWidth)
+      if (surface === 'collapsed') assert.ok(geometry.tasksBottom < geometry.historyTop)
+      else {
+        assert.equal(geometry.leftGap, 8)
+        assert.equal(geometry.rightGap, 8)
+        assert.ok(geometry.tasksRight < geometry.historyLeft)
+      }
+      await page.click(entry)
+      await page.waitForSelector('[data-tasks-view]')
+      assert.equal((await state(page)).root.activeTabId, 'system:tasks')
+      if (surface === 'mobile') {
+        await page.goto(baseUrl, { waitUntil: 'domcontentloaded' })
+        await page.waitForSelector(entry)
+      } else {
+        await page.click('[data-tab-id="system:agents"]')
+      }
+      await page.click(entry)
+      await page.waitForSelector('[data-tasks-view]')
+      assert.equal((await state(page)).root.activeTabId, 'system:tasks')
+      assert.equal(Object.values((await state(page)).tabsById).filter(tab => tab.type === 'tasks').length, 1)
+    } finally { await page.close() }
+  }
+})
+
+test('Code-embedded sidebar keeps a direct Tasks popup entry next to settings', async () => {
+  const page = await openFixture()
+  try {
+    await page.goto(`${baseUrl}?foxwarmEmbed=sidebar&foxwarmEmbedNonce=fixture-nonce-123456`, { waitUntil: 'domcontentloaded' })
+    const entry = 'button[aria-label="Open tasks"]'
+    await page.waitForSelector(entry)
+    assert.equal(await page.$('[data-pane-id]'), null)
+    await page.setViewport({ width: 240, height: 800 })
+    assert.equal(await page.$eval(entry, button => button.textContent.trim()), '')
+    assert.ok(await page.$(`${entry} svg.lucide-clipboard-list`))
+    const geometry = await page.evaluate(() => {
+      const tasks = document.querySelector('[aria-label="Open tasks"]').getBoundingClientRect()
+      const settings = document.querySelector('[aria-label="Open UI settings"]').getBoundingClientRect()
+      return { tasksRight: tasks.right, settingsLeft: settings.left, settingsRight: settings.right, width: innerWidth }
+    })
+    assert.ok(geometry.tasksRight < geometry.settingsLeft && geometry.settingsRight <= geometry.width)
+    await page.evaluate(() => {
+      window.__opened = []
+      window.__popup = { opener: window }
+      window.open = (url, target, features) => { window.__opened.push({ url, target, features }); return window.__popup }
+    })
+    await page.click(entry)
+    const opened = await page.evaluate(() => window.__opened[0])
+    const url = new URL(opened.url)
+    assert.equal(url.origin, new URL(baseUrl).origin)
+    assert.equal(url.pathname, '/prefix/ui/')
+    assert.equal(url.searchParams.get('foxwarmPopup'), 'tasks')
+    assert.equal(url.searchParams.has('foxwarmEmbed'), false)
+    assert.equal(opened.target, '_blank')
+    assert.equal(opened.features, 'popup')
+    assert.equal(await page.evaluate(() => window.__popup.opener), null)
+    await page.evaluate(() => { window.open = () => null; window.__alerts = []; window.alert = message => window.__alerts.push(message) })
+    await page.click(entry)
+    assert.equal(await page.evaluate(() => window.__alerts.length), 1)
+    assert.match(await page.evaluate(() => window.__alerts[0]), /Allow popups/)
+    await page.click('button[aria-label="Open UI settings"]')
+    await page.waitForSelector('[data-global-ui-settings-menu]', { visible: true })
+    assert.equal(await page.$('[data-global-ui-settings-menu] .lucide-clipboard-list'), null)
+    assert.equal(await page.$eval('[data-global-ui-settings-menu]', menu => Array.from(menu.querySelectorAll('button')).at(-1).textContent.trim()), 'Open setup')
+  } finally { await page.close() }
+})
+
 test('Tasks restores from its deployment-relative route, stays singleton, and moves to a popup leaf', async () => {
   const page = await openFixture({ tabs: [system], activeTabId: system.id, hash: '#tab/system%3Atasks' })
   try {
@@ -1210,9 +1293,7 @@ test('Tasks restores from its deployment-relative route, stays singleton, and mo
     assert.equal((await state(page)).tabsById['system:tasks'].type, 'tasks')
     await page.reload({ waitUntil: 'domcontentloaded' })
     await page.waitForSelector('[data-tasks-view]')
-    await page.click('[data-sidebar-footer] button[title="UI settings"]')
-    await page.waitForFunction(() => Array.from(document.querySelectorAll('button')).some(button => button.textContent.trim() === 'Tasks'))
-    await page.evaluate(() => Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === 'Tasks').click())
+    await page.click('[data-sidebar-footer] button[aria-label="Open tasks"]')
     assert.equal(Object.values((await state(page)).tabsById).filter(tab => tab.type === 'tasks').length, 1)
     await page.click('[data-tab-id="system:tasks"]', { button: 'right' })
     await page.waitForSelector('[role="menu"]')
