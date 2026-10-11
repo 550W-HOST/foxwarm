@@ -8,8 +8,8 @@ internal sealed record PatchOperation(string Action, string Path, string[] Lines
 internal static class WorkspacePatch
 {
     private const int MaxContextErrorLength = 1600;
-    private const int MaxContextErrorLineLength = 240;
-    private const int MaxDiagnosticSnippetLength = 160;
+    private const int MaxContextErrorPathLength = 120;
+    private const string FailedHunkOmission = "\n... (middle of failed hunk omitted) ...\n";
     private static readonly string[] Headers =
     [
         "*** Update File: ",
@@ -108,6 +108,7 @@ internal static class WorkspacePatch
         var index = 0;
         while (index < section.Length && section[index] != "*** End of File")
         {
+            var hunkStart = index;
             string? anchor = null;
             if (section[index].StartsWith("@@ ", StringComparison.Ordinal))
                 anchor = section[index++][3..];
@@ -194,7 +195,7 @@ internal static class WorkspacePatch
                 matched = FindContext(input, context, cursor);
             if (matched < 0)
                 throw new InvalidDataException(
-                    FormatContextMismatch(input, context, cursor, eof, path)
+                    FormatContextMismatch(section[hunkStart..(eof ? index + 1 : index)], cursor, eof, path)
                 );
             patches.AddRange(local.Select(chunk => chunk with { Index = chunk.Index + matched }));
             cursor = matched + context.Count;
@@ -298,78 +299,37 @@ internal static class WorkspacePatch
             .Replace('\u205F', ' ')
             .Replace('\u3000', ' ');
 
+    private static string FormatContextErrorPath(string path)
+    {
+        var shortened = path.Length <= MaxContextErrorPathLength
+            ? path
+            : path[..60] + "…" + path[^59..];
+        return System.Text.Json.JsonSerializer.Serialize(shortened);
+    }
+
+    private static string FormatBoundedFailedHunk(string[] patchLines, int maxLength)
+    {
+        var hunk = string.Join('\n', patchLines);
+        if (hunk.Length <= maxLength)
+            return hunk;
+        var contentLength = Math.Max(0, maxLength - FailedHunkOmission.Length);
+        if (contentLength == 0)
+            return FailedHunkOmission[..Math.Min(maxLength, FailedHunkOmission.Length)];
+        var headLength = (contentLength + 1) / 2;
+        var tailLength = contentLength - headLength;
+        return hunk[..headLength] + FailedHunkOmission
+            + (tailLength > 0 ? hunk[^tailLength..] : "");
+    }
+
     private static string FormatContextMismatch(
-        string[] lines,
-        List<string> context,
+        string[] patchLines,
         int start,
         bool eof,
         string path
     )
     {
-        static string Snippet(string value)
-        {
-            var trimmed = value.Trim();
-            if (trimmed.Length <= MaxDiagnosticSnippetLength)
-                return System.Text.Json.JsonSerializer.Serialize(trimmed);
-            return System.Text.Json.JsonSerializer.Serialize(
-                trimmed[..(MaxDiagnosticSnippetLength - 1)] + "…"
-            );
-        }
-        var details = new List<string>
-        {
-            $"Could not match {(eof ? "EOF" : "patch")} context while patching {Snippet(path)} starting at line {start + 1}.",
-            $"Expected context: {context.Count} lines, {context.Sum(line => line.Length) + Math.Max(0, context.Count - 1)} characters; file: {lines.Length} lines.",
-        };
-        var candidate = -1;
-        var first = context.FindIndex(line => NormalizeMatchLine(line).Length > 0);
-        if (first >= 0)
-        {
-            var expected = NormalizeMatchLine(context[first]);
-            for (var i = start + first; i < lines.Length; i++)
-                if (NormalizeMatchLine(lines[i]) == expected)
-                {
-                    if (candidate >= 0)
-                    {
-                        candidate = -1;
-                        break;
-                    }
-                    candidate = i - first;
-                }
-        }
-        if (candidate >= 0)
-        {
-            var mismatch = 0;
-            while (
-                mismatch < context.Count
-                && candidate + mismatch < lines.Length
-                && NormalizeMatchLine(context[mismatch])
-                    == NormalizeMatchLine(lines[candidate + mismatch])
-            )
-                mismatch++;
-            details.Add(
-                $"Candidate starts at file line {candidate + 1}; first mismatch at file line {candidate + mismatch + 1} (context line {mismatch + 1})."
-            );
-            details.Add($"Expected: {Snippet(context[mismatch])}");
-            details.Add(
-                $"Actual: {(candidate + mismatch < lines.Length ? Snippet(lines[candidate + mismatch]) : "<end of file>")}"
-            );
-        }
-        else
-        {
-            details.Add("No unique candidate location; limited preview:");
-            foreach (var line in context.Take(3))
-                details.Add($"Expected: {Snippet(line)}");
-            foreach (var line in lines.Skip(Math.Max(0, start)).Take(3))
-                details.Add($"Actual: {Snippet(line)}");
-        }
-        var formatted = string.Join(
-            '\n',
-            details.Select(line =>
-                line.Length > MaxContextErrorLineLength
-                    ? line[..(MaxContextErrorLineLength - 1)] + "…"
-                    : line
-            )
-        );
+        var prefix = $"Could not match {(eof ? "EOF" : "patch")} context while patching {FormatContextErrorPath(path)} starting at line {start + 1}.\nFailed hunk:\n";
+        var formatted = prefix + FormatBoundedFailedHunk(patchLines, Math.Max(0, MaxContextErrorLength - prefix.Length));
         return formatted[..Math.Min(MaxContextErrorLength, formatted.Length)];
     }
 

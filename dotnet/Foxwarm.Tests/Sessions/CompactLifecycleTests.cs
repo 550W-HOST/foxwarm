@@ -33,7 +33,7 @@ public sealed class CompactLifecycleTests
         SessionManager? managerForPeer = null;
         var policyPath = Path.Combine(data, "state", "tool-authorization.yaml");
         await using var peer = new ScriptedResponsesSequenceServer(
-            8,
+            9,
             async (index, stream, captured) =>
             {
                 var texts = JsonNode.Parse(captured.Body)!["input"]!
@@ -129,7 +129,18 @@ public sealed class CompactLifecycleTests
                         }
                     );
                 else if (index == 6)
+                    call = FunctionCall(
+                        "failed-hunk",
+                        "apply_patch",
+                        new JsonObject
+                        {
+                            ["input"] = "*** Begin Patch\n*** Update File: " + path
+                                + "\n@@ repair-target\n-old-content-not-in-file\n+required-added-line-tail\n*** End Patch",
+                        }
+                    );
+                else if (index == 7)
                 {
+                    // Matching the original raw arguments proves the failed hunk left the held file unchanged.
                     var patch =
                         "*** Begin Patch\n*** Update File: "
                         + path
@@ -234,7 +245,7 @@ public sealed class CompactLifecycleTests
         );
         Assert.Equal("compact-plan", compactJournal["purpose"]!.GetValue<string>());
         Assert.NotEmpty(compactJournal["attempts"]!.AsArray());
-        Assert.Equal(8, peer.RequestCount);
+        Assert.Equal(9, peer.RequestCount);
         Assert.DoesNotContain("compact-plan-", (await peer.RequestAt(1)).Body);
         Assert.Contains(
             "This file was saved from the original provider arguments.",
@@ -244,6 +255,16 @@ public sealed class CompactLifecycleTests
         Assert.Contains("Compact repair canceled", (await peer.RequestAt(4)).Body);
         Assert.Contains("invalid_tool_control_argument", (await peer.RequestAt(6)).Body);
         Assert.Contains("Compact repair failed", (await peer.RequestAt(7)).Body);
+        var failedHunkRequest = JsonNode.Parse((await peer.RequestAt(7)).Body)!;
+        var failedHunkOutput = Assert.Single(
+            failedHunkRequest["input"]!.AsArray().OfType<JsonObject>(),
+            row => SessionWait.Text(row["type"]) == "function_call_output"
+                && SessionWait.Text(row["call_id"]) == "failed-hunk"
+        );
+        var feedback = failedHunkOutput["output"]!.GetValue<string>();
+        Assert.Contains("@@ repair-target", feedback);
+        Assert.Contains("-old-content-not-in-file", feedback);
+        Assert.Contains("+required-added-line-tail", feedback);
         Assert.Single(manager.Catalog.List());
         Assert.Single(owner.Archive.ReadBlocks());
         Assert.True(owner.Entry.Snapshot().History.Count < before);
@@ -252,7 +273,7 @@ public sealed class CompactLifecycleTests
             row => row["compaction"]?["planner"] is JsonObject
         );
         var planner = completion["compaction"]!["planner"]!.AsObject();
-        Assert.Equal(8, planner["steps"]!.GetValue<int>());
+        Assert.Equal(9, planner["steps"]!.GetValue<int>());
         Assert.Equal(
             new[]
             {
@@ -262,6 +283,7 @@ public sealed class CompactLifecycleTests
                 "edit",
                 "edit",
                 "edit",
+                "apply_patch",
                 "apply_patch",
                 "submit_compact_plan",
             },

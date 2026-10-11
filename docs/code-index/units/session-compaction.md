@@ -22,7 +22,7 @@ A compaction operation captures admission mode and exact operation identity. Asy
 
 The compact commit refreshes memory using the recorded live concrete model identity. The active per-Session JSON/history remains the only source for the next live turn. Compaction may replace/prune active history and queue-related prompt state, but immutable Archive rows and branch lineage are not rewritten or used to reconstruct missing active authority. Pre-rename failure leaves prior authority and rolls back only newly staged rows; post-rename failure retains/publishes committed history/memory/version and is classified committed/too-late.
 
-Plan submission uses the bounded `submit_compact_plan` shape with direct fields or operation-local `argsFilePath`; invalid direct input preserves raw provider argument text, while success/cancel/error/exhaustion paths clean up the transient repair directory. Repair guidance includes a bounded beginning/end preview of the current JSON artifact. The plan artifact is not Session/Archive history and is never resumed after restart.
+Plan submission uses the bounded `submit_compact_plan` shape with direct fields or operation-local `argsFilePath`; invalid direct input preserves raw provider argument text, while success/cancel/error/exhaustion paths clean up the transient repair directory. Repair guidance includes a bounded beginning/end preview of the current JSON artifact. Failed `apply_patch` repair calls use the shared `WorkspacePatch.Update` diagnostic: only the failing original hunk is returned, retaining anchor and edit prefixes within the 1,600-character bound; the pending file is not changed. The plan artifact is not Session/Archive history and is never resumed after restart.
 
 ## Recall and lineage contract
 

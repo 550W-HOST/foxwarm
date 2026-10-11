@@ -67,6 +67,11 @@ try {
   const savedRaw = raw.replace('customBotField: retained', 'customBotField: retained\n  newUnknownField: preserved')
   const saved = await api('/api/setup/config', 'POST', { yaml: savedRaw })
   assert.equal(saved.status, 200, JSON.stringify(saved))
+  assert.equal(saved.body.saved, true)
+  assert.equal(saved.body.target, 'config')
+  assert.deepEqual(saved.body.applied, [])
+  assert.deepEqual(saved.body.notApplied, ['channels'])
+  assert(saved.body.restartRequired.includes('bot'))
   assert.equal(saved.body.reload.available, false)
   assert.deepEqual(saved.body.reload.started, [])
   assert.deepEqual(saved.body.reload.stopped, [])
@@ -81,6 +86,11 @@ try {
     },
   })
   assert.equal(channelSave.status, 200, JSON.stringify(channelSave))
+  assert.equal(channelSave.body.saved, true)
+  assert.equal(channelSave.body.target, 'config')
+  assert.deepEqual(channelSave.body.applied, [])
+  assert.deepEqual(channelSave.body.notApplied, ['channels'])
+  assert(Array.isArray(channelSave.body.restartRequired))
   const channelRaw = await readFile(`${fixture.data}/state/config.yaml`, 'utf8')
   assert.equal((channelRaw.match(/^channels:/gm) || []).length, 1)
   assert.match(channelRaw, /newUnknownField: preserved/)
@@ -134,7 +144,7 @@ try {
   }, { value: uiRaw })
   await new Promise(resolve => setTimeout(resolve, 500))
   await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent?.trim() === 'Save config')?.click())
-  await until(async () => Boolean(await page.$eval('[data-save-feedback="config"]', node => node.textContent?.includes('Configuration saved')).catch(() => false)), 'UI config save', 10000).catch(async error => {
+  await until(async () => Boolean(await page.$eval('[data-save-feedback="config"]', node => node.getAttribute('role') === 'status' && node.textContent?.trim()).catch(() => false)), 'UI config save', 10000).catch(async error => {
     const debug = await page.evaluate(() => ({
       buttons: [...document.querySelectorAll('button')].map(button => ({ text: button.textContent?.trim(), disabled: button.disabled })),
       feedback: document.querySelector('[data-save-feedback="config"]')?.textContent || null,
@@ -142,6 +152,7 @@ try {
     }))
     throw new Error(`${error.message}: ${JSON.stringify(debug)}`)
   })
+  const originalSetupFeedback = await page.$eval('[data-save-feedback="config"]', node => node.textContent)
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.waitForSelector('#setup-tab-config')
   const afterUiRaw = await readFile(`${fixture.data}/state/config.yaml`, 'utf8')
@@ -170,7 +181,15 @@ try {
   assert.equal(newPrefix.status, 200, JSON.stringify(newPrefix))
   assert.equal(newPrefix.body.config.rawYaml, restartRaw)
 
-  console.log(JSON.stringify({ result: 'ok', rawPreserved: true, invalidUnchanged: true, channelSectionPreserved: true, unavailableChannels: true, uiSave: true, restartPrefix: true }))
+  const outcome = response => ({
+    saved: response.saved, target: response.target, applied: response.applied,
+    notApplied: response.notApplied, restartRequired: response.restartRequired,
+  })
+  console.log(JSON.stringify({
+    result: 'ok', rawPreserved: true, invalidUnchanged: true, channelSectionPreserved: true,
+    unavailableChannels: true, uiSave: true, originalSetupFeedback,
+    configOutcome: outcome(saved.body), channelOutcome: outcome(channelSave.body), restartPrefix: true,
+  }))
 } finally {
   if (browser) await browser.close().catch(() => {})
   await fixture.cleanup()

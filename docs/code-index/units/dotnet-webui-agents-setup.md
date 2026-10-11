@@ -8,12 +8,12 @@ Serves Agent creation/metadata/memory/knowledge and provider/model setup/configu
 
 ## Stable methods and callers
 
-Agent routes delegate catalog/AgentMemory/SessionManager Agent operations; setup routes validate `SetupProviderRequests`, `AppConfigurationRules`, and model YAML before saving configuration or returning forms. These routes do not make Vector fields a runtime capability.
+Agent routes delegate catalog/AgentMemory/SessionManager Agent operations; setup routes validate `SetupProviderRequests`, `AppConfigurationRules`, and model YAML before saving configuration or returning forms. `RegisterSetupRoutes` forwards the actual `SaveAppAsync`, `SaveChannelsAsync`, and `SaveAsync` installation results (`saved`, `target`, `applied`, `notApplied`, `restartRequired`) alongside existing config/reload or model payload fields. These routes do not make Vector fields a runtime capability.
 
 ## Contract and side effects
 
-Setup/Agent changes are authenticated and explicit; model/settings updates are staged through manager/save-lane boundaries where they affect a Session. Agent memory selection can affect later prompts but does not rewrite active history. Unsupported remote/managed/child fields return explicit validation errors rather than being stored as accepted consumers.
+Setup/Agent changes are authenticated and explicit. Setup save success means the validated file was installed, not that deferred access identities or external channels are active; the forwarded outcome preserves that distinction. Model/settings updates are staged through manager/save-lane boundaries where they affect a Session. Agent memory selection can affect later prompts but does not rewrite active history. Unsupported remote/managed/child fields return explicit validation errors rather than being stored as accepted consumers.
 
 ## Tests
 
-`WebUiStartupTests.cs`; `AppConfigurationRulesTests.cs`; `AppConfigurationRulesTests.cs`; AgentMemory/setup/model configuration tests.
+`WebUiStartupTests.cs`; `AppConfigurationRulesTests.cs`; AgentMemory/setup/model configuration tests.

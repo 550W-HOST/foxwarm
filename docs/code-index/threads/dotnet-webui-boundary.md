@@ -19,7 +19,7 @@ Browser WebUI fetch/WebSocket/PTY/Code request
 
 ## Auth and route order
 
-Static WebUI and state-changing routes are served only after normal host auth; `/api/auth` is the token exchange. Prefix/base-path handling is deployment-relative. Route handlers validate request IDs/limits before invoking manager/runtime services and translate committed/accepted/partial failures into explicit HTTP payloads.
+Static WebUI and state-changing routes are served only after normal host auth; `POST /api/auth` is the token exchange. Authenticated `GET /api/auth/session` returns `{ role: 'admin' }` for the current full-access instance-token host. Prefix/base-path handling is deployment-relative. Route handlers validate request IDs/limits before invoking manager/runtime services and translate committed/accepted/partial failures into explicit HTTP payloads.
 
 ## Realtime and history
 
@@ -29,7 +29,7 @@ Static WebUI and state-changing routes are served only after normal host auth; `
 
 The .NET channel has real routes for current tasks/terminal/files/images/history; Vector-backed history/admission remains `VECTOR_DISABLED` and remote Node/Worker routes are not claimed as fully connected to this Main. Root package start/build still targets TypeScript Main even though this .NET host is the active replacement architecture.
 
-The current React entry point requests `GET /api/auth/session` before mounting any normal, popup, or embedded root. It expects `{ role: 'admin' }` for the administrator app or a verified scoped WebUI identity response for the restricted root. The .NET host currently registers only `POST /api/auth`; it does not yet implement the auth-session route or scoped access identities. Consequently, the merged browser client cannot enter the administrator app against the current .NET host, even after a successful token login. This is a pending host adaptation, not a claim of implemented restricted WebUI support.
+The current React entry point requests `GET /api/auth/session` before mounting any normal, popup, or embedded root. It expects `{ role: 'admin' }` for the administrator app or a verified scoped WebUI identity response for the restricted root. The .NET host implements the authenticated administrator response, so successful instance-token login allows the merged client to mount the administrator app. Restricted WebUI identities remain explicitly deferred and are not accepted or represented as supported.
 
 ## Canonical units and tests
 

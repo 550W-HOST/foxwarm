@@ -56,30 +56,23 @@ internal sealed partial class WebUIChannel
                         input["yaml"] is JsonValue yaml && yaml.TryGetValue<string>(out var text)
                             ? text
                             : throw new InvalidDataException("Setup config yaml must be a string.");
-                    await configuration.SaveAppAsync(raw);
-                    return Results.Ok(
-                        new JsonObject
-                        {
-                            ["success"] = true,
-                            ["configPath"] = configuration.AppPath,
-                            ["rawYaml"] = raw,
-                            ["channelCount"] = ConfigurationYaml.Parse(raw, "app config")[
-                                "channels"
-                            ]
-                                is JsonObject channels
-                                ? channels.Count
-                                : 0,
-                            ["reload"] = new JsonObject
-                            {
-                                ["started"] = new JsonArray(),
-                                ["stopped"] = new JsonArray(),
-                                ["statuses"] = configuration.ChannelDiagnostics(webUiRunning: true),
-                                ["available"] = false,
-                                ["message"] =
-                                    "External chat channels are unavailable on this server.",
-                            },
-                        }
-                    );
+                    var installation = await configuration.SaveAppAsync(raw);
+                    installation["success"] = true;
+                    installation["configPath"] = configuration.AppPath;
+                    installation["rawYaml"] = raw;
+                    installation["channelCount"] = ConfigurationYaml.Parse(raw, "app config")["channels"]
+                        is JsonObject channels
+                        ? channels.Count
+                        : 0;
+                    installation["reload"] = new JsonObject
+                    {
+                        ["started"] = new JsonArray(),
+                        ["stopped"] = new JsonArray(),
+                        ["statuses"] = configuration.ChannelDiagnostics(webUiRunning: true),
+                        ["available"] = false,
+                        ["message"] = "External chat channels are unavailable on this server.",
+                    };
+                    return Results.Ok(installation);
                 }
                 catch (Exception error)
                     when (error
@@ -119,25 +112,20 @@ internal sealed partial class WebUIChannel
                         throw new InvalidDataException(
                             "Setup channels must contain a channels object or YAML."
                         );
-                    await configuration.SaveChannelsAsync(channels);
-                    return Results.Ok(
-                        new JsonObject
-                        {
-                            ["success"] = true,
-                            ["configPath"] = configuration.AppPath,
-                            ["channelsYaml"] = ModelConfiguration.ChannelsYamlForObject(channels),
-                            ["channelCount"] = channels.Count,
-                            ["reload"] = new JsonObject
-                            {
-                                ["started"] = new JsonArray(),
-                                ["stopped"] = new JsonArray(),
-                                ["statuses"] = configuration.ChannelDiagnostics(webUiRunning: true),
-                                ["available"] = false,
-                                ["message"] =
-                                    "External chat channels are unavailable on this server.",
-                            },
-                        }
-                    );
+                    var installation = await configuration.SaveChannelsAsync(channels);
+                    installation["success"] = true;
+                    installation["configPath"] = configuration.AppPath;
+                    installation["channelsYaml"] = ModelConfiguration.ChannelsYamlForObject(channels);
+                    installation["channelCount"] = channels.Count;
+                    installation["reload"] = new JsonObject
+                    {
+                        ["started"] = new JsonArray(),
+                        ["stopped"] = new JsonArray(),
+                        ["statuses"] = configuration.ChannelDiagnostics(webUiRunning: true),
+                        ["available"] = false,
+                        ["message"] = "External chat channels are unavailable on this server.",
+                    };
+                    return Results.Ok(installation);
                 }
                 catch (Exception error)
                     when (error
@@ -177,15 +165,11 @@ internal sealed partial class WebUIChannel
                     input =
                         await JsonNode.ParseAsync(request.Body) as JsonObject
                         ?? throw new InvalidDataException("Models setup input must be an object.");
-                    await configuration.SaveAsync(input);
-                    return Results.Ok(
-                        new JsonObject
-                        {
-                            ["success"] = true,
-                            ["models"] = configuration.Diagnostics(),
-                            ["payload"] = WebUiContract.Models(sessions.Models),
-                        }
-                    );
+                    var installation = await configuration.SaveAsync(input);
+                    installation["success"] = true;
+                    installation["models"] = configuration.Diagnostics();
+                    installation["payload"] = WebUiContract.Models(sessions.Models);
+                    return Results.Ok(installation);
                 }
                 catch (Exception error)
                     when (error
