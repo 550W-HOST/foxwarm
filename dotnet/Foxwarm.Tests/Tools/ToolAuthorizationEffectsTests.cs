@@ -188,7 +188,7 @@ public sealed class ToolAuthorizationEffectsTests
         Assert.Contains(definitions, node => node?["name"]?.GetValue<string>() == "call_tool");
         Assert.DoesNotContain(
             definitions,
-            node => node?["name"]?.GetValue<string>() == "set_tool_rules"
+            node => node?["name"]?.GetValue<string>() == "set_config"
         );
         var refused = await Call(
             execution.Tools,
@@ -287,8 +287,8 @@ public sealed class ToolAuthorizationEffectsTests
         var original = await File.ReadAllBytesAsync(target);
         var denied = await Call(
             execution.Tools,
-            "set_tool_rules",
-            Obj("""{"filePath":"candidate.yaml"}""")
+            "set_config",
+            Obj("""{"target":"tool-rules","filePath":"candidate.yaml"}""")
         );
         Assert.Equal("tool_authorization_denied", Error(denied));
         Assert.Equal(original, await File.ReadAllBytesAsync(target));
@@ -303,8 +303,8 @@ public sealed class ToolAuthorizationEffectsTests
             Error(
                 await Call(
                     execution.Tools,
-                    "set_tool_rules",
-                    Obj("""{"filePath":"candidate.yaml"}""")
+                    "set_config",
+                    Obj("""{"target":"tool-rules","filePath":"candidate.yaml"}""")
                 )
             )
         );
@@ -321,8 +321,8 @@ public sealed class ToolAuthorizationEffectsTests
             Error(
                 await Call(
                     execution.Tools,
-                    "set_tool_rules",
-                    Obj("""{"filePath":"candidate.yaml"}""")
+                    "set_config",
+                    Obj("""{"target":"tool-rules","filePath":"candidate.yaml"}""")
                 )
             )
         );
@@ -351,8 +351,8 @@ public sealed class ToolAuthorizationEffectsTests
             Error(
                 await Call(
                     execution.Tools,
-                    "set_tool_rules",
-                    Obj("""{"filePath":"candidate.yaml"}""")
+                    "set_config",
+                    Obj("""{"target":"tool-rules","filePath":"candidate.yaml"}""")
                 )
             )
         );
@@ -360,7 +360,7 @@ public sealed class ToolAuthorizationEffectsTests
         Assert.False(execution.Tools.PolicyUnavailable);
         File.CreateSymbolicLink(Path.Combine(own, "link"), candidate);
         Assert.NotNull(
-            Error(await Call(execution.Tools, "set_tool_rules", Obj("""{"filePath":"link"}""")))
+            Error(await Call(execution.Tools, "set_config", Obj("""{"target":"tool-rules","filePath":"link"}""")))
         );
         Assert.Equal(original, await File.ReadAllBytesAsync(target));
     }

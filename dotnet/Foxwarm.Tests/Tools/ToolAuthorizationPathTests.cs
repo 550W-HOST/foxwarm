@@ -144,21 +144,21 @@ public sealed class ToolAuthorizationPathTests
         await File.WriteAllBytesAsync(regular, bytes);
         Assert.Equal(
             bytes,
-            await files.CapturePolicyCandidateAsync("candidate", CancellationToken.None)
+            await files.CaptureConfigCandidateAsync("candidate", true, CancellationToken.None)
         );
         Directory.CreateDirectory(Path.Combine(temp.Path, "directory"));
         await Assert.ThrowsAsync<InvalidDataException>(() =>
-            files.CapturePolicyCandidateAsync("directory", CancellationToken.None)
+            files.CaptureConfigCandidateAsync("directory", true, CancellationToken.None)
         );
         await File.WriteAllBytesAsync(regular, new byte[ToolAuthorizationPolicy.MaxBytes + 1]);
         await Assert.ThrowsAsync<InvalidDataException>(() =>
-            files.CapturePolicyCandidateAsync("candidate", CancellationToken.None)
+            files.CaptureConfigCandidateAsync("candidate", true, CancellationToken.None)
         );
         await File.WriteAllBytesAsync(regular, bytes);
         File.CreateSymbolicLink(Path.Combine(temp.Path, "link"), regular);
         Assert.Equal(
             bytes,
-            await files.CapturePolicyCandidateAsync("link", CancellationToken.None)
+            await files.CaptureConfigCandidateAsync("link", true, CancellationToken.None)
         );
     }
 }

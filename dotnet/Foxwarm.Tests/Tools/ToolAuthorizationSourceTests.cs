@@ -545,7 +545,7 @@ public sealed class ToolAuthorizationSourceTests
                 ("builtin", "create_agent", new()),
                 ("builtin", "get_session_messages", new()),
                 ("builtin", "delete_session", new()),
-                ("builtin", "set_tool_rules", Obj("""{"filePath":"own"}""")),
+                ("builtin", "set_config", Obj("""{"target":"tool-rules","filePath":"own"}""")),
                 ("builtin", "read_exec", new()),
                 ("mcp", "read", Obj("""{"filePath":"own"}""")),
             }
@@ -616,7 +616,7 @@ public sealed class ToolAuthorizationSourceTests
                     name,
                     source == "mcp" ? "peer" : null,
                     args,
-                    source == "node" || name == "set_tool_rules"
+                    source == "node" || name == "set_config"
                         ? files.AuthorizationFacts(name, args)
                         : [],
                     "alpha",

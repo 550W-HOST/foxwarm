@@ -92,6 +92,8 @@ internal static class IsolatedToolCompatibility
                     throw new InvalidDataException(
                         "Obsolete or neutral Agent tool rule identity; use the concrete capability and refresh_session_snapshot."
                     );
+                if (source == "builtin" && tool == "set_tool_rules")
+                    throw new InvalidDataException("Obsolete Agent rule set_tool_rules; review permissions before migrating to set_config, because Agent exact rules cannot constrain target.");
                 var identity =
                     source
                     + "\0"
@@ -201,7 +203,7 @@ internal static class IsolatedToolCompatibility
         if (
             request.Source == "node" && request.Name is "read" or "write" or "edit" or "apply_patch"
             || request.Source == "builtin"
-                && request.Name is "set_tool_rules" or "send_file" or "image_write_to_file"
+                && request.Name is "set_config" or "send_file" or "image_write_to_file"
         )
             if (
                 request.Paths.Any(path =>

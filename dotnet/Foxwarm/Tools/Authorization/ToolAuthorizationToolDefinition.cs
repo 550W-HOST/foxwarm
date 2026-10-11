@@ -8,23 +8,29 @@ internal static class ToolAuthorizationToolDefinition
         new()
         {
             ["type"] = "function",
-            ["name"] = "set_tool_rules",
+            ["name"] = "set_config",
             ["description"] =
-                "Replace the instance's tool authorization policy with a validated UTF-8 YAML file on Main. The current policy must allow this tool and reading the file.",
+                "Install a complete YAML configuration from a file on master. Choose config, models, or tool-rules. The candidate is validated before replacing the active file. The result identifies applied changes and settings that require a restart. Your current permissions must allow both this operation and reading the candidate file.",
             ["parameters"] = new JsonObject
             {
                 ["type"] = "object",
                 ["additionalProperties"] = false,
                 ["properties"] = new JsonObject
                 {
+                    ["target"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["enum"] = new JsonArray("config", "models", "tool-rules"),
+                        ["description"] = "Configuration to replace: config for app settings, models for providers and models, or tool-rules for the instance tool authorization policy.",
+                    },
                     ["filePath"] = new JsonObject
                     {
                         ["type"] = "string",
                         ["description"] =
-                            "Path to the candidate policy file. Relative paths use the session working directory, or the agent directory when unset. Absolute paths and ~/ paths are accepted subject to permissions. A leading $fw_agentdir or $fw_tmp expands to the agent directory or its tmp directory. Other leading $ names are rejected.",
+                            "Path on master to the complete candidate YAML file. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory on master. Other leading $ names are rejected.",
                     },
                 },
-                ["required"] = new JsonArray("filePath"),
+                ["required"] = new JsonArray("target", "filePath"),
             },
             ["strict"] = false,
         };

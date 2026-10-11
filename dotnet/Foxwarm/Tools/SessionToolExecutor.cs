@@ -227,6 +227,7 @@ internal sealed partial class SessionToolExecutor(
                 if (identity == hosted.Id)
                     break;
             }
+            cancellationToken.ThrowIfCancellationRequested();
             hosted.BeginTool();
             var startedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var monotonic = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -321,6 +322,7 @@ internal sealed partial class SessionToolExecutor(
                     ["ownerSessionId"] = taskResult["ownerSessionId"]?.DeepClone(),
                 }
                 : response;
+        if (response["sentNotifications"] is JsonNode sent) visible["sentNotifications"] = sent.DeepClone();
         if (response["warning"] is JsonNode warning)
             visible["warning"] = warning.DeepClone();
         if (
@@ -337,7 +339,7 @@ internal sealed partial class SessionToolExecutor(
         }
         else if (completionTarget is not null)
             invocation.Value!.Receipt = new TurnToolReceipt(completionTarget, null, null);
-        return visible;
+        return new JsonObject { ["output"] = visible.ToJsonString() };
     }
 
     private async Task<JsonObject> ExecuteExecAsync(JsonObject args, CancellationToken token)
@@ -564,8 +566,8 @@ internal sealed partial class SessionToolExecutor(
                 MemoryTools.ExecuteAsync(owner.Hosted, owner.Manager, name, args, token);
         handlers["list_agents"] = (owner, _, _) =>
             Task.FromResult(new JsonObject { ["output"] = owner.Manager.ListAgentsText() });
-        handlers["set_tool_rules"] = (owner, args, token) =>
-            owner.Manager.InstallToolRulesAsync(
+        handlers["set_config"] = (owner, args, token) =>
+            owner.Manager.InstallConfigAsync(
                 owner.Hosted,
                 owner.Files ?? throw new NotSupportedException("This executor has no file reader."),
                 args,
@@ -602,7 +604,7 @@ internal sealed partial class SessionToolExecutor(
                         "mcp_config"
                         or "list_mcp_servers"
                         or "delete_session"
-                        or "set_tool_rules"
+                        or "set_config"
                         or "move_session"
                         or "create_timer"
                         or "list_timers"

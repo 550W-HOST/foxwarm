@@ -214,7 +214,7 @@ public sealed partial class WorkspaceTools
             return [];
         var resolved = name switch
         {
-            "read" or "set_tool_rules" or "send_file" or "run_script" or "start_toolscript_run" =>
+            "read" or "set_config" or "send_file" or "run_script" or "start_toolscript_run" =>
                 ResolveReadWrite(raw, true),
             "write" or "image_write_to_file" => ResolveReadWrite(raw, false),
             "edit" => ResolvePatchPath(raw, true),
@@ -231,11 +231,11 @@ public sealed partial class WorkspaceTools
         ];
     }
 
-    internal async Task<byte[]> CapturePolicyCandidateAsync(string raw, CancellationToken token)
+    internal async Task<byte[]> CaptureConfigCandidateAsync(string raw, bool policy, CancellationToken token)
     {
         var path = ResolveReadWrite(raw, true);
         if (!RegularFile(path))
-            throw new InvalidDataException("Policy candidate must be a regular file.");
+            throw new InvalidDataException("Configuration candidate must be a regular file.");
         await using var stream = new FileStream(
             path,
             FileMode.Open,
@@ -245,10 +245,10 @@ public sealed partial class WorkspaceTools
             FileOptions.Asynchronous
         );
         if (!RegularFileHandle(stream, path))
-            throw new InvalidDataException("Policy candidate must be a regular file.");
+            throw new InvalidDataException("Configuration candidate must be a regular file.");
         var size = stream.Length;
-        if (size > ToolAuthorizationPolicy.MaxBytes)
-            throw new InvalidDataException("Policy candidate exceeds its byte limit.");
+        if (policy && size > ToolAuthorizationPolicy.MaxBytes)
+            throw new InvalidDataException("Configuration candidate exceeds its byte limit.");
         using var output = new MemoryStream();
         var buffer = new byte[8192];
         while (true)
@@ -256,8 +256,8 @@ public sealed partial class WorkspaceTools
             var count = await stream.ReadAsync(buffer, token);
             if (count == 0)
                 break;
-            if (output.Length + count > ToolAuthorizationPolicy.MaxBytes)
-                throw new InvalidDataException("Policy candidate exceeds its byte limit.");
+            if (policy && output.Length + count > ToolAuthorizationPolicy.MaxBytes)
+                throw new InvalidDataException("Configuration candidate exceeds its byte limit.");
             output.Write(buffer, 0, count);
         }
         return output.ToArray();
