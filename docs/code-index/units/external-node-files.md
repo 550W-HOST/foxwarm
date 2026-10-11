@@ -21,7 +21,7 @@ Copy/image/send use their real builtin identities, not additional ordinary `node
 
 ## Transport and failure contract
 
-Whole transfers support files up to 50 MiB. The receive-frame ceiling accommodates base64 of that limit plus 64 KiB of envelope/path metadata, without unbounded transport allocation. Reads validate decoded size and the existing wire SHA-256 before use; write receipts validate size/SHA-256 against the bytes sent. No local staging/report hashes or secondary verification protocol are introduced. Source materialization is charged before base64 decoding rather than trusting a peer-reported size.
+Whole transfers support files up to 50 MiB. The receive-frame ceiling accommodates base64 of that limit plus 1 MiB of envelope/path metadata, without unbounded transport allocation. Path metadata accepts up to 128 KiB of UTF-8, including extended remote Windows namespaces. Reads validate decoded size and the existing wire SHA-256 before use; write receipts validate size/SHA-256 against the bytes sent. No local staging/report hashes or secondary verification protocol are introduced. Source materialization is charged before base64 decoding rather than trusting a peer-reported size.
 
 The CLI transfer write contract creates missing parents and defaults to no overwrite. This is separate from ordinary `write.createDirs`. Cancellation, timeout, disconnect and uncertain writes are never replayed; an already-started effect may remain. Unavailable Nodes/capabilities never fall back to Main. The existing post-write image partial result retains `fileWritten` and the actual path. A successful upload or file delivery does not commit a model turn or create destination Session history.
 

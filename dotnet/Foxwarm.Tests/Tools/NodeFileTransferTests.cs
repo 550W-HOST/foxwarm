@@ -144,17 +144,15 @@ public sealed class NodeFileTransferTests
         await f.Start();
         var one = await f.Connect("one");
         var two = await f.Connect("two");
-        var pending = f.Manager.Nodes.ReadFileAsync(
-            "one",
-            "C:\\remote\\binary.bin",
-            f.Owner,
-            false,
-            default
-        );
+        var remotePath =
+            "\\\\?\\C:\\remote\\"
+            + string.Concat(Enumerable.Repeat("nested\\", 700))
+            + "binary.bin";
+        var pending = f.Manager.Nodes.ReadFileAsync("one", remotePath, f.Owner, false, default);
         var request = await Fixture.Read(one);
         Assert.Equal(f.Owner.Id, request["sessionId"]!.GetValue<string>());
         Assert.Equal(f.Owner.Agent, request["agentName"]!.GetValue<string>());
-        Assert.Equal("C:\\remote\\binary.bin", request["filePath"]!.GetValue<string>());
+        Assert.Equal(remotePath, request["filePath"]!.GetValue<string>());
         Assert.False(request["restrictToAgentDir"]!.GetValue<bool>());
         byte[] bytes = [0, 255, 1, 128];
         await Fixture.Send(two, Fixture.Reply(request, bytes));

@@ -9,8 +9,8 @@ internal sealed partial class NodeConnectionHub
 {
     internal const int FileLimit = 50 * 1024 * 1024;
 
-    // Base64 of a supported file plus bounded path/metadata fields.
-    internal const int FileFrameLimit = 4 * ((FileLimit + 2) / 3) + 64 * 1024;
+    // Base64 of a supported file plus bounded metadata, including extended Windows paths.
+    internal const int FileFrameLimit = 4 * ((FileLimit + 2) / 3) + 1024 * 1024;
     private readonly ConcurrentDictionary<string, FileInvocation> transfers = new(
         StringComparer.Ordinal
     );
@@ -125,9 +125,12 @@ internal sealed partial class NodeConnectionHub
         CancellationToken token
     )
     {
-        if (string.IsNullOrWhiteSpace(path) || System.Text.Encoding.UTF8.GetByteCount(path) > 4096)
+        if (
+            string.IsNullOrWhiteSpace(path)
+            || System.Text.Encoding.UTF8.GetByteCount(path) > 128 * 1024
+        )
             throw new InvalidDataException(
-                "File transfer requires a nonempty path within 4096 UTF-8 bytes."
+                "File transfer requires a nonempty path within 128 KiB of UTF-8 metadata."
             );
         token.ThrowIfCancellationRequested();
         owner.Entry.RequireIdentityAuthority();
