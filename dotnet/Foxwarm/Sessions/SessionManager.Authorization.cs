@@ -135,11 +135,17 @@ internal sealed partial class SessionManager
             throw new InvalidOperationException(
                 "Tool source is no longer the current Session owner."
             );
-        if (resolved.Source == "node")
+        if (resolved.Source == "node" || resolved.Source == "builtin" && resolved.Name is "run_script" or "start_toolscript_run")
             RequireNodeBoundary(owner, resolved.ExecutionNode);
-        var remote = resolved.Source == "node" && resolved.ExecutionNode != "master";
+        if (resolved.Source == "builtin" && resolved.Name is "send_file" or "image_write_to_file")
+            RequireFileNodeBoundary(owner, resolved.ExecutionNode);
+        if (resolved.Source == "builtin" && resolved.Name == "copy_between_nodes")
+            foreach (var key in new[] { "sourceNode", "targetNode" })
+                RequireFileNodeBoundary(owner, SessionWait.Text(resolved.Args[key])?.Trim() ?? "");
+        var remote = resolved.ExecutionNode != "master" && (resolved.Source == "node" || resolved.Source == "builtin" && resolved.Name is "send_file" or "image_write_to_file" or "run_script" or "start_toolscript_run");
         var paths =
-            remote ? RemoteAuthorizationPaths(resolved)
+            resolved.Source == "builtin" && resolved.Name == "copy_between_nodes" ? CopyAuthorizationPaths(owner, resolved.Args)
+            : remote ? RemoteAuthorizationPaths(resolved)
             : resolved.Source == "node"
                 && resolved.Name is "read" or "write" or "edit" or "apply_patch" or "exec"
             || resolved.Source == "builtin"
@@ -171,11 +177,10 @@ internal sealed partial class SessionManager
             resolved.Server,
             resolved.Args,
             paths,
-            resolved.Source == "node" ? resolved.ExecutionNode
-                : resolved.Name == "node"
+            resolved.Name == "node"
                 && SessionWait.Text(resolved.Args["nodeId"]) is string targetNode
                     ? targetNode.Trim()
-                : "master"
+                : resolved.ExecutionNode
         );
         var policy = await authorization.LoadAsync(token);
         if (concreteTarget is not null)
@@ -220,7 +225,7 @@ internal sealed partial class SessionManager
     {
         if (name == "call_tool" && source == "builtin")
             return true;
-        var targetNode = node ?? (source == "node" ? CurrentNode(owner) : "master");
+        var targetNode = node ?? (source == "node" || source == "builtin" && name is "send_file" or "image_write_to_file" ? CurrentNode(owner) : "master");
         if (
             source == "node"
             && AgentIsolated(owner.Agent)
@@ -279,6 +284,8 @@ internal sealed partial class SessionManager
     private static IReadOnlyList<AuthorizationPath> RemoteAuthorizationPaths(ResolvedTool resolved)
     {
         var paths = new List<AuthorizationPath>();
+        if (resolved.Name is "run_script" or "start_toolscript_run" && SessionWait.Text(resolved.Args["code"]) is { } code && !string.IsNullOrWhiteSpace(code))
+            return paths;
         foreach (var key in new[] { "filePath", "cwd" })
             if (SessionWait.Text(resolved.Args[key]) is string raw)
                 paths.Add(new(key, raw, null, resolved.ExecutionNode));

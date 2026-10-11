@@ -27,7 +27,7 @@ Agent Node binding uses existing Agent metadata and owner admission/creation. Ad
 
 ## Phase boundary
 
-Advertised external exec and authenticated Node Session events are connected through the [remote exec unit](./remote-exec.md), including transient start-time authority, durable completion ACK, waits and truthful Stop. File transfer/copy, remote ToolScript source, image delivery, Code/PTY Node services and Shell HTTP also remain unconnected. Inline native ToolScript can dispatch ordinary Node tools through the same concrete registry. Protocol 3 negotiation alone does not grant external-owner or Worker behavior; Session events use authenticated placement or the exact exec completion grant. Official CLI/browser/Android client code is unchanged.
+Advertised external exec and authenticated Node Session events are connected through the [remote exec unit](./remote-exec.md), including transient start-time authority, durable completion ACK, waits and truthful Stop. Whole-file transfer/copy, remote ToolScript source, image export/delivery and bound-Agent attachments are connected through the [file consumers unit](./external-node-files.md). Code/PTY Node services and Shell HTTP remain unconnected. Inline native ToolScript can dispatch ordinary Node tools through the same concrete registry. Protocol 3 negotiation alone does not grant external-owner or Worker behavior; Session events use authenticated placement or the exact exec completion grant. Official CLI/browser/Android client code is unchanged.
 
 ## Tests
 

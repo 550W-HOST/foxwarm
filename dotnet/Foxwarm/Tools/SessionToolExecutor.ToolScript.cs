@@ -6,6 +6,17 @@ namespace Foxwarm.Tools;
 
 internal sealed partial class SessionToolExecutor
 {
+    private static string RemoteSourcePath(string file, string? cwd)
+    {
+        // Only join strings here: the Node owns normalization, home/tokens and OS path rules.
+        if (string.IsNullOrWhiteSpace(cwd) || file.StartsWith('/') || file.StartsWith('\\')
+            || file.StartsWith('~') || file.StartsWith('$')
+            || file.Length > 1 && file[1] == ':')
+            return file;
+        var separator = cwd.Contains('\\') ? "\\" : "/";
+        return cwd.TrimEnd('/', '\\') + separator + file;
+    }
+
     private sealed record ScriptScope(string LiteralOwner, ToolScriptDataBudget Budget);
 
     private readonly AsyncLocal<ScriptScope?> scriptScope = new();
@@ -88,11 +99,16 @@ internal sealed partial class SessionToolExecutor
             {
                 await sessions.WaitForIdentityMutationAsync(hosted.Id, currentToken);
                 hosted.Entry.RequireIdentityAuthority();
-                if (sessions.CurrentNode(hosted) != "master")
-                    throw new NotSupportedException(
-                        "Remote ToolScript source loading is not connected in this phase. Supply inline code."
-                    );
+                var node = rootCall?.Node ?? ExecutionNode;
+                var cwd = rootCall?.Cwd ?? ExecutionCwd;
                 var files = Files ?? sessions.IdentityWorkspace(hosted);
+                if (node != "master")
+                {
+                    var raw = RemoteSourcePath(file, cwd);
+                    await sessions.AuthorizeNodeFileAsync(hosted, node, raw, "read", files, currentToken);
+                    var source = await sessions.ReadNodeFileAsync(hosted, node, raw, files, currentToken, size => budget.Charge(checked(8L * size)));
+                    return (source.Path, new System.Text.UTF8Encoding(false, true).GetString(source.Bytes));
+                }
                 var actual = files.Paths.FilePath(file);
                 await sessions.AuthorizeToolAsync(
                     hosted,
@@ -127,7 +143,7 @@ internal sealed partial class SessionToolExecutor
                     );
                 var bytes = new byte[(int)length];
                 await stream.ReadExactlyAsync(bytes, currentToken);
-                return (actual, System.Text.Encoding.UTF8.GetString(bytes));
+                return (actual, new System.Text.UTF8Encoding(false, true).GetString(bytes));
             },
             nested
                 ? null

@@ -118,10 +118,10 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
             .Replace("'", "&apos;");
     }
 
-    internal static string Descriptor(string filename, string path, string mime) =>
+    internal static string Descriptor(string filename, string path, string mime, string node = "master") =>
         mime.StartsWith("image/", StringComparison.Ordinal)
-            ? $"<foxwarm-image name=\"{Escape(filename)}\" node=\"master\" path=\"{Escape(path)}\" />"
-            : $"<foxwarm-file name=\"{Escape(filename)}\" node=\"master\" path=\"{Escape(path)}\" mime=\"{Escape(mime)}\" />";
+            ? $"<foxwarm-image name=\"{Escape(filename)}\" node=\"{Escape(node)}\" path=\"{Escape(path)}\" />"
+            : $"<foxwarm-file name=\"{Escape(filename)}\" node=\"{Escape(node)}\" path=\"{Escape(path)}\" mime=\"{Escape(mime)}\" />";
 
     internal async Task<PreparedUploadedParts> PrepareAsync(
         JsonObject input,
@@ -165,24 +165,27 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                 await StageAsync(owner, "before-copy");
                 await sessions.WaitForIdentityMutationAsync(owner.Id, token);
                 sessions.RequireFileIngressOwner(owner);
+                var node = sessions.FileIngressNode(owner);
+                var timestamp = DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH-mm-ss-fffZ");
+                var storage = StorageName(filename, mime, timestamp, Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(4)));
+                string destination;
+                if (node != "master")
+                {
+                    // Authenticated administrator ingress selects the real owner; it is not a model tool call.
+                    var relative = ".temp/channel-files/webui/" + storage;
+                    var written = await sessions.Nodes.WriteFileAsync(node, relative, bytes, false, owner, true, token);
+                    destination = SessionWait.Text(written["absolutePath"]) ?? SessionWait.Text(written["filePath"]) ?? relative;
+                    saved.Add(new JsonObject { ["path"] = destination, ["filename"] = filename, ["node"] = node, ["mimeType"] = mime, ["size"] = bytes.Length });
+                }
+                else
+                {
                 var directory = Path.Combine(
                     sessions.AgentDirectory(owner.Agent),
                     ".temp",
                     "channel-files",
                     "webui"
                 );
-                var timestamp = DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH-mm-ss-fffZ");
-                var destination = Path.Combine(
-                    directory,
-                    StorageName(
-                        filename,
-                        mime,
-                        timestamp,
-                        Convert.ToHexStringLower(
-                            System.Security.Cryptography.RandomNumberGenerator.GetBytes(4)
-                        )
-                    )
-                );
+                destination = Path.Combine(directory, storage);
                 Directory.CreateDirectory(directory);
                 token.ThrowIfCancellationRequested();
                 // Keep the actual started destination across move; delete only this created temporary file.
@@ -231,8 +234,9 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                     if (created)
                         File.Delete(temp);
                 }
+                }
                 await StageAsync(owner, "after-copy");
-                parts.Add(new JsonObject { ["text"] = Descriptor(filename, destination, mime) });
+                parts.Add(new JsonObject { ["text"] = Descriptor(filename, destination, mime, node) });
                 if (mime.StartsWith("image/", StringComparison.Ordinal))
                 {
                     var imageId = "image_" + Guid.NewGuid();

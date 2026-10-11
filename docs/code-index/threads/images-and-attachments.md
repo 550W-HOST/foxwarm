@@ -20,7 +20,7 @@ WebUI upload / tool file reference / canonical Session message
 
 `WebUIChannel.Images`/`Files` creates or resolves canonical blobs before returning a reference. `PersistentSessionAuthorityStore.LoadAsync` externalizes supported inline image parts through the image store; missing/invalid required blobs fail according to strict caller policy and do not silently rewrite active history. Provider adaptation can deduplicate a repeated blob without deleting the canonical source.
 
-A transport ref is not a blob authority; a successful browser upload is not a model-turn commit. File delivery and image routes retain Session/agent ownership and normal HTTP auth. Vector/image search is not part of current .NET history admission; `VECTOR_DISABLED` remains explicit.
+A transport ref is not a blob authority; a successful browser upload is not a model-turn commit. File delivery and image routes retain Session/agent ownership and normal HTTP auth. [External Node consumers](../units/external-node-files.md) transfer source/export/attachment bytes without moving canonical image/history/Archive authority. Remote delivery stages bytes into the existing authenticated Main download path; a delivery failure does not delete an already-exported remote image. Vector/image search is not part of current .NET history admission; `VECTOR_DISABLED` remains explicit.
 
 ## Canonical units and tests
 

@@ -368,6 +368,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
 
     private void FailCalls(Connection connection, string reason)
     {
+        FailTransfers(connection, reason);
         foreach (var pair in calls)
             if (
                 ReferenceEquals(pair.Value.Connection, connection)
@@ -485,7 +486,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
                         return;
                     if (
                         read.MessageType != WebSocketMessageType.Text
-                        || stream.Length + read.Count > 64 * 1024 * 1024
+                        || stream.Length + read.Count > FileFrameLimit
                     )
                         throw new InvalidDataException("Invalid Node message.");
                     stream.Write(buffer, 0, read.Count);
@@ -611,6 +612,11 @@ internal sealed partial class NodeConnectionHub : IDisposable
                         throw new InvalidDataException("NODE_PROTOCOL_INCOMPATIBLE");
                     if (type == "node_register")
                         continue;
+                    if (type is "file_read_response" or "file_write_response" or "file_transfer_error")
+                    {
+                        HandleFileReply(connection, message, type);
+                        continue;
+                    }
                     if (type is "tool_call_response" or "tool_call_error")
                     {
                         HandleToolReply(connection, message, type == "tool_call_response");

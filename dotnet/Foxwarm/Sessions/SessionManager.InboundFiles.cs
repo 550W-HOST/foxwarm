@@ -2,6 +2,8 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionManager
 {
+    internal string FileIngressNode(SessionOwner owner) => BoundNode(owner.Agent) ?? "master";
+
     internal IDisposable BeginFileIngress(SessionOwner owner)
     {
         RequireFileIngressOwner(owner);
@@ -11,12 +13,9 @@ internal sealed partial class SessionManager
     internal void RequireFileIngressOwner(SessionOwner owner)
     {
         owner.Entry.RequireIdentityAuthority();
-        var isolation = Isolation(owner.Agent);
-        var bound = SessionGoal.Trim(isolation.RecordedNode ?? "");
-        if (isolation.Isolated && bound.Length > 0 && bound != "master")
-            throw new UnsupportedSessionExecutionEnvironmentException(
-                "Main attachment ingress cannot use this Agent's bound Node: " + bound
-            );
+        var bound = FileIngressNode(owner);
+        if (bound != "master" && !Nodes.Online(bound))
+            throw new InvalidOperationException("Attachment Node is offline or incompatible: " + bound);
         if (!IsCurrentOwner(owner))
             throw new InvalidOperationException("Attachment Session owner is no longer current.");
     }

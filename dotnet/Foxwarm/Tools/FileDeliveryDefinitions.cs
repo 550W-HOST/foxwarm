@@ -7,24 +7,37 @@ internal static class FileDeliveryDefinitions
     internal static JsonArray Definitions() =>
         new(
             Definition(
+                "copy_between_nodes",
+                "Copy a file between two Nodes, including master. Both paths are checked against the applicable permissions. Relative paths use this agent's directory on each Node, not the session working directory.",
+                new JsonObject
+                {
+                    ["sourceNode"] = String("Node containing the source file. Use master for the Main host."),
+                    ["sourcePath"] = String("Source path on sourceNode. Absolute paths, ~/ paths, and paths relative to the agent directory are accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."),
+                    ["targetNode"] = String("Node that will receive the file. Use master for the Main host."),
+                    ["targetPath"] = String("Destination path on targetNode. Absolute paths, ~/ paths, and paths relative to the agent directory are accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."),
+                    ["overwrite"] = new JsonObject { ["type"] = "boolean", ["description"] = "Allow replacement of an existing destination file. Defaults to false." },
+                },
+                "sourceNode", "sourcePath", "targetNode", "targetPath"
+            ),
+            Definition(
                 "send_file",
-                "Make a Main file available for download through WebUI. Choose a Session's attached destinations or one explicit destination; with neither, use the current session. The tool result lets the user download the file. WebUI destination checks do not post a notification in the target chat.",
+                "Deliver a file or image from a Node to users. Choose either one channelTargetId or a sessionId whose attached channels should receive it. With neither, delivery uses the current session.",
                 new JsonObject
                 {
                     ["channelTargetId"] = String(
                         "One destination in the form <channel-instance-id>:<conversation-id>. Do not combine with sessionId."
                     ),
                     ["sessionId"] = String(
-                        "Session whose attached destinations should be used. Defaults to this session; do not combine with channelTargetId."
+                        "Session whose attached channels should receive the file. Defaults to the current session; do not combine with channelTargetId."
                     ),
                     ["filePath"] = String(
-                        "File on Main. Relative paths use this session's working directory, or the agent directory when unset. Absolute paths, ~/ paths, and leading $fw_agentdir or $fw_tmp are accepted subject to permissions. Other leading $ names are rejected."
+                        "Path on the selected Node. On master, relative paths use the current session working directory or, if unset, its agent directory. On other Nodes, they use that Node's agent directory. Absolute paths and ~/ paths are accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
                     ),
                     ["node"] = String(
-                        "File source Node. Defaults to the current Node. This host supports master only."
+                        "Node containing the file. Defaults to the current Node."
                     ),
                     ["caption"] = String(
-                        "Text to accompany the file where the destination supports captions."
+                        "Text to accompany the file, where the destination supports captions."
                     ),
                     ["text"] = String("Alternative name for caption."),
                 },
@@ -32,12 +45,12 @@ internal static class FileDeliveryDefinitions
             ),
             Definition(
                 "image_write_to_file",
-                "Save an image from this session's current or archived history to a Main file. Original bytes are preserved; the filename does not change the format. The saved file can be reused or made available with send_file.",
+                "Save an image from this session, including a generated image or one returned by a tool. The saved file can be reused or delivered with send_file.",
                 new JsonObject
                 {
                     ["id"] = String("Image ID shown in this session."),
                     ["filePath"] = String(
-                        "Destination path. Relative paths use this session's working directory, or the agent directory when unset. Absolute paths, ~/ paths, and leading $fw_agentdir or $fw_tmp are accepted subject to permissions. Other leading $ names are rejected."
+                        "Destination path. On master, relative paths use the session working directory or, if unset, the agent directory. On other Nodes, they use that Node's agent directory. Absolute paths and ~/ paths are also accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
                     ),
                     ["overwrite"] = new JsonObject
                     {
@@ -46,7 +59,7 @@ internal static class FileDeliveryDefinitions
                             "Allow replacement of an existing file. Defaults to false.",
                     },
                     ["node"] = String(
-                        "Destination Node. Defaults to the current Node. This host supports master only."
+                        "Node on which to save the image. Defaults to the current Node."
                     ),
                 },
                 "id",

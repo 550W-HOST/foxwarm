@@ -12,7 +12,7 @@ Agent/setup methods load/validate Agent metadata and provider forms; knowledge/m
 
 ## Contract and side effects
 
-This unit is an orchestration boundary. It does not write active JSON/Archive outside `SessionSaveLane`, does not make catalog rows semantic history, and does not turn setup Vector fields into runtime Vector admission. File delivery is authenticated/deployment-relative; memory/knowledge selection affects future prompt input, not past history.
+This unit is an orchestration boundary. It does not write active JSON/Archive outside `SessionSaveLane`, does not make catalog rows semantic history, and does not turn setup Vector fields into runtime Vector admission. File export/delivery and bound-Agent ingress use the [external Node file consumers](./external-node-files.md) without moving Session/image authority off Main. File delivery is authenticated/deployment-relative; memory/knowledge selection affects future prompt input, not past history.
 
 `InstallConfigAsync` resolves/captures one regular candidate through the existing read/path boundary, checks both `set_config` and Main read authority, then reauthorizes inside the configuration installation lane. Native validation errors do not expose candidate content. `wait` with exact owned `waitExecIds` defaults to one 600-second fallback unless input waiting or an explicit null disables that fallback; explicit positive fallback values remain unchanged.
 

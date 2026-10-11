@@ -14,6 +14,8 @@ Loads the authority YAML/graph, evaluates allow/deny effects and path scopes, em
 
 Every executable local/MCP/Node capability enters authorization before dispatch. Rules provide tool authorization, not OS/network sandboxing; a remote Node's protocol capability still requires an allowed Main-side boundary. Deny/ambiguous/invalid graphs fail closed, while read-only definition discovery may report unavailable tools without invoking them.
 
+File transfer consumers retain their actual builtin identities. Copy supplies separate `sourcePath`/`targetPath` facts with each endpoint's Node; Main paths resolve from that Agent directory and remote facts stay unresolved. Copy/image/send do not require additional ordinary Node read/write grants. Remote ToolScript source retains its existing concrete Node read authorization. Isolated copy permits only Main own-Agent paths and its bound/current Node; explicit builtin grants do not bypass Main path, unrelated-Node or destination-Session checks. Canonical consumer contract: [External Node files](./external-node-files.md).
+
 The non-default setter is `set_config` with required `target` (`config`, `models`, or `tool-rules`) and `filePath`. There is no obsolete `set_tool_rules` command alias. Persisted generic policies that explicitly name that removed builtin fail validation with migration guidance toward deliberate `set_config` target restrictions; exact isolated metadata receives explicit migration guidance rather than an unconstrained replacement. The new setter retains the independent isolation/path/authority boundaries.
 
 ## Tests

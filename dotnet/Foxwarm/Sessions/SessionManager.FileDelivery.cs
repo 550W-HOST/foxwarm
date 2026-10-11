@@ -24,20 +24,20 @@ internal sealed partial class SessionManager
         deletionChannels.Attach("webui:" + id, id);
     }
 
-    internal Task<JsonObject> SendFileAsync(
+    internal async Task<JsonObject> SendFileAsync(
         SessionOwner owner,
         WorkspaceTools files,
         JsonObject args,
-        CancellationToken token
+        CancellationToken token,
+        string? selectedNode = null
     )
     {
         ToolRegistry.Keys(
             args,
             ["channelTargetId", "sessionId", "filePath", "node", "caption", "text"]
         );
-        ToolRegistry.LocalNode(
-            ToolRegistry.TargetNode(ToolRegistry.Text(args, "node"), CurrentNode(owner))
-        );
+        var node = ToolRegistry.TargetNode(ToolRegistry.Text(args, "node"), selectedNode ?? CurrentNode(owner));
+        RequireFileNodeBoundary(owner, node);
         var raw = SessionGoal.Trim(ToolRegistry.Text(args, "filePath") ?? "");
         if (raw.Length == 0)
             throw new InvalidDataException("send_file requires filePath.");
@@ -65,10 +65,29 @@ internal sealed partial class SessionManager
         CheckFileDestinations(owner, target, direct, bindings);
         if (destinations.Length == 0)
             throw new InvalidDataException($"Session `{target}` has no attached channels.");
-        var path = files.Paths.FilePath(raw);
-        if (!WorkspaceTools.RegularFile(path))
-            throw new InvalidDataException("Not a regular file: " + raw);
-        var name = Path.GetFileName(path);
+        string path;
+        string name;
+        if (node == "master")
+        {
+            path = files.Paths.FilePath(raw);
+            if (!WorkspaceTools.RegularFile(path))
+                throw new InvalidDataException("Not a regular file: " + raw);
+            name = Path.GetFileName(path);
+        }
+        else
+        {
+            var file = await ReadNodeFileAsync(owner, node, raw, files, token);
+            await WaitForIdentityMutationAsync(owner.Id, token);
+            await AuthorizeToolAsync(owner, new("send_file", "builtin", "send_file", args, ExecutionNode: node), IdentityWorkspace(owner), token);
+            CheckFileDestinations(owner, target, direct, bindings);
+            name = Foxwarm.Nodes.NodeConnectionHub.RemoteFileName(file.Name);
+            if (string.IsNullOrWhiteSpace(name) || name is "." or "..")
+                throw new InvalidDataException("Node file name is invalid.");
+            var directory = Path.Combine(AgentDirectory(owner.Agent), ".temp", "file-delivery", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            path = Path.Combine(directory, name);
+            await File.WriteAllBytesAsync(path, file.Bytes, token);
+        }
         var delivered = new List<string>();
         var skipped = new List<string>();
         var failed = new List<string>();
@@ -130,7 +149,7 @@ internal sealed partial class SessionManager
         var output = string.Join("\n", lines);
         if (delivered.Count == 0)
             throw new InvalidOperationException(output);
-        return Task.FromResult(new JsonObject { ["output"] = output, ["fullPath"] = path });
+        return new JsonObject { ["output"] = output, ["fullPath"] = path };
     }
 
     private string FileSession(string requested) =>
@@ -182,13 +201,13 @@ internal sealed partial class SessionManager
         SessionOwner owner,
         WorkspaceTools files,
         JsonObject args,
-        CancellationToken token
+        CancellationToken token,
+        string? selectedNode = null
     )
     {
         ToolRegistry.Keys(args, ["id", "filePath", "overwrite", "node"]);
-        ToolRegistry.LocalNode(
-            ToolRegistry.TargetNode(ToolRegistry.Text(args, "node"), CurrentNode(owner))
-        );
+        var node = ToolRegistry.TargetNode(ToolRegistry.Text(args, "node"), selectedNode ?? CurrentNode(owner));
+        RequireFileNodeBoundary(owner, node);
         var id = ToolRegistry.Text(args, "id");
         var raw = ToolRegistry.Text(args, "filePath");
         if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(raw))
@@ -220,40 +239,14 @@ internal sealed partial class SessionManager
             files = IdentityWorkspace(owner);
             await AuthorizeToolAsync(
                 owner,
-                new("image_write_to_file", "builtin", "image_write_to_file", args),
+                new("image_write_to_file", "builtin", "image_write_to_file", args, ExecutionNode: node),
                 files,
                 token
             );
             if (identity == owner.Id)
                 break;
         }
-        var path = files.Paths.FilePath(raw);
-        token.ThrowIfCancellationRequested();
-        owner.Entry.RequireIdentityAuthority();
-        if (!IsCurrentOwner(owner))
-            throw new InvalidOperationException("Image source Session is no longer current.");
-        if (
-            Directory.Exists(path)
-            || !overwrite && (File.Exists(path) || new FileInfo(path).LinkTarget is not null)
-        )
-            throw new IOException(
-                "File already exists: " + raw + ". Use overwrite=true to overwrite."
-            );
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        if (File.Exists(path) && !WorkspaceTools.RegularFile(path))
-            throw new IOException("Image target must be a regular file.");
-        if (
-            !await FileToolCore.WriteBytesAtomic(
-                path,
-                bytes,
-                overwrite,
-                () => _ = files.Paths.FilePath(raw),
-                token
-            )
-        )
-            throw new IOException(
-                "File already exists: " + raw + ". Use overwrite=true to overwrite."
-            );
+        var path = await WriteNodeFileAsync(owner, node, raw, bytes, overwrite, files, token);
         try
         {
             await FileStageAsync(owner, "after-write");
@@ -278,7 +271,7 @@ internal sealed partial class SessionManager
         return new JsonObject
         {
             ["output"] =
-                $"Image `{id}` written to `{raw}` on node `master`.\nYou can make it available with send_file.",
+                $"Image `{id}` written to `{raw}` on node `{node}`.\nYou can make it available with send_file.",
             ["fullPath"] = path,
         };
     }

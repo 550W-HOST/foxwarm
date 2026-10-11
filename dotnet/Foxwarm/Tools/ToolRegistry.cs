@@ -73,14 +73,13 @@ internal sealed class ToolRegistry(
                     );
                 throw new InvalidDataException("Unknown tool: " + invocation);
             }
-            if (invocation is "send_file" or "image_write_to_file")
-                LocalNode(TargetNode(Text(args, "node"), currentNode));
             return new(
                 invocation,
                 direct.Source,
                 invocation,
                 (JsonObject)args.DeepClone(),
-                ExecutionNode: direct.Source == "node" ? currentNode : "master"
+                ExecutionNode: direct.Source == "node" || invocation is "run_script" or "start_toolscript_run" ? currentNode
+                    : invocation is "send_file" or "image_write_to_file" ? TargetNode(Text(args, "node"), currentNode) : "master"
             );
         }
         Keys(args, ["toolId", "source", "name", "server", "nodeId", "args", "argsJson"]);
@@ -151,16 +150,14 @@ internal sealed class ToolRegistry(
             LocalNode(node);
         else if (node is not null)
             throw new InvalidDataException("Builtin tools do not support Node selection.");
-        if (source == "builtin" && name is "send_file" or "image_write_to_file")
-            LocalNode(
-                TargetNode(Text(targetArgs, "node"), source == "node" ? targetNode : currentNode)
-            );
         return new(
             invocation,
             source,
             name,
             targetArgs,
-            ExecutionNode: source == "node" ? targetNode : "master"
+            ExecutionNode: source == "node" ? targetNode
+                : name is "run_script" or "start_toolscript_run" ? currentNode
+                : name is "send_file" or "image_write_to_file" ? TargetNode(Text(targetArgs, "node"), currentNode) : "master"
         );
     }
 

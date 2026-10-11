@@ -15,7 +15,7 @@ Runs Main-local Monty ToolScript slices, routes the supported host calls, persis
 - `ToolScriptDataBudget.Charge`, `Retain`, `JsonPreflight`, `ParseJson`, `JsonValue`, and `ReadRecordAsync` charge conservative per-activity materialization; `ToolScriptStdout.Append` enforces the cumulative 64 MiB UTF-8 stdout limit. `ToolScriptBudgetBuffer` charges incremental JSON tokens while serializing opaque values.
 - `ToolScriptRecordJson.Write` streams bounded record JSON; `ToolScriptRunStore.AcquireAsync`, `ReadAsync`, `ListAsync`, `WriteAsync`, `RequireOwned`, and `RequireUnmanaged` serialize per-run access, owner checks, durable record writes, and managed-run refusal.
 
-Callers: `SessionToolExecutor.ToolScript`, `ToolScriptToolDefinitions`, `SessionManager.ToolScript`, and WebUI/tool timeline consumers. The runtime is Main-local; managed child-session host functions are explicitly unsupported in this host.
+Callers: `SessionToolExecutor.ToolScript`, `ToolScriptToolDefinitions`, `SessionManager.ToolScript`, and WebUI/tool timeline consumers. The interpreter is Main-local even when source is fetched from a selected external Node through the [whole-file consumer](./external-node-files.md). Managed child-session host functions are explicitly unsupported in this host.
 
 ## Budget and worker contract
 
@@ -32,6 +32,8 @@ Active cancellation requests the run token and lets the worker/host-call boundar
 ## Host-call boundary
 
 `HostCallAsync` accepts only the supported names and normalizes `call_tool` descriptors into the unified tool path. Filesystem, exec, terminal, MCP, Node, Session, and authorization effects remain behind their ordinary tools/owners; Monty OS functions and mounts are not exposed. `request_model_without_context` uses the current owner’s prompt-cache/effort boundary and returns normalized text/parts, while ToolScript records keep run metadata separate from outer Session history. `ToolScriptContext.CallTool` carries nullable JSON source values through the ordinary Session executor; [MCP values and trusted control](../threads/tools-permissions-and-exec.md#outbound-mcp-values-and-trusted-control) govern the projection boundary.
+
+`filePath` source uses the captured invocation Node/cwd, whole bytes and strict UTF-8/source-budget checks. A snapshot continuation does not refetch a changed source file; nested calls retain current-owner dispatch and authorization after Node selection changes.
 
 Short `call_tool` strings containing a qualified ID, such as `node:master/read` or `builtin:task`, use the same concrete registry path as descriptor calls. Cancellation is checked before host-call/tool admission and again after asynchronous authorization. Stop settles a launched exec wait without killing its shell, and no later script host effect is admitted. Both existing run modes still execute the initial segment before returning; waiting/time-budget pauses require explicit continuation in either mode.
 
