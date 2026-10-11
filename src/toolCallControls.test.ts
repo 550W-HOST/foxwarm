@@ -197,6 +197,7 @@ test('the same cancellation preflight works with an authoritative Session-worker
       currentSessionEffects: {
         placement: 'session-worker',
         persistSession: async () => {},
+        registerAbortController: () => {}, clearAbortController: () => {},
       } as any,
     });
     assert.deepEqual(responses(result), [{ canceled: true, message: 'Tool call canceled before execution.' }]);

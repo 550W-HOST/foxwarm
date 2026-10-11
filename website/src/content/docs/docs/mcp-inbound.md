@@ -3,7 +3,7 @@ title: Connect an external MCP client
 description: Enable Foxwarm's MCP endpoint and grant an external client access to selected tools, Nodes, or Sessions.
 ---
 
-Foxwarm exposes a Streamable HTTP MCP endpoint at `/mcp` on the **same HTTP port as the WebUI**. Each external identity has its own token, and tool rules determine what it can use. The endpoint is disabled by default.
+Foxwarm exposes a Streamable HTTP MCP endpoint at `/mcp` on the **same HTTP port as the WebUI**. Access identities are shared with the WebUI, while each surface must be declared explicitly. Tool rules determine which MCP tools an identity can use. The endpoint is disabled unless at least one configured identity declares the `mcp` surface.
 
 This page is for clients connecting **to Foxwarm**. To connect Foxwarm to another tool server, see [outbound MCP](/docs/tools-skills-mcp/#connect-an-mcp-tool-server).
 
@@ -12,14 +12,15 @@ This page is for clients connecting **to Foxwarm**. To connect Foxwarm to anothe
 Add this block to `state/config.yaml` in your data directory:
 
 ```yaml
-mcpInbound:
-  enabled: true
+access:
   identities:
     editor:
       token: REPLACE_WITH_A_LONG_PRIVATE_TOKEN
+      surfaces:
+        mcp: {}
 ```
 
-Replace the token before starting Foxwarm. For another client identity, add another named entry with a different token. Do not reuse the WebUI or Node pairing token. These credentials are read from YAML, not from environment variables.
+Replace the token before starting Foxwarm. For another identity, add another named entry with a different token; one identity may declare both `webui` and `mcp` surfaces. Do not reuse the instance superuser or Node pairing token. These credentials are read from YAML, not from environment variables.
 
 Restart Foxwarm after changing the configuration. With the default port, the endpoint is `http://localhost:3001/mcp`. Behind a reverse proxy, retain the deployment prefix, for example `https://your-host.example/foxwarm/mcp`. Use HTTPS when sending credentials over an untrusted network.
 
@@ -129,7 +130,27 @@ await client.callTool({
 });
 ```
 
-A successful result confirms that the message was queued, not that the Session has read or answered it. The Session runs under its own Agent and existing permissions. Reading the response requires a separate read permission and `foxwarm_session` call with `action: 'read'`.
+A successful result confirms that the message was queued, not that the Session has read or answered it. The Session runs under its own Agent and existing permissions. You can read history with a separate read permission and `foxwarm_session` call with `action: 'read'`, or request an explicit reply over a supported receiving connection.
+
+### Explicit replies between Foxwarm instances
+
+On the calling instance, load the bundled [mcp-management Skill](https://github.com/550W-HOST/foxwarm/blob/main/skills/mcp-management/SKILL.md), configure the receiver as a `streamable-http` server, and start `mcp_notifications` for the current Session before sending with `reply: true`:
+
+```js
+await client.callTool({
+  name: 'foxwarm_session',
+  arguments: {
+    action: 'send',
+    sessionId: 'existing-session-id',
+    message: 'Please check the build and send an explicit text reply.',
+    reply: true,
+  },
+});
+```
+
+Here `client` represents the active receiving connection, not the short-lived client closed in the earlier example. Both peers must negotiate Foxwarm notification support; the managed `mcp_notifications` tool handles this for a Foxwarm calling Session. The send result and receiving Session's server metadata include a temporary `channelTargetId`. An authorized replying Session sends text with `send_to_channel` using that exact destination. Normal assistant output, MCP logs, and progress are not forwarded. The destination needs no reverse URL or credential for the calling instance.
+
+Replies enter the calling Session's ordinary queue. Reception is online-only, with no offline replay; stopping or replacing the context invalidates its old destination. Normal channel authorization still applies, including isolated Sessions' own-attachment requirement; the temporary endpoint has no attachment. Follow the Skill's [explicit-reply reference](https://github.com/550W-HOST/foxwarm/blob/main/skills/mcp-management/references/instance-replies.md) for the full setup, status, and stop workflow. For identities and safe rule updates, load [access-control](https://github.com/550W-HOST/foxwarm/blob/main/skills/access-control/SKILL.md).
 
 ## Background commands
 
@@ -149,7 +170,7 @@ bot:
   enableTrigger: false
 ```
 
-With inbound MCP enabled, Foxwarm still starts its HTTP server and Node connections. You can leave both settings enabled when MCP shares a normal WebUI installation.
+With an identity declaring the `mcp` surface, Foxwarm still starts its HTTP server and Node connections even when the WebUI is disabled. You can leave both settings enabled when MCP shares a normal WebUI installation. An identity that declares only `webui` cannot authenticate to `/mcp`.
 
 To pair a CLI Node, an administrator supplies the existing token from the instance's private `state/node_token` file to that Node. An authorized MCP operator can then discover and call `node_pair_list` and `node_pair_approve`. The MCP endpoint never returns the bootstrap token. See [Nodes](/docs/nodes/) for client setup.
 

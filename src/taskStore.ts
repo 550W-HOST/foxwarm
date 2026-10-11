@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const TASK_ACTIONS = ['create', 'list', 'get', 'claim', 'assign', 'update', 'complete', 'cancel'] as const;
 export const TASK_STATUSES = ['open', 'active', 'completed', 'cancelled'] as const;
+export const TASK_LIST_SCOPES = ['current-session', 'current-agent', 'all'] as const;
 export const TASK_LIST_LIMIT = 50;
 export const TASK_CHILD_LIMIT = 20;
 export const TASK_NOTE_LIMIT = 10;
@@ -43,11 +44,11 @@ type TaskArgs = Record<string, any>;
 type TaskActor = { kind: 'user' } | { kind: 'session'; sessionId: string };
 const ACTION_FIELDS: Record<typeof TASK_ACTIONS[number], string[]> = {
   create: ['title', 'description', 'parentTaskId', 'ownerSessionId', 'notifySession'],
-  list: ['status'],
+  list: ['status', 'scope'],
   get: ['taskId'],
   claim: ['taskId'],
   assign: ['taskId', 'ownerSessionId', 'notifySession'],
-  update: ['taskId', 'description', 'note', 'status'],
+  update: ['taskId', 'description', 'note', 'status', 'notifySession'],
   complete: ['taskId', 'result'],
   cancel: ['taskId', 'reason'],
 };
@@ -76,6 +77,9 @@ export function validateTaskArgs(args: TaskArgs): void {
   if (Object.prototype.hasOwnProperty.call(args, 'status')) {
     const statuses = args.action === 'update' ? ['open', 'active'] : TASK_STATUSES;
     if (!statuses.includes(args.status)) throw new TaskError('TASK_INVALID_ARGS', `status for task ${args.action} must be one of: ${statuses.join(', ')}.`);
+  }
+  if (args.action === 'list' && args.scope !== undefined && !TASK_LIST_SCOPES.includes(args.scope)) {
+    throw new TaskError('TASK_INVALID_ARGS', `scope for task list must be one of: ${TASK_LIST_SCOPES.join(', ')}.`);
   }
   if (args.action === 'assign' && !Object.prototype.hasOwnProperty.call(args, 'ownerSessionId')) {
     throw new TaskError('TASK_INVALID_ARGS', 'task assign requires an existing ownerSessionId or null.');
@@ -255,17 +259,17 @@ export class TaskStore {
     } catch (error) { db.exec('ROLLBACK'); throw error; }
   }
 
-  execute(args: TaskArgs, sessionId?: string, listLimit = TASK_LIST_LIMIT, anchorSeq?: number): any {
+  execute(args: TaskArgs, sessionId?: string, listLimit = TASK_LIST_LIMIT, anchorSeq?: number, scopeSessionIds?: readonly string[]): any {
     validateTaskArgs(args);
     if (args.action !== 'list' && args.action !== 'get' && (typeof sessionId !== 'string' || !sessionId.trim())) throw new TaskError('TASK_INVALID_ARGS', 'task requires a current Session.');
     if (sessionId !== undefined) sessionId = this.canonicalId(sessionId);
     if (args.ownerSessionId !== undefined && args.ownerSessionId !== null) args = { ...args, ownerSessionId: this.canonicalId(args.ownerSessionId) };
-    return this.executeWithActor(args, { kind: 'session', sessionId }, listLimit, anchorSeq);
+    return this.executeWithActor(args, { kind: 'session', sessionId }, listLimit, anchorSeq, scopeSessionIds);
   }
 
   /** User authority is supplied only by the authenticated Tasks route. */
   executeAsUser(args: TaskArgs): any {
-    args = args.notifySession === undefined ? { ...args, notifySession: true } : args;
+    args = args.action !== 'comment' && args.notifySession === undefined ? { ...args, notifySession: true } : args;
     if (args.action === 'comment') {
       const { notifySession, ...comment } = args;
       // Reuse the existing note and task-ID bounds without extending the tool schema.
@@ -281,13 +285,13 @@ export class TaskStore {
     return this.executeWithActor(args, { kind: 'user' });
   }
 
-  private executeWithActor(args: TaskArgs, actor: TaskActor, listLimit = TASK_LIST_LIMIT, anchorSeq?: number): any {
+  private executeWithActor(args: TaskArgs, actor: TaskActor, listLimit = TASK_LIST_LIMIT, anchorSeq?: number, scopeSessionIds?: readonly string[]): any {
     const db = this.getDb();
     // A write transaction covers the read, authority check and update, even
     // across independent SQLite connections/processes racing to claim.
     db.exec(args.action === 'list' || args.action === 'get' ? 'BEGIN' : 'BEGIN IMMEDIATE');
     try {
-      const result = this.executeInTransaction(db, args, actor, listLimit, anchorSeq);
+      const result = this.executeInTransaction(db, args, actor, listLimit, anchorSeq, scopeSessionIds);
       db.exec('COMMIT');
       if (result.task) {
         const { legacyGoalSessionId, reminderLastSeq, reminderMessageCount, assignmentRevision, ...visibleTask } = result.task;
@@ -301,11 +305,22 @@ export class TaskStore {
     }
   }
 
-  private executeInTransaction(db: DatabaseSync, args: TaskArgs, actor: TaskActor, listLimit: number, anchorSeq?: number): any {
+  private executeInTransaction(db: DatabaseSync, args: TaskArgs, actor: TaskActor, listLimit: number, anchorSeq?: number, scopeSessionIds?: readonly string[]): any {
     const sessionId = actor.kind === 'session' ? actor.sessionId : null;
     if (args.action === 'list') {
-      const where = args.status === undefined ? "status IN ('open','active')" : 'status=?';
-      const params = args.status === undefined ? [] : [args.status];
+      const filters = [args.status === undefined ? "status IN ('open','active')" : 'status=?'];
+      const params: any[] = args.status === undefined ? [] : [args.status];
+      if (args.scope !== undefined && args.scope !== 'all') {
+        const scopedIds = scopeSessionIds ?? (args.scope === 'current-session' && sessionId ? [sessionId] : []);
+        const ids = [...new Set(scopedIds.flatMap(id => this.sessionReferences(id)))];
+        if (ids.length === 0) filters.push('0');
+        else {
+          const placeholders = ids.map(() => '?').join(',');
+          filters.push(`(createdBySessionId IN (${placeholders}) OR ownerSessionId IN (${placeholders}))`);
+          params.push(...ids, ...ids);
+        }
+      }
+      const where = filters.join(' AND ');
       const tasks = db.prepare(`SELECT id,title,status,parentTaskId,createdByKind,createdBySessionId,ownerSessionId,updatedAt
         FROM tasks WHERE ${where} ORDER BY updatedAt DESC,id LIMIT ?`).all(...params, Math.max(1, Math.min(TASK_LIST_LIMIT, listLimit)));
       const total = Number(db.prepare(`SELECT COUNT(*) AS count FROM tasks WHERE ${where}`).get(...params).count);
@@ -343,7 +358,7 @@ export class TaskStore {
       this.addNote(db, task.id, actor, args.note, now);
       db.prepare('UPDATE tasks SET updatedAt=? WHERE id=?').run(now, task.id);
       return { task: this.requireTask(db, task.id),
-        ...(args.notifySession !== false && task.ownerSessionId ? { commentNotification: { owner: task.ownerSessionId } } : {}) };
+        ...(args.notifySession === true && task.ownerSessionId ? { commentNotification: { owner: task.ownerSessionId } } : {}) };
     }
     const state = `status=${task.status}, owner=${task.ownerSessionId ?? 'unclaimed'}`;
     if (task.status === 'completed' || task.status === 'cancelled') {
@@ -390,7 +405,7 @@ export class TaskStore {
         if (args.status === 'active' && task.status !== 'active') db.prepare('UPDATE tasks SET reminderLastSeq=?,reminderMessageCount=0 WHERE id=?')
           .run(anchorSeq ?? null, task.id);
         if (args.note !== undefined) this.addNote(db, task.id, actor, args.note, now);
-        if (args.note !== undefined && task.ownerSessionId && task.ownerSessionId !== sessionId) {
+        if (args.note !== undefined && args.notifySession === true && task.ownerSessionId && task.ownerSessionId !== sessionId) {
           return { task: this.requireTask(db, task.id), commentNotification: { owner: task.ownerSessionId } };
         }
       } else if (args.action === 'complete') {

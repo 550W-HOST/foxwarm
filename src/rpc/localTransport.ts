@@ -56,7 +56,8 @@ export class LocalRpcTransport implements RpcTransport {
     const requestId = buildRpcRequestId();
     const traceId = options.traceId || requestId;
     const deadlineAt = resolveRpcDeadline(options);
-    const linked = buildLinkedAbortController(options.signal, deadlineAt);
+    const settleCancellation = descriptor.methods[methodName]?.cancellation === 'settle';
+    const linked = buildLinkedAbortController(options.signal, deadlineAt, settleCancellation);
     if (linked.controller.signal.aborted) {
       linked.dispose();
       throw linked.controller.signal.reason instanceof Error
@@ -72,6 +73,7 @@ export class LocalRpcTransport implements RpcTransport {
       clonedInput,
       {
         signal: linked.controller.signal,
+        hardCancellationSignal: linked.hardController?.signal,
         requestId,
         traceId,
         deadlineAt,
@@ -84,7 +86,8 @@ export class LocalRpcTransport implements RpcTransport {
         // A caller-provided abort reason belongs to the caller and must retain
         // object identity. Handler-owned failures cross the same serialized DTO
         // boundary used by the child-process transport.
-        if (options.signal?.aborted && options.signal.reason instanceof Error) {
+        if (descriptor.methods[methodName]?.cancellation !== 'settle'
+          && options.signal?.aborted && options.signal.reason instanceof Error) {
           throw options.signal.reason;
         }
         throw deserializeRpcError(cloneRpcDto(serializeRpcError(error)));
@@ -92,10 +95,11 @@ export class LocalRpcTransport implements RpcTransport {
     );
     handlerPromise.finally(() => this.finishRequest()).catch(() => {});
 
+    const failureSignal = linked.hardController?.signal || linked.controller.signal;
     const abortPromise = new Promise<never>((_resolve, reject) => {
-      linked.controller.signal.addEventListener('abort', () => {
-        reject(linked.controller.signal.reason instanceof Error
-          ? linked.controller.signal.reason
+      failureSignal.addEventListener('abort', () => {
+        reject(failureSignal.reason instanceof Error
+          ? failureSignal.reason
           : new RpcError('RPC_CANCELLED', 'RPC request cancelled.', true));
       }, { once: true });
     });

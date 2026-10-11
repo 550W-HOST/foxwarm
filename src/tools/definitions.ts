@@ -68,7 +68,8 @@ const baseDefinitions = [
                     parentTaskId: { type: 'string', maxLength: 128, description: "Existing parent task ID for a simple child task. Set only when creating." },
                     taskId: { type: 'string', maxLength: 128, description: "Existing task ID. Required for get, claim, update, complete, and cancel." },
                     status: { type: 'string', enum: ['open', 'active', 'completed', 'cancelled'], description: "For list, filter by task status. For update, set only open or active." },
-                    notifySession: { type: 'boolean', description: "When true, send task notifications after the assignment is committed: notify the new owner, and notify the previous owner when ownership changes or is released." },
+                    scope: { type: 'string', enum: ['current-session', 'current-agent', 'all'], description: "For list, choose tasks created by or assigned to the current Session (default), any Session in the current Agent, or all Sessions and users." },
+                    notifySession: { type: 'boolean', description: "When true, create/assign notify the new owner and, on transfer or release, the previous owner after the change is saved. For update with a note, notify the current owner unless it is the caller. Omitted or false saves without these notifications." },
                     ownerSessionId: { type: ['string', 'null'], maxLength: 256, description: "For create, the optional existing Session ID to receive the new task. For assign, the existing Session ID to receive the task, or null to release the current owner." },
                     note: { type: 'string', maxLength: 1000, description: "Short progress note to append when updating a task." },
                     result: { type: 'string', maxLength: 20000, description: "Completion summary for a completed task. For long description or result text, use ToolScript to compose the operation so you do not regenerate duplicate content." },
@@ -274,7 +275,7 @@ Example:
         {
             name: 'exec',
             defaultInject: true,
-            description: "Run a shell command on the current Node. Output is saved in a command log and shown as a bounded preview. If the command outlasts timeout, it continues in the background and returns an execId; a later event reports completion. The timeout does not kill the command. Avoid adding head or tail just to shorten the preview: that changes the captured output. If you need both a complete log and a filtered view, save the complete output separately or use tee with a filter that consumes the whole stream. For temporary files, prefer $fw_tmp ($env:fw_tmp in PowerShell) over /tmp; fw_agentdir gives the Agent directory. These environment variables are set for Agent-owned commands on Main and CLI Nodes.",
+            description: "Run a shell command on the current Node. Adjacent exec calls in the same response may run concurrently. Set cwd directly instead of using a preceding exec to change directories. Use one command with && for dependent shell steps, or run_script when later calls depend on earlier results. Output is saved in a command log and shown as a bounded preview. If the command outlasts timeout, it continues in the background and returns an execId; a later event reports completion. The timeout does not kill the command. On supported Nodes, Stop or Run queued ends the wait without killing the command, returning available output and an execId; completion is reported later. Avoid adding head or tail just to shorten the preview: that changes the captured output. If you need both a complete log and a filtered view, save the complete output separately or use tee with a filter that consumes the whole stream. For temporary files, prefer $fw_tmp ($env:fw_tmp in PowerShell) over /tmp; fw_agentdir gives the Agent directory. These environment variables are set for Agent-owned commands on Main and CLI Nodes.",
             parameters: {
                 type: 'object',
                 properties: {
@@ -322,14 +323,14 @@ Example:
         {
             name: 'wait',
             defaultInject: true,
-            description: "End the current turn and wait for more information before continuing. Specify what you are waiting for using at least one of the options below. Incoming messages or other events can resume the session even while the specified work is still pending. If another tool in the same batch returns an error, this wait is canceled so you can handle the error.",
+            description: "End the current turn and wait for more information before continuing. This tool registers the wait and returns; it does not remain running until messages arrive or work completes. It requests that the Session pause after the current tool batch. Specify what you are waiting for using at least one of the options below. Incoming messages or other events can resume the session even while the specified work is still pending. If another tool in the same batch returns an error, this wait is canceled so you can handle the error.",
             parameters: {
                 type: 'object',
                 // Anthropic-compatible gateways reject top-level schema combinators.
                 // tool_wait enforces mutual exclusion before starting a wait.
                 properties: {
                     reason: { type: 'string', description: "Briefly explain what you are waiting for." },
-                    wakeIfNoActivityAfterSeconds: { type: 'number', exclusiveMinimum: 0, description: "Resume after this many seconds if nothing else has resumed the session. Use this as a fallback so you can check progress or decide what to do next." },
+                    wakeIfNoActivityAfterSeconds: { type: ['number', 'null'], exclusiveMinimum: 0, description: "Resume after this many seconds if nothing else has resumed the session. Set to null to disable the automatic 600-second fallback for waitExecIds." },
                     waitAllSessions: {
                         type: 'array',
                         description: "Session IDs from which you need responses before continuing the dependent work. Use this only when every listed session must respond. Cannot be combined with waitAnySessions.",
@@ -344,18 +345,18 @@ Example:
                     },
                     waitExecIds: {
                         type: 'array',
-                        description: "Background executions whose completion you are waiting for. Use an active execId owned by this session or agent, or one whose completion is already queued. Use the execId returned by exec, not a process ID or file path.",
+                        description: "Background executions whose completion you are waiting for. Use an active execId owned by this session or agent, or one whose completion is already queued. Use the execId returned by exec, not a process ID or file path. When wakeIfNoActivityAfterSeconds is omitted, this wait also wakes after 600 seconds; set it to null to wait indefinitely.",
                         minItems: 1, uniqueItems: true,
                         items: { type: 'string', description: "Execution ID returned by exec." }
                     },
-                    waitForInput: { type: 'boolean', enum: [true], description: "Set to true when waiting for a user message or another external event that is not covered by the session or execution options." }
+                    waitForInput: { type: 'boolean', enum: [true], description: "Set to true when waiting for a user message or another external event that is not covered by the session or execution options. When combined with waitExecIds, this keeps the wait input-driven without adding the automatic exec fallback." }
                 }
             } as any
         },
         {
             name: 'send_to_channel',
             defaultInject: true,
-            description: "Send a message to a specific channel destination. For a normal-mode channel attached to this session, reply directly instead: your assistant text is delivered automatically. Use this tool for send-only channels or when the task requires delivery to a different destination.",
+            description: "Send a message to a specific channel destination. The destination does not need a Session attachment. For a normal-mode channel attached to this session, reply directly instead: your assistant text is delivered automatically. Use this tool for send-only channels or when the task requires delivery to a different destination.",
             parameters: {
                 type: 'object',
                 properties: {
@@ -735,7 +736,7 @@ Example:
         {
             name: 'run_script',
             defaultInject: true,
-            description: "Run ToolScript code to coordinate tool calls. Supply a script file or inline code. Top-level code can read args and return a result; scripts defining main(args) are called automatically. Returns a runId for inspecting or resuming the run. A run paused at a safe time-budget checkpoint can be resumed with continue_script.",
+            description: "Run Python-subset ToolScript to coordinate tool calls. Use it for dependent tool calls, conditional steps, or stopping after a failed prerequisite; ordinary adjacent exec calls may run concurrently. Supply code or filePath; args is the input dictionary. Call tools synchronously with call_tool (no await); its first argument can be a tool name or tool ID. Use return for the result. Example: code='return call_tool(\"read\", {\"filePath\": args[\"path\"], \"endLine\": 5})', args={\"path\": \"README.md\"}. Tools return their native values, not a common response envelope. Use call_tool for filesystem/process access rather than Python OS APIs. A defined main(args) is called automatically. Returns status and runId; resume a time-budget or agent-input pause with continue_script using runId and continuationId.",
             parameters: {
                 type: 'object',
                 properties: {
@@ -848,9 +849,21 @@ Example:
             }
         },
         {
+            name: 'mcp_notifications',
+            description: "Start, stop, or inspect message notifications from a configured MCP server for the current Session. Requires Streamable HTTP and Foxwarm notification support. Calls to the server share this Session's connection. Incoming messages enter this Session's normal queue only while reception is enabled; disconnected messages are not replayed. See the mcp-management skill for setup and explicit replies between instances.",
+            parameters: {
+                type: 'object',
+                properties: {
+                    action: { type: 'string', enum: ['start', 'stop', 'status'], description: 'Operation to perform.' },
+                    server: { type: 'string', description: 'Configured MCP server name.' }
+                },
+                required: ['action', 'server']
+            }
+        },
+        {
             name: 'node',
             defaultInject: true,
-            description: "List available Nodes, select this session's execution Node, or manage a Node through its configured provider. Provider operations may create or remove resources; inspect the provider's behavior before assuming what will be retained or deleted.",
+            description: "List available Nodes, select this session's execution Node, or manage a Node through its configured provider. For select, you may put exec or file calls after it in the same response. Those calls use the selected Node; if selection fails, the remaining calls in that batch are skipped. Provider operations may create or remove resources; inspect the provider's behavior before assuming what will be retained or deleted.",
             parameters: {
                 type: 'object',
                 properties: {
@@ -917,7 +930,7 @@ Example:
                 type: 'object',
                 properties: {
                     agentName: { type: 'string', description: "Existing agent that will own the session." },
-                    sessionName: { type: 'string', description: "Session name without the agent prefix; it cannot contain /." },
+                    sessionName: { type: 'string', description: "Session name without the agent prefix. Use only ASCII letters, digits, underscores, and hyphens." },
                     displayName: { type: 'string', description: "Display name for the new session." },
                     parentSessionId: { type: 'string', description: "Existing session to record as the new session's parent." },
                     node: { type: 'string', description: "Node for the new session. Omit to inherit this session's current Node. An isolated target agent uses its bound Node." },
@@ -958,15 +971,16 @@ Example:
             }
         },
         {
-            name: 'set_tool_rules',
+            name: 'set_config',
             defaultInject: false,
-            description: "Install a complete tool authorization policy from a file on master. The candidate is validated before atomically replacing state/tool-authorization.yaml. Your current permissions must allow both this operation and reading the candidate file.",
+            description: "Install a complete YAML configuration from a file on master. Choose config, models, or tool-rules. The candidate is validated before replacing the active file. Supported changes are applied without restarting; the result identifies changes that require a restart. Your current permissions must allow both this operation and reading the candidate file. See the access-control skill for identity and tool-policy updates.",
             parameters: {
                 type: 'object',
                 properties: {
-                    filePath: { type: 'string', description: "Path on master to the complete candidate YAML policy. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory on master. Other leading $ names are rejected." }
+                    target: { type: 'string', enum: ['config', 'models', 'tool-rules'], description: "Configuration to replace: config for app settings, models for providers and models, or tool-rules for the instance tool authorization policy." },
+                    filePath: { type: 'string', description: "Path on master to the complete candidate YAML file. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory on master. Other leading $ names are rejected." }
                 },
-                required: ['filePath'],
+                required: ['target', 'filePath'],
                 additionalProperties: false
             }
         },
@@ -977,7 +991,7 @@ Example:
                 type: 'object',
                 properties: {
                     sessionId: { type: 'string', description: "Session to move. Defaults to this session." },
-                    newSessionId: { type: 'string', description: "New session name without an agent prefix or /. Defaults to main when createAgent is true." },
+                    newSessionId: { type: 'string', description: "New session name without an agent prefix. Use only ASCII letters, digits, underscores, and hyphens. Defaults to main when createAgent is true." },
                     createAgent: { type: 'boolean', description: "Create the destination agent. Defaults to false." },
                     newAgentName: { type: 'string', description: "Destination agent. Required when creating an agent or moving across agents; omit to rename within the source agent." },
                     createAgentInheritMemory: { type: 'boolean', description: "Copy source memory when creating the destination agent. Applies only when createAgent is true." },

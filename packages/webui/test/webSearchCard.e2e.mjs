@@ -29,7 +29,7 @@ async function buildFixtureBundle() {
       metadata({ type: 'find_in_page', pattern: 'invisible' }),
       { text: 'final answer', providerMeta: { openaiResponses: { annotations: [{ type: 'url_citation', url: 'https://example.com/source', title: 'Example source' }] } } },
     ], __meta: { seq: 1 } }
-    createRoot(document.getElementById('root')).render(React.createElement(ChatTimeline, { sessionId: 'fixture/main', messages: [message], isMobile: false, groupTools: false, showUsageBadge: false }))
+    createRoot(document.getElementById('root')).render(React.createElement(ChatTimeline, { sessionId: 'fixture/main', messages: [message], isMobile: false, timelineView: 'detailed', showUsageBadge: false }))
   `
   const result = await build({
     stdin: { contents: source, resolveDir: new URL('..', import.meta.url).pathname, sourcefile: 'web-search-card-fixture.tsx' },

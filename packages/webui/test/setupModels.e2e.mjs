@@ -246,6 +246,10 @@ async function attachRequestMocks(targetPage, options = {}) {
       }
       return
     }
+    if (url.pathname.endsWith('/api/auth/session')) {
+      void respondJson(request, { role: 'admin' })
+      return
+    }
     if (url.pathname.endsWith('/api/setup/config') && request.method() === 'POST') {
       savedConfigRequest = JSON.parse(request.postData() || '{}')
       options.configSaveRequests?.push(savedConfigRequest)
@@ -257,7 +261,7 @@ async function attachRequestMocks(targetPage, options = {}) {
         void respondJson(request, { error: configSaveError }, 400)
       } else {
         mockConfigRawYaml = savedConfigRequest.yaml
-        void respondJson(request, { success: true, rawYaml: savedConfigRequest.yaml, reload: { started: ['telegram'] } })
+        void respondJson(request, { success: true, rawYaml: savedConfigRequest.yaml, reload: { started: ['telegram'] }, ...options.configSaveResult })
       }
       return
     }
@@ -1468,6 +1472,27 @@ test('config save success and error feedback stay with the Config Save button', 
   await page.waitForFunction(() => !document.querySelector('[data-save-feedback="models"], [data-save-feedback="config"]'))
   await page.click('[data-setup-tab="models"]')
   await page.waitForSelector('[data-setup-section="models"] [data-editor-ready="true"]', { timeout: 15_000 })
+})
+
+test('Config save feedback distinguishes saved changes from pending restart and incomplete application', async () => {
+  const configPage = await browser.newPage()
+  const options = { configSaveResult: { saved: true, restartRequired: ['bot'], notApplied: [] } }
+  await attachRequestMocks(configPage, options)
+  try {
+    await configPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
+    await configPage.waitForSelector('[data-setup-tab="config"]')
+    await configPage.click('[data-setup-tab="config"]')
+    await configPage.click('button::-p-text(Save config)')
+    await configPage.waitForFunction(() => /saved/i.test(document.querySelector('[data-save-feedback="config"]')?.textContent || ''))
+    let feedback = await configPage.$eval('[data-save-feedback="config"]', element => element.textContent)
+    assert.match(feedback, /restart/i)
+    options.configSaveResult = { saved: true, restartRequired: [], notApplied: ['channels'] }
+    await configPage.click('button::-p-text(Save config)')
+    await configPage.waitForFunction(() => /could not be applied/i.test(document.querySelector('[data-save-feedback="config"]')?.textContent || ''))
+    feedback = await configPage.$eval('[data-save-feedback="config"]', element => element.textContent)
+    assert.match(feedback, /saved/i)
+    assert.match(feedback, /could not be applied/i)
+  } finally { await configPage.close() }
 })
 
 test('editing while a models save is held preserves the newer document and suppresses stale feedback', async () => {

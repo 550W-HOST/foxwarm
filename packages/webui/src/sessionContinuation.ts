@@ -44,6 +44,13 @@ function isGeneratedCompactCompletionMessage(message: Message): boolean {
     && isCanonicalSystemOnlyPart(message.parts[1], isCompactCompletionGoalReminderText)
 }
 
+/** Canonical maintenance only; authored text and messages with extra content are not maintenance. */
+export function isCompactCompletionMaintenanceMessage(message: Message): boolean {
+  return isGeneratedCompactCompletionMessage(message)
+    || message.role === 'user' && message.parts.length === 1
+      && isCanonicalSystemOnlyPart(message.parts[0], isCompactCompletedText)
+}
+
 function isCompactCompletedMessage(message: Message): boolean {
   if (isGeneratedCompactCompletionMessage(message)) return true
   const meaningfulParts = message.parts.filter(part => (

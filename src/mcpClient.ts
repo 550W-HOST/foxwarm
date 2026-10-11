@@ -1,6 +1,8 @@
+import { isDeepStrictEqual } from 'node:util';
 import { MCP_CONFIG_PATH } from './config';
 import { logger } from './common';
 import { DiskJsonData } from './utils/diskJsonData';
+import { closeMcpCallerConnections, withMcpCallerConnection, startMcpNotifications, MCP_NOTIFICATION_CAPABILITY, type McpConnectionOwner, type McpCallerConnection } from './mcpCallerConnections';
 
 type McpSdkModules = {
   Client: any;
@@ -302,7 +304,7 @@ async function getServerConfig(name?: string): Promise<{ name: string; config: M
   return { name: serverName, config: server };
 }
 
-function getHeaders(config: McpServerConfig): Record<string, string> | undefined {
+export function buildMcpHttpHeaders(config: McpServerConfig): Record<string, string> | undefined {
   const headers: Record<string, string> = {};
 
   // The token supplies a default; an explicitly configured header wins.
@@ -322,10 +324,6 @@ function getHeaders(config: McpServerConfig): Record<string, string> | undefined
   return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
-export function buildMcpHttpHeadersForTests(config: McpServerConfig): Record<string, string> | undefined {
-  return getHeaders(config);
-}
-
 export function setMcpSdkForTests(sdk: McpSdkModules | null): void {
   cachedMcpSdk = sdk;
 }
@@ -334,6 +332,7 @@ export async function resetMcpConnectionsForTests(): Promise<void> {
   const entries = Array.from(stdioConnectionPool.values());
   stdioConnectionPool.clear();
   await Promise.all(entries.map(entry => closePooledStdioConnection(entry)));
+  await closeMcpCallerConnections();
   cachedMcpSdk = null;
 }
 
@@ -387,31 +386,6 @@ function scheduleStdioIdleCleanup(entry: PooledStdioConnection) {
     });
   }, STDIO_POOL_IDLE_TTL_MS);
   entry.idleTimer.unref?.();
-}
-
-async function connectStreamableHttp(url: string, config: McpServerConfig): Promise<StandardConnection> {
-  const { Client, StreamableHTTPClientTransport } = loadMcpSdk();
-  const headers = getHeaders(config);
-  const transport = new StreamableHTTPClientTransport(new URL(url), {
-    requestInit: {
-      headers,
-    } as any,
-  });
-  const client = new Client({ name: 'foxwarm-mcp-client', version: '1.0.0' });
-  await client.connect(transport);
-  return { client, transport, transportKind: 'streamable-http' };
-}
-
-async function connectSse(url: string, config: McpServerConfig): Promise<StandardConnection> {
-  const { Client, SSEClientTransport } = loadMcpSdk();
-  const headers = getHeaders(config);
-  const transport = new SSEClientTransport(new URL(url), {
-    eventSourceInit: headers ? ({ headers } as any) : undefined,
-    requestInit: headers ? ({ headers } as any) : undefined,
-  });
-  const client = new Client({ name: 'foxwarm-mcp-client', version: '1.0.0' });
-  await client.connect(transport);
-  return { client, transport, transportKind: 'sse' };
 }
 
 async function connectStdio(config: McpServerConfig): Promise<StandardConnection> {
@@ -486,60 +460,21 @@ async function getOrCreatePooledStdioConnection(serverName: string, config: McpS
   }
 }
 
-async function connectStandardTransport(config: McpServerConfig): Promise<StandardConnection> {
-  const transport = normalizeTransport(config);
-
-  if (transport === 'streamable-http') {
-    return connectStreamableHttp(requireUrl(config, transport), config);
-  }
-
-  if (transport === 'sse') {
-    return connectSse(requireUrl(config, transport), config);
-  }
-
-  if (transport === 'stdio') {
-    return connectStdio(config);
-  }
-
-  if (transport === 'auto') {
-    try {
-      return await connectStreamableHttp(requireUrl(config, transport), config);
-    } catch (streamableError: any) {
-      try {
-        return await connectSse(requireUrl(config, transport), config);
-      } catch (sseError: any) {
-        throw new Error(
-          `Failed to connect MCP server using auto transport. Streamable HTTP error: ${streamableError?.message || streamableError}. SSE error: ${sseError?.message || sseError}`
-        );
-      }
-    }
-  }
-
-  throw new Error(`Transport ${transport} is not a standard MCP transport.`);
+function httpOptions(name: string, config: McpServerConfig, owner?: McpConnectionOwner) {
+  const mode = normalizeTransport(config) as 'streamable-http' | 'sse' | 'auto';
+  return { owner, server: name, mode, url: requireUrl(config, mode), headers: buildMcpHttpHeaders(config), sdk: loadMcpSdk() };
 }
 
-async function withStandardConnection<T>(config: McpServerConfig, fn: (connection: StandardConnection) => Promise<T>): Promise<T> {
-  const connection = await connectStandardTransport(config);
-  try {
-    return await fn(connection);
-  } finally {
-    try {
-      await connection.transport.close();
-    } catch {
-      // Ignore close errors for short-lived MCP tool calls.
-    }
-  }
-}
-
-async function withServerConnection<T>(serverName: string, config: McpServerConfig, fn: (connection: StandardConnection) => Promise<T>): Promise<T> {
-  if (normalizeTransport(config) !== 'stdio') {
-    return withStandardConnection(config, fn);
-  }
+async function withServerConnection<T>(serverName: string, config: McpServerConfig,
+  fn: (connection: Pick<McpCallerConnection, 'client' | 'reception'>) => Promise<T>, owner?: McpConnectionOwner, signal?: AbortSignal): Promise<T> {
+  signal?.throwIfAborted();
+  if (normalizeTransport(config) !== 'stdio') return withMcpCallerConnection(httpOptions(serverName, config, owner), fn, signal);
 
   const connection = await getOrCreatePooledStdioConnection(serverName, config);
   connection.lastUsedAt = Date.now();
   clearStdioIdleTimer(connection);
   try {
+    signal?.throwIfAborted();
     return await fn(connection);
   } finally {
     connection.lastUsedAt = Date.now();
@@ -642,6 +577,23 @@ export function normalizeMcpToolResult(result: any): any {
 
   result = normalizeMcpImageContent(result);
 
+  if (Object.prototype.hasOwnProperty.call(result, 'structuredContent')) {
+    if (Array.isArray(result.content)) {
+      const content = result.content.filter((item: any) => {
+        if (!isPlainTextContentBlock(item)) return true;
+        try { return !isDeepStrictEqual(JSON.parse(item.text), result.structuredContent); }
+        catch { return true; }
+      });
+      if (content.length !== result.content.length) result = { ...result, content };
+    }
+    const hasOtherMetadata = Object.keys(result).some(key => key !== 'structuredContent'
+      && key !== 'content' && !(key === 'isError' && result.isError !== true));
+    if (!hasOtherMetadata && (result.content === undefined || (Array.isArray(result.content) && result.content.length === 0))) {
+      return result.structuredContent;
+    }
+    return result;
+  }
+
   if (hasPreservableMcpResultMetadata(result)) {
     return result;
   }
@@ -655,33 +607,60 @@ export function normalizeMcpToolResult(result: any): any {
   return parsed !== undefined ? parsed : content[0].text;
 }
 
-export async function listTools(serverName?: string, signal?: AbortSignal) {
+export async function listTools(serverName?: string, signal?: AbortSignal, owner?: McpConnectionOwner) {
   const { name, config } = await getServerConfig(serverName);
   return withServerConnection(name, config, async ({ client }) => {
     return signal ? await client.listTools(undefined, { signal }) : await client.listTools();
-  });
+  }, owner, signal);
 }
 
-export async function callTool(serverName: string | undefined, tool: string, args?: Record<string, any>, options: { signal?: AbortSignal; rawResult?: boolean } = {}) {
+export async function callTool(serverName: string | undefined, tool: string, args?: Record<string, any>, options: { signal?: AbortSignal; rawResult?: boolean; owner?: McpConnectionOwner; cancellationLabel?: string } = {}) {
   const { name, config } = await getServerConfig(serverName);
-  return withServerConnection(name, config, async ({ client }) => {
-    const params = { name: tool, arguments: args || {} };
-    const requestOptions = {
-      ...(config.timeoutSeconds === undefined ? {} : { timeout: config.timeoutSeconds * 1000 }),
-      ...(options.signal ? { signal: options.signal } : {}),
-    };
-    try {
-      const result = !Object.keys(requestOptions).length
-        ? await client.callTool(params)
-        : await client.callTool(params, undefined, requestOptions);
-      return options.rawResult ? result : normalizeMcpToolResult(result);
-    } catch (error) {
-      // The SDK dispatches cancellation asynchronously. Keep this short-lived HTTP
-      // transport open briefly so its best-effort notification can reach the server.
-      if (options.signal?.aborted) await new Promise(resolve => setTimeout(resolve, 100));
-      throw error;
+  let dispatched = false;
+  try {
+    return await withServerConnection(name, config, async ({ client, reception }) => {
+      if (tool === 'foxwarm_session' && args?.action === 'send'
+        && client.getServerCapabilities?.()?.experimental?.[MCP_NOTIFICATION_CAPABILITY]?.version === 1) {
+        if (typeof args.allowReply === 'boolean' && typeof args.reply === 'boolean' && args.allowReply !== args.reply) {
+          throw new Error('allowReply and legacy reply must agree when both are provided. No tool call was sent.');
+        }
+        if (args.allowReply === true || args.reply === true) {
+          if (!reception) throw new Error('Start mcp_notifications for this Session before requesting explicit replies. No tool call was sent.');
+          await reception.assertActive();
+        }
+      }
+      options.signal?.throwIfAborted();
+      const params = { name: tool, arguments: args || {} };
+      const requestOptions = {
+        ...(config.timeoutSeconds === undefined ? {} : { timeout: config.timeoutSeconds * 1000 }),
+        ...(options.signal ? { signal: options.signal } : {}),
+      };
+      try {
+        dispatched = true;
+        const result = !Object.keys(requestOptions).length
+          ? await client.callTool(params)
+          : await client.callTool(params, undefined, requestOptions);
+        return options.rawResult ? result : normalizeMcpToolResult(result);
+      } catch (error) {
+        // The SDK dispatches cancellation asynchronously. Keep this short-lived HTTP
+        // transport open briefly so its best-effort notification can reach the server.
+        if (options.signal?.aborted) await new Promise(resolve => setTimeout(resolve, 100));
+        throw error;
+      }
+    }, options.owner, options.signal);
+  } catch (error: any) {
+    const signal = options.signal;
+    const isCancellation = signal?.aborted && (!dispatched || error === signal.reason
+      || error?.name === 'AbortError'
+      || (error?.code === -32001 && String(error?.message).includes(String(signal.reason))));
+    if (isCancellation) {
+      const label = options.cancellationLabel || 'caller cancellation';
+      throw new Error(dispatched
+        ? `MCP call was cancelled by ${label} after dispatch. No result was received; the remote tool may already have executed or caused side effects. Cancellation does not roll those effects back.`
+        : `MCP call was not started because ${label} cancelled it; the tool was not executed.`);
     }
-  });
+    throw error;
+  }
 }
 
 export async function upsertServer(name: string, server: McpServerConfig) {
@@ -689,6 +668,7 @@ export async function upsertServer(name: string, server: McpServerConfig) {
     config.servers = config.servers || {};
     config.servers[name] = normalizeManagedMcpServerConfig({ ...config.servers[name], ...server });
   });
+  await closeMcpCallerConnections({ server: name });
 }
 
 export async function setServerEnabled(name: string, enable: boolean) {
@@ -699,6 +679,7 @@ export async function setServerEnabled(name: string, enable: boolean) {
     }
     config.servers[name].enable = enable;
   });
+  await closeMcpCallerConnections({ server: name });
 }
 
 export async function getServers() {
@@ -708,4 +689,16 @@ export async function getServers() {
 export async function listServers() {
   const servers = await getServers();
   return summarizeServers(servers);
+}
+
+export async function startNotifications(server: string, owner: McpConnectionOwner, reception: {
+  assertActive(): Promise<void>;
+  receive(message: string, endpoint: string, assertLive: () => void): Promise<void>;
+}) {
+  const servers = await getServers();
+  if (!Object.prototype.hasOwnProperty.call(servers, server)) throw new Error(`MCP server "${server}" not found.`);
+  const config = servers[server];
+  if (config.enable === false) throw new Error(`MCP server "${server}" is disabled.`);
+  if (normalizeTransport(config) !== 'streamable-http') throw new Error('Notifications require an enabled Streamable HTTP server.');
+  return startMcpNotifications({ ...httpOptions(server, config, owner), ...reception });
 }

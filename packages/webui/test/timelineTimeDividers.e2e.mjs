@@ -26,7 +26,7 @@ before(async () => {
     const call = (id, seq, timestamp, startedAt) => timed(seq, [{ functionCall: { id, name: 'exec', args: { command: 'echo ' + id } } }], timestamp, { usage: { cachedTokens: 2, inputTokens: 3, outputTokens: 4 }, ...(startedAt !== undefined ? { llmRequestTiming: { startedAt, completedAt: timestamp, durationMs: timestamp - startedAt } } : {}) })
     const result = (id, seq, timestamp, output) => ({ role: 'tool', parts: [{ functionResponse: { tool_use_id: id, name: 'exec', response: { output } } }], __meta: { seq, timestamp } })
     const received = (seq, timestamp) => ({ role: 'user', parts: [{ text: 'A later user message' }], __meta: { seq, timestamp } })
-    const mainProps = messages => ({ sessionId: 'fixture/timeline', messages, isMobile: false, groupTools: true, showUsageBadge: true })
+    const mainProps = messages => ({ sessionId: 'fixture/timeline', messages, isMobile: false, timelineView: 'grouped', showUsageBadge: true })
     const groupMessages = () => {
       const aEnd = base + 40 * 60_000
       const bStart = aEnd + 59_999

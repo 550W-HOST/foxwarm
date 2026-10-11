@@ -444,7 +444,7 @@ function App() {
     return Number.isFinite(saved) ? Math.min(420, Math.max(180, saved)) : 256
   })
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true')
-  const { sendKeyMode, setSendKeyMode, groupTools, setGroupTools, showUsageBadge, setShowUsageBadge, showUserMessageMetadata, setShowUserMessageMetadata } = useChatPreferences()
+  const { sendKeyMode, setSendKeyMode, timelineView, setTimelineView, showUsageBadge, setShowUsageBadge, showUserMessageMetadata, setShowUserMessageMetadata } = useChatPreferences()
   const [webUiSettings, setWebUiSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
   const [vscodeFrameStarted, setVscodeFrameStarted] = useState(false)
   const [vscodeFrameSlot, setVscodeFrameSlot] = useState<HTMLElement | null>(null)
@@ -468,13 +468,15 @@ function App() {
   const replaceTabId = useWorkbenchStore((state) => state.replaceTabId)
   const moveTabToPane = useWorkbenchStore((state) => state.moveTabToPane)
   const dockTabToPaneEdge = useWorkbenchStore((state) => state.dockTabToPaneEdge)
+  const movePaneToEdge = useWorkbenchStore((state) => state.movePaneToEdge)
   const reorderTabs = useWorkbenchStore((state) => state.reorderTabs)
   const splitPaneWithTab = useWorkbenchStore((state) => state.splitPaneWithTab)
   const splitPaneWithNewTab = useWorkbenchStore((state) => state.splitPaneWithNewTab)
   const closePane = useWorkbenchStore((state) => state.closePane)
+  const setPaneCollapsed = useWorkbenchStore((state) => state.setPaneCollapsed)
   const updateSplitSizes = useWorkbenchStore((state) => state.updateSplitSizes)
 
-  const [draggingItem, setDraggingItem] = useState<{ type: 'tab' | 'session'; id: string; title: string } | null>(null)
+  const [draggingItem, setDraggingItem] = useState<{ type: 'tab' | 'session' | 'pane'; id: string; title: string } | null>(null)
 
   const pendingRouteTabIdRef = useRef<string | null>(null)
   const currentRouteTabIdRef = useRef<string | null>(route.tabId)
@@ -491,7 +493,11 @@ function App() {
   const focusedActiveTabId = focusedPane?.activeTabId || paneNodes[0]?.activeTabId || null
   const focusedActiveTab = focusedActiveTabId ? (tabsById[focusedActiveTabId] || null) : null
   const activePaneTabTypes = useMemo(
-    () => paneNodes.map((pane) => pane.activeTabId ? tabsById[pane.activeTabId]?.type : null),
+    () => paneNodes.filter((pane) => !pane.collapsed).map((pane) => pane.activeTabId ? tabsById[pane.activeTabId]?.type : null),
+    [paneNodes, tabsById],
+  )
+  const hasCollapsedCodePane = useMemo(
+    () => paneNodes.some((pane) => pane.collapsed && pane.tabIds.some((tabId) => tabsById[tabId]?.type === 'vscode')),
     [paneNodes, tabsById],
   )
   const handleVscodeFrameSlot = useCallback((element: HTMLElement | null) => setVscodeFrameSlot(element), [])
@@ -846,10 +852,13 @@ function App() {
   }
 
   useLayoutEffect(() => {
-    setVscodeFrameStarted((started) => selectCodeFrameStarted(started, activePaneTabTypes, {
-      workbenchVisible: !isMobile || !showSessionList,
-    }))
-  }, [activePaneTabTypes, isMobile, showSessionList])
+    setVscodeFrameStarted((started) => {
+      if (hasCollapsedCodePane && !activePaneTabTypes.includes('vscode')) return false
+      return selectCodeFrameStarted(started, activePaneTabTypes, {
+        workbenchVisible: !isMobile || !showSessionList,
+      })
+    })
+  }, [activePaneTabTypes, hasCollapsedCodePane, isMobile, showSessionList])
 
   const updateCodePath = (path: string) => {
     const normalized = writeCodeWorkspacePathPreference(localStorage, path)
@@ -1487,11 +1496,11 @@ function App() {
           onOpenCodeCommit={openCodeCommit}
           onOpenModelSettings={() => openSetupView({ focusModels: true })}
           sendKeyMode={sendKeyMode}
-          groupTools={groupTools}
+          timelineView={timelineView}
           showUsageBadge={showUsageBadge}
           showUserMessageMetadata={showUserMessageMetadata}
           onSendKeyModeChange={setSendKeyMode}
-          onGroupToolsChange={setGroupTools}
+          onTimelineViewChange={setTimelineView}
           onShowUsageBadgeChange={setShowUsageBadge}
           onShowUserMessageMetadataChange={setShowUserMessageMetadata}
         />
@@ -1504,7 +1513,7 @@ function App() {
 
     if (tab.type === 'search') return <HistorySearchView
       isMobile={isMobile}
-      groupTools={groupTools}
+      timelineView={timelineView}
       showUsageBadge={showUsageBadge}
       showUserMessageMetadata={showUserMessageMetadata}
       knownSessions={sidebarSessions.map(session => session.id)}
@@ -1569,7 +1578,7 @@ function App() {
     )
   }
 
-  const renderPane = (paneId: string, onBack?: () => void) => {
+  const renderPane = (paneId: string, onBack?: () => void, collapseDirection: 'row' | 'column' = 'column') => {
     const pane = findPaneNode(root, paneId)
     if (!pane) {
       return null
@@ -1625,8 +1634,10 @@ function App() {
     return (
       <WorkbenchPane
         paneId={paneId}
+        collapseDirection={collapseDirection}
         tabs={paneTabs}
         activeTabId={pane.activeTabId}
+        collapsed={pane.collapsed}
         focused={focusedPaneId === paneId}
         emphasizeFocus={paneIds.length > 1}
         dragEnabled={!isMobile}
@@ -1636,6 +1647,7 @@ function App() {
         canCloseActiveTab={!!activeTab && !(activeTab.type === 'setup' && setupOobe)}
         renderContent={renderContent}
         onFocusPane={handleFocus}
+        onSetCollapsed={setPaneCollapsed}
         onSelectTab={navigateToTab}
         onCloseTab={(tabId) => { void closeWorkbenchTab(tabId) }}
         onKeepTab={keepWorkbenchTab}
@@ -1657,7 +1669,12 @@ function App() {
 
   const handleDragStart = (event: DragStartEvent) => {
     const activeId = String(event.active.id)
-    const activeData = event.active.data.current as { type?: string; title?: string; sessionId?: string } | undefined
+    const activeData = event.active.data.current as { type?: string; title?: string; sessionId?: string; paneId?: string } | undefined
+    if (activeData?.type === 'pane' && activeData.paneId) {
+      const pane = findPaneNode(root, activeData.paneId)
+      setDraggingItem({ type: 'pane', id: activeData.paneId, title: pane?.tabIds.map((id) => tabsById[id]?.title).filter(Boolean).join(', ') || 'Empty pane' })
+      return
+    }
     if (activeData?.type === 'session') {
       setDraggingItem({ type: 'session', id: activeData.sessionId || activeId, title: activeData.title || activeData.sessionId || activeId })
       return
@@ -1683,6 +1700,13 @@ function App() {
     setDraggingItem(null)
 
     if (!overId || !activeData) {
+      return
+    }
+
+    if (activeData.type === 'pane') {
+      if (activeData.paneId && overData?.type === 'pane-edge' && overData.paneId && overData.edge) {
+        movePaneToEdge(activeData.paneId, overData.paneId, overData.edge)
+      }
       return
     }
 
@@ -1810,6 +1834,12 @@ function App() {
       sensors={dragSensors}
       collisionDetection={(args) => {
         const collisions = pointerWithin(args)
+        if (args.active.data.current?.type === 'pane') {
+          return collisions.filter((collision) => {
+            const data = args.droppableContainers.find((container) => container.id === collision.id)?.data.current
+            return data?.type === 'pane-edge' && data.paneId !== args.active.data.current?.paneId
+          })
+        }
         const priorityByType: Record<string, number> = {
           'sidebar-session-before': 0,
           'sidebar-session-after': 0,
@@ -1836,6 +1866,10 @@ function App() {
         {draggingTab ? (
           <div className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong">
             <span className="truncate">{draggingTab.title}</span>
+          </div>
+        ) : draggingItem?.type === 'pane' ? (
+          <div data-pane-drag-overlay className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg">
+            <span className="truncate">Pane: {draggingItem.title}</span>
           </div>
         ) : draggingItem?.type === 'session' ? (
           <div data-session-drag-overlay className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong">
@@ -1968,7 +2002,7 @@ function App() {
         <div className="h-full min-h-0 overflow-hidden">
           <WorkbenchLayout
             node={root}
-            renderPane={(paneId) => renderPane(paneId)}
+            renderPane={(paneId, collapseDirection) => renderPane(paneId, undefined, collapseDirection)}
             onLayoutResize={updateSplitSizes}
           />
         </div>

@@ -1,0 +1,332 @@
+# Unit: src-channels-qqbot
+
+Files: src/channels/qqbotChannel.ts, src/channels/qqbotChannel.test.ts, src/channels/qqbotChannelMediaSend.test.ts, src/channels/qqbotMedia.ts, src/channels/qqbotMedia.test.ts, src/channels/qqbotMediaUpload.ts, src/channels/qqbotMediaUpload.test.ts
+
+## Purpose
+
+Implements the official QQ Bot gateway adapter with direct AppID/client-secret
+configuration. It uses the QQ access-token endpoint, gateway WebSocket, and
+official REST message endpoints without depending on an unlicensed QR
+credential-provisioning package. C2C and group ingress also accepts bounded
+image/file/video/voice attachments through a deferred, authorization-gated materializer,
+and C2C/group `Channel.sendFile` uses the official direct-small or streamed-large
+upload flow.
+
+## Key exports
+
+- `QQBotChannel` — managed `Channel` implementation for official QQ Bot text
+  ingress, bounded group context/batching, bounded C2C/group media ingress,
+  and text delivery.
+- `parseQQBotConversationId()` — validates the scoped outbound target format.
+- `isQQBotChannelConfigReady()` — validates the two required credentials for
+  runtime factory/status handling.
+- `buildQQBotAttachmentPreviewParts()` — creates URL-free metadata parts for
+  attachment ingress before authorization and materialization.
+- `materializeQQBotAttachments()` — streams allowlisted HTTPS media into a
+  bounded spool, saves generic descriptors, and emits transient image parts
+  after a best-effort supported-raster format probe. Main-hosted sessions use
+  the path-based atomic saver; isolated/bound-node sessions use the existing
+  whole-buffer saver only up to a fixed 10 MiB transfer cap.
+- `uploadQQBotFile()` — validates a prepared local `ChannelFile`, sends files
+  below the 5 MiB direct-upload threshold through the bounded base64 endpoint
+  and larger files through streamed hashes/part bodies, enforces the
+  Tencent-compatible 100 MiB local-send cap, and returns one opaque `file_info`
+  token without caching it.
+
+## Function Index
+
+| Function | Description |
+| --- | --- |
+| `QQBotChannel.start()` / `stop()` | Obtains a token, opens or closes the gateway, and fences reconnect/heartbeat callbacks by connection generation. |
+| `QQBotChannel.handleGatewayMessage()` | Identifies or resumes after `HELLO`, retains dispatch sequence/session state, handles gateway control frames, and accepts supported message events. |
+| `QQBotChannel.routeInboundMessage()` | Deduplicates supported events, creates scoped identity, buffers/batches group input, keeps C2C/group attachment metadata URL-free, and attaches an ephemeral current-message media materializer. |
+| `QQBotChannel.sendMessage()` | Routes C2C, group, guild-channel, and guild-DM text to their official REST endpoint; C2C/group sends allocate one process-local outbound sequence per logical message. |
+| `QQBotChannel.sendFile()` | Sends C2C/group images or generic files through destination-specific direct-small or streamed-large upload and one rich-media message, using one outbound sequence across final-message fallback attempts; rejects guild/DM media. |
+| `QQBotChannel.sendTyping()` | Uses the official C2C input-notify message with the latest conversation-local inbound message ID and a process-local outbound sequence when available. |
+| `QQBotChannel.apiRequest()` / `getAccessToken()` | Performs authenticated API requests with a bounded 401 token refresh. |
+
+## Identity and supported surface
+
+- One configured adapter instance owns its configured channel ID. Its QQ
+  conversations are scoped as `c2c:<openid>`, `group:<group-openid>`,
+  `guild:<channel-id>`, and `dm:<guild-id>`.
+- `senderId` is the actual QQ identity: C2C `author.user_openid`, group
+  `author.member_openid`, or guild/DM `author.id`. This lets shared channel
+  authorization use `allowedUsers` normally rather than treating a group or
+  channel target as its sender.
+- The adapter accepts `content` plus attachments from `C2C_MESSAGE_CREATE`,
+  `GROUP_AT_MESSAGE_CREATE`, and ordinary `GROUP_MESSAGE_CREATE` events. Group
+  ordinary events are either bounded mention-triggered context or fixed-window
+  always-mode batches according to `requireMention`. Attachment-only C2C/group events are retained as
+  safe filename/MIME/size metadata and can be materialized only after the
+  canonical router has already authorized the sender. Supported raster images
+  become transient inline parts and other direct files (including video/voice)
+  become saved descriptors; the router's durable image boundary replaces image
+  bytes with references. Voice prefers an allowlisted WAV URL and preserves
+  bounded ASR reference text. Guild channel/DM media remains unsupported, and
+  empty guild/DM events are ignored; nested attachments remain deferred.
+- QQ group current triggers attach the adapter's reliable current-mention
+  classification through the generic channel-ingress metadata boundary. The
+  same classification drives mention policy and batch flushing. Exact signals,
+  grammar, command ordering, persistence, and no-guess behavior are canonical in
+  [D-channel-current-group-trigger-metadata](../modules/channels.md#d-channel-current-group-trigger-metadata).
+- Attachment materialization uses HTTPS-only allowlisted hosts, manually
+  revalidates each redirect, forwards no bot authorization/cookies, streams to
+  a bounded temporary file with a timeout, enforces per-file/total/count
+  bounds, sanitizes names, and uses a best-effort supported-raster format probe;
+  declared MIME and filenames remain hints and non-raster bytes stay generic.
+  Default local limits are 20 MiB safe inline-image cap, 50 MiB generic-file
+  cap, 200 MiB total, and eight attachments; isolated/bound-node transfers
+  additionally cap each downloaded attachment at a fixed 10 MiB before the
+  whole-buffer node write. The image setting cannot exceed
+  the safe 20 MiB inline cap while the generic-file setting cannot exceed 200
+  MiB. Images above the inline cap become generic file descriptors without
+  inline bytes. Master inbound file writes use a unique temporary path
+  followed by atomic rename and cleanup.
+- Attachment metadata is built before any media fetch. A message's ephemeral
+  `ChannelMessage.materializeParts(sessionId)` hook is invoked by
+  `MessageRouter` only when authorization was true at ingress; unauthorized
+  and first guest messages therefore perform zero media fetch/write operations.
+  The hook is never persisted or copied to a queue item.
+- The adapter retains a bounded latest message ID per scoped conversation.
+  Automatic typing, progress, intermediate, and final delivery resolves that
+  adapter-local ID for each attached QQ conversation; `ChannelContext`,
+  `QueueSource`, Worker RPC, and tool context do not carry or persist it.
+  When any ordinary follow-up arrives during a no-tool provider request, the
+  runner's pre-final safe point publishes the completed result once as
+  intermediate output to every eligible attachment, then continues the turn;
+  QQ uses its current latest passive ID and monotonic sequence independently.
+- Session-worker intermediate model-text delivery uses the same source-blind
+  attachment path with `turnFinal` unset. Each continuing-result text uses the
+  adapter's current/latest passive `msg_id` and monotonic `msg_seq`; WebUI is
+  excluded by the turn runner before this channel is called.
+- The gateway retains the latest dispatch sequence and READY session ID in
+  memory. HELLO resumes only when both are present; RECONNECT, resumable and
+  non-resumable INVALID_SESSION frames, documented close classes, heartbeat
+  ACKs, and stop/reconnect generation fencing are handled without persisting a
+  session claim.
+- A bounded in-process event-identity map drops duplicate supported gateway
+  deliveries before they reach MessageRouter. AT and ordinary group event
+  types share one canonical business-event namespace, so the same message is
+  not enqueued twice when QQ delivers both forms. Its identity uses event type,
+  `msg_id`, and normalized business `msg_seq` and/or official
+  `message_scene.ext` `msg_idx=<value>` array entry when supplied; gateway
+  dispatch `s` is transport resume state, never business dedup identity.
+  Bounded malformed/ambiguous ext input falls back to a valid `msg_seq` or
+  id-only identity. This inbound business sequence is independent from the
+  outbound allocator and the gateway dispatch sequence.
+- One module-scoped allocator supplies every C2C/group text, media, and typing
+  `msg_seq` across all adapter instances in the process. Module load chooses a
+  random nonzero uint32 seed; allocation advances through `1..0xffffffff` and
+  wraps to 1. Channel stop, reconnect, reload, instance recreation, passive
+  context expiry, and turn completion do not reset it. One logical outgoing
+  message allocates once, so the bounded 401 token retry and passive-expired
+  proactive fallback reuse the same value. This is process-local collision
+  mitigation only, with no persistence or cross-process/restart uniqueness.
+- QQ offers typing through C2C input-notify messages, so this adapter sends
+  typing only for a C2C conversation with a current latest inbound message ID.
+- C2C/group `sendFile` reuses a latest conversation-local message ID when
+  available, or a matching persisted ID supplied by the generic file-delivery
+  boundary after restart. It sends locally prepared files smaller than 5 MiB
+  through the destination-specific direct base64 flow, and uses the official
+  streamed chunk flow at or above 5 MiB. Images are sent only for
+  byte-probed JPEG/PNG/GIF/WebP/BMP within the image cap; other images downgrade
+  to generic files within the file cap. Outbound local files are hard-capped at
+  100 MiB; this is lower than the 200 MiB inbound configuration hard cap.
+- `SessionTurnRunner` carries only the current turn's QQ source metadata through
+  the in-process tool context to `send_file`. An explicit target receives that
+  fallback metadata only when its exact instance/conversation matches; a
+  mismatched target is therefore proactive, while session broadcast still
+  relies on the adapter's exact-match check.
+
+## Runtime and configuration
+
+- `QQBotConfig` in `src/config.ts` accepts `appId`, `clientSecret`, `enabled`,
+  `requireMention` (default `true`), `groupContextLimit` (default 10, range 0-50),
+  `groupBatchWindowMs` (default 5000; 0 or range 250-30000), `allowedUsers`,
+  `allowAllUsers`, and bounded `media` limits
+  (`imageMaxBytes` safe inline-image cap, `fileMaxBytes`, `maxTotalBytes`,
+  `maxAttachments`). Main-hosted materialization uses the path saver; isolated
+  or bound-node QQ media uses the existing whole-buffer saver only for files up
+  to the fixed 10 MiB transfer cap. Outbound
+  C2C/group media uses the image/file settings subject to the separate 100 MiB
+  local-send hard cap and the official local upload flow.
+- `src/channelRuntime.ts` constructs, starts, stops, reloads, and reports each
+  configured `qqbot` instance alongside the other managed adapters.
+- Startup uses the managed runtime after normal router authorization is
+  initialized. Multiple QQ Bot instances therefore have independent registry
+  IDs, credentials, and attachment namespaces.
+
+## Tests
+
+`src/channels/qqbotChannel.test.ts` and `src/channels/qqbotChannelMediaSend.test.ts` use mocked token/gateway/REST/COS calls and
+a fake WebSocket. It covers scoped target validation, C2C/group inbound
+identity and attachment ordering, deduplication before media fetch, passive
+reply and C2C typing identifiers, gateway identify and resume control flow,
+guild/DM media rejection, group/guild/DM outbound routes, and
+shutdown/reconnect fencing. Outbound tests cover destination-specific
+upload routes, direct-small bodies, streamed hash/chunk order, passive IDs/counts/sequences,
+caption/cap handling, permission failures, generation fences, and the
+`send_file` target path, including current-turn restart fallback metadata and
+mismatched-target proactive delivery. `src/channels/qqbotMediaUpload.test.ts` covers safe
+regular-file validation, the 100 MiB sparse-file preflight, HTTPS/userinfo/port
+checks, bounded prepare responses, part hashing, bounded PUT
+cancellation/timeouts, no whole-file buffering, and opaque completion tokens.
+`src/channels/qqbotMedia.test.ts` covers safe
+previews, direct video/voice generic saves and nested deferral, Main-hosted preflight,
+streamed spool/total/timeout bounds and cleanup, allowlisted redirect
+validation, safe generic-file storage, safe-inline-cap image fallback, best-effort
+raster format probing, controlled error categories/path scrubbing, and
+transient image data crossing into a canonical blob reference, isolated
+whole-buffer saves, and the fixed isolated transfer cap. Channel tests also
+cover the three group-delivery patterns, mention context, fixed always-mode
+batching, AT immediate flush, context markup escaping, group bounds/TTL,
+slash/media boundaries, lifecycle timer fences, AT/non-AT business
+deduplication, passive replies retaining the trigger `msg_id`, the three-minute
+boundary, structured expiration fallback, and media final retry without a
+second upload. Upload-unit tests cover tiny PNG/JPEG/generic direct bodies,
+  the exact 5 MiB boundary, larger streamed files, bounded direct responses,
+  and direct generation fences.
+
+## Design Decisions
+
+### D-qqbot-passive-reply-fallback
+
+For an adapter-selected passive QQ reply, Foxwarm follows the Tencent/OpenClaw local policy
+instead of inferring a server error: from the inbound/first-seen `msg_id`, at
+most four **successful passive text/image/file replies** are sent in three
+minutes. The next reply after that count or age boundary makes exactly one
+proactive attempt to the same scoped conversation. A per-`msg_id` in-process
+chain serializes the decision, HTTP result, and successful-count update, so
+concurrent replies do not spend speculative quota; unrelated IDs remain
+concurrent. Each queued operation is fenced to the adapter run generation
+before it begins I/O; stop or reload clears state, and stale old-generation
+chains cannot affect a new run. Typing uses the shared outbound sequence but
+does not consume the four passive replies. The limiter is per adapter instance,
+bounded and in-memory only; the outbound sequence allocator is module-scoped
+and survives adapter lifecycle changes.
+
+When a passive C2C/group text or media final/intermediate delivery receives
+the structured QQ API error code `40034005` (`code` or `err_code`), the
+adapter marks that `msg_id` expired and makes exactly one proactive retry.
+Text retries omit `msg_id`; media retries reuse the just-uploaded same-target
+`file_info` without re-uploading. The passive attempt and proactive fallback
+reuse the outgoing message's allocated `msg_seq`. Future
+operations for that ID remain proactive. No other API failure, generic HTTP
+failure, network/auth/rate-limit failure, or proactive failure triggers a
+fallback loop or retry; an automatic text final delivery logs and completes
+rather than making the runner send another error through the same passive context.
+
+### D-qqbot-inbound-media-boundary
+
+[2026-08-08] Stage 1 supports inbound C2C/group direct attachments. The adapter
+exposes URL-free metadata first; only a source that passed
+canonical Router authorization at ingress may invoke the ephemeral materializer
+to fetch and save media. First guest and unauthorized messages remain
+metadata-only, while later authorized messages may materialize. Direct video and
+voice are saved as generic bounded files; voice prefers an allowlisted
+`voice_wav_url` and includes bounded `asr_refer_text` metadata. Declared MIME
+and filename are hints only. A best-effort Sharp probe detects PNG/JPEG/GIF/WebP
+for optional inline image data under the safe cap; all other bytes stay generic.
+Inline image bytes remain transient until the shared
+content-addressed image-blob conversion runs before durable queue/history
+storage; generic files remain saved node/path descriptors. Images above the
+safe inline cap are generic file descriptors, not inline data. Guild/DM media,
+nested attachments, retries/outbox, and remote URL send are deferred.
+Main-hosted materialization uses the bounded spool path saver. For an
+isolated/bound-node destination, the adapter reuses the existing WeCom-style
+whole-buffer `saveInboundSessionFile`/node transfer only up to a fixed 10 MiB
+per-attachment cap; larger attachments return the ordinary bounded
+too-large result before a Buffer/Base64 transfer. This is deliberately a
+small fallback, not a claim that the node API is a streaming boundary, and
+introduces no new node protocol or configuration.
+
+### D-qqbot-group-mention-policy
+
+`QQBotConfig.requireMention` defaults to `true`. One configured adapter owns a
+bounded in-memory accumulator per scoped group so the same implementation works
+with QQ platform delivery configured as AT-only, AT plus previous group
+messages, or all group messages. QQ's AT-plus-history mode may deliver exactly
+one `GROUP_AT_MESSAGE_CREATE` whose `msg_elements[*].content` contains the
+previous-message bundle instead of replaying ordinary gateway frames.
+
+When mention is required, group events not classified as a current mention are
+untrusted context only. The adapter keeps the latest `groupContextLimit`
+entries and flushes them with one later mention trigger as exactly one
+`ChannelMessage` and one Router call. When no local context exists, the adapter
+may instead parse the bounded platform history bundle from the AT event. These
+records remain untrusted context and use `source="platform-history"` without
+sender/time attributes because QQ does not provide that attribution in the
+bundle; local sender-labelled context takes precedence to avoid duplicates.
+When mention is not required, the first
+ordinary event opens a fixed, non-sliding `groupBatchWindowMs` window; later
+ordinary events join without moving the deadline. The latest event is the
+current trigger, previous events are context, and a mention trigger or
+current-message media flushes immediately. A zero window preserves immediate per-event routing.
+Slash-command triggers bypass aggregation, clear pending context, and retain
+the Router's existing command parser input.
+
+The trigger/current event alone owns Router authorization, sender/source
+metadata, the passive `msg_id`, and latest-message state. Prior context is
+serialized inside the Router's outer direct-channel wrapper as
+`<foxwarm-qqbot-context count="..." untrusted="true">` with escaped
+sender-labelled items and a blank line before current text. Ambient attachment
+metadata remains URL-free and is never materialized; only current-message media
+uses the existing authorization-gated materializer. Context is bounded to 50
+configurable entries, expires five minutes after local arrival, and the adapter
+keeps at most 1,000 group accumulators. Stop/reload clears timers and buffers;
+gateway reconnect/resume preserves them. A flush detaches state before awaiting
+the Router, retains ordinary busy-queue behavior, and has no retry/outbox.
+
+Mention and ordinary native forms share the existing canonical business dedup namespace.
+The live buffer is checked first so an ordinary representation can be upgraded
+in place by a later AT representation rather than appearing twice or suppressing
+the trigger. A true proactive failure such as QQ `40034105` remains a platform
+permission result.
+
+### D-qqbot-outbound-media
+
+[2026-08-10] QQ outbound media is limited to C2C and Group `Channel.sendFile` using an
+already prepared safe local file. Tencent's current JPEG/PNG/GIF/WebP/BMP
+image formats within the configured image threshold use QQ `file_type=1`;
+other or oversized images use `file_type=4` when within the generic-file cap.
+The adapter probes actual local bytes rather than trusting extension, MIME, or
+`ChannelFile.isImage`: Sharp metadata identifies JPEG/PNG/GIF/WebP, while a
+strict coherently sized common uncompressed BMP file/DIB-header check covers
+deployments whose optional Sharp BMP loader is absent: CORE headers accept 24
+bpp, while INFO-family headers accept 24/32 bpp. Indexed 1/4/8,
+16-bpp, compressed, bitfield, and RLE BMP variants remain generic unless Sharp
+itself recognizes them. SVG, ICO, malformed, pixel-truncated, palette-less,
+mislabeled, and unknown bytes remain
+generic. Probing never decodes/re-encodes the upload, so animated GIF/WebP and
+all other accepted bytes are uploaded unchanged. Files smaller than 5 MiB use
+the destination-specific `/files` direct-upload body with `srv_send_msg: false`
+and bounded base64 `file_data`; generic direct uploads also include the
+sanitized `file_name`. Files at or above 5 MiB use the existing
+`upload_prepare` → presigned COS part PUT → `upload_part_finish` → `/files`
+completion flow. The direct path may read one strictly sub-5 MiB file buffer;
+the streamed path hashes and sends part bodies without whole-file buffering.
+Neither path retries, caches `file_info`, falls back to the other protocol
+after an error, or logs/persists direct `file_data`. The local send path is
+hard-capped at 100 MiB even when inbound `fileMaxBytes` is set to the 200 MiB
+inbound maximum. Upload URLs use HTTPS with no userinfo and normal ports, and
+the QQ API response is the trust boundary; bot credentials are never sent to
+the presigned host. Latest
+conversation-local QQ message IDs share the existing four-success passive
+limiter and module-scoped outbound `msg_seq`; age/count and the structured `40034005`
+fallback are canonical in
+[D-qqbot-passive-reply-fallback](#d-qqbot-passive-reply-fallback). Media final
+fallback reuses the just-uploaded same-target `file_info` and does not upload
+again; upload failures and non-expiration final failures do not infer a retry.
+Generation checks fence the local read, each direct/chunk request stage, and
+final delivery.
+Guild/DM native media, remote URL send, and general upload-service abstractions
+remain unsupported; video/audio files use ordinary generic `file_type=4` when
+within the local cap.
+
+## Canonical ownership
+
+Shared channel type/instance/conversation identity and managed reload rules
+remain canonical in [channels module](../modules/channels.md#design-decisions).
+Conversation-local passive-delivery ownership is canonical in
+[D-channel-conversation-latest-passive-context](../modules/channels.md#d-channel-conversation-latest-passive-context).

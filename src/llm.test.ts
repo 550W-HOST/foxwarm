@@ -677,9 +677,10 @@ test('requestLlmOnce can make a direct provider-specific request without a sessi
           { type: 'text', text: 'anthropic ok' },
         ],
         usage: {
-          input_tokens: 7,
+          input_tokens: 2,
+          cache_creation_input_tokens: 7324,
+          cache_read_input_tokens: 22903,
           output_tokens: 3,
-          cache_read_input_tokens: 1,
         },
       },
     };
@@ -712,10 +713,149 @@ test('requestLlmOnce can make a direct provider-specific request without a sessi
     assert.equal(result.modelId, 'anthropic/claude-sonnet-4-5');
     assert.deepEqual(result.allParts, [{ text: 'anthropic ok' }]);
     assert.deepEqual(result.usage, {
+      inputTokens: 7326,
+      outputTokens: 3,
+      cachedTokens: 22903,
+    });
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('Anthropic usage keeps legacy input/output counts when cache fields are absent', async () => {
+  const originalPost = axios.post;
+  (axios as any).post = async () => ({
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    data: {
+      content: [{ type: 'text', text: 'anthropic legacy usage' }],
+      usage: { input_tokens: 7, output_tokens: 3 },
+    },
+  });
+
+  try {
+    const result = await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'legacy usage response' }] }],
+      systemPrompt: '',
+      model: 'anthropic/claude-sonnet-4-5',
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    assert.equal(result.text, 'anthropic legacy usage');
+    assert.deepEqual(result.usage, {
       inputTokens: 7,
       outputTokens: 3,
-      cachedTokens: 1,
+      cachedTokens: 0,
     });
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('Anthropic thinking and redacted_thinking preserve empty blocks, order, and concrete-model compatibility', async () => {
+  const originalPost = axios.post;
+  const sourceModel = {
+    providerKey: 'anthropic-fixture',
+    providerType: 'anthropic',
+    baseUrl: 'https://fixture.example',
+    apiKey: '',
+    model: 'claude',
+    extraFields: {},
+    extraHeaders: {},
+  } as any;
+  const sourceModelId = 'anthropic-fixture/claude';
+  const initialContents: Message[] = [{ role: 'user', parts: [{ text: 'round-trip input' }] }];
+  const originalContents = structuredClone(initialContents);
+  const capturedBodies: any[] = [];
+
+  (axios as any).post = async (_url: string, data: any) => {
+    capturedBodies.push(data);
+    return {
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: capturedBodies.length === 1
+        ? {
+            content: [
+              { type: 'thinking', thinking: '', signature: 'opaque-signature' },
+              { type: 'redacted_thinking', data: 'opaque-redacted-data' },
+              { type: 'tool_use', id: 'call_round_trip', name: 'read', input: { filePath: 'README.md' } },
+              { type: 'text', text: 'The answer.' },
+            ],
+          }
+        : { content: [{ type: 'text', text: 'ack' }] },
+    };
+  };
+
+  try {
+    const parsed = await requestLlmOnce({
+      contents: initialContents,
+      systemPrompt: '',
+      modelEntryOverride: sourceModel,
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    assert.deepEqual(initialContents, originalContents, 'response parsing must not mutate caller input');
+    assert.deepEqual(parsed.allParts, [
+      { thinking: '', providerMeta: { signature: 'opaque-signature' } },
+      { providerMeta: { redactedThinking: 'opaque-redacted-data' } },
+      { functionCall: { id: 'call_round_trip', name: 'read', args: { filePath: 'README.md' } } },
+      { text: 'The answer.' },
+    ]);
+
+    const roundTripHistory: Message[] = [
+      { role: 'model', parts: parsed.allParts!, __meta: { modelId: sourceModelId } },
+      {
+        role: 'tool',
+        parts: [{ functionResponse: {
+          tool_use_id: 'call_round_trip',
+          name: 'read',
+          response: { output: 'repository contents' },
+        } }],
+      },
+    ];
+    const originalRoundTripHistory = structuredClone(roundTripHistory);
+
+    await requestLlmOnce({
+      contents: roundTripHistory,
+      systemPrompt: '',
+      modelEntryOverride: sourceModel,
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    const sameModelAssistant = capturedBodies[1].messages.find((message: any) => message.role === 'assistant');
+    assert.deepEqual(sameModelAssistant.content, [
+      { type: 'thinking', thinking: '', signature: 'opaque-signature' },
+      { type: 'redacted_thinking', data: 'opaque-redacted-data' },
+      { type: 'tool_use', id: 'call_round_trip', name: 'read', input: { filePath: 'README.md' } },
+      { type: 'text', text: 'The answer.' },
+    ]);
+    assert.deepEqual(roundTripHistory, originalRoundTripHistory, 'request serialization must not mutate canonical history');
+
+    const differentModel = { ...sourceModel, providerKey: 'other-anthropic-fixture' };
+    await requestLlmOnce({
+      contents: roundTripHistory,
+      systemPrompt: '',
+      modelEntryOverride: differentModel,
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    const differentModelAssistant = capturedBodies[2].messages.find((message: any) => message.role === 'assistant');
+    assert.deepEqual(differentModelAssistant.content, [
+      { type: 'tool_use', id: 'call_round_trip', name: 'read', input: { filePath: 'README.md' } },
+      { type: 'text', text: 'The answer.' },
+    ]);
+    assert.equal(JSON.stringify(differentModelAssistant).includes('opaque-redacted-data'), false);
+    assert.equal(JSON.stringify(differentModelAssistant).includes('opaque-signature'), false);
   } finally {
     (axios as any).post = originalPost;
   }

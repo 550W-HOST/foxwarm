@@ -54,6 +54,8 @@ Foxwarm 当前把 **agent** 与 **session** 明确分开：
 - 该命令**不会创建 agent**；如果目标 agent 不存在，请先用 `/agent create`
 - 该命令也**不会重命名 agent 本身**；agent 级别变更更适合走新建/迁移/清理流程
 
+创建或移动 Session 时，新名称只允许 ASCII 字母、数字、`_`、`-`；fork/child 的 suffix 也遵循该规则。已有包含其他字符的 Session 不会批量改名，仍可读取并移动到合法名称。`displayName` 不受此限制。
+
 ## 持久化结构
 
 Foxwarm 主要使用以下路径保存 session 与 agent 状态：

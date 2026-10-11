@@ -411,6 +411,42 @@ export const APP_CONFIG_SCHEMA = {
   additionalProperties: true,
   properties: {
     url: { type: 'string', pattern: '^https?://', description: 'Public HTTP(S) base URL used in Node setup instructions. May include a deployment path; requires restart.' },
+    access: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        identities: {
+          type: 'object',
+          maxProperties: 64,
+          propertyNames: { pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$' },
+          additionalProperties: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['token', 'surfaces'],
+            properties: {
+              token: { type: 'string', minLength: 1, maxLength: 4096, pattern: '^[A-Za-z0-9._~+/-]+={0,2}$' },
+              surfaces: {
+                type: 'object',
+                additionalProperties: false,
+                minProperties: 1,
+                properties: {
+                  webui: {
+                    type: 'object',
+                    additionalProperties: false,
+                    required: ['sessions'],
+                    properties: {
+                      sessions: { type: 'array', minItems: 1, maxItems: 256, uniqueItems: true, items: { type: 'string', minLength: 1, maxLength: 512 } },
+                    },
+                  },
+                  mcp: { type: 'object', additionalProperties: false, maxProperties: 0 },
+                },
+              },
+            },
+          },
+        },
+      },
+      description: 'Startup-only shared WebUI and inbound MCP identities. Declare each surface explicitly and restart after changes.',
+    },
     nodeProviders: {
       type: 'object',
       propertyNames: { pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' },

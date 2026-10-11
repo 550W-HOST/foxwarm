@@ -15,7 +15,7 @@ function descriptor(id = 'fixture-sandbox', availability = 'ready') {
     availability,
     defaultCwd: `memfs://${id}/root`,
     filesystem: mode === 'read-only' ? 'read' : 'read-write',
-    ...(mode === 'with-exec' ? { exec: true } : {}),
+    ...(['with-exec', 'delayed-exec'].includes(mode) ? { exec: true } : {}),
   };
 }
 
@@ -224,6 +224,11 @@ async function main(): Promise<void> {
     return;
   }
   if (request.operation === 'exec') {
+    if (mode === 'delayed-exec') {
+      fs.writeFileSync(`${logPath}.ready`, String(process.pid));
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      fs.writeFileSync(`${logPath}.effect`, 'late effect');
+    }
     response.result = { output: 'fixture-exec', observed: request.request };
     write(response);
     return;

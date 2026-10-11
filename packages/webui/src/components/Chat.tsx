@@ -1,3 +1,4 @@
+import type { TimelineView } from '../chatPreferences'
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp, Code2, ExternalLink, MessageSquareText, Search, SquareTerminal, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
@@ -180,6 +181,7 @@ interface ChatProps {
   experimentalAttachments?: boolean
   canonicalSessionId?: string
   sessionDisplayName?: string
+  webUiIdentityMode?: boolean
   onBack?: () => void
   onOpenTerminal?: () => void
   onOpenCode?: () => void
@@ -188,11 +190,11 @@ interface ChatProps {
   onOpenCodeCommit?: (target: CodeCommitTarget) => void | Promise<void>
   onOpenModelSettings?: () => void
   sendKeyMode?: 'modEnter' | 'enter'
-  groupTools?: boolean
+  timelineView?: TimelineView
   showUsageBadge?: boolean
   showUserMessageMetadata?: boolean
   onSendKeyModeChange?: (mode: 'modEnter' | 'enter') => void
-  onGroupToolsChange?: (enabled: boolean) => void
+  onTimelineViewChange?: (mode: TimelineView) => void
   onShowUsageBadgeChange?: (enabled: boolean) => void
   onShowUserMessageMetadataChange?: (enabled: boolean) => void
 }
@@ -238,7 +240,7 @@ type SessionListRecord = {
   isolated?: boolean
 }
 
-const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experimentalTextOnly = false, experimentalAttachments = false, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onGroupToolsChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experimentalTextOnly = false, experimentalAttachments = false, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', timelineView = 'detailed', showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onTimelineViewChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
   const [timelineState, dispatchTimeline] = useReducer(timelineReducer, { messages: [], queuedMessages: [] })
   const messages = timelineState.messages
   const queuedMessages = timelineState.queuedMessages
@@ -423,13 +425,15 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       }
     }
 
-    fetchAsrStatus()
+    if (!webUiIdentityMode) void fetchAsrStatus()
+    else setAsrAvailable(false)
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [webUiIdentityMode])
 
   const fetchModels = useCallback(async () => {
+    if (webUiIdentityMode) return
     await runLatestModelOptionsRequest(modelRequestGateRef.current, () => loadPageOnce('webui:models', async () => {
       const res = await fetch(`${API_BASE_PATH}/models`)
       if (!res.ok) throw new Error(`Failed to load models (${res.status})`)
@@ -443,17 +447,19 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       }
       if (state.loading !== undefined) setModelsRefreshing(state.loading)
     })
-  }, [])
+  }, [webUiIdentityMode])
 
   useEffect(() => {
     const handleModelsChanged = () => { void fetchModels() }
-    window.addEventListener(MODEL_OPTIONS_CHANGED_EVENT, handleModelsChanged)
-    void fetchModels()
+    if (!webUiIdentityMode) {
+      window.addEventListener(MODEL_OPTIONS_CHANGED_EVENT, handleModelsChanged)
+      void fetchModels()
+    }
     return () => {
       window.removeEventListener(MODEL_OPTIONS_CHANGED_EVENT, handleModelsChanged)
       modelRequestGateRef.current.invalidate()
     }
-  }, [fetchModels])
+  }, [fetchModels, webUiIdentityMode])
 
   useEffect(() => {
     if (!sessionBusy) {
@@ -1590,7 +1596,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
   }, [messages, scrollToBottom, streamingAssistantDraft])
 
   const snapshotSystemMessage = useMemo<Message | null>(() => {
-    const snapshotText = persistentMemorySnapshot.trim()
+    const snapshotText = webUiIdentityMode ? '' : persistentMemorySnapshot.trim()
 
     if (!snapshotText) {
       return null
@@ -1604,7 +1610,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
         synthetic: 'persistentMemorySnapshot',
       },
     }
-  }, [persistentMemorySnapshot])
+  }, [webUiIdentityMode, persistentMemorySnapshot])
 
   const visibleMessages = useMemo(() => {
     if (showFullTimeline || messages.length <= DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
@@ -1615,7 +1621,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
 
   const hiddenMessageCount = messages.length - visibleMessages.length
 
-  const searchFields = useMemo(() => searchOpen ? projectSessionSearchFields(messages, groupTools) : [], [groupTools, messages, searchOpen])
+  const searchFields = useMemo(() => searchOpen ? projectSessionSearchFields(messages, timelineView) : [], [timelineView, messages, searchOpen])
   const searchMatches = useMemo(() => findSessionSearchMatches(searchFields, searchQuery), [searchFields, searchQuery])
   const currentSearchIndex = searchMatches.findIndex(match => match.id === searchMatchId)
   const selectedSearchMatch = searchMatches[currentSearchIndex >= 0 ? currentSearchIndex : 0] || null
@@ -1936,7 +1942,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     let requestText = userMessage
     let uploadedFiles
     try {
-      uploadedFiles = await uploadReferencedFiles(files, `${API_BASE_PATH}/upload`)
+      uploadedFiles = await uploadReferencedFiles(files, `${API_BASE_PATH}/upload`, fetch, webUiIdentityMode ? sessionId : undefined)
     } catch (err) {
       console.error('File upload failed:', err)
       setLoading(false)
@@ -2186,7 +2192,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       <ContentHeader
         icon={<MessageSquareText className="h-5 w-5" />}
         title={sessionDisplayName || sessionRecord?.displayName || sessionId}
-        subtitle={(
+        subtitle={webUiIdentityMode ? null : (
           <span data-session-header-subtitle className="font-mono text-[12px]" title={sessionRecord?.cwd || undefined}>
             {sessionHeaderSubtitle}
           </span>
@@ -2228,7 +2234,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
             {!isFullHistoryLoaded && <span className="foxwarm-chat-lg-label text-xs text-fw-text-muted">Earlier messages may still load.</span>}
           </div>
         ) : undefined}
-        actions={(
+        actions={webUiIdentityMode ? null : (
           <>
             <button type="button" onClick={() => activateSearch()} aria-label="Find in chat" title="Find in chat" className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover">
               <Search className="h-4 w-4" /><span className="foxwarm-chat-sm-label">Find</span>
@@ -2266,8 +2272,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
             <SessionUiSettingsMenu
               sendKeyMode={sendKeyMode}
               onSendKeyModeChange={onSendKeyModeChange}
-              groupTools={groupTools}
-              onGroupToolsChange={onGroupToolsChange}
+              timelineView={timelineView}
+              onTimelineViewChange={onTimelineViewChange}
               showUsageBadge={showUsageBadge}
               onShowUsageBadgeChange={onShowUsageBadgeChange}
               showUserMessageMetadata={showUserMessageMetadata}
@@ -2330,24 +2336,25 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
             <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full">
               <ThreadCardHeightContext.Provider value={cardHeightContext}>
                 <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-                  <ChatTimeline sessionId={sessionId} isRunningTool={sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} />
+                  <ChatTimeline sessionId={sessionId} historyMessages={messages} runtimeState={sessionRecord?.runtimeState} busyStartedAt={sessionRecord?.busyStartedAt} isRunningTool={sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} />
                 </ToolScriptProgressContext.Provider>
               </ThreadCardHeightContext.Provider>
             </div>
             <ProcessingStatus
+              timelineView={timelineView}
               sessionBusy={sessionBusy}
               runtimeState={sessionRecord?.runtimeState}
               sessionQueueLength={sessionQueueLength}
               turnIncomplete={sessionRecord?.runtimeState?.state === 'idle' && turnIncomplete}
               loading={loading}
               isMobile={isMobile}
-              onStop={handleStop}
-              onRunQueued={handleRunQueued}
-              onContinue={handleContinue}
+              onStop={webUiIdentityMode ? undefined : handleStop}
+              onRunQueued={webUiIdentityMode ? undefined : handleRunQueued}
+              onContinue={webUiIdentityMode ? undefined : handleContinue}
             />
             {queuedMessages.length > 0 && (
               <div className="foxwarm-queued-preview min-w-0 max-w-full" data-queued-preview="true" aria-label="Queued messages">
-                <ThreadCardHeightContext.Provider value={cardHeightContext}><ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={false} showTimeDividers={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} /></ThreadCardHeightContext.Provider>
+                <ThreadCardHeightContext.Provider value={cardHeightContext}><ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} timelineView={timelineView} showUsageBadge={false} showTimeDividers={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} /></ThreadCardHeightContext.Provider>
               </div>
             )}
             <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />
@@ -2385,6 +2392,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
         experimentalAttachments={experimentalAttachments}
         compactModelSelector={compactModelSelector}
         sessionId={sessionId}
+        webUiIdentityMode={webUiIdentityMode}
         sessionMissing={sessionMissing}
         loading={loading}
         asrAvailable={asrAvailable}
@@ -2419,7 +2427,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
         onCreateStreamingTranscriber={handleCreateStreamingTranscriber}
       />
 
-      {showDebugInfo && (
+      {!webUiIdentityMode && showDebugInfo && (
         <SessionDebugModal
           source={{
             sessionId,
@@ -2432,7 +2440,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
             sessionBusy,
             sessionQueueLength,
             queuedPreviewCount: queuedMessages.length,
-            groupTools,
+            timelineView,
             showUsageBadge,
             showUserMessageMetadata,
             sendKeyMode,
@@ -2460,11 +2468,12 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
   && prev.onOpenCodeCommit === next.onOpenCodeCommit
   && prev.onOpenModelSettings === next.onOpenModelSettings
   && prev.sendKeyMode === next.sendKeyMode
-  && prev.groupTools === next.groupTools
+  && prev.timelineView === next.timelineView
   && prev.showUsageBadge === next.showUsageBadge
+  && prev.webUiIdentityMode === next.webUiIdentityMode
   && prev.showUserMessageMetadata === next.showUserMessageMetadata
   && prev.onSendKeyModeChange === next.onSendKeyModeChange
-  && prev.onGroupToolsChange === next.onGroupToolsChange
+  && prev.onTimelineViewChange === next.onTimelineViewChange
   && prev.onShowUsageBadgeChange === next.onShowUsageBadgeChange
   && prev.onShowUserMessageMetadataChange === next.onShowUserMessageMetadataChange
 ))

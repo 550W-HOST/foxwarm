@@ -12,6 +12,7 @@ import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import { buildSessionRuntimeSessionDto } from './sessionRuntimeService';
 import type { Session } from './types';
+import { Channel, registerChannel, unregisterChannel } from './channel';
 import { createNodeRegistryStore, createPendingPairing, resetNodeRegistryForTests, setNodeRegistryStoreForTests } from './nodes/registry';
 import * as nodeTools from './tools/nodeTools';
 import { getAgentDir, getAgentMemoryDir, resolveModelConfig } from './config';
@@ -39,6 +40,45 @@ function baseSession(id: string): Session {
     busy: false, queue: [], meta: { lastMessageTime: 0 }, lastAppliedMailboxId: 0,
   } as Session;
 }
+
+test('Worker model tool sends through Main to an unattached channel without creating an attachment', async () => {
+  const sourceId = `worker-channel-${Date.now()}`;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-channel-'));
+  const sent: Array<{ conversationId: string; text: string }> = [];
+  const channel: Channel = {
+    name: 'worker-unattached', platform: 'test',
+    start: async () => {}, stop: async () => {}, onMessage: () => {}, sendTyping: async () => {},
+    sendMessage: async (conversationId, text) => { sent.push({ conversationId, text }); },
+  };
+  registerChannel(channel.name, channel);
+  const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite'));
+  store.open();
+  const target = `${channel.name}:group:room-42`;
+  const supervisor = new SessionWorkerSupervisor({
+    store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
+    workerEnv: { FOXWARM_DATA_DIR: root, FOXWARM_TEST_CHANNEL_TARGET: target },
+  });
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, () => true);
+  const statePath = path.join(root, 'state', 'sessions', `${sourceId}.json`);
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sourceId)));
+  try {
+    assert.equal(sessionManager.getSessionByChannel(channel.name, 'group:room-42'), undefined);
+    await supervisor.reconcileStartupOwnerships();
+    sessionManager.getAllSessions().set(sourceId, baseSession(sourceId));
+    await ingress.submitEnsuringWorker(sourceId, { type: 'user', parts: [{ text: 'send an explicit channel message' }] });
+    assert.deepEqual(sent, [{ conversationId: 'group:room-42', text: 'worker explicit send' }]);
+    const authority = await fs.readFile(statePath, 'utf8');
+    assert.ok(authority.includes('Message sent to channel target `' + target + '`'));
+    assert.equal(sessionManager.getSessionByChannel(channel.name, 'group:room-42'), undefined);
+  } finally {
+    await supervisor.shutdown(5_000).catch(() => {});
+    store.close();
+    unregisterChannel(channel.name);
+    sessionManager.getAllSessions().delete(sourceId);
+    await sessionManager.saveSessionCatalogEntries(sessionManager.getAllSessions().keys()).catch(() => {});
+    await fs.remove(root);
+  }
+});
 
 test('worker child creation, reply delivery, and facade queries stay Main-owned end to end', async () => {
   const parentId = `mc-parent-${Date.now()}`;

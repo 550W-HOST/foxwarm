@@ -92,11 +92,11 @@ export default function PopupWebUiApp({ target }: { target: FoxwarmPopupTarget }
         canonicalSessionId={target.sessionId}
         sessionDisplayName={target.title}
         sendKeyMode={preferences.sendKeyMode}
-        groupTools={preferences.groupTools}
+        timelineView={preferences.timelineView}
         showUsageBadge={preferences.showUsageBadge}
         showUserMessageMetadata={preferences.showUserMessageMetadata}
         onSendKeyModeChange={preferences.setSendKeyMode}
-        onGroupToolsChange={preferences.setGroupTools}
+        onTimelineViewChange={preferences.setTimelineView}
         onShowUsageBadgeChange={preferences.setShowUsageBadge}
         onShowUserMessageMetadataChange={preferences.setShowUserMessageMetadata}
         onOpenModelSettings={() => navigate({ kind: 'setup' })}
@@ -110,7 +110,7 @@ export default function PopupWebUiApp({ target }: { target: FoxwarmPopupTarget }
   } else if (target.kind === 'logs') {
     content = <Suspense fallback={<PopupLeafFallback label="Logs" />}><LogsView /></Suspense>
   } else if (target.kind === 'search') {
-    content = <HistorySearchView isMobile={window.innerWidth < 768} groupTools={preferences.groupTools} showUsageBadge={preferences.showUsageBadge} showUserMessageMetadata={preferences.showUserMessageMetadata} />
+    content = <HistorySearchView isMobile={window.innerWidth < 768} timelineView={preferences.timelineView} showUsageBadge={preferences.showUsageBadge} showUserMessageMetadata={preferences.showUserMessageMetadata} />
   } else if (target.kind === 'agents') {
     content = (
       <Suspense fallback={<PopupLeafFallback label="Agents" />}>

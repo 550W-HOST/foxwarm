@@ -1,11 +1,11 @@
 import { formatMessageHeading, createMessageContextPreviewItem, renderContextPreviewItems } from './contextPreviewRenderer';
-import { requireVerifiedMcpInboundExternalId, type VerifiedMcpInboundPrincipal } from './mcpInboundConfig';
+import { requireVerifiedAccessIdentity, type VerifiedAccessIdentity } from './accessConfig';
 import type { ExternalExecutionContext } from './mcpInboundHttp';
 import * as sessionManager from './sessionManager';
 import * as sessionRuntime from './sessionRuntime';
 import { buildExternalToolAuthorizationRequest, evaluateToolAuthorization, evaluateToolAuthorizationSync } from './toolAuthorization';
 import { formatLocalTimestamp } from './utils/localTime';
-import { formatFoxwarmSystemTag } from './utils/promptWrappers';
+import { formatFoxwarmSystemOpen, formatFoxwarmSystemClose } from './utils/promptWrappers';
 
 export class ExternalSessionBeforeAdmissionError extends Error {}
 
@@ -14,8 +14,8 @@ const DEFAULT_READ_COUNT = 10;
 const DEFAULT_PREVIEW_LENGTH = 6000;
 const MAX_SEND_MESSAGE_BYTES = 1024 * 1024 - 4096; // Keep the complete user QueueItem within Worker ingress's 1 MiB limit.
 
-function assertActive(context: ExternalExecutionContext, principal: VerifiedMcpInboundPrincipal): void {
-  if (context.externalId !== requireVerifiedMcpInboundExternalId(principal) || context.disposed) {
+function assertActive(context: ExternalExecutionContext, principal: VerifiedAccessIdentity): void {
+  if (context.externalId !== requireVerifiedAccessIdentity(principal) || context.disposed) {
     throw new ExternalSessionBeforeAdmissionError('External Session context is unavailable.');
   }
 }
@@ -28,7 +28,7 @@ function exactTarget(requestedId: string): string {
   if (!session) throw new ExternalSessionBeforeAdmissionError('Session is unavailable.');
   return session.id;
 }
-async function authorize(principal: VerifiedMcpInboundPrincipal, context: ExternalExecutionContext,
+async function authorize(principal: VerifiedAccessIdentity, context: ExternalExecutionContext,
   name: 'session' | 'get_session_messages' | 'send_to_session', args: Record<string, unknown>): Promise<void> {
   assertActive(context, principal);
   const request = buildExternalToolAuthorizationRequest({ principal, sessionId: context.id,
@@ -40,7 +40,7 @@ async function authorize(principal: VerifiedMcpInboundPrincipal, context: Extern
 }
 
 /** One global catalog capability; it is not a per-row authorization projection. */
-export async function listExternalSessions(principal: VerifiedMcpInboundPrincipal, context: ExternalExecutionContext,
+export async function listExternalSessions(principal: VerifiedAccessIdentity, context: ExternalExecutionContext,
   start = 0, count = DEFAULT_LIST_COUNT): Promise<unknown> {
   await authorize(principal, context, 'session', { action: 'list', start, count });
   const page = await sessionRuntime.listSessionsPage({ offset: start, limit: count });
@@ -56,7 +56,7 @@ export async function listExternalSessions(principal: VerifiedMcpInboundPrincipa
 }
 
 /** Read an owner-aware history snapshot, never the Main catalog stub or raw queue/prompt snapshot. */
-export async function readExternalSession(principal: VerifiedMcpInboundPrincipal, context: ExternalExecutionContext,
+export async function readExternalSession(principal: VerifiedAccessIdentity, context: ExternalExecutionContext,
   requestedId: string, start?: number, count = DEFAULT_READ_COUNT, previewLength = DEFAULT_PREVIEW_LENGTH): Promise<unknown> {
   assertActive(context, principal);
   const sessionId = exactTarget(requestedId);
@@ -90,8 +90,8 @@ export async function readExternalSession(principal: VerifiedMcpInboundPrincipal
 }
 
 /** One ordinary user input from an external owner, not a system send or a fabricated Session message. */
-export async function sendExternalSession(principal: VerifiedMcpInboundPrincipal, context: ExternalExecutionContext,
-  requestedId: string, message: string): Promise<{ accepted: true; sessionId: string }> {
+export async function sendExternalSession(principal: VerifiedAccessIdentity, context: ExternalExecutionContext,
+  requestedId: string, message: string, allowReply = false): Promise<{ accepted: true; sessionId: string; channelTargetId?: string }> {
   assertActive(context, principal);
   if (typeof message !== 'string' || !message.trim() || Buffer.byteLength(message, 'utf8') > MAX_SEND_MESSAGE_BYTES) {
     throw new ExternalSessionBeforeAdmissionError('Message must be non-empty and fit in a bounded Session input.');
@@ -101,8 +101,14 @@ export async function sendExternalSession(principal: VerifiedMcpInboundPrincipal
   const permission = buildExternalToolAuthorizationRequest({ principal, sessionId: context.id,
     tool: { source: 'builtin', name: 'send_to_session' }, args: permissionArgs });
   await authorize(principal, context, 'send_to_session', permissionArgs);
+  if (allowReply && !context.replyChannel) throw new ExternalSessionBeforeAdmissionError('A Foxwarm notification receiver is required for replies.');
+  if (allowReply) {
+    try { context.replyChannel!.assertAvailable(); }
+    catch { throw new ExternalSessionBeforeAdmissionError('An active Foxwarm notification receiver is required for replies.'); }
+  }
   const checkAdmission = () => {
     assertActive(context, principal);
+    if (allowReply) context.replyChannel!.assertAvailable();
     if (exactTarget(requestedId) !== sessionId) throw new ExternalSessionBeforeAdmissionError('Session is unavailable.');
     if (evaluateToolAuthorizationSync(permission).action !== 'allow') {
       throw new ExternalSessionBeforeAdmissionError('Session action is not permitted.');
@@ -110,14 +116,22 @@ export async function sendExternalSession(principal: VerifiedMcpInboundPrincipal
   };
   checkAdmission();
   const input = { type: 'user' as const, parts: [
-    { system: formatFoxwarmSystemTag({ kind: 'external-input',
-      externalId: requireVerifiedMcpInboundExternalId(principal), contextId: context.id,
-      time: formatLocalTimestamp(Date.now()), hint: 'Message from an external MCP client.' }) },
+    { system: formatFoxwarmSystemOpen({ kind: 'external-input',
+      externalId: requireVerifiedAccessIdentity(principal), contextId: context.id,
+      time: formatLocalTimestamp(Date.now()),
+      ...(allowReply ? { channelTargetId: context.replyChannel!.targetId } : {}),
+      hint: 'Message from an external MCP client.' + (allowReply
+        ? ' For an explicit reply, use send_to_channel with the channelTargetId shown here. Ordinary assistant replies are not sent to this connection.' : '') }) },
     { text: message },
+    { system: formatFoxwarmSystemClose() },
   ] };
   if (Buffer.byteLength(JSON.stringify(input), 'utf8') > 1024 * 1024) {
     throw new ExternalSessionBeforeAdmissionError('Message exceeds the Session input limit.');
   }
-  await sessionManager.enqueueSessionItem(sessionId, input, {}, checkAdmission);
-  return { accepted: true, sessionId };
+  const lease = allowReply ? context.replyChannel!.acquire() : undefined;
+  try {
+    await sessionManager.enqueueSessionItem(sessionId, input, {}, checkAdmission);
+    lease?.commit();
+    return { accepted: true, sessionId, ...(allowReply ? { channelTargetId: context.replyChannel!.targetId } : {}) };
+  } finally { lease?.release(); }
 }

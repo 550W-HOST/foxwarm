@@ -17,7 +17,7 @@ type PersistedRequestTiming = {
   durationMs: number
 }
 
-const readPersistedRequestTiming = (value: unknown): PersistedRequestTiming | null | 'invalid' => {
+export const readPersistedRequestTiming = (value: unknown): PersistedRequestTiming | null | 'invalid' => {
   if (value === undefined || value === null) return null
   if (!value || typeof value !== 'object' || Array.isArray(value)) return 'invalid'
 

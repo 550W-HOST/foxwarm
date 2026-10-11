@@ -8,7 +8,7 @@ Provides target-platform native dependencies/build glue for the CLI Node, includ
 
 ## Stable navigation
 
-The TypeScript client/proxy and protocol entry points are in [CLI Node](./shared-and-nodes-cli-node.md). Native runtime packaging determines which PTY/process features can be advertised during Node capability negotiation.
+The TypeScript client/proxy and protocol entry points are in [CLI Node](./cli-node-client.md). Native runtime packaging determines which PTY/process features can be advertised during Node capability negotiation.
 
 ## Boundary behavior
 

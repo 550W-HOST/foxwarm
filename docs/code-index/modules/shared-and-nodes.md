@@ -5,17 +5,21 @@ TypeScript protocol and execution packages that remain real boundaries while the
 ## Units
 
 - [Shared Node protocol and capability shapes](../units/shared-node-protocol.md)
-- [Shared file and local execution primitives](../units/shared-local-execution.md)
+- [Shared file and local execution primitives](../units/shared-node-tools.md)
 - [Shared persistent exec lifecycle](../units/shared-persistent-exec.md)
 - [Shared output truncation and bounded excerpts](../units/shared-output-truncation.md)
-- [Shared patches, config schemas, markup, and metadata](../units/shared-patches-and-config.md)
-- [Shared Code helper IPC and VS Code service](../units/shared-code-ipc.md)
-- [Authenticated CLI Node client, TUI, master proxy, PTY service, and process lifecycle](../units/shared-and-nodes-cli-node.md)
+- [Shared apply-patch parsing and file changes](../units/shared-apply-patch.md)
+- [Shared pure configuration schemas](../units/shared-config-schemas.md)
+- [Shared Code helper IPC](../units/shared-code-helper-ipc.md)
+- [Shared VS Code Node service and Git details](../units/shared-vscode-node-service.md)
+- [Authenticated CLI Node client, PTY service, and process lifecycle](../units/cli-node-client.md)
+- [CLI Node master proxy](../units/cli-node-master-proxy.md)
+- [CLI Node TUI](../units/cli-node-tui.md)
 - [CLI Node native runtime](../units/shared-and-nodes-cli-runtime.md)
-- [Browser extension Node transport, permissions, tabs, and popup](../units/shared-and-nodes-browser-node.md)
+- [Browser extension Node transport, permissions, tabs, and popup](../units/browser-node-extension.md)
 - [Android-compatible Python Node server and authentication helpers](../units/shared-and-nodes-android-node.md)
-- [Sandbox worktree invocation and file operations](../units/shared-and-nodes-sandbox-node.md)
-- [VS Code Web extension assets and dedicated web integration build boundary](../units/shared-and-nodes-vscode-web-assets.md)
+- [Sandbox worktree invocation and file operations](../units/src-docker-worktree-provider.md)
+- [VS Code Web extension assets and dedicated web integration build boundary](../units/vscode-web-extensions.md)
 
 ## Cross-module contract
 

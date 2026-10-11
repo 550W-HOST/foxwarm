@@ -1,0 +1,74 @@
+# Unit: src-index
+
+Files: src/index.ts, scripts/restart.sh
+
+## Purpose
+
+Main application entry point that bootstraps the Foxwarm bot system: initializes storage, starts communication channels (Telegram, Matrix, WebUI, TUI, WeWork/Weixin), sets up HTTP server with WebSocket support, and orchestrates session management, vector DB, timers, and message routing.
+
+## Key Exports
+
+None — this file is the application entry point and does not export any symbols.
+
+## Function Index
+
+| Function | Lines (approximate) | Description (one phrase) |
+|----------|---------------------|--------------------------|
+| `ensureToken()` | ~80–95 | Reads or generates the main authentication token file |
+| `ensureNodeToken()` | ~97–112 | Reads or generates the node pairing token file |
+| `start()` | ~114–430 | Main bootstrap function: migrates data, initializes channels, HTTP server, router, and all subsystems |
+
+## Dependencies
+
+- `./common` — logger
+- `./channels/telegramChannel` — TelegramChannel class
+- `./channels/matrixChannel` — MatrixChannel class
+- `./channels/webuiChannel` — WebUIChannel class
+- `./channels/tuiChannel` — TUIChannel class
+- `./channels/weworkChannel` — WeWorkWebhookChannel class
+- `./channelRuntime` — `initializeChannelRuntime`, `startManagedChannel`
+- `./messageRouter` — MessageRouter class
+- `./commandHandler` — CommandHandler class
+- `./sessionManager` — session loading, resumption, event queuing
+- `./sessionRuntime` — local high-level session DTO service, update-event bridge, and graceful drain
+- `./mainManagementTools` — closed local Main Management tool service initialization and graceful drain
+- `./nodeExecution` / `./nodes/providers` — closed local Node execution service plus awaited provider initialization/shutdown
+- `./vector` — configured vector owner startup and graceful shutdown
+- `./channel` — `registerChannel`
+- `./config` — all configuration constants and helpers, including the shared `access.identities` contract
+- `./httpServer` — HttpServer class, `setHttpServer`
+- `./mcpInboundHttp` — stateful inbound HTTP service with identity-bound contexts and graceful transport shutdown.
+- `./mcpInboundCatalog` — Main-owned outbound MCP, compatible CLI Node and bounded Session wrapper adapter for verified external contexts. Worker ingress receives the optional process-local live-context assertion before durable mailbox admission.
+- `./nodes/websocket` — `registerNodeWebSocket`
+- `./nodes/httpRoutes` — `registerNodeHttpRoutes`
+- `./nodes/registry` — `initializeNodeRegistry`
+- `./logRotation` — `cleanupLegacyTopLevelLogDirs`, `scheduleLogRotation`
+- `./startupUtils` — `startWithRetry`
+- `./timers` — `initializeTimers`
+- `./execManager` — `initializeExecManager`
+
+## Behavior
+
+- The executable sets the presentation-only process title `foxwarm:main` during bootstrap. The title is not used for runtime identity, lifecycle, or authorization.
+- Registers global `unhandledRejection` and `uncaughtException` handlers (exits on uncaught exception).
+- Initializes the framework-level `agents/00_SYSTEM.md` from `templates/agents/00_SYSTEM.md` for fresh installs, but if legacy `agents/main/memory/00_SYSTEM.md` already exists it leaves the root file absent so runtime fallback preserves the user's existing framework prompt. The starter template describes default snapshot layers and concise collaboration guidance; detailed tool syntax stays in tool descriptions and on-demand skills.
+- Initializes main agent memory from `templates/main/memory/` if the memory directory is absent or empty; that template no longer carries the framework `00_SYSTEM.md`, avoiding duplicate prompt injection on fresh installs.
+- Optionally starts TUI mode and redirects logger output to the TUI screen.
+- Loads sessions and completes startup migrations before entering explicit disabled Vector mode or starting the configured local/child vector owner. Disabled mode does not load the manager/runtime/native LanceDB, start maintenance/backfill, or spawn the `dbWorkers` child. With `sessionWorkers:true`, it opens the durable Worker store, reconciles ownership, creates the supervisor/ingress coordinator with the Main destructive-admission wrapper, initializes Worker-aware SessionRuntime, installs enqueue/delete/fork/fence hooks, and resumes pending mailbox work. With workers disabled, SessionRuntime remains local. After SessionRuntime/Main Management establish catalog and ingress authority, Core awaits every Node provider's initialization before exposing Node execution. Startup failure is observable. Shutdown fences Node execution, then closes providers while Session ingress is still available, before shutting down workers and remaining services.
+- Builds an authorized-users list from all channel configs for the MessageRouter.
+- Starts an HTTP server (Express) with WebSocket upgrade and Node bootstrap/WS when WebUI, Trigger, or MCP inbound is enabled. The MCP service registers `/mcp` with the production outbound MCP discovery/call catalog before HTTP start; WebUIChannel and its SessionRuntime presentation bridge start only if WebUI or Trigger is enabled. An MCP-only deployment retains normal Main and Session initialization without granting external callers an internal Session or Node adapter.
+- Starts each configured channel (Telegram, Matrix, WebUI, WeWork, Weixin) with retry logic via `startWithRetry`.
+- Resumes busy sessions after all channels are up.
+- Schedules periodic log rotation.
+- The tmux restart script resolves a stable pane ID before sending Ctrl+C, waits one second, then sends the startup command literally and Enter separately. Window auto-renaming does not change the target, and failed target lookup or input delivery exits unsuccessfully. The delay allows terminal input processing; it does not confirm that the old process has exited.
+- Does not create or hydrate a `main` Session during process startup; existing live Sessions and pending work recover through their established owners.
+- Configured Telegram/Matrix default-main attachments retain the exact `main` target identity and log an actionable warning when that target is unavailable; startup still completes without recreating or retargeting it.
+- On `SIGINT`/`SIGTERM`, closes inbound MCP connections and terminally fences outbound notification receivers before Session-owner teardown, then closes the Main process's lazy ToolScript/Monty pool, terminally drains Node execution, closes Node providers while Session ingress remains available, and shuts down Session workers with bounded handback before draining outbound MCP and releasing its remaining ordinary caller connections, Main Management, SessionRuntime, and the vector owner.
+
+## Integration
+
+- Channels register themselves via `registerChannel` and receive messages through the `MessageRouter`, which delegates to `CommandHandler` and `sessionManager`.
+- The HTTP server hosts the WebUI channel and node communication (WebSocket + HTTP routes).
+- `channelRuntime` manages dynamic channel lifecycle (start/stop) for managed channels like Weixin.
+- `sessionManager` is the central state coordinator; sessions are resumed and events queued from this entry point.
+- `initializeTimers` and `initializeExecManager` set up background task infrastructure used by sessions.

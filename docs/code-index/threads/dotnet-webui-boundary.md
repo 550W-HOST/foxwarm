@@ -29,6 +29,8 @@ Static WebUI and state-changing routes are served only after normal host auth; `
 
 The .NET channel has real routes for current tasks/terminal/files/images/history; Vector-backed history/admission remains `VECTOR_DISABLED` and remote Node/Worker routes are not claimed as fully connected to this Main. Root package start/build still targets TypeScript Main even though this .NET host is the active replacement architecture.
 
+The current React entry point requests `GET /api/auth/session` before mounting any normal, popup, or embedded root. It expects `{ role: 'admin' }` for the administrator app or a verified scoped WebUI identity response for the restricted root. The .NET host currently registers only `POST /api/auth`; it does not yet implement the auth-session route or scoped access identities. Consequently, the merged browser client cannot enter the administrator app against the current .NET host, even after a successful token login. This is a pending host adaptation, not a claim of implemented restricted WebUI support.
+
 ## Canonical units and tests
 
 - [Host runtime](../units/host-runtime.md)

@@ -37,9 +37,9 @@ Remote Node topology and Worker ownership remain migration work. Root package st
 
 - [Shared Node protocol](../units/shared-node-protocol.md)
 - [Shared persistent exec](../units/shared-persistent-exec.md)
-- [CLI Node](../units/shared-and-nodes-cli-node.md)
-- [Browser Node](../units/shared-and-nodes-browser-node.md)
+- [CLI Node](../units/cli-node-client.md)
+- [Browser Node](../units/browser-node-extension.md)
 - [Android Node](../units/shared-and-nodes-android-node.md)
-- [Sandbox Node](../units/shared-and-nodes-sandbox-node.md)
+- [Sandbox Node](../units/src-docker-worktree-provider.md)
 - [Tools/permissions](./tools-permissions-and-exec.md)
 - shared protocol, CLI compatibility, browser protocol/tool-result, Android auth, and sandbox worktree tests.

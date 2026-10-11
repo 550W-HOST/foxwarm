@@ -92,7 +92,7 @@
   <div class="container">
     <h1>🦊 Foxwarm</h1>
     <form id="loginForm">
-      <input type="password" id="token" placeholder="Enter token" required autofocus>
+      <input type="password" id="token" placeholder="Enter admin or WebUI token" required autofocus>
       <div class="error" id="error">Invalid token</div>
       <button type="submit">Login</button>
     </form>
@@ -114,7 +114,7 @@
         });
         if (!authRes.ok) {
           errorDiv.style.display = 'block';
-          errorDiv.textContent = 'Invalid token. Find the token in state/token or startup logs.';
+          errorDiv.textContent = 'Invalid token. Check it and try again.';
           return;
         }
 

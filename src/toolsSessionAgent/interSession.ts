@@ -2,6 +2,7 @@ import {
   ToolArgs,
   ToolContext,
   buildEndTurnResult,
+  DEFAULT_WAIT_EXEC_FALLBACK_SECONDS,
   normalizeWaitFallbackSeconds,
   normalizeWaitAllSessions,
   normalizeWaitAnySessions,
@@ -46,11 +47,13 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
   let childSessionId: string;
   let taskAssignmentDelivered = true;
   let taskAssignmentWarning: string | undefined;
+  let sentNotifications = 0;
   if (taskId) {
     const attached = await taskService.createAttachedChild(taskId, currentSessionId, create, message);
     childSessionId = attached.childSessionId;
     taskAssignmentDelivered = attached.assignmentDelivered;
     taskAssignmentWarning = attached.warning;
+    sentNotifications = attached.sentNotifications;
   } else {
     childSessionId = await create();
   }
@@ -60,11 +63,11 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
       ? `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'}). Task assignment sent${taskAssignmentWarning ? ` with warning: ${taskAssignmentWarning}` : ''}.`
       : `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'}), but task assignment delivery failed${taskAssignmentWarning ? `: ${taskAssignmentWarning}` : '.'}`;
     if (taskAssignmentDelivered && afterSend === 'wait') {
-      return { output, __toolPostAction: { waitForReply: true, successfulSendToSessionTarget: childSessionId } };
+      return { output, sentNotifications, __toolPostAction: { waitForReply: true, successfulSendToSessionTarget: childSessionId } };
     }
     return taskAssignmentDelivered && afterSend === 'finish'
-      ? { ...buildEndTurnResult(), output, __toolPostAction: { finishAfterSend: true } }
-      : output;
+      ? { ...buildEndTurnResult(), output, sentNotifications, __toolPostAction: { finishAfterSend: true } }
+      : { output, sentNotifications };
   }
 
   if (message) {
@@ -133,11 +136,18 @@ export async function tool_wait(args: ToolArgs, ctx?: ToolContext) {
   const unknownKeys = Object.keys(args).filter(key => !allowedKeys.has(key));
   if (unknownKeys.length) throw new Error(`wait received unsupported argument${unknownKeys.length === 1 ? '' : 's'}: ${unknownKeys.join(', ')}.`);
   const { reason } = args || {};
-  const timeoutSeconds = normalizeWaitFallbackSeconds(args?.wakeIfNoActivityAfterSeconds);
+  const requestedTimeoutSeconds = normalizeWaitFallbackSeconds(args?.wakeIfNoActivityAfterSeconds);
   let waitAllSessions = normalizeWaitAllSessions(args?.waitAllSessions);
   let waitAnySessions = normalizeWaitAnySessions(args?.waitAnySessions);
   const waitExecIds = normalizeWaitExecIds(args?.waitExecIds);
   const waitForInput = normalizeWaitForInput(args?.waitForInput);
+  const fallbackDisabled = Object.prototype.hasOwnProperty.call(args, 'wakeIfNoActivityAfterSeconds')
+    && args.wakeIfNoActivityAfterSeconds === null;
+  const timeoutSeconds = requestedTimeoutSeconds ?? (
+    waitExecIds && !waitForInput && !fallbackDisabled
+      ? DEFAULT_WAIT_EXEC_FALLBACK_SECONDS
+      : undefined
+  );
   if (waitAllSessions && waitAnySessions) throw new Error('waitAllSessions and waitAnySessions are mutually exclusive.');
   if (!waitAllSessions && !waitAnySessions && !waitExecIds && !waitForInput && timeoutSeconds === undefined) {
     throw new Error('wait requires at least one progress source: waitAllSessions, waitAnySessions, waitExecIds, waitForInput:true, or wakeIfNoActivityAfterSeconds. reason alone is not sufficient.');

@@ -48,6 +48,7 @@ interface ChatComposerProps {
   sessionId: string
   experimentalTextOnly?: boolean
   experimentalAttachments?: boolean
+  webUiIdentityMode?: boolean
   sessionMissing: boolean
   loading: boolean
   asrAvailable: boolean
@@ -668,6 +669,7 @@ function ModelSelector({
 const ChatComposer = memo(function ChatComposer({
   compactModelSelector,
   sessionId,
+  webUiIdentityMode = false,
   sessionMissing,
   loading,
   asrAvailable,
@@ -809,12 +811,13 @@ const ChatComposer = memo(function ChatComposer({
       }
     }
 
-    fetchCommands()
+    if (!webUiIdentityMode) void fetchCommands()
+    else { setAvailableCommands([]); setCommandsLoading(false); setCommandsError(null) }
 
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [webUiIdentityMode])
 
   useEffect(() => {
     const savedDraft = loadedDraft
@@ -899,8 +902,8 @@ const ChatComposer = memo(function ChatComposer({
   }, [onHeightChange])
 
   const slashCompletion = useMemo(
-    () => plainInput === null ? null : getSlashCommandCompletion(plainInput, availableCommands),
-    [availableCommands, plainInput],
+    () => webUiIdentityMode || plainInput === null ? null : getSlashCommandCompletion(plainInput, availableCommands),
+    [availableCommands, webUiIdentityMode, plainInput],
   )
   const slashCommandSuggestions = slashCompletion?.suggestions || []
   const slashCommandHints = slashCompletion?.hints || []
@@ -1462,7 +1465,7 @@ const ChatComposer = memo(function ChatComposer({
           disabled={loading || sessionMissing || recordingLocked}
           placeholder={sessionMissing
             ? 'Session not found'
-            : experimentalTextOnly ? 'Message this session' : 'Ask Foxwarm anything, + to add files, / for commands'}
+            : webUiIdentityMode ? 'Send a message' : experimentalTextOnly ? 'Message this session' : 'Ask Foxwarm anything, + to add files, / for commands'}
           onChange={(nextDraft) => {
             commitDraft(nextDraft)
             setDismissedSlashQuery(null)
@@ -1505,7 +1508,7 @@ const ChatComposer = memo(function ChatComposer({
                 </button>
               )}
             </div>
-            <ModelSelector
+            {!webUiIdentityMode && <ModelSelector
               compact={compactModelSelector}
               options={modelOptions}
               currentModelKey={currentModelKey}
@@ -1532,7 +1535,7 @@ const ChatComposer = memo(function ChatComposer({
               onChangeChildEffort={onChangeChildEffort}
               onRefreshModels={onRefreshModels}
               onOpenModelSettings={onOpenModelSettings}
-            />
+            />}
           </div>
           <button
             type="submit"

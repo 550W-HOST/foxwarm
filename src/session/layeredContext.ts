@@ -12,7 +12,7 @@ import {
 import { isModelVisibleMessage } from './messageVisibility';
 import { parseFoxwarmOpeningTag } from '../utils/promptWrappers';
 import { isSystemPayloadTextPart } from '../utils/systemMessageParts';
-import type { ExtractedMemoryFact } from './compactPlan';
+import { normalizeFrictionScore, type ExtractedMemoryFact } from './compactPlan';
 
 const COMPACT_CANDIDATE_IGNORED_SYSTEM_PREFIXES = [
   'This session has been compacted.',
@@ -39,6 +39,7 @@ export interface ArchiveBlockRecord {
   rawEndTimestamp?: number;
   summary: string;
   memoryFacts?: ExtractedMemoryFact[];
+  frictionScore?: number;
   createdAt: number;
   sourceSessionId?: string;
   inherited?: boolean;
@@ -56,6 +57,7 @@ export interface CreateArchiveBlockInput {
   rawEndTimestamp?: number;
   summary: string;
   memoryFacts?: ExtractedMemoryFact[];
+  frictionScore?: number;
 }
 
 export function isIgnoredCompactLifecycleSystemText(text: string): boolean {
@@ -155,6 +157,7 @@ async function buildArchiveBlockRecords(session: Session, blocks: CreateArchiveB
   session.nextBlockId = await resolveNextSessionBlockId(session);
   const createdAt = Date.now();
   return blocks.map((block) => {
+    const frictionScore = normalizeFrictionScore(block.frictionScore);
     const id = session.nextBlockId!;
     session.nextBlockId = id + 1;
     return {
@@ -174,6 +177,7 @@ async function buildArchiveBlockRecords(session: Session, blocks: CreateArchiveB
       rawEndSeq: block.rawEndSeq,
       ...(typeof block.rawStartTimestamp === 'number' && Number.isFinite(block.rawStartTimestamp) ? { rawStartTimestamp: block.rawStartTimestamp } : {}),
       ...(typeof block.rawEndTimestamp === 'number' && Number.isFinite(block.rawEndTimestamp) ? { rawEndTimestamp: block.rawEndTimestamp } : {}),
+      ...(frictionScore !== undefined ? { frictionScore } : {}),
       summary: formatArchiveBlockSummary(block.summary, block.memoryFacts),
       ...(block.memoryFacts?.length ? { memoryFacts: block.memoryFacts } : {}),
       createdAt,
@@ -281,7 +285,9 @@ export function formatArchiveBlockContextText(record: ArchiveBlockContextTextInp
 }
 
 export function buildContextBlockMessageMeta(record: ArchiveBlockRecord): ContextBlockMessageMeta {
+  const frictionScore = normalizeFrictionScore(record.frictionScore);
   return {
+    ...(frictionScore !== undefined ? { frictionScore } : {}),
     id: record.id,
     level: record.level,
     rawStartSeq: record.rawStartSeq,

@@ -1,3 +1,6 @@
+import { AccessConfigRuntime, type NormalizedAccessIdentity } from '../accessConfig';
+import { configInstaller, type ConfigInstaller } from '../configInstaller';
+import { projectWebUiSessionScope, webUiSessionScopeAllows } from '../webuiSessionScope';
 import { registerWebUiTaskRoutes } from './webuiTasks';
 import { taskService } from '../tools/taskTools';
 /**
@@ -6,10 +9,11 @@ import { taskService } from '../tools/taskTools';
 
 import express from 'express';
 import http from 'http';
+import os from 'os';
 import path from 'path';
 import fs from 'fs-extra';
 import yaml from 'js-yaml';
-import { buildModelsConfigFromSetupForm, dumpSetupYaml, readRawAppConfigFile, readRawTextFileIfExists, validateAppConfigYaml, writeAppConfigWithChannels, writeRawAppConfig, writeRawModelsConfig } from '../setupConfig';
+import { buildModelsConfigFromSetupForm, dumpSetupYaml, readRawAppConfigFile, readRawTextFileIfExists, validateAppConfigYaml, buildAppConfigWithChannelsYaml } from '../setupConfig';
 import { buildSavedFileText, saveInboundSessionFile } from '../channelFiles';
 import { WebSocket } from 'ws';
 import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
@@ -21,11 +25,11 @@ import { deleteSessionLifecycle } from '../sessionDeletion';
 import type { SessionRuntimeSessionDto } from '../sessionRuntime';
 import { buildSessionRuntimeSessionDto } from '../sessionRuntimeService';
 import { sessionCatalogStore } from '../session/catalogStore';
-import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, ProviderConfigValue, getActiveModelsConfigPath, getAgentDir, readAppConfigFile, resolveModelConfig, MODEL_EFFORTS, type ModelEffort, type ModelsConfig } from '../config';
+import { ACCESS_RUNTIME, AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, ProviderConfigValue, getActiveModelsConfigPath, getAgentDir, readAppConfigFile, resolveModelConfig, MODEL_EFFORTS, type ModelEffort, type ModelsConfig, type NormalizedAccessConfig, authenticateAccessToken } from '../config';
 import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
-import { httpServer } from '../httpServer';
+import { httpServer, type HttpAuthContext } from '../httpServer';
 import { COMMANDS } from '../commands';
-import { listChannelRuntimeStatuses, reloadManagedChannels } from '../channelRuntime';
+import { listChannelRuntimeStatuses } from '../channelRuntime';
 import { requestLlmOnce } from '../llm';
 import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLogin, waitForWeixinQrLogin } from '../weixin/api';
 import { createAsrServiceWebSocket, getAsrServiceStatus, transcribeWithAsrService } from '../asrClient';
@@ -59,6 +63,34 @@ import { registerWebUiNodeOnboardingRoutes } from './webuiNodeOnboarding';
 import { WebUiRealtimeHub, WEBUI_REALTIME_PATH } from './webuiRealtime';
 import { buildQueuedPreviewMessages, MAX_QUEUED_PREVIEW_ITEMS, sanitizeQueuedPreviewParts } from './webuiQueuePreview';
 import { listProviderModels, parseProviderModelListRequest, ProviderModelListError } from '../providerModelList';
+
+const WEBUI_UPLOAD_DIR = path.join(os.tmpdir(), 'foxwarm-uploads');
+const WEBUI_IDENTITY_FEATURES = {
+  chat: true,
+  attachments: true,
+  commands: false,
+  terminal: false,
+  workspace: false,
+  setup: false,
+  settings: false,
+  sessionManagement: false,
+  debug: false,
+  modelSelection: false,
+  sidebar: false,
+};
+const WEBUI_ADMIN_FEATURES = {
+  chat: true,
+  attachments: true,
+  commands: true,
+  terminal: true,
+  workspace: true,
+  setup: true,
+  settings: true,
+  sessionManagement: true,
+  debug: true,
+  modelSelection: true,
+  sidebar: true,
+};
 
 const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
 const WEBUI_NODE_LAUNCH_SERVICES = ['vscode-fs', 'vscode-git', 'vscode-pty'] as const;
@@ -672,6 +704,9 @@ export interface WebUIChannelOptions {
   enableWebUI?: boolean;
   enableTrigger?: boolean;
   loadModelStreamSnapshot?: (sessionId: string) => Promise<unknown>;
+  accessConfig?: NormalizedAccessConfig;
+  accessRuntime?: AccessConfigRuntime;
+  configInstaller?: ConfigInstaller;
 }
 
 function buildChildrenMap(allSessions: Map<string, any>): Map<string, string[]> {
@@ -848,9 +883,16 @@ export class WebUIChannel implements Channel {
   private token: string;
   private enableWebUI: boolean;
   private enableTrigger: boolean;
+  private access: AccessConfigRuntime;
+  private installer: ConfigInstaller;
+  private unsubscribeAccess: () => void;
+  private webUiAuthIdentities = new WeakMap<HttpAuthContext, NormalizedAccessIdentity>();
+  private identityResponses = new Map<express.Response, string>();
   private loadModelStreamSnapshot?: (sessionId: string) => Promise<unknown>;
   private sseClients: Map<string, express.Response[]> = new Map(); // sessionId -> clients
   private realtimeHub?: WebUiRealtimeHub;
+  private sseSessionAccess = new WeakMap<express.Response, () => boolean>();
+  private webUiUploads = new Map<string, { identityId: string; sessionId: string }>();
   private logs = new WebUiLogFile(MAIN_LOG_PATH);
   private presentationSubscriberSessions = new Set<string>();
   private presentationSubscriptionListener?: (sessionId: string, active: boolean) => void | Promise<void>;
@@ -871,6 +913,69 @@ export class WebUIChannel implements Channel {
     initializing: boolean;
   }>();
   private globalSseInvalidationEventId = 0;
+
+  private async getAuthContext(req: express.Request): Promise<HttpAuthContext | null> {
+    return httpServer.getAuthContext(req);
+  }
+
+  private authSessionPayload(auth: HttpAuthContext) {
+    if (auth.role === 'admin') {
+      return { role: 'admin' as const, features: WEBUI_ADMIN_FEATURES };
+    }
+    const sessionIds = projectWebUiSessionScope(auth.sessionIds, sessionManager.getSessionCatalog,
+      agent => sessionCatalogStore.listByAgent(agent) as Array<{ id: string; agent: string }>);
+    return {
+      role: 'webui' as const,
+      identityId: auth.identityId,
+      sessionIds,
+      features: WEBUI_IDENTITY_FEATURES,
+    };
+  }
+
+  private webUiCanAccessSession(auth: HttpAuthContext, sessionId: string): boolean {
+    if (auth.role === 'admin') return true;
+    return this.isAuthCurrent(auth) && webUiSessionScopeAllows(auth.sessionIds, sessionId, sessionManager.getSessionCatalog);
+  }
+
+  private isAuthCurrent(auth: HttpAuthContext): boolean {
+    if (auth.role === 'admin') return true;
+    const original = this.webUiAuthIdentities.get(auth);
+    const current = this.access.snapshot.identities[auth.identityId];
+    return !!original && !!current?.surfaces.webui && original.token === current.token
+      && JSON.stringify(auth.sessionIds) === JSON.stringify(current.surfaces.webui.sessions);
+  }
+
+  private trackIdentityResponse(auth: HttpAuthContext, res: express.Response): void {
+    if (auth.role !== 'webui') return;
+    this.identityResponses.set(res, auth.identityId);
+    res.once('close', () => { this.identityResponses.delete(res); });
+  }
+
+  private async requireSessionAccess(req: express.Request, res: express.Response, sessionId: string): Promise<HttpAuthContext | null> {
+    const auth = await this.getAuthContext(req);
+    if (!auth) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return null;
+    }
+    if (!this.webUiCanAccessSession(auth, sessionId)) {
+      res.status(403).json({ error: 'Forbidden: WebUI identity is not bound to this session', code: 'WEBUI_SESSION_NOT_ALLOWED' });
+      return null;
+    }
+    this.trackIdentityResponse(auth, res);
+    return auth;
+  }
+
+  private accessibleSseClients(sessionId: string): express.Response[] {
+    return [...(this.sseClients.get(sessionId) || [])].filter(client => {
+      if (this.sseSessionAccess.get(client)?.() !== false) return true;
+      client.end();
+      return false;
+    });
+  }
+
+  private isSlashCommandText(text: string): boolean {
+    return /^\s*(?:@[a-zA-Z_\-.]+\s+)?\//.test(text);
+  }
 
   private async refreshPresentationSubscription(sessionId: string): Promise<void> {
     const active = this.hasPresentationSubscribers(sessionId);
@@ -910,6 +1015,25 @@ export class WebUIChannel implements Channel {
     this.token = options.token;
     this.enableWebUI = options.enableWebUI !== false;
     this.enableTrigger = options.enableTrigger !== false;
+    this.access = options.accessRuntime || (options.accessConfig ? new AccessConfigRuntime(options.accessConfig) : ACCESS_RUNTIME);
+    this.access.reserveInstanceToken(options.token);
+    this.installer = options.configInstaller || configInstaller;
+    this.unsubscribeAccess = this.access.subscribe(change => {
+      this.realtimeHub?.revokeIdentities(change.webui);
+      for (const [response, id] of this.identityResponses) {
+        if (change.webui.has(id)) response.destroy();
+      }
+      const cleanup: Promise<void>[] = [];
+      for (const [filePath, owner] of this.webUiUploads) {
+        const old = change.previous.identities[owner.identityId];
+        const current = change.current.identities[owner.identityId];
+        if (!change.webui.has(owner.identityId) || (old?.token === current?.token && current?.surfaces.webui
+          && webUiSessionScopeAllows(current.surfaces.webui.sessions, owner.sessionId, sessionManager.getSessionCatalog))) continue;
+        this.webUiUploads.delete(filePath);
+        cleanup.push(fs.remove(filePath));
+      }
+      return Promise.all(cleanup).then(() => {});
+    });
     this.loadModelStreamSnapshot = options.loadModelStreamSnapshot;
     
     // Add routes to HTTP server
@@ -925,22 +1049,36 @@ export class WebUIChannel implements Channel {
       return next();
     }
     
-    // Check token
-    if (!httpServer.checkToken(req)) {
-      // Serve login.html directly instead of redirect
-      const loginPath = path.join(BASE_DIR, 'packages', 'webui', 'public', 'login.html');
-      return res.sendFile(loginPath);
-    }
-    
-    next();
+    httpServer.getAuthContext(req).then(auth => {
+      if (!auth) {
+        const loginPath = path.join(BASE_DIR, 'packages', 'webui', 'public', 'login.html');
+        return res.sendFile(loginPath);
+      }
+      next();
+    }).catch(next);
   };
 
   private setupRoutes() {
     // Add routes to HTTP server
     const httpServerInstance = httpServer;
+    const verifyWebUiIdentity = (token: string): HttpAuthContext | null => {
+      const identity = authenticateAccessToken(this.access.snapshot, token, 'webui');
+      if (!identity?.surfaces.webui) return null;
+      const auth: HttpAuthContext = {
+        role: 'webui',
+        identityId: identity.identityId,
+        sessionIds: identity.surfaces.webui.sessions,
+        features: WEBUI_IDENTITY_FEATURES,
+      };
+      this.webUiAuthIdentities.set(auth, this.access.snapshot.identities[identity.identityId]);
+      return auth;
+    };
+    httpServerInstance.setWebUiIdentityVerifier(verifyWebUiIdentity);
     if (this.enableWebUI) registerWebUiTaskRoutes(httpServerInstance, taskService);
     this.realtimeHub = new WebUiRealtimeHub({
       checkToken: req => httpServerInstance.checkIncomingToken(req),
+      getAuthContext: req => httpServerInstance.getIncomingAuthContext(req),
+      isAuthCurrent: auth => this.isAuthCurrent(auth),
       resolveIds: ids => {
         const resolved = sessionCatalogStore.resolveMany(ids);
         return {
@@ -949,6 +1087,10 @@ export class WebUIChannel implements Channel {
             return resolution?.kind === 'exact' || resolution?.kind === 'alias' ? [resolution.sessionId] : [];
           }))],
           missingIds: ids.filter(id => resolved[id]?.kind !== 'exact' && resolved[id]?.kind !== 'alias'),
+          agentsByCanonicalId: Object.fromEntries(sessionCatalogStore.getMany(
+            [...new Set(Object.values(resolved).flatMap(resolution =>
+              resolution.kind === 'exact' || resolution.kind === 'alias' ? [resolution.sessionId] : []))],
+          ).map(session => [session.id, session.agent])),
           requestedToCanonical: Object.fromEntries(ids.flatMap(id => {
             const resolution = resolved[id];
             return resolution?.kind === 'exact' || resolution?.kind === 'alias' ? [[id, resolution.sessionId]] : [];
@@ -1025,13 +1167,36 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           const { token } = req.body;
           if (token === this.token) {
-            res.json({ success: true });
-          } else {
-            res.status(401).json({ error: 'Invalid token' });
+            return res.json({ success: true, ...this.authSessionPayload({ role: 'admin' }) });
           }
+          const identity = authenticateAccessToken(this.access.snapshot, token, 'webui');
+          if (identity?.surfaces.webui) {
+            const response = { success: true, ...this.authSessionPayload({
+              role: 'webui',
+              identityId: identity.identityId,
+              sessionIds: identity.surfaces.webui.sessions,
+              features: WEBUI_IDENTITY_FEATURES,
+            }) };
+            return res.json(response);
+          }
+          res.status(401).json({ error: 'Invalid token' });
         },
         noAuth: true,
       });
+
+      httpServerInstance.addRoute({
+        path: '/api/auth/session',
+        method: 'GET',
+        auth: 'webui',
+        handler: async (req: express.Request, res: express.Response) => {
+          const auth = await this.getAuthContext(req);
+          if (!auth) {
+            return res.status(401).json({ error: 'Unauthorized' });
+          }
+          res.json(this.authSessionPayload(auth));
+        },
+      });
+
 
       // Get available slash commands for WebUI autocomplete
       httpServerInstance.addRoute({
@@ -1149,12 +1314,13 @@ export class WebUIChannel implements Channel {
               // Raw mode is intentionally raw: validate first, then write the
               // user-provided text byte-for-byte instead of parse + dump, so
               // comments, key order, quoting, and custom formatting survive.
-              writeRawModelsConfig(String(req.body?.yaml ?? ''), modelsPath);
+              await this.installer.install('models', String(req.body?.yaml ?? ''));
             } else {
-              const existingRaw = readRawTextFileIfExists(modelsPath);
-              const existingConfig = existingRaw.trim() ? ((yaml.load(existingRaw) as any) || {}) : {};
-              const config = buildModelsConfigFromSetupForm(req.body || {}, existingConfig);
-              fs.writeFileSync(modelsPath, dumpSetupYaml(config), 'utf8');
+              await this.installer.install('models', () => {
+                const existingRaw = readRawTextFileIfExists(modelsPath);
+                const existingConfig = existingRaw.trim() ? ((yaml.load(existingRaw) as any) || {}) : {};
+                return dumpSetupYaml(buildModelsConfigFromSetupForm(req.body || {}, existingConfig));
+              });
             }
 
             // Validate by resolving the newly written config.
@@ -1245,13 +1411,15 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const rawYaml = String(req.body?.yaml ?? '');
-            const config = writeRawAppConfig(rawYaml, APP_CONFIG_PATH);
-            const reload = await reloadManagedChannels();
+            const config = validateAppConfigYaml(rawYaml);
+            const installation = await this.installer.install('config', rawYaml);
+            const reload = installation.reload;
             res.json({
               success: true,
               configPath: APP_CONFIG_PATH,
               rawYaml,
               channelCount: Object.keys(config.channels || {}).length,
+              ...installation,
               reload,
             });
           } catch (e: any) {
@@ -1269,17 +1437,13 @@ export class WebUIChannel implements Channel {
             const nextChannels = req.body?.channels && typeof req.body.channels === 'object'
               ? req.body.channels
               : parseChannelsYaml(req.body?.yaml);
-            const current = readAppConfigFile();
-            const next: AppConfig = {
-              ...current,
-              channels: nextChannels,
-            };
-            writeAppConfigWithChannels(next.channels || {}, APP_CONFIG_PATH);
-            const reload = await reloadManagedChannels();
+            const installation = await this.installer.install('config', () => buildAppConfigWithChannelsYaml(nextChannels || {}, APP_CONFIG_PATH));
+            const reload = installation.reload;
             res.json({
               success: true,
               configPath: APP_CONFIG_PATH,
-              channelsYaml: dumpSetupYaml(next.channels || {}),
+              channelsYaml: dumpSetupYaml(nextChannels || {}),
+              ...installation,
               reload,
             });
           } catch (e: any) {
@@ -1321,12 +1485,11 @@ export class WebUIChannel implements Channel {
             const setup = getWeixinSetupConfig(req.body || {});
             const result = await waitForWeixinQrLogin({ sessionKey, baseUrl: setup.baseUrl, routeTag: setup.routeTag, timeoutMs: 5000 });
             if (result.connected && result.botToken) {
-              const current = readAppConfigFile();
-              const existingChannels = current.channels || {};
-              const previous = (existingChannels as any)[setup.channelId] || {};
-              const next: AppConfig = {
-                ...current,
-                channels: {
+              const installation = await this.installer.install('config', () => {
+                const current = readAppConfigFile();
+                const existingChannels = current.channels || {};
+                const previous = (existingChannels as any)[setup.channelId] || {};
+                const channels: AppConfig['channels'] = {
                   ...existingChannels,
                   [setup.channelId]: {
                     ...previous,
@@ -1337,11 +1500,11 @@ export class WebUIChannel implements Channel {
                     routeTag: setup.routeTag,
                     allowedUsers: result.userId ? Array.from(new Set([...(previous.allowedUsers || []), result.userId])) : previous.allowedUsers,
                   },
-                },
-              };
-              writeAppConfigWithChannels(next.channels || {}, APP_CONFIG_PATH);
-              const reload = await reloadManagedChannels();
-              return res.json({ success: true, channelId: setup.channelId, connected: true, userId: result.userId || null, message: result.message, reload });
+                };
+                return buildAppConfigWithChannelsYaml(channels, APP_CONFIG_PATH);
+              });
+              const reload = installation.reload;
+              return res.json({ success: true, channelId: setup.channelId, connected: true, userId: result.userId || null, message: result.message, ...installation, reload });
             }
             res.json({ success: true, channelId: setup.channelId, connected: false, message: result.message });
           } catch (e: any) {
@@ -1681,14 +1844,19 @@ export class WebUIChannel implements Channel {
       httpServerInstance.addRoute({
         path: '/api/sessions',
         method: 'GET',
-        handler: async (_req: express.Request, res: express.Response) => {
+        auth: 'webui',
+        handler: async (req: express.Request, res: express.Response) => {
           try {
+            const auth = await this.getAuthContext(req);
+            if (!auth) return res.status(401).json({ error: 'Unauthorized' });
             const runtimeSessions = await sessionRuntime.listSessions();
+            if (auth.role === 'webui') {
+              return res.json({ sessions: runtimeSessions.filter(session => this.webUiCanAccessSession(auth, session.id))
+                .map(session => ({ id: session.id, displayName: session.displayName || null, busy: session.busy })) });
+            }
             const allSessions = new Map(runtimeSessions.map(session => [session.id, session]));
-            
             // Build parent-to-children map
             const childrenMap = buildChildrenMap(allSessions);
-            
             const sessions = Array.from(allSessions.entries())
               .map(([id, session]) => ({
                 ...buildWebUiSessionState(session),
@@ -1721,7 +1889,7 @@ export class WebUIChannel implements Channel {
             const agentId = typeof req.body?.agentId === 'string' && req.body.agentId.trim()
               ? req.body.agentId.trim()
               : 'main';
-            const requestedSessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : '';
+            const requestedSessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId : '';
             sessionManager.validateAgentName(agentId);
 
             let sessionId: string;
@@ -1960,7 +2128,6 @@ export class WebUIChannel implements Channel {
             const allSessions = new Map(runtimeSessions.map(session => [session.id, session]));
 
             const childrenMap = buildChildrenMap(allSessions);
-            
             // Build tree structure
             const agents = Array.from(allSessions.entries()).map(([id, session]) => ({
               id,
@@ -2009,7 +2176,57 @@ export class WebUIChannel implements Channel {
               const stream = fs.createReadStream(blobPath);
               stream.on('error', reject);
               res.on('finish', resolve);
-              res.on('close', resolve);
+              res.on('close', () => { stream.destroy(); resolve(); });
+              stream.pipe(res);
+            });
+          } catch (e: any) {
+            if (e?.code === 'ENOENT') return res.status(404).json({ error: 'Image blob not found' });
+            if (e?.message === 'Invalid image blob id.') return res.status(400).json({ error: e.message });
+            logger.error({ err: e }, 'Failed to serve image blob');
+            if (!res.headersSent) res.status(500).json({ error: 'Failed to serve image blob' });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/sessions/:sessionId/blobs/:blobId',
+        method: 'GET',
+        auth: 'webui',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionId = req.params.sessionId as string;
+            const auth = await this.requireSessionAccess(req, res, sessionId);
+            if (!auth) return;
+            const blobId = req.params.blobId as string;
+            // A blob ID is content-derived, not a secret. Require a reference
+            // in the bound Session before serving it to a WebUI identity.
+            if (auth.role === 'webui') {
+              const snapshot = await sessionRuntime.getHistory(sessionId);
+              if (!snapshot) return res.status(404).json({ error: 'Session not found' });
+              if (sessionManager.getSessionCatalog(sessionId)?.id !== snapshot.session.id || !this.webUiCanAccessSession(auth, sessionId)) {
+                return res.status(403).json({ error: 'WebUI identity session binding changed.' });
+              }
+              if (!snapshot.messages.some(message => message.parts.some(part => part.inlineDataRef?.blobId === blobId))) {
+                return res.status(403).json({ error: 'Image is not part of this WebUI identity session.' });
+              }
+            }
+            const blobPath = resolveImageBlobPath(blobId);
+            const stat = await fs.stat(blobPath);
+            if (!stat.isFile()) return res.status(404).json({ error: 'Image blob not found' });
+            const safeMimeType = getSafeRasterMimeType(blobId);
+            res.setHeader('Content-Type', safeMimeType || 'application/octet-stream');
+            res.setHeader('Content-Length', String(stat.size));
+            res.setHeader('ETag', `"${blobId}"`);
+            res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+            res.setHeader('X-Content-Type-Options', 'nosniff');
+            if (!safeMimeType) {
+              res.setHeader('Content-Disposition', `attachment; filename="${blobId}"`);
+            }
+            await new Promise<void>((resolve, reject) => {
+              const stream = fs.createReadStream(blobPath);
+              stream.on('error', reject);
+              res.on('finish', resolve);
+              res.on('close', () => { stream.destroy(); resolve(); });
               stream.pipe(res);
             });
           } catch (e: any) {
@@ -2171,9 +2388,12 @@ export class WebUIChannel implements Channel {
       httpServerInstance.addRoute({
         path: '/api/sessions/:sessionId/history',
         method: 'GET',
+        auth: 'webui',
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = req.params.sessionId as string;
+            const auth = await this.requireSessionAccess(req, res, sessionId);
+            if (!auth) return;
             const historyRangeKeys = ['tail', 'prefixLength', 'afterSeq', 'historyVersion'];
             const hasHistoryRangeQuery = Object.keys(req.query).some(key => historyRangeKeys.includes(key));
             const unknownQuery = hasHistoryRangeQuery
@@ -2231,6 +2451,10 @@ export class WebUIChannel implements Channel {
             if (!snapshot) {
               return res.status(404).json({ error: 'Session not found' });
             }
+            if (auth.role === 'webui' && (sessionManager.getSessionCatalog(sessionId)?.id !== snapshot.session.id
+              || !this.webUiCanAccessSession(auth, sessionId))) {
+              return res.status(403).json({ error: 'WebUI identity session binding changed.' });
+            }
             const historyVersion = snapshot.session.historyVersion;
             if (expectedHistoryVersion !== undefined && expectedHistoryVersion !== historyVersion) {
               return res.status(409).json({
@@ -2268,7 +2492,7 @@ export class WebUIChannel implements Channel {
             res.json({
               session: buildWebUiSessionState(snapshot.session),
               messages: webUiHistory.messages,
-              persistentMemorySnapshot: snapshot.persistentMemorySnapshot,
+              persistentMemorySnapshot: auth.role === 'admin' ? snapshot.persistentMemorySnapshot : null,
               queuedMessages,
               queueLength: snapshot.session.queueLength,
               latestSeq: snapshot.latestSeq,
@@ -2436,7 +2660,7 @@ export class WebUIChannel implements Channel {
             res.json({ success: true, newSessionId });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to fork session');
-            res.status(500).json({ error: e.message });
+            res.status(/^Invalid session name\./.test(e.message) ? 400 : 500).json({ error: e.message });
           }
         },
       });
@@ -2830,20 +3054,20 @@ export class WebUIChannel implements Channel {
       httpServerInstance.addRoute({
         path: '/api/sessions/:sessionId/stream',
         method: 'GET',
+        auth: 'webui',
         handler: async (req: express.Request, res: express.Response) => {
           const requestedSessionId = req.params.sessionId as string;
-
-          // Check token from cookie or query parameter
-          if (!httpServer.checkToken(req)) {
-            logger.warn('SSE token validation failed');
-            res.status(401).json({ error: 'Unauthorized' });
-            return;
-          }
+          const auth = await this.requireSessionAccess(req, res, requestedSessionId);
+          if (!auth) return;
 
           const session = await sessionRuntime.getSession(requestedSessionId);
           if (!session) {
             res.status(404).json({ error: 'Session not found' });
             return;
+          }
+          if (auth.role === 'webui' && (sessionManager.getSessionCatalog(requestedSessionId)?.id !== session.id
+            || !this.webUiCanAccessSession(auth, requestedSessionId))) {
+            return res.status(403).json({ error: 'WebUI identity session binding changed.' });
           }
           const sessionId = session.id;
           
@@ -2859,6 +3083,9 @@ export class WebUIChannel implements Channel {
             this.sseClients.set(sessionId, []);
           }
           this.sseClients.get(sessionId)!.push(res);
+          if (auth.role === 'webui') this.sseSessionAccess.set(res, () =>
+            this.webUiCanAccessSession(auth, requestedSessionId)
+            && sessionManager.getSessionCatalog(requestedSessionId)?.id === sessionId);
           this.refreshPresentationSubscription(sessionId);
           
           // logger.info({ sessionId, clientCount: this.sseClients.get(sessionId)!.length }, 'SSE client connected');
@@ -2873,11 +3100,21 @@ export class WebUIChannel implements Channel {
           
           // Keep-alive ping every 30 seconds
           const keepAliveInterval = setInterval(() => {
-            try {
-              res.write(': keep-alive\n\n');
-            } catch (e) {
-              clearInterval(keepAliveInterval);
+            if (auth.role === 'webui') {
+              void this.getAuthContext(req).then(fresh => {
+                if (fresh?.role !== 'webui' || fresh.identityId !== auth.identityId
+                  || !this.webUiCanAccessSession(fresh, requestedSessionId)
+                  || sessionManager.getSessionCatalog(requestedSessionId)?.id !== sessionId) {
+                  res.end();
+                  clearInterval(keepAliveInterval);
+                  return;
+                }
+                res.write(': keep-alive\n\n');
+              }).catch(() => { res.end(); clearInterval(keepAliveInterval); });
+              return;
             }
+            try { res.write(': keep-alive\n\n'); }
+            catch { clearInterval(keepAliveInterval); }
           }, 30000);
           
           // Remove client on disconnect
@@ -2985,20 +3222,20 @@ export class WebUIChannel implements Channel {
       httpServerInstance.addRoute({
         path: '/api/upload',
         method: 'POST',
+        auth: 'webui',
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const multer = require('multer');
-            const os = require('os');
             const crypto = require('crypto');
             
             // Setup multer for file upload
             const upload = multer({
-              dest: path.join(os.tmpdir(), 'foxwarm-uploads'),
+              dest: WEBUI_UPLOAD_DIR,
               limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
             });
             
             // Ensure upload directory exists
-            await fs.ensureDir(path.join(os.tmpdir(), 'foxwarm-uploads'));
+            await fs.ensureDir(WEBUI_UPLOAD_DIR);
             
             // Handle upload
             upload.single('file')(req, res, async (err: any) => {
@@ -3011,8 +3248,16 @@ export class WebUIChannel implements Channel {
                 res.status(400).json({ error: 'No file uploaded' });
                 return;
               }
-              
+
               const originalName = normalizeWebUiMultipartFilename(req.file.originalname);
+
+              const auth = await this.getAuthContext(req);
+              const uploadSessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : '';
+              if (!auth || (auth.role === 'webui' && (!uploadSessionId || !this.webUiCanAccessSession(auth, uploadSessionId)))) {
+                await fs.remove(req.file.path).catch(() => {});
+                res.status(!auth ? 401 : uploadSessionId ? 403 : 400).json({ error: 'WebUI identity upload requires a bound sessionId.' });
+                return;
+              }
 
               // Generate unique filename
               const ext = path.extname(originalName);
@@ -3024,6 +3269,13 @@ export class WebUIChannel implements Channel {
               
               logger.info({ filename, originalName, size: req.file.size }, 'File uploaded');
               
+              if (!this.isAuthCurrent(auth) || (auth.role === 'webui' && !this.webUiCanAccessSession(auth, uploadSessionId))) {
+                await fs.remove(finalPath).catch(() => {});
+                if (!res.destroyed) res.status(401).json({ error: 'Access changed.' });
+                return;
+              }
+              if (auth.role === 'webui') this.webUiUploads.set(finalPath, { identityId: auth.identityId, sessionId: uploadSessionId });
+
               res.json({ 
                 path: finalPath,
                 filename: originalName,
@@ -3192,9 +3444,12 @@ export class WebUIChannel implements Channel {
       httpServerInstance.addRoute({
         path: '/api/sessions/:sessionId/message',
         method: 'POST',
+        auth: 'webui',
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = req.params.sessionId as string;
+            const auth = await this.requireSessionAccess(req, res, sessionId);
+            if (!auth) return;
             const { text, parts, filePaths, uploadedFiles } = req.body;
             const clientMessageId = typeof req.body?.clientMessageId === 'string'
               && req.body.clientMessageId.length > 0
@@ -3206,9 +3461,23 @@ export class WebUIChannel implements Channel {
             if (!existingSession) {
               return res.status(404).json({ error: 'Session not found' });
             }
+            if (auth.role === 'webui' && (sessionManager.getSessionCatalog(sessionId)?.id !== existingSession.id
+              || !this.webUiCanAccessSession(auth, existingSession.id))) {
+              return res.status(403).json({ error: 'WebUI identity session binding changed.' });
+            }
 
             // Support both old format (text) and new format (parts)
             let finalParts = parts || (text ? [{ text }] : []);
+            if (auth.role === 'webui') {
+              if (!Array.isArray(finalParts) || finalParts.some(part => !part || typeof part !== 'object'
+                || Array.isArray(part) || typeof part.text !== 'string' || Object.keys(part).some(key => key !== 'text'))) {
+                return res.status(400).json({ error: 'WebUI identity messages may only include text parts.' });
+              }
+              if (typeof text === 'string' && this.isSlashCommandText(text)
+                || this.isSlashCommandText(finalParts.map(part => part.text).join('\n'))) {
+                return res.status(403).json({ error: 'WebUI identity tokens cannot use slash commands.', code: 'WEBUI_COMMANDS_DISABLED' });
+              }
+            }
             
             const ctx: ChannelContext = {
               channelId: 'webui',
@@ -3258,6 +3527,18 @@ export class WebUIChannel implements Channel {
               ? uploadedFiles
               : (Array.isArray(filePaths) ? filePaths.map((filePath) => ({ path: filePath })) : []);
 
+            if (auth.role === 'webui') {
+              for (const entry of uploadedEntries) {
+                const filePath = typeof entry === 'string' ? entry : entry?.path;
+                const owner = typeof filePath === 'string' ? this.webUiUploads.get(filePath) : null;
+                if (!owner || owner.identityId !== auth.identityId
+                  || sessionManager.getSessionCatalog(owner.sessionId)?.id !== existingSession.id
+                  || !this.webUiCanAccessSession(auth, owner.sessionId)) {
+                  return res.status(403).json({ error: 'Attachment is not bound to this WebUI identity session.' });
+                }
+              }
+            }
+
             if (uploadedEntries.length > 0) {
               for (const entry of uploadedEntries) {
                 const tempPath = typeof entry === 'string'
@@ -3266,6 +3547,9 @@ export class WebUIChannel implements Channel {
                 if (!tempPath) continue;
 
                 try {
+                  if (auth.role === 'webui' && !this.webUiCanAccessSession(auth, sessionId)) {
+                    return res.status(403).json({ error: 'WebUI identity session binding changed.' });
+                  }
                   const stats = await fs.stat(tempPath);
                   if (!stats.isFile()) continue;
 
@@ -3283,7 +3567,7 @@ export class WebUIChannel implements Channel {
                       : 'application/octet-stream');
                   const isImage = mimeType.startsWith('image/');
                   const saved = await saveInboundSessionFile({
-                    sessionId,
+                    sessionId: auth.role === 'webui' ? existingSession.id : sessionId,
                     platform: 'webui',
                     buffer: fileBuffer,
                     fileName: originalName,
@@ -3304,6 +3588,7 @@ export class WebUIChannel implements Channel {
                 } catch (err) {
                   logger.warn({ filePath: tempPath, err }, 'Failed to process uploaded file');
                 } finally {
+                  this.webUiUploads.delete(tempPath);
                   await fs.remove(tempPath).catch(() => {});
                 }
               }
@@ -3311,11 +3596,17 @@ export class WebUIChannel implements Channel {
             
             if (finalParts.length === 0) throw new Error('Missing message content');
 
+            if (auth.role === 'webui' && !this.webUiCanAccessSession(auth, sessionId)) {
+              return res.status(403).json({ error: 'WebUI identity session binding changed.' });
+            }
+
             // Attach webui channel if not already attached
             // Use sessionId as channelUserId so each session has its own channel
+            const attachmentSessionId = auth.role === 'webui' ? sessionManager.getSessionCatalog(sessionId)?.id : sessionId;
+            if (!attachmentSessionId) return res.status(403).json({ error: 'WebUI identity session binding changed.' });
             let existingSessionId = sessionManager.getSessionByChannel('webui', sessionId);
-            if (!existingSessionId || existingSessionId !== sessionId) {
-              sessionManager.attachChannel('webui', sessionId, sessionId);
+            if (!existingSessionId || existingSessionId !== attachmentSessionId) {
+              sessionManager.attachChannel('webui', sessionId, attachmentSessionId);
             }
 
             // Return immediately - don't wait for processing
@@ -3406,7 +3697,7 @@ export class WebUIChannel implements Channel {
 
   // Broadcast new message to SSE clients
   broadcastMessage(sessionId: string, message: any) {
-    const clients = this.sseClients.get(sessionId);
+    const clients = this.accessibleSseClients(sessionId);
     const payload = { type: 'message', message: buildWebUiMessage(message) };
     logger.debug({ sessionId, clientCount: clients?.length || 0, messageRole: message.role }, 'Broadcasting message to SSE clients');
     if (clients && clients.length > 0) {
@@ -3424,7 +3715,7 @@ export class WebUIChannel implements Channel {
   }
 
   broadcastQueueHistoryAppend(sessionId: string, append: QueueHistoryAppendPresentation) {
-    const clients = this.sseClients.get(sessionId);
+    const clients = this.accessibleSseClients(sessionId);
     for (const message of append.messages) {
       const payload = { type: 'message', message: buildWebUiMessage(message) };
       const data = JSON.stringify(payload);
@@ -3442,7 +3733,7 @@ export class WebUIChannel implements Channel {
   }
 
   broadcastSessionEvent(sessionId: string, event: any) {
-    const clients = this.sseClients.get(sessionId);
+    const clients = this.accessibleSseClients(sessionId);
     const payload = { type: 'session-event', event };
     if (clients && clients.length > 0) {
       const data = JSON.stringify(payload);
@@ -3458,7 +3749,7 @@ export class WebUIChannel implements Channel {
   }
 
   broadcastSessionStateUpdate(sessionId: string, runtimeSession?: SessionRuntimeSessionDto | null) {
-    const clients = this.sseClients.get(sessionId);
+    const clients = this.accessibleSseClients(sessionId);
 
     // The production event bridge supplies an immutable DTO. The live-map
     // fallback remains only for direct compatibility callers and existing
@@ -3593,8 +3884,10 @@ export class WebUIChannel implements Channel {
 
   async stop(): Promise<void> {
     // HTTP server is managed globally, no need to stop here
+    this.unsubscribeAccess();
     this.logs.dispose();
     this.realtimeHub?.dispose();
+    for (const response of this.identityResponses.keys()) response.destroy();
     logger.info('WebUI channel stopped');
     return Promise.resolve();
   }

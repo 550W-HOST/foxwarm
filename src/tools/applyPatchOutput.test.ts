@@ -133,7 +133,7 @@ test('backend Unicode patching retains per-file partial success when a later nea
     ].join('\n') }, ctx), (error: unknown) => {
       assert.ok(error instanceof Error);
       assert.ok(error.message.length < 2000);
-      assert.match(error.message, /first mismatch at file line 1/);
+      assert.match(error.message, /Failed hunk:\n@@\n-/);
       assert.match(error.message, /- Updated good\.cs \(\+1 -1\)/);
       assert.match(error.message, /1 remaining operation\(s\) were not applied/);
       return true;

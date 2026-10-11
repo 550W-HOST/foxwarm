@@ -11,7 +11,7 @@ import WebSocket from 'ws';
 import { NodeClient } from '../packages/cli-node/dist/client';
 import { CLI_NODE_CAPABILITIES } from '../packages/shared/dist/nodeCapabilities';
 import { HttpServer } from './httpServer';
-import { normalizeMcpInboundConfig, authenticateMcpInboundBearer } from './mcpInboundConfig';
+import { normalizeAccessConfig, authenticateAccessBearer } from './accessConfig';
 import { McpInboundMcpCatalog } from './mcpInboundCatalog';
 import { McpInboundHttpService } from './mcpInboundHttp';
 import type { ExternalExecutionContext } from './mcpInboundHttp';
@@ -24,7 +24,7 @@ import { registerNodeWebSocket } from './nodes/websocket';
 import { sessionCatalogStore } from './session/catalogStore';
 import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from './toolAuthorization';
 
-const credentials = normalizeMcpInboundConfig({ enabled: true, identities: { alpha: { token: 'synthetic-alpha-token' }, beta: { token: 'synthetic-beta-token' } } });
+const credentials = normalizeAccessConfig({ identities: { alpha: { token: 'synthetic-alpha-token', surfaces: { mcp: {} } }, beta: { token: 'synthetic-beta-token', surfaces: { mcp: {} } } } });
 const policy = parseToolAuthorizationPolicyBytes(`
 version: 1
 defaultAction: deny
@@ -71,8 +71,8 @@ test('an external context discovers, selects, and uses paired CLI file capabilit
     await client.connect();
     await Promise.race([ready, new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('CLI Node did not register.')), 5_000))]);
     assert.equal(nodesManager.supportsExternalOwner('paired-external-node'), true);
-    const alpha = authenticateMcpInboundBearer(credentials, 'Bearer synthetic-alpha-token')!;
-    const beta = authenticateMcpInboundBearer(credentials, 'Bearer synthetic-beta-token')!;
+    const alpha = authenticateAccessBearer(credentials, 'Bearer synthetic-alpha-token')!;
+    const beta = authenticateAccessBearer(credentials, 'Bearer synthetic-beta-token')!;
     const a: ExternalExecutionContext = { id: '11111111-2222-4333-8444-555555555555', externalId: 'alpha', currentNode: 'master', cwd: null, selectionGeneration: 0 };
     const b: ExternalExecutionContext = { id: '11111111-2222-4333-8444-666666666666', externalId: 'beta', currentNode: 'master', cwd: null, selectionGeneration: 0 };
     assert.deepEqual(await listExternalNodeTools(beta, b), []);

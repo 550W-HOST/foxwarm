@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { ArrowLeft } from 'lucide-react'
-import { WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
+import { WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 
 interface ContentHeaderProps {
   icon: ReactNode
@@ -42,9 +42,10 @@ export default function ContentHeader({ icon, title, subtitle, actions, onBack, 
           </div>
         </div>
 
-        {actions && (
+        {(actions || tabHeader) && (
           <div className="flex shrink-0 items-center gap-2">
             {actions}
+            <WorkbenchPaneControls />
           </div>
         )}
       </div>

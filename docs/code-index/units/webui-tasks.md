@@ -1,7 +1,7 @@
 # Unit: WebUI Tasks
 
 Files: packages/webui/src/components/TasksView.tsx, packages/webui/src/components/SessionSelector.tsx, packages/webui/test/tasksView.e2e.mjs
-Secondary files: packages/webui/src/App.tsx, packages/webui/src/PopupWebUiApp.tsx, packages/webui/src/EmbeddedWebUiApp.tsx, packages/webui/src/popupWebUi.ts, packages/webui/src/workbench/types.ts, packages/webui/src/workbench/utils.ts, packages/webui/src/components/GlobalUiSettingsMenu.tsx, packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/test/sessionListAndWorkbenchState.test.mjs, packages/webui/test/popupWebUi.test.mjs
+Secondary files: packages/webui/src/App.tsx, packages/webui/src/PopupWebUiApp.tsx, packages/webui/src/EmbeddedWebUiApp.tsx, packages/webui/src/popupWebUi.ts, packages/webui/src/workbench/types.ts, packages/webui/src/workbench/utils.ts, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/CollapsedSidebar.tsx, packages/webui/src/components/SessionList.tsx, packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/test/sessionListAndWorkbenchState.test.mjs, packages/webui/test/popupWebUi.test.mjs
 
 ## Purpose
 
@@ -32,7 +32,7 @@ Provides a Tasks singleton workbench tab with Table and Board views, manual Refr
 
 ## Workbench integration
 
-`system:tasks` uses the existing singleton activation, hash restoration, storage normalization, close fallback, split panes, tab menus and top-level popup flow. The settings menu exposes `Tasks` in expanded, collapsed and mobile navigation. Code's embedded Sidebar opens the same-origin Tasks popup without adding a host bridge or embedded target kind. The sole-tab header uses the ordinary workbench icon/Close controls; popup leaves have no workbench controls.
+`system:tasks` uses the existing singleton activation, hash restoration, storage normalization, close fallback, split panes, tab menus and top-level popup flow. Navigation placement is defined by [D-webui-tasks-navigation](#d-webui-tasks-navigation). Code's embedded Sidebar opens the same-origin Tasks popup without adding a host bridge or embedded target kind. The sole-tab header uses the ordinary workbench icon/Close controls; popup leaves have no workbench controls.
 
 ## Design decisions
 
@@ -40,8 +40,12 @@ Provides a Tasks singleton workbench tab with Table and Board views, manual Refr
 
 [2026-10-07] Tasks is a singleton workbench tab offering Table, Board, task details, manual Refresh, and only create/comment/owner user actions. User author identity is distinct from owner Session identity; no selected Session is used as the User actor. The UI adds no claim/complete/cancel controls, card dragging, account/role platform or task-specific realtime transport. Ordinary authenticated WebUI access retains its existing full-access contract.
 
+### D-webui-tasks-navigation
+
+[2026-10-11] Tasks has a persistent direct entry rather than a settings-menu row. Expanded desktop and mobile Session-list footers show an icon plus `Tasks` on the left, with History and settings on the right. The collapsed rail shows only the Tasks icon above History and settings. These entries reuse the ordinary singleton activation callback and are omitted when that callback is unavailable. The Code-embedded Sidebar shows a direct Tasks icon beside its header settings button, retaining its same-origin popup behavior and blocked-popup feedback.
+
 ## Tests
 
 - `tasksView.e2e.mjs` owns an HTTP fixture beneath a deployment prefix and mounts the production component. It covers four bounded status reads, Agent relationship filtering, Table/Board switching, all columns and card contents, narrow-viewport overflow containment and fixed detail visibility, detail text and bounded note/child summaries, loading, empty views, errors, Refresh recovery, obsolete detail cancellation, and the create/comment/owner user-action controls.
-- `workbenchPreview.e2e.mjs` mounts the production built App against its existing mock APIs. It covers Tasks route restoration/reload, singleton menu activation, popout URL/leaf behavior and sole-tab header close alongside the existing Chat, Agents, History, Logs, Setup, Terminal and Code behaviors.
+- `workbenchPreview.e2e.mjs` mounts the production built App against its existing mock APIs. It covers Tasks route restoration/reload, direct expanded/collapsed/mobile singleton activation and footer layout, embedded direct popup activation and blocked-popup feedback, popout URL/leaf behavior and sole-tab header close alongside the existing Chat, Agents, History, Logs, Setup, Terminal and Code behaviors.
 - Existing workbench normalization and popup URL/parser tests preserve old system tabs while accepting Tasks.

@@ -5,6 +5,7 @@ export const rpcTestService = defineRpcService('rpc-test', 1, {
   fail: rpcMethod<{ code: string }, never>(),
   plainFail: rpcMethod<Record<string, never>, never>(),
   wait: rpcMethod<{ delayMs: number }, { completed: true }>(),
+  settle: rpcMethod<{ delayMs: number; fail?: boolean }, { completed: true; aborted: boolean }>({ cancellation: 'settle' }),
   publish: rpcMethod<{ value: string }, { accepted: boolean }>(),
 }, {
   progress: rpcEvent<{ value: string }>(),
@@ -35,6 +36,11 @@ export const rpcTestHandler: RpcServiceHandler<typeof rpcTestService> = {
       else context.signal.addEventListener('abort', abort, { once: true });
     });
     return { completed: true };
+  },
+  async settle(input, context) {
+    await new Promise(resolve => setTimeout(resolve, input.delayMs));
+    if (input.fail) throw new RpcError('SETTLED_FAILURE', 'actual handler error');
+    return { completed: true, aborted: context.signal.aborted };
   },
   async publish(input, context) {
     return { accepted: context.emit('progress', { value: input.value }) };

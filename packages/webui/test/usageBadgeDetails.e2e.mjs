@@ -61,15 +61,15 @@ async function buildFixtureBundle() {
         { role: 'model', parts: [{ text: 'Previous boundary request' }], __meta: { seq: 'ordinary-at-prior', llmRequestTiming: requestTiming(0, 1000) } },
         { role: 'model', parts: [{ text: 'One-minute response' }], __meta: { seq: 'ordinary-at-current', usage: usage(7, 8, 9), modelId: 'provider/at-minute', timestamp: 62500, llmRequestTiming: requestTiming(61000, 62500) } },
       ] },
-      groupSame: { groupTools: true, messages: [toolCall('same-one', 'provider/real-model', 'virtual/same', 1700000000000, 1000, 2000), toolResponse('same-one'), toolCall('same-two', 'provider/real-model', 'virtual/same', 1700000000000, 5000, 7000), toolResponse('same-two'), { role: 'model', parts: [{ text: 'Tools complete.' }], __meta: { seq: 'same-final' } }] },
-      groupDifferent: { groupTools: true, messages: [toolCall('different-one', 'provider/first-model', 'virtual/first', 1700000000000, 1000, 2000), toolResponse('different-one'), toolCall('different-two', 'provider/second-model', 'virtual/second', 1700000060000, 5000, 7000), toolResponse('different-two'), { role: 'model', parts: [{ text: 'Tools complete.' }], __meta: { seq: 'different-final' } }] },
-      groupBelowMinute: { groupTools: true, messages: [toolCall('group-below-one', 'provider/group-below', null, 1700000000000, 0, 1000), toolResponse('group-below-one'), toolCall('group-below-two', 'provider/group-below', null, 1700000062499, 60999, 62499), toolResponse('group-below-two'), { role: 'model', parts: [{ text: 'Tools complete.' }], __meta: { seq: 'group-below-final' } }] },
-      groupAtMinute: { groupTools: true, messages: [toolCall('group-at-one', 'provider/group-at', null, 1700000000000, 0, 1000), toolResponse('group-at-one'), toolCall('group-at-two', 'provider/group-at', null, 1700000062500, 61000, 62500), toolResponse('group-at-two'), { role: 'model', parts: [{ text: 'Tools complete.' }], __meta: { seq: 'group-at-final' } }] },
+      groupSame: { timelineView: 'grouped', messages: [toolCall('same-one', 'provider/real-model', 'virtual/same', 1700000000000, 1000, 2000), toolResponse('same-one'), toolCall('same-two', 'provider/real-model', 'virtual/same', 1700000000000, 5000, 7000), toolResponse('same-two'), { role: 'model', parts: [{ text: 'Tools complete.' }], __meta: { seq: 'same-final' } }] },
+      groupDifferent: { timelineView: 'grouped', messages: [toolCall('different-one', 'provider/first-model', 'virtual/first', 1700000000000, 1000, 2000), toolResponse('different-one'), toolCall('different-two', 'provider/second-model', 'virtual/second', 1700000060000, 5000, 7000), toolResponse('different-two'), { role: 'model', parts: [{ text: 'Tools complete.' }], __meta: { seq: 'different-final' } }] },
+      groupBelowMinute: { timelineView: 'grouped', messages: [toolCall('group-below-one', 'provider/group-below', null, 1700000000000, 0, 1000), toolResponse('group-below-one'), toolCall('group-below-two', 'provider/group-below', null, 1700000062499, 60999, 62499), toolResponse('group-below-two'), { role: 'model', parts: [{ text: 'Tools complete.' }], __meta: { seq: 'group-below-final' } }] },
+      groupAtMinute: { timelineView: 'grouped', messages: [toolCall('group-at-one', 'provider/group-at', null, 1700000000000, 0, 1000), toolResponse('group-at-one'), toolCall('group-at-two', 'provider/group-at', null, 1700000062500, 61000, 62500), toolResponse('group-at-two'), { role: 'model', parts: [{ text: 'Tools complete.' }], __meta: { seq: 'group-at-final' } }] },
       longMobile: { messages: [{ role: 'model', parts: [{ text: 'Long route response' }], __meta: { seq: 4, usage: usage(1, 2, 3), modelId: 'provider/real-model', virtualModelKey: longVirtualKey, timestamp: 1700000000000 } }] },
       hidden: { showUsageBadge: false, messages: [{ role: 'model', parts: [{ text: 'Hidden usage' }], __meta: { seq: 5, usage: usage(1, 2, 3), modelId: 'provider/hidden', timestamp: 1700000000000 } }] },
-      groupSeq: { groupTools: true, messages: groupSeqMessages },
-      oneModelManyCalls: { groupTools: true, messages: [manyCalls, twoResults, finish] },
-      groupMissingSeq: { groupTools: true, messages: [manyCalls, twoResults, { ...laterCall, __meta: { usage: usage(4, 5, 6) } }, laterResult, finish] },
+      groupSeq: { timelineView: 'grouped', messages: groupSeqMessages },
+      oneModelManyCalls: { timelineView: 'grouped', messages: [manyCalls, twoResults, finish] },
+      groupMissingSeq: { timelineView: 'grouped', messages: [manyCalls, twoResults, { ...laterCall, __meta: { usage: usage(4, 5, 6) } }, laterResult, finish] },
       seqMissing: { messages: [{ role: 'model', parts: [{ text: 'No persisted sequence' }], __meta: { usage: usage(1, 2, 3) } }] },
       seqZero: { messages: [{ role: 'model', parts: [{ text: 'Zero sequence' }], __meta: { seq: 0, usage: usage(1, 2, 3) } }] },
       seqFraction: { messages: [{ role: 'model', parts: [{ text: 'Fraction sequence' }], __meta: { seq: 12.7, usage: usage(1, 2, 3) } }] },
@@ -85,18 +85,18 @@ async function buildFixtureBundle() {
         sessionId: 'example/main',
         messages: fixture.messages,
         isMobile: window.innerWidth < 768,
-        groupTools: fixture.groupTools || false,
+        timelineView: fixture.timelineView || 'detailed',
         showUsageBadge: fixture.showUsageBadge !== false,
         showTimeDividers: false,
       }))
     }
     window.commitStreamSeq = seq => {
       streamMessage.__meta.seq = seq
-      roots.stream.render(React.createElement(ChatTimeline, { sessionId: 'example/main', messages: [...cases.stream.messages], isMobile: false, groupTools: false, showUsageBadge: true, showTimeDividers: false }))
+      roots.stream.render(React.createElement(ChatTimeline, { sessionId: 'example/main', messages: [...cases.stream.messages], isMobile: false, timelineView: 'detailed', showUsageBadge: true, showTimeDividers: false }))
     }
     window.commitGroupSeq = seq => {
       manyCalls.__meta.seq = seq
-      roots.groupSeq.render(React.createElement(ChatTimeline, { sessionId: 'example/main', messages: [...groupSeqMessages], isMobile: false, groupTools: true, showUsageBadge: true, showTimeDividers: false }))
+      roots.groupSeq.render(React.createElement(ChatTimeline, { sessionId: 'example/main', messages: [...groupSeqMessages], isMobile: false, timelineView: 'grouped', showUsageBadge: true, showTimeDividers: false }))
     }
   `
   const result = await build({

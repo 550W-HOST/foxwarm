@@ -3,7 +3,7 @@ import { taskService } from './taskTools';
 import { executeTools } from '../llm';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TASK_ACTIONS, TASK_STATUSES } from '../taskStore';
+import { TASK_ACTIONS, TASK_LIST_SCOPES, TASK_STATUSES } from '../taskStore';
 import { definitions } from './definitions';
 import { BUILTIN_TOOL_PLACEMENTS } from './placement';
 import * as sessionManager from '../sessionManager';
@@ -22,6 +22,7 @@ test('one task builtin has the action enum, no caller-supplied identity, and Mai
   assert.deepEqual(schema.required, ['action']);
   assert.deepEqual(schema.properties.action.enum, [...TASK_ACTIONS]);
   assert.deepEqual(schema.properties.status.enum, [...TASK_STATUSES]);
+  assert.deepEqual(schema.properties.scope.enum, [...TASK_LIST_SCOPES]);
   assert.equal(schema.additionalProperties, false);
   assert.equal(schema.properties.sessionId, undefined);
   assert.deepEqual(schema.properties.ownerSessionId.type, ['string', 'null']);
@@ -49,11 +50,27 @@ test('direct, unified and Worker task calls use exact context identity through M
     const claimed = readResult(await call_tool({ source: 'builtin', name: 'task', args: { action: 'claim', taskId } }, ownerCtx));
     assert.equal(claimed.ownerSessionId, owner.id);
     assert.equal(claimed.status, 'active');
-    await task({ action: 'update', taskId, note: 'Creator progress note' }, creatorCtx);
+    const ownerOnlyTask = readResult(await task({ action: 'create', title: 'Only visible to owner or wider scope' }, ownerCtx)).taskId;
+    const creatorDefaultList = readResult(await task({ action: 'list' }, creatorCtx));
+    assert.deepEqual(creatorDefaultList.tasks.map((entry: any) => entry.id), [taskId], 'direct list defaults to the current Session');
+    for (const extra of [{ title: 'unused' }, { taskId: 'unused' }, { ownerSessionId: owner.id }]) {
+      await assert.rejects(() => task({ action: 'list', ...extra } as any, creatorCtx), /is not allowed for task list/);
+    }
+    const ownerSessionList = readResult(await call_tool({ source: 'builtin', name: 'task', args: { action: 'list', scope: 'current-session' } }, ownerCtx));
+    assert.ok(ownerSessionList.tasks.some((entry: any) => entry.id === taskId));
+    assert.ok(ownerSessionList.tasks.some((entry: any) => entry.id === ownerOnlyTask));
+    const unifiedAllList = readResult(await call_tool({ source: 'builtin', name: 'task', args: { action: 'list', scope: 'all' } }, creatorCtx));
+    assert.ok(unifiedAllList.tasks.some((entry: any) => entry.id === ownerOnlyTask), 'unified list supports the global scope');
+    assert.equal(creator.agent, owner.agent, 'the Sessions in this fixture share an Agent');
+    const workerAgentList = readResult(await call_tool({ source: 'builtin', name: 'task', args: { action: 'list', scope: 'current-agent' } }, ownerCtx));
+    assert.ok(workerAgentList.tasks.some((entry: any) => entry.id === taskId));
+    assert.ok(workerAgentList.tasks.some((entry: any) => entry.id === ownerOnlyTask), 'Worker list resolves actual Agent catalog membership');
+    await task({ action: 'update', taskId, note: 'Creator progress note', notifySession: true }, creatorCtx);
     await task({ action: 'update', taskId, note: 'Working' }, ownerCtx);
     assert.equal(JSON.stringify(creator), creatorBefore);
     const result = readResult(await task({ action: 'complete', taskId, result: 'Done' }, ownerCtx));
     assert.equal(result.status, 'completed');
+    assert.equal(result.sentNotifications, 1);
     const inspected = readResult(await task({ action: 'get', taskId }, creatorCtx));
     assert.equal(inspected.task.result, 'Done');
     assert.equal(inspected.notes.find((note: any) => note.text === 'Working').sessionId, owner.id);
@@ -93,6 +110,7 @@ test('create_child_session taskId assigns or transfers the real child before del
     const taskId = readResult(await task({ action: 'create', title: 'Child work', description: 'Complete the full child task description.' }, ctx)).taskId;
     const result: any = await create_child_session({ suffix: 'executor', taskId, message: 'Use the approved implementation path.', afterSend: 'wait' }, ctx);
     const childId = String(result.output ?? result).match(/`([^`]+)`/)![1];
+    assert.equal(result.sentNotifications, 1);
     assert.deepEqual(result.__toolPostAction, { waitForReply: true, successfulSendToSessionTarget: childId });
     children.push(childId);
     assert.ok(sessionManager.getSessionCatalog(childId));
@@ -109,7 +127,8 @@ test('create_child_session taskId assigns or transfers the real child before del
     assert.equal(readResult(await task({ action: 'get', taskId }, ctx)).task.ownerSessionId, childId);
     assert.match(readResult(await task({ action: 'get', taskId }, ctx)).notes[0].text, new RegExp(childId));
     const transferredResult: any = await create_child_session({ suffix: 'replacement', taskId, message: 'Continue the transferred task.' }, ctx);
-    const transferredId = String(transferredResult).match(/`([^`]+)`/)![1];
+    const transferredId = String(transferredResult.output ?? transferredResult).match(/`([^`]+)`/)![1];
+    assert.equal(transferredResult.sentNotifications, 2);
     children.push(transferredId);
     const oldChild = await sessionManager.getExistingSession(childId);
     const replacement = await sessionManager.getExistingSession(transferredId);
@@ -144,6 +163,7 @@ test('create_child_session does not enter wait when task assignment delivery fai
   service.createAttachedChild = async () => ({
     childSessionId: 'delivery-failure-child',
     assignmentDelivered: false,
+    sentNotifications: 0,
     warning: 'Task assigned, but the new owner notification could not be delivered.',
   });
   try {
@@ -168,7 +188,7 @@ test('real Session moves preserve task owner/creator/attached identities, notifi
     const taskId = readResult(await task({ action: 'create', title: 'Linked work across Session moves' }, { sessionId: creator.id })).taskId;
     await task({ action: 'assign', taskId, ownerSessionId: parent.id }, { sessionId: creator.id });
     const created = await create_child_session({ suffix: 'executor', taskId }, { sessionId: parent.id, session: parent });
-    child = await sessionManager.getExistingSession(String(created).match(/`([^`]+)`/)![1]);
+    child = await sessionManager.getExistingSession(String((created as any).output ?? created).match(/`([^`]+)`/)![1]);
     const ctx = { sessionId: child.id, session: child };
     const selfId = readResult(await task({ action: 'create', title: 'Self-owned work across rename' }, ctx)).taskId;
     await task({ action: 'claim', taskId: selfId }, ctx);
@@ -281,7 +301,7 @@ test('model task mutation receipts stay minimal across direct, unified, Worker a
   const directCtx: any = { sessionId: creator.id, session: creator };
   const workerCtx: any = { sessionId: owner.id, session: owner, sessionPlacement: 'session-worker', persistCurrentSession: async () => { throw new Error('Task must not persist Session state'); } };
   const assertReceipt = (value: any, expectedStatus: string, expectedOwner: string | null) => {
-    assert.deepEqual(Object.keys(value).sort(), ['ownerSessionId', 'status', 'taskId']);
+    assert.deepEqual(Object.keys(value).sort(), ['ownerSessionId', 'sentNotifications', 'status', 'taskId']);
     assert.match(value.taskId, /^task_/);
     assert.equal(value.status, expectedStatus);
     assert.equal(value.ownerSessionId, expectedOwner);

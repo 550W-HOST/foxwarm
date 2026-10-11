@@ -129,6 +129,7 @@ export class ProcessRpcClientTransport implements RpcTransport {
       let timer: NodeJS.Timeout | undefined;
       const abort = () => {
         this.send({ kind: this.kind('rpc-cancel'), generation: this.generation, requestId } as any);
+        if (descriptor.methods[methodName]?.cancellation === 'settle') return;
         this.rejectPending(requestId, options.signal?.reason instanceof Error
           ? options.signal.reason
           : new RpcError('RPC_CANCELLED', 'RPC request cancelled.', true));

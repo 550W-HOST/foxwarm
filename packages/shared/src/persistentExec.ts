@@ -253,8 +253,17 @@ export function generatePersistentExecPetname(randomInt: (maxExclusive: number) 
   return `${EXEC_ID_ADJECTIVES[adjectiveIndex]}-${EXEC_ID_NOUNS[nounIndex]}`;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal?.addEventListener('abort', finish, { once: true });
+    if (signal?.aborted) finish();
+  });
 }
 
 function escapeInlineCode(text: string): string {
@@ -986,14 +995,15 @@ export class PersistentExecManager {
     return fallback;
   }
 
-  async waitForExecCompletion(execId: string, timeoutMs: number): Promise<ExecStatus | null> {
+  async waitForExecCompletion(execId: string, timeoutMs: number, signal?: AbortSignal): Promise<ExecStatus | null> {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       const entry = this.runningExecs.get(execId);
       if (!entry) return null;
       const status = await this.ensureFallbackStatus(entry);
       if (status) return status;
-      await sleep(STATUS_POLL_INTERVAL_MS);
+      if (signal?.aborted) return null;
+      await sleep(STATUS_POLL_INTERVAL_MS, signal);
     }
     return null;
   }
@@ -1032,9 +1042,11 @@ export class PersistentExecManager {
     return `${output.text}${footerSeparator}${this.buildForegroundFooter(entry, status, output, warning)}`;
   }
 
-  async buildBackgroundTimeoutResult(entry: RunningExecEntry, timeoutSeconds: number = DEFAULT_EXEC_TIMEOUT_SECONDS, warning?: string): Promise<string> {
+  async buildBackgroundTimeoutResult(entry: RunningExecEntry, timeoutSeconds: number = DEFAULT_EXEC_TIMEOUT_SECONDS, warning?: string, waitEndedBy?: string): Promise<string> {
     const partialOutput = await this.readPartialLog(entry.logPath);
-    const fullNotice = buildBackgroundTimeoutFullNotice(timeoutSeconds);
+    const fullNotice = waitEndedBy
+      ? `${waitEndedBy} ended this call's wait. The command was already started and was not killed; it may still be running in the background. Completion will be reported separately.`
+      : buildBackgroundTimeoutFullNotice(timeoutSeconds);
     const processTree = await this.buildLiveProcessTree(entry);
     const nodeLine = entry.nodeId && entry.nodeId !== 'master' ? `Node: \`${entry.nodeId}\`\n` : '';
     const warningLine = warning ? `${warning}\n` : '';

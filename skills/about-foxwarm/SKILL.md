@@ -1,6 +1,6 @@
 ---
 name: about-foxwarm
-description: "Explain Foxwarm concepts, setup, and exploration paths: agents, sessions, tools, nodes, skills, channels, WebUI, memory, ToolScript, and where to find docs."
+description: "Explain Foxwarm concepts, setup, and exploration paths: agents, sessions, tools, nodes, skills, channels, WebUI, memory, ToolScript, MCP connections/replies, access identities, and tool permissions."
 ---
 
 # About Foxwarm
@@ -44,6 +44,8 @@ Child sessions should explicitly report back to the parent when they finish.
 A **tool** is an action the assistant can call, such as reading files, editing files, running shell commands, searching memory, sending files, managing sessions, or interacting with nodes.
 
 Tool availability depends on the current session, agent isolation, and node.
+
+Generic tool policy can restrict internal Agents/Sessions and external MCP identities. It checks the concrete tool and target, not just a calling wrapper. Loading a skill or selecting a Node does not grant permission.
 
 ### Node
 
@@ -97,6 +99,12 @@ Session history is separate from agent memory.
 
 ToolScript is an automation layer for orchestrating tool calls and managed sessions. Use ToolScript when a workflow needs repeatable multi-step tool automation.
 
+### Access identity and MCP
+
+An **access identity** is a configured entry credential with explicitly declared WebUI and/or MCP surfaces. A WebUI identity can chat with bound existing Sessions without receiving administrator management access. Its browser scope does not grant tools or change those Sessions' Agent authority.
+
+Foxwarm can connect outward to MCP tool servers and accept permitted external clients at its own `/mcp` endpoint. An MCP identity must also have concrete tool grants. Two Foxwarm instances can exchange explicit text replies when the calling Session starts notifications and the receiving Session sends to a server-provided channel destination; ordinary assistant output is not automatically forwarded.
+
 ## First things to try after setup
 
 If models are configured and WebUI is open, the user can ask:
@@ -108,6 +116,22 @@ If models are configured and WebUI is open, the user can ask:
 - "Help me connect a browser node."
 - "Help me configure a Telegram channel."
 - "Create a project memory note from this README."
+- "Connect an MCP tool server and show its tools."
+- "Give a collaborator WebUI access to one existing Session."
+- "Allow an external MCP identity to send work to one Session."
+- "Receive an explicit reply from another Foxwarm instance."
+
+## Choose the next skill
+
+| Goal | Skill |
+| --- | --- |
+| Create or migrate Agents, manage memory/inheritance, or bind Node isolation | [agent-management](../agent-management/SKILL.md) |
+| Configure entry identities, restrict browser Session scope, or safely update internal/external tool rules | [access-control](../access-control/SKILL.md) |
+| Connect outbound/inbound MCP, discover/call tools, or set up explicit instance replies | [mcp-management](../mcp-management/SKILL.md) |
+| Pair/bootstrap a Node | [node-setup](../node-setup/SKILL.md) |
+| Coordinate dependent tool calls | [toolscript-automation](../toolscript-automation/SKILL.md) |
+
+These skills own different workflows; their cross-links provide navigation rather than another copy of the same rules. Ask the agent to load the named skill, or use `skill({ action: "load", skillName: "access-control" })` through the tool interface.
 
 ## Where to find details
 

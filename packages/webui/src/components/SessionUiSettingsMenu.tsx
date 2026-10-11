@@ -1,3 +1,4 @@
+import type { TimelineView } from '../chatPreferences'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Menu } from 'lucide-react'
 import { CONTEXT_SCROLLBAR_SETTINGS_EVENT, readContextScrollbarSettings, writeContextScrollbarSettings } from '../contextScrollbarSettings'
@@ -8,8 +9,8 @@ type SendKeyMode = 'modEnter' | 'enter'
 interface SessionUiSettingsMenuProps {
   sendKeyMode: SendKeyMode
   onSendKeyModeChange: (mode: SendKeyMode) => void
-  groupTools: boolean
-  onGroupToolsChange: (enabled: boolean) => void
+  timelineView: TimelineView
+  onTimelineViewChange: (mode: TimelineView) => void
   showUsageBadge: boolean
   onShowUsageBadgeChange: (enabled: boolean) => void
   showUserMessageMetadata: boolean
@@ -20,8 +21,8 @@ interface SessionUiSettingsMenuProps {
 export default function SessionUiSettingsMenu({
   sendKeyMode,
   onSendKeyModeChange,
-  groupTools,
-  onGroupToolsChange,
+  timelineView,
+  onTimelineViewChange,
   showUsageBadge,
   onShowUsageBadgeChange,
   showUserMessageMetadata,
@@ -154,9 +155,18 @@ export default function SessionUiSettingsMenu({
           <div className="border-b border-fw-border px-4 py-3 dark:border-fw-border">
             <div className="mb-2 text-xs font-medium text-fw-text-muted">Chat</div>
             <div className="space-y-1">
-              <button type="button" onClick={() => onGroupToolsChange(!groupTools)} className={toggleRowClass}>
-                <span>Group tools</span>{toggle(groupTools)}
-              </button>
+              <fieldset className="pb-2">
+                <legend className="px-2 py-1.5 text-xs text-fw-text">Timeline view</legend>
+                <div className="flex gap-1" role="radiogroup" aria-label="Timeline view">
+                  {(['detailed', 'grouped', 'conversation'] as const).map(mode => (
+                    <button key={mode} type="button" role="radio" aria-checked={timelineView === mode}
+                      onClick={() => onTimelineViewChange(mode)}
+                      className={`flex-1 rounded px-2 py-1 text-xs ${timelineView === mode ? 'bg-fw-accent text-fw-text-inverse' : 'bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised dark:text-fw-text dark:hover:bg-fw-hover'}`}>
+                      {mode[0].toUpperCase() + mode.slice(1)}
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
               <button type="button" onClick={() => onShowUsageBadgeChange(!showUsageBadge)} className={toggleRowClass}>
                 <span>Show usage badges</span>{toggle(showUsageBadge)}
               </button>

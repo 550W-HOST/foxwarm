@@ -28,7 +28,7 @@ const reactFixture = `
     const synthetic = buildStreamingAssistantMessage(draft)
     root.render(React.createElement(ChatTimeline, {
       sessionId: 'fixture/main', messages: [...committed, ...(synthetic ? [synthetic] : [])],
-      isMobile: false, groupTools: false, showUsageBadge: false,
+      isMobile: false, timelineView: 'detailed', showUsageBadge: false,
     }))
   }
   window.fixture = {

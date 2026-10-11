@@ -5,6 +5,8 @@ export const DEFAULT_RPC_BUILD_ID = 'foxwarm-1.0.0';
 
 export type RpcMethodDefinition<Input, Output> = {
   readonly kind: 'unary';
+  /** Cooperative tool cancellation signals the handler and retains its settled receipt. */
+  readonly cancellation?: 'settle';
   readonly _input?: Input;
   readonly _output?: Output;
 };
@@ -24,8 +26,8 @@ export type RpcServiceDescriptor<Methods extends RpcMethodMap = RpcMethodMap, Ev
   readonly events: Events;
 };
 
-export function rpcMethod<Input, Output>(): RpcMethodDefinition<Input, Output> {
-  return { kind: 'unary' };
+export function rpcMethod<Input, Output>(options: { cancellation?: 'settle' } = {}): RpcMethodDefinition<Input, Output> {
+  return { kind: 'unary', ...options };
 }
 
 export function rpcEvent<Payload>(): RpcEventDefinition<Payload> {
@@ -62,6 +64,8 @@ export type RpcCallOptions = {
 
 export type RpcHandlerContext<Events extends RpcEventMap = RpcEventMap> = {
   readonly signal: AbortSignal;
+  /** For settled tool calls, hard deadline/owner-loss cancellation remains separate from ordinary caller Stop. */
+  readonly hardCancellationSignal?: AbortSignal;
   readonly requestId: string;
   readonly traceId: string;
   readonly deadlineAt?: number;
@@ -148,23 +152,28 @@ export function resolveRpcDeadline(options: RpcCallOptions): number | undefined 
   return Date.now() + options.timeoutMs;
 }
 
-export function buildLinkedAbortController(signal?: AbortSignal, deadlineAt?: number): {
+export function buildLinkedAbortController(signal?: AbortSignal, deadlineAt?: number, settleCancellation = false): {
   controller: AbortController;
+  hardController?: AbortController;
   dispose: () => void;
 } {
   const controller = new AbortController();
+  const hardController = settleCancellation ? new AbortController() : undefined;
   const abortFromParent = () => controller.abort(signal?.reason || new RpcError('RPC_CANCELLED', 'RPC request cancelled.', true));
   if (signal?.aborted) abortFromParent();
   else signal?.addEventListener('abort', abortFromParent, { once: true });
 
   const timeoutMs = deadlineAt === undefined ? undefined : Math.max(0, deadlineAt - Date.now());
   const timer = timeoutMs === undefined ? undefined : setTimeout(() => {
-    controller.abort(new RpcError('RPC_DEADLINE_EXCEEDED', 'RPC request deadline exceeded.', true));
+    const reason = new RpcError('RPC_DEADLINE_EXCEEDED', 'RPC request deadline exceeded.', true);
+    hardController?.abort(reason);
+    controller.abort(reason);
   }, timeoutMs);
   timer?.unref?.();
 
   return {
     controller,
+    hardController,
     dispose: () => {
       signal?.removeEventListener('abort', abortFromParent);
       if (timer) clearTimeout(timer);

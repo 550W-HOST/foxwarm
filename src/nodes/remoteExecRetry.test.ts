@@ -256,3 +256,47 @@ test('remote exec response classification uses the dispatch peer feature snapsho
     assert.deepEqual(getRemoteExecLivenessRecordsForTests().map(record => [record.execId, record.state]), [['steady-ibis', 'outcome-unknown']]);
   });
 });
+
+test('optional exec-wait cancellation addresses one call, retains its real receipt and detaches after settlement', async () => {
+  await withSession('remote-stop-wait', async sessionId => {
+    const manager = new NodesManager({ generateExecId: () => 'calm-otter' });
+    const wire: any[] = [];
+    installRemote(manager, 'wait-capable', message => {
+      wire.push(message);
+      if (message.type === 'tool_call_cancel') queueMicrotask(() => manager.handleToolResponse(message.callId,
+        { output: 'partial', execId: 'calm-otter', background: true }));
+    });
+    (manager.getNode('wait-capable') as any).capabilities.features.execWaitCancellation = true;
+    const controller = new AbortController();
+    const pending = manager.executeTool('wait-capable', 'exec', { command: 'fixture' }, sessionId, undefined, undefined, controller.signal);
+    assert.equal(wire[0].type, 'tool_call');
+    controller.abort();
+    assert.deepEqual(await pending, { output: 'partial', execId: 'calm-otter', background: true });
+    assert.deepEqual(wire.map(item => item.type), ['tool_call', 'tool_call_cancel']);
+    assert.equal(wire[1].callId, wire[0].callId);
+    assert.equal((manager as any).toolCalls.size, 0);
+    const second = new AbortController();
+    const done = manager.executeTool('wait-capable', 'exec', { command: 'completed' }, sessionId, undefined, undefined, second.signal);
+    manager.handleToolResponse(wire[2].callId, { output: 'actual completed result' });
+    assert.deepEqual(await done, { output: 'actual completed result' });
+    second.abort();
+    assert.equal(wire.length, 3, 'a completed foreground call has no old-turn cancellation listener');
+  });
+});
+
+test('an old Node still executes normally and returns its actual receipt after Stop without a fake cancellation', async () => {
+  await withSession('remote-old-stop', async sessionId => {
+    const manager = new NodesManager({ generateExecId: () => 'quiet-heron' });
+    const wire: any[] = [];
+    installRemote(manager, 'old-node', message => { wire.push(message); }, v1Compatibility());
+    const controller = new AbortController();
+    const pending = manager.executeTool('old-node', 'exec', { command: 'fixture' }, sessionId, undefined, undefined, controller.signal);
+    controller.abort();
+    assert.equal(wire.length, 1, 'old Node does not receive an unsupported cancellation message');
+    manager.handleToolResponse(wire[0].callId, { output: 'real old-node result' });
+    const actual = await pending;
+    assert.match(actual.output, /^real old-node result/);
+    assert.match(actual.output, /could not end waiting early/);
+    assert.equal(wire.length, 1);
+  });
+});

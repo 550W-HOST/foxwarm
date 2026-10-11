@@ -141,6 +141,20 @@ test('foxwarm snapshot system tags are system-like and collapsible, not lightwei
   })
 })
 
+test('new and persisted external-input headers are heavy system cards, not direct-user metadata', () => {
+  for (const header of ['<foxwarm-system kind="external-input">', '<foxwarm-system kind="external-input" />']) {
+    assert.equal(isLightweightStructuredSystem(header), false)
+    assert.equal(isHeavySystemTextLine(header), true)
+    assert.equal(isCollapsibleSystemText(header), true)
+    assert.deepEqual(getSystemMessagePreviewDescriptor({ role: 'user', parts: [{ system: header }, { text: 'external body' }] }), {
+      kind: 'external-input', source: 'foxwarm-system', previewPrefix: '',
+    })
+  }
+  for (const kind of ['time', 'session', 'channel-mode']) {
+    assert.equal(isLightweightStructuredSystem(`<foxwarm-system kind="${kind}" />`), true)
+  }
+})
+
 test('legacy system prefixes remain supported', () => {
   assert.equal(isSystemLikeText('[SYSTEM: current time = now]'), true)
   assert.equal(isSystemLikeText('[FROM: telegram:chat]'), true)

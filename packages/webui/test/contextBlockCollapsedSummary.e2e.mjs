@@ -81,7 +81,7 @@ async function buildFixtureBundle() {
         sessionId: 'fixture/main',
         messages: [{ role: 'user', parts: [{ text }], __meta: { seq: id } }],
         isMobile: true,
-        groupTools: false,
+        timelineView: 'detailed',
         showUsageBadge: false,
       }))
     }

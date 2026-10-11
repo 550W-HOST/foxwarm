@@ -56,7 +56,7 @@ before(async () => {
         sessionId: 'fixture/main',
         messages,
         isMobile: false,
-        groupTools: id !== 'ungroupedMessages',
+        timelineView: id === 'ungroupedMessages' ? 'detailed' : 'grouped',
         showUsageBadge: false,
       }))
     }

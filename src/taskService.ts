@@ -9,6 +9,7 @@ export class TaskService {
   constructor(readonly store: TaskStore, private readonly deps: {
     resolveSessionId: (id: string) => string | undefined;
     resolveSessionAgent?: (id: string) => string | undefined;
+    listSessionIdsForAgent?: (agent: string) => string[];
     readSessionMessageSeq?: (id: string) => Promise<number | undefined>;
     sendToSession: (target: string, message: string, source?: string, options?: SessionDeliveryOptions) => Promise<unknown>;
   }) {}
@@ -23,6 +24,7 @@ export class TaskService {
 
   private async deliverAssignmentPlan(result: any, sessionId: string | undefined, plan: { revision: number; newOwner?: string; previousOwner?: string; sourceKind?: 'session' | 'user' }, additionalMessage?: string): Promise<{ result: any; newOwnerDelivered: boolean }> {
     const failedRecipients: string[] = [];
+    result.sentNotifications = 0;
     let newOwnerDelivered = !plan.newOwner;
     for (const [recipient, plannedTarget] of [['previous', plan.previousOwner], ['new', plan.newOwner]] as const) {
       if (!plannedTarget) continue;
@@ -47,6 +49,7 @@ export class TaskService {
           ...(recipient === 'previous' ? { trigger: false } : {}),
           taskNotification: { taskId: result.task.id, event, recipient, ...(plan.sourceKind ? { sourceKind: plan.sourceKind } : {}) },
         });
+        result.sentNotifications++;
         this.store.markAssignmentNotification(result.task.id, plan.revision, recipient, 'sent');
         if (recipient === 'new') newOwnerDelivered = true;
       } catch {
@@ -66,6 +69,7 @@ export class TaskService {
         `Note on task ${result.task.id} — ${result.task.title}\n${note}`,
         sourceKind === 'user' ? undefined : sessionId,
         { taskNotification: { taskId: result.task.id, event: 'note', ...(sourceKind ? { sourceKind } : {}) } });
+      result.sentNotifications++;
     } catch {
       result.warning = 'Note saved, but the owner notification could not be delivered.';
     }
@@ -88,6 +92,7 @@ export class TaskService {
       sessionId = this.deps.resolveSessionId(sessionId) || sessionId;
       return this.store.execute(normalized, sessionId, undefined, progressAnchor);
     });
+    if (['create', 'claim', 'assign', 'update', 'complete', 'cancel'].includes(args.action)) result.sentNotifications = 0;
     const plan = result.assignmentNotification;
     delete result.assignmentNotification;
     if (plan) result = (await this.deliverAssignmentPlan(result, sessionId, plan)).result;
@@ -105,6 +110,7 @@ export class TaskService {
       } else try {
         await this.deps.sendToSession(creator,
           `Task completed: ${result.task.id} — ${result.task.title}${result.task.result ? `\n${result.task.result}` : ''}`, sessionId, { taskNotification: { taskId: result.task.id, event: 'completed' } });
+        result.sentNotifications++;
         this.store.markCompletionNotification(result.task.id, 'sent');
       } catch {
         this.store.markCompletionNotification(result.task.id, 'failed');
@@ -124,6 +130,7 @@ export class TaskService {
       normalized.ownerSessionId = ownerSessionId;
     }
     let result = await this.exclusive(() => this.store.executeAsUser(normalized));
+    result.sentNotifications = 0;
     const assignmentPlan = result.assignmentNotification;
     delete result.assignmentNotification;
     if (assignmentPlan) result = (await this.deliverAssignmentPlan(result, undefined, { ...assignmentPlan, sourceKind: 'user' })).result;
@@ -146,11 +153,28 @@ export class TaskService {
   }
 
   /** Read-only callers do not need a Session actor. */
-  list(status?: string, limit?: number, includeSessionAgents = false): any {
+  list(status?: string, limit?: number, includeSessionAgents = false, scope?: string, sessionId?: string): any {
+    const args = { action: 'list', ...(status === undefined ? {} : { status }), ...(scope === undefined ? {} : { scope }) };
+    validateTaskArgs(args);
     if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 50)) {
       throw new TaskError('TASK_INVALID_ARGS', 'limit must be an integer from 1 to 50.');
     }
-    const result = this.store.execute({ action: 'list', ...(status === undefined ? {} : { status }) }, undefined, limit);
+    let canonicalSessionId: string | undefined;
+    let scopeSessionIds: string[] | undefined;
+    if (scope !== undefined && scope !== 'all') {
+      if (!sessionId?.trim()) throw new TaskError('TASK_SESSION_REQUIRED', 'A current Session is required for this task list scope.');
+      canonicalSessionId = this.deps.resolveSessionId(sessionId) || sessionId;
+      if (scope === 'current-session') scopeSessionIds = [canonicalSessionId];
+      else if (scope === 'current-agent') {
+        const agent = this.deps.resolveSessionAgent?.(canonicalSessionId);
+        if (!agent || !this.deps.listSessionIdsForAgent) {
+          throw new TaskError('TASK_SESSION_NOT_FOUND', 'The current Session Agent could not be resolved for this task list scope.', 404);
+        }
+        scopeSessionIds = this.deps.listSessionIdsForAgent(agent)
+          .map(id => this.deps.resolveSessionId(id) || id);
+      }
+    }
+    const result = this.store.execute(args, canonicalSessionId, limit, undefined, scopeSessionIds);
     if (!includeSessionAgents || !this.deps.resolveSessionAgent) return result;
     return {
       ...result,
@@ -166,7 +190,7 @@ export class TaskService {
     return this.store.execute({ action: 'get', taskId }, undefined);
   }
 
-  async createAttachedChild(taskId: string, sourceSessionId: string, create: () => Promise<string>, additionalMessage?: string): Promise<{ childSessionId: string; assignmentDelivered: boolean; warning?: string }> {
+  async createAttachedChild(taskId: string, sourceSessionId: string, create: () => Promise<string>, additionalMessage?: string): Promise<{ childSessionId: string; assignmentDelivered: boolean; sentNotifications: number; warning?: string }> {
     const source = this.deps.resolveSessionId(sourceSessionId) || sourceSessionId;
     const attached = await this.exclusive(async () => {
       const task = this.store.execute({ action: 'get', taskId }, source).task;
@@ -190,6 +214,6 @@ export class TaskService {
       assignmentDelivered = delivered.newOwnerDelivered;
       result = delivered.result;
     }
-    return { childSessionId, assignmentDelivered, ...(result.warning ? { warning: result.warning } : {}) };
+    return { childSessionId, assignmentDelivered, sentNotifications: result.sentNotifications || 0, ...(result.warning ? { warning: result.warning } : {}) };
   }
 }

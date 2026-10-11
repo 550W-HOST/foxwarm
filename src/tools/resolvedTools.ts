@@ -1,3 +1,4 @@
+import { throwIfToolStopped } from '../toolCallControls';
 import { resolveObjectArgWithJsonFallback } from '../jsonObjectArgs';
 import * as mcpExternal from '../mcpExternalService';
 import { executeNodeTool } from '../nodeExecution';
@@ -120,7 +121,7 @@ function resolveBuiltin(invocationName: string, name: string, rawArgs: ToolArgs,
     permissionNode, ...(nodeSelectsPlacement ? { targetNode } : {}) }, ctx);
 }
 
-export async function resolveUnifiedTool(input: ToolArgs, ctx: ToolContext, invocationName = 'call_tool'): Promise<ResolvedTool> {
+export function parseUnifiedToolCall(input: ToolArgs) {
   const ref = input.toolId ? parseUnifiedToolId(String(input.toolId)) : {
     source: typeof input.source === 'string' ? input.source.trim() as UnifiedToolSource : undefined,
     name: typeof input.name === 'string' ? input.name : '',
@@ -130,6 +131,11 @@ export async function resolveUnifiedTool(input: ToolArgs, ctx: ToolContext, invo
   if (!ref.source || !['builtin', 'mcp', 'node'].includes(ref.source)) throw new Error('call_tool requires either toolId or a valid source (builtin, mcp, node).');
   if (!ref.name) throw new Error('call_tool requires a tool name.');
   const args = resolveObjectArgWithJsonFallback(input, 'args', 'argsJson', { required: true, label: 'call_tool args' })!;
+  return { ...ref, args };
+}
+
+export async function resolveUnifiedTool(input: ToolArgs, ctx: ToolContext, invocationName = 'call_tool'): Promise<ResolvedTool> {
+  const { args, ...ref } = parseUnifiedToolCall(input);
   const current = await currentNode(ctx);
   if (ref.source === 'node') return resolveNode(invocationName, ref.name, args, ctx, normalizeNodeId(ref.nodeId, current), current);
   if (ref.source === 'mcp') return resolveMcp(invocationName, ref.server, ref.name, args);
@@ -163,8 +169,10 @@ async function checkPermission(resolved: ResolvedTool, ctx: ToolContext): Promis
 
 export async function executeResolvedTool(resolved: ResolvedTool, ctx: ToolContext): Promise<any> {
   if (!ctx.sessionId) throw new Error('Tool execution requires an active source session.');
-  if (resolved.source === 'mcp') return mcpExternal.callMcpTool(ctx.sessionId, resolved.server, resolved.name, resolved.args);
+  throwIfToolStopped(ctx.signal);
+  if (resolved.source === 'mcp') return mcpExternal.callMcpTool(ctx.sessionId, resolved.server, resolved.name, resolved.args, ctx.signal);
   await checkPermission(resolved, ctx);
+  throwIfToolStopped(ctx.signal);
   // Only a concrete file capability can report a path. Bind its Node identity to
   // the trusted resolved target, never to a remote result or the current UI Node.
   const { onResolvedPaths, ...toolCtx } = ctx;
@@ -174,7 +182,7 @@ export async function executeResolvedTool(resolved: ResolvedTool, ctx: ToolConte
       const result = await executeNodeTool(ctx.sessionId, resolved.executionNode, resolved.name, resolved.args,
         resolved.routingSnapshot
           ? { ...resolved.routingSnapshot, ...(ctx.deferSessionCwdSync ? { deferSessionCwdSync: true } : {}) }
-          : (ctx.deferSessionCwdSync ? { currentNode: resolved.executionNode, deferSessionCwdSync: true } : undefined), ctx.programmatic);
+          : (ctx.deferSessionCwdSync ? { currentNode: resolved.executionNode, deferSessionCwdSync: true } : undefined), ctx.programmatic, ctx.signal);
       if (!fileTool || !result || typeof result !== 'object' || Array.isArray(result)
         || !Object.prototype.hasOwnProperty.call(result, RESOLVED_PATH_SIDECAR)) return result;
       const { [RESOLVED_PATH_SIDECAR]: paths, ...visible } = result;

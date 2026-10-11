@@ -8,7 +8,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import '../llm';
 import { createWorktreeFileOperations } from '../../packages/sandbox-node-runtime/dist/worktreeFileOperations';
-import { normalizeMcpInboundConfig, authenticateMcpInboundBearer } from '../mcpInboundConfig';
+import { normalizeAccessConfig, authenticateAccessBearer } from '../accessConfig';
 import { McpInboundMcpCatalog } from '../mcpInboundCatalog';
 import type { ExternalExecutionContext } from '../mcpInboundHttp';
 import { callExternalNodeTool, externalExecResult, externalNodeAction, listExternalNodeTools, releaseExternalNodeContext } from '../mcpInboundNodeService';
@@ -452,6 +452,40 @@ test('resident Docker exec reuses canonical foreground, cwd, failure, artifact-r
     assert.equal(programmatic.content, 'script-data\n'); assert.equal(programmatic.status, 'completed'); assert.equal(programmatic.exitCode, 7);
     assert.equal(programmatic.truncated, false); assert.ok(programmatic.logPath.startsWith(artifactDir));
 
+    const ready = path.join(repo, 'stop-ready');
+    const release = path.join(repo, 'stop-release');
+    const controller = new AbortController();
+    const waiting = invokeProviderTool(provider, { sourceSessionId: 'session-exec', nodeId: 'n', toolName: 'exec',
+      args: { command: `printf partial; touch '${ready}'; while [ ! -f '${release}' ]; do sleep 0.05; done; printf finished`, timeout: 60 },
+      context: { agent: 'main', currentNode: 'n', cwd: repo, deferSessionCwdSync: true } }, { signal: controller.signal });
+    try {
+      const deadline = Date.now() + 5000;
+      while (!await fs.pathExists(ready)) {
+        if (Date.now() > deadline) throw new Error('Docker adapter fixture did not become ready.');
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      const before = Date.now();
+      controller.abort();
+      const actual = await waiting as any;
+      const interrupted = typeof actual === 'string' ? actual : actual.output;
+      assert(Date.now() - before < 1500);
+      assert.match(interrupted, /partial[\s\S]*not killed/);
+      assert.match(interrupted, /execId:/);
+      assert.doesNotMatch(interrupted, /timeout.*60|longer than 60/i);
+      const running = (await fs.readJson(path.join(artifactDir, 'running-exec.json'))).execs[0];
+      await fs.writeFile(release, 'finish normally');
+      const completedBy = Date.now() + 5000;
+      while (!await fs.pathExists(running.statusPath)) {
+        if (Date.now() > completedBy) throw new Error('Docker adapter command did not complete normally after handoff.');
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      assert.equal((await fs.readJson(running.statusPath)).exitCode, 0);
+      assert.match(await fs.readFile(running.logPath, 'utf8'), /partialfinished/);
+    } finally {
+      await fs.writeFile(release, 'finish normally');
+      await waiting.catch(() => {});
+    }
+
     const envArgs = launches[0].filter((_value, index, all) => index > 0 && all[index - 1] === '-e');
     assert.ok(envArgs.every(value => /^(TERM|FOXWARM_EXEC_[A-Z_]+)=/.test(value))); assert.equal(envArgs.some(value => /HOME|DOCKER|SESSION/.test(value)), false);
     const artifactFiles = (await fs.readdir(artifactDir, { recursive: true }) as string[]).map(item => path.join(artifactDir, item)); const logPath = artifactFiles.find(item => item.endsWith('.log')); assert.ok(logPath);
@@ -478,9 +512,9 @@ test('external owner uses an already-ready Docker worktree for canonical files a
   (nodeProviderRegistry as any).listNodes = registry.listNodes.bind(registry);
   (nodeProviderRegistry as any).resolveNode = registry.resolveNode.bind(registry);
   (nodeProviderRegistry as any).invokeTool = registry.invokeTool.bind(registry);
-  const config = normalizeMcpInboundConfig({ enabled: true, identities: { alpha: { token: 'synthetic-docker-alpha' }, beta: { token: 'synthetic-docker-beta' } } });
-  const alpha = authenticateMcpInboundBearer(config, 'Bearer synthetic-docker-alpha')!;
-  const beta = authenticateMcpInboundBearer(config, 'Bearer synthetic-docker-beta')!;
+  const config = normalizeAccessConfig({ identities: { alpha: { token: 'synthetic-docker-alpha', surfaces: { mcp: {} } }, beta: { token: 'synthetic-docker-beta', surfaces: { mcp: {} } } } });
+  const alpha = authenticateAccessBearer(config, 'Bearer synthetic-docker-alpha')!;
+  const beta = authenticateAccessBearer(config, 'Bearer synthetic-docker-beta')!;
   const context = (externalId: string, id: string): ExternalExecutionContext =>
     ({ id, externalId, currentNode: 'master', cwd: null, selectionGeneration: 0 });
   const first = context('alpha', '44444444-4444-4444-8444-555555555555');

@@ -187,6 +187,17 @@ test('GFM tables retain semantic table markup for the scrollable Markdown style'
   assert.match(html, /<td>b<\/td>/)
 })
 
+test('assistant GFM tables retain table semantics inside their local scroll surface', () => {
+  const source = '| left | right |\n| --- | --- |\n| a | b |'
+  const ordinary = renderMarkdownWithSanitizer(source, identitySanitizer)
+  const assistant = renderAssistantMarkdownSegmentsWithSanitizer(source, identitySanitizer)[0].html
+
+  assert.doesNotMatch(ordinary, /foxwarm-markdown-table-scroll/)
+  assert.match(assistant, /^<div class="foxwarm-markdown-table-scroll"><table>[\s\S]*<\/table>\s*<\/div>$/)
+  assert.match(assistant, /<thead>[\s\S]*<th>left<\/th>/)
+  assert.match(assistant, /<tbody>[\s\S]*<td>b<\/td>/)
+})
+
 test('ordinary Markdown segments preserve stable top-level token positions', () => {
   const initial = renderMarkdownSegmentsWithSanitizer('First paragraph.\n\nSecond paragraph.', identitySanitizer)
   const extendedTail = renderMarkdownSegmentsWithSanitizer('First paragraph.\n\nSecond paragraph grows.', identitySanitizer)

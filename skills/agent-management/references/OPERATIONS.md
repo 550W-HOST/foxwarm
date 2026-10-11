@@ -218,6 +218,8 @@ If you also need a separate extra session afterward, use:
 
 - `create_session`
 
+New Session names must contain only ASCII letters, digits, underscores, and hyphens. A display name is separate and can use ordinary descriptive text.
+
 For an isolated worker controlled by the current session, do not create an
 unrelated isolated agent main session and assume it can report back. The intended
 shape is:
@@ -352,6 +354,8 @@ Be precise about whether you are moving a **session** or replacing an **agent**.
 ### Session move/rename
 
 If the goal is to move or rename a session thread, use the session-level capability.
+
+The destination Session name follows the same ASCII letters/digits/underscore/hyphen rule as creation. Existing legacy IDs remain readable and can be moved to a valid new name; do not rewrite stored history or aliases to enforce the naming rule. Fork/child suffixes and the resulting new Session name must also be valid, so a nonconforming legacy parent may need to be renamed before creating an append-style child.
 
 Agent-facing path:
 

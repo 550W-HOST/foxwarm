@@ -1,0 +1,97 @@
+# Unit: src-session-history
+
+Files: src/session/history.ts, src/session/history.test.ts, src/session/historyArchiveRange.test.ts, src/session/historyCompactRanges.test.ts, src/session/historyCompactPlanRetry.test.ts
+
+## Purpose
+
+Owns session-history mutation and compaction orchestration. It computes thresholds, creates transient compact jobs, runs the bounded plan loop, validates compatible-prefix commits, formats completion markers, applies manual clear/delete/historical-response-pruning operations, and delegates archive/vector work to their domain modules.
+
+Canonical end-to-end contract: [context compaction and recall](../threads/context-compaction-and-recall.md).
+
+## Key exports
+
+### Threshold and job state
+
+- `getDefaultCompactThresholdTokens(session)` — `llm.compactThresholdPercent` (85% by default) of the resolved model context window.
+- `getEffectiveCompactThresholdTokens(session)` — positive session override or default.
+- `isAsyncCompactEnabled(session)` — true unless the resolved model explicitly sets `asyncCompact:false`.
+- `hasPendingCompactWork`, `hasCompletedCompactJob`, `discardPendingCompactWork`, `applyCompletedCompactJob` — compact-job lifecycle. Completed readiness checks terminal job status and exact uncancelled operation identity, not signal presence or operation phase.
+
+### Candidate and commit helpers
+
+- `resolveCompactionSplitIndex` — recent-tail split that keeps tool-call/response group boundaries.
+- `buildLayeredCompactCandidateEntries` — active-history-only raw/block candidate construction with structural barriers and token policies.
+- `isSingleBlockCompactionStrandedBetweenHigherLevelBlocks` — narrow single-block lift exception.
+- `resolveCreateBlockRanges` — materializes history/archive operation metadata from validator-resolved candidate ranges without re-walking source endpoints.
+- `buildCreatedBlockHistoryWithPreservedMessages`, `removePreservedMessages` — exact raw-message preservation/removal in authoritative history.
+- `formatCompactionCompletionMarker` — canonical compact-completion formatter.
+
+### Operations
+
+- `compactHistory`, `compactHistoryWithSummary` — explicit compaction façades.
+- `checkAndCompactIfNeeded`, `processSessionCompactionRequest` — automatic/explicit orchestration.
+- `buildToolResponsePrunePlan`, `commitToolResponsePrunePlan` — pure dry-run and exact compatible-prefix commit for historical response-only pruning.
+- `compactToolMessages` — manual provider-free façade over the shared response-only pruning primitive.
+- `deleteMessages`, `clearSession` — destructive history operations with archive coordination. Clear retains or recovers the [block ID high-water mark](../threads/context-compaction-and-recall.md#d-context-block-id-high-water) before clearing active history, without reconstructing it from Archive.
+- `getArchivedMessages` — sequence-range archive query result.
+- `forceIndexSession`, `getUsageTotalTokens` — index and provider-usage helpers.
+
+## Internal sections
+
+- **Snapshot creation:** captures complete exact active history, prompt/cache context, and request options for commit validation. The transient planning clone starts with only the ordered history prefix before the force-kept recent tail, using `resolveCompactionSplitIndex` for the atomic tool boundary; automatic tool-response pruning still snapshots complete history.
+- **Candidate construction:** consumes only the cloned authoritative active history. It applies visibility, positive unique/ordered raw sequence structure, semantic block metadata and raw coverage, protected/noncandidate barriers, preserved-raw rules, atomic grouping for present consecutive call/tool-response runs, recent-tail keep, and raw/block policies without reading or repairing from Archive. A valid call with no following tool row remains an ordinary single-message candidate. A malformed tool row starts a new segment locally without hiding a valid preceding call/response prefix; later valid rows may resume after that barrier. Active pruned responses and edited wording are summarized exactly as active history presents them.
+- **Planning loop:** calls the model with that detached prefix plus planning instructions and accumulated retry messages, never the force-kept tail. The prompt still describes the real force-kept count/sequence range from the complete snapshot. It accepts one `submit_compact_plan` or a pending-file repair edit/patch, parses/normalizes/resolves each successful plan once, appends transient tool responses and actionable feedback, and stops after `COMPACT_FLOW_MAX_ROUNDS`. Repair-file behavior is canonical in [D-context-compact-runtime-gate](../threads/context-compaction-and-recall.md#d-context-compact-runtime-gate).
+- **Result construction:** maps validator-resolved candidate ranges to active-history indices, raw ranges, and timestamps, then creates block archive records and replacement history messages without touching the live session. Planner-backed results carry invocation-local diagnostics into the completion message under [D-context-compact-planner-debug](../threads/context-compaction-and-recall.md#d-context-compact-planner-debug).
+- **Compatible commit:** verifies the consumed snapshot prefix, writes archive/block state, replaces only that prefix while retaining appended suffixes and preserving the prompt-cache key, persists, and emits completion/reminder events.
+- **Background mode:** stores pending job state and wakes the owner with a queue signal; safe-point priority is canonical in [D-context-compact-scheduling-boundary](../threads/context-compaction-and-recall.md#d-context-compact-scheduling-boundary). A completed job may be consumed while its enqueue callback still awaits. Identity guards keep that late producer from deleting a newer result, clearing its wake signals, or reviving the consumed operation. Commit shares the awaited compatibility path.
+
+## Dependencies
+
+- `src/session/compactPlan.ts` owns prompt/schema/quota validation.
+- `src/session/compactPlanRepair.ts` owns the invocation-local repair artifact and exact file operations.
+- `src/session/layeredContext.ts` owns block rendering and immutable block append operations.
+- `src/session/archive.ts` and `archiveStore.ts` own durable source history.
+- `src/vector.ts` owns archive and compact-fact indexing.
+- `src/llm.ts` owns provider requests and `LlmRequestError`.
+- `src/session/taskContext.ts` checkpoints task progress before committed compaction removes visible messages.
+
+## Behavior
+
+Transient compact-job Session clones preserve raw `effort`, `childModelDefault`, and `childEffortDefault` alongside the selected model so compaction requests use the same provider-neutral request setting without mutating the live owner.
+
+- The planning model preserves the live prompt-cache key on its clone because pre-commit prefix/schema lineage is unchanged. The engine separately marks only planning that is actually running in the background; awaited planning, including the missing-enqueue synchronous fallback, remains unmarked. A selected `openai-ws` leaf consumes that transient distinction under [D-model-routing-openai-ws-prompt-cache-key](../threads/model-routing.md#d-model-routing-openai-ws-prompt-cache-key), without mutating the clone or live persisted lineage.
+- Each transient compact-planning provider call is journaled with purpose `compact-plan`; its canonical prompt/messages and normalized result remain reconstructable without adding temporary planning rows to session history.
+- Async, awaited, and auto modes use one engine. A terminal provider error, exhausted plan loop, or stale prefix leaves live history unchanged.
+- The shared awaited engine asks its exact local or Worker owner to publish the existing compaction runtime phase before prompt-cache preparation and holds it through provider retries and commit. Success, failure, cancellation, and no-op paths release only that owned phase; background planning never requests foreground publication.
+- Session-worker callers bind exact-owner dependencies and force awaited mode at canonical runner safe points or an idle explicit operation; omitting the enqueue dependency structurally prevents background commit records.
+- Async planning may start from a compatible snapshot while the live session is busy. Planning itself is not queued; background completion enqueues only `compact-commit` for safe live application. Canonical scheduling: [D-context-compact-scheduling-boundary](../threads/context-compaction-and-recall.md#d-context-compact-scheduling-boundary).
+- Successful compaction preserves `promptCacheKey`; `/clear` remains the lineage rotation boundary.
+- At the automatic usage trigger, response-only pruning dry-runs first. It retains Unicode-safe line-aware 500/500 response excerpts plus exact recall guidance, commits only when the estimated Session falls below 60% of its prior size, and otherwise leaves history untouched for layered planning. The reduction gate is relative because a committed prune rewrites an earlier part of the request prefix, so a marginal rewrite costs provider prompt-cache invalidation without meaningful recovery. Manual `/compact tools` uses the same primitive without that reduction gate and performs no save/version increment on no-op.
+- Historical response pruning alone proves exact Archive identity for its recall footer. A committed pruned response then becomes ordinary active-history input to layered compaction; layered planning does not repeat that Archive proof.
+- Protected lifecycle/history items are segment barriers; display-only messages are transparent and not summarized. Prior pure compact-completion notices are the narrow exception: they are transparent to candidate ranges and removed from the entire compatible active history only on successful commit, before one current notice is appended. Canonical contract: [D-context-compact-completion](../threads/context-compaction-and-recall.md#d-context-compact-completion).
+- Compact jobs pass normalized `frictionScore` through range resolution and block creation. Higher-level candidates use valid source scores from active metadata; canonical contract: [execution friction](../threads/context-compaction-and-recall.md#d-context-block-execution-friction).
+- Each created block carries its normalized facts through archive append; its facts are indexed only after success with that block identity/level/raw range, and indexing is best-effort.
+- New compact completion emits one lifecycle marker only. Historical two-part completion plus Goal reminder remains read-compatible with Continue classification.
+- Compaction scans consumed history for current `skill({ action: "load" })` calls and persisted legacy `load_skill` calls, then emits only current `skill` reload guidance when loaded instructions were compacted away.
+- Temporary compact progress may be broadcast without becoming authoritative final history.
+
+## Compatibility
+
+- `compactHistoryWithSummary` remains an exported manual façade over the current compact engine.
+- `getArchivedMessages` uses the SQLite archive authority; legacy JSONL compatibility is owned only by the startup migration.
+- `getArchivedMessages` derives the complete effective `availableRange` from archive statistics and reads selected records through the bounded sequence-range query. Point/range requests therefore do not materialize unrelated archive message payloads; result ordering/count/error semantics are unchanged.
+- Compact completion follows [D-context-compact-completion](../threads/context-compaction-and-recall.md#d-context-compact-completion); this unit does not define a second wire contract.
+
+## Design decisions
+
+### D-history-compatible-prefix-commit
+
+A compact job may replace only the live history snapshot prefix that still matches its snapshot. Concurrent incompatible change converts the result into a safe non-commit.
+
+### D-history-failed-planning-noncommit
+
+A failed planning request cannot submit or partially apply a compact plan. Provider request error semantics are canonical in [D-llm-request-errors](../modules/llm.md#d-llm-request-errors).
+
+### D-history-independent-goal-reminder
+
+Historical compact completions and Goal reminders remain separately identifiable structured system parts for read compatibility. New compaction emits only its one lifecycle marker; task reminders are request-only under [D-tasks-replace-goal](src-session-task-context.md#d-tasks-replace-goal).

@@ -180,7 +180,7 @@ async function buildFixtureBundle() {
       ...Array.from({ length: count }, (_, index) => React.createElement(Chat, {
         key: generation + '-' + index,
         sessionId, canonicalSessionId: sessionId, sessionDisplayName: 'Fixture',
-        groupTools: new URLSearchParams(location.search).has('groupTools'),
+        timelineView: new URLSearchParams(location.search).has('timelineView') ? 'grouped' : 'detailed',
         showUserMessageMetadata: !!window.fixtureShowUserMetadata,
       })),
     ))
@@ -1627,7 +1627,7 @@ for (const segmented of [false, true]) {
 
 test('real Chat WS call commit, tool result, and final model row retain a manually opened running tool', async () => {
   page = await browser.newPage()
-  await page.goto(`${fixtureUrl}?groupTools`, { waitUntil: 'load' })
+  await page.goto(`${fixtureUrl}?timelineView`, { waitUntil: 'load' })
   await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
   await page.evaluate(() => window.resolveFixtureHistory(0, undefined, 0, { busy: true }))
   await page.waitForFunction(() => document.body.textContent.includes('old history row'))

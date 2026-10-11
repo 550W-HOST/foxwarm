@@ -82,6 +82,7 @@ export const BUILTIN_TOOL_PLACEMENTS = {
   cancel_toolscript_run: { owner: 'dispatcher/container' },
   mcp_config: { owner: 'external-service' },
   list_mcp_servers: { owner: 'external-service' },
+  mcp_notifications: { owner: 'external-service' },
   node: {
     owner: 'dispatcher/container',
     actionOwners: {
@@ -100,7 +101,7 @@ export const BUILTIN_TOOL_PLACEMENTS = {
   create_session: { owner: 'main-management' },
   set_agent_inherit: { owner: 'main-management' },
   set_agent_isolated: { owner: 'main-management' },
-  set_tool_rules: { owner: 'main-management' },
+  set_config: { owner: 'main-management' },
   move_session: { owner: 'main-management' },
 } as const satisfies Readonly<Record<string, ToolPlacementMetadata>>;
 
