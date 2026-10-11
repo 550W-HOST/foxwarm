@@ -266,8 +266,7 @@ internal sealed partial class SessionManager
             if (
                 node != "master"
                 && tools.Entries.Any(entry =>
-                    entry.Source == "builtin"
-                    && SessionWait.Text(entry.Definition["name"]) == name
+                    entry.Source == "builtin" && SessionWait.Text(entry.Definition["name"]) == name
                 )
             )
                 continue;

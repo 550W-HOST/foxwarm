@@ -27,7 +27,11 @@ public sealed class RemoteExecProtocolTests
         internal string Data => Path.Combine(Temp.Path, "data");
         internal string Work => Path.Combine(Temp.Path, "work");
 
-        internal async Task Start(bool legacy = false, bool cancel = true, bool advertiseExec = true)
+        internal async Task Start(
+            bool legacy = false,
+            bool cancel = true,
+            bool advertiseExec = true
+        )
         {
             Manager = new(Data, Work, Options, HostModels.ForTest(Options));
             await Manager.LoadAsync();
@@ -42,7 +46,11 @@ public sealed class RemoteExecProtocolTests
             await Manager.SelectNodeAsync(Owner, "remote");
         }
 
-        internal async Task Connect(bool legacy = false, bool cancel = true, bool advertiseExec = true)
+        internal async Task Connect(
+            bool legacy = false,
+            bool cancel = true,
+            bool advertiseExec = true
+        )
         {
             var builder = WebApplication.CreateBuilder();
             builder.Logging.ClearProviders();
