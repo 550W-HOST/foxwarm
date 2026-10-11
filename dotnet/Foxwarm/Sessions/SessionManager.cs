@@ -173,7 +173,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             ResolveExecLifetime,
             HistoricalExecOwners
         );
-        executor.RemoteIdentityReserved = (session, id) => Find(session) is { } owner && Nodes.ExecClaims.Has(owner, id, activeOnly: false);
+        executor.RemoteIdentityReserved = (session, id) =>
+            Find(session) is { } owner && Nodes.ExecClaims.Has(owner, id, activeOnly: false);
         Nodes.LocalExecActive = (owner, id) => executor.IsOwnedActive(owner.Id, id);
         Nodes.SessionEvent = AdmitNodeSessionEventAsync;
         Nodes.BackgroundRegistration = RegisterRemoteExecBackgroundAsync;

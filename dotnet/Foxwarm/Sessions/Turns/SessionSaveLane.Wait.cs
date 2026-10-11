@@ -164,8 +164,12 @@ public sealed partial class SessionSaveLane
                     if (receipt is not null)
                     {
                         uncertainExternalReceipts.Add(receipt);
-                        var durableReceipts = SessionWait.Strings(prepared.Snapshot.Meta["acceptedExternalEventIds"]);
-                        uncertainExternalReceipts.RemoveWhere(value => !durableReceipts.Contains(value, StringComparer.Ordinal));
+                        var durableReceipts = SessionWait.Strings(
+                            prepared.Snapshot.Meta["acceptedExternalEventIds"]
+                        );
+                        uncertainExternalReceipts.RemoveWhere(value =>
+                            !durableReceipts.Contains(value, StringComparer.Ordinal)
+                        );
                     }
                     entry.WithState(Publish);
                     entry.InvokeQueuedCommitted(entry.Snapshot());
@@ -176,16 +180,27 @@ public sealed partial class SessionSaveLane
                     uncertainExternalReceipts.Remove(receipt);
             }
             var retained = SessionWait.Strings(entry.Snapshot().Meta["acceptedExternalEventIds"]);
-            uncertainExternalReceipts.RemoveWhere(value => !retained.Contains(value, StringComparer.Ordinal));
+            uncertainExternalReceipts.RemoveWhere(value =>
+                !retained.Contains(value, StringComparer.Ordinal)
+            );
             entry.InvokeQueuedCommitted(entry.Snapshot());
         });
         return admitted;
     }
 
-    internal Task<bool> CommitRemoteExecCompletionAsync(string execId, string message, string eventId) =>
+    internal Task<bool> CommitRemoteExecCompletionAsync(
+        string execId,
+        string message,
+        string eventId
+    ) =>
         AdmitWithReceiptAsync(
-            new QueueItem(QueueItemType.Background, [new JsonObject { ["system"] = message }],
-                OpenFields: new JsonObject { ["execId"] = execId, ["externalEventId"] = eventId }), eventId);
+            new QueueItem(
+                QueueItemType.Background,
+                [new JsonObject { ["system"] = message }],
+                OpenFields: new JsonObject { ["execId"] = execId, ["externalEventId"] = eventId }
+            ),
+            eventId
+        );
 
     internal async Task<string?> StartWaitAsync(JsonObject declaration)
     {

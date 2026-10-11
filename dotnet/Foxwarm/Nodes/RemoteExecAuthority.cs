@@ -42,7 +42,9 @@ internal sealed class RemoteExecAuthority
             {
                 if (!OperatingSystem.IsWindows())
                     File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-                var bytes = Encoding.ASCII.GetBytes(Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32)) + "\n");
+                var bytes = Encoding.ASCII.GetBytes(
+                    Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32)) + "\n"
+                );
                 created.Write(bytes);
                 created.Flush(true);
                 LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(file)!);
@@ -54,8 +56,14 @@ internal sealed class RemoteExecAuthority
         secret = Convert.FromHexString(text);
     }
 
-    private static string Encode(byte[] value) => Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-    private static byte[] Decode(string value) => Convert.FromBase64String(value.Replace('-', '+').Replace('_', '/') + new string('=', (4 - value.Length % 4) % 4));
+    private static string Encode(byte[] value) =>
+        Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    private static byte[] Decode(string value) =>
+        Convert.FromBase64String(
+            value.Replace('-', '+').Replace('_', '/') + new string('=', (4 - value.Length % 4) % 4)
+        );
+
     private static string Key(string original, string id) => original + "\0" + id;
 
     internal string Issue(string node, string original, string id)
@@ -70,7 +78,9 @@ internal sealed class RemoteExecAuthority
             ["issuedAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
         var encoded = Encode(Encoding.UTF8.GetBytes(payload.ToJsonString()));
-        return encoded + "." + Encode(HMACSHA256.HashData(secret, Encoding.ASCII.GetBytes(encoded)));
+        return encoded
+            + "."
+            + Encode(HMACSHA256.HashData(secret, Encoding.ASCII.GetBytes(encoded)));
     }
 
     internal bool Verify(string node, string original, string id, string grant)
@@ -81,7 +91,12 @@ internal sealed class RemoteExecAuthority
             if (parts.Length != 2)
                 return false;
             var signature = Decode(parts[1]);
-            if (!CryptographicOperations.FixedTimeEquals(signature, HMACSHA256.HashData(secret, Encoding.ASCII.GetBytes(parts[0]))))
+            if (
+                !CryptographicOperations.FixedTimeEquals(
+                    signature,
+                    HMACSHA256.HashData(secret, Encoding.ASCII.GetBytes(parts[0]))
+                )
+            )
                 return false;
             var payload = JsonNode.Parse(Decode(parts[0])) as JsonObject;
             return SessionWait.Number(payload?["v"]) == 1
@@ -89,9 +104,11 @@ internal sealed class RemoteExecAuthority
                 && SessionWait.Text(payload?["nodeId"]) == node
                 && SessionWait.Text(payload?["sessionId"]) == original
                 && SessionWait.Text(payload?["execId"]) == id
-                && SessionWait.Number(payload?["issuedAt"]) is double issued && double.IsFinite(issued);
+                && SessionWait.Number(payload?["issuedAt"]) is double issued
+                && double.IsFinite(issued);
         }
-        catch (Exception error) when (error is FormatException or System.Text.Json.JsonException or ArgumentException)
+        catch (Exception error)
+            when (error is FormatException or System.Text.Json.JsonException or ArgumentException)
         {
             return false;
         }
@@ -99,19 +116,37 @@ internal sealed class RemoteExecAuthority
 
     private void Prune()
     {
-        foreach (var pair in claims.Where(pair => DateTimeOffset.UtcNow - pair.Value.TrackedAt > TimeSpan.FromHours(24)).ToArray())
+        foreach (
+            var pair in claims
+                .Where(pair =>
+                    DateTimeOffset.UtcNow - pair.Value.TrackedAt > TimeSpan.FromHours(24)
+                )
+                .ToArray()
+        )
             claims.Remove(pair.Key);
     }
 
-    internal string NextId(bool legacy) => (legacy ? "exec_" : "") + (GenerateId?.Invoke()
-        ?? ExecPetnames.Adjectives[RandomNumberGenerator.GetInt32(ExecPetnames.Adjectives.Length)] + "-" + ExecPetnames.Nouns[RandomNumberGenerator.GetInt32(ExecPetnames.Nouns.Length)]);
+    internal string NextId(bool legacy) =>
+        (legacy ? "exec_" : "")
+        + (
+            GenerateId?.Invoke()
+            ?? ExecPetnames.Adjectives[
+                RandomNumberGenerator.GetInt32(ExecPetnames.Adjectives.Length)
+            ]
+                + "-"
+                + ExecPetnames.Nouns[RandomNumberGenerator.GetInt32(ExecPetnames.Nouns.Length)]
+        );
 
     internal Claim? Reserve(string node, SessionOwner owner, string id)
     {
         lock (gate)
         {
             Prune();
-            if (claims.Values.Any(claim => ReferenceEquals(claim.Owner, owner) && claim.ExecId == id))
+            if (
+                claims.Values.Any(claim =>
+                    ReferenceEquals(claim.Owner, owner) && claim.ExecId == id
+                )
+            )
                 return null;
             var claim = new Claim(node, owner, id, Issue(node, owner.Id, id));
             claims.Add(Key(claim.OriginalSessionId, id), claim);
@@ -124,12 +159,23 @@ internal sealed class RemoteExecAuthority
         lock (gate)
         {
             Prune();
-            return claims.TryGetValue(Key(original, id), out var claim)
-                && claim.Node == node && claim.Grant == grant && Verify(node, original, id, grant) ? claim : null;
+            return
+                claims.TryGetValue(Key(original, id), out var claim)
+                && claim.Node == node
+                && claim.Grant == grant
+                && Verify(node, original, id, grant)
+                ? claim
+                : null;
         }
     }
 
-    internal bool Activate(string node, string original, string id, string grant, SessionOwner owner)
+    internal bool Activate(
+        string node,
+        string original,
+        string id,
+        string grant,
+        SessionOwner owner
+    )
     {
         lock (gate)
         {
@@ -149,7 +195,13 @@ internal sealed class RemoteExecAuthority
     {
         lock (gate)
         {
-            if (!ReferenceEquals(Exact(claim.Node, claim.OriginalSessionId, claim.ExecId, claim.Grant), claim) || claim.State == "active")
+            if (
+                !ReferenceEquals(
+                    Exact(claim.Node, claim.OriginalSessionId, claim.ExecId, claim.Grant),
+                    claim
+                )
+                || claim.State == "active"
+            )
                 return;
             if (definite)
                 claims.Remove(Key(claim.OriginalSessionId, claim.ExecId));
@@ -161,7 +213,12 @@ internal sealed class RemoteExecAuthority
     internal void Complete(Claim claim)
     {
         lock (gate)
-            if (ReferenceEquals(Exact(claim.Node, claim.OriginalSessionId, claim.ExecId, claim.Grant), claim))
+            if (
+                ReferenceEquals(
+                    Exact(claim.Node, claim.OriginalSessionId, claim.ExecId, claim.Grant),
+                    claim
+                )
+            )
                 claims.Remove(Key(claim.OriginalSessionId, claim.ExecId));
     }
 
@@ -170,7 +227,12 @@ internal sealed class RemoteExecAuthority
         lock (gate)
         {
             Prune();
-            return claims.Values.Any(claim => ReferenceEquals(claim.Owner, owner) && claim.Agent == owner.Agent && claim.ExecId == id && (!activeOnly || claim.State == "active"));
+            return claims.Values.Any(claim =>
+                ReferenceEquals(claim.Owner, owner)
+                && claim.Agent == owner.Agent
+                && claim.ExecId == id
+                && (!activeOnly || claim.State == "active")
+            );
         }
     }
 
@@ -184,7 +246,9 @@ internal sealed class RemoteExecAuthority
     internal void Retire(SessionOwner owner)
     {
         lock (gate)
-            foreach (var pair in claims.Where(pair => ReferenceEquals(pair.Value.Owner, owner)).ToArray())
+            foreach (
+                var pair in claims.Where(pair => ReferenceEquals(pair.Value.Owner, owner)).ToArray()
+            )
                 claims.Remove(pair.Key);
     }
 

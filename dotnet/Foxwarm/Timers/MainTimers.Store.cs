@@ -35,10 +35,7 @@ internal sealed partial class MainTimers : IAsyncDisposable
     private static readonly JsonSerializerOptions JsonOptions = new() { MaxDepth = int.MaxValue };
     private static readonly JsonDocumentOptions ReadOptions = new() { MaxDepth = int.MaxValue };
 
-    internal MainTimers(
-        string root,
-        Func<JsonObject, Task> deliver
-    )
+    internal MainTimers(string root, Func<JsonObject, Task> deliver)
     {
         path = Path.Combine(root, "state", "timers.json");
         this.deliver = deliver;

@@ -12,7 +12,8 @@ namespace Foxwarm.Tests;
 
 public sealed class RemoteExecProtocolTests
 {
-    private static ResponsesClientOptions Options => new(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
+    private static ResponsesClientOptions Options =>
+        new(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
 
     private sealed class Fixture : IAsyncDisposable
     {
@@ -31,7 +32,11 @@ public sealed class RemoteExecProtocolTests
             Manager = new(Data, Work, Options, HostModels.ForTest(Options));
             await Manager.LoadAsync();
             Owner = await Manager.CreateNamedAsync("main", "exec-owner", null, null);
-            Owner.Registry.TriggerOverride = _ => { Wakes++; return Task.CompletedTask; };
+            Owner.Registry.TriggerOverride = _ =>
+            {
+                Wakes++;
+                return Task.CompletedTask;
+            };
             Credential = Manager.Nodes.Registry.Create("remote");
             await Connect(legacy, cancel);
             await Manager.SelectNodeAsync(Owner, "remote");
@@ -47,14 +52,26 @@ public sealed class RemoteExecProtocolTests
             App.Map("/node_ws", Manager.Nodes.HandleAsync);
             await App.StartAsync();
             Socket = new();
-            await Socket.ConnectAsync(new Uri(App.Urls.Single().Replace("http", "ws") + "/node_ws?id=remote&auth=" + Credential["authToken"]!.GetValue<string>()), default);
+            await Socket.ConnectAsync(
+                new Uri(
+                    App.Urls.Single().Replace("http", "ws")
+                        + "/node_ws?id=remote&auth="
+                        + Credential["authToken"]!.GetValue<string>()
+                ),
+                default
+            );
             var registration = new JsonObject
             {
-                ["type"] = "node_register", ["nodeType"] = "protocol-peer",
+                ["type"] = "node_register",
+                ["nodeType"] = "protocol-peer",
                 ["capabilities"] = new JsonObject
                 {
                     ["tools"] = new JsonArray(new JsonObject { ["name"] = "exec" }),
-                    ["features"] = new JsonObject { ["remoteExecBackgroundRegistration"] = true, ["execWaitCancellation"] = cancel },
+                    ["features"] = new JsonObject
+                    {
+                        ["remoteExecBackgroundRegistration"] = true,
+                        ["execWaitCancellation"] = cancel,
+                    },
                 },
             };
             if (!legacy)
@@ -63,8 +80,28 @@ public sealed class RemoteExecProtocolTests
             Assert.Equal("registered", (await Read())["type"]!.GetValue<string>());
         }
 
-        internal Task<JsonNode?> Exec(CancellationToken token = default) => Manager.Nodes.ExecuteAsync("remote", "exec", new JsonObject { ["command"] = "owned-effect" }, Owner.Id, Owner.Agent, "remote", "C:\\remote\\cwd", false, token, Owner);
-        internal async Task Send(JsonObject message) => await Socket.SendAsync(Encoding.UTF8.GetBytes(message.ToJsonString()), WebSocketMessageType.Text, true, default);
+        internal Task<JsonNode?> Exec(CancellationToken token = default) =>
+            Manager.Nodes.ExecuteAsync(
+                "remote",
+                "exec",
+                new JsonObject { ["command"] = "owned-effect" },
+                Owner.Id,
+                Owner.Agent,
+                "remote",
+                "C:\\remote\\cwd",
+                false,
+                token,
+                Owner
+            );
+
+        internal async Task Send(JsonObject message) =>
+            await Socket.SendAsync(
+                Encoding.UTF8.GetBytes(message.ToJsonString()),
+                WebSocketMessageType.Text,
+                true,
+                default
+            );
+
         internal async Task<JsonObject> Read()
         {
             using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -73,19 +110,40 @@ public sealed class RemoteExecProtocolTests
             Assert.Equal(WebSocketMessageType.Text, read.MessageType);
             return JsonNode.Parse(bytes.AsSpan(0, read.Count))!.AsObject();
         }
-        internal JsonObject Background(JsonObject request) => new()
-        {
-            ["type"] = "remote_exec_background", ["sessionId"] = request["sessionId"]!.DeepClone(),
-            ["execId"] = request["backgroundExecId"]!.DeepClone(), ["completionCapability"] = request["completionCapability"]!.DeepClone(),
-        };
-        internal JsonObject Completion(JsonObject request, string requestId = "completion") => new()
-        {
-            ["type"] = "session_event", ["requestId"] = requestId, ["sessionId"] = request["sessionId"]!.DeepClone(),
-            ["message"] = "owned remote completion", ["eventType"] = "background",
-            ["execId"] = request["backgroundExecId"]!.DeepClone(), ["completionCapability"] = request["completionCapability"]!.DeepClone(),
-            ["eventId"] = "remote-exec-completion:" + request["backgroundExecId"]!.GetValue<string>(),
-        };
-        internal Task Respond(JsonObject request, JsonNode? result) => Send(new JsonObject { ["type"] = "tool_call_response", ["callId"] = request["callId"]!.DeepClone(), ["result"] = result });
+
+        internal JsonObject Background(JsonObject request) =>
+            new()
+            {
+                ["type"] = "remote_exec_background",
+                ["sessionId"] = request["sessionId"]!.DeepClone(),
+                ["execId"] = request["backgroundExecId"]!.DeepClone(),
+                ["completionCapability"] = request["completionCapability"]!.DeepClone(),
+            };
+
+        internal JsonObject Completion(JsonObject request, string requestId = "completion") =>
+            new()
+            {
+                ["type"] = "session_event",
+                ["requestId"] = requestId,
+                ["sessionId"] = request["sessionId"]!.DeepClone(),
+                ["message"] = "owned remote completion",
+                ["eventType"] = "background",
+                ["execId"] = request["backgroundExecId"]!.DeepClone(),
+                ["completionCapability"] = request["completionCapability"]!.DeepClone(),
+                ["eventId"] =
+                    "remote-exec-completion:" + request["backgroundExecId"]!.GetValue<string>(),
+            };
+
+        internal Task Respond(JsonObject request, JsonNode? result) =>
+            Send(
+                new JsonObject
+                {
+                    ["type"] = "tool_call_response",
+                    ["callId"] = request["callId"]!.DeepClone(),
+                    ["result"] = result,
+                }
+            );
+
         internal async Task<JsonObject> StartBackground()
         {
             var execution = Exec();
@@ -93,27 +151,50 @@ public sealed class RemoteExecProtocolTests
             Assert.Equal(Owner.Id, request["sessionId"]!.GetValue<string>());
             Assert.Equal("C:\\remote\\cwd", request["sessionCwd"]!.GetValue<string>());
             await Send(Background(request));
-            await Respond(request, new JsonObject { ["output"] = "actual background", ["execId"] = request["backgroundExecId"]!.DeepClone() });
+            await Respond(
+                request,
+                new JsonObject
+                {
+                    ["output"] = "actual background",
+                    ["execId"] = request["backgroundExecId"]!.DeepClone(),
+                }
+            );
             await execution;
-            Assert.True(Manager.Nodes.ExecClaims.Has(Owner, request["backgroundExecId"]!.GetValue<string>()));
+            Assert.True(
+                Manager.Nodes.ExecClaims.Has(Owner, request["backgroundExecId"]!.GetValue<string>())
+            );
             return request;
         }
+
         internal async Task Restart()
         {
-            Socket.Abort(); Socket.Dispose();
-            await App.StopAsync(); await App.DisposeAsync();
+            Socket.Abort();
+            Socket.Dispose();
+            await App.StopAsync();
+            await App.DisposeAsync();
             await Manager.DisposeAsync();
             Manager = new(Data, Work, Options, HostModels.ForTest(Options));
             await Manager.LoadAsync();
             Owner = await Manager.RequiredAsync(Owner.Id);
-            Owner.Registry.TriggerOverride = _ => { Wakes++; return Task.CompletedTask; };
+            Owner.Registry.TriggerOverride = _ =>
+            {
+                Wakes++;
+                return Task.CompletedTask;
+            };
             await Connect();
         }
+
         public async ValueTask DisposeAsync()
         {
-            Socket?.Abort(); Socket?.Dispose();
-            if (App is not null) { await App.StopAsync(); await App.DisposeAsync(); }
-            if (Manager is not null) await Manager.DisposeAsync();
+            Socket?.Abort();
+            Socket?.Dispose();
+            if (App is not null)
+            {
+                await App.StopAsync();
+                await App.DisposeAsync();
+            }
+            if (Manager is not null)
+                await Manager.DisposeAsync();
             Temp.Dispose();
         }
     }
@@ -121,17 +202,33 @@ public sealed class RemoteExecProtocolTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Durable_admission_retry_and_duplicate_ack_use_the_actual_owner_lane(bool afterRename)
+    public async Task Durable_admission_retry_and_duplicate_ack_use_the_actual_owner_lane(
+        bool afterRename
+    )
     {
         await using var fixture = new Fixture();
         await fixture.Start();
         var request = await fixture.StartBackground();
         var id = request["backgroundExecId"]!.GetValue<string>();
         await fixture.Manager.SelectNodeAsync(fixture.Owner, "master");
-        await fixture.Manager.DeclareWaitAsync(fixture.Owner, new JsonObject { ["waitExecIds"] = new JsonArray(id), ["wakeIfNoActivityAfterSeconds"] = null });
+        await fixture.Manager.DeclareWaitAsync(
+            fixture.Owner,
+            new JsonObject
+            {
+                ["waitExecIds"] = new JsonArray(id),
+                ["wakeIfNoActivityAfterSeconds"] = null,
+            }
+        );
         var faults = Path.Combine(fixture.Data, "state", "experiment-faults");
         Directory.CreateDirectory(faults);
-        await File.WriteAllTextAsync(Path.Combine(faults, SessionIdentity.ExecDirectorySegment(fixture.Owner.Id) + (afterRename ? ".wait-after-rename" : ".wait-before-rename")), "fault");
+        await File.WriteAllTextAsync(
+            Path.Combine(
+                faults,
+                SessionIdentity.ExecDirectorySegment(fixture.Owner.Id)
+                    + (afterRename ? ".wait-after-rename" : ".wait-before-rename")
+            ),
+            "fault"
+        );
         await fixture.Send(fixture.Completion(request));
         Assert.Equal("error", (await fixture.Read())["type"]!.GetValue<string>());
         Assert.True(fixture.Manager.Nodes.ExecClaims.Has(fixture.Owner, id));
@@ -143,90 +240,210 @@ public sealed class RemoteExecProtocolTests
         Assert.Equal("session_event_accepted", (await fixture.Read())["type"]!.GetValue<string>());
         Assert.Single(fixture.Owner.Entry.Snapshot().Queue);
         Assert.Equal(1, fixture.Wakes);
-        var saved = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Owner.AuthorityStore.AuthorityPath))!;
-        Assert.Contains("remote-exec-completion:" + id, SessionWait.Strings(saved["meta"]?["acceptedExternalEventIds"]));
+        var saved = JsonNode.Parse(
+            await File.ReadAllTextAsync(fixture.Owner.AuthorityStore.AuthorityPath)
+        )!;
+        Assert.Contains(
+            "remote-exec-completion:" + id,
+            SessionWait.Strings(saved["meta"]?["acceptedExternalEventIds"])
+        );
         Assert.Null(fixture.Owner.WaitSnapshot());
     }
 
     [Fact]
     public async Task Registration_requires_the_exact_reserved_identity_not_a_returned_exec_id()
     {
-        await using var fixture = new Fixture(); await fixture.Start();
-        var execution = fixture.Exec(); var request = await fixture.Read();
-        var invalid = fixture.Background(request); invalid["execId"] = "invented-id";
-        await fixture.Send(invalid); Assert.Equal("error", (await fixture.Read())["type"]!.GetValue<string>());
-        await Assert.ThrowsAsync<InvalidDataException>(() => fixture.Manager.DeclareWaitAsync(fixture.Owner, new JsonObject { ["waitExecIds"] = new JsonArray(request["backgroundExecId"]!.DeepClone()) }));
-        await fixture.Respond(request, new JsonObject { ["execId"] = "arbitrary-id", ["output"] = "completed" }); await execution;
-        await Assert.ThrowsAsync<InvalidDataException>(() => fixture.Manager.DeclareWaitAsync(fixture.Owner, new JsonObject { ["waitExecIds"] = new JsonArray("arbitrary-id") }));
-        Assert.Null(fixture.Manager.Nodes.ExecClaims.Exact("remote", fixture.Owner.Id, request["backgroundExecId"]!.GetValue<string>(), request["completionCapability"]!.GetValue<string>()));
+        await using var fixture = new Fixture();
+        await fixture.Start();
+        var execution = fixture.Exec();
+        var request = await fixture.Read();
+        var invalid = fixture.Background(request);
+        invalid["execId"] = "invented-id";
+        await fixture.Send(invalid);
+        Assert.Equal("error", (await fixture.Read())["type"]!.GetValue<string>());
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            fixture.Manager.DeclareWaitAsync(
+                fixture.Owner,
+                new JsonObject
+                {
+                    ["waitExecIds"] = new JsonArray(request["backgroundExecId"]!.DeepClone()),
+                }
+            )
+        );
+        await fixture.Respond(
+            request,
+            new JsonObject { ["execId"] = "arbitrary-id", ["output"] = "completed" }
+        );
+        await execution;
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            fixture.Manager.DeclareWaitAsync(
+                fixture.Owner,
+                new JsonObject { ["waitExecIds"] = new JsonArray("arbitrary-id") }
+            )
+        );
+        Assert.Null(
+            fixture.Manager.Nodes.ExecClaims.Exact(
+                "remote",
+                fixture.Owner.Id,
+                request["backgroundExecId"]!.GetValue<string>(),
+                request["completionCapability"]!.GetValue<string>()
+            )
+        );
     }
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Stop_retains_the_correlation_for_real_reply_and_only_advertised_cancellation(bool supported)
+    public async Task Stop_retains_the_correlation_for_real_reply_and_only_advertised_cancellation(
+        bool supported
+    )
     {
-        await using var fixture = new Fixture(); await fixture.Start(cancel: supported);
-        using var stop = new CancellationTokenSource(); var execution = fixture.Exec(stop.Token); var request = await fixture.Read();
+        await using var fixture = new Fixture();
+        await fixture.Start(cancel: supported);
+        using var stop = new CancellationTokenSource();
+        var execution = fixture.Exec(stop.Token);
+        var request = await fixture.Read();
         stop.Cancel();
-        if (supported) Assert.Equal("tool_call_cancel", (await fixture.Read())["type"]!.GetValue<string>());
+        if (supported)
+            Assert.Equal("tool_call_cancel", (await fixture.Read())["type"]!.GetValue<string>());
         Assert.False(execution.IsCompleted);
         await fixture.Send(fixture.Background(request));
-        await fixture.Respond(request, new JsonObject { ["output"] = "command was already started and was not killed" });
+        await fixture.Respond(
+            request,
+            new JsonObject { ["output"] = "command was already started and was not killed" }
+        );
         var result = await execution;
         Assert.Contains("not killed", result!["output"]!.GetValue<string>());
-        Assert.Equal(!supported, result["output"]!.GetValue<string>().Contains("could not end waiting early"));
-        Assert.True(fixture.Manager.Nodes.ExecClaims.Has(fixture.Owner, request["backgroundExecId"]!.GetValue<string>()));
+        Assert.Equal(
+            !supported,
+            result["output"]!.GetValue<string>().Contains("could not end waiting early")
+        );
+        Assert.True(
+            fixture.Manager.Nodes.ExecClaims.Has(
+                fixture.Owner,
+                request["backgroundExecId"]!.GetValue<string>()
+            )
+        );
     }
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Only_an_explicit_prestart_rejection_allows_the_rolling_identity_retry(bool legacy)
+    public async Task Only_an_explicit_prestart_rejection_allows_the_rolling_identity_retry(
+        bool legacy
+    )
     {
-        await using var fixture = new Fixture(); await fixture.Start(legacy: legacy);
-        var execution = fixture.Exec(); var first = await fixture.Read();
-        await fixture.Send(new JsonObject { ["type"] = "tool_call_error", ["callId"] = first["callId"]!.DeepClone(), ["execStarted"] = false,
-            ["error"] = new JsonObject { ["message"] = legacy ? "Persistent exec ID is invalid." : "collision", ["code"] = legacy ? null : "PERSISTENT_EXEC_ID_COLLISION" } });
+        await using var fixture = new Fixture();
+        await fixture.Start(legacy: legacy);
+        var execution = fixture.Exec();
+        var first = await fixture.Read();
+        await fixture.Send(
+            new JsonObject
+            {
+                ["type"] = "tool_call_error",
+                ["callId"] = first["callId"]!.DeepClone(),
+                ["execStarted"] = false,
+                ["error"] = new JsonObject
+                {
+                    ["message"] = legacy ? "Persistent exec ID is invalid." : "collision",
+                    ["code"] = legacy ? null : "PERSISTENT_EXEC_ID_COLLISION",
+                },
+            }
+        );
         var next = await fixture.Read();
-        Assert.NotEqual(first["backgroundExecId"]!.GetValue<string>(), next["backgroundExecId"]!.GetValue<string>());
-        if (legacy) Assert.StartsWith("exec_", next["backgroundExecId"]!.GetValue<string>());
-        await fixture.Send(new JsonObject { ["type"] = "tool_call_error", ["callId"] = next["callId"]!.DeepClone(), ["execStarted"] = true,
-            ["error"] = new JsonObject { ["message"] = "possible started effect", ["code"] = "PERSISTENT_EXEC_ID_COLLISION" } });
+        Assert.NotEqual(
+            first["backgroundExecId"]!.GetValue<string>(),
+            next["backgroundExecId"]!.GetValue<string>()
+        );
+        if (legacy)
+            Assert.StartsWith("exec_", next["backgroundExecId"]!.GetValue<string>());
+        await fixture.Send(
+            new JsonObject
+            {
+                ["type"] = "tool_call_error",
+                ["callId"] = next["callId"]!.DeepClone(),
+                ["execStarted"] = true,
+                ["error"] = new JsonObject
+                {
+                    ["message"] = "possible started effect",
+                    ["code"] = "PERSISTENT_EXEC_ID_COLLISION",
+                },
+            }
+        );
         await Assert.ThrowsAnyAsync<InvalidOperationException>(() => execution);
-        var claim = fixture.Manager.Nodes.ExecClaims.Exact("remote", fixture.Owner.Id, next["backgroundExecId"]!.GetValue<string>(), next["completionCapability"]!.GetValue<string>());
-        Assert.NotNull(claim); Assert.Equal("outcome-unknown", claim.State);
+        var claim = fixture.Manager.Nodes.ExecClaims.Exact(
+            "remote",
+            fixture.Owner.Id,
+            next["backgroundExecId"]!.GetValue<string>(),
+            next["completionCapability"]!.GetValue<string>()
+        );
+        Assert.NotNull(claim);
+        Assert.Equal("outcome-unknown", claim.State);
     }
 
     [Fact]
     public async Task Rename_rebinds_the_real_owner_and_delete_fences_the_old_lifetime()
     {
-        await using var fixture = new Fixture(); await fixture.Start();
+        await using var fixture = new Fixture();
+        await fixture.Start();
         var request = await fixture.StartBackground();
         var old = fixture.Owner.Id;
-        await fixture.Manager.MoveIdentityAsync(fixture.Owner, new JsonObject { ["newSessionId"] = "renamed", ["createAgent"] = true, ["newAgentName"] = "moved" });
+        await fixture.Manager.MoveIdentityAsync(
+            fixture.Owner,
+            new JsonObject
+            {
+                ["newSessionId"] = "renamed",
+                ["createAgent"] = true,
+                ["newAgentName"] = "moved",
+            }
+        );
         Assert.Equal("moved/renamed", fixture.Owner.Id);
-        Assert.True(fixture.Manager.Nodes.ExecClaims.Has(fixture.Owner, request["backgroundExecId"]!.GetValue<string>()));
-        await fixture.Send(fixture.Completion(request)); Assert.Equal("session_event_accepted", (await fixture.Read())["type"]!.GetValue<string>());
+        Assert.True(
+            fixture.Manager.Nodes.ExecClaims.Has(
+                fixture.Owner,
+                request["backgroundExecId"]!.GetValue<string>()
+            )
+        );
+        await fixture.Send(fixture.Completion(request));
+        Assert.Equal("session_event_accepted", (await fixture.Read())["type"]!.GetValue<string>());
         Assert.Single(fixture.Owner.Entry.Snapshot().Queue);
-        await fixture.Owner.Entry.SaveLane.DropCapturedQueueAsync(fixture.Owner.Entry.Snapshot().Queue);
-        Assert.Equal("deleted", (await fixture.Manager.DeleteAsync(fixture.Owner.Id))["status"]!.GetValue<string>());
-        await fixture.Send(fixture.Completion(request, "late")); Assert.Equal("error", (await fixture.Read())["type"]!.GetValue<string>());
-        Assert.ThrowsAny<InvalidOperationException>(() => fixture.Manager.GetExistingAsync(old).GetAwaiter().GetResult());
+        await fixture.Owner.Entry.SaveLane.DropCapturedQueueAsync(
+            fixture.Owner.Entry.Snapshot().Queue
+        );
+        Assert.Equal(
+            "deleted",
+            (await fixture.Manager.DeleteAsync(fixture.Owner.Id))["status"]!.GetValue<string>()
+        );
+        await fixture.Send(fixture.Completion(request, "late"));
+        Assert.Equal("error", (await fixture.Read())["type"]!.GetValue<string>());
+        Assert.ThrowsAny<InvalidOperationException>(() =>
+            fixture.Manager.GetExistingAsync(old).GetAwaiter().GetResult()
+        );
         Assert.Null(SessionWait.Text(fixture.Manager.Catalog.Resolve(old)["sessionId"]));
     }
 
     [Fact]
     public async Task Restart_accepts_a_durable_duplicate_but_not_a_new_unproven_completion()
     {
-        await using var fixture = new Fixture(); await fixture.Start();
+        await using var fixture = new Fixture();
+        await fixture.Start();
         var durable = await fixture.StartBackground();
-        await fixture.Send(fixture.Completion(durable)); Assert.Equal("session_event_accepted", (await fixture.Read())["type"]!.GetValue<string>());
+        await fixture.Send(fixture.Completion(durable));
+        Assert.Equal("session_event_accepted", (await fixture.Read())["type"]!.GetValue<string>());
         var unproven = await fixture.StartBackground();
         await fixture.Restart();
-        Assert.False(fixture.Manager.Nodes.ExecClaims.Has(fixture.Owner, unproven["backgroundExecId"]!.GetValue<string>()));
-        await fixture.Send(fixture.Completion(durable, "durable-replay")); Assert.Equal("session_event_accepted", (await fixture.Read())["type"]!.GetValue<string>());
-        await fixture.Send(fixture.Completion(unproven, "unproven-replay")); Assert.Equal("error", (await fixture.Read())["type"]!.GetValue<string>());
-        Assert.Single(SessionWait.Strings(fixture.Owner.Entry.Snapshot().Meta["acceptedExternalEventIds"]));
+        Assert.False(
+            fixture.Manager.Nodes.ExecClaims.Has(
+                fixture.Owner,
+                unproven["backgroundExecId"]!.GetValue<string>()
+            )
+        );
+        await fixture.Send(fixture.Completion(durable, "durable-replay"));
+        Assert.Equal("session_event_accepted", (await fixture.Read())["type"]!.GetValue<string>());
+        await fixture.Send(fixture.Completion(unproven, "unproven-replay"));
+        Assert.Equal("error", (await fixture.Read())["type"]!.GetValue<string>());
+        Assert.Single(
+            SessionWait.Strings(fixture.Owner.Entry.Snapshot().Meta["acceptedExternalEventIds"])
+        );
     }
 }

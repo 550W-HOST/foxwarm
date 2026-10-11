@@ -11,18 +11,38 @@ internal sealed partial class NodeConnectionHub
     internal Func<string, JsonObject, Task>? SessionEvent { get; set; }
     internal Func<string, JsonObject, Task>? BackgroundRegistration { get; set; }
 
-    private sealed class NodeToolException(JsonNode? error, bool? started) : InvalidOperationException(
-        "Node tool failed: " + (SessionWait.Text(error) ?? (error is JsonObject ? SessionWait.Text(error["message"]) : null) ?? "unspecified error"))
+    private sealed class NodeToolException(JsonNode? error, bool? started)
+        : InvalidOperationException(
+            "Node tool failed: "
+                + (
+                    SessionWait.Text(error)
+                    ?? (error is JsonObject ? SessionWait.Text(error["message"]) : null)
+                    ?? "unspecified error"
+                )
+        )
     {
-        internal readonly string? Code = error is JsonObject ? SessionWait.Text(error["code"]) : null;
-        internal readonly string? Detail = SessionWait.Text(error) ?? (error is JsonObject ? SessionWait.Text(error["message"]) : null);
+        internal readonly string? Code =
+            error is JsonObject ? SessionWait.Text(error["code"]) : null;
+        internal readonly string? Detail =
+            SessionWait.Text(error)
+            ?? (error is JsonObject ? SessionWait.Text(error["message"]) : null);
         internal readonly bool? Started = started;
-        internal bool PreStart(string id) => Started == false || Started is null && KnownRejection(id);
-        internal bool KnownRejection(string id) => Code == "PERSISTENT_EXEC_ID_COLLISION"
+
+        internal bool PreStart(string id) =>
+            Started == false || Started is null && KnownRejection(id);
+
+        internal bool KnownRejection(string id) =>
+            Code == "PERSISTENT_EXEC_ID_COLLISION"
             || Detail == "Persistent exec ID is invalid."
             || Detail == $"Persistent exec `{id}` already exists.";
-        internal bool RetryCollision(string id, bool legacy) => Started != true
-            && (legacy ? Detail == $"Persistent exec `{id}` already exists." : Code == "PERSISTENT_EXEC_ID_COLLISION");
+
+        internal bool RetryCollision(string id, bool legacy) =>
+            Started != true
+            && (
+                legacy
+                    ? Detail == $"Persistent exec `{id}` already exists."
+                    : Code == "PERSISTENT_EXEC_ID_COLLISION"
+            );
     }
 
     internal async Task<JsonNode?> ExecuteAsync(
@@ -42,13 +62,31 @@ internal sealed partial class NodeConnectionHub
         lock (gate)
         {
             connection = Require(id);
-            if (!connection.Capabilities["tools"]!.AsArray().Any(value => SessionWait.Text(value?["name"]) == tool))
+            if (
+                !connection.Capabilities["tools"]!
+                    .AsArray()
+                    .Any(value => SessionWait.Text(value?["name"]) == tool)
+            )
                 throw new InvalidDataException("Tool is not advertised by Node: " + tool);
         }
         if (tool != "exec")
-            return await ExecuteOnceAsync(connection, tool, args, sessionId, agent, currentNode, cwd, programmatic, token, null, owner);
+            return await ExecuteOnceAsync(
+                connection,
+                tool,
+                args,
+                sessionId,
+                agent,
+                currentNode,
+                cwd,
+                programmatic,
+                token,
+                null,
+                owner
+            );
         if (owner is null || owner.Id != sessionId || owner.Agent != agent)
-            throw new InvalidOperationException("Remote exec requires its current Main-owned Session.");
+            throw new InvalidOperationException(
+                "Remote exec requires its current Main-owned Session."
+            );
         var legacy = false;
         for (var attempt = 0; attempt < 16; attempt++)
         {
@@ -66,18 +104,36 @@ internal sealed partial class NodeConnectionHub
             }
             try
             {
-                return await ExecuteOnceAsync(connection, tool, args, claim.OriginalSessionId, claim.Agent, currentNode, cwd, programmatic, token, claim, owner, admission);
+                return await ExecuteOnceAsync(
+                    connection,
+                    tool,
+                    args,
+                    claim.OriginalSessionId,
+                    claim.Agent,
+                    currentNode,
+                    cwd,
+                    programmatic,
+                    token,
+                    claim,
+                    owner,
+                    admission
+                );
             }
-            catch (NodeToolException error) when (error.Started != true
-                && !legacy && SessionWait.Number(connection.Protocol?["negotiated"]) == 1
-                && error.Detail == "Persistent exec ID is invalid.")
+            catch (NodeToolException error)
+                when (error.Started != true
+                    && !legacy
+                    && SessionWait.Number(connection.Protocol?["negotiated"]) == 1
+                    && error.Detail == "Persistent exec ID is invalid."
+                )
             {
                 legacy = true;
                 attempt = -1;
             }
             catch (NodeToolException error) when (error.RetryCollision(execId, legacy)) { }
         }
-        throw new InvalidOperationException("Remote exec identity allocation exhausted after explicit pre-start collision rejections.");
+        throw new InvalidOperationException(
+            "Remote exec identity allocation exhausted after explicit pre-start collision rejections."
+        );
     }
 
     private async Task<JsonNode?> ExecuteOnceAsync(
@@ -96,13 +152,24 @@ internal sealed partial class NodeConnectionHub
     )
     {
         var callId = "call_" + Guid.NewGuid().ToString("N");
-        var result = new TaskCompletionSource<JsonNode?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var supportsRegistration = connection.Capabilities["features"]?["remoteExecBackgroundRegistration"]?.GetValue<bool>() == true;
-        var supportsCancel = supportsRegistration && connection.Capabilities["features"]?["execWaitCancellation"]?.GetValue<bool>() == true;
+        var result = new TaskCompletionSource<JsonNode?>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var supportsRegistration =
+            connection
+                .Capabilities["features"]
+                ?["remoteExecBackgroundRegistration"]?.GetValue<bool>() == true;
+        var supportsCancel =
+            supportsRegistration
+            && connection.Capabilities["features"]?["execWaitCancellation"]?.GetValue<bool>()
+                == true;
         var call = new Invocation(connection, result, claim, supportsRegistration, owner);
         var attemptedSend = false;
         // Exec Stop is a wire handshake, not cancellation of its correlation or remote process.
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token, claim is null ? token : CancellationToken.None);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(
+            shutdown.Token,
+            claim is null ? token : CancellationToken.None
+        );
         deadline.CancelAfter(TimeSpan.FromSeconds(62));
         try
         {
@@ -123,7 +190,11 @@ internal sealed partial class NodeConnectionHub
             }
             if (currentNode == connection.Id && cwd is not null)
                 request["sessionCwd"] = cwd;
-            if (programmatic && connection.Capabilities["features"]?["programmaticToolData"]?.GetValue<bool>() == true)
+            if (
+                programmatic
+                && connection.Capabilities["features"]?["programmaticToolData"]?.GetValue<bool>()
+                    == true
+            )
                 request["programmatic"] = true;
             token.ThrowIfCancellationRequested();
             lock (gate)
@@ -136,15 +207,22 @@ internal sealed partial class NodeConnectionHub
             await SendAsync(connection, request, deadline.Token);
             dispatchAdmission?.Dispose();
             dispatchAdmission = null;
-            using var cancellation = claim is not null && supportsCancel ? token.Register(() =>
-            {
-                if (calls.TryGetValue(callId, out var pendingCall) && ReferenceEquals(pendingCall, call))
-                    _ = CancelExecWaitAsync(connection, callId);
-            }) : default;
+            using var cancellation =
+                claim is not null && supportsCancel
+                    ? token.Register(() =>
+                    {
+                        if (
+                            calls.TryGetValue(callId, out var pendingCall)
+                            && ReferenceEquals(pendingCall, call)
+                        )
+                            _ = CancelExecWaitAsync(connection, callId);
+                    })
+                    : default;
             var value = await result.Task.WaitAsync(deadline.Token);
             if (claim is not null && token.IsCancellationRequested && !supportsCancel)
             {
-                const string note = "\nStop or Run queued could not end waiting early on this Node. The actual result is preserved; update the Node client for foreground exec wait cancellation.";
+                const string note =
+                    "\nStop or Run queued could not end waiting early on this Node. The actual result is preserved; update the Node client for foreground exec wait cancellation.";
                 if (value is JsonObject obj && SessionWait.Text(obj["output"]) is string output)
                     obj["output"] = output + note;
                 else if (SessionWait.Text(value) is string text)
@@ -156,13 +234,17 @@ internal sealed partial class NodeConnectionHub
         {
             throw; // The authenticated response handler already classified the start boundary.
         }
-        catch (Exception error) when (error is OperationCanceledException or WebSocketException or IOException)
+        catch (Exception error)
+            when (error is OperationCanceledException or WebSocketException or IOException)
         {
             if (claim is not null)
                 ExecClaims.Settle(claim, !attemptedSend);
-            throw new IOException(attemptedSend
-                ? "Node request canceled, disconnected or timed out. Started effects may have occurred; they were not retried."
-                : "Node request was not dispatched.", error);
+            throw new IOException(
+                attemptedSend
+                    ? "Node request canceled, disconnected or timed out. Started effects may have occurred; they were not retried."
+                    : "Node request was not dispatched.",
+                error
+            );
         }
         finally
         {
@@ -175,15 +257,24 @@ internal sealed partial class NodeConnectionHub
     {
         try
         {
-            await SendAsync(connection, new JsonObject { ["type"] = "tool_call_cancel", ["callId"] = callId }, CancellationToken.None);
+            await SendAsync(
+                connection,
+                new JsonObject { ["type"] = "tool_call_cancel", ["callId"] = callId },
+                CancellationToken.None
+            );
         }
-        catch (Exception error) when (error is WebSocketException or IOException or ObjectDisposedException) { }
+        catch (Exception error)
+            when (error is WebSocketException or IOException or ObjectDisposedException) { }
     }
 
     private void HandleToolReply(Connection connection, JsonObject message, bool success)
     {
         var callId = SessionWait.Text(message["callId"]) ?? "";
-        if (!calls.TryGetValue(callId, out var call) || !ReferenceEquals(call.Connection, connection) || !calls.TryRemove(callId, out _))
+        if (
+            !calls.TryGetValue(callId, out var call)
+            || !ReferenceEquals(call.Connection, connection)
+            || !calls.TryRemove(callId, out _)
+        )
             return;
         if (success)
         {
@@ -193,9 +284,16 @@ internal sealed partial class NodeConnectionHub
         }
         else
         {
-            var started = message["execStarted"] is JsonValue value && value.TryGetValue<bool>(out var flag) ? (bool?)flag : null;
-            if (started is null && message["error"] is JsonObject details
-                && details["execStarted"] is JsonValue embedded && embedded.TryGetValue<bool>(out var reported))
+            var started =
+                message["execStarted"] is JsonValue value && value.TryGetValue<bool>(out var flag)
+                    ? (bool?)flag
+                    : null;
+            if (
+                started is null
+                && message["error"] is JsonObject details
+                && details["execStarted"] is JsonValue embedded
+                && embedded.TryGetValue<bool>(out var reported)
+            )
                 started = reported;
             var error = new NodeToolException(message["error"], started);
             if (call.Claim is not null)
@@ -209,6 +307,10 @@ internal sealed partial class NodeConnectionHub
         ExecClaims.Retire(owner);
         foreach (var pair in calls)
             if (ReferenceEquals(pair.Value.Owner, owner) && calls.TryRemove(pair.Key, out var call))
-                call.Result.TrySetException(new IOException("Session lifetime retired. Started remote effects were not killed or retried."));
+                call.Result.TrySetException(
+                    new IOException(
+                        "Session lifetime retired. Started remote effects were not killed or retried."
+                    )
+                );
     }
 }

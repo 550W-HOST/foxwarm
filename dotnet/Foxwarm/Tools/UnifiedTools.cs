@@ -103,11 +103,7 @@ internal static partial class UnifiedTools
                         : SessionWait.Text(owner.Entry.Snapshot().AuthorityEnvelope["currentNode"])
                             ?? "master"
                 );
-                foreach (
-                    var definition in registry
-                        .NodeDefinitions(nodeId)
-                        .OfType<JsonObject>()
-                )
+                foreach (var definition in registry.NodeDefinitions(nodeId).OfType<JsonObject>())
                 {
                     var name = SessionWait.Text(definition["name"])!;
                     var description = SessionWait.Text(definition["description"]) ?? "";

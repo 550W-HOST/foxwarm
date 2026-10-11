@@ -30,7 +30,13 @@ internal sealed partial class NodeConnectionHub : IDisposable
         internal bool Retired;
     }
 
-    private sealed record Invocation(Connection Connection, TaskCompletionSource<JsonNode?> Result, RemoteExecAuthority.Claim? Claim, bool SupportsRegistration, SessionOwner? Owner);
+    private sealed record Invocation(
+        Connection Connection,
+        TaskCompletionSource<JsonNode?> Result,
+        RemoteExecAuthority.Claim? Claim,
+        bool SupportsRegistration,
+        SessionOwner? Owner
+    );
 
     internal NodeConnectionHub(string root)
     {
@@ -614,16 +620,44 @@ internal sealed partial class NodeConnectionHub : IDisposable
                     {
                         try
                         {
-                            var consumer = type == "session_event" ? SessionEvent : BackgroundRegistration;
+                            var consumer =
+                                type == "session_event" ? SessionEvent : BackgroundRegistration;
                             if (consumer is null)
-                                throw new InvalidOperationException("Node Session events are unavailable.");
+                                throw new InvalidOperationException(
+                                    "Node Session events are unavailable."
+                                );
                             await consumer(id, message);
-                            if (type == "session_event" && SessionWait.Text(message["requestId"]) is string requestId)
-                                await SendAsync(connection, new JsonObject { ["type"] = "session_event_accepted", ["requestId"] = requestId }, lifetime.Token);
+                            if (
+                                type == "session_event"
+                                && SessionWait.Text(message["requestId"]) is string requestId
+                            )
+                                await SendAsync(
+                                    connection,
+                                    new JsonObject
+                                    {
+                                        ["type"] = "session_event_accepted",
+                                        ["requestId"] = requestId,
+                                    },
+                                    lifetime.Token
+                                );
                         }
-                        catch (Exception error) when (error is InvalidOperationException or IOException or InvalidDataException)
+                        catch (Exception error)
+                            when (error
+                                    is InvalidOperationException
+                                        or IOException
+                                        or InvalidDataException
+                            )
                         {
-                            await SendAsync(connection, new JsonObject { ["type"] = "error", ["requestId"] = message["requestId"]?.DeepClone(), ["error"] = error.Message }, lifetime.Token);
+                            await SendAsync(
+                                connection,
+                                new JsonObject
+                                {
+                                    ["type"] = "error",
+                                    ["requestId"] = message["requestId"]?.DeepClone(),
+                                    ["error"] = error.Message,
+                                },
+                                lifetime.Token
+                            );
                         }
                         continue;
                     }
