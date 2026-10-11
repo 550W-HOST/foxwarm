@@ -192,7 +192,10 @@ internal sealed partial class SessionCompactor
         var persistentSnapshot =
             snapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.GetValue<string>() ?? "";
         var after = EstimateHistory(rewritten, persistentSnapshot);
-        var maximum = Math.Max(0, (int)Math.Ceiling(EstimateHistory(snapshot.History, persistentSnapshot) * .6) - 1);
+        var maximum = Math.Max(
+            0,
+            (int)Math.Ceiling(EstimateHistory(snapshot.History, persistentSnapshot) * .6) - 1
+        );
         if (after > maximum)
             return false;
         foreach (var seq in affected)
@@ -220,44 +223,59 @@ internal sealed partial class SessionCompactor
         sessions?.Tasks.TaskContext(snapshot.Id, TaskProgress.Sequences(snapshot), false, []);
         try
         {
-        await hosted.Entry.SaveLane.CommitCompactionAsync(
-            live =>
-            {
-                if (
-                    live.HistoryVersion != snapshot.HistoryVersion
-                    || live.History.Count < snapshot.History.Count
-                    || snapshot
-                        .History.Where(
-                            (message, index) => !JsonNode.DeepEquals(message, live.History[index])
-                        )
-                        .Any()
-                )
-                    throw new InvalidOperationException(
-                        "Tool-response pruning snapshot changed incompatibly."
-                    );
-                var nextHistory = rewritten
-                    .Concat(live.History.Skip(snapshot.History.Count))
-                    .Select(row => (JsonObject)row.DeepClone())
-                    .ToArray();
-                if (EstimateHistory(nextHistory, SessionWait.Text(live.AuthorityEnvelope["persistentMemorySnapshot"]) ?? "") > maximum)
-                    throw new PruningEstimateExceededException();
-                var staged = live.Snapshot() with
+            await hosted.Entry.SaveLane.CommitCompactionAsync(
+                live =>
                 {
-                    History = nextHistory,
-                    HistoryVersion = live.HistoryVersion + 1,
-                };
-                var version = live.HistoryVersion;
-                var nextSeq = live.NextMessageSeq;
-                void Publish(SessionState state)
-                {
-                    state.PublishCommittedHistoryRewrite(nextHistory, version, nextSeq, nextSeq);
-                }
-                return new CompactionPreparation(staged, [], [], Publish);
-            },
-            token
-        );
+                    if (
+                        live.HistoryVersion != snapshot.HistoryVersion
+                        || live.History.Count < snapshot.History.Count
+                        || snapshot
+                            .History.Where(
+                                (message, index) =>
+                                    !JsonNode.DeepEquals(message, live.History[index])
+                            )
+                            .Any()
+                    )
+                        throw new InvalidOperationException(
+                            "Tool-response pruning snapshot changed incompatibly."
+                        );
+                    var nextHistory = rewritten
+                        .Concat(live.History.Skip(snapshot.History.Count))
+                        .Select(row => (JsonObject)row.DeepClone())
+                        .ToArray();
+                    if (
+                        EstimateHistory(
+                            nextHistory,
+                            SessionWait.Text(live.AuthorityEnvelope["persistentMemorySnapshot"])
+                                ?? ""
+                        ) > maximum
+                    )
+                        throw new PruningEstimateExceededException();
+                    var staged = live.Snapshot() with
+                    {
+                        History = nextHistory,
+                        HistoryVersion = live.HistoryVersion + 1,
+                    };
+                    var version = live.HistoryVersion;
+                    var nextSeq = live.NextMessageSeq;
+                    void Publish(SessionState state)
+                    {
+                        state.PublishCommittedHistoryRewrite(
+                            nextHistory,
+                            version,
+                            nextSeq,
+                            nextSeq
+                        );
+                    }
+                    return new CompactionPreparation(staged, [], [], Publish);
+                },
+                token
+            );
         }
-        catch (PruningEstimateExceededException) { return false; }
+        catch (PruningEstimateExceededException)
+        {
+            return false;
+        }
         hosted.PublishStateChanged();
         return true;
     }

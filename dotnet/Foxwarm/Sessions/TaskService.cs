@@ -11,7 +11,10 @@ internal sealed class TaskService : IDisposable
         int SentNotifications
     );
 
-    private sealed class NotificationReceipt { internal int Count; }
+    private sealed class NotificationReceipt
+    {
+        internal int Count;
+    }
 
     private readonly TaskStore store;
     private readonly SessionManager manager;
@@ -150,11 +153,34 @@ internal sealed class TaskService : IDisposable
         IReadOnlyList<string>? scopeIds = null;
         if (action == "list" && Text(args["scope"]) is string scope && scope != "all")
         {
-            if (actor is null) throw new TaskError("TASK_SESSION_REQUIRED", "A current Session is required for this task list scope.");
-            var agent = resolveSessionAgent(actor) ?? throw new TaskError("TASK_SESSION_NOT_FOUND", "The current Session Agent could not be resolved for this task list scope.", 404);
-            scopeIds = scope == "current-session" ? new[] { actor } : manager.Catalog.List().Where(row => Text(row["agent"]) == agent).Select(row => Text(row["id"])!).ToArray();
+            if (actor is null)
+                throw new TaskError(
+                    "TASK_SESSION_REQUIRED",
+                    "A current Session is required for this task list scope."
+                );
+            var agent =
+                resolveSessionAgent(actor)
+                ?? throw new TaskError(
+                    "TASK_SESSION_NOT_FOUND",
+                    "The current Session Agent could not be resolved for this task list scope.",
+                    404
+                );
+            scopeIds =
+                scope == "current-session"
+                    ? new[] { actor }
+                    : manager
+                        .Catalog.List()
+                        .Where(row => Text(row["agent"]) == agent)
+                        .Select(row => Text(row["id"])!)
+                        .ToArray();
         }
-        var result = store.Execute(normalizedArgs, actor, httpLimit, selectedAnchor, scopeSessionIds: scopeIds);
+        var result = store.Execute(
+            normalizedArgs,
+            actor,
+            httpLimit,
+            selectedAnchor,
+            scopeSessionIds: scopeIds
+        );
         var warnings = new List<string>();
         var receipt = new NotificationReceipt();
         var resultTaskId = Text(result.Payload["task"]?["id"]) ?? Text(args["taskId"]);
@@ -197,7 +223,8 @@ internal sealed class TaskService : IDisposable
             result.Payload["task"] = store
                 .Execute(new JsonObject { ["action"] = "get", ["taskId"] = resultTaskId! }, null)
                 .Payload["task"]!.DeepClone();
-        if (action is not ("list" or "get")) result.Payload["sentNotifications"] = receipt.Count;
+        if (action is not ("list" or "get"))
+            result.Payload["sentNotifications"] = receipt.Count;
         return result;
     }
 
@@ -330,7 +357,12 @@ internal sealed class TaskService : IDisposable
         return newOwnerDelivered;
     }
 
-    private async Task DeliverCompletionAsync(string taskId, string actor, List<string> warnings, NotificationReceipt receipt)
+    private async Task DeliverCompletionAsync(
+        string taskId,
+        string actor,
+        List<string> warnings,
+        NotificationReceipt receipt
+    )
     {
         var row = store
             .Execute(new JsonObject { ["action"] = "get", ["taskId"] = taskId }, null)
@@ -481,9 +513,14 @@ internal sealed class TaskService : IDisposable
     )> ExecuteForToolWithReceiptAsync(SessionOwner source, JsonObject args)
     {
         var normalized = (JsonObject)args.DeepClone();
-        if (Text(normalized["action"]) == "list" && !normalized.ContainsKey("scope")) normalized["scope"] = "current-session";
+        if (Text(normalized["action"]) == "list" && !normalized.ContainsKey("scope"))
+            normalized["scope"] = "current-session";
         var payload = (
-            await ExecuteAsync(normalized, source.Id, anchor: source.Entry.Snapshot().NextMessageSeq - 1)
+            await ExecuteAsync(
+                normalized,
+                source.Id,
+                anchor: source.Entry.Snapshot().NextMessageSeq - 1
+            )
         ).Payload;
         var task = payload["task"] as JsonObject;
         var completionTarget =

@@ -260,7 +260,8 @@ internal static class CompactPlanValidator
         return result;
     }
 
-    internal static int? Friction(JsonNode? node) => Number(node) is long value && value is >= 0 and <= 100 ? (int)value : null;
+    internal static int? Friction(JsonNode? node) =>
+        Number(node) is long value && value is >= 0 and <= 100 ? (int)value : null;
 
     private static long? Number(JsonNode? node) => CompactCandidateBuilder.Number(node);
 

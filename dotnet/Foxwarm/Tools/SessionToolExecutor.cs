@@ -322,7 +322,8 @@ internal sealed partial class SessionToolExecutor(
                     ["ownerSessionId"] = taskResult["ownerSessionId"]?.DeepClone(),
                 }
                 : response;
-        if (response["sentNotifications"] is JsonNode sent) visible["sentNotifications"] = sent.DeepClone();
+        if (response["sentNotifications"] is JsonNode sent)
+            visible["sentNotifications"] = sent.DeepClone();
         if (response["warning"] is JsonNode warning)
             visible["warning"] = warning.DeepClone();
         if (

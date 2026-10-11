@@ -441,11 +441,29 @@ internal sealed class TaskStore : IDisposable
         {
             var status = Text(args["status"]);
             var where = status is null ? "status IN ('open','active')" : "status=$status";
-            var scoped = Text(args["scope"]) is string scope && scope != "all"
-                ? (scopeSessionIds ?? (scope == "current-session" && actor is not null ? new[] { actor } : Array.Empty<string>())).SelectMany(References).Distinct(StringComparer.Ordinal).ToArray()
-                : null;
+            var scoped =
+                Text(args["scope"]) is string scope && scope != "all"
+                    ? (
+                        scopeSessionIds
+                        ?? (
+                            scope == "current-session" && actor is not null
+                                ? new[] { actor }
+                                : Array.Empty<string>()
+                        )
+                    )
+                        .SelectMany(References)
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray()
+                    : null;
             if (scoped is not null)
-                where += scoped.Length == 0 ? " AND 0" : " AND (createdBySessionId IN (" + string.Join(',', scoped.Select((_, i) => "$scope" + i)) + ") OR ownerSessionId IN (" + string.Join(',', scoped.Select((_, i) => "$scope" + i)) + "))";
+                where +=
+                    scoped.Length == 0
+                        ? " AND 0"
+                        : " AND (createdBySessionId IN ("
+                            + string.Join(',', scoped.Select((_, i) => "$scope" + i))
+                            + ") OR ownerSessionId IN ("
+                            + string.Join(',', scoped.Select((_, i) => "$scope" + i))
+                            + "))";
             var rows = Query(
                 db,
                 $"SELECT id,title,status,parentTaskId,createdByKind,createdBySessionId,ownerSessionId,updatedAt FROM tasks WHERE {where} ORDER BY updatedAt DESC,id LIMIT $limit",
@@ -454,7 +472,12 @@ internal sealed class TaskStore : IDisposable
                 scopeIds: scoped
             );
             rows = rows.Select(CanonicalReferences).ToList();
-            var total = ScalarInt(db, $"SELECT COUNT(*) FROM tasks WHERE {where}", status, scopeIds: scoped);
+            var total = ScalarInt(
+                db,
+                $"SELECT COUNT(*) FROM tasks WHERE {where}",
+                status,
+                scopeIds: scoped
+            );
             return new(
                 TaskJson(
                     new JsonObject
@@ -686,7 +709,12 @@ internal sealed class TaskStore : IDisposable
                     );
                     if (args["note"] is not null)
                         AddNote(db, taskId, actor!, actorKind, Text(args["note"])!, now2);
-                    if (args["note"] is not null && args["notifySession"]?.GetValue<bool>() == true && owner is not null && owner != actor)
+                    if (
+                        args["note"] is not null
+                        && args["notifySession"]?.GetValue<bool>() == true
+                        && owner is not null
+                        && owner != actor
+                    )
                         commentOwner = owner;
                     if (Text(args["status"]) == "active" && Text(task["status"]) != "active")
                         Update(db, taskId, "reminderLastSeq", anchorSeq, "reminderMessageCount", 0);
@@ -849,7 +877,8 @@ internal sealed class TaskStore : IDisposable
         if (id is not null)
             Add(cmd, "$id", id);
         if (scopeIds is not null)
-            for (var i = 0; i < scopeIds.Count; i++) Add(cmd, "$scope" + i, scopeIds[i]);
+            for (var i = 0; i < scopeIds.Count; i++)
+                Add(cmd, "$scope" + i, scopeIds[i]);
         using var r = cmd.ExecuteReader();
         var result = new List<JsonObject>();
         while (r.Read())
@@ -857,7 +886,13 @@ internal sealed class TaskStore : IDisposable
         return result;
     }
 
-    private int ScalarInt(SqliteConnection db, string sql, string? status, string? id = null, IReadOnlyList<string>? scopeIds = null)
+    private int ScalarInt(
+        SqliteConnection db,
+        string sql,
+        string? status,
+        string? id = null,
+        IReadOnlyList<string>? scopeIds = null
+    )
     {
         using var cmd = db.CreateCommand();
         cmd.CommandText = sql;
@@ -866,7 +901,8 @@ internal sealed class TaskStore : IDisposable
         if (id is not null)
             Add(cmd, "$id", id);
         if (scopeIds is not null)
-            for (var i = 0; i < scopeIds.Count; i++) Add(cmd, "$scope" + i, scopeIds[i]);
+            for (var i = 0; i < scopeIds.Count; i++)
+                Add(cmd, "$scope" + i, scopeIds[i]);
         return Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
 
@@ -1085,8 +1121,14 @@ internal sealed class TaskStore : IDisposable
                     "TASK_INVALID_ARGS",
                     $"{key} is not allowed for task {action}."
                 );
-        if (args.ContainsKey("scope") && Text(args["scope"]) is not ("current-session" or "current-agent" or "all"))
-            throw new TaskError("TASK_INVALID_ARGS", "scope must be current-session, current-agent, or all.");
+        if (
+            args.ContainsKey("scope")
+            && Text(args["scope"]) is not ("current-session" or "current-agent" or "all")
+        )
+            throw new TaskError(
+                "TASK_INVALID_ARGS",
+                "scope must be current-session, current-agent, or all."
+            );
         Limit(args, "title", 200);
         Limit(args, "description", 20000);
         Limit(args, "result", 20000);
@@ -1201,8 +1243,14 @@ internal sealed class TaskStore : IDisposable
                     $"{key} is not allowed for user task {action}."
                 );
         }
-        if (args.ContainsKey("scope") && Text(args["scope"]) is not ("current-session" or "current-agent" or "all"))
-            throw new TaskError("TASK_INVALID_ARGS", "scope must be current-session, current-agent, or all.");
+        if (
+            args.ContainsKey("scope")
+            && Text(args["scope"]) is not ("current-session" or "current-agent" or "all")
+        )
+            throw new TaskError(
+                "TASK_INVALID_ARGS",
+                "scope must be current-session, current-agent, or all."
+            );
         Limit(args, "title", 200);
         Limit(args, "description", 20000);
         Limit(args, "taskId", 128);

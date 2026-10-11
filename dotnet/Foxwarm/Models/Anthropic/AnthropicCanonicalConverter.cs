@@ -44,7 +44,15 @@ internal static class AnthropicCanonicalConverter
                     break;
                 case "redacted_thinking":
                     if (SessionWait.Text(block["data"]) is string redacted)
-                        parts.Add(new JsonObject { ["providerMeta"] = new JsonObject { ["redactedThinking"] = redacted } });
+                        parts.Add(
+                            new JsonObject
+                            {
+                                ["providerMeta"] = new JsonObject
+                                {
+                                    ["redactedThinking"] = redacted,
+                                },
+                            }
+                        );
                     break;
                 case "tool_use":
                     var id = SessionWait.Text(block["id"]);
@@ -93,9 +101,13 @@ internal static class AnthropicCanonicalConverter
             ? new JsonObject
             {
                 ["inputTokens"] = Reported(usage["input_tokens"]) is double input
-                    ? System.Text.Json.JsonSerializer.SerializeToNode(input + (Reported(usage["cache_creation_input_tokens"]) ?? 0))
+                    ? System.Text.Json.JsonSerializer.SerializeToNode(
+                        input + (Reported(usage["cache_creation_input_tokens"]) ?? 0)
+                    )
                     : null,
-                ["outputTokens"] = Reported(usage["output_tokens"]) is not null ? usage["output_tokens"]?.DeepClone() : null,
+                ["outputTokens"] = Reported(usage["output_tokens"]) is not null
+                    ? usage["output_tokens"]?.DeepClone()
+                    : null,
                 ["cachedTokens"] = Reported(usage["cache_read_input_tokens"]) is not null
                     ? usage["cache_read_input_tokens"]!.DeepClone()
                     : JsonValue.Create(0),

@@ -21,7 +21,8 @@ internal static class ToolAuthorizationToolDefinition
                     {
                         ["type"] = "string",
                         ["enum"] = new JsonArray("config", "models", "tool-rules"),
-                        ["description"] = "Configuration to replace: config for app settings, models for providers and models, or tool-rules for the instance tool authorization policy.",
+                        ["description"] =
+                            "Configuration to replace: config for app settings, models for providers and models, or tool-rules for the instance tool authorization policy.",
                     },
                     ["filePath"] = new JsonObject
                     {

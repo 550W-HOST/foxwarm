@@ -101,9 +101,16 @@ internal static class AgentToolDefinitions
                         "completed",
                         "cancelled"
                     ),
-                    ["scope"] = Choice("For list, choose tasks created by or assigned to the current Session (default), any Session in the current Agent, or all Sessions and users.", "current-session", "current-agent", "all"),
+                    ["scope"] = Choice(
+                        "For list, choose tasks created by or assigned to the current Session (default), any Session in the current Agent, or all Sessions and users.",
+                        "current-session",
+                        "current-agent",
+                        "all"
+                    ),
                     ["note"] = String("Short progress note to append when updating a task."),
-                    ["result"] = String("Completion summary for a completed task. For long description or result text, use ToolScript to compose the operation so you do not regenerate duplicate content."),
+                    ["result"] = String(
+                        "Completion summary for a completed task. For long description or result text, use ToolScript to compose the operation so you do not regenerate duplicate content."
+                    ),
                     ["notifySession"] = Boolean(
                         "When true, create/assign notify the new owner and, on transfer or release, the previous owner after the change is saved. For update with a note, notify the current owner unless it is the caller. Omitted or false saves without these notifications."
                     ),

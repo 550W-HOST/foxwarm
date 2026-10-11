@@ -123,8 +123,18 @@ public sealed class SessionTurnTests
         await processing.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Single(chat.Calls);
         Assert.Empty(reloaded.Snapshot().Queue);
-        Assert.Contains(reloaded.Snapshot().History, row => row["parts"]!.AsArray().Any(part => part?["system"]?.GetValue<string>() == "passive"));
-        Assert.Contains(reloaded.Snapshot().History, row => row["parts"]!.AsArray().Any(part => part?["text"]?.GetValue<string>() == "ordinary"));
+        Assert.Contains(
+            reloaded.Snapshot().History,
+            row =>
+                row["parts"]!
+                    .AsArray()
+                    .Any(part => part?["system"]?.GetValue<string>() == "passive")
+        );
+        Assert.Contains(
+            reloaded.Snapshot().History,
+            row =>
+                row["parts"]!.AsArray().Any(part => part?["text"]?.GetValue<string>() == "ordinary")
+        );
     }
 
     [Fact]

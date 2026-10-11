@@ -51,7 +51,9 @@ internal static class AnthropicRequestSerializer
                         }
                     );
                 if (SessionWait.Text(part["providerMeta"]?["redactedThinking"]) is string redacted)
-                    blocks.Add(new JsonObject { ["type"] = "redacted_thinking", ["data"] = redacted });
+                    blocks.Add(
+                        new JsonObject { ["type"] = "redacted_thinking", ["data"] = redacted }
+                    );
                 if (SessionWait.Text(part["system"]) is { Length: > 0 } system)
                     blocks.Add(Text(OpenAIRequestText.System(system)));
                 if (SessionWait.Text(part["text"]) is { Length: > 0 } text)

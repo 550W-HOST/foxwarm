@@ -116,7 +116,9 @@ public sealed class CommittedArchiveBoundaryTests
             await manager.LoadMainHostAsync();
             await manager.CreateNamedAsync("main", "main", null, null);
             Assert.Equal("main", Assert.Single(manager.Owners()).Id);
-            Assert.False(await manager.Journal.HasSqliteAuthorityAsync(LlmRequestJournalStore.MigrationId));
+            Assert.False(
+                await manager.Journal.HasSqliteAuthorityAsync(LlmRequestJournalStore.MigrationId)
+            );
         }
     }
 

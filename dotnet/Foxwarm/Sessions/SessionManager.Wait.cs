@@ -30,7 +30,10 @@ internal sealed partial class SessionManager
         if (input == false)
             throw new InvalidDataException("waitForInput must be exactly true when provided.");
         double? seconds = null;
-        if (args.ContainsKey("wakeIfNoActivityAfterSeconds") && args["wakeIfNoActivityAfterSeconds"] is not null)
+        if (
+            args.ContainsKey("wakeIfNoActivityAfterSeconds")
+            && args["wakeIfNoActivityAfterSeconds"] is not null
+        )
         {
             seconds = SessionWait.Number(args["wakeIfNoActivityAfterSeconds"]);
             if (seconds is not double value || !double.IsFinite(value) || value <= 0)

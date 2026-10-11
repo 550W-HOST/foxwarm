@@ -152,14 +152,35 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
             result = copy;
         }
         var requested = result is JsonObject selected ? selected["name"] : result;
-        bool Explicit(string name) => SessionWait.Text(requested) == name
+        bool Explicit(string name) =>
+            SessionWait.Text(requested) == name
             || requested is JsonArray list && list.Any(value => SessionWait.Text(value) == name)
-            || requested is JsonObject map && (SessionWait.Text(map["equals"]) == name
-                || (map["oneOf"] as JsonArray ?? []).Any(value => SessionWait.Text(value) == name));
-        if (Explicit("update_session_snapshot") && ToolAuthorizationEvaluation.ToolMatches(result, "builtin", "update_session_snapshot", null))
-            throw new InvalidDataException("Obsolete builtin update_session_snapshot; migrate to refresh_session_snapshot.");
-        if (Explicit("set_tool_rules") && ToolAuthorizationEvaluation.ToolMatches(result, "builtin", "set_tool_rules", null))
-            throw new InvalidDataException("Obsolete builtin set_tool_rules; migrate to set_config with an explicit target constraint (tool-rules for the former policy setter).");
+            || requested is JsonObject map
+                && (
+                    SessionWait.Text(map["equals"]) == name
+                    || (map["oneOf"] as JsonArray ?? []).Any(value =>
+                        SessionWait.Text(value) == name
+                    )
+                );
+        if (
+            Explicit("update_session_snapshot")
+            && ToolAuthorizationEvaluation.ToolMatches(
+                result,
+                "builtin",
+                "update_session_snapshot",
+                null
+            )
+        )
+            throw new InvalidDataException(
+                "Obsolete builtin update_session_snapshot; migrate to refresh_session_snapshot."
+            );
+        if (
+            Explicit("set_tool_rules")
+            && ToolAuthorizationEvaluation.ToolMatches(result, "builtin", "set_tool_rules", null)
+        )
+            throw new InvalidDataException(
+                "Obsolete builtin set_tool_rules; migrate to set_config with an explicit target constraint (tool-rules for the former policy setter)."
+            );
         return result;
     }
 

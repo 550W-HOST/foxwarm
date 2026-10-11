@@ -360,7 +360,13 @@ public sealed class ToolAuthorizationEffectsTests
         Assert.False(execution.Tools.PolicyUnavailable);
         File.CreateSymbolicLink(Path.Combine(own, "link"), candidate);
         Assert.NotNull(
-            Error(await Call(execution.Tools, "set_config", Obj("""{"target":"tool-rules","filePath":"link"}""")))
+            Error(
+                await Call(
+                    execution.Tools,
+                    "set_config",
+                    Obj("""{"target":"tool-rules","filePath":"link"}""")
+                )
+            )
         );
         Assert.Equal(original, await File.ReadAllBytesAsync(target));
     }

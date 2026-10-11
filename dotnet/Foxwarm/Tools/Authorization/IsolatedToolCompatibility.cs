@@ -93,7 +93,9 @@ internal static class IsolatedToolCompatibility
                         "Obsolete or neutral Agent tool rule identity; use the concrete capability and refresh_session_snapshot."
                     );
                 if (source == "builtin" && tool == "set_tool_rules")
-                    throw new InvalidDataException("Obsolete Agent rule set_tool_rules; review permissions before migrating to set_config, because Agent exact rules cannot constrain target.");
+                    throw new InvalidDataException(
+                        "Obsolete Agent rule set_tool_rules; review permissions before migrating to set_config, because Agent exact rules cannot constrain target."
+                    );
                 var identity =
                     source
                     + "\0"

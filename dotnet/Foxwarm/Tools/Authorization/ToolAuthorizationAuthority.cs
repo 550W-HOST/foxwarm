@@ -231,7 +231,11 @@ public sealed partial class WorkspaceTools
         ];
     }
 
-    internal async Task<byte[]> CaptureConfigCandidateAsync(string raw, bool policy, CancellationToken token)
+    internal async Task<byte[]> CaptureConfigCandidateAsync(
+        string raw,
+        bool policy,
+        CancellationToken token
+    )
     {
         var path = ResolveReadWrite(raw, true);
         if (!RegularFile(path))

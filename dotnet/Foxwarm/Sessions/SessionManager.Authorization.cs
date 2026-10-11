@@ -249,33 +249,64 @@ internal sealed partial class SessionManager
         ToolRegistry.Keys(args, ["target", "filePath"]);
         var path = ToolRegistry.Text(args, "filePath");
         var target = ToolRegistry.Text(args, "target");
-        if (target is not ("config" or "models" or "tool-rules") || string.IsNullOrWhiteSpace(path) || Encoding.UTF8.GetByteCount(path) > 4096)
-            throw new InvalidDataException("set_config requires target (config, models, or tool-rules) and one nonempty filePath within 4096 UTF-8 bytes.");
+        if (
+            target is not ("config" or "models" or "tool-rules")
+            || string.IsNullOrWhiteSpace(path)
+            || Encoding.UTF8.GetByteCount(path) > 4096
+        )
+            throw new InvalidDataException(
+                "set_config requires target (config, models, or tool-rules) and one nonempty filePath within 4096 UTF-8 bytes."
+            );
         async Task Authorize(CancellationToken current)
         {
-            await AuthorizeToolAsync(owner, new("set_config", "builtin", "set_config", args), files, current);
-            await AuthorizeToolAsync(owner, new("set_config", "node", "read", new JsonObject { ["filePath"] = path }), files, current);
+            await AuthorizeToolAsync(
+                owner,
+                new("set_config", "builtin", "set_config", args),
+                files,
+                current
+            );
+            await AuthorizeToolAsync(
+                owner,
+                new("set_config", "node", "read", new JsonObject { ["filePath"] = path }),
+                files,
+                current
+            );
         }
         await Authorize(token);
         var bytes = await files.CaptureConfigCandidateAsync(path, target == "tool-rules", token);
         JsonObject installed;
         try
         {
-        if (models.ConfigurationOwner is { } configuration)
-            installed = await configuration.InstallAsync(target, _ => Task.FromResult(bytes), authorization, Authorize, token);
-        else if (target == "tool-rules")
-        {
-            // Constant-model hosts have no Setup/configuration owner, but retain policy installation.
-            await Authorize(token);
-            await authorization.InstallAsync(bytes, token);
-            installed = Foxwarm.Models.ModelConfiguration.Installed(target, ["tool-rules"], [], []);
-        }
-        else
-            throw new NotSupportedException("Configuration installation is unavailable on this host.");
+            if (models.ConfigurationOwner is { } configuration)
+                installed = await configuration.InstallAsync(
+                    target,
+                    _ => Task.FromResult(bytes),
+                    authorization,
+                    Authorize,
+                    token
+                );
+            else if (target == "tool-rules")
+            {
+                // Constant-model hosts have no Setup/configuration owner, but retain policy installation.
+                await Authorize(token);
+                await authorization.InstallAsync(bytes, token);
+                installed = Foxwarm.Models.ModelConfiguration.Installed(
+                    target,
+                    ["tool-rules"],
+                    [],
+                    []
+                );
+            }
+            else
+                throw new NotSupportedException(
+                    "Configuration installation is unavailable on this host."
+                );
         }
         catch (Exception error) when (error is InvalidDataException or DecoderFallbackException)
         {
-            throw new InvalidDataException($"Invalid {target} YAML candidate. The active file was not changed.");
+            throw new InvalidDataException(
+                $"Invalid {target} YAML candidate. The active file was not changed."
+            );
         }
         return new JsonObject { ["output"] = installed.ToJsonString() };
     }
