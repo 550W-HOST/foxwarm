@@ -117,13 +117,14 @@ internal sealed class ToolRegistry(Foxwarm.McpClient mcp, Func<SessionOwner, str
         return new(invocation, source, name, targetArgs);
     }
 
-    internal async Task<JsonObject> ExecuteAsync(
+    internal async Task<JsonNode?> ExecuteAsync(
         ResolvedTool resolved,
         SessionToolExecutor owner,
         CancellationToken cancellationToken
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var generation = owner.Hosted.McpGeneration;
         await owner.AuthorizeAsync(resolved, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         var result =
@@ -132,7 +133,9 @@ internal sealed class ToolRegistry(Foxwarm.McpClient mcp, Func<SessionOwner, str
                     resolved.Server!,
                     resolved.Name,
                     resolved.Args,
-                    cancellationToken
+                    cancellationToken,
+                    owner.Hosted,
+                    generation
                 )
                 : await entries[resolved.Name].Execute(owner, resolved.Args, cancellationToken);
         if (owner.Programmatic)

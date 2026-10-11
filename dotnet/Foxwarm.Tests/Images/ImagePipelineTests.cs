@@ -719,7 +719,7 @@ public sealed class ImagePipelineTests
             ["inlineDataItems"] = new JsonArray(image),
         };
         var guarded = await Foxwarm.Tools.ToolOutputGuard.GuardAsync(response, temp.Path, "large");
-        Assert.NotNull(guarded["inlineDataItems"]);
+        Assert.NotNull(guarded!["inlineDataItems"]);
         Assert.False(Directory.Exists(Path.Combine(temp.Path, ".temp", "tool-output")));
         var message = Message(
             "tool",
@@ -754,7 +754,7 @@ public sealed class ImagePipelineTests
             temp.Path,
             "large-text"
         );
-        Assert.NotNull(trimmed["inlineData"]);
+        Assert.NotNull(trimmed!["inlineData"]);
         Assert.True(trimmed["outputTruncated"]!.GetValue<bool>());
         Assert.DoesNotContain(
             Convert.ToBase64String(bytes),

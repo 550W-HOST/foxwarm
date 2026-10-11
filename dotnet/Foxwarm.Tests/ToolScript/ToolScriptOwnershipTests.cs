@@ -28,12 +28,11 @@ public sealed class ToolScriptOwnershipTests
         return dispatcher;
     }
 
-    private static Task<JsonObject> Call(
+    private static async Task<JsonObject> Call(
         SessionToolExecutor dispatcher,
         string name,
         JsonObject args
-    ) =>
-        dispatcher.ExecuteAsync(
+    ) => (await dispatcher.ExecuteAsync(
             new JsonObject
             {
                 ["id"] = "ownership",
@@ -41,7 +40,7 @@ public sealed class ToolScriptOwnershipTests
                 ["args"] = args,
             },
             default
-        );
+        ))!.AsObject();
 
     [Fact]
     public async Task Self_move_then_nested_pause_creates_new_owner_record_without_rewriting_outer_or_literal_caller()

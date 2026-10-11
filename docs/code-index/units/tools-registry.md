@@ -10,12 +10,12 @@ Discovers concrete tools, projects model definitions, applies output/control pol
 
 - `ToolRegistry` combines builtins, MCP, provider-hosted definitions, and permitted Node capabilities into one discovered set with stable names/schemas.
 - `UnifiedToolDefinitions`/`UnifiedTools.Schema` publish model-facing JSON; `UnifiedTools` resolves calls and carries Session/agent/request scope into execution.
-- `SessionToolExecutor` dispatches definitions, commits observation/memory/wait/settings/timer/compact changes through SessionManager/save-lane APIs, and returns typed tool results; the `session` tool resolves targeted status through the real Main owner and applies parent changes through catalog presentation mutation; its ToolScript partial bridges to MainToolScript.
+- `SessionToolExecutor` dispatches definitions, commits observation/memory/wait/settings/timer/compact changes through SessionManager/save-lane APIs, and returns source JSON values with separately typed trusted receipts; the `session` tool resolves targeted status through the real Main owner and applies parent changes through catalog presentation mutation; its ToolScript partial bridges to MainToolScript.
 - `ToolCallControls`, `ToolOutputGuard`, `BoundedTextExcerpt`, and `ToolResponseFormatting` enforce call ordering, size/truncation, status/error envelopes, and provider-visible output boundaries.
 
 ## Contract and side effects
 
-Definition discovery is not authorization: execution calls `ToolAuthorizationEvaluation` before local/MCP/Node effects. Tools that change Session state use owner/save-lane boundaries; a model-visible success is not emitted before the underlying operation reports its committed/accepted outcome. Provider-hosted tools remain provider-scoped.
+Definition discovery is not authorization: execution calls `ToolAuthorizationEvaluation` before local/MCP/Node effects. Tools that change Session state use owner/save-lane boundaries; a model-visible success is not emitted before the underlying operation reports its committed/accepted outcome. Provider-hosted tools remain provider-scoped. JSON source values and model/history projection follow [the cross-module tool contract](../threads/tools-permissions-and-exec.md#outbound-mcp-values-and-trusted-control).
 
 ## Tests
 

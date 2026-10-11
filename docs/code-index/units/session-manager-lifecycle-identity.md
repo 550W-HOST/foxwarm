@@ -8,7 +8,7 @@ Coordinates create/fork/clear/delete, deletion claims, canonical identity moves,
 
 ## Stable methods and callers
 
-Lifecycle methods claim exact identity/deletion gates before changing owner/store/catalog. Identity move validates Archive reservation/ledger evidence, renames bound artifacts, rebinds save-lane/store identity, and publishes aliases only after committed evidence. Delete drains/cancels runtime work, removes active authority/catalog artifacts in declared order, and reports partial cleanup without rewriting immutable Archive history.
+Lifecycle methods claim exact identity/deletion gates before changing owner/store/catalog. Identity move validates Archive reservation/ledger evidence, renames bound artifacts, rebinds save-lane/store identity, and publishes aliases only after committed evidence. Identity move and deletion invalidate the owner-scoped [outbound MCP bindings](./mcp.md#connection-and-cancellation-contract). Delete drains/cancels runtime work, removes active authority/catalog artifacts in declared order, and reports partial cleanup without rewriting immutable Archive history.
 
 ## Contract and side effects
 

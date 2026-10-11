@@ -502,7 +502,8 @@ internal static class CompactCandidateBuilder
                 );
             if (part["functionResponse"] is JsonObject response)
             {
-                var value = response["response"] as JsonObject;
+                var source = response["response"];
+                var value = source as JsonObject;
                 var output =
                     value?["error"] is JsonNode error
                         ? "ERROR: "
@@ -517,7 +518,7 @@ internal static class CompactCandidateBuilder
                         ? textOutput
                     : value?["output"]?.ToJsonString()
                         ?? value?["content"]?.ToJsonString()
-                        ?? value?.ToJsonString()
+                        ?? source?.ToJsonString()
                         ?? "";
                 pieces.Add($"[tool:{response["name"]?.GetValue<string>() ?? "unknown"}] {output}");
             }

@@ -1164,7 +1164,7 @@ internal sealed class BarrierToolExecutor : ITurnToolExecutor
 
     public void Release() => release.TrySetResult(true);
 
-    public async Task<JsonObject> ExecuteAsync(
+    public async Task<JsonNode?> ExecuteAsync(
         JsonObject functionCall,
         CancellationToken cancellationToken
     )
@@ -1184,14 +1184,14 @@ internal sealed class RecordingToolExecutor(JsonObject? response = null) : ITurn
     private int invocations;
     public int Invocations => Volatile.Read(ref invocations);
 
-    public Task<JsonObject> ExecuteAsync(
+    public Task<JsonNode?> ExecuteAsync(
         JsonObject functionCall,
         CancellationToken cancellationToken
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
         Interlocked.Increment(ref invocations);
-        return Task.FromResult((JsonObject)response.DeepClone());
+        return Task.FromResult<JsonNode?>((JsonObject)response.DeepClone());
     }
 }
 

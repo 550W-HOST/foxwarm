@@ -16,7 +16,7 @@ Callers: `WebUIChannel.Images/Files`, `PersistentSessionAuthorityStore.LoadAsync
 
 ## Contract and side effects
 
-A transport reference is not itself an authority record: canonical blob identity and ownership remain in `ImageBlobStore`/Session metadata. Load externalization is tolerant for existing stored data where the current caller requests non-strict hydration; provider serializers must not mutate active history while adapting image parts. Browser URLs are authenticated host routes, not public filesystem paths.
+A transport reference is not itself an authority record: canonical blob identity and ownership remain in `ImageBlobStore`/Session metadata. Load externalization is tolerant for existing stored data where the current caller requests non-strict hydration; provider serializers must not mutate active history while adapting image parts. Browser URLs are authenticated host routes, not public filesystem paths. Externalized MCP image occurrences retain their per-image `annotations` and `_meta` beside the reference, including the native ToolScript projection; audio and binary resources are not routed to an image decoder.
 
 ## Tests
 

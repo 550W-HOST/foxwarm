@@ -23,6 +23,10 @@ internal sealed partial class SessionOwner
 
     private sealed record OwnerIdentity(string Id, string Agent);
 
+    private long mcpGeneration;
+    internal long McpGeneration => Interlocked.Read(ref mcpGeneration);
+    internal void AdvanceMcpGeneration() => Interlocked.Increment(ref mcpGeneration);
+
     private OwnerIdentity identity;
     private SessionEntry? entry;
     public string Id => Volatile.Read(ref identity).Id;

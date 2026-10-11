@@ -25,6 +25,14 @@ Definition discovery is not authorization. Invalid/ambiguous rules fail closed; 
 
 `MainNativePaths` resolves roots; `FileToolCore`/`WorkspaceTools` enforce bounded reads/writes/patches; `LocalExecManager` owns cwd/env/process/parallel/persistent exec; `FileDeliveryDefinitions` produces authenticated deployment-relative delivery. Retry-safe write refs and post-effect ambiguity are preserved rather than guessed away.
 
+## Outbound MCP values and trusted control
+
+The [outbound MCP client](../units/mcp.md) receives an actual trusted Session owner from unified discovery/execution, including nested ToolScript. Its SDK bindings are transient connection authority, not Session history or a model-supplied caller identity. Real configuration changes, identity moves, deletion, and host shutdown invalidate their corresponding lifetimes.
+
+`McpClient.CallAsync`, `ToolRegistry.ExecuteAsync`, `TurnToolExecution.Response`, `ITurnToolExecutor`, and ToolScript's `CallTool` carry JSON values, including arrays, scalars, and null. MCP [Source normalization](../units/src-mcp-client.md#d-mcp-source-normalization) happens once at that boundary. Native ToolScript receives the source value without an invented `output` wrapper; ordinary model history retains objects/arrays and wraps only scalar/null values for the established model projection. Image extraction/reference hydration and normal text truncation still apply; completed audio/binary resource content is retained as data.
+
+`TurnToolReceipt` remains a separately typed trusted executor result. Untrusted MCP result fields do not create send/task/wait receipts, mutate caller identity, supply local resolved paths, or trigger a control operation. Provider output formatting is a history projection; it does not replace the source value or perform MCP normalization.
+
 ## Canonical units and tests
 
 - [Unified tools](../units/tools-registry.md)

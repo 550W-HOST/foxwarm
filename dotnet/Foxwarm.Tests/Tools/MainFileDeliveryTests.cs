@@ -69,12 +69,11 @@ public sealed class MainFileDeliveryTests
             return f;
         }
 
-        internal Task<JsonObject> Call(
+        internal async Task<JsonObject> Call(
             string name,
             JsonObject args,
             CancellationToken token = default
-        ) =>
-            Tools.ExecuteAsync(
+        ) => (await Tools.ExecuteAsync(
                 new JsonObject
                 {
                     ["id"] = Guid.NewGuid().ToString("N"),
@@ -82,7 +81,7 @@ public sealed class MainFileDeliveryTests
                     ["args"] = args.DeepClone(),
                 },
                 token
-            );
+            ))!.AsObject();
 
         internal async Task<JsonObject> Reference(
             string id,

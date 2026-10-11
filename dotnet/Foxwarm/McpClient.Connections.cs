@@ -7,138 +7,256 @@ namespace Foxwarm;
 
 internal sealed partial class McpClient
 {
-    private sealed record Connection(SdkClient Client, IClientTransport Transport)
-        : IAsyncDisposable
+    private sealed class Connection(SdkClient client, IClientTransport transport) : IAsyncDisposable
     {
-        public async ValueTask DisposeAsync()
+        internal SdkClient Client => client;
+        private Task? disposal;
+        public ValueTask DisposeAsync()
         {
-            try
-            {
-                await Client.DisposeAsync();
-            }
+            lock (this)
+                return new(disposal ??= CloseAsync());
+        }
+        private async Task CloseAsync()
+        {
+            try { await client.DisposeAsync(); }
             finally
             {
-                if (Transport is IAsyncDisposable disposable)
+                if (transport is IAsyncDisposable disposable)
                     await disposable.DisposeAsync();
             }
         }
     }
 
-    private sealed class PoolEntry(string key)
+    // Owner is a trusted in-process Session lifetime, never a supplied Session ID.
+    private sealed record ConnectionKey(string Server, SessionOwner? Owner, long Generation, string? Process);
+    private sealed class PoolEntry
     {
-        internal readonly string Key = key;
-        internal readonly TaskCompletionSource<Connection> Connected = new(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
+        internal readonly ConnectionKey Key;
+        internal readonly JsonObject Config;
+        internal readonly CancellationTokenSource Lifetime;
+        internal readonly CancellationToken Token;
+        internal PoolEntry(ConnectionKey key, JsonObject config, CancellationToken shutdown)
+        {
+            Key = key;
+            Config = config;
+            Lifetime = CancellationTokenSource.CreateLinkedTokenSource(shutdown);
+            Token = Lifetime.Token;
+        }
+        internal readonly TaskCompletionSource<Connection> Connected = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal int Active;
         internal bool Invalid;
+        internal bool Retiring;
         internal CancellationTokenSource? Idle;
-        internal Task? IdleTask;
     }
-
     private readonly object poolGate = new();
-    private readonly Dictionary<string, PoolEntry> pool = new(StringComparer.Ordinal);
+    private readonly Dictionary<ConnectionKey, PoolEntry> pool = [];
     private readonly HashSet<Task> closing = [];
 
-    private async Task<T> WithClientAsync<T>(
-        string server,
-        JsonObject config,
-        CancellationToken token,
-        Func<SdkClient, Task<T>> operation
-    )
+    private static string ProcessSettings(JsonObject config)
     {
-        if (SessionWait.Text(config["transport"]) != "stdio")
-        {
-            await using var connection = await ConnectAsync(server, config, token);
-            try
-            {
-                return await operation(connection.Client);
-            }
-            catch (OperationCanceledException)
-            {
-                await Task.Delay(100);
-                throw;
-            }
-        }
-        var connectionSettings = new JsonObject();
+        var settings = new JsonObject();
         foreach (var key in new[] { "command", "args", "env", "cwd", "stderr" })
-            connectionSettings[key] = config[key]?.DeepClone();
-        var poolKey = server + ":" + connectionSettings.ToJsonString();
-        PoolEntry entry;
+            settings[key] = config[key]?.DeepClone();
+        return settings.ToJsonString();
+    }
+
+    private async Task<T> WithClientAsync<T>(string server, CancellationToken token,
+        SessionOwner? owner, long? ownerGeneration, Func<SdkClient, JsonObject, CancellationToken, Task<T>> operation)
+    {
+        PoolEntry? entry = null;
+        JsonObject config;
         var create = false;
         lock (poolGate)
         {
-            if (shutdown.IsCancellationRequested)
-                throw new OperationCanceledException(token);
-            if (!pool.TryGetValue(poolKey, out entry!) || entry.Invalid)
+            token.ThrowIfCancellationRequested();
+            shutdown.Token.ThrowIfCancellationRequested();
+            using var admission = owner?.Entry.AdmitMutation();
+            if (owner is not null)
             {
-                entry = new(poolKey);
-                pool[poolKey] = entry;
-                create = true;
+                owner.Entry.RequireIdentityAuthority();
+                if (owner.Entry.Retired || owner.McpGeneration != ownerGeneration)
+                    throw new InvalidOperationException("MCP caller lifetime changed before execution.");
             }
-            entry.Active++;
-            entry.Idle?.Cancel();
-            entry.Idle = null;
+            config = configuration.Get(server);
+            var stdio = SessionWait.Text(config["transport"]) == "stdio";
+            if (stdio || owner is not null)
+            {
+                var key = new ConnectionKey(server, stdio ? null : owner,
+                    stdio ? 0 : ownerGeneration!.Value, stdio ? ProcessSettings(config) : null);
+                if (pool.TryGetValue(key, out entry) && !MatchesConfiguration(entry, config))
+                    InvalidateEntry(entry, preserveActiveStdio: true);
+                if (entry is null || entry.Invalid)
+                {
+                    entry = new(key, config, shutdown.Token);
+                    pool[key] = entry;
+                    create = true;
+                }
+                entry.Active++;
+                entry.Idle?.Cancel();
+                entry.Idle = null;
+            }
+        }
+        // Unowned administrative probes are short-lived, not an anonymous shared caller.
+        if (entry is null)
+        {
+            await using var connection = await ConnectAsync(server, config, token);
+            return await InvokeAsync(connection.Client, token);
         }
         if (create)
-            _ = ConnectEntryAsync(entry, server, config);
+            TrackClosing(ConnectEntryAsync(entry));
+        async Task<T> InvokeAsync(SdkClient client, CancellationToken requestToken)
+        {
+            try { return await operation(client, config, requestToken); }
+            catch (OperationCanceledException) when (requestToken.IsCancellationRequested) { throw; }
+            catch (Exception error)
+            {
+                // Use the exact configuration which supplied this connection's credentials,
+                // even if a concurrent mutation has already published another configuration.
+                throw new InvalidOperationException(SafeError(error.Message, config));
+            }
+        }
+        var cancelled = false;
         try
         {
-            var connection = await entry.Connected.Task.WaitAsync(token);
-            return await operation(connection.Client);
+            using var request = CancellationTokenSource.CreateLinkedTokenSource(token, entry.Token);
+            var connection = await entry.Connected.Task.WaitAsync(request.Token);
+            // Lifecycle invalidation can cancel a lease; ordinary Stop only cancels this request.
+            request.Token.ThrowIfCancellationRequested();
+            return await InvokeAsync(connection.Client, request.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            cancelled = true;
+            if (entry.Token.IsCancellationRequested && !token.IsCancellationRequested)
+                throw new InvalidOperationException("MCP connection was invalidated; started effects may have occurred and were not reversed.");
+            throw;
         }
         finally
         {
             lock (poolGate)
             {
                 entry.Active--;
+                if (entry.Active == 0 && entry.Retiring)
+                {
+                    entry.Retiring = false;
+                    CloseEntry(entry);
+                }
                 if (entry.Active == 0 && !entry.Invalid && !shutdown.IsCancellationRequested)
                 {
-                    var idle = new CancellationTokenSource();
-                    entry.Idle = idle;
-                    entry.IdleTask = IdleCloseAsync(entry, idle);
-                    TrackClosing(entry.IdleTask);
+                    if (cancelled && entry.Key.Process is null)
+                        InvalidateEntry(entry);
+                    else if (entry.Key.Process is not null)
+                    {
+                        var idle = new CancellationTokenSource();
+                        entry.Idle = idle;
+                        TrackClosing(IdleCloseAsync(entry, idle));
+                    }
                 }
             }
         }
     }
 
-    private async Task ConnectEntryAsync(PoolEntry entry, string server, JsonObject config)
+    private async Task ConnectEntryAsync(PoolEntry entry)
     {
         try
         {
-            var connection = await ConnectAsync(server, config, shutdown.Token);
-            entry.Connected.TrySetResult(connection);
-            _ = ObserveDisconnectAsync(entry, connection);
+            var connection = await ConnectAsync(entry.Key.Server, entry.Config, entry.Token);
+            lock (poolGate)
+            {
+                if (!entry.Invalid && !entry.Lifetime.IsCancellationRequested
+                    && MatchesConfiguration(entry, CurrentConfiguration(entry.Key.Server)))
+                {
+                    entry.Connected.TrySetResult(connection);
+                    TrackClosing(ObserveDisconnectAsync(entry, connection));
+                    return;
+                }
+                InvalidateEntry(entry);
+            }
+            await connection.DisposeAsync();
+            entry.Connected.TrySetCanceled();
         }
         catch (Exception error)
         {
-            lock (poolGate)
-            {
-                entry.Invalid = true;
-                if (pool.GetValueOrDefault(entry.Key) == entry)
-                    pool.Remove(entry.Key);
-            }
             entry.Connected.TrySetException(error);
+            lock (poolGate)
+                InvalidateEntry(entry);
         }
     }
 
     private async Task ObserveDisconnectAsync(PoolEntry entry, Connection connection)
     {
-        try
-        {
-            await connection.Client.Completion;
-        }
+        try { await connection.Client.Completion; }
         catch { }
         lock (poolGate)
+            InvalidateEntry(entry);
+    }
+
+    // Called under poolGate. Cancellation fences initialization and removes the binding
+    // before a subsequent acquisition; SDK disposal owns any HTTP DELETE.
+    private void InvalidateEntry(PoolEntry entry, bool preserveActiveStdio = false)
+    {
+        if (entry.Invalid)
+            return;
+        entry.Invalid = true;
+        entry.Idle?.Cancel();
+        if (pool.GetValueOrDefault(entry.Key) == entry)
+            pool.Remove(entry.Key);
+        // A captured, established stdio process may finish admitted requests after a
+        // process-key change. It cannot be acquired again or published from late init.
+        if (preserveActiveStdio && entry.Key.Process is not null && entry.Active > 0 && entry.Connected.Task.IsCompletedSuccessfully)
         {
-            if (entry.Invalid)
-                return;
-            entry.Invalid = true;
-            entry.Idle?.Cancel();
-            if (pool.GetValueOrDefault(entry.Key) == entry)
-                pool.Remove(entry.Key);
-            TrackClosing(connection.DisposeAsync().AsTask());
+            entry.Retiring = true;
+            return;
+        }
+        CloseEntry(entry);
+    }
+
+    private void CloseEntry(PoolEntry entry)
+    {
+        entry.Lifetime.Cancel();
+        TrackClosing(CloseEntryAsync(entry));
+    }
+
+    private static async Task CloseEntryAsync(PoolEntry entry)
+    {
+        try
+        {
+            var connection = await entry.Connected.Task;
+            await connection.DisposeAsync();
+        }
+        catch { }
+        finally { entry.Lifetime.Dispose(); }
+    }
+
+    internal void InvalidateOwner(SessionOwner owner)
+    {
+        lock (poolGate)
+        {
+            owner.AdvanceMcpGeneration();
+            foreach (var entry in pool.Values.Where(entry => ReferenceEquals(entry.Key.Owner, owner)).ToArray())
+                InvalidateEntry(entry);
+        }
+    }
+
+    private JsonObject? CurrentConfiguration(string server)
+    {
+        try { return configuration.Get(server); }
+        catch (InvalidDataException) { return null; }
+    }
+
+    private static bool MatchesConfiguration(PoolEntry entry, JsonObject? current) =>
+        current is not null && (entry.Key.Process is null
+            ? JsonNode.DeepEquals(entry.Config, current)
+            : SessionWait.Text(current["transport"]) == "stdio" && entry.Key.Process == ProcessSettings(current));
+
+    private void InvalidateServer(string server)
+    {
+        lock (poolGate)
+        {
+            var current = CurrentConfiguration(server);
+            foreach (var entry in pool.Values.Where(entry => entry.Key.Server == server).ToArray())
+                if (!MatchesConfiguration(entry, current))
+                    InvalidateEntry(entry, preserveActiveStdio: true);
         }
     }
 
@@ -148,22 +266,11 @@ internal sealed partial class McpClient
         {
             await Task.Delay(TimeSpan.FromSeconds(60), idle.Token);
             lock (poolGate)
-            {
-                if (entry.Active != 0 || entry.Idle != idle || entry.Invalid)
-                    return;
-                entry.Invalid = true;
-                if (pool.GetValueOrDefault(entry.Key) == entry)
-                    pool.Remove(entry.Key);
-            }
-            var connection = await entry.Connected.Task;
-            await connection.DisposeAsync();
+                if (entry.Active == 0 && entry.Idle == idle && !entry.Invalid)
+                    InvalidateEntry(entry);
         }
         catch (OperationCanceledException) { }
-        catch { }
-        finally
-        {
-            idle.Dispose();
-        }
+        finally { idle.Dispose(); }
     }
 
     private async Task<Connection> ConnectAsync(
@@ -223,6 +330,7 @@ internal sealed partial class McpClient
                             ?? throw new InvalidDataException("MCP HTTP requires url.")
                     ),
                     AdditionalHeaders = headers,
+                    OwnsSession = true,
                     TransportMode = SessionWait.Text(config["transport"]) switch
                     {
                         "streamable-http" => HttpTransportMode.StreamableHttp,
@@ -241,11 +349,13 @@ internal sealed partial class McpClient
             );
             return new(client, transport);
         }
-        catch
+        catch (Exception error)
         {
             if (transport is IAsyncDisposable disposable)
                 await disposable.DisposeAsync();
-            throw;
+            if (error is OperationCanceledException && token.IsCancellationRequested)
+                throw;
+            throw new InvalidOperationException(SafeError(error.Message, config));
         }
     }
 
@@ -254,46 +364,30 @@ internal sealed partial class McpClient
         lock (poolGate)
             if (!task.IsCompleted)
                 closing.Add(task);
-        _ = task.ContinueWith(
-            completed =>
-            {
-                _ = completed.Exception;
-                lock (poolGate)
-                    closing.Remove(completed);
-            },
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default
-        );
+        _ = task.ContinueWith(completed =>
+        {
+            _ = completed.Exception;
+            lock (poolGate)
+                closing.Remove(completed);
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
     private async Task CloseConnectionsAsync()
     {
-        PoolEntry[] entries;
         lock (poolGate)
+            foreach (var entry in pool.Values.ToArray())
+                InvalidateEntry(entry);
+        // Disconnect observers complete as the SDK clients are disposed. Initializers are
+        // included so an invalidated late connection cannot outlive host shutdown.
+        while (true)
         {
-            entries = pool.Values.ToArray();
-            pool.Clear();
-            foreach (var entry in entries)
-            {
-                entry.Invalid = true;
-                entry.Idle?.Cancel();
-            }
-        }
-        foreach (var entry in entries)
-            try
-            {
-                var connection = await entry.Connected.Task;
-                await connection.DisposeAsync();
-            }
+            Task[] pending;
+            lock (poolGate)
+                pending = closing.ToArray();
+            if (pending.Length == 0)
+                return;
+            try { await Task.WhenAll(pending); }
             catch { }
-        Task[] pending;
-        lock (poolGate)
-            pending = closing.ToArray();
-        try
-        {
-            await Task.WhenAll(pending);
         }
-        catch { }
     }
 }

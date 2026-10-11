@@ -53,7 +53,7 @@ public interface ISessionChatService : IChatService
 
 public interface ITurnToolExecutor
 {
-    Task<JsonObject> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken);
+    Task<JsonNode?> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken);
 }
 
 /// <summary>A successful handoff ends only after its complete paired tool batch is committed.</summary>
@@ -68,14 +68,14 @@ public interface ITurnToolControl
 
 public sealed class UnsupportedTurnToolExecutor : ITurnToolExecutor
 {
-    public Task<JsonObject> ExecuteAsync(
+    public Task<JsonNode?> ExecuteAsync(
         JsonObject functionCall,
         CancellationToken cancellationToken
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var name = functionCall["name"]?.GetValue<string>() ?? "";
-        return Task.FromResult(ToolError("unknown_tool", $"Unknown tool: {name}"));
+        return Task.FromResult<JsonNode?>(ToolError("unknown_tool", $"Unknown tool: {name}"));
     }
 
     public static JsonObject ToolError(string type, string message) =>

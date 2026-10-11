@@ -79,13 +79,13 @@ public sealed class ExecParallelTests
             Assert.Equal("", tools.CurrentCallId);
             releases["second"].SetResult();
             var secondResult = await second;
-            Assert.Equal("second", secondResult.Response["output"]!.GetValue<string>());
+            Assert.Equal("second", secondResult.Response!["output"]!.GetValue<string>());
             Assert.NotNull(secondResult.Timing);
             Assert.True(owner.ToolActive);
             Assert.False(first.IsCompleted);
             releases["first"].SetResult();
             var firstResult = await first;
-            Assert.Equal("first", firstResult.Response["output"]!.GetValue<string>());
+            Assert.Equal("first", firstResult.Response!["output"]!.GetValue<string>());
             Assert.NotNull(firstResult.Timing);
             Assert.False(owner.ToolActive);
             Assert.Equal("", tools.CurrentCallId);

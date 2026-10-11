@@ -68,8 +68,8 @@ function peer() {
       if (kind === 'resource') return { content: [{ type: 'resource', resource: { uri: 'test://owned/resource', mimeType: 'text/plain', text: 'RESOURCE-TEXT', _meta: { label } } }] }
       if (kind === 'image' || kind === 'audio' || kind === 'blob') {
         await writeFile(join(root, 'effect-' + tag + '.txt'), 'REMOTE-EFFECT-COMPLETED')
-        const data = Buffer.from('BINARY-MUST-NOT-ENTER-PROVIDER-TEXT').toString('base64')
-        return { content: [kind === 'blob' ? { type: 'resource', resource: { uri: 'test://owned/binary', mimeType: 'application/octet-stream', blob: data } } : { type: kind, mimeType: kind === 'audio' ? 'audio/wav' : 'image/png', data }] }
+        const data = kind === 'image' ? 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nS0AAAAASUVORK5CYII=' : Buffer.from('SYNTHETIC-BINARY-CONTENT').toString('base64')
+        return { content: [...(kind === 'image' ? [{ type: 'text', text: 'IMAGE-EXPLANATION' }] : []), kind === 'blob' ? { type: 'resource', resource: { uri: 'test://owned/binary', mimeType: 'application/octet-stream', blob: data } } : { type: kind, mimeType: kind === 'audio' ? 'audio/wav' : 'image/png', data }] }
       }
       throw new McpError(ErrorCode.InvalidParams, 'Unknown result case')
     }

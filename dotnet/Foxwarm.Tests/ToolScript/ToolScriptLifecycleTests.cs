@@ -11,7 +11,7 @@ public sealed class ToolScriptLifecycleTests
 {
     private static ToolScriptContext Context(
         ScriptFixture f,
-        Func<JsonObject, ToolScriptDataBudget, CancellationToken, Task<JsonObject>>? call = null
+        Func<JsonObject, ToolScriptDataBudget, CancellationToken, Task<JsonNode?>>? call = null
     ) =>
         new(
             f.Owner,
@@ -296,7 +296,7 @@ public sealed class ToolScriptLifecycleTests
                 (_, _, _) =>
                 {
                     calls++;
-                    return Task.FromResult(new JsonObject { ["value"] = 0 });
+                    return Task.FromResult<JsonNode?>(new JsonObject { ["value"] = 0 });
                 }
             ),
             default
@@ -453,7 +453,7 @@ public sealed class ToolScriptLifecycleTests
                 (_, _, _) =>
                 {
                     calls++;
-                    return Task.FromResult(new JsonObject());
+                    return Task.FromResult<JsonNode?>(new JsonObject());
                 }
             ),
             default
@@ -529,7 +529,7 @@ public sealed class ToolScriptLifecycleTests
                 (_, _, _) =>
                 {
                     calls++;
-                    return Task.FromResult(new JsonObject());
+                    return Task.FromResult<JsonNode?>(new JsonObject());
                 }
             ),
             default

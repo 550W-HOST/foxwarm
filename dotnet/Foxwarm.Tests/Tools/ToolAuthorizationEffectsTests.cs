@@ -100,8 +100,7 @@ public sealed class ToolAuthorizationEffectsTests
         return (tools, files, mcp, registry);
     }
 
-    private static Task<JsonObject> Call(SessionToolExecutor tools, string name, JsonObject args) =>
-        tools.ExecuteAsync(
+    private static async Task<JsonObject> Call(SessionToolExecutor tools, string name, JsonObject args) => (await tools.ExecuteAsync(
             new JsonObject
             {
                 ["id"] = Guid.NewGuid().ToString("N"),
@@ -109,7 +108,7 @@ public sealed class ToolAuthorizationEffectsTests
                 ["args"] = args,
             },
             CancellationToken.None
-        );
+        ))!.AsObject();
 
     private static string? Error(JsonObject response) =>
         response["error"]?["type"]?.GetValue<string>();
@@ -614,7 +613,7 @@ public sealed class ToolAuthorizationEffectsTests
             execution.Tools,
             CancellationToken.None
         );
-        Assert.True(result["retained"]!.GetValue<bool>());
+        Assert.True(result!["retained"]!.GetValue<bool>());
         Assert.True(File.Exists(Path.Combine(peer, "effect-direct")));
         Assert.Null(
             Error(
@@ -636,7 +635,7 @@ public sealed class ToolAuthorizationEffectsTests
             default
         );
         Assert.Null(opaque.ResolvedPaths);
-        Assert.NotNull(opaque.Response["__meta"]?["resolvedPaths"]);
+        Assert.NotNull(opaque.Response!["__meta"]?["resolvedPaths"]);
         await Policy(
             manager,
             "version: 1\ndefaultAction: deny\nrules: [{id: physical-only, action: allow, match: {tool: read, path: {allWithin: '${agent.dir}'}}}]"

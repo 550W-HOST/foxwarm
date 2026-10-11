@@ -27,6 +27,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         Timeout = System.Threading.Timeout.InfiniteTimeSpan,
     };
     private readonly Foxwarm.McpClient mcp;
+    internal Foxwarm.McpClient OutboundMcp => mcp;
     private readonly ModelRouting modelRouting = new();
     internal LlmRequestJournalStore Journal { get; }
     internal TaskService Tasks { get; }

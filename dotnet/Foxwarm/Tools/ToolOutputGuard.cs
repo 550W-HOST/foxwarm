@@ -5,12 +5,14 @@ namespace Foxwarm.Tools;
 
 internal static class ToolOutputGuard
 {
-    internal static async Task<JsonObject> GuardAsync(
-        JsonObject response,
+    internal static async Task<JsonNode?> GuardAsync(
+        JsonNode? response,
         string workspace,
         string callId
     )
     {
+        if (response is not JsonObject)
+            return await GuardTextAsync(response, workspace);
         // Keep recognized image carriers outside the text guard, as Source extraction does.
         var plain = (JsonObject)response.DeepClone();
         var carriers = new JsonObject();
@@ -80,15 +82,15 @@ internal static class ToolOutputGuard
             return await GuardTextAsync(response, workspace);
         var guarded = await GuardTextAsync(plain, workspace);
         foreach (var (key, value) in carriers)
-            if (guarded[key] is JsonArray existing && value is JsonArray extracted)
+            if (guarded![key] is JsonArray existing && value is JsonArray extracted)
                 foreach (var item in extracted)
                     existing.Add(item?.DeepClone());
             else
-                guarded[key] = value?.DeepClone();
+                guarded![key] = value?.DeepClone();
         return guarded;
     }
 
-    private static async Task<JsonObject> GuardTextAsync(JsonObject response, string workspace)
+    private static async Task<JsonNode?> GuardTextAsync(JsonNode? response, string workspace)
     {
         var text = ToolResponseFormatting.Format(response);
         if (text.Length <= 40_000)
@@ -136,10 +138,10 @@ internal static class ToolOutputGuard
                 "exitCode",
             }
         )
-            if (response[key] is JsonNode value && value.ToJsonString().Length <= 2000)
+            if (response is JsonObject obj && obj[key] is JsonNode value && value.ToJsonString().Length <= 2000)
                 result[key] = value.DeepClone();
         var excerpt = head + $"\n[Tool output truncated; complete output: {file}]\n" + tail;
-        if (response.ContainsKey("error"))
+        if (response is JsonObject error && error.ContainsKey("error"))
             result["error"] = "TOOL ERROR OUTPUT TOO LONG\n" + excerpt;
         else
             result["output"] = excerpt;

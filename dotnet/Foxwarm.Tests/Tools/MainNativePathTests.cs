@@ -199,7 +199,7 @@ public sealed class MainNativePathTests
             ),
             default
         );
-        Assert.NotNull(denied.Response["error"]);
+        Assert.NotNull(denied.Response!["error"]);
         Assert.False(Directory.Exists(Path.Combine(outside, "new")));
         Assert.Null(denied.ResolvedPaths);
     }
@@ -247,7 +247,7 @@ public sealed class MainNativePathTests
             Call("read", new JsonObject { ["filePath"] = "note" }),
             default
         );
-        Assert.NotNull(failed["error"]);
+        Assert.NotNull(failed!["error"]);
         Assert.False(Directory.Exists(Path.GetDirectoryName(missing)));
         var refused = await tools.ExecuteAsync(
             Call(
@@ -258,7 +258,7 @@ public sealed class MainNativePathTests
         );
         var reference = System
             .Text.RegularExpressions.Regex.Match(
-                refused["error"]!["message"]!.GetValue<string>(),
+                refused!["error"]!["message"]!.GetValue<string>(),
                 "contentRef: \"([^\"]+)\""
             )
             .Groups[1]
@@ -280,7 +280,7 @@ public sealed class MainNativePathTests
             ),
             default
         );
-        Assert.Null(retry.Response["error"]);
+        Assert.Null(retry.Response!["error"]);
         Assert.Equal(
             "Owned cached retry.",
             await File.ReadAllTextAsync(Path.Combine(work, "retry.txt"))
@@ -324,7 +324,7 @@ public sealed class MainNativePathTests
                         Call("read", new JsonObject { ["filePath"] = path }),
                         default
                     )
-                )["error"]
+                )!["error"]
             );
         Assert.Null(
             (
@@ -332,7 +332,7 @@ public sealed class MainNativePathTests
                     Call("read", new JsonObject { ["filePath"] = "." }),
                     default
                 )
-            )["error"]
+            )!["error"]
         );
     }
 

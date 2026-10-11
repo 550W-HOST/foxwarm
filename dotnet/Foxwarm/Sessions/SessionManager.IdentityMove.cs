@@ -327,6 +327,7 @@ internal sealed partial class SessionManager
                 foreach (var id in claims)
                     identityMoveClaims[id] = operation;
             }
+            mcp.InvalidateOwner(owner);
             var prior = owningIdentityMove.Value;
             owningIdentityMove.Value = operation;
             try

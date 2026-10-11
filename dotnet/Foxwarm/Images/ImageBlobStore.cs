@@ -332,6 +332,9 @@ internal sealed partial class ImageBlobStore(string dataRoot)
                                 ["mimeType"] = Mime(images[i]),
                             },
                         };
+                        foreach (var key in new[] { "annotations", "_meta" })
+                            if (images[i][key] is JsonNode metadata)
+                                sibling[key] = metadata.DeepClone();
                         await ExternalizePartAsync(sibling, message, index + i + 1, token);
                         siblingParts.Add(sibling);
                     }

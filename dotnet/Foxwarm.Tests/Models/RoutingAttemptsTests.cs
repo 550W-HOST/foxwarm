@@ -575,10 +575,10 @@ public sealed class RoutingAttemptsTests
     {
         internal int Count;
 
-        public Task<JsonObject> ExecuteAsync(JsonObject call, CancellationToken token)
+        public Task<JsonNode?> ExecuteAsync(JsonObject call, CancellationToken token)
         {
             Count++;
-            return Task.FromResult(new JsonObject { ["output"] = "effect" });
+            return Task.FromResult<JsonNode?>(new JsonObject { ["output"] = "effect" });
         }
     }
 

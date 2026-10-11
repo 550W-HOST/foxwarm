@@ -265,6 +265,7 @@ internal sealed partial class SessionManager
                     lock (lifecycle)
                         identities[id].Retiring = true;
                     operation.RetirementStarted.Add(id);
+                    mcp.InvalidateOwner(owner);
                     await owner.Compactor.StopAsync();
                     await owner.DrainForegroundAsync();
                     await waitTimeouts.RetireAsync(id);

@@ -57,7 +57,7 @@ public sealed class MainExecCwdTests
             Call("printf '%s\\n' \"$HOME\" \"$fw_agentdir\" \"$fw_tmp\"; cd \"$fw_tmp\"; pwd"),
             default
         );
-        Assert.True(result.Response["error"] is null, result.Response.ToJsonString());
+        Assert.True(result.Response!["error"] is null, result.Response.ToJsonString());
         var output = result.Response["output"]!.GetValue<string>();
         Assert.Contains(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), output);
         Assert.Contains(work + "\n" + Path.Combine(work, "tmp"), output);
@@ -151,7 +151,7 @@ public sealed class MainExecCwdTests
         {
             await owner.UpdateCwdAsync(changed);
             var execution = await tools.ExecuteAttributedAsync(Call("pwd"), default);
-            Assert.True(execution.Response["error"] is null, execution.Response.ToJsonString());
+            Assert.True(execution.Response!["error"] is null, execution.Response.ToJsonString());
             Assert.Equal(declared ? work : changed, execution.DeferredCwd);
             Assert.Contains(
                 (declared ? work : changed) + "\n",
@@ -188,7 +188,7 @@ public sealed class MainExecCwdTests
             Call($"cd '{first}'; sleep 1.8; cd '{later}'; pwd", 1),
             default
         );
-        Assert.True(result.Response["error"] is null, result.Response.ToJsonString());
+        Assert.True(result.Response!["error"] is null, result.Response.ToJsonString());
         Assert.Equal(first, owner.Entry.Snapshot().AuthorityEnvelope["cwd"]!.GetValue<string>());
         await owner.UpdateCwdAsync(work);
         var directory = Directory
@@ -230,7 +230,7 @@ public sealed class MainExecCwdTests
             default
         );
         var denied = await tools.ExecuteAttributedAsync(Call("pwd"), default);
-        Assert.NotNull(denied.Response["error"]);
+        Assert.NotNull(denied.Response!["error"]);
         Assert.False(Directory.Exists(Path.Combine(work, "tmp")));
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
@@ -243,7 +243,7 @@ public sealed class MainExecCwdTests
             default
         );
         var invalid = await tools.ExecuteAttributedAsync(Call("pwd"), default);
-        Assert.NotNull(invalid.Response["error"]);
+        Assert.NotNull(invalid.Response!["error"]);
         Assert.True(Directory.Exists(Path.Combine(work, "tmp")));
         Assert.False(Directory.Exists(missing));
     }

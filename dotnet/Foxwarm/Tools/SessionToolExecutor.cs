@@ -134,7 +134,7 @@ internal sealed partial class SessionToolExecutor(
             return new(
                 response,
                 current.Timing,
-                response["error"] is null ? current.ResolvedPaths : null,
+                (response as JsonObject)?["error"] is null ? current.ResolvedPaths : null,
                 current.DeferredCwd,
                 current.ToolScriptSubCalls,
                 current.Receipt
@@ -169,7 +169,7 @@ internal sealed partial class SessionToolExecutor(
     {
         var errors = toolMessage["parts"]!
             .AsArray()
-            .Any(part => part?["functionResponse"]?["response"]?["error"] is not null);
+            .Any(part => (part?["functionResponse"]?["response"] as JsonObject)?["error"] is not null);
         var explicitStop = explicitWaitIds.Count > 0;
         if (errors || stopping)
             foreach (var id in explicitWaitIds)
@@ -188,12 +188,12 @@ internal sealed partial class SessionToolExecutor(
         return finish || !stopping && (handoff || explicitStop && !errors);
     }
 
-    public async Task<JsonObject> ExecuteAsync(
+    public async Task<JsonNode?> ExecuteAsync(
         JsonObject functionCall,
         CancellationToken cancellationToken
     ) => (await ExecuteAttributedAsync(functionCall, cancellationToken)).Response;
 
-    private async Task<JsonObject> ExecuteCoreAsync(
+    private async Task<JsonNode?> ExecuteCoreAsync(
         JsonObject functionCall,
         CancellationToken cancellationToken
     )
@@ -378,7 +378,7 @@ internal sealed partial class SessionToolExecutor(
         {
             return execution with
             {
-                Response = await ApplyCwdAsync(execution.Response, cwd),
+                Response = await ApplyCwdAsync(execution.Response!.AsObject(), cwd),
                 DeferredCwd = null,
             };
         }
@@ -412,15 +412,15 @@ internal sealed partial class SessionToolExecutor(
         return copy;
     }
 
-    private Task<JsonObject> ExecuteWorkspaceAsync(
+    private async Task<JsonObject> ExecuteWorkspaceAsync(
         string name,
         JsonObject args,
         CancellationToken token
     ) =>
-        (Files as ITurnToolExecutor ?? workspace).ExecuteAsync(
+        (await (Files as ITurnToolExecutor ?? workspace).ExecuteAsync(
             new JsonObject { ["name"] = name, ["args"] = args.DeepClone() },
             token
-        );
+        ))!.AsObject();
 
     private async Task<JsonObject> ExecuteAgentAsync(
         string name,
@@ -581,7 +581,8 @@ internal sealed partial class SessionToolExecutor(
                 token,
                 (source, name, server) =>
                     owner.Manager.ToolVisible(owner.Hosted, source, name, server),
-                owner.ScriptBudget
+                owner.ScriptBudget,
+                owner.Hosted
             );
         handlers["call_tool"] = (_, _, _) =>
             throw new InvalidDataException("call_tool is a dispatcher, not a concrete target.");
@@ -629,7 +630,7 @@ internal sealed partial class SessionToolExecutor(
 internal sealed record TurnToolPreparation(JsonObject Response, bool PolicyUnavailable = false);
 
 internal sealed record TurnToolExecution(
-    JsonObject Response,
+    JsonNode? Response,
     JsonObject? Timing = null,
     JsonArray? ResolvedPaths = null,
     string? DeferredCwd = null,

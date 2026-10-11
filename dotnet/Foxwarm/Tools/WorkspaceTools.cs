@@ -160,6 +160,9 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
         Paths = MainNativePaths.Default(this.root, cwd);
     }
 
+    async Task<JsonNode?> ITurnToolExecutor.ExecuteAsync(JsonObject call, CancellationToken token) =>
+        await ExecuteAsync(call, token);
+
     public async Task<JsonObject> ExecuteAsync(
         JsonObject functionCall,
         CancellationToken cancellationToken

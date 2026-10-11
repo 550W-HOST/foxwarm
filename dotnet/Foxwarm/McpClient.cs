@@ -126,9 +126,12 @@ internal sealed partial class McpClient(string root) : IAsyncDisposable
                         patch,
                         enabledOnly: patch.Count == 1 && patch.ContainsKey("enable")
                     );
+                    InvalidateServer(name);
                 }
                 catch (Exception error)
                 {
+                    if (error is AuthorityCommittedException)
+                        InvalidateServer(name);
                     throw new InvalidOperationException(SafeError(error.Message, patch));
                 }
                 var timeout = SessionWait.Number(args["timeoutSeconds"]);
@@ -200,7 +203,9 @@ internal sealed partial class McpClient(string root) : IAsyncDisposable
 
     internal Task<IReadOnlyList<JsonObject>> ListToolsAsync(
         string server,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        SessionOwner? owner = null,
+        long? ownerGeneration = null
     ) =>
         RunAsync(
             async token =>
@@ -210,9 +215,10 @@ internal sealed partial class McpClient(string root) : IAsyncDisposable
                 {
                     return await WithClientAsync(
                         server,
-                        config,
                         token,
-                        async client =>
+                        owner,
+                        ownerGeneration,
+                        async (client, config, requestToken) =>
                         {
                             var tools = new List<JsonObject>();
                             string? cursor = null;
@@ -220,7 +226,7 @@ internal sealed partial class McpClient(string root) : IAsyncDisposable
                             {
                                 var page = await client.ListToolsAsync(
                                     new ListToolsRequestParams { Cursor = cursor },
-                                    token
+                                    requestToken
                                 );
                                 tools.AddRange(
                                     page.Tools.Select(tool =>
@@ -243,13 +249,15 @@ internal sealed partial class McpClient(string root) : IAsyncDisposable
             cancellationToken
         );
 
-    internal Task<JsonObject> CallAsync(
+    internal Task<JsonNode?> CallAsync(
         string server,
         string name,
         JsonObject args,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        SessionOwner? owner = null,
+        long? ownerGeneration = null
     ) =>
-        RunAsync(
+        RunAsync<JsonNode?>(
             async token =>
             {
                 var config = configuration.Get(server);
@@ -257,12 +265,13 @@ internal sealed partial class McpClient(string root) : IAsyncDisposable
                 {
                     return await WithClientAsync(
                         server,
-                        config,
                         token,
-                        async client =>
+                        owner,
+                        ownerGeneration,
+                        async (client, config, requestToken) =>
                         {
                             using var callBudget = CancellationTokenSource.CreateLinkedTokenSource(
-                                token
+                                requestToken
                             );
                             callBudget.CancelAfter(
                                 TimeSpan.FromSeconds(
@@ -271,6 +280,7 @@ internal sealed partial class McpClient(string root) : IAsyncDisposable
                             );
                             var request = new JsonRpcRequest
                             {
+                                Id = new RequestId("foxwarm-call-" + Guid.NewGuid().ToString("N")),
                                 Method = RequestMethods.ToolsCall,
                                 Params = new JsonObject
                                 {
@@ -278,11 +288,6 @@ internal sealed partial class McpClient(string root) : IAsyncDisposable
                                     ["arguments"] = args.DeepClone(),
                                 },
                             };
-                            var stdio = SessionWait.Text(config["transport"]) == "stdio";
-                            if (stdio)
-                                request.Id = new RequestId(
-                                    "foxwarm-call-" + Guid.NewGuid().ToString("N")
-                                );
                             callBudget.Token.ThrowIfCancellationRequested();
                             JsonRpcResponse result;
                             try
@@ -291,51 +296,26 @@ internal sealed partial class McpClient(string root) : IAsyncDisposable
                             }
                             catch (OperationCanceledException)
                             {
-                                // Keep the original local cancellation outcome. A late notification
-                                // only asks the stdio peer to cancel; it cannot reverse effects.
-                                if (stdio)
+                                if (SessionWait.Text(config["transport"]) == "stdio")
                                 {
-                                    using var notificationBudget = new CancellationTokenSource(
-                                        TimeSpan.FromSeconds(1)
-                                    );
+                                    // The pinned SDK's local WaitAsync cancellation can finish
+                                    // before its best-effort cancellation callback is sent. Keep
+                                    // the accepted stdio peer signal using the SDK's typed API.
+                                    using var notificationBudget = new CancellationTokenSource(TimeSpan.FromSeconds(1));
                                     try
                                     {
-                                        await client.SendMessageAsync(
-                                            new JsonRpcNotification
-                                            {
-                                                Method = NotificationMethods.CancelledNotification,
-                                                Params = JsonSerializer.SerializeToNode(
-                                                    new CancelledNotificationParams
-                                                    {
-                                                        RequestId = request.Id,
-                                                    },
-                                                    McpJsonUtilities.DefaultOptions
-                                                ),
-                                            },
-                                            notificationBudget.Token
-                                        );
+                                        await client.SendNotificationAsync(
+                                            NotificationMethods.CancelledNotification,
+                                            new CancelledNotificationParams { RequestId = request.Id },
+                                            cancellationToken: notificationBudget.Token);
                                     }
-                                    catch
-                                    { /* Best effort; never replace the timeout/Stop result. */
-                                    }
+                                    catch { /* Do not replace the original Stop/timeout outcome. */ }
                                 }
-                                if (!token.IsCancellationRequested)
+                                if (!requestToken.IsCancellationRequested)
                                     throw new TimeoutException("MCP tool call timed out.");
                                 throw;
                             }
-                            var owned = result.Result is JsonObject obj
-                                ? (JsonObject)obj.DeepClone()
-                                : throw new InvalidDataException(
-                                    "MCP tools/call returned a non-object result."
-                                );
-                            if (
-                                owned["content"] is JsonArray content
-                                && content.Any(UnsupportedContent)
-                            )
-                                throw new NotSupportedException(
-                                    "MCP result contains unsupported audio or binary content. The server call completed; its effects were not reversed."
-                                );
-                            return NormalizeResult(NormalizeImages(owned));
+                            return NormalizeResult(result.Result?.DeepClone());
                         }
                     );
                 }
@@ -346,15 +326,6 @@ internal sealed partial class McpClient(string root) : IAsyncDisposable
             },
             cancellationToken
         );
-
-    private static bool UnsupportedContent(JsonNode? value)
-    {
-        var kind = SessionWait.Text(value?["type"]);
-        return kind is "audio"
-            || kind == "resource"
-                && value?["resource"] is JsonObject resource
-                && resource["blob"] is not null;
-    }
 
     private static JsonObject NormalizeImages(JsonObject result)
     {
@@ -388,38 +359,56 @@ internal sealed partial class McpClient(string root) : IAsyncDisposable
         return result;
     }
 
-    private static JsonObject NormalizeResult(JsonObject result)
+    private static bool PlainText(JsonNode? value, out string text)
     {
-        var metadata = result.Any(pair =>
-            pair.Key != "content"
-            && !(
-                pair.Key == "isError"
-                && pair.Value is JsonValue value
-                && value.TryGetValue<bool>(out var error)
-                && !error
-            )
-        );
-        if (
-            !metadata
-            && result["content"] is JsonArray { Count: 1 } content
-            && content[0] is JsonObject block
-            && block.All(pair => pair.Key is "type" or "text")
-            && SessionWait.Text(block["type"]) == "text"
-            && SessionWait.Text(block["text"]) is string text
-        )
+        text = "";
+        if (value is not JsonObject block || block.Any(pair => pair.Key is not ("type" or "text"))
+            || SessionWait.Text(block["type"]) != "text" || SessionWait.Text(block["text"]) is not string content)
+            return false;
+        text = content;
+        return true;
+    }
+
+    private static JsonNode? NormalizeResult(JsonNode? value)
+    {
+        if (value is not JsonObject obj)
+            return value;
+        var result = NormalizeImages(obj);
+        if (result.TryGetPropertyValue("structuredContent", out var structured))
         {
-            try
+            if (result["content"] is JsonArray blocks)
             {
-                var parsed = JsonNode.Parse(text);
-                if (parsed is JsonObject obj)
-                    return obj;
-                if (parsed is JsonArray array)
-                    return new JsonObject { ["output"] = array };
+                var kept = new JsonArray();
+                foreach (var block in blocks)
+                {
+                    var duplicate = false;
+                    if (PlainText(block, out var text))
+                        try { duplicate = JsonNode.DeepEquals(JsonNode.Parse(text), structured); }
+                        catch (JsonException) { }
+                    if (!duplicate)
+                        kept.Add(block?.DeepClone());
+                }
+                result["content"] = kept;
             }
-            catch (JsonException) { }
-            return new JsonObject { ["output"] = text };
+            var metadata = result.Any(pair => pair.Key is not ("content" or "structuredContent")
+                && !(pair.Key == "isError" && SessionCatalog.Flag(pair.Value) != true));
+            if (!metadata && (result["content"] is not JsonArray { Count: > 0 }))
+                return structured?.DeepClone();
+            return result;
         }
-        return result;
+        if (result.Any(pair => pair.Key != "content"
+            && !(pair.Key == "isError" && SessionCatalog.Flag(pair.Value) != true)))
+            return result;
+        if (result["content"] is not JsonArray { Count: 1 } content || !PlainText(content[0], out var plain))
+            return result;
+        try
+        {
+            var parsed = JsonNode.Parse(plain);
+            if (parsed is JsonObject or JsonArray)
+                return parsed;
+        }
+        catch (JsonException) { }
+        return JsonValue.Create(plain);
     }
 
     internal void BeginShutdown()

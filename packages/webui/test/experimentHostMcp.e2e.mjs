@@ -58,6 +58,8 @@ async function task(calls, { owner = current, final = true, browserSend = false 
 async function perform(target, args, id, owner = current) { await task([invoke(id, target, args)], { owner }); return pair(id, owner) }
 async function lines(file) { return (await readFile(join(peerRoot, file), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) }
 async function startHost() {
+  await mkdir(join(data, 'state'), { recursive: true })
+  await writeFile(join(data, 'state', 'token'), token, { mode: 0o600 })
   await writeModelFixture(data, { default: 'local', providers: { 'local': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${provider.address().port}`, apiKey: providerToken, models: ['wire'] } } })
   const child = spawn(dotnet, [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env,
     FOXWARM_EXPERIMENT_DATA_ROOT: data, FOXWARM_EXPERIMENT_TOOL_ROOT: work, FOXWARM_EXPERIMENT_PORT: String(port), FOXWARM_EXPERIMENT_API_TOKEN: token,
@@ -80,7 +82,7 @@ try {
     try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk)
       const body = JSON.parse(Buffer.concat(chunks).toString()); assert.equal(req.headers.authorization, `Bearer ${providerToken}`)
-      assert.equal(body.tools.length, 24); assert(body.tools.some(tool => tool.name === 'compact_session')); assert(body.tools.some(tool => tool.name === 'call_tool')); assert(body.tools.some(tool => tool.name === 'search_tools'))
+      assert.equal(body.tools.length, 35); assert(body.tools.some(tool => tool.name === 'compact_session')); assert(body.tools.some(tool => tool.name === 'call_tool')); assert(body.tools.some(tool => tool.name === 'search_tools'))
       assert(!body.tools.some(tool => tool.name === 'mcp_config' || tool.name === 'list_mcp_servers' || tool.name === 'echo_effect'))
       for (const tool of body.tools) {
         const fields = tool.parameters.properties
@@ -164,7 +166,7 @@ try {
     const result = await perform('mcp:local/result_case', { kind }, 'case-' + kind)
     if (kind === 'plain') assert.equal(result.output, 'plain text π')
     if (kind === 'primitive') assert.equal(result.output, '42')
-    if (kind === 'array') assert.deepEqual(result.output, [1, { value: 'two' }])
+    if (kind === 'array') assert.deepEqual(result, [1, { value: 'two' }])
     if (kind === 'multi') assert.equal(result.content.length, 2)
     if (kind === 'metadata') { assert.equal(result._meta.retained, true); assert.equal(result.structuredContent.nested.value, 7) }
     if (kind === 'resource') assert.equal(result.content[0].resource.text, 'RESOURCE-TEXT')
@@ -181,8 +183,17 @@ try {
   assert(protocol.error); assert(!JSON.stringify(protocol).includes('synthetic-only-secret'))
   for (const kind of ['image', 'audio', 'blob']) {
     const result = await perform('mcp:local/result_case', { kind, tag: kind }, 'case-' + kind)
-    assert(result.error); assert.match(result.error.message, /completed.*not reversed/); assert(await exists(join(peerRoot, 'effect-' + kind + '.txt')))
-    assert(!JSON.stringify(result).includes(Buffer.from('BINARY-MUST-NOT-ENTER-PROVIDER-TEXT').toString('base64')))
+    assert.equal(result.error, undefined)
+    assert(await exists(join(peerRoot, 'effect-' + kind + '.txt')))
+    if (kind === 'image') {
+      assert.equal(result.content[0].text, 'IMAGE-EXPLANATION')
+      const persisted = (await history()).find(row => row.parts?.some(part => part.functionResponse?.tool_use_id === 'case-image'))
+      assert(persisted.parts.some(part => part.inlineDataRef && part.toolUseId === 'case-image'))
+      assert(!JSON.stringify(persisted).includes('iVBOR'))
+      const replay = requests.at(-1).body.input.find(item => item.call_id === 'case-image' && item.type === 'function_call_output')
+      assert(replay.output.some(part => part.type === 'input_image'))
+    } else if (kind === 'audio') assert.equal(result.content[0].type, 'audio')
+    else assert.equal(result.content[0].resource.mimeType, 'application/octet-stream')
   }
   const large = await perform('mcp:local/result_case', { kind: 'large' }, 'case-large')
   assert.equal(large.outputTruncated, true); assert(large.output.length < 40000); assert.match(await readFile(large.outputFullPath, 'utf8'), /^long: START-/)
@@ -199,7 +210,7 @@ try {
   assert(bad.error); assert(!await exists(join(peerRoot, 'effect-unknown-server.txt')))
   for (let index = 0; index < 15; index++) assert.equal((await perform('mcp:local/echo_effect', { tag: 'repeat-' + index }, 'repeat-' + index)).pid, echo.pid)
 
-  // Managed changes use captured old clients for in-flight calls and a new live config for later calls.
+  // Established stdio calls keep their captured process while a process-key change retires it from new acquisitions.
   await task([invoke('held-old', 'mcp:local/hold_effect', { tag: 'old' })], { final: false })
   await until(() => exists(join(peerRoot, 'started-old')), 'old connection entered')
   await perform('builtin:mcp_config', { name: 'local', args: [peerFile, 'stdio', peerRoot, 'updated-label'] }, 'update-live', admin)

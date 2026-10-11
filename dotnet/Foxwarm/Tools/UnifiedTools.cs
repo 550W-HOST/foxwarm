@@ -24,7 +24,8 @@ internal static partial class UnifiedTools
         JsonObject args,
         CancellationToken token,
         Func<string, string, string?, bool>? visible = null,
-        Foxwarm.ToolScript.ToolScriptDataBudget? budget = null
+        Foxwarm.ToolScript.ToolScriptDataBudget? budget = null,
+        SessionOwner? owner = null
     )
     {
         ToolRegistry.Keys(args, ["query", "sources", "server", "nodeId", "limit", "includeSchema"]);
@@ -147,7 +148,7 @@ internal static partial class UnifiedTools
                 token.ThrowIfCancellationRequested();
                 try
                 {
-                    foreach (var tool in await registry.Mcp.ListToolsAsync(server, token))
+                    foreach (var tool in await registry.Mcp.ListToolsAsync(server, token, owner, owner?.McpGeneration))
                     {
                         var name = SessionWait.Text(tool["name"]) ?? "unknown";
                         var description = SessionWait.Text(tool["description"]) ?? "";

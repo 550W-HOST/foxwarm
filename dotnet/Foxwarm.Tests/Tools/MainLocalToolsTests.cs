@@ -59,8 +59,7 @@ public sealed class MainLocalToolsTests
             return f;
         }
 
-        internal Task<JsonObject> Call(string name, JsonObject args) =>
-            Tools.ExecuteAsync(
+        internal async Task<JsonObject> Call(string name, JsonObject args) => (await Tools.ExecuteAsync(
                 new JsonObject
                 {
                     ["id"] = Guid.NewGuid().ToString("N"),
@@ -68,7 +67,7 @@ public sealed class MainLocalToolsTests
                     ["args"] = args,
                 },
                 default
-            );
+            ))!.AsObject();
 
         public async ValueTask DisposeAsync()
         {
@@ -1262,8 +1261,8 @@ public sealed class MainLocalToolsTests
             },
             default
         );
-        Assert.Null(Error(stopped));
-        Assert.Contains("in-flight request was canceled", stopped["output"]!.GetValue<string>());
+        Assert.Null(Error(stopped!.AsObject()));
+        Assert.Contains("in-flight request was canceled", stopped!["output"]!.GetValue<string>());
         await target.DrainForegroundAsync();
         Assert.False(target.Entry.Snapshot().Busy);
         Assert.False(target.Entry.Snapshot().Stopping);

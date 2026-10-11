@@ -423,7 +423,7 @@ public sealed class SessionDeletionTests
             },
             default
         );
-        Assert.Equal("SESSION_DELETE_CURRENT", self["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("SESSION_DELETE_CURRENT", self!["error"]!["type"]!.GetValue<string>());
         var deleted = await executor.ExecuteAsync(
             new JsonObject
             {
@@ -437,7 +437,7 @@ public sealed class SessionDeletionTests
             },
             default
         );
-        Assert.Null(deleted["error"]);
+        Assert.Null(deleted!["error"]);
         Assert.Null(manager.Catalog.Get("target"));
     }
 

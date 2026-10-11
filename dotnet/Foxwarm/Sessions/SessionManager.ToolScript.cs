@@ -26,8 +26,8 @@ internal sealed partial class SessionManager
             );
     }
 
-    internal async Task<JsonObject> NormalizeToolScriptResultAsync(
-        JsonObject value,
+    internal async Task<JsonNode?> NormalizeToolScriptResultAsync(
+        JsonNode? value,
         string name,
         ToolScriptDataBudget budget,
         CancellationToken token
@@ -38,7 +38,7 @@ internal sealed partial class SessionManager
         {
             ["tool_use_id"] = "toolscript-" + Guid.NewGuid().ToString("N"),
             ["name"] = name,
-            ["response"] = value.DeepClone(),
+            ["response"] = value?.DeepClone(),
         };
         var message = new JsonObject
         {
@@ -47,20 +47,21 @@ internal sealed partial class SessionManager
         };
         token.ThrowIfCancellationRequested();
         await Images.ExternalizeMessageAsync(message);
-        var result = (JsonObject)message["parts"]![0]!["functionResponse"]!["response"]!;
+        var envelope = message["parts"]![0]!["functionResponse"]!.AsObject();
+        var result = envelope["response"];
         var images = message["parts"]!
             .AsArray()
             .OfType<JsonObject>()
             .Where(part => part.ContainsKey("inlineDataRef"))
             .ToArray();
-        if (images.Length > 0)
+        if (images.Length > 0 && result is JsonObject obj)
         {
-            var parts = result["parts"] as JsonArray ?? new JsonArray();
+            var parts = obj["parts"] as JsonArray ?? new JsonArray();
             foreach (var image in images)
                 parts.Add(image.DeepClone());
-            result["parts"] = parts;
+            obj["parts"] = parts;
         }
-        result.Parent!.AsObject().Remove("response");
+        envelope.Remove("response");
         return result;
     }
 
