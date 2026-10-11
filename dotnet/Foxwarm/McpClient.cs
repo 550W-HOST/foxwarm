@@ -301,15 +301,23 @@ internal sealed partial class McpClient(string root) : IAsyncDisposable
                                     // The pinned SDK's local WaitAsync cancellation can finish
                                     // before its best-effort cancellation callback is sent. Keep
                                     // the accepted stdio peer signal using the SDK's typed API.
-                                    using var notificationBudget = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+                                    using var notificationBudget = new CancellationTokenSource(
+                                        TimeSpan.FromSeconds(1)
+                                    );
                                     try
                                     {
                                         await client.SendNotificationAsync(
                                             NotificationMethods.CancelledNotification,
-                                            new CancelledNotificationParams { RequestId = request.Id },
-                                            cancellationToken: notificationBudget.Token);
+                                            new CancelledNotificationParams
+                                            {
+                                                RequestId = request.Id,
+                                            },
+                                            cancellationToken: notificationBudget.Token
+                                        );
                                     }
-                                    catch { /* Do not replace the original Stop/timeout outcome. */ }
+                                    catch
+                                    { /* Do not replace the original Stop/timeout outcome. */
+                                    }
                                 }
                                 if (!requestToken.IsCancellationRequested)
                                     throw new TimeoutException("MCP tool call timed out.");
@@ -362,8 +370,12 @@ internal sealed partial class McpClient(string root) : IAsyncDisposable
     private static bool PlainText(JsonNode? value, out string text)
     {
         text = "";
-        if (value is not JsonObject block || block.Any(pair => pair.Key is not ("type" or "text"))
-            || SessionWait.Text(block["type"]) != "text" || SessionWait.Text(block["text"]) is not string content)
+        if (
+            value is not JsonObject block
+            || block.Any(pair => pair.Key is not ("type" or "text"))
+            || SessionWait.Text(block["type"]) != "text"
+            || SessionWait.Text(block["text"]) is not string content
+        )
             return false;
         text = content;
         return true;
@@ -383,23 +395,35 @@ internal sealed partial class McpClient(string root) : IAsyncDisposable
                 {
                     var duplicate = false;
                     if (PlainText(block, out var text))
-                        try { duplicate = JsonNode.DeepEquals(JsonNode.Parse(text), structured); }
+                        try
+                        {
+                            duplicate = JsonNode.DeepEquals(JsonNode.Parse(text), structured);
+                        }
                         catch (JsonException) { }
                     if (!duplicate)
                         kept.Add(block?.DeepClone());
                 }
                 result["content"] = kept;
             }
-            var metadata = result.Any(pair => pair.Key is not ("content" or "structuredContent")
-                && !(pair.Key == "isError" && SessionCatalog.Flag(pair.Value) != true));
+            var metadata = result.Any(pair =>
+                pair.Key is not ("content" or "structuredContent")
+                && !(pair.Key == "isError" && SessionCatalog.Flag(pair.Value) != true)
+            );
             if (!metadata && (result["content"] is not JsonArray { Count: > 0 }))
                 return structured?.DeepClone();
             return result;
         }
-        if (result.Any(pair => pair.Key != "content"
-            && !(pair.Key == "isError" && SessionCatalog.Flag(pair.Value) != true)))
+        if (
+            result.Any(pair =>
+                pair.Key != "content"
+                && !(pair.Key == "isError" && SessionCatalog.Flag(pair.Value) != true)
+            )
+        )
             return result;
-        if (result["content"] is not JsonArray { Count: 1 } content || !PlainText(content[0], out var plain))
+        if (
+            result["content"] is not JsonArray { Count: 1 } content
+            || !PlainText(content[0], out var plain)
+        )
             return result;
         try
         {

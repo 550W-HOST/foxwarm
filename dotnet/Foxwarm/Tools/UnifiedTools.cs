@@ -148,7 +148,14 @@ internal static partial class UnifiedTools
                 token.ThrowIfCancellationRequested();
                 try
                 {
-                    foreach (var tool in await registry.Mcp.ListToolsAsync(server, token, owner, owner?.McpGeneration))
+                    foreach (
+                        var tool in await registry.Mcp.ListToolsAsync(
+                            server,
+                            token,
+                            owner,
+                            owner?.McpGeneration
+                        )
+                    )
                     {
                         var name = SessionWait.Text(tool["name"]) ?? "unknown";
                         var description = SessionWait.Text(tool["description"]) ?? "";

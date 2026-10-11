@@ -100,15 +100,22 @@ public sealed class ToolAuthorizationEffectsTests
         return (tools, files, mcp, registry);
     }
 
-    private static async Task<JsonObject> Call(SessionToolExecutor tools, string name, JsonObject args) => (await tools.ExecuteAsync(
-            new JsonObject
-            {
-                ["id"] = Guid.NewGuid().ToString("N"),
-                ["name"] = name,
-                ["args"] = args,
-            },
-            CancellationToken.None
-        ))!.AsObject();
+    private static async Task<JsonObject> Call(
+        SessionToolExecutor tools,
+        string name,
+        JsonObject args
+    ) =>
+        (
+            await tools.ExecuteAsync(
+                new JsonObject
+                {
+                    ["id"] = Guid.NewGuid().ToString("N"),
+                    ["name"] = name,
+                    ["args"] = args,
+                },
+                CancellationToken.None
+            )
+        )!.AsObject();
 
     private static string? Error(JsonObject response) =>
         response["error"]?["type"]?.GetValue<string>();

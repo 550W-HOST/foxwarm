@@ -82,15 +82,18 @@ public sealed class MainTimerToolsTests
             }
         }
 
-        internal async Task<JsonObject> Call(string name, JsonObject args) => (await Tools.ExecuteAsync(
-                new JsonObject
-                {
-                    ["id"] = Guid.NewGuid().ToString("N"),
-                    ["name"] = name,
-                    ["args"] = args.DeepClone(),
-                },
-                default
-            ))!.AsObject();
+        internal async Task<JsonObject> Call(string name, JsonObject args) =>
+            (
+                await Tools.ExecuteAsync(
+                    new JsonObject
+                    {
+                        ["id"] = Guid.NewGuid().ToString("N"),
+                        ["name"] = name,
+                        ["args"] = args.DeepClone(),
+                    },
+                    default
+                )
+            )!.AsObject();
 
         public async ValueTask DisposeAsync()
         {

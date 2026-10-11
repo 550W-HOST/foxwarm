@@ -160,9 +160,7 @@ internal static class ProviderImageParts
             {
                 if (OpenAIRequestText.PreviousRequest(response) is { } timing)
                     result.Insert(0, new JsonObject { ["type"] = textType, ["text"] = timing });
-                var text = ToolResponseFormatting.Format(
-                    response["response"]
-                );
+                var text = ToolResponseFormatting.Format(response["response"]);
                 if (text.Length > 0)
                     result.Add(new JsonObject { ["type"] = textType, ["text"] = text });
             }

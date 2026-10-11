@@ -6,7 +6,9 @@ namespace Foxwarm.Sessions;
 public sealed partial class LocalSessionTurnHost
 {
     private static JsonNode ModelToolResponse(JsonNode? value) =>
-        value is JsonObject or JsonArray ? value.DeepClone() : new JsonObject { ["output"] = value?.DeepClone() };
+        value is JsonObject or JsonArray
+            ? value.DeepClone()
+            : new JsonObject { ["output"] = value?.DeepClone() };
 
     private async Task<JsonArray> ExecuteToolBatchAsync(
         IReadOnlyList<(JsonObject Call, JsonObject? Preset)> planned,
@@ -94,7 +96,10 @@ public sealed partial class LocalSessionTurnHost
             };
             if (result.Timing is not null)
                 response["executionTiming"] = result.Timing.DeepClone();
-            if ((result.Response as JsonObject)?["error"] is null && result.ResolvedPaths is { Count: > 0 } paths)
+            if (
+                (result.Response as JsonObject)?["error"] is null
+                && result.ResolvedPaths is { Count: > 0 } paths
+            )
                 response["__meta"] = new JsonObject { ["resolvedPaths"] = paths.DeepClone() };
             if (result.ToolScriptSubCalls is { Count: > 0 } scriptCalls)
             {

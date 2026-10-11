@@ -59,15 +59,18 @@ public sealed class MainLocalToolsTests
             return f;
         }
 
-        internal async Task<JsonObject> Call(string name, JsonObject args) => (await Tools.ExecuteAsync(
-                new JsonObject
-                {
-                    ["id"] = Guid.NewGuid().ToString("N"),
-                    ["name"] = name,
-                    ["args"] = args,
-                },
-                default
-            ))!.AsObject();
+        internal async Task<JsonObject> Call(string name, JsonObject args) =>
+            (
+                await Tools.ExecuteAsync(
+                    new JsonObject
+                    {
+                        ["id"] = Guid.NewGuid().ToString("N"),
+                        ["name"] = name,
+                        ["args"] = args,
+                    },
+                    default
+                )
+            )!.AsObject();
 
         public async ValueTask DisposeAsync()
         {

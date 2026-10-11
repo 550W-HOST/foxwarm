@@ -32,15 +32,18 @@ public sealed class ToolScriptOwnershipTests
         SessionToolExecutor dispatcher,
         string name,
         JsonObject args
-    ) => (await dispatcher.ExecuteAsync(
-            new JsonObject
-            {
-                ["id"] = "ownership",
-                ["name"] = name,
-                ["args"] = args,
-            },
-            default
-        ))!.AsObject();
+    ) =>
+        (
+            await dispatcher.ExecuteAsync(
+                new JsonObject
+                {
+                    ["id"] = "ownership",
+                    ["name"] = name,
+                    ["args"] = args,
+                },
+                default
+            )
+        )!.AsObject();
 
     [Fact]
     public async Task Self_move_then_nested_pause_creates_new_owner_record_without_rewriting_outer_or_literal_caller()

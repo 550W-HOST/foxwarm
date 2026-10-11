@@ -64,15 +64,18 @@ public sealed class MainToolScriptTests
             }
         }
 
-        internal async Task<JsonObject> Call(string name, JsonObject args) => (await Tools.ExecuteAsync(
-                new JsonObject
-                {
-                    ["id"] = "outer-script",
-                    ["name"] = name,
-                    ["args"] = args.DeepClone(),
-                },
-                default
-            ))!.AsObject();
+        internal async Task<JsonObject> Call(string name, JsonObject args) =>
+            (
+                await Tools.ExecuteAsync(
+                    new JsonObject
+                    {
+                        ["id"] = "outer-script",
+                        ["name"] = name,
+                        ["args"] = args.DeepClone(),
+                    },
+                    default
+                )
+            )!.AsObject();
 
         public async ValueTask DisposeAsync()
         {

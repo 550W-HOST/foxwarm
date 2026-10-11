@@ -73,15 +73,18 @@ public sealed class MainFileDeliveryTests
             string name,
             JsonObject args,
             CancellationToken token = default
-        ) => (await Tools.ExecuteAsync(
-                new JsonObject
-                {
-                    ["id"] = Guid.NewGuid().ToString("N"),
-                    ["name"] = name,
-                    ["args"] = args.DeepClone(),
-                },
-                token
-            ))!.AsObject();
+        ) =>
+            (
+                await Tools.ExecuteAsync(
+                    new JsonObject
+                    {
+                        ["id"] = Guid.NewGuid().ToString("N"),
+                        ["name"] = name,
+                        ["args"] = args.DeepClone(),
+                    },
+                    token
+                )
+            )!.AsObject();
 
         internal async Task<JsonObject> Reference(
             string id,

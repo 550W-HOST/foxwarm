@@ -829,8 +829,10 @@ public sealed class WriteFixtureToolExecutor : ITurnToolExecutor
 
     public int SuccessfulEffects => Volatile.Read(ref successfulEffects);
 
-    async Task<JsonNode?> ITurnToolExecutor.ExecuteAsync(JsonObject call, CancellationToken token) =>
-        await ExecuteAsync(call, token);
+    async Task<JsonNode?> ITurnToolExecutor.ExecuteAsync(
+        JsonObject call,
+        CancellationToken token
+    ) => await ExecuteAsync(call, token);
 
     public async Task<JsonObject> ExecuteAsync(
         JsonObject functionCall,

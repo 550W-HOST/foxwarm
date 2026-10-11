@@ -138,7 +138,11 @@ internal static class ToolOutputGuard
                 "exitCode",
             }
         )
-            if (response is JsonObject obj && obj[key] is JsonNode value && value.ToJsonString().Length <= 2000)
+            if (
+                response is JsonObject obj
+                && obj[key] is JsonNode value
+                && value.ToJsonString().Length <= 2000
+            )
                 result[key] = value.DeepClone();
         var excerpt = head + $"\n[Tool output truncated; complete output: {file}]\n" + tail;
         if (response is JsonObject error && error.ContainsKey("error"))

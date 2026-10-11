@@ -169,7 +169,9 @@ internal sealed partial class SessionToolExecutor(
     {
         var errors = toolMessage["parts"]!
             .AsArray()
-            .Any(part => (part?["functionResponse"]?["response"] as JsonObject)?["error"] is not null);
+            .Any(part =>
+                (part?["functionResponse"]?["response"] as JsonObject)?["error"] is not null
+            );
         var explicitStop = explicitWaitIds.Count > 0;
         if (errors || stopping)
             foreach (var id in explicitWaitIds)
@@ -417,10 +419,12 @@ internal sealed partial class SessionToolExecutor(
         JsonObject args,
         CancellationToken token
     ) =>
-        (await (Files as ITurnToolExecutor ?? workspace).ExecuteAsync(
-            new JsonObject { ["name"] = name, ["args"] = args.DeepClone() },
-            token
-        ))!.AsObject();
+        (
+            await (Files as ITurnToolExecutor ?? workspace).ExecuteAsync(
+                new JsonObject { ["name"] = name, ["args"] = args.DeepClone() },
+                token
+            )
+        )!.AsObject();
 
     private async Task<JsonObject> ExecuteAgentAsync(
         string name,

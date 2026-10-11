@@ -7,24 +7,49 @@ namespace Foxwarm.Tests;
 public sealed class OutboundMcpLifecycleTests
 {
     private static JsonObject Args(string tag) => new() { ["tag"] = tag };
+
     private static string Id(JsonNode? value) => value!["id"]!.GetValue<string>();
-    private static JsonObject Search() => new() { ["sources"] = new JsonArray("mcp"), ["server"] = "peer" };
+
+    private static JsonObject Search() =>
+        new() { ["sources"] = new JsonArray("mcp"), ["server"] = "peer" };
 
     [Fact]
     public async Task Official_stdio_reuses_process_for_discovery_calls_native_Monty_and_credential_only_changes()
     {
         await using var f = await OutboundMcpFixture.CreateAsync();
         var root = Path.Combine(f.Temp.Path, "stdio");
-        await f.Mcp.ConfigureAsync(new JsonObject { ["name"] = "peer", ["transport"] = "stdio", ["command"] = "node", ["args"] = new JsonArray(OutboundSdkPeer.Script, "stdio", root), ["stderr"] = "pipe" }, default);
+        await f.Mcp.ConfigureAsync(
+            new JsonObject
+            {
+                ["name"] = "peer",
+                ["transport"] = "stdio",
+                ["command"] = "node",
+                ["args"] = new JsonArray(OutboundSdkPeer.Script, "stdio", root),
+                ["stderr"] = "pipe",
+            },
+            default
+        );
         var tools = f.Tools(f.First);
-        var discovered = await tools.ExecuteAsync(new JsonObject { ["name"] = "search_tools", ["args"] = Search() }, default);
+        var discovered = await tools.ExecuteAsync(
+            new JsonObject { ["name"] = "search_tools", ["args"] = Search() },
+            default
+        );
         Assert.Contains("probe", discovered!["output"]!.GetValue<string>());
         Assert.Equal("stdio", Id(await f.CallAsync(f.First, "probe", Args("first"))));
         Assert.Equal("stdio", Id(await f.CallAsync(f.Second, "probe", Args("second"))));
         var script = await f.ScriptAsync("return call_tool('mcp:peer/probe', {'tag': 'native'})");
         Assert.Equal("completed", script!["status"]!.GetValue<string>());
         Assert.Equal("stdio", Id(script["result"]));
-        await f.Mcp.ConfigureAsync(new JsonObject { ["name"] = "peer", ["token"] = Guid.NewGuid().ToString("N"), ["headers"] = new JsonObject { ["X-Qualification"] = Guid.NewGuid().ToString("N") }, ["timeoutSeconds"] = 1 }, default);
+        await f.Mcp.ConfigureAsync(
+            new JsonObject
+            {
+                ["name"] = "peer",
+                ["token"] = Guid.NewGuid().ToString("N"),
+                ["headers"] = new JsonObject { ["X-Qualification"] = Guid.NewGuid().ToString("N") },
+                ["timeoutSeconds"] = 1,
+            },
+            default
+        );
         using var cancel = new CancellationTokenSource();
         var stopped = f.CallAsync(f.First, "hold", Args("stopped"), cancel.Token);
         await WaitFileAsync(root, "effect", "stopped");
@@ -38,8 +63,18 @@ public sealed class OutboundMcpLifecycleTests
         Assert.Equal("stdio", Id(await f.CallAsync(f.First, "probe", Args("after-timeout"))));
         var events = await FileEventsAsync(root);
         Assert.Single(events, row => row["kind"]!.GetValue<string>() == "process");
-        Assert.Single(events, row => row["kind"]!.GetValue<string>() == "effect" && row["tag"]?.GetValue<string>() == "stopped");
-        Assert.Single(events, row => row["kind"]!.GetValue<string>() == "effect" && row["tag"]?.GetValue<string>() == "timeout");
+        Assert.Single(
+            events,
+            row =>
+                row["kind"]!.GetValue<string>() == "effect"
+                && row["tag"]?.GetValue<string>() == "stopped"
+        );
+        Assert.Single(
+            events,
+            row =>
+                row["kind"]!.GetValue<string>() == "effect"
+                && row["tag"]?.GetValue<string>() == "timeout"
+        );
     }
 
     [Fact]
@@ -49,11 +84,17 @@ public sealed class OutboundMcpLifecycleTests
         await using var peer = await OutboundSdkPeer.StartAsync(temp.Path);
         await using var f = await OutboundMcpFixture.CreateAsync();
         await f.ConfigureAsync(peer.Url + "/mcp");
-        var search = await f.Tools(f.First).ExecuteAsync(new JsonObject { ["name"] = "search_tools", ["args"] = Search() }, default);
+        var search = await f.Tools(f.First)
+            .ExecuteAsync(
+                new JsonObject { ["name"] = "search_tools", ["args"] = Search() },
+                default
+            );
         Assert.Contains("probe", search!["output"]!.GetValue<string>());
         var first = Id(await f.CallAsync(f.First, "probe", Args("first")));
         var again = Id(await f.CallAsync(f.First, "probe", Args("again")));
-        var script = await f.ScriptAsync("search_tools = call_tool('search_tools', {'sources': ['mcp'], 'server': 'peer'})\nreturn {'search': search_tools, 'call': call_tool('mcp:peer/probe', {'tag': 'native'})}");
+        var script = await f.ScriptAsync(
+            "search_tools = call_tool('search_tools', {'sources': ['mcp'], 'server': 'peer'})\nreturn {'search': search_tools, 'call': call_tool('mcp:peer/probe', {'tag': 'native'})}"
+        );
         Assert.Equal("completed", script!["status"]!.GetValue<string>());
         Assert.Equal(first, Id(script["result"]!["call"]));
         Assert.Equal(first, again);
@@ -61,12 +102,23 @@ public sealed class OutboundMcpLifecycleTests
         Assert.NotEqual(first, second);
         var events = await peer.EventsAsync();
         Assert.Equal(2, events.Count(row => row["kind"]!.GetValue<string>() == "initialize"));
-        Assert.All(events.Where(row => row["kind"]!.GetValue<string>() == "initialize"), row => Assert.StartsWith("2025-", row["protocol"]!.GetValue<string>()));
+        Assert.All(
+            events.Where(row => row["kind"]!.GetValue<string>() == "initialize"),
+            row => Assert.StartsWith("2025-", row["protocol"]!.GetValue<string>())
+        );
         Assert.Contains(events, row => row["method"]?.GetValue<string>() == "server/discover");
-        Assert.All(events.Where(row => row["kind"]!.GetValue<string>() == "list"), row => Assert.Equal(first, row["id"]!.GetValue<string>()));
+        Assert.All(
+            events.Where(row => row["kind"]!.GetValue<string>() == "list"),
+            row => Assert.Equal(first, row["id"]!.GetValue<string>())
+        );
         var failed = await f.CallAsync(f.First, "fail", Args("non-replay"));
         Assert.NotNull(failed!["error"]);
-        Assert.Single((await peer.EventsAsync()), row => row["kind"]!.GetValue<string>() == "effect" && row["tag"]?.GetValue<string>() == "non-replay");
+        Assert.Single(
+            (await peer.EventsAsync()),
+            row =>
+                row["kind"]!.GetValue<string>() == "effect"
+                && row["tag"]?.GetValue<string>() == "non-replay"
+        );
         Assert.Equal(first, Id(await f.CallAsync(f.First, "probe", Args("after-error"))));
         await f.DisposeAsync();
         var deleted = await peer.WaitAsync("delete", count: 2);
@@ -88,9 +140,15 @@ public sealed class OutboundMcpLifecycleTests
         var surviving = f.CallAsync(f.First, "hold", Args("two"));
         await peer.WaitAsync("effect", "two");
         cancel.Cancel();
-        Assert.Equal("tool_call_cancelled", (await cancelled)!["error"]!["type"]!.GetValue<string>());
+        Assert.Equal(
+            "tool_call_cancelled",
+            (await cancelled)!["error"]!["type"]!.GetValue<string>()
+        );
         Assert.False(surviving.IsCompleted);
-        Assert.DoesNotContain((await peer.EventsAsync()), row => row["kind"]!.GetValue<string>() == "delete");
+        Assert.DoesNotContain(
+            (await peer.EventsAsync()),
+            row => row["kind"]!.GetValue<string>() == "delete"
+        );
         await peer.ReleaseAsync("two");
         Assert.Equal(id, Id(await surviving));
         Assert.Equal(id, Id(await f.CallAsync(f.First, "probe")));
@@ -102,7 +160,12 @@ public sealed class OutboundMcpLifecycleTests
         Assert.Single(await peer.WaitAsync("delete"));
         Assert.NotEqual(id, Id(await f.CallAsync(f.First, "probe")));
         foreach (var tag in new[] { "one", "two", "single" })
-            Assert.Single((await peer.EventsAsync()), row => row["kind"]!.GetValue<string>() == "effect" && row["tag"]?.GetValue<string>() == tag);
+            Assert.Single(
+                (await peer.EventsAsync()),
+                row =>
+                    row["kind"]!.GetValue<string>() == "effect"
+                    && row["tag"]?.GetValue<string>() == tag
+            );
     }
 
     [Fact]
@@ -122,17 +185,29 @@ public sealed class OutboundMcpLifecycleTests
         Assert.NotEqual(first, moved);
         var outcome = await f.Manager.DeleteAsync(f.Second.Id, source: f.First);
         Assert.Equal("deleted", outcome["status"]!.GetValue<string>());
-        Assert.Contains(await peer.WaitAsync("delete", count: 2), row => row["id"]!.GetValue<string>() == second);
+        Assert.Contains(
+            await peer.WaitAsync("delete", count: 2),
+            row => row["id"]!.GetValue<string>() == second
+        );
         Assert.NotNull((await f.CallAsync(f.Second, "probe"))!["error"]);
         Assert.Equal(moved, Id(await f.CallAsync(f.First, "probe")));
-        await f.Mcp.ConfigureAsync(new JsonObject { ["name"] = "peer", ["timeoutSeconds"] = 2 }, default);
+        await f.Mcp.ConfigureAsync(
+            new JsonObject { ["name"] = "peer", ["timeoutSeconds"] = 2 },
+            default
+        );
         await peer.WaitAsync("delete", count: 3);
         var changed = Id(await f.CallAsync(f.First, "probe"));
         Assert.NotEqual(moved, changed);
-        await f.Mcp.ConfigureAsync(new JsonObject { ["name"] = "peer", ["enable"] = false }, default);
+        await f.Mcp.ConfigureAsync(
+            new JsonObject { ["name"] = "peer", ["enable"] = false },
+            default
+        );
         await peer.WaitAsync("delete", count: 4);
         Assert.NotNull((await f.CallAsync(f.First, "probe"))!["error"]);
-        await f.Mcp.ConfigureAsync(new JsonObject { ["name"] = "peer", ["enable"] = true }, default);
+        await f.Mcp.ConfigureAsync(
+            new JsonObject { ["name"] = "peer", ["enable"] = true },
+            default
+        );
         Assert.NotEqual(changed, Id(await f.CallAsync(f.First, "probe")));
     }
 
@@ -150,13 +225,20 @@ public sealed class OutboundMcpLifecycleTests
         Assert.NotNull((await initializing.WaitAsync(TimeSpan.FromSeconds(10)))!["error"]);
         var current = Id(await f.CallAsync(f.First, "probe"));
         Assert.Equal(current, Id(await f.CallAsync(f.First, "probe")));
-        Assert.Single((await peer.EventsAsync()), row => row["kind"]!.GetValue<string>() == "initialize");
+        Assert.Single(
+            (await peer.EventsAsync()),
+            row => row["kind"]!.GetValue<string>() == "initialize"
+        );
     }
 
     [Theory]
     [InlineData("sse", "/sse", 0)]
     [InlineData("auto", "/auto", 1)]
-    public async Task Official_SSE_and_auto_initialization_cleanup_reuse_without_replaying_effects(string transport, string path, int failedProbes)
+    public async Task Official_SSE_and_auto_initialization_cleanup_reuse_without_replaying_effects(
+        string transport,
+        string path,
+        int failedProbes
+    )
     {
         using var temp = new TempDirectory();
         await using var peer = await OutboundSdkPeer.StartAsync(temp.Path);
@@ -167,11 +249,20 @@ public sealed class OutboundMcpLifecycleTests
         Assert.NotNull((await f.CallAsync(f.First, "fail", Args("sse-effect")))!["error"]);
         var events = await peer.EventsAsync();
         Assert.Single(events, row => row["kind"]!.GetValue<string>() == "sse-open");
-        Assert.Equal(failedProbes, events.Count(row => row["kind"]!.GetValue<string>() == "failed-http-probe"));
+        Assert.Equal(
+            failedProbes,
+            events.Count(row => row["kind"]!.GetValue<string>() == "failed-http-probe")
+        );
         Assert.Single(events, row => row["kind"]!.GetValue<string>() == "effect");
-        await f.Mcp.ConfigureAsync(new JsonObject { ["name"] = "peer", ["enable"] = false }, default);
+        await f.Mcp.ConfigureAsync(
+            new JsonObject { ["name"] = "peer", ["enable"] = false },
+            default
+        );
         await peer.WaitAsync("closed");
-        Assert.DoesNotContain((await peer.EventsAsync()), row => row["kind"]!.GetValue<string>() == "delete");
+        Assert.DoesNotContain(
+            (await peer.EventsAsync()),
+            row => row["kind"]!.GetValue<string>() == "delete"
+        );
     }
 
     [Fact]
@@ -184,7 +275,9 @@ public sealed class OutboundMcpLifecycleTests
         var call = f.CallAsync(f.First, "hold", Args("shutdown"));
         await peer.WaitAsync("effect", "shutdown");
         f.Manager.BeginShutdown();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => call.WaitAsync(TimeSpan.FromSeconds(10)));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            call.WaitAsync(TimeSpan.FromSeconds(10))
+        );
         await f.Mcp.DrainAsync();
         Assert.NotNull((await f.CallAsync(f.First, "probe"))!["error"]);
         await f.DisposeAsync();
@@ -193,12 +286,19 @@ public sealed class OutboundMcpLifecycleTests
     }
 
     private static async Task<JsonObject[]> FileEventsAsync(string root) =>
-        (await File.ReadAllLinesAsync(Path.Combine(root, "events.ndjson"))).Where(line => line.Length > 0).Select(line => JsonNode.Parse(line)!.AsObject()).ToArray();
+        (await File.ReadAllLinesAsync(Path.Combine(root, "events.ndjson")))
+            .Where(line => line.Length > 0)
+            .Select(line => JsonNode.Parse(line)!.AsObject())
+            .ToArray();
 
     private static async Task WaitFileAsync(string root, string kind, string tag)
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        while (!(await FileEventsAsync(root)).Any(row => row["kind"]?.GetValue<string>() == kind && row["tag"]?.GetValue<string>() == tag))
+        while (
+            !(await FileEventsAsync(root)).Any(row =>
+                row["kind"]?.GetValue<string>() == kind && row["tag"]?.GetValue<string>() == tag
+            )
+        )
             await Task.Delay(20, deadline.Token);
     }
 }
