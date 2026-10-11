@@ -1100,7 +1100,7 @@ test('default model-facing tool definitions exclude hidden browser and advanced 
   assert.equal(modelFacingDefinitions.some(def => def.name === 'image_crop'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'image_write_to_file'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'submit_compact_plan'), true);
-  assert.equal(modelFacingDefinitions.some(def => def.name === 'set_goal'), true);
+  assert.equal(definitions.some(def => def.name === 'set_goal'), false);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'session'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'skill'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'node'), true);
@@ -1142,6 +1142,30 @@ test('renamed snapshot refresh works through direct unified and ToolScript paths
   }
 });
 
+test('session parent updates work through direct and unified builtin dispatch', async () => {
+  await sessionManager.loadSessions();
+  const parentId = `unified_session_parent_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const childId = `unified_session_child_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  await sessionManager.getSession(parentId);
+  const child = await sessionManager.getSession(childId);
+  const ctx: any = { sessionId: childId, session: child };
+  try {
+    assert.deepEqual(await tools.session({ action: 'update-parent', parentSessionId: parentId }, ctx), {
+      sessionId: childId,
+      previousParentSessionId: null,
+      parentSessionId: parentId,
+    });
+    assert.deepEqual(await call_tool({ source: 'builtin', name: 'session', args: { action: 'update-parent', parentSessionId: null } }, ctx), {
+      sessionId: childId,
+      previousParentSessionId: parentId,
+      parentSessionId: null,
+    });
+  } finally {
+    await sessionManager.deleteSession(childId).catch(() => {});
+    await sessionManager.deleteSession(parentId).catch(() => {});
+  }
+});
+
 test('recall model-facing schema separates target/vector retrieval from literal result post-filtering', () => {
   const recallDef = definitions.find(def => def.name === 'recall');
   assert.ok(recallDef);
@@ -1175,7 +1199,10 @@ test('recall model-facing schema separates target/vector retrieval from literal 
 test('submit_compact_plan exposes the replaceAsBlocks array-or-JSON-string contract', () => {
   const compactDef = modelFacingDefinitions.find(def => def.name === 'submit_compact_plan');
   assert.ok(compactDef);
-  assert.deepEqual(compactDef.parameters.required, ['replaceAsBlocks']);
+  assert.equal(compactDef.parameters.required, undefined);
+  assert.equal((compactDef.parameters as any).oneOf, undefined);
+  assert.equal((compactDef.parameters as any).anyOf, undefined);
+  assert.equal(compactDef.parameters.properties.argsFilePath.type, 'string');
   assert.equal(Object.prototype.hasOwnProperty.call(compactDef.parameters.properties, 'createBlocksJson'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(compactDef.parameters.properties, 'createBlocks'), false);
   const replacementSchema = compactDef.parameters.properties.replaceAsBlocks as any;
@@ -1192,19 +1219,13 @@ test('wait is the model-facing pause tool and end_turn is removed', () => {
   assert.ok(waitDef);
   assert.equal(waitDef.defaultInject, true);
   assert.equal((waitDef.parameters?.properties as any)?.reason?.type, 'string');
-  assert.equal((waitDef.parameters?.properties as any)?.wakeIfNoActivityAfterSeconds?.type, 'number');
+  assert.deepEqual((waitDef.parameters?.properties as any)?.wakeIfNoActivityAfterSeconds?.type, ['number', 'null']);
+  assert.match((waitDef.parameters?.properties as any)?.wakeIfNoActivityAfterSeconds?.description, /600-second fallback/);
   assert.equal((waitDef.parameters?.properties as any)?.waitExecIds?.type, 'array');
   assert.equal(Object.prototype.hasOwnProperty.call(waitDef.parameters?.properties || {}, 'timeoutMessage'), false);
   assert.equal(definitions.some(def => def.name === 'end_turn'), false);
 });
 
-test('set_goal schema keeps goal optional so clear can omit it', () => {
-  const definition = definitions.find(def => def.name === 'set_goal');
-  assert.ok(definition);
-  assert.equal((definition.parameters?.properties as any)?.goal?.type, 'string');
-  assert.equal(Object.prototype.hasOwnProperty.call(definition.parameters?.properties || {}, 'remindOnTurnEnd'), false);
-  assert.deepEqual(definition.parameters?.required, undefined);
-});
 
 test('defaultInject metadata is the single source of truth for default model injection', () => {
   for (const definition of modelFacingDefinitions) {
@@ -1219,6 +1240,7 @@ test('defaultInject metadata is the single source of truth for default model inj
 
 test('default model-facing tool names and serialized schema size stay consolidated', () => {
   assert.deepEqual(modelFacingDefinitions.map(def => def.name), [
+    'task',
     'read',
     'write',
     'edit',
@@ -1242,7 +1264,6 @@ test('default model-facing tool names and serialized schema size stay consolidat
     'skill',
     'get_session_messages',
     'recall',
-    'set_goal',
     'submit_compact_plan',
     'search_tools',
     'call_tool',
@@ -1273,7 +1294,7 @@ test('consolidated resource tool schemas expose their approved actions', () => {
   const definition = definitions.find(def => def.name === 'session');
   assert.ok(definition);
   assert.equal(definition.defaultInject, true);
-  assert.deepEqual((definition.parameters?.properties as any)?.action?.enum, ['status', 'list', 'update-display-name']);
+  assert.deepEqual((definition.parameters?.properties as any)?.action?.enum, ['status', 'list', 'update-display-name', 'update-parent']);
   assert.equal((definition.parameters?.properties as any)?.start?.type, 'number');
   assert.equal((definition.parameters?.properties as any)?.count?.type, 'number');
   assert.equal((definition.parameters?.properties as any)?.sessionId?.type, 'string');

@@ -23,18 +23,7 @@ interface ParserState {
 const END_PATCH = '*** End Patch';
 const END_FILE = '*** End of File';
 
-const FORMAT_HINT = `Expected apply_patch format:
-*** Begin Patch
-*** Update File: <path>
-@@ optional anchor
- context line (prefix with space)
--line to delete
-+line to insert
-*** Add File: <path>
-+new file content line
-*** Delete File: <path>
-*** End Patch
-For Update File: context lines start with space, deletions with '-', insertions with '+'. Use '@@' to start a new section. See the apply_patch tool description for full details.`;
+const FORMAT_HINT = "Use *** Begin Patch / *** End Patch with file action headers; prefix update lines with space/-/+ and add lines with +; use @@ between update sections.";
 
 const FILE_HEADER_PREFIXES = [
   '*** Update File: ',
@@ -178,6 +167,15 @@ function readStr(state: ParserState, prefix: string): string {
   return '';
 }
 
+// Match Codex's final seek_sequence pass without changing inserted content.
+function normalizeMatchLine(value: string): string {
+  return value.trim()
+    .replace(/[\u2010-\u2015\u2212]/g, '-')
+    .replace(/[\u2018-\u201B]/g, "'")
+    .replace(/[\u201C-\u201F]/g, '"')
+    .replace(/[\u00A0\u2002-\u200A\u202F\u205F\u3000]/g, ' ');
+}
+
 function advanceCursorToAnchor(anchor: string, inputLines: string[], cursor: number, parser: ParserState): number {
   let found = false;
 
@@ -197,6 +195,16 @@ function advanceCursorToAnchor(anchor: string, inputLines: string[], cursor: num
         cursor = i + 1;
         parser.fuzz += 1;
         found = true;
+        break;
+      }
+    }
+  }
+
+  if (!found && !inputLines.slice(0, cursor).some(line => normalizeMatchLine(line) === normalizeMatchLine(anchor))) {
+    for (let i = cursor; i < inputLines.length; i += 1) {
+      if (normalizeMatchLine(inputLines[i]) === normalizeMatchLine(anchor)) {
+        cursor = i + 1;
+        parser.fuzz += 1000;
         break;
       }
     }
@@ -241,7 +249,7 @@ function readSection(lines: string[], startIndex: number, filePath: string): {
     } else if (line[0] === ' ') {
       mode = 'keep';
     } else {
-      throw new Error(`Invalid apply_patch input for ${filePath}: invalid line: ${line}. Each line must start with ' ' (context), '-' (delete), or '+' (insert).\n${FORMAT_HINT}`);
+      throw new Error(`Invalid apply_patch input for ${filePath}: invalid line: ${line}\n${FORMAT_HINT}`);
     }
 
     line = line.slice(1);
@@ -320,6 +328,12 @@ function findContextCore(lines: string[], context: string[], start: number): { n
     }
   }
 
+  for (let i = start; i < lines.length; i += 1) {
+    if (equalsSlice(lines, context, i, normalizeMatchLine)) {
+      return { newIndex: i, fuzz: 1000 };
+    }
+  }
+
   return { newIndex: -1, fuzz: 0 };
 }
 
@@ -336,6 +350,34 @@ function findContext(lines: string[], context: string[], start: number, eof: boo
   return findContextCore(lines, context, start);
 }
 
+const MAX_CONTEXT_ERROR_LENGTH = 1600;
+const MAX_CONTEXT_ERROR_PATH_LENGTH = 120;
+const FAILED_HUNK_OMISSION = '\n... (middle of failed hunk omitted) ...\n';
+
+function formatContextErrorPath(filePath: string): string {
+  const shortened = filePath.length <= MAX_CONTEXT_ERROR_PATH_LENGTH
+    ? filePath
+    : `${filePath.slice(0, 60)}…${filePath.slice(-59)}`;
+  return JSON.stringify(shortened);
+}
+
+function formatBoundedFailedHunk(patchLines: string[], maxLength: number): string {
+  const hunk = patchLines.join('\n');
+  if (hunk.length <= maxLength) return hunk;
+
+  const contentLength = Math.max(0, maxLength - FAILED_HUNK_OMISSION.length);
+  if (contentLength === 0) return FAILED_HUNK_OMISSION.slice(0, maxLength);
+
+  const headLength = Math.ceil(contentLength / 2);
+  const tailLength = contentLength - headLength;
+  return `${hunk.slice(0, headLength)}${FAILED_HUNK_OMISSION}${tailLength > 0 ? hunk.slice(-tailLength) : ''}`;
+}
+
+function formatContextMismatch(patchLines: string[], start: number, eof: boolean, filePath: string): string {
+  const prefix = `Could not match ${eof ? 'EOF' : 'patch'} context while patching ${formatContextErrorPath(filePath)} starting at line ${start + 1}.\nFailed hunk:\n`;
+  return `${prefix}${formatBoundedFailedHunk(patchLines, Math.max(0, MAX_CONTEXT_ERROR_LENGTH - prefix.length))}`.slice(0, MAX_CONTEXT_ERROR_LENGTH);
+}
+
 function parseUpdateDiff(lines: string[], input: string, filePath: string): { chunks: ApplyPatchChunk[]; fuzz: number } {
   const parser: ParserState = {
     lines: [...lines, END_PATCH],
@@ -347,6 +389,7 @@ function parseUpdateDiff(lines: string[], input: string, filePath: string): { ch
   let cursor = 0;
 
   while (!isDone(parser, UPDATE_SECTION_TERMINATORS)) {
+    const hunkStart = parser.index;
     const anchor = readStr(parser, '@@ ');
     const hasBareAnchor = !anchor && parser.lines[parser.index] === '@@';
     if (hasBareAnchor) parser.index += 1;
@@ -360,14 +403,10 @@ function parseUpdateDiff(lines: string[], input: string, filePath: string): { ch
     }
 
     const { nextContext, sectionChunks, endIndex, eof } = readSection(parser.lines, parser.index, filePath);
-    const nextContextText = nextContext.join('\n');
     const { newIndex, fuzz } = findContext(inputLines, nextContext, cursor, eof);
 
     if (newIndex === -1) {
-      if (eof) {
-        throw new Error(`Could not match EOF context while patching ${filePath} starting at line ${cursor + 1}:\n${nextContextText}`);
-      }
-      throw new Error(`Could not match patch context while patching ${filePath} starting at line ${cursor + 1}:\n${nextContextText}`);
+      throw new Error(formatContextMismatch(parser.lines.slice(hunkStart, endIndex), cursor, eof, filePath));
     }
 
     parser.fuzz += fuzz;

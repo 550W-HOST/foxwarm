@@ -2,6 +2,7 @@ import {
   ToolArgs,
   ToolContext,
   buildEndTurnResult,
+  DEFAULT_WAIT_EXEC_FALLBACK_SECONDS,
   normalizeWaitFallbackSeconds,
   normalizeWaitAllSessions,
   normalizeWaitAnySessions,
@@ -16,6 +17,7 @@ import {
   isWebUiUnsupportedFileDelivery,
   buildSendFileResult,
 } from './helpers';
+import { taskService } from '../tools/taskTools';
 import * as sessionManager from '../sessionManager';
 import { armMainWaitLiveness, scheduleMainWaitTimeout, validateMainWaitExecIds, validateMainWaitSessions } from '../mainManagementTools';
 import { logger } from '../common';
@@ -26,22 +28,47 @@ import { validateInterAgentHandoffConfirmationForMode } from '../toolCallControl
 
 export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext) {
   await requireNotIsolated(ctx, 'create_child_session');
-  validateInterAgentHandoffConfirmationForMode(args, HANDOFF_CONFIRMATION_ENABLED);
+  validateInterAgentHandoffConfirmationForMode(args, HANDOFF_CONFIRMATION_ENABLED, 'create_child_session');
   const normalizedArgs = normalizeCreateChildSessionArgs(args);
-  const { agentName, suffix, displayName, fork = false, message, node } = normalizedArgs;
+  const { agentName, suffix, displayName, fork = false, message, node, taskId } = normalizedArgs;
   const afterSend = normalizeAfterSendBehavior(normalizedArgs, 'create_child_session');
   const forced = normalizeForceModel(normalizedArgs, 'create_child_session');
 
   if (!ctx || !ctx.sessionId) {
     throw new Error('Cannot create child session: missing context');
   }
-  if (afterSend === 'wait' && (typeof message !== 'string' || !message.trim())) {
+  if (afterSend === 'wait' && !taskId && (typeof message !== 'string' || !message.trim())) {
     throw new Error('create_child_session with afterSend="wait" requires a non-empty initial message.');
   }
 
   const currentSessionId = ctx.sessionId;
-  const childSessionId = await sessionManager.createChildSession(currentSessionId, suffix, fork,
-    { agentName, displayName, node, model: forced.model, effort: forced.effort, sourceOverride: (ctx as any).sourceOverride });
+  const create = () => sessionManager.createChildSession(currentSessionId, suffix, fork,
+    { agentName, displayName, node, taskId, model: forced.model, effort: forced.effort, sourceOverride: (ctx as any).sourceOverride });
+  let childSessionId: string;
+  let taskAssignmentDelivered = true;
+  let taskAssignmentWarning: string | undefined;
+  let sentNotifications = 0;
+  if (taskId) {
+    const attached = await taskService.createAttachedChild(taskId, currentSessionId, create, message);
+    childSessionId = attached.childSessionId;
+    taskAssignmentDelivered = attached.assignmentDelivered;
+    taskAssignmentWarning = attached.warning;
+    sentNotifications = attached.sentNotifications;
+  } else {
+    childSessionId = await create();
+  }
+
+  if (taskId) {
+    const output = taskAssignmentDelivered
+      ? `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'}). Task assignment sent${taskAssignmentWarning ? ` with warning: ${taskAssignmentWarning}` : ''}.`
+      : `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'}), but task assignment delivery failed${taskAssignmentWarning ? `: ${taskAssignmentWarning}` : '.'}`;
+    if (taskAssignmentDelivered && afterSend === 'wait') {
+      return { output, sentNotifications, __toolPostAction: { waitForReply: true, successfulSendToSessionTarget: childSessionId } };
+    }
+    return taskAssignmentDelivered && afterSend === 'finish'
+      ? { ...buildEndTurnResult(), output, sentNotifications, __toolPostAction: { finishAfterSend: true } }
+      : { output, sentNotifications };
+  }
 
   if (message) {
     if (afterSend === 'wait' || afterSend === 'finish') {
@@ -67,8 +94,8 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
 }
 
 export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
-  validateInterAgentHandoffConfirmationForMode(args, HANDOFF_CONFIRMATION_ENABLED);
-  const unknownKeys = Object.keys(args || {}).filter(key => !['sessionId', 'message', 'afterSend', 'noFurtherAssistantReply', 'waitAfterHandoff', 'confirmation'].includes(key));
+  validateInterAgentHandoffConfirmationForMode(args, HANDOFF_CONFIRMATION_ENABLED, 'send_to_session');
+  const unknownKeys = Object.keys(args || {}).filter(key => !['sessionId', 'handoffRecall', 'message', 'afterSend', 'noFurtherAssistantReply', 'waitAfterHandoff', 'handoffConfirmation'].includes(key));
   if (unknownKeys.length) throw new Error(`send_to_session received unsupported argument${unknownKeys.length === 1 ? '' : 's'}: ${unknownKeys.join(', ')}.`);
   const { sessionId, message } = args;
   const afterSend = normalizeAfterSendBehavior(args, 'send_to_session');
@@ -109,11 +136,18 @@ export async function tool_wait(args: ToolArgs, ctx?: ToolContext) {
   const unknownKeys = Object.keys(args).filter(key => !allowedKeys.has(key));
   if (unknownKeys.length) throw new Error(`wait received unsupported argument${unknownKeys.length === 1 ? '' : 's'}: ${unknownKeys.join(', ')}.`);
   const { reason } = args || {};
-  const timeoutSeconds = normalizeWaitFallbackSeconds(args?.wakeIfNoActivityAfterSeconds);
+  const requestedTimeoutSeconds = normalizeWaitFallbackSeconds(args?.wakeIfNoActivityAfterSeconds);
   let waitAllSessions = normalizeWaitAllSessions(args?.waitAllSessions);
   let waitAnySessions = normalizeWaitAnySessions(args?.waitAnySessions);
   const waitExecIds = normalizeWaitExecIds(args?.waitExecIds);
   const waitForInput = normalizeWaitForInput(args?.waitForInput);
+  const fallbackDisabled = Object.prototype.hasOwnProperty.call(args, 'wakeIfNoActivityAfterSeconds')
+    && args.wakeIfNoActivityAfterSeconds === null;
+  const timeoutSeconds = requestedTimeoutSeconds ?? (
+    waitExecIds && !waitForInput && !fallbackDisabled
+      ? DEFAULT_WAIT_EXEC_FALLBACK_SECONDS
+      : undefined
+  );
   if (waitAllSessions && waitAnySessions) throw new Error('waitAllSessions and waitAnySessions are mutually exclusive.');
   if (!waitAllSessions && !waitAnySessions && !waitExecIds && !waitForInput && timeoutSeconds === undefined) {
     throw new Error('wait requires at least one progress source: waitAllSessions, waitAnySessions, waitExecIds, waitForInput:true, or wakeIfNoActivityAfterSeconds. reason alone is not sufficient.');

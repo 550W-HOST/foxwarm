@@ -169,7 +169,6 @@ export class WebUiRealtimeTransport {
     socket.onopen = () => {
       if (!this.isCurrentSocket(socket, generation)) return
       this.reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS
-      this.sendSubscriptions()
     }
     socket.onmessage = event => {
       if (!this.isCurrentSocket(socket, generation)) return
@@ -228,7 +227,10 @@ export class WebUiRealtimeTransport {
       try { this.socket?.close(1008, 'Realtime protocol error') } catch {}
       return
     }
-    if (message.type === 'connected') return
+    if (message.type === 'connected') {
+      this.sendSubscriptions()
+      return
+    }
 
     if (message.type === 'session-list-delta') {
       for (const subscription of this.listSubscriptions.values()) {

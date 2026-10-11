@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test:tasks-e2e": "node --test test/tasksView.e2e.mjs",
     "test:markdown": "node --test test/markdownRenderer.test.mjs",
     "test:mermaid-policy": "node --test test/mermaidPolicy.test.mjs",
     "test:setup-models": "node --test test/setupModels.test.mjs",

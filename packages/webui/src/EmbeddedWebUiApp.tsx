@@ -1,7 +1,7 @@
 import { makeFoxwarmPopupUrl } from './popupWebUi'
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { DndContext } from '@dnd-kit/core'
-import { Bot, Workflow } from 'lucide-react'
+import { Bot, Workflow, ClipboardList } from 'lucide-react'
 import Chat from './components/Chat'
 import SessionListCore from './components/SessionListCore'
 import AgentCreationMenu from './components/AgentCreationMenu'
@@ -129,7 +129,20 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
         <div className="border-b border-fw-border p-3 dark:border-fw-border">
           <div className="flex items-center justify-between gap-2">
             <h1 className="flex min-w-0 items-center gap-2 truncate text-lg font-bold text-fw-text-strong"><Bot className="h-4 w-4 shrink-0" /> Foxwarm</h1>
-            <div className="flex items-stretch gap-1">
+            <div className="flex shrink-0 items-stretch gap-1">
+              <button
+                type="button"
+                title="Open tasks"
+                aria-label="Open tasks"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-fw-border text-fw-text transition hover:bg-fw-hover hover:text-fw-text-strong dark:border-fw-border dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse"
+                onClick={() => {
+                  const popup = window.open(makeFoxwarmPopupUrl(window.location.href, { kind: 'tasks' }).toString(), '_blank', 'popup')
+                  if (!popup) window.alert('Allow popups to open tasks in a new window.')
+                  else { try { popup.opener = null } catch {} }
+                }}
+              >
+                <ClipboardList className="h-4 w-4" aria-hidden="true" />
+              </button>
               <GlobalUiSettingsMenu
                 menuAlign="end"
                 onOpenSetup={openSetup}
@@ -266,11 +279,11 @@ export function EmbeddedChatApp({ target }: { target: Extract<FoxwarmEmbeddedTar
         canonicalSessionId={target.sessionId}
         sessionDisplayName={target.title}
         sendKeyMode={preferences.sendKeyMode}
-        groupTools={preferences.groupTools}
+        timelineView={preferences.timelineView}
         showUsageBadge={preferences.showUsageBadge}
         showUserMessageMetadata={preferences.showUserMessageMetadata}
         onSendKeyModeChange={preferences.setSendKeyMode}
-        onGroupToolsChange={preferences.setGroupTools}
+        onTimelineViewChange={preferences.setTimelineView}
         onShowUsageBadgeChange={preferences.setShowUsageBadge}
         onShowUserMessageMetadataChange={preferences.setShowUserMessageMetadata}
         onOpenModelSettings={() => postFoxwarmEmbedHostMessage(target.nonce, { type: 'open-setup', focus: 'models' })}

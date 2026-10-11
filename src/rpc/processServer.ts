@@ -32,7 +32,7 @@ export class ProcessRpcServer {
   private readonly generation: number;
   private readonly buildId: string;
   private readonly maxPendingEvents: number;
-  private readonly activeRequests = new Map<string, AbortController>();
+  private readonly activeRequests = new Map<string, ReturnType<typeof buildLinkedAbortController>>();
   private readonly pendingEventSequences = new Set<number>();
   private eventSequence = 0;
   private draining = false;
@@ -80,7 +80,7 @@ export class ProcessRpcServer {
     } else if (message.kind === this.kind('rpc-request')) {
       void this.handleRequest(message);
     } else if (message.kind === this.kind('rpc-cancel')) {
-      this.activeRequests.get(message.requestId)?.abort(new RpcError('RPC_CANCELLED', 'RPC request cancelled.', true));
+      this.activeRequests.get(message.requestId)?.controller.abort(new RpcError('RPC_CANCELLED', 'RPC request cancelled.', true));
     } else if (message.kind === this.kind('rpc-drain')) {
       this.draining = true;
       this.drainRequest = message;
@@ -100,8 +100,16 @@ export class ProcessRpcServer {
       return;
     }
 
-    const linked = buildLinkedAbortController(undefined, message.deadlineAt);
-    this.activeRequests.set(message.requestId, linked.controller);
+    let settleCancellation: boolean;
+    try {
+      settleCancellation = this.registry.getService(message.service, message.serviceVersion)
+        .descriptor.methods[message.method]?.cancellation === 'settle';
+    } catch (error) {
+      this.respondError(message.requestId, error);
+      return;
+    }
+    const linked = buildLinkedAbortController(undefined, message.deadlineAt, settleCancellation);
+    this.activeRequests.set(message.requestId, linked);
     try {
       const result = await this.registry.invoke(
         message.service,
@@ -110,6 +118,7 @@ export class ProcessRpcServer {
         cloneRpcDto(message.input),
         {
           signal: linked.controller.signal,
+          hardCancellationSignal: linked.hardController?.signal,
           requestId: message.requestId,
           traceId: message.traceId,
           deadlineAt: message.deadlineAt,
@@ -123,7 +132,8 @@ export class ProcessRpcServer {
           ),
         },
       );
-      if (!linked.controller.signal.aborted) {
+      if (!linked.hardController?.signal.aborted && (!linked.controller.signal.aborted || (settleCancellation
+        && linked.controller.signal.reason?.code === 'RPC_CANCELLED'))) {
         this.send({
           kind: this.kind('rpc-response'),
           protocolVersion: RPC_PROTOCOL_VERSION,
@@ -134,7 +144,10 @@ export class ProcessRpcServer {
         });
       }
     } catch (error) {
-      this.respondError(message.requestId, linked.controller.signal.aborted
+      this.respondError(message.requestId, linked.hardController?.signal.aborted
+        ? linked.hardController.signal.reason
+        : linked.controller.signal.aborted
+        && !(settleCancellation && linked.controller.signal.reason?.code === 'RPC_CANCELLED')
         ? (linked.controller.signal.reason || error)
         : error);
     } finally {
@@ -205,7 +218,10 @@ export class ProcessRpcServer {
     this.draining = true;
     this.peer.off('message', this.onMessage);
     const reason = new RpcError('RPC_PARENT_DISCONNECTED', 'Parent IPC disconnected.', true);
-    for (const controller of this.activeRequests.values()) controller.abort(reason);
+    for (const request of this.activeRequests.values()) {
+      request.hardController?.abort(reason);
+      request.controller.abort(reason);
+    }
     void this.cleanupAfterParentDisconnect();
   };
 
@@ -264,7 +280,10 @@ export class ProcessRpcServer {
     this.draining = true;
     this.peer.off('message', this.onMessage);
     this.peer.off('disconnect', this.onParentDisconnect);
-    for (const controller of this.activeRequests.values()) controller.abort(reason);
+    for (const request of this.activeRequests.values()) {
+      request.hardController?.abort(reason);
+      request.controller.abort(reason);
+    }
   }
 
   private sendReady(): void {

@@ -160,7 +160,13 @@ test('awaited no-op compaction releases its transient runtime phase without call
 
 test('compact planning retries plain-text/no-tool response and succeeds on a later submit_compact_plan call', async () => {
   const { sessionHistory, archive, llm } = await loadDeps();
+  const { writeAuthoritativeSessionState } = await import('./stateFile');
+  const { getSessionHistoryFilePath, readSessionHistorySnapshot } = await import('./metadataStore');
+  const { estimateSessionTokens } = await import('../tokenCount');
   const session = await makeCompactableSession(archive, makeSessionId('compact_retry_plain_text_success'));
+  session.stats = { totalCachedTokens: 9000, totalInputTokens: 8000, totalOutputTokens: 7000,
+    lastUsage: { cachedTokens: 6000, inputTokens: 5000, outputTokens: 4000 } };
+  const parentStats = structuredClone(session.stats);
   const saveCounter = { count: 0 };
   const prompts: string[] = [];
   const purposes: Array<string | undefined> = [];
@@ -203,8 +209,10 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
 
       if (prompts.length === 1) {
         const text = 'I can summarize this in plain text, but I forgot the tool call.';
-        await Promise.resolve(options?.appendMessage?.({ role: 'model', parts: [{ text }] }));
-        return { text, toolCalls: [], allParts: [{ text }] };
+        const usage = { cachedTokens: 5, inputTokens: 10, outputTokens: 7, reasoningTokens: 3 };
+        await Promise.resolve(options?.appendMessage?.({ role: 'model', parts: [{ thinking: 'planner reasoning' }, { text }], __meta: { usage } }));
+        activeSession.stats.totalInputTokens += usage.inputTokens;
+        return { text, usage, toolCalls: [], allParts: [{ text }] };
       }
 
       const toolCall = {
@@ -220,12 +228,17 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
           }]),
         },
       };
-      await Promise.resolve(options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] }));
-      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+      const usage = { cachedTokens: 2, inputTokens: 20, outputTokens: 8 };
+      await Promise.resolve(options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }],
+        providerMeta: { sourceModelId: 'fixture/planner', providerSpecificFields: { opaque: 'retained' } }, __meta: { usage } }));
+      activeSession.stats.totalInputTokens += usage.inputTokens;
+      return { text: '', usage, toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
     };
 
+    const deps = makeDepsForSession(session, saveCounter);
+    deps.saveSession = async () => { saveCounter.count += 1; await writeAuthoritativeSessionState(session); };
     await sessionHistory.processSessionCompactionRequest(
-      makeDepsForSession(session, saveCounter),
+      deps,
       session.id,
       { keepPercent: 0.5 },
       'await',
@@ -242,14 +255,53 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
     assert(session.history.some(message => message.parts.some(part => /summary after retrying a missing compact tool call/.test(part.text || ''))));
     assert(session.history.some(message => message.parts.some(part => (part.system || '').includes('event="compact-completed"'))));
     assert.equal(session.history[0]?.__meta?.contextBlock?.level, 1);
+    const completion = session.history.at(-1)!;
+    const planner = completion.compaction?.planner;
+    assert(planner);
+    assert.equal(completion.__meta?.compaction, undefined);
+    assert.equal(planner.steps, 2);
+    assert.deepEqual(planner.toolCalls, ['submit_compact_plan']);
+    assert.deepEqual(planner.usage, { cachedTokens: 7, inputTokens: 30, outputTokens: 15, reasoningTokens: 3 });
+    assert.deepEqual(session.stats, parentStats, 'detached planner usage never changes parent totals');
+    assert.deepEqual(planner.messages.map(message => message.role), ['user', 'model', 'user', 'model']);
+    assert.equal(flattenPrompt(planner.messages[0].parts), prompts[0]);
+    assert.equal(flattenPrompt(planner.messages[2].parts), prompts[1]);
+    assert.equal(planner.messages[1].parts[0].thinking, 'planner reasoning');
+    assert.deepEqual(planner.messages[3].providerMeta?.providerSpecificFields, { opaque: 'retained' });
+    assert(planner.messages.every(message => message.__meta?.seq === undefined), 'inherited history rows are not copied into planner messages');
+    assert.doesNotMatch(JSON.stringify(planner.messages), /recent user message/);
+    const persisted = await readSessionHistorySnapshot(session.id);
+    assert.deepEqual(persisted?.history.at(-1).compaction, completion.compaction);
+    const archived = await archive.readArchiveMessagesBySeqRange(session.id, completion.__meta!.seq, completion.__meta!.seq);
+    assert.deepEqual(archived[0].message.compaction, completion.compaction);
+    const withoutDebug = { ...session, history: session.history.map(({ compaction: _compaction, ...message }) => message) };
+    assert.equal(estimateSessionTokens(session), estimateSessionTokens(withoutDebug));
   } finally {
     (llm as any).chat = originalChat;
     (llm as any).buildSessionSystemPromptSnapshotForSession = originalBuild;
+    await fs.remove(getSessionHistoryFilePath(session.id));
     if (!SAVE_GENERATED_SESSION_LOGS) {
       await fs.remove(path.join((await loadDeps()).tempRoot, 'logs', 'sessions', `${session.id}.jsonl`)).catch(() => {});
       await fs.remove(path.join((await loadDeps()).tempRoot, 'logs', 'sessions', `${session.id}.blocks.jsonl`)).catch(() => {});
     }
   }
+});
+
+test('provider-free display-only cleanup does not fabricate planner diagnostics', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_display_only_debug'));
+  session.history.slice(0, 2).forEach(message => { message.modelVisible = false; });
+  const originalChat = llm.chat;
+  try {
+    (llm as any).chat = async () => { throw new Error('display-only cleanup must not call the planner'); };
+    await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0.5 }, 'await');
+    assert.equal(session.history.length, 3);
+    const completion = session.history.at(-1)!;
+    assert(completion.parts.some(part => part.system?.includes('event="compact-completed"')));
+    assert.equal(completion.compaction, undefined);
+    const archived = await archive.readArchiveMessagesBySeqRange(session.id, completion.__meta!.seq, completion.__meta!.seq);
+    assert.equal(archived[0].message.compaction, undefined);
+  } finally { (llm as any).chat = originalChat; }
 });
 
 test('awaited compact cancellation aborts its provider signal without changing history', async () => {
@@ -1154,12 +1206,13 @@ test('successful compaction removes prior completion notices from the force-kept
 
     const compactCompletions = session.history.filter(message => message.parts.some(part => (part.system || '').includes('event="compact-completed"')));
     assert.equal(compactCompletions.length, 1, 'only the current compact completion remains active');
-    assert(compactCompletions[0].parts.some(part => (part.system || '').includes('goal-reminder')), 'current completion retains the current goal reminder');
+    assert.equal(compactCompletions[0].parts.length, 1, 'new completion emits only the lifecycle marker, not a Goal reminder');
     assert.equal(session.history.some(message => message.__meta?.seq === 3), false, 'old completion is removed even from the force-kept tail');
     assert.equal(session.history.some(message => message.parts.some(part => part.system === inheritedBoundary)), true, 'unrelated session boundary remains active');
     assert.equal(session.history.some(message => message.parts.some(part => part.text === 'recent real user content')), true, 'real content remains active');
     const archived = await archive.readArchiveMessagesBySeqRange(session.id, 3, 3);
     assert.equal(archived[0]?.message.parts[0]?.system, oldCompletion, 'old completion remains in durable archive');
+    assert.equal(archived[0]?.message.parts[1]?.system, '<foxwarm-system kind="goal-reminder" />', 'historical paired Goal marker remains readable');
   } finally {
     (llm as any).chat = originalChat;
     if (!SAVE_GENERATED_SESSION_LOGS) {
@@ -1730,7 +1783,7 @@ test('manual historical tool-response pruning is a true no-op for small response
   assert.deepEqual(session.history, before);
 });
 
-test('automatic pruning commits below 50% and skips layered provider planning', async () => {
+test('automatic pruning commits a material estimated reduction and skips layered provider planning', async () => {
   const { sessionHistory, llm } = await loadDeps();
   const session: Session = {
     id: makeSessionId('auto_tool_prune_commit'), agent: 'main', history: [], persistentMemorySnapshot: '',
@@ -1759,7 +1812,7 @@ test('automatic pruning commits below 50% and skips layered provider planning', 
   } finally { (llm as any).chat = originalChat; }
 });
 
-test('automatic pruning above 50% leaves byte-exact history and runs layered planning', async () => {
+test('automatic pruning declines a marginal estimated reduction and leaves byte-exact history for layered planning', async () => {
   const { sessionHistory, archive, llm } = await loadDeps();
   const session: Session = {
     id: makeSessionId('auto_tool_prune_fallback'), agent: 'main', history: [], persistentMemorySnapshot: 'S'.repeat(300000),
@@ -1790,6 +1843,36 @@ test('automatic pruning above 50% leaves byte-exact history and runs layered pla
     assert.equal(session.promptCacheKey, 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
     assert.equal(saves.count, 0);
   } finally { sessionHistory.discardPendingCompactWork(session.id); (llm as any).chat = originalChat; }
+});
+
+test('automatic pruning declines a marginal estimated reduction instead of rewriting the prompt prefix', async () => {
+  const { sessionHistory, archive } = await loadDeps();
+  const session: Session = {
+    id: makeSessionId('auto_tool_prune_marginal_budget'), agent: 'main', history: [], persistentMemorySnapshot: '',
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null }, busy: false, queue: [],
+    meta: { lastMessageTime: Date.now() }, historyVersion: 6, promptCacheKey: '99999999-aaaa-4bbb-8ccc-dddddddddddd',
+  } as Session;
+  const payload = 'marginal-tool '.repeat(160);
+  const messages: Message[] = [
+    { role: 'model', parts: [{ functionCall: { id: 'marginal-call', name: 'read', args: { unchanged: true } } }], __meta: { seq: 1, timestamp: 1 } },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'marginal-call', name: 'read', response: { output: payload } } }], __meta: { seq: 2, timestamp: 2 } },
+    ...Array.from({ length: 24 }, (_, index): Message => ({ role: index % 2 ? 'model' : 'user', parts: [{ text: `tail-block-${index} ${'x'.repeat(120)}` }], __meta: { seq: index + 3, timestamp: index + 3 } })),
+  ];
+  await archive.appendMessagesToArchive(session, messages);
+  session.history = messages;
+  const before = structuredClone(session.history);
+  const plan = await sessionHistory.buildToolResponsePrunePlan(session.id, session, 0.3);
+  assert.ok(plan.replacedFunctionResponses > 0, 'the session must actually contain a prunable response');
+  assert.ok(
+    plan.estimatedTokensAfter >= plan.estimatedTokensBefore * 0.6,
+    `the marginal reduction must stay above the commit ratio (${plan.estimatedTokensBefore} -> ${plan.estimatedTokensAfter})`,
+  );
+  const saves = { count: 0 };
+  assert.equal(await sessionHistory.tryAutomaticToolResponsePruning(makeDepsForSession(session, saves), session.id), false);
+  assert.deepEqual(session.history, before);
+  assert.equal(session.historyVersion, 6);
+  assert.equal(saves.count, 0);
+  assert.equal(JSON.stringify(session.history).includes('historical tool response pruned'), false);
 });
 
 test('prune commit accepts an appended suffix and rejects a changed prefix', async () => {
@@ -1976,4 +2059,267 @@ test('clear, reload and later compact keep block identities and new fork caps wi
     (llm as any).chat = originalChat;
     for (const sessionId of createdIds.reverse()) await manager.deleteSession(sessionId).catch(() => {});
   }
+});
+
+function repairPathFromFeedback(parts: MessagePart[] | null): string {
+  const match = flattenPrompt(parts).match(/Repair file: ("(?:[^"\\]|\\.)*")/);
+  assert(match, 'feedback identifies the operation repair file');
+  return JSON.parse(match[1]);
+}
+
+test('malformed raw compact arguments retain one file through JSON and range retries, exact edits and blocked tools', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const { parseFunctionCallArgs } = await import('../toolCallArgs');
+  const session = await makeCompactableSession(archive, makeSessionId('compact_file_repair'));
+  const before = structuredClone(session.history);
+  const originalChat = llm.chat;
+  const invalidArgs = { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 999, summary: 'repaired raw résumé 🦊' }] };
+  const validJson = JSON.stringify(invalidArgs, null, 2) + '\n';
+  const raw = validJson.slice(0, -2);
+  let filePath = '';
+  let round = 0;
+  try {
+    (llm as any).chat = async (parts: MessagePart[] | null, active: Session, _iteration: number, options: any) => {
+      round += 1;
+      assert.deepEqual(session.history, before);
+      if (round > 1) {
+        const currentPath = repairPathFromFeedback(parts);
+        if (filePath) assert.equal(currentPath, filePath);
+        filePath = currentPath;
+        assert.deepEqual(await fs.readdir(path.dirname(filePath)), ['plan.json']);
+        const expected = round <= 3 ? raw : round <= 5 ? validJson : validJson.replace('999', '2');
+        assert.deepEqual(await fs.readFile(filePath), Buffer.from(expected));
+        assert(flattenPrompt(parts).endsWith(`\`\`\`json\n${expected}\n\`\`\``), 'repair feedback shows the current file verbatim after both edits and failed calls');
+        const responses = active.history.flatMap(message => message.parts).filter(part => part.functionResponse?.name === 'submit_compact_plan');
+        assert(responses.length > 0);
+        assert(!JSON.stringify(responses).includes(raw), 'tool feedback does not duplicate malformed raw JSON');
+      }
+      let toolCall: any;
+      switch (round) {
+        case 1: toolCall = { name: 'submit_compact_plan', ...parseFunctionCallArgs(raw) }; break;
+        case 2: toolCall = { name: 'submit_compact_plan', args: { argsFilePath: filePath } }; break;
+        case 3: toolCall = { name: 'edit', args: { filePath, oldText: '\n  ]\n', newText: '\n  ]\n}\n' } }; break;
+        case 4: toolCall = { name: 'submit_compact_plan', args: { argsFilePath: filePath } }; break;
+        case 5: toolCall = { name: 'apply_patch', args: { input: `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-      "sourceEnd": 999,\n+      "sourceEnd": 2,\n*** End Patch` } }; break;
+        case 6: toolCall = { name: 'exec', args: { command: 'must never execute' } }; break;
+        case 7: toolCall = { name: 'read', args: { filePath } }; break;
+        case 8: toolCall = { name: 'write_memory', args: { filePath: 'must-not-exist.md', content: 'must not write' } }; break;
+        case 9: toolCall = { name: 'submit_compact_plan', args: { argsFilePath: path.join(path.dirname(filePath), 'other.json') } }; break;
+        case 10: toolCall = { name: 'submit_compact_plan', args: { argsFilePath: filePath, replaceAsBlocks: [] } }; break;
+        default: toolCall = { name: 'submit_compact_plan', args: { argsFilePath: filePath } };
+      }
+      toolCall.id = `file-round-${round}`;
+      const toolCalls = round === 6
+        ? [toolCall, { id: 'file-round-6-extra', name: 'read', args: { filePath: 'must-not-read.txt' } }]
+        : [toolCall];
+      if (parts) await options.appendMessage({ role: 'user', parts });
+      const allParts = toolCalls.map(functionCall => ({ functionCall }));
+      await options.appendMessage({ role: 'model', parts: allParts });
+      return { text: '', toolCalls, allParts };
+    };
+    await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0.5 }, 'await');
+    assert.equal(round, 11);
+    assert.equal(await fs.pathExists(filePath), false);
+    assert.equal(await fs.pathExists(path.dirname(filePath)), false);
+    assert(session.history.some(message => message.parts.some(part => (part.text || '').includes('repaired raw résumé 🦊'))));
+    const planner = session.history.at(-1)!.compaction?.planner;
+    assert(planner);
+    assert.equal(planner.steps, 11);
+    assert.deepEqual(planner.toolCalls, [
+      'submit_compact_plan', 'submit_compact_plan', 'edit', 'submit_compact_plan', 'apply_patch',
+      'exec', 'read', 'read', 'write_memory', 'submit_compact_plan', 'submit_compact_plan', 'submit_compact_plan',
+    ]);
+    assert.equal(planner.usage, undefined, 'missing provider usage is not fabricated');
+    assert.equal(planner.messages.filter(message => message.role === 'model').length, 11);
+    assert.equal(planner.messages.filter(message => message.role === 'user').length, 11);
+    assert(planner.messages.some(message => flattenPrompt(message.parts).includes('Do not call `read`')), 'even read of the pending file is rejected');
+    assert.equal(planner.messages.filter(message => message.role === 'tool').length, 7);
+    assert.equal(planner.messages[1].parts[0].functionCall?.rawArgsText, raw);
+    assert(JSON.stringify(planner).includes(filePath));
+    const modelContext = session.history.map(({ compaction: _compaction, ...message }) => message);
+    assert(!JSON.stringify(modelContext).includes(filePath));
+    assert(!JSON.stringify(modelContext).includes('must never execute'));
+    assert.equal(await fs.pathExists(path.join(path.dirname(path.dirname(path.dirname(filePath))), 'memory', 'must-not-exist.md')), false);
+    const records = await archive.readArchiveMessagesBySeqRange(session.id, 1, session.nextMessageSeq);
+    assert.deepEqual(records.at(-1)!.message.compaction?.planner, planner, 'repair diagnostics persist only on the completion record');
+    assert(!JSON.stringify(records.slice(0, -1)).includes(filePath));
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('valid raw compact JSON with invalid endpoints is saved without reserialization and repaired with edit', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const { parseFunctionCallArgs } = await import('../toolCallArgs');
+  const session = await makeCompactableSession(archive, makeSessionId('compact_valid_raw_repair'));
+  const originalChat = llm.chat;
+  const raw = '{"replaceAsBlocks":[{"level":1,"sourceKind":"message","sourceStart":1,"sourceEnd":99,"summary":"exact raw repair"}],"preserveMessages":[]}\r\n';
+  let filePath = '';
+  let round = 0;
+  try {
+    (llm as any).chat = async (parts: MessagePart[] | null, _active: Session, _iteration: number, options: any) => {
+      round += 1;
+      let toolCall: any;
+      if (round === 1) toolCall = { name: 'submit_compact_plan', ...parseFunctionCallArgs(raw) };
+      else {
+        const currentPath = repairPathFromFeedback(parts);
+        if (filePath) assert.equal(currentPath, filePath);
+        filePath = currentPath;
+        const expected = round <= 4 ? raw : raw.replace('"sourceEnd":99', '"sourceEnd":2');
+        assert(flattenPrompt(parts).endsWith(`\`\`\`json\n${expected}\n\`\`\``), 'minified arguments keep actual spacing and the complete parameter object in feedback');
+        if (round <= 4) {
+          assert.deepEqual(await fs.readFile(filePath), Buffer.from(raw));
+          toolCall = { name: 'edit', args: { filePath, oldText: '"sourceEnd":99', newText: '"sourceEnd":2', ...(round === 2 ? { __cancelTool: true } : round === 3 ? { __cancelTool: false } : {}) } };
+        } else toolCall = { name: 'submit_compact_plan', args: { argsFilePath: filePath } };
+      }
+      toolCall.id = `valid-raw-${round}`;
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+    await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0.5 }, 'await');
+    assert.equal(round, 5);
+    assert.equal(await fs.pathExists(filePath), false);
+    assert(session.history.some(message => message.parts.some(part => (part.text || '').includes('exact raw repair'))));
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('pending repair files are cleaned after planner error or round exhaustion without changing live history', async () => {
+  const { sessionHistory, archive, llm, compactPlan } = await loadDeps();
+  const originalChat = llm.chat;
+  try {
+    for (const outcome of ['provider-error', 'round-exhaustion'] as const) {
+      const session = await makeCompactableSession(archive, makeSessionId(`compact_repair_${outcome}`));
+      const before = structuredClone(session.history);
+      let filePath = '';
+      let round = 0;
+      (llm as any).chat = async (parts: MessagePart[] | null, _active: Session, _iteration: number, options: any) => {
+        round += 1;
+        if (round > 1) {
+          const currentPath = repairPathFromFeedback(parts);
+          if (filePath) assert.equal(currentPath, filePath);
+          filePath = currentPath;
+          if (outcome === 'provider-error') throw new Error('held planner failure');
+        }
+        const toolCall = { id: `exhaust-${round}`, name: 'submit_compact_plan', args: {}, rawArgsText: '{', argsParseError: 'bad JSON' };
+        await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+        return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+      };
+      await assert.rejects(sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0.5 }, 'await'), outcome === 'provider-error' ? /held planner failure/ : /Compaction skipped after 15/);
+      assert.equal(round, outcome === 'provider-error' ? 2 : compactPlan.COMPACT_FLOW_MAX_ROUNDS);
+      assert.deepEqual(session.history, before);
+      assert.equal(await fs.pathExists(filePath), false);
+      assert.equal(await fs.pathExists(path.dirname(filePath)), false);
+    }
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('cancelling a compact planner with a pending repair file cleans it and preserves live history', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_repair_cancel'));
+  const before = structuredClone(session.history);
+  const deps = makeDepsForSession(session, { count: 0 });
+  const originalChat = llm.chat;
+  let started!: () => void;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  let round = 0;
+  let filePath = '';
+  try {
+    (llm as any).chat = async (parts: MessagePart[] | null, _active: Session, _iteration: number, options: any) => {
+      round += 1;
+      if (round === 1) {
+        const toolCall = { id: 'cancel-invalid', name: 'submit_compact_plan', args: {}, rawArgsText: '{', argsParseError: 'bad JSON' };
+        await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+        return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+      }
+      filePath = repairPathFromFeedback(parts);
+      assert.equal(await fs.readFile(filePath, 'utf8'), '{');
+      started();
+      await new Promise<void>((_resolve, reject) => options.abortSignal.addEventListener('abort', () => {
+        const error = new Error('aborted'); error.name = 'AbortError'; reject(error);
+      }, { once: true }));
+      throw new Error('unreachable');
+    };
+    const running = sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.5 }, 'await');
+    await entered;
+    assert.deepEqual(await sessionHistory.cancelSessionCompaction(deps, session.id), { outcome: 'cancelled', phase: 'planning' });
+    await running;
+    assert.equal(round, 2);
+    assert.deepEqual(session.history, before);
+    assert.equal(await fs.pathExists(filePath), false);
+    assert.equal(await fs.pathExists(path.dirname(filePath)), false);
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('compact plan friction survives job commit, archive reads, and active authority persistence', async () => {
+  const { sessionHistory, archive, layeredContext, llm } = await loadDeps();
+  const { writeAuthoritativeSessionState } = await import('./stateFile');
+  const { readSessionHistorySnapshot } = await import('./metadataStore');
+  const originalChat = llm.chat;
+  try {
+    for (const frictionScore of [0, 67, undefined]) {
+      const session = await makeCompactableSession(archive, makeSessionId('compact_friction'));
+      (llm as any).chat = async (_parts: any, _active: Session, _iteration: number, options: any) => {
+        const block = {
+          level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2,
+          summary: 'Scored continuation summary.', ...(frictionScore !== undefined ? { frictionScore } : {}),
+        };
+        const call = { id: 'friction-plan', name: 'submit_compact_plan', args: { replaceAsBlocks: [block] } };
+        await options.appendMessage({ role: 'model', parts: [{ functionCall: call }] });
+        return { text: '', toolCalls: [call], allParts: [{ functionCall: call }] };
+      };
+      const deps = makeDepsForSession(session, { count: 0 });
+      deps.saveSession = async () => { await writeAuthoritativeSessionState(session); };
+      await sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.5 }, 'await');
+      const [record] = await layeredContext.readArchiveBlocksByIdRange(session.id);
+      assert.equal(record.frictionScore, frictionScore);
+      assert.equal(session.history[0].__meta?.contextBlock?.frictionScore, frictionScore);
+      const persisted = await readSessionHistorySnapshot(session.id);
+      assert.equal(persisted!.history[0].__meta?.contextBlock?.frictionScore, frictionScore);
+      if (frictionScore === undefined) {
+        assert.equal(Object.prototype.hasOwnProperty.call(record, 'frictionScore'), false);
+        assert.equal(Object.prototype.hasOwnProperty.call(persisted!.history[0].__meta!.contextBlock!, 'frictionScore'), false);
+      }
+    }
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('higher-level planning takes source scores from active metadata and stores its own assessment', async () => {
+  const { sessionHistory, archive, layeredContext, compactPlan, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_source_friction'));
+  const blocks = await layeredContext.appendBlocksToArchive(session, Array.from({ length: 10 }, (_, index) => ({
+    level: 1, sourceKind: 'message' as const, sourceStart: index + 1, sourceEnd: index + 1,
+    rawStartSeq: index + 1, rawEndSeq: index + 1, summary: `source-${index + 1} ${'block '.repeat(1800)}`,
+    frictionScore: 5,
+  })));
+  session.history = blocks.map(layeredContext.renderBlockMessage);
+  session.history[0].__meta!.contextBlock!.frictionScore = 0;
+  session.history[1].__meta!.contextBlock!.frictionScore = 83;
+  (session.history[2].__meta!.contextBlock! as any).frictionScore = 'invalid';
+  delete session.history[3].__meta!.contextBlock!.frictionScore;
+  const built = await sessionHistory.buildLayeredCompactCandidateEntries(session.history);
+  const candidates = built.candidateEntries.map(entry => entry.item);
+  assert.deepEqual(candidates.map(item => item.kind === 'block' ? item.frictionScore : null), [0, 83, undefined, undefined]);
+  const prompt = compactPlan.buildCompactPromptText({ forcedKeptCount: 0, candidateItems: candidates });
+  const sourceLines = prompt.split('\n').filter(line => line.startsWith('- B#'));
+  assert.match(sourceLines[0], /frictionScore=0/);
+  assert.match(sourceLines[1], /frictionScore=83/);
+  assert.doesNotMatch(sourceLines[2], /frictionScore/);
+  assert.doesNotMatch(sourceLines[3], /frictionScore/);
+  const originalChat = llm.chat;
+  try {
+    (llm as any).chat = async (parts: MessagePart[], _active: Session, _iteration: number, options: any) => {
+      const plannerSourceLines = flattenPrompt(parts).split('\n').filter(line => line.startsWith('- B#'));
+      assert.deepEqual(plannerSourceLines, sourceLines);
+      const call = { id: 'source-friction-plan', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
+        level: 2, sourceKind: 'block', sourceStart: blocks[0].id, sourceEnd: blocks[1].id,
+        summary: 'New range assessment.', frictionScore: 61,
+      }] } };
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: call }] });
+      return { text: '', toolCalls: [call], allParts: [{ functionCall: call }] };
+    };
+    await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0 }, 'await');
+    const [newBlock] = await layeredContext.readArchiveBlocksByIdRange(session.id, 11, 11);
+    assert.equal(newBlock.frictionScore, 61);
+    assert.equal(session.history[0].__meta?.contextBlock?.frictionScore, 61);
+    assert.equal((await layeredContext.readArchiveBlocksByIdRange(session.id, 1, 1))[0].frictionScore, 5,
+      'active source scores do not repair or rewrite immutable Archive records');
+  } finally { (llm as any).chat = originalChat; }
 });

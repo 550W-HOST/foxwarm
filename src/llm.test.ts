@@ -677,9 +677,10 @@ test('requestLlmOnce can make a direct provider-specific request without a sessi
           { type: 'text', text: 'anthropic ok' },
         ],
         usage: {
-          input_tokens: 7,
+          input_tokens: 2,
+          cache_creation_input_tokens: 7324,
+          cache_read_input_tokens: 22903,
           output_tokens: 3,
-          cache_read_input_tokens: 1,
         },
       },
     };
@@ -712,10 +713,149 @@ test('requestLlmOnce can make a direct provider-specific request without a sessi
     assert.equal(result.modelId, 'anthropic/claude-sonnet-4-5');
     assert.deepEqual(result.allParts, [{ text: 'anthropic ok' }]);
     assert.deepEqual(result.usage, {
+      inputTokens: 7326,
+      outputTokens: 3,
+      cachedTokens: 22903,
+    });
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('Anthropic usage keeps legacy input/output counts when cache fields are absent', async () => {
+  const originalPost = axios.post;
+  (axios as any).post = async () => ({
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    data: {
+      content: [{ type: 'text', text: 'anthropic legacy usage' }],
+      usage: { input_tokens: 7, output_tokens: 3 },
+    },
+  });
+
+  try {
+    const result = await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'legacy usage response' }] }],
+      systemPrompt: '',
+      model: 'anthropic/claude-sonnet-4-5',
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    assert.equal(result.text, 'anthropic legacy usage');
+    assert.deepEqual(result.usage, {
       inputTokens: 7,
       outputTokens: 3,
-      cachedTokens: 1,
+      cachedTokens: 0,
     });
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('Anthropic thinking and redacted_thinking preserve empty blocks, order, and concrete-model compatibility', async () => {
+  const originalPost = axios.post;
+  const sourceModel = {
+    providerKey: 'anthropic-fixture',
+    providerType: 'anthropic',
+    baseUrl: 'https://fixture.example',
+    apiKey: '',
+    model: 'claude',
+    extraFields: {},
+    extraHeaders: {},
+  } as any;
+  const sourceModelId = 'anthropic-fixture/claude';
+  const initialContents: Message[] = [{ role: 'user', parts: [{ text: 'round-trip input' }] }];
+  const originalContents = structuredClone(initialContents);
+  const capturedBodies: any[] = [];
+
+  (axios as any).post = async (_url: string, data: any) => {
+    capturedBodies.push(data);
+    return {
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: capturedBodies.length === 1
+        ? {
+            content: [
+              { type: 'thinking', thinking: '', signature: 'opaque-signature' },
+              { type: 'redacted_thinking', data: 'opaque-redacted-data' },
+              { type: 'tool_use', id: 'call_round_trip', name: 'read', input: { filePath: 'README.md' } },
+              { type: 'text', text: 'The answer.' },
+            ],
+          }
+        : { content: [{ type: 'text', text: 'ack' }] },
+    };
+  };
+
+  try {
+    const parsed = await requestLlmOnce({
+      contents: initialContents,
+      systemPrompt: '',
+      modelEntryOverride: sourceModel,
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    assert.deepEqual(initialContents, originalContents, 'response parsing must not mutate caller input');
+    assert.deepEqual(parsed.allParts, [
+      { thinking: '', providerMeta: { signature: 'opaque-signature' } },
+      { providerMeta: { redactedThinking: 'opaque-redacted-data' } },
+      { functionCall: { id: 'call_round_trip', name: 'read', args: { filePath: 'README.md' } } },
+      { text: 'The answer.' },
+    ]);
+
+    const roundTripHistory: Message[] = [
+      { role: 'model', parts: parsed.allParts!, __meta: { modelId: sourceModelId } },
+      {
+        role: 'tool',
+        parts: [{ functionResponse: {
+          tool_use_id: 'call_round_trip',
+          name: 'read',
+          response: { output: 'repository contents' },
+        } }],
+      },
+    ];
+    const originalRoundTripHistory = structuredClone(roundTripHistory);
+
+    await requestLlmOnce({
+      contents: roundTripHistory,
+      systemPrompt: '',
+      modelEntryOverride: sourceModel,
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    const sameModelAssistant = capturedBodies[1].messages.find((message: any) => message.role === 'assistant');
+    assert.deepEqual(sameModelAssistant.content, [
+      { type: 'thinking', thinking: '', signature: 'opaque-signature' },
+      { type: 'redacted_thinking', data: 'opaque-redacted-data' },
+      { type: 'tool_use', id: 'call_round_trip', name: 'read', input: { filePath: 'README.md' } },
+      { type: 'text', text: 'The answer.' },
+    ]);
+    assert.deepEqual(roundTripHistory, originalRoundTripHistory, 'request serialization must not mutate canonical history');
+
+    const differentModel = { ...sourceModel, providerKey: 'other-anthropic-fixture' };
+    await requestLlmOnce({
+      contents: roundTripHistory,
+      systemPrompt: '',
+      modelEntryOverride: differentModel,
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    const differentModelAssistant = capturedBodies[2].messages.find((message: any) => message.role === 'assistant');
+    assert.deepEqual(differentModelAssistant.content, [
+      { type: 'tool_use', id: 'call_round_trip', name: 'read', input: { filePath: 'README.md' } },
+      { type: 'text', text: 'The answer.' },
+    ]);
+    assert.equal(JSON.stringify(differentModelAssistant).includes('opaque-redacted-data'), false);
+    assert.equal(JSON.stringify(differentModelAssistant).includes('opaque-signature'), false);
   } finally {
     (axios as any).post = originalPost;
   }
@@ -2820,7 +2960,7 @@ test('LocalSessionTurnHost clears explicit wait through injected effects when a 
   }
 });
 
-test('LocalSessionTurnHost executes detached read and set_goal without global source-session lookup', async () => {
+test('LocalSessionTurnHost executes detached read and compact setting without global source-session lookup', async () => {
   const session = createOpenAITestSession(makeId('detached_tool_owner'));
   session.agent = 'main';
   const dirPath = await fs.mkdtemp('/tmp/foxwarm-detached-tools-');
@@ -2848,16 +2988,12 @@ test('LocalSessionTurnHost executes detached read and set_goal without global so
 
   try {
     const message = await new LocalSessionTurnHost(effects).executeTools([
-      { id: 'detached-goal', name: 'set_goal', args: { goal: 'Keep detached ownership', remindEvery: 7 } },
+      { id: 'detached-setting', name: 'set_session_compact_threshold', args: { thresholdTokens: 12345 } },
       { id: 'detached-read', name: 'read', args: { filePath } },
     ], { sessionId: session.id, session }, session);
-    assert.deepEqual(session.goalState && {
-      goal: session.goalState.goal,
-      remindEvery: session.goalState.remindEvery,
-      anchorSeq: session.goalState.anchorSeq,
-    }, { goal: 'Keep detached ownership', remindEvery: 7, anchorSeq: 0 });
+    assert.equal(session.compactThresholdTokens, 12345);
     assert.equal(persisted, 1);
-    assert.deepEqual(message.parts[0].functionResponse?.response, { output: 'ok' });
+    assert.match(String((message.parts[0].functionResponse?.response as any)?.output), /12345/);
     assert.match(String((message.parts[1].functionResponse?.response as any)?.output), /detached read ok/);
     assert.equal(sessionManager.getAllSessions().has(session.id), false);
   } finally {
@@ -3828,11 +3964,12 @@ test('chat journals only historical concrete model provenance and strips all __m
   }
 });
 
-test('requestLlmOnce excludes presentation paths and ToolScript activity from provider requests and journals', async () => {
+test('requestLlmOnce excludes presentation paths, ToolScript activity and planner diagnostics from requests and journals', async () => {
   const originalPost = axios.post;
   let capturedBody: any;
   const displayPath = '/display-only/agent-file.txt';
   const displayCall = 'display-only-nested-tool';
+  const plannerText = 'display-only-planner-instruction';
   const contents: Message[] = [
     { role: 'model', parts: [{ functionCall: { id: 'read-file', name: 'read', args: { filePath: 'file.txt' } } }] },
     { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'read-file', name: 'read', response: { output: 'contents' },
@@ -3841,7 +3978,11 @@ test('requestLlmOnce excludes presentation paths and ToolScript activity from pr
     { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'script', name: 'run_script',
       response: { status: 'completed', runId: 'tsr_fixture', result: 0 },
       __meta: { toolScriptSubCalls: [{ id: 'tss_1', name: displayCall, status: 'completed', startedAt: 1 }] } } }] },
-    { role: 'user', parts: [{ text: 'next request' }] },
+    { role: 'user', parts: [{ text: 'next request' }], compaction: { planner: {
+      steps: 1, toolCalls: ['submit_compact_plan'],
+      usage: { cachedTokens: 2, inputTokens: 3, outputTokens: 4 },
+      messages: [{ role: 'user', parts: [{ system: plannerText }] }],
+    } } },
   ];
   const original = structuredClone(contents);
   try {
@@ -3862,11 +4003,15 @@ test('requestLlmOnce excludes presentation paths and ToolScript activity from pr
       assert.equal(request.includes(displayPath), false, providerType);
       assert.equal(request.includes(displayCall), false, providerType);
       assert.equal(request.includes('toolScriptSubCalls'), false, providerType);
+      assert.equal(request.includes(plannerText), false, providerType);
+      assert.equal(request.includes('compaction'), false, providerType);
       assert.ok(request.includes('tsr_fixture'), providerType);
       const journal = await reconstructLlmRequest(result.llmRequestId!);
       assert.equal(journal.completeness, 'complete');
       assert.equal(JSON.stringify(journal).includes(displayPath), false, providerType);
       assert.equal(JSON.stringify(journal).includes(displayCall), false, providerType);
+      assert.equal(JSON.stringify(journal).includes(plannerText), false, providerType);
+      if (journal.completeness === 'complete') assert(journal.messages.every(message => !message.compaction));
       assert.deepEqual(contents, original, 'request preparation must not rewrite persisted/UI history');
     }
   } finally { (axios as any).post = originalPost; }
@@ -4249,4 +4394,84 @@ test('chat persists a generated prompt cache key for stored legacy sessions', as
     (axios as any).post = originalPost;
     await sessionManager.deleteSession(sessionId).catch(() => {});
   }
+});
+
+test('compact-plan provider schemas export direct/file fields and returned calls retain raw text or structured input', async () => {
+  const { COMPACT_PLAN_TOOL_DEFINITION } = await import('./session/compactPlan');
+  const originalPost = axios.post;
+  const raw = ' { "replaceAsBlocks": [\r\n';
+  const structured = { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 99, summary: 'structured invalid range' }] };
+  const cases = [
+    { provider: 'openai-completions', payload: () => ({ choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'compact-provider', type: 'function', function: { name: 'submit_compact_plan', arguments: raw } }] }, finish_reason: 'tool_calls' }] }) },
+    { provider: 'openai-responses', payload: () => ({ type: 'response.completed', response: { id: 'compact-response', output: [{ type: 'function_call', call_id: 'compact-provider', name: 'submit_compact_plan', arguments: raw }], usage: { input_tokens: 1, output_tokens: 1 } } }) },
+    { provider: 'anthropic', payload: () => ({ content: [{ type: 'tool_use', id: 'compact-provider', name: 'submit_compact_plan', input: structured }] }) },
+  ];
+  try {
+    for (const fixture of cases) {
+      let exportedSchema: any;
+      (axios as any).post = async (_url: string, body: any) => {
+        exportedSchema = fixture.provider === 'anthropic' ? body.tools[0].input_schema
+          : fixture.provider === 'openai-completions' ? body.tools[0].function.parameters : body.tools[0].parameters;
+        const payload = fixture.payload();
+        let data: any = payload;
+        if (fixture.provider !== 'anthropic') {
+          const stream = new PassThrough();
+          process.nextTick(() => { stream.end(`data: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n`); });
+          data = stream;
+        }
+        return { status: 200, statusText: 'OK', headers: {}, data };
+      };
+      const result = await requestLlmOnce({
+        contents: [{ role: 'user', parts: [{ text: 'compact candidates' }] }], systemPrompt: '',
+        modelEntryOverride: { providerKey: 'fixture', providerType: fixture.provider, baseUrl: 'https://fixture.example/v1', model: 'model', extraFields: {}, extraHeaders: {} } as any,
+        toolDefinitions: [COMPACT_PLAN_TOOL_DEFINITION], purpose: 'compact-plan',
+        notifySessionEvents: false, registerAbortController: false, maxRetries: 1,
+      });
+      assert.deepEqual(exportedSchema, COMPACT_PLAN_TOOL_DEFINITION.parameters);
+      assert.equal(exportedSchema.required, undefined);
+      assert.equal((exportedSchema as any).oneOf, undefined);
+      assert.equal((exportedSchema as any).anyOf, undefined);
+      assert.equal(exportedSchema.properties.argsFilePath.type, 'string');
+      assert.deepEqual(exportedSchema.properties.replaceAsBlocks.oneOf.map((item: any) => item.type), ['array', 'string']);
+      const call = result.toolCalls[0];
+      assert.equal(call, result.allParts.find(part => part.functionCall)?.functionCall);
+      if (fixture.provider === 'anthropic') {
+        assert.deepEqual(call.args, structured);
+        assert.equal(call.rawArgsText, undefined);
+        assert.equal(call.argsParseError, undefined);
+      } else {
+        assert.equal(call.rawArgsText, raw);
+        assert.match(call.argsParseError || '', /Invalid tool arguments JSON/);
+        assert.deepEqual(call.args, {});
+      }
+    }
+  } finally { (axios as any).post = originalPost; }
+});
+
+
+test('normal task request context reaches provider/retry but never canonical history, and disappears when no longer active', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession(makeId('request_only_task_context'));
+  const bodies: any[] = [];
+  let active = true;
+  let contexts = 0;
+  (axios as any).post = async (_url: string, body: any) => {
+    bodies.push(body);
+    if (bodies.length === 1) { active = false; throw new Error('retry after task completion'); }
+    return { status: 200, statusText: 'OK', headers: {}, data: makeChatCompletionStream('Task-aware answer') };
+  };
+  try {
+    await chat([{ text: 'Continue real input' }], session, 0, {
+      toolDefinitions: [], registerAbortController: false, maxRetries: 2,
+      currentSessionEffects: { ...createDefaultCurrentSessionEffects(), persistSession: async () => {} },
+      appendMessage: async message => { session.history.push(message); },
+      requestContext: async () => { contexts++; return active ? [{ role: 'user', parts: [{ system: '<foxwarm-system kind="task-reminder">task_fixture — Active task (active)</foxwarm-system>' }] }] : []; },
+    });
+    assert.equal(contexts, 2);
+    assert.equal(bodies.length, 2);
+    assert.match(JSON.stringify(bodies[0]), /task_fixture/);
+    assert.doesNotMatch(JSON.stringify(bodies[1]), /task_fixture/);
+    assert.doesNotMatch(JSON.stringify(session.history), /task_fixture|task-reminder/);
+    assert.deepEqual(session.history.map(message => message.role), ['user', 'model']);
+  } finally { (axios as any).post = originalPost; }
 });

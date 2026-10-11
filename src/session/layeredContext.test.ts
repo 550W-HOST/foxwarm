@@ -119,3 +119,21 @@ test('block summary appends a stable generated memory-facts section', () => {
   assert.equal(summary, 'Original continuation summary.\n\n### Memory facts\n- **decision:** Use block-associated durable facts. _(context: Compaction contract; attributed to: user)_');
   assert.equal(formatArchiveBlockSummary('Old block summary.'), 'Old block summary.');
 });
+
+test('block friction is structured metadata only, including a scored zero and legacy omission', () => {
+  const record: any = {
+    id: 1, level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2,
+    rawStartSeq: 1, rawEndSeq: 2, summary: 'unchanged summary', createdAt: 1000,
+  };
+  const original = renderBlockMessage(record);
+  for (const frictionScore of [0, 73]) {
+    const scored = renderBlockMessage({ ...record, frictionScore });
+    assert.deepEqual(scored.parts, original.parts);
+    assert.equal(scored.__meta?.contextBlock?.frictionScore, frictionScore);
+  }
+  for (const frictionScore of [undefined, null, -1, 101, 1.5, '73']) {
+    const unscored = renderBlockMessage({ ...record, frictionScore });
+    assert.deepEqual(unscored, original);
+    assert.equal(Object.prototype.hasOwnProperty.call(unscored.__meta!.contextBlock!, 'frictionScore'), false);
+  }
+});

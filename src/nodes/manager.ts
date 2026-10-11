@@ -41,7 +41,7 @@ interface ToolDefinition {
 interface NodeCapabilities {
   tools: ToolDefinition[];
   services?: Record<string, number>;
-  features?: { remoteExecBackgroundRegistration?: boolean; externalToolOwner?: number; programmaticToolData?: boolean };
+  features?: { execWaitCancellation?: boolean; remoteExecBackgroundRegistration?: boolean; externalToolOwner?: number; programmaticToolData?: boolean };
 }
 
 interface Node {
@@ -90,6 +90,8 @@ interface ToolCall {
   };
   resolve: (result: any) => void;
   reject: (error: unknown) => void;
+  cleanupCancellation?: () => void;
+  cancellationSignal?: AbortSignal;
 }
 
 const LEGACY_PERSISTENT_EXEC_INVALID_ID_ERROR = 'Persistent exec ID is invalid.';
@@ -403,6 +405,7 @@ export class NodesManager {
     }
     for (const [callId, call] of this.toolCalls.entries()) {
       if (call.node !== nodeId) continue;
+      this.toolCalls.get(callId)?.cleanupCancellation?.();
       this.toolCalls.delete(callId);
       if (call.remoteExec) {
         markRemoteExecOutcomeUnknown({
@@ -602,13 +605,6 @@ export class NodesManager {
     request.reject(new NodeServiceRequestError(payload.code || 'NodeServiceError', payload.message || 'Node service failed.', payload.statusCode || 500));
   }
 
-  /**
-   * Execute a tool on a specific node
-   */
-  async executeNodeTool(nodeId: string, toolName: string, args: Record<string, any>, sessionId: string): Promise<any> {
-    return await this.executeTool(nodeId, toolName, args, sessionId);
-  }
-
   supportsExternalOwner(nodeId: string): boolean {
     const node = this.nodes.get(nodeId);
     return !!node?.ws && node.protocolCompatibility.negotiated === 3
@@ -688,6 +684,7 @@ export class NodesManager {
           ...(cwd === undefined ? {} : { sessionCwd: cwd }), timeoutMs: 62_000 }));
       } catch (error) {
         const pending = this.toolCalls.get(callId);
+        this.toolCalls.get(callId)?.cleanupCancellation?.();
         this.toolCalls.delete(callId);
         pending?.reject(error);
       }
@@ -704,6 +701,7 @@ export class NodesManager {
     sessionId: string,
     routingSnapshot?: { currentNode: string; cwd?: string },
     programmatic?: true,
+    signal?: AbortSignal,
   ): Promise<any> {
     const node = this.nodes.get(nodeId);
     if (!node) {
@@ -716,11 +714,6 @@ export class NodesManager {
     
     if (!node.tools.has(toolName)) {
       throw new Error(`Tool \`${toolName}\` not available on node \`${nodeId}\``);
-    }
-    
-    // If master node, execute locally
-    if (nodeId === 'master') {
-      return await this.executeToolLocally(toolName, args, sessionId);
     }
     
     const sourceSessionId = session.id;
@@ -754,6 +747,7 @@ export class NodesManager {
       const shouldSendCwd = routedCurrentNode === nodeId && typeof routedCwd === 'string';
       const timeoutMs = 62000;
       try {
+        signal?.throwIfAborted();
         const request = {
           type: 'tool_call',
           callId: callId,
@@ -768,7 +762,23 @@ export class NodesManager {
         };
         if (node.httpExec) node.httpExec.dispatch(request);
         else node.ws!.send(JSON.stringify(request));
+        const call = this.toolCalls.get(callId);
+        if (call && toolName === 'exec' && signal) {
+          call.cancellationSignal = signal;
+          if (node.ws && node.capabilities?.features?.execWaitCancellation === true
+            && node.capabilities.features.remoteExecBackgroundRegistration === true) {
+            const cancel = () => {
+              if (this.toolCalls.get(callId) !== call) return;
+              try { node.ws!.send(JSON.stringify({ type: 'tool_call_cancel', callId })); }
+              catch { /* Existing disconnect/timeout handling retains its failure boundary. */ }
+            };
+            signal.addEventListener('abort', cancel, { once: true });
+            call.cleanupCancellation = () => signal.removeEventListener('abort', cancel);
+            if (signal.aborted) cancel();
+          }
+        }
       } catch (error) {
+        this.toolCalls.get(callId)?.cleanupCancellation?.();
         this.toolCalls.delete(callId);
         if (remoteExec) {
           releaseRemoteExecReservation({
@@ -785,6 +795,7 @@ export class NodesManager {
       // Set timeout
       const timeout = setTimeout(() => {
         if (this.toolCalls.has(callId)) {
+          this.toolCalls.get(callId)?.cleanupCancellation?.();
           this.toolCalls.delete(callId);
           node.httpExec?.cancel(callId);
           if (remoteExec) {
@@ -866,6 +877,7 @@ export class NodesManager {
     const call = this.toolCalls.get(callId);
     if (call) {
       if (call.externalOwner && call.node !== authenticatedNodeId) return;
+      this.toolCalls.get(callId)?.cleanupCancellation?.();
       this.toolCalls.delete(callId);
       if (call.remoteExec) {
         const identity = {
@@ -880,7 +892,13 @@ export class NodesManager {
           markRemoteExecOutcomeUnknown(identity);
         }
       }
-      call.resolve(adaptLegacyRemoteNodeToolResult(result));
+      let actual: any = adaptLegacyRemoteNodeToolResult(result);
+      if (call.cancellationSignal?.aborted && !call.cleanupCancellation) {
+        const note = '\nStop or Run queued could not end waiting early on this Node. The actual result is preserved; update the Node client for foreground exec wait cancellation.';
+        if (typeof actual === 'string') actual += note;
+        else if (actual && typeof actual.output === 'string') actual = { ...actual, output: actual.output + note };
+      }
+      call.resolve(actual);
       logger.info({ callId, tool: call.name }, 'Tool response received');
     } else {
       logger.warn({ callId }, 'Tool response for unknown call');
@@ -894,6 +912,7 @@ export class NodesManager {
     const call = this.toolCalls.get(callId);
     if (call) {
       if (call.externalOwner && call.node !== authenticatedNodeId) return;
+      this.toolCalls.get(callId)?.cleanupCancellation?.();
       this.toolCalls.delete(callId);
       if (call.remoteExec) {
         const identity = {
@@ -1241,40 +1260,6 @@ export class NodesManager {
     const definitions = toolsModule.definitions;
     
     return definitions.find((d: any) => d.name === toolName);
-  }
-
-  /**
-   * Execute a tool locally (on master node)
-   */
-  async executeToolLocally(toolName: string, args: Record<string, any>, sessionId: string): Promise<any> {
-    // Keep lazy require here to avoid a real circular dependency:
-    // tools -> nodesManager -> tools.
-    const toolsModule = require('../tools');
-    const tool = toolsModule[toolName];
-    const runtimeNodeId = typeof args?.__runtimeNodeId === 'string' && args.__runtimeNodeId.trim().length > 0
-      ? args.__runtimeNodeId.trim()
-      : 'master';
-    const toolArgs = { ...(args || {}) };
-    delete toolArgs.__runtimeNodeId;
-    
-    if (!tool) {
-      throw new Error(`Tool \`${toolName}\` not found`);
-    }
-    
-    const ctx = {
-      sessionId,
-      session: await sessionManager.getSession(sessionId),
-      runtimeNodeId,
-      broadcast: async (text: string) => {
-        // Broadcast via session
-        const session = await sessionManager.getSession(sessionId);
-        if (session.broadcast) {
-          session.broadcast(text);
-        }
-      }
-    };
-    
-    return await tool(toolArgs, ctx);
   }
 }
 

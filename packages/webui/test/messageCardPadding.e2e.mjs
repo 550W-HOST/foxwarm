@@ -34,7 +34,7 @@ async function buildFixtureBundle() {
         { role: 'user', parts: [{ text: 'User message.' }], __meta: { seq: 2 } },
       ],
       isMobile: false,
-      groupTools: false,
+      timelineView: 'detailed',
       showUsageBadge: false,
     }))
   `

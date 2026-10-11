@@ -46,8 +46,10 @@ export const BUILTIN_TOOL_PLACEMENTS = {
       status: 'session-owner',
       list: 'main-management',
       'update-display-name': 'main-management',
+      'update-parent': 'main-management',
     },
   },
+  task: { owner: 'main-management' },
   list_agents: { owner: 'main-management' },
   skill: { owner: 'session-owner' },
   get_session_messages: { owner: 'dispatcher/container' },
@@ -55,7 +57,6 @@ export const BUILTIN_TOOL_PLACEMENTS = {
   get_archived_blocks: { owner: 'external-service' },
   recall: { owner: 'dispatcher/container' },
   delete_session: { owner: 'main-management' },
-  set_goal: { owner: 'session-owner' },
   set_session_child_model: { owner: 'session-owner' },
   set_session_compact_threshold: { owner: 'session-owner' },
   refresh_session_snapshot: { owner: 'session-owner' },
@@ -81,6 +82,7 @@ export const BUILTIN_TOOL_PLACEMENTS = {
   cancel_toolscript_run: { owner: 'dispatcher/container' },
   mcp_config: { owner: 'external-service' },
   list_mcp_servers: { owner: 'external-service' },
+  mcp_notifications: { owner: 'external-service' },
   node: {
     owner: 'dispatcher/container',
     actionOwners: {
@@ -99,7 +101,7 @@ export const BUILTIN_TOOL_PLACEMENTS = {
   create_session: { owner: 'main-management' },
   set_agent_inherit: { owner: 'main-management' },
   set_agent_isolated: { owner: 'main-management' },
-  set_tool_rules: { owner: 'main-management' },
+  set_config: { owner: 'main-management' },
   move_session: { owner: 'main-management' },
 } as const satisfies Readonly<Record<string, ToolPlacementMetadata>>;
 

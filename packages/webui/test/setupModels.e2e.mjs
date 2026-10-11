@@ -200,10 +200,11 @@ async function attachRequestMocks(targetPage, options = {}) {
       return
     }
     if (url.pathname.endsWith('/api/models')) {
+      options.modelOptionsRequests?.push(url.pathname)
       const respondModels = () => respondJson(request, {
         defaultKey: 'route',
         currentKey: 'route',
-        models: [
+        models: options.modelOptions?.models ?? [
           { key: 'leaf/model-a', label: 'leaf/model-a', isVirtual: false, allowedEfforts: ['none', 'low', 'high'], defaultEffort: 'high' },
           { key: 'leaf/model-b', label: 'leaf/model-b', isVirtual: false, allowedEfforts: ['medium', 'max'], defaultEffort: 'medium' },
           { key: 'sticky', label: 'sticky', isVirtual: true, allowedEfforts: ['none', 'low', 'high'], defaultEffort: null },
@@ -245,6 +246,10 @@ async function attachRequestMocks(targetPage, options = {}) {
       }
       return
     }
+    if (url.pathname.endsWith('/api/auth/session')) {
+      void respondJson(request, { role: 'admin' })
+      return
+    }
     if (url.pathname.endsWith('/api/setup/config') && request.method() === 'POST') {
       savedConfigRequest = JSON.parse(request.postData() || '{}')
       options.configSaveRequests?.push(savedConfigRequest)
@@ -256,7 +261,7 @@ async function attachRequestMocks(targetPage, options = {}) {
         void respondJson(request, { error: configSaveError }, 400)
       } else {
         mockConfigRawYaml = savedConfigRequest.yaml
-        void respondJson(request, { success: true, rawYaml: savedConfigRequest.yaml, reload: { started: ['telegram'] } })
+        void respondJson(request, { success: true, rawYaml: savedConfigRequest.yaml, reload: { started: ['telegram'] }, ...options.configSaveResult })
       }
       return
     }
@@ -1469,6 +1474,27 @@ test('config save success and error feedback stay with the Config Save button', 
   await page.waitForSelector('[data-setup-section="models"] [data-editor-ready="true"]', { timeout: 15_000 })
 })
 
+test('Config save feedback distinguishes saved changes from pending restart and incomplete application', async () => {
+  const configPage = await browser.newPage()
+  const options = { configSaveResult: { saved: true, restartRequired: ['bot'], notApplied: [] } }
+  await attachRequestMocks(configPage, options)
+  try {
+    await configPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
+    await configPage.waitForSelector('[data-setup-tab="config"]')
+    await configPage.click('[data-setup-tab="config"]')
+    await configPage.click('button::-p-text(Save config)')
+    await configPage.waitForFunction(() => /saved/i.test(document.querySelector('[data-save-feedback="config"]')?.textContent || ''))
+    let feedback = await configPage.$eval('[data-save-feedback="config"]', element => element.textContent)
+    assert.match(feedback, /restart/i)
+    options.configSaveResult = { saved: true, restartRequired: [], notApplied: ['channels'] }
+    await configPage.click('button::-p-text(Save config)')
+    await configPage.waitForFunction(() => /could not be applied/i.test(document.querySelector('[data-save-feedback="config"]')?.textContent || ''))
+    feedback = await configPage.$eval('[data-save-feedback="config"]', element => element.textContent)
+    assert.match(feedback, /saved/i)
+    assert.match(feedback, /could not be applied/i)
+  } finally { await configPage.close() }
+})
+
 test('editing while a models save is held preserves the newer document and suppresses stale feedback', async () => {
   const heldModelsSaves = []
   const racePage = await browser.newPage()
@@ -1960,6 +1986,72 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
     ), { timeout: 15_000 })
     assert.equal(await normalPage.$$eval('[data-tab-id="system:setup"]', (tabs) => tabs.length), 1)
   } finally {
+    await normalPage.close()
+  }
+})
+
+test('successful Setup save refreshes a mounted split-pane Chat; rejected saves keep options and manual Refresh refetches', async () => {
+  const normalPage = await browser.newPage()
+  const modelOptionsRequests = []
+  const modelOptions = { models: [{ key: 'leaf/old-model', label: 'old-model', isVirtual: false }] }
+  await normalPage.setViewport({ width: 1600, height: 900 })
+  await normalPage.evaluateOnNewDocument(() => {
+    const chat = { id: 'chat:model-cache', type: 'chat', sessionId: 'model-cache', title: 'Model cache' }
+    const setup = { id: 'system:setup', type: 'setup', title: 'Setup' }
+    localStorage.setItem('foxwarm_workbench_state_v4', JSON.stringify({ state: {
+      version: 4,
+      tabsById: { [chat.id]: chat, [setup.id]: setup },
+      root: { id: 'split-cache', kind: 'split', direction: 'row', sizes: [50, 50], children: [
+        { id: 'pane-chat', kind: 'pane', tabIds: [chat.id], activeTabId: chat.id },
+        { id: 'pane-setup', kind: 'pane', tabIds: [setup.id], activeTabId: setup.id },
+      ] },
+      focusedPaneId: 'pane-chat',
+    }, version: 1 }))
+  })
+  await attachRequestMocks(normalPage, { modelOptions, modelOptionsRequests })
+  try {
+    await normalPage.goto(`${productionBaseUrl}/#session/model-cache`, { waitUntil: 'networkidle2' })
+    await normalPage.waitForSelector('.foxwarm-model-selector-trigger')
+    await normalPage.evaluate(() => { window.fixtureModelTrigger = document.querySelector('.foxwarm-model-selector-trigger') })
+    await normalPage.click('.foxwarm-model-selector-trigger')
+    await normalPage.waitForSelector('[data-model-option-key="leaf/old-model"]')
+    await normalPage.keyboard.press('Escape')
+    assert.equal(modelOptionsRequests.length, 1, 'opening the picker reuses the initial model request')
+
+    await normalPage.click('[data-setup-tab="models"]')
+    await normalPage.waitForSelector('[data-setup-section="models"] [data-editor-ready="true"]')
+    await normalPage.click('[data-setup-section="models"] .view-lines')
+    await normalPage.keyboard.down('Control')
+    await normalPage.keyboard.press('a')
+    await normalPage.keyboard.up('Control')
+    await normalPage.keyboard.type('default: leaf/new-model\nproviders:\n  leaf:\n    providerType: openai-completions\n    models: [new-model]\n')
+    modelOptions.models = [{ key: 'leaf/new-model', label: 'new-model', isVirtual: false }]
+    await normalPage.click('button::-p-text(Save models)')
+    await normalPage.waitForFunction(() => document.querySelector('[data-setup-section="models"] [role="status"]')?.textContent?.includes('Models saved.'))
+    await waitForItems(modelOptionsRequests, 2)
+    assert.equal(await normalPage.evaluate(() => window.fixtureModelTrigger === document.querySelector('.foxwarm-model-selector-trigger')), true)
+    await normalPage.click('.foxwarm-model-selector-trigger')
+    await normalPage.waitForSelector('[data-model-option-key="leaf/new-model"]')
+    assert.equal(await normalPage.$('[data-model-option-key="leaf/old-model"]'), null)
+    assert.equal(modelOptionsRequests.length, 2)
+    await normalPage.keyboard.press('Escape')
+
+    saveError = 'Rejected model configuration'
+    modelOptions.models = [{ key: 'leaf/rejected-model', label: 'rejected-model', isVirtual: false }]
+    await normalPage.click('button::-p-text(Save models)')
+    await normalPage.waitForFunction(() => document.querySelector('[data-setup-section="models"] [role="alert"]')?.textContent?.includes('Rejected model configuration'))
+    await normalPage.click('.foxwarm-model-selector-trigger')
+    await normalPage.waitForSelector('[data-model-option-key="leaf/new-model"]')
+    assert.equal(await normalPage.$('[data-model-option-key="leaf/rejected-model"]'), null)
+    assert.equal(modelOptionsRequests.length, 2, 'failed saves do not invalidate the accepted options')
+
+    modelOptions.models = [{ key: 'leaf/manual-model', label: 'manual-model', isVirtual: false }]
+    await normalPage.click('button[aria-label="Refresh models"]')
+    await normalPage.waitForSelector('[data-model-option-key="leaf/manual-model"]')
+    assert.equal(await normalPage.$('[data-model-option-key="leaf/new-model"]'), null)
+    assert.equal(modelOptionsRequests.length, 3)
+  } finally {
+    saveError = null
     await normalPage.close()
   }
 })

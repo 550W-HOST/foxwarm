@@ -1,4 +1,4 @@
-import { requireVerifiedMcpInboundExternalId, type VerifiedMcpInboundPrincipal } from './mcpInboundConfig';
+import { requireVerifiedAccessIdentity, type VerifiedAccessIdentity } from './accessConfig';
 import type { ExternalExecutionContext } from './mcpInboundHttp';
 import { definitions } from './tools/definitions';
 import * as nodeTools from './tools/nodeTools';
@@ -14,19 +14,19 @@ export function isExternalPairingToolName(name: string): name is ExternalPairing
   return name === 'node_pair_list' || name === 'node_pair_approve';
 }
 
-function assertActive(principal: VerifiedMcpInboundPrincipal, context: ExternalExecutionContext): void {
-  if (context.externalId !== requireVerifiedMcpInboundExternalId(principal) || context.disposed) {
+function assertActive(principal: VerifiedAccessIdentity, context: ExternalExecutionContext): void {
+  if (context.externalId !== requireVerifiedAccessIdentity(principal) || context.disposed) {
     throw new ExternalPairingBeforeEffectError('External pairing context is unavailable.');
   }
 }
-function permission(principal: VerifiedMcpInboundPrincipal, context: ExternalExecutionContext,
+function permission(principal: VerifiedAccessIdentity, context: ExternalExecutionContext,
   name: ExternalPairingToolName, args: Record<string, unknown> = {}) {
   return buildExternalToolAuthorizationRequest({ principal, sessionId: context.id,
     tool: { source: 'builtin', name }, args });
 }
 
 /** Only the two pre-existing Main-owned pairing tools are discoverable, with their original copy/schema. */
-export function listExternalPairingDefinitions(principal: VerifiedMcpInboundPrincipal, context: ExternalExecutionContext) {
+export function listExternalPairingDefinitions(principal: VerifiedAccessIdentity, context: ExternalExecutionContext) {
   assertActive(principal, context);
   const visible = supportedNames.filter(name =>
     isToolAuthorizationPotentiallyVisibleSync(permission(principal, context, name)));
@@ -39,7 +39,7 @@ export function listExternalPairingDefinitions(principal: VerifiedMcpInboundPrin
 }
 
 /** Use the ordinary Main pairing handlers without creating a ToolContext or claiming an internal Session. */
-export async function callExternalPairingTool(principal: VerifiedMcpInboundPrincipal, context: ExternalExecutionContext,
+export async function callExternalPairingTool(principal: VerifiedAccessIdentity, context: ExternalExecutionContext,
   name: ExternalPairingToolName, args: Record<string, unknown>): Promise<string> {
   assertActive(principal, context);
   if (!supportedNames.includes(name) || Object.keys(args).some(key => name === 'node_pair_list'

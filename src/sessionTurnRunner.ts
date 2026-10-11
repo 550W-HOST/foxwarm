@@ -7,7 +7,7 @@ import { buildChildReminder, isNoActionSignalText } from './session/childSession
 import { getManagedSessionState, setManagedSessionState } from './session/managedState';
 import { createDisplayOnlyModelMessage } from './session/messageVisibility';
 import { maybeRefreshStaleSessionSnapshot } from './session/snapshotRefresh';
-import { maybeBuildGoalReminderMessage } from './session/goal';
+import { createTaskRequestContext } from './session/taskContext';
 import { isSessionArchiveCommitError } from './session/archive';
 import { isSessionAuthorityPostCommitError } from './session/stateFile';
 import { isSessionTurnIncomplete, SessionContinuationUnavailableError } from './sessionContinuation';
@@ -706,18 +706,6 @@ export class SessionTurnRunner {
     await this.host.queueSessionSystemEvent(session.id, reminder, 'background');
   }
 
-  private async maybeAppendGoalIntervalReminder(session: Session): Promise<void> {
-    const reminder = maybeBuildGoalReminderMessage(session);
-    if (!reminder) {
-      return;
-    }
-
-    // Interval reminders are canonical history context for the request about to
-    // be sent. They are not session work: queueing one would defer visibility
-    // until after the current turn and create a synthetic reminder-only turn.
-    await this.host.appendSessionMessage(session, reminder);
-  }
-
   private async deliverIntermediateModelText(
     session: Session,
     text: string,
@@ -871,8 +859,7 @@ export class SessionTurnRunner {
 
         // This is the safe boundary immediately before a provider call: queued
         // inputs and the preceding tool result have already been persisted, so
-        // an interval reminder cannot split a function call from its result.
-        await this.maybeAppendGoalIntervalReminder(session);
+        // request-only task context cannot split a function call from its result.
 
         await this.emitTurnProgress({ type: 'llm-start' }, session, turnId);
         this.host.setActiveSessionRuntimeState(session.id, {
@@ -888,6 +875,7 @@ export class SessionTurnRunner {
         try {
           result = await this.host.chat(parts, session, iteration, {
             onRetry: this.createLlmRetryNotifier(session, broadcast, turnId, () => { terminalRetryDelivered = true; }),
+            requestContext: createTaskRequestContext(session),
             prepareRetry: signal => this.prepareLlmRetry(session, iteration, signal),
             onIntermediateAssistantText: async text => {
               await this.deliverIntermediateModelText(session, text, broadcast, turnId);
@@ -1018,8 +1006,9 @@ export class SessionTurnRunner {
         const toolResultMsg = await this.host.executeTools(turnToolCalls, toolContext, session);
 
         const successfulSendTargets = (toolResultMsg as any).__toolPostAction?.successfulSendToSessionTargets;
-        if (session.parentSessionId && Array.isArray(successfulSendTargets)
-          && successfulSendTargets.includes(session.parentSessionId)
+        const completedLinkedTask = (toolResultMsg as any).__toolPostAction?.completedLinkedTask?.attachedSessionId === session.id;
+        if ((completedLinkedTask || (session.parentSessionId && Array.isArray(successfulSendTargets)
+          && successfulSendTargets.includes(session.parentSessionId)))
           && resolveChildHandoffBoundary(session)) {
           await this.host.saveSession(session);
         }
@@ -1337,7 +1326,7 @@ export class SessionTurnRunner {
           && !session.busy
           && !getManagedSessionState(session)?.currentStep
           && !this.host.isSessionDestructiveLifecycleClaimed(session.id)
-          && session.queue.some(isQueueItem)) {
+          && session.queue.some(item => isQueueItem(item) && item.trigger !== false)) {
           void this.processSessionQueue(sessionId).catch(error => {
             logger.error({ err: error, sessionId }, 'Trailing queued work failed');
           });

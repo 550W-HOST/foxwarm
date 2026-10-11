@@ -158,8 +158,12 @@ export async function buildSessionStatusInfo(
   suppliedSession?: Session | SessionRuntimeSessionDto,
   exactOwner = false,
   historyMessages?: Message[],
+  persistentMemorySnapshot?: string,
 ): Promise<SessionStatusInfo> {
-  const session = suppliedSession || await sessionManager.getSession(sessionId);
+  const session = suppliedSession || await sessionManager.getExistingSession(sessionId);
+  if (!session) {
+    throw new Error(`Session \`${sessionId}\` not found.`);
+  }
   const realSessionId = session.id || sessionId;
   const agentName = session.agent || 'main';
   const agentDir = getAgentDir(agentName);
@@ -168,6 +172,7 @@ export async function buildSessionStatusInfo(
     ? {
         ...runtimeDto,
         history: historyMessages || [],
+        persistentMemorySnapshot: persistentMemorySnapshot || '',
         stats: {
           totalCachedTokens: runtimeDto.tokenUsage.cachedTokens,
           totalInputTokens: runtimeDto.tokenUsage.inputTokens,

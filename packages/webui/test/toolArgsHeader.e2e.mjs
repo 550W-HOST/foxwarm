@@ -56,6 +56,14 @@ async function buildFixtureBundle() {
         call: { id: 'send-alias-call', name: 'send_to_session', args: { sessionId: '<main>', message: 'alias body' } },
         response: { tool_use_id: 'send-alias-call', name: 'send_to_session', response: { output: 'sent' } },
       },
+      child: {
+        call: { id: 'child-call', name: 'create_child_session', args: {
+          suffix: 'task-child', taskId: 'task_demo', agentName: 'worker', displayName: 'Task child',
+          node: 'remote-a', forceModel: { modelId: 'openai/gpt-5.6-sol', effort: 'high' },
+          message: 'Start the assigned work.', afterSend: 'wait',
+        } },
+        response: { tool_use_id: 'child-call', name: 'create_child_session', response: { output: 'created' } },
+      },
       malformedPatch: {
         call: { id: 'malformed-patch', name: 'apply_patch', args: {}, argsParseError: 'Invalid tool arguments JSON', rawArgsText: '<img src=x onerror=window.rawXss=1>\\n{not-json' },
         response: { tool_use_id: 'malformed-patch', name: 'apply_patch', response: { error: 'Invalid arguments' } },
@@ -102,7 +110,7 @@ async function mountFixture({ width, height, style = 'default', dark = false }) 
   await page.evaluate(({ style, dark }) => {
     window.setFixtureTheme(style, dark)
   }, { style, dark })
-  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-tool-card').length === 10)
+  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-tool-card').length === 11)
 }
 
 async function readVisualState(id) {
@@ -245,7 +253,7 @@ before(async () => {
   const bundle = await buildFixtureBundle()
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{width:100%;padding:12px}.fixture{width:100%;min-width:0}</style></head><body><main>${['exec', 'edit', 'error', 'send', 'sendAlias', 'malformedPatch', 'malformedExec', 'rawNoError', 'rawMissing', 'noResult'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
+  response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{width:100%;padding:12px}.fixture{width:100%;min-width:0}</style></head><body><main>${['exec', 'edit', 'error', 'send', 'sendAlias', 'child', 'malformedPatch', 'malformedExec', 'rawNoError', 'rawMissing', 'noResult'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -378,6 +386,16 @@ test('send_to_session To prefixes inherit ordinary call text in collapsed and ex
       assert.equal(expanded.aliasText, expected.alias)
       assert.match(expanded.text, /^To/)
     }
+  }
+})
+
+test('create_child_session identifies task assignments and shows supplied creation fields when expanded', async () => {
+  await mountFixture({ width: 900, height: 800 })
+  assert.match(await page.$eval('#child .foxwarm-tool-call-summary', element => element.textContent), /childtask-child\(new, task, message\)/)
+  await page.click('#child .foxwarm-tool-header-toggle')
+  const expanded = await page.$eval('#child .foxwarm-tool-call-args', element => element.textContent)
+  for (const value of ['task_demo', 'worker', 'Task child', 'remote-a', 'openai/gpt-5.6-sol', 'high', 'Start the assigned work.', 'wait']) {
+    assert.match(expanded, new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
   }
 })
 

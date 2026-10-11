@@ -25,7 +25,7 @@ async function buildFixtureBundle() {
         sessionId: 'fixture-session',
         messages,
         isMobile: false,
-        groupTools: false,
+        timelineView: 'detailed',
         showUsageBadge: false,
       })
     )

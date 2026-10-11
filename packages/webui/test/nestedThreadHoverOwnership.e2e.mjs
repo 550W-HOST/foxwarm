@@ -37,13 +37,13 @@ before(async () => {
       return new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } })
     }
     const cases = {
-      standaloneSuccess: { groupTools: false, messages: [call('one', 1), result('one', 2), last(3)] },
-      standaloneError: { groupTools: false, messages: [call('bad', 4), result('bad', 5, true), last(6)] },
-      nested: { groupTools: true, messages: [call('one', 7, 'THOUGHT_A'), result('one', 8), call('bad', 9), result('bad', 10, true), last(11)] },
-      ctx: { groupTools: false, messages: [{ role: 'model', parts: [{ text: '[CTX-BLOCK L1 B#4 raw#1-#5] context summary' }], __meta: { seq: 12, contextBlock: { id: 4, level: 1, sourceKind: 'message', rawStartSeq: 1, rawEndSeq: 5 } } }] },
+      standaloneSuccess: { timelineView: 'detailed', messages: [call('one', 1), result('one', 2), last(3)] },
+      standaloneError: { timelineView: 'detailed', messages: [call('bad', 4), result('bad', 5, true), last(6)] },
+      nested: { timelineView: 'grouped', messages: [call('one', 7, 'THOUGHT_A'), result('one', 8), call('bad', 9), result('bad', 10, true), last(11)] },
+      ctx: { timelineView: 'detailed', messages: [{ role: 'model', parts: [{ text: '[CTX-BLOCK L1 B#4 raw#1-#5] context summary' }], __meta: { seq: 12, contextBlock: { id: 4, level: 1, sourceKind: 'message', rawStartSeq: 1, rawEndSeq: 5 } } }] },
     }
     for (const [id, config] of Object.entries(cases)) createRoot(document.getElementById(id)).render(React.createElement(ChatTimeline, {
-      sessionId: 'fixture/main', messages: config.messages, groupTools: config.groupTools, isMobile: false, showUsageBadge: false,
+      sessionId: 'fixture/main', messages: config.messages, timelineView: config.timelineView, isMobile: false, showUsageBadge: false,
     }))
   `
   const result = await build({ stdin: { contents: source, resolveDir: new URL('..', import.meta.url).pathname, sourcefile: 'nested-hover-fixture.tsx' }, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })

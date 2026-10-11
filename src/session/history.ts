@@ -1,4 +1,7 @@
 import * as llm from '../llm';
+import { CompactPlanRepairFile, compactPlanSubmissionUsesFile } from './compactPlanRepair';
+import { parseFunctionCallArgs } from '../toolCallArgs';
+import { getToolCancellationArgumentError, isSingleToolCancellationRequested, isWholeBatchCancellationRequested, stripToolCancellationArguments } from '../toolCallControls';
 import { isDeepStrictEqual } from 'node:util';
 import { logger } from '../common';
 import {
@@ -35,13 +38,13 @@ import {
   selectCompactCandidateTargetLevels,
   validateCompactPlanArgs,
 } from './compactPlan';
-import { CompactionRequest, Message, MessagePart, QueueItem, Session, TokenUsage } from '../types';
+import { CompactionPlannerDebug, CompactionRequest, FunctionCall, Message, MessagePart, QueueItem, Session, TokenUsage } from '../types';
 import { formatToolResponsePayload } from '../../packages/shared/dist/toolResponseFormatting';
 import { formatMessagePreviewText } from '../utils/messageFormat';
 import { buildSystemMessageParts } from '../utils/systemMessageParts';
 import { formatFoxwarmSystemTag } from '../utils/promptWrappers';
 import { formatLocalTimestamp } from '../utils/localTime';
-import { formatSessionGoalReminderText } from './goal';
+import { checkpointTaskProgress } from './taskContext';
 import { appendBlocksToArchiveWithCommitInfo, renderBlockMessage, resolveNextSessionBlockId, rollbackUncommittedBlocks, shouldIgnoreMessageInCompactCandidates, shouldRemoveOldCompactCompletionMessage } from './layeredContext';
 import { isModelVisibleMessage } from './messageVisibility';
 import { captureSessionSemanticState, restoreSessionSemanticState } from './metadataStore';
@@ -50,6 +53,14 @@ import { isSessionAuthorityPostCommitError } from './stateFile';
 const TOOL_RESPONSE_RETAIN_HEAD_CHARS = 500;
 const TOOL_RESPONSE_RETAIN_TAIL_CHARS = 500;
 const TOOL_RESPONSE_LINE_PREFERENCE_WINDOW = 100;
+/**
+ * Automatic pruning commits only when the estimated Session shrinks below this ratio of its
+ * previous size. A committed prune rewrites an earlier part of the request prefix, so provider
+ * prompt caching is invalidated after that point; a marginal reduction is not worth that
+ * rewrite. An absolute context budget is unreliable as the gate here because the estimate
+ * covers only history plus the memory snapshot, not the fixed request overhead.
+ */
+const TOOL_RESPONSE_PRUNE_MAX_ESTIMATED_RATIO = 0.6;
 const TOOL_RESPONSE_METADATA_KEYS = new Set([
   'status', 'node', 'nodeId', 'path', 'filePath', 'absolutePath', 'outputFullPath',
   'logPath', 'statusPath', 'runId', 'execId', 'sha256', 'hash', 'location',
@@ -179,6 +190,7 @@ type CompactJobOperation = {
   sourceBlockIds?: number[];
   summary: string;
   memoryFacts?: ExtractedMemoryFact[];
+  frictionScore?: number;
 };
 
 type CompactJobResult =
@@ -208,10 +220,12 @@ type CompactJobResult =
         rawEndTimestamp?: number;
         summary: string;
         memoryFacts?: ExtractedMemoryFact[];
+        frictionScore?: number;
       }>;
       preserveMessages: Array<{ seq: number; operationIndex: number }>;
       removePreservedMessages: number[];
       replacedItemCount: number;
+      planner?: CompactionPlannerDebug;
     };
 
 type CompactJobState = {
@@ -860,7 +874,7 @@ export async function buildLayeredCompactCandidateEntries(olderHistory: Message[
         item: buildBlockCandidateItem(block.id, block.level, block.rawStartSeq, block.rawEndSeq,
           formatMessagePreviewText(message, Number.MAX_SAFE_INTEGER, { skipThinking: true }),
           estimateTokenCount(formatMessagePreviewText(message, Number.MAX_SAFE_INTEGER, { skipThinking: true })),
-          isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(olderHistory, historyIndex), compactSegmentId),
+          isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(olderHistory, historyIndex), compactSegmentId, block.frictionScore),
         historyStartIndex: historyIndex, historyEndIndex: historyIndex,
         rawStartTimestamp: normalizeActiveHistoryTimestamp(block.rawStartTimestamp),
         rawEndTimestamp: normalizeActiveHistoryTimestamp(block.rawEndTimestamp),
@@ -982,6 +996,7 @@ export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: La
       ...(sourceBlockIds.length > 0 ? { sourceBlockIds } : {}),
       summary: block.summary,
       memoryFacts: block.memoryFacts,
+      ...(block.frictionScore !== undefined ? { frictionScore: block.frictionScore } : {}),
     };
   });
 
@@ -1023,36 +1038,24 @@ async function finalizeCompaction(
   compactedSkillNames: string[] = [],
   insertedCompletionMessages: Awaited<ReturnType<typeof appendMessagesToArchive>> = [],
   operation: CompactOperation,
+  planner?: CompactionPlannerDebug,
 ): Promise<void> {
   const persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshotForSession(session);
   if (isCompactCancelled(operation)) throw new CompactCancelledError();
   if (persistentMemorySnapshot !== undefined) session.persistentMemorySnapshot = persistentMemorySnapshot;
+  await checkpointTaskProgress(session);
   session.history = newHistory;
 
   const completionText = formatCompactionCompletionMarker(sessionId, completionMarker, session.parentSessionId, compactedSkillNames, Date.now());
-  const hasCompletionGoalReminder = !!session.goalState?.goal?.trim();
-  const completionParts: MessagePart[] = buildSystemMessageParts(completionText);
-  if (hasCompletionGoalReminder) {
-    completionParts.push(...buildSystemMessageParts(formatSessionGoalReminderText(session.goalState.goal)));
-  }
-
   const completionMessage: Message = {
     role: 'user',
-    parts: completionParts,
-    __meta: {
-      timestamp: Date.now(),
-      ...(hasCompletionGoalReminder ? { goalReminder: true, goalReminderKind: 'compact-completion' } : {}),
-    },
+    parts: buildSystemMessageParts(completionText),
+    ...(planner ? { compaction: { planner } } : {}),
+    __meta: { timestamp: Date.now() },
   };
   insertedCompletionMessages.push(...await appendMessagesToArchive(session, [completionMessage]));
   if (isCompactCancelled(operation)) throw new CompactCancelledError();
   session.history.push(completionMessage);
-  const completionSeq = completionMessage.__meta!.seq!;
-  if (hasCompletionGoalReminder && session.goalState) {
-    session.goalState.anchorSeq = completionSeq;
-    completionMessage.__meta!.goalAnchorSeq = completionSeq;
-  }
-
   session.vectorIndexPosition = 0;
   session.historyVersion = (session.historyVersion || 0) + 1;
   session.indexingState = undefined;
@@ -1164,63 +1167,144 @@ async function runCompactJob(
   let compactPlan: CompactPlan | null = null;
   let compactRoundsUsed = 0;
   let invalidCompactPlanAttempts = 0;
+  const plannerHistoryStart = transientSession.history.length;
+  const plannerToolCalls: string[] = [];
+  let plannerUsage: TokenUsage | undefined;
 
-  while (compactRoundsUsed < COMPACT_FLOW_MAX_ROUNDS) {
-    if (isCompactCancelled(operation)) throw new CompactCancelledError();
-    compactRoundsUsed += 1;
-    const result = await llm.chat(nextPromptParts, transientSession, invalidCompactPlanAttempts, {
-      appendMessage: async (message) => {
-        await appendTransientSessionMessage(transientSession, message);
-        mirrorTemporaryCompactMessage(deps, sessionId, message);
-      },
-      notifySessionEvents: false,
-      registerAbortController: false,
-      abortSignal: operation.controller.signal,
-      purpose: 'compact-plan',
-      ...(execution === 'background' ? { compactPlanBackground: true } : {}),
-      snapshotAuthority: 'detached',
-    });
+  let repairFile: CompactPlanRepairFile | undefined;
+  const appendToolFeedback = async (call: FunctionCall, response: string) => {
+    const message: Message = { role: 'tool', parts: [{ functionResponse: {
+      tool_use_id: call.id, name: call.name, response: { output: response },
+    } }] };
+    await appendTransientSessionMessage(transientSession, message);
+    mirrorTemporaryCompactMessage(deps, sessionId, message);
+  };
+  const repairInstructions = async () => repairFile
+    ? [
+      repairFile.structuredFallback
+        ? 'The provider did not supply raw argument text. This file was created by JSON-serializing the complete argument values of your rejected submit_compact_plan tool call; it is not a verbatim copy of generated text.'
+        : 'This file was created from the complete arguments text of your rejected submit_compact_plan tool call, copied exactly as generated. It contains the parameters you passed to that tool, not the tool response or only the replaceAsBlocks array.',
+      `Repair file: ${JSON.stringify(repairFile.filePath)}.`,
+      'Any successful edits are retained in this same file. The excerpts below show its current contents without reformatting.',
+      'Do not call read: it is unavailable and unnecessary here. Use your rejected tool call and these excerpts; match the file\'s actual whitespace and escaping rather than guessing them.',
+      'Repair the file into one JSON object containing the direct submit_compact_plan parameters. Do not add a tool name, call ID, or args wrapper. Use edit or apply_patch on this exact file only; a patch may contain only one Update File operation.',
+      `Then call ${COMPACT_PLAN_TOOL_NAME} by itself with {"argsFilePath":${JSON.stringify(repairFile.filePath)}}.`,
+      await repairFile.preview(transientSession, operation),
+    ].join('\n')
+    : `Submit corrected direct plan fields with ${COMPACT_PLAN_TOOL_NAME}.`;
 
-    const toolCalls = result.toolCalls || [];
-    const onlyPlanCall = toolCalls.length === 1 && toolCalls[0].name === COMPACT_PLAN_TOOL_NAME;
-    if (!onlyPlanCall) {
-      const invalidToolName = toolCalls.find(call => call.name !== COMPACT_PLAN_TOOL_NAME)?.name || COMPACT_PLAN_TOOL_NAME;
-      logger.warn({ sessionId, invalidToolName, toolCallCount: toolCalls.length, compactRoundsUsed }, 'Layered compact flow rejected a missing or non-plan tool call; retrying with feedback');
-      const invalidToolNotice = toolCalls.length === 0
-        ? `Compact planning must be submitted by calling ${COMPACT_PLAN_TOOL_NAME}; plain text/no tool call cannot complete compaction.`
-        : invalidToolName === COMPACT_PLAN_TOOL_NAME
-        ? `Call ${COMPACT_PLAN_TOOL_NAME} exactly once, by itself.`
-        : `Do not call \`${invalidToolName}\`; the only accepted tool call during compaction is ${COMPACT_PLAN_TOOL_NAME}.`;
-      nextPromptParts = [{
-        system: [
-          'COMPACT TOOL CALL INVALID.',
-          invalidToolNotice,
-          'Do not read or write agent memory during compaction.',
-          `When ready, call exactly one ${COMPACT_PLAN_TOOL_NAME} tool call by itself. Do not combine ${COMPACT_PLAN_TOOL_NAME} with any other tool call.`,
-        ].join(' '),
-      }];
-      continue;
-    }
-
-    try {
-      compactPlan = validateCompactPlanArgs(result.toolCalls[0].args || {}, candidateItems, {
-        removablePreservedMessages: preservedMessageCandidates,
-        messagePolicy,
-        blockPolicies,
+  try {
+    while (compactRoundsUsed < COMPACT_FLOW_MAX_ROUNDS) {
+      if (isCompactCancelled(operation)) throw new CompactCancelledError();
+      compactRoundsUsed += 1;
+      const result = await llm.chat(nextPromptParts, transientSession, invalidCompactPlanAttempts, {
+        appendMessage: async (message) => {
+          await appendTransientSessionMessage(transientSession, message);
+          mirrorTemporaryCompactMessage(deps, sessionId, message);
+        },
+        notifySessionEvents: false,
+        registerAbortController: false,
+        abortSignal: operation.controller.signal,
+        purpose: 'compact-plan',
+        ...(execution === 'background' ? { compactPlanBackground: true } : {}),
+        snapshotAuthority: 'detached',
       });
-      break;
-    } catch (e) {
-      if (!(e instanceof CompactPlanValidationError)) {
-        throw e;
+      if (isCompactCancelled(operation)) throw new CompactCancelledError();
+
+      const toolCalls = result.toolCalls || [];
+      plannerToolCalls.push(...toolCalls.map(call => call.name));
+      // Count each round's result once, not the cloned parent's cumulative
+      // stats or the same usage echoed on an appended assistant message.
+      if (result.usage) {
+        plannerUsage ??= { cachedTokens: 0, inputTokens: 0, outputTokens: 0 };
+        plannerUsage.cachedTokens += result.usage.cachedTokens || 0;
+        plannerUsage.inputTokens += result.usage.inputTokens || 0;
+        plannerUsage.outputTokens += result.usage.outputTokens || 0;
+        if (result.usage.reasoningTokens !== undefined) {
+          plannerUsage.reasoningTokens = (plannerUsage.reasoningTokens || 0) + result.usage.reasoningTokens;
+        }
+      }
+      const call = toolCalls[0];
+      if (repairFile && toolCalls.length === 1 && (call.name === 'edit' || call.name === 'apply_patch')) {
+        try {
+          const controlError = getToolCancellationArgumentError(call);
+          if (controlError) throw new Error(controlError);
+          if (isSingleToolCancellationRequested(call) || isWholeBatchCancellationRequested(toolCalls)) {
+            await appendToolFeedback(call, 'Compact repair canceled.');
+          } else {
+            await repairFile.edit({ ...call, args: stripToolCancellationArguments(call.args) }, transientSession, operation);
+            await appendToolFeedback(call, 'Compact arguments file updated.');
+          }
+        } catch (error) {
+          await appendToolFeedback(call, `Compact repair failed: ${(error as Error).message}`);
+        }
+        nextPromptParts = [{ system: await repairInstructions() }];
+        continue;
+      }
+      const onlyPlanCall = toolCalls.length === 1 && call.name === COMPACT_PLAN_TOOL_NAME;
+      if (!onlyPlanCall) {
+        const invalidToolName = toolCalls.find(call => call.name !== COMPACT_PLAN_TOOL_NAME)?.name || COMPACT_PLAN_TOOL_NAME;
+        logger.warn({ sessionId, invalidToolName, toolCallCount: toolCalls.length, compactRoundsUsed }, 'Layered compact flow rejected a missing or non-plan tool call; retrying with feedback');
+        const invalidToolNotice = toolCalls.length === 0
+          ? `Compact planning must be submitted by calling ${COMPACT_PLAN_TOOL_NAME}; plain text/no tool call cannot complete compaction.`
+          : invalidToolName === COMPACT_PLAN_TOOL_NAME
+          ? `Call ${COMPACT_PLAN_TOOL_NAME} exactly once, by itself.`
+          : `Do not call \`${invalidToolName}\`; ${repairFile ? 'only an exact-file edit or apply_patch repair, or a single plan submission, is accepted' : `the only accepted tool call during compaction is ${COMPACT_PLAN_TOOL_NAME}`}.`;
+        nextPromptParts = [{
+          system: [
+            'COMPACT TOOL CALL INVALID.',
+            invalidToolNotice,
+            'Do not read or write agent memory during compaction.',
+            `When ready, call exactly one ${COMPACT_PLAN_TOOL_NAME} tool call by itself. Do not combine ${COMPACT_PLAN_TOOL_NAME} with any other tool call.`,
+            ...(repairFile ? [await repairInstructions()] : []),
+          ].join(' '),
+        }];
+        continue;
       }
 
-      invalidCompactPlanAttempts += 1;
-
-      logger.warn({ sessionId, invalidCompactPlanAttempts, compactRoundsUsed, validationError: e.message }, 'Layered compact plan validation failed; retrying compact flow');
-      nextPromptParts = [{
-        system: buildCompactPlanValidationFeedback(e),
-      }];
+      let fileSubmission = false;
+      let validatingPlan = false;
+      try {
+        if (call.argsParseError) throw new Error('Compact plan arguments must be valid JSON with a top-level object.');
+        let args = call.args || {};
+        // Even an invalid file submission must not replace the pending arguments file.
+        fileSubmission = Object.prototype.hasOwnProperty.call(args, 'argsFilePath');
+        if (compactPlanSubmissionUsesFile(args)) {
+          if (!repairFile) throw new Error('No repair file is pending for this compact operation.');
+          const text = await repairFile.read(args.argsFilePath, transientSession, operation);
+          const parsed = parseFunctionCallArgs(text);
+          if (!text.trim() || parsed.argsParseError) throw new Error('The repair file must contain valid JSON with a top-level object.');
+          if (Object.prototype.hasOwnProperty.call(parsed.args, 'argsFilePath')) throw new Error('The repair file must contain direct plan fields, not argsFilePath.');
+          args = parsed.args;
+        }
+        validatingPlan = true;
+        compactPlan = validateCompactPlanArgs(args, candidateItems, {
+          removablePreservedMessages: preservedMessageCandidates,
+          messagePolicy,
+          blockPolicies,
+        });
+        break;
+      } catch (error) {
+        if (validatingPlan && !(error instanceof CompactPlanValidationError)) throw error;
+        invalidCompactPlanAttempts += 1;
+        if (!repairFile && !fileSubmission) {
+          try { repairFile = await CompactPlanRepairFile.create(call, transientSession, operation); }
+          catch (saveError) {
+            logger.warn({ sessionId, error: (saveError as Error).message }, 'Unable to save compact arguments for file repair');
+          }
+        }
+        const feedback = error instanceof CompactPlanValidationError
+          ? buildCompactPlanValidationFeedback(error)
+          : `COMPACT PLAN INVALID. ${(error as Error).message}`;
+        logger.warn({ sessionId, invalidCompactPlanAttempts, compactRoundsUsed, validationError: (error as Error).message }, 'Layered compact plan validation failed; retrying compact flow');
+        await appendToolFeedback(call, repairFile
+          ? `Compact plan rejected. Repair file: ${JSON.stringify(repairFile.filePath)}.`
+          : 'Compact plan rejected; submit corrected direct plan fields.');
+        nextPromptParts = [{ system: `${feedback} ${await repairInstructions()}` }];
+      }
     }
+  } finally {
+    await repairFile?.cleanup();
   }
 
   if (!compactPlan) {
@@ -1239,7 +1323,13 @@ async function runCompactJob(
   return {
     status: 'ready',
     completionMarker,
-      completionBroadcastMessage,
+    completionBroadcastMessage,
+    planner: {
+      steps: compactRoundsUsed,
+      toolCalls: plannerToolCalls,
+      ...(plannerUsage ? { usage: plannerUsage } : {}),
+      messages: structuredClone(transientSession.history.slice(plannerHistoryStart)),
+    },
     snapshotHistory: historySnapshot,
     consumedHistoryCount: splitIndex,
     operations: operations.map(operation => ({
@@ -1256,6 +1346,7 @@ async function runCompactJob(
       sourceBlockIds: operation.sourceBlockIds,
       summary: operation.summary,
       memoryFacts: operation.memoryFacts,
+      ...(operation.frictionScore !== undefined ? { frictionScore: operation.frictionScore } : {}),
     })),
     createdBlocks: operations.map(operation => ({
       level: operation.level,
@@ -1269,6 +1360,7 @@ async function runCompactJob(
       rawEndTimestamp: operation.rawEndTimestamp,
       summary: operation.summary,
       memoryFacts: operation.memoryFacts,
+      ...(operation.frictionScore !== undefined ? { frictionScore: operation.frictionScore } : {}),
     })),
     preserveMessages,
     removePreservedMessages,
@@ -1337,6 +1429,7 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
       result.completionBroadcastMessage, createdRecords.length,
       result.replacedItemCount, compactedSkillNames, insertedCompletionMessages,
       operation,
+      result.planner,
     );
     operation.committed = true;
 
@@ -1708,20 +1801,20 @@ export async function tryAutomaticToolResponsePruning(
   if (!session) return false;
   const plan = planOverride || await buildToolResponsePrunePlan(sessionId, session, COMPACT_KEEP_PERCENT);
   if (plan.replacedFunctionResponses === 0) return false;
-  const { contextLimit } = resolveModelConfig(session.model);
-  const recoveryTarget = Math.max(1, Math.floor(contextLimit * 0.5));
-  const commit = await commitToolResponsePrunePlan(deps, sessionId, plan, recoveryTarget);
+  const maximumEstimatedTokens = Math.max(0, Math.ceil(plan.estimatedTokensBefore * TOOL_RESPONSE_PRUNE_MAX_ESTIMATED_RATIO) - 1);
+  const commit = await commitToolResponsePrunePlan(deps, sessionId, plan, maximumEstimatedTokens);
   if (!commit.committed) {
     logger.info({
       sessionId, prunableResponses: plan.replacedFunctionResponses,
-      estimatedTokensAfter: commit.result.estimatedTokensAfter, recoveryTarget,
+      estimatedTokensBefore: commit.result.estimatedTokensBefore, estimatedTokensAfter: commit.result.estimatedTokensAfter,
+      maximumEstimatedTokens,
     }, 'Automatic historical tool-response pruning did not commit; continuing to layered compaction');
     return false;
   }
   logger.info({
     sessionId, prunedResponses: commit.result.replacedFunctionResponses, touchedMessages: commit.result.touchedMessages,
     estimatedTokensBefore: commit.result.estimatedTokensBefore, estimatedTokensAfter: commit.result.estimatedTokensAfter,
-    estimatedTokensSaved: commit.result.estimatedTokensSaved, recoveryTarget,
+    estimatedTokensSaved: commit.result.estimatedTokensSaved, maximumEstimatedTokens,
   }, 'Automatic historical tool-response pruning completed; layered compaction skipped for this trigger');
   return true;
 }

@@ -158,6 +158,15 @@ test('model-visible lightweight user metadata is estimated, while a display-only
   assert.equal(getContextScrollbarLegendStats(segments).reduce((sum, stat) => sum + stat.estimatedTokens, 0), segments[1].estimatedTokens)
 })
 
+test('LLM retry metadata keeps the context overview in the system/thread-card family', () => {
+  const segments = buildContextScrollbarSegments([
+    message('model', '⚠️ LLM Error: Attempt 1/5 failed: provider unavailable\nAttempt 2/5 failed: retry exhausted', 1, { noticeType: 'llm-retry' }),
+  ])
+  assert.equal(segments[0].tone, 'system')
+  assert.equal(segments[0].category, 'system')
+  assert.ok(segments[0].estimatedRenderedHeight >= 94, 'system-card height uses the collapsed thread-card estimate')
+})
+
 test('scale model uses log1p, semantic hidden height, measured replacement, and keeps display-only rendered height', () => {
   const segments = buildContextScrollbarSegments([
     { role: 'model', parts: [{ functionCall: { id: 'call-1', name: 'read', args: { filePath: '/tmp/very-long' } } }], __meta: { seq: 1 } },

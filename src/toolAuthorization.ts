@@ -1,5 +1,5 @@
 import fs from 'fs-extra';
-import { promises as fsPromises } from 'fs';
+import { replaceConfigFile } from './configFile';
 import path from 'path';
 import yaml from 'js-yaml';
 import { getAgentDir, getAgentMemoryDir, STATE_DIR, WORKSPACE_DIR } from './config';
@@ -7,8 +7,8 @@ import type { Session } from './types';
 import { canonicalPotentialPathSync, resolveAgentPath } from './utils/pathResolve';
 import { RpcError } from './rpc';
 import { resolveNodeTransferPath } from './nodeFileTransfer';
-import { parseApplyPatchInput } from './applyPatch';
-import { requireVerifiedMcpInboundExternalId, type VerifiedMcpInboundPrincipal } from './mcpInboundConfig';
+import { parseApplyPatchInput } from '../packages/shared/dist/applyPatch';
+import { requireVerifiedAccessIdentity, type VerifiedAccessIdentity } from './accessConfig';
 
 export const TOOL_AUTH_CONFIG_PATH = path.join(STATE_DIR, 'tool-authorization.yaml');
 export const TOOL_AUTH_POLICY_UNAVAILABLE = 'TOOL_AUTH_POLICY_UNAVAILABLE';
@@ -243,6 +243,10 @@ function normalizeToolMatcher(value: unknown, label: string): ToolMatcher {
   if (explicitlyNames(name, 'update_session_snapshot')
     && matchesTool(normalized, { source: 'builtin', name: 'update_session_snapshot' })) {
     throw new Error(`${label} uses obsolete builtin \`update_session_snapshot\`; migrate it to \`refresh_session_snapshot\`.`);
+  }
+  if (explicitlyNames(name, 'set_tool_rules')
+    && matchesTool(normalized, { source: 'builtin', name: 'set_tool_rules' })) {
+    throw new Error(`${label} uses obsolete builtin \`set_tool_rules\`; migrate to \`set_config\` with an explicit target constraint (tool-rules for the former policy setter).`);
   }
   return normalized;
 }
@@ -518,7 +522,7 @@ export function evaluateToolAuthorizationPolicy(policy: ToolAuthorizationPolicy,
 }
 
 const NODE_FILE_PATH_TOOLS = new Set(['read', 'write', 'edit']);
-const BUILTIN_FILE_PATH_TOOLS = new Set(['send_file', 'image_write_to_file', 'set_tool_rules']);
+const BUILTIN_FILE_PATH_TOOLS = new Set(['send_file', 'image_write_to_file', 'set_config']);
 const MEMORY_PATH_TOOLS = new Set(['read_memory', 'write_memory', 'edit_memory', 'delete_memory']);
 function resolveMemoryPath(raw: string, agentName: string): string {
   const normalized = raw.trim().replace(/^[\\/]+/, '').replace(/^memory[\\/]+/, '');
@@ -586,7 +590,7 @@ export function buildToolAuthorizationRequest(options: {
 
 /** Construct trusted external identity facts; execution-session and path context arrive in later integration. */
 export function buildExternalToolAuthorizationRequest(options: {
-  principal: VerifiedMcpInboundPrincipal;
+  principal: VerifiedAccessIdentity;
   sessionId?: string;
   tool: ToolAuthorizationToolRef;
   targetNode?: string;
@@ -594,7 +598,7 @@ export function buildExternalToolAuthorizationRequest(options: {
   /** Trusted execution-bound path facts; never accepted directly from external request JSON. */
   paths?: ToolAuthorizationPathRecord[];
 }): ToolAuthorizationRequest {
-  const externalId = requireVerifiedMcpInboundExternalId(options.principal);
+  const externalId = requireVerifiedAccessIdentity(options.principal);
   return {
     principal: 'external', externalId,
     ...(options.sessionId ? { session: options.sessionId } : {}),
@@ -605,19 +609,8 @@ export function buildExternalToolAuthorizationRequest(options: {
 
 export async function installToolAuthorizationPolicyBytes(bytes: Buffer): Promise<void> {
   parseToolAuthorizationPolicyBytes(bytes);
-  const destination = policyPath();
-  await fs.ensureDir(path.dirname(destination));
-  const tempPath = path.join(path.dirname(destination), `.${path.basename(destination)}.${process.pid}.${Date.now()}.tmp`);
-  try {
-    const handle = await fsPromises.open(tempPath, 'wx', 0o600);
-    try { await handle.writeFile(bytes); await handle.sync(); }
-    finally { await handle.close(); }
-    await fs.rename(tempPath, destination);
-    invalidateToolAuthorizationPolicyCache();
-  } catch (error) {
-    await fs.remove(tempPath).catch(() => {});
-    throw error;
-  }
+  replaceConfigFile(policyPath(), bytes);
+  invalidateToolAuthorizationPolicyCache();
 }
 
 export const TOOL_AUTH_POLICY_LIMITS = Object.freeze({ maxPolicyBytes: MAX_POLICY_BYTES, maxRules: MAX_RULES, cacheMaxAgeMs: CACHE_MAX_AGE_MS, retryDelayMs: RETRY_DELAY_MS });

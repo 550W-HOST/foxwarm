@@ -65,6 +65,11 @@ test('placement resolution routes only node-environment tools to currentNode', (
     owner: 'main-management',
     executionNode: 'master',
   });
+  assert.deepEqual(resolveBuiltinToolPlacement('session', { action: 'update-parent' }, 'remote-node'), {
+    name: 'session',
+    owner: 'main-management',
+    executionNode: 'master',
+  });
   for (const action of ['list', 'create', 'ensure', 'inspect', 'destroy']) {
     assert.deepEqual(resolveBuiltinToolPlacement('node', { action }, 'remote-node'), {
       name: 'node', owner: 'main-management', executionNode: 'master',

@@ -84,6 +84,7 @@ function App({ opts }: { opts: Opts }) {
   const [autoApproveAll, setAutoApproveAll] = useState(!!opts.autoApproveAll);
   const [approval, setApproval] = useState<Approval | null>(null);
   const clientRef = useRef<NodeClient | null>(null);
+  const approvalRef = useRef<Approval | null>(null);
   const autoApprovePattern = useMemo(() => opts.autoApprove ? new RegExp(opts.autoApprove, 'i') : null, [opts.autoApprove]);
   const selectedSession = sessions[selected];
 
@@ -119,15 +120,29 @@ function App({ opts }: { opts: Opts }) {
       credentialsFile: opts.credentialsFile,
       localTrigger: opts.localTrigger,
       localTriggerPort: opts.localTriggerPort,
-      toolCallInterceptor: async (tool, args, sessionId, _callId, serverTimeoutMs) => {
+      toolCallInterceptor: async (tool, args, sessionId, _callId, serverTimeoutMs, signal) => {
         if (autoApproveAll || (autoApprovePattern && autoApprovePattern.test(tool))) return true;
         return await new Promise<boolean | string>((resolve) => {
+          if (signal?.aborted) {
+            resolve('cancelled');
+            return;
+          }
           const effectiveTimeoutMs = serverTimeoutMs || (opts.timeout ? opts.timeout * 1000 : 0);
-          const timeout = effectiveTimeoutMs > 0 ? setTimeout(() => {
-            setApproval(null);
-            resolve('timeout');
-          }, Math.max(1000, effectiveTimeoutMs - 2000)) : undefined;
-          setApproval({ tool, args, sessionId, resolve, timeout });
+          let timeout: NodeJS.Timeout | undefined;
+          const finish = (result: boolean | string) => {
+            if (timeout) clearTimeout(timeout);
+            signal?.removeEventListener('abort', cancel);
+            if (approvalRef.current?.resolve === finish) {
+              approvalRef.current = null;
+              setApproval(null);
+            }
+            resolve(result);
+          };
+          const cancel = () => finish('cancelled');
+          signal?.addEventListener('abort', cancel, { once: true });
+          timeout = effectiveTimeoutMs > 0 ? setTimeout(() => finish('timeout'), Math.max(1000, effectiveTimeoutMs - 2000)) : undefined;
+          approvalRef.current = { tool, args, sessionId, resolve: finish, timeout };
+          setApproval(approvalRef.current);
         });
       },
       onStatus: (event, detail) => {
@@ -146,7 +161,7 @@ function App({ opts }: { opts: Opts }) {
     const timer = setInterval(() => void refresh(), 3000);
     return () => {
       clearInterval(timer);
-      approval?.resolve('timeout');
+      approvalRef.current?.resolve('timeout');
       void client.disconnect();
       clientRef.current = null;
     };

@@ -25,7 +25,9 @@ test('model-facing creation schemas require intentional nested forceModel overri
   assert.equal((child.parameters.properties as any).agentName.type, 'string');
   assert.equal((child.parameters.properties as any).displayName.type, 'string');
   assert.equal((create.parameters.properties as any).displayName.type, 'string');
-  assert.equal(Object.keys(addHandoffConfirmationSchema(child, true).parameters.properties!).at(-1), 'confirmation');
+  const handoffKeys = Object.keys(addHandoffConfirmationSchema(child, true).parameters.properties!);
+  assert.equal(handoffKeys.at(-1), 'handoffConfirmation');
+  assert.ok(handoffKeys.indexOf('handoffRecall') < handoffKeys.indexOf('message'));
   assert.equal((child.parameters.properties as any).node.type, 'string');
   assert.equal((create.parameters.properties as any).node.type, 'string');
   assert.equal((create.parameters.properties as any).fork, undefined);

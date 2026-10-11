@@ -1086,8 +1086,8 @@ test('detached exact owner completes one real local-tool iteration', async () =>
     turnIds.push(options.turnId);
     if (parts) await options.appendMessage({ role: 'user', parts });
     if (iteration++ === 0) {
-      await options.appendMessage({ role: 'model', parts: [{ functionCall: { id: 'goal-call', name: 'set_goal', args: { goal: 'detached goal' } } }] });
-      return { text: '', toolCalls: [{ id: 'goal-call', name: 'set_goal', args: { goal: 'detached goal' } }] };
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: { id: 'goal-call', name: 'set_session_compact_threshold', args: { thresholdTokens: 12345 } } }] });
+      return { text: '', toolCalls: [{ id: 'goal-call', name: 'set_session_compact_threshold', args: { thresholdTokens: 12345 } }] };
     }
     await options.appendMessage({ role: 'model', parts: [{ text: 'tool complete' }] });
     return { text: 'tool complete' };
@@ -1095,7 +1095,7 @@ test('detached exact owner completes one real local-tool iteration', async () =>
 
   try {
     await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
-    assert.equal(session.goalState?.goal, 'detached goal');
+    assert.equal(session.compactThresholdTokens, 12345);
     assert.deepEqual(session.history.map(message => message.role), ['user', 'model', 'tool', 'model']);
     assert.equal(session.history.length, 4);
     assert.equal(session.busy, false);
@@ -1585,4 +1585,87 @@ test('default unbound busy claim honors destructive fencing while bound custom e
     sessionManager.releaseSessionsForDestructiveLifecycle(claim.claimId);
     sessionManager.getAllSessions().delete(session.id);
   }
+});
+
+test('passive finish-window input stays durable without starting another processor', async () => {
+  const session = createSession(`passive_finish_window_${Date.now()}`, 'first turn');
+  const effects = createEffects(session, []);
+  const updateBusy = effects.updateBusy;
+  let injected = false;
+  let requests = 0;
+  effects.updateBusy = async (owner, busy) => {
+    if (!busy && !injected) {
+      injected = true;
+      owner.queue.push({ type: 'intersession', trigger: false, parts: [{ system: 'Task ownership changed.' }] });
+    }
+    return updateBusy(owner, busy);
+  };
+  const originalChat = llm.chat;
+  (llm as any).chat = async (_parts: any, _owner: Session, _iteration: number, options: any) => {
+    requests++;
+    await options.appendMessage({ role: 'model', parts: [{ text: 'done' }] });
+    return { text: 'done' };
+  };
+  try {
+    await new SessionTurnRunner(new LocalSessionTurnHost(effects, session)).processSessionQueue(session.id);
+    assert.equal(requests, 1);
+    assert.equal(session.busy, false);
+    assert.equal(session.queue.length, 1);
+    assert.equal((await readSessionHistorySnapshot(session.id)).queue[0].trigger, false);
+  } finally { (llm as any).chat = originalChat; }
+});
+
+async function assertLinkedChildCompletion(scripted: boolean): Promise<void> {
+  const { tool_task } = await import('./tools/taskTools');
+  const { create_child_session } = await import('./tools');
+  const creator = await sessionManager.getSession(`task_link_creator_${Date.now()}`);
+  const parent = await sessionManager.getSession(`task_link_parent_${Date.now()}`);
+  let child: Session;
+  const originalChat = llm.chat;
+  let requests = 0;
+  try {
+    const created = JSON.parse((await tool_task({ action: 'create', title: 'Linked work' }, { sessionId: creator.id, session: creator } as any)).output);
+    const attached = await create_child_session({ suffix: 'task-link-child', taskId: created.taskId }, { sessionId: parent.id, session: parent } as any);
+    const childId = String(attached).match(/`([^`]+)`/)![1];
+    child = await sessionManager.getExistingSession(childId);
+    assert.equal(child.parentSessionId, parent.id);
+    await sessionManager.sendToSession(child.id, 'Complete the attached task.', parent.id);
+    (llm as any).chat = async (_parts: any, owner: Session, _iteration: number, options: any) => {
+      requests++;
+      if (requests === 1) {
+        const call = scripted
+          ? { id: 'linked-task-script', name: 'run_script', args: {
+            code: 'call_tool({"toolId": "builtin:task", "args": {"action": "complete", "taskId": args["taskId"], "result": "Finished."}})\nreturn {"scriptFinished": True}',
+            args: { taskId: created.taskId },
+          } }
+          : { id: 'linked-task-complete', name: 'call_tool', args: { toolId: 'builtin:task', args: { action: 'complete', taskId: created.taskId, result: 'Finished.' } } };
+        await options.appendMessage({ role: 'model', parts: [{ functionCall: call }] });
+        return { text: '', toolCalls: [call], allParts: [{ functionCall: call }] };
+      }
+      assert.equal(owner.childHandoffState?.resolved, true);
+      await options.appendMessage({ role: 'model', parts: [{ text: 'done' }] });
+      return { text: 'done' };
+    };
+    await new SessionTurnRunner(new LocalSessionTurnHost(createEffects(child, []), child)).processSessionQueue(child.id);
+    assert.equal(requests, 2);
+    assert.equal(child.childHandoffState.resolved, true);
+    assert.equal(child.queue.length, 0);
+    assert.equal(parent.queue.length, 0, 'no fabricated successful parent send or duplicate routine report');
+    assert.match(JSON.stringify(creator.queue), /Task completed.*Finished/);
+    const completed = JSON.parse((await tool_task({ action: 'get', taskId: created.taskId }, { sessionId: creator.id, session: creator } as any)).output);
+    assert.equal(completed.task.attachedSessionId, child.id);
+    assert.equal(completed.task.completionNotificationStatus, 'sent');
+  } finally {
+    (llm as any).chat = originalChat;
+    if (child) await sessionManager.deleteSession(child.id);
+    await sessionManager.deleteSession(parent.id);
+    await sessionManager.deleteSession(creator.id);
+  }
+}
+
+test('linked child completion resolves its own handoff when creator and actual parent are different Sessions', () => assertLinkedChildCompletion(false));
+
+test('nested run_script Task completion forwards its real receipt and resolves the linked child handoff', async () => {
+  try { await assertLinkedChildCompletion(true); }
+  finally { await (await import('./toolscript')).shutdownToolScriptRuntime(); }
 });

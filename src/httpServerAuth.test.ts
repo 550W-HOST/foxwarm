@@ -70,5 +70,53 @@ test('authenticated routes accept the current cookie and bearer token but reject
       headers: { Authorization: 'Bearer secret-token' },
     });
     assert.equal(bearer.status, 200);
+
+    const mixed = await fetch(`${baseUrl}/api/protected`, {
+      headers: { Cookie: 'foxwarm_token=stale-cookie', Authorization: 'Bearer secret-token' },
+    });
+    assert.equal(mixed.status, 200);
+  });
+});
+
+test('webui auth routes allow restricted identities while admin routes reject them', async () => {
+  await withServer(async (server, baseUrl) => {
+    server.setWebUiIdentityVerifier(async (token: string) => token === 'webui-token'
+      ? { role: 'webui', identityId: 'webui-1', sessionIds: ['webui/main'] }
+      : null);
+
+    server.addRoute({
+      path: '/api/admin-only',
+      method: 'GET',
+      handler: async (_req, res) => {
+        res.json({ ok: true });
+      },
+    });
+
+    server.addRoute({
+      path: '/api/webui',
+      method: 'GET',
+      auth: 'webui',
+      handler: async (req, res) => {
+        res.json({ auth: await server.getAuthContext(req) });
+      },
+    });
+
+    const webUiAllowed = await fetch(`${baseUrl}/api/webui`, {
+      headers: { Authorization: 'Bearer webui-token' },
+    });
+    assert.equal(webUiAllowed.status, 200);
+    assert.deepEqual(await webUiAllowed.json(), {
+      auth: { role: 'webui', identityId: 'webui-1', sessionIds: ['webui/main'] },
+    });
+
+    const webUiDenied = await fetch(`${baseUrl}/api/admin-only`, {
+      headers: { Authorization: 'Bearer webui-token' },
+    });
+    assert.equal(webUiDenied.status, 403);
+
+    const adminAllowed = await fetch(`${baseUrl}/api/admin-only`, {
+      headers: { Authorization: 'Bearer secret-token' },
+    });
+    assert.equal(adminAllowed.status, 200);
   });
 });

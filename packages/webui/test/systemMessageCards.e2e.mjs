@@ -33,6 +33,7 @@ async function buildFixtureBundle() {
     import React from 'react'
     import { createRoot } from 'react-dom/client'
     import ChatTimeline from ${JSON.stringify(timelineEntry)}
+    import { projectSessionSearchFields, findSessionSearchMatches } from './src/components/chatSessionSearch'
     import { ToolTag } from './src/components/chatShared'
     import ReasoningCard from './src/components/ReasoningCard'
     import { initializeThemeRuntime, setThemeSelection } from './src/theme/runtime'
@@ -49,6 +50,7 @@ async function buildFixtureBundle() {
     const cases = {
       event: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="event" type="wait-timeout">\\nwait timeout reached for sessionId: \`child/session\`\\n</foxwarm-system>' }, { inlineData: image }], __meta: { seq: 1 } }] },
       interAgent: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-message type="inter-agent" sourceSessionId="parent/child">\\n' + interAgentBody + '\\n</foxwarm-message>' }], __meta: { seq: 2 } }] },
+      task: { messages: [{ role: 'user', parts: [{ system: '<foxwarm-message type="task" taskId="task_fixture" event="completed" sourceSessionId="worker/session" hint="task notification from Foxwarm; not direct user input">\\nTask completed: task_fixture\\n{"createdBySessionId":"creator/session","ownerSessionId":"worker/session","previousOwnerSessionId":"old/session","attachedSessionId":"worker/session"}\\n</foxwarm-message>' }], __meta: { seq: 26 } }] },
       sessionBoundary: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="session-boundary" event="new-child">\\nboundary body\\n</foxwarm-system>' }], __meta: { seq: 21 } }] },
       goalReminder: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="goal-reminder">\\nremember this goal\\n</foxwarm-system>' }], __meta: { seq: 22 } }] },
       systemPrompt: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="system-prompt">\\nprompt body\\n</foxwarm-system>' }], __meta: { seq: 23 } }] },
@@ -56,6 +58,11 @@ async function buildFixtureBundle() {
       legacy: { messages: [{ role: 'user', parts: [{ system: 'legacy system notification' }], __meta: { seq: 3 } }] },
       direct: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-message type="channel">\\ndirect user body\\n</foxwarm-message>\\n<foxwarm-file name="中文测试.txt" node="master" path="/tmp/中文测试.txt" mime="text/plain" />' }, { inlineData: image }], __meta: { seq: 4 } }] },
       externalInput: { messages: [{ role: 'user', parts: [
+        { system: '<foxwarm-system kind="external-input" server="peer" endpoint="fixture:reply">' },
+        { text: '  ordinary external user input\\nsecond external line  ' },
+        { system: '</foxwarm-system>' },
+      ], __meta: { seq: 27 } }] },
+      legacyExternalInput: { messages: [{ role: 'user', parts: [
         { system: '<foxwarm-system kind="external-input" externalId="alpha" contextId="fixture" hint="Message from an external MCP client." />' },
         { text: 'ordinary external user input' },
       ], __meta: { seq: 25 } }] },
@@ -71,15 +78,25 @@ async function buildFixtureBundle() {
       ] },
     }
 
+    const roots = {}
     for (const [id, fixture] of Object.entries(cases)) {
-      createRoot(document.getElementById(id)).render(React.createElement(ChatTimeline, {
+      roots[id] = createRoot(document.getElementById(id))
+      roots[id].render(React.createElement(ChatTimeline, {
         sessionId: 'fixture/main',
         messages: fixture.messages,
         isMobile: window.innerWidth < 768,
-        groupTools: false,
+        timelineView: 'detailed',
         showUsageBadge: false,
         nestedDepth: fixture.nestedDepth || 0,
       }))
+    }
+    window.searchExternalInput = (id) => {
+      const matches = findSessionSearchMatches(projectSessionSearchFields(cases[id].messages, 'grouped'), 'ordinary external user input')
+      roots[id].render(React.createElement(ChatTimeline, {
+        sessionId: 'fixture/main', messages: cases[id].messages, isMobile: false,
+        timelineView: 'grouped', showUsageBadge: false, searchTarget: matches[0],
+      }))
+      return matches
     }
     createRoot(document.getElementById('unknownTool')).render(React.createElement(ToolTag, { name: 'future-tool', className: 'foxwarm-unknown-tool-tag' }))
     createRoot(document.getElementById('sendToSessionTool')).render(React.createElement(ToolTag, { name: 'send_to_session', className: 'foxwarm-send-to-session-tool-tag' }))
@@ -105,7 +122,7 @@ async function mountFixture(width = 900, dark = false, style = 'default') {
   await page.evaluate(({ dark, style }) => {
     window.setFixtureTheme(style, dark)
   }, { dark, style })
-  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-chat-timeline').length === 12)
+  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-chat-timeline').length === 14)
 }
 
 before(async () => {
@@ -117,7 +134,7 @@ before(async () => {
 
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:900px;max-width:100%;min-width:0;margin-bottom:20px}</style></head><body><main>${['event', 'interAgent', 'sessionBoundary', 'goalReminder', 'systemPrompt', 'unknown', 'legacy', 'direct', 'externalInput', 'mixed', 'nested', 'spacing', 'unknownTool', 'sendToSessionTool', 'reasoningMessage', 'reasoningProcessing'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
+    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:900px;max-width:100%;min-width:0;margin-bottom:20px}</style></head><body><main>${['event', 'interAgent', 'task', 'sessionBoundary', 'goalReminder', 'systemPrompt', 'unknown', 'legacy', 'direct', 'externalInput', 'legacyExternalInput', 'mixed', 'nested', 'spacing', 'unknownTool', 'sendToSessionTool', 'reasoningMessage', 'reasoningProcessing'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -141,7 +158,7 @@ test('console reasoning selectors do not borrow system-message declarations', as
 
 test('heavy system and non-channel messages use kind-tagged thread cards while direct users stay bubbles', async () => {
   await mountFixture()
-  for (const [id, kind] of [['event', 'event'], ['interAgent', 'inter-agent'], ['sessionBoundary', 'session-boundary'], ['goalReminder', 'goal-reminder'], ['systemPrompt', 'system-prompt'], ['unknown', 'future-system-kind'], ['legacy', 'system'], ['mixed', 'event'], ['nested', 'snapshot']]) {
+  for (const [id, kind] of [['event', 'event'], ['interAgent', 'inter-agent'], ['task', 'task'], ['sessionBoundary', 'session-boundary'], ['goalReminder', 'goal-reminder'], ['systemPrompt', 'system-prompt'], ['unknown', 'future-system-kind'], ['legacy', 'system'], ['mixed', 'event'], ['nested', 'snapshot'], ['externalInput', 'external-input'], ['legacyExternalInput', 'external-input']]) {
     const card = await page.$eval(`#${id} [data-system-message-card]`, element => ({
       kind: element.getAttribute('data-system-message-kind'),
       expanded: element.querySelector('button')?.getAttribute('aria-expanded'),
@@ -169,10 +186,7 @@ test('heavy system and non-channel messages use kind-tagged thread cards while d
 
   assert.equal(await page.$$('#direct [data-system-message-card]').then(nodes => nodes.length), 0)
   assert.equal(await page.$$('#direct .foxwarm-user-message-bubble').then(nodes => nodes.length), 1)
-  assert.equal(await page.$$('#externalInput [data-system-message-card]').then(nodes => nodes.length), 0,
-    'an external-origin user message must not render as a framework system-delivered card')
-  assert.equal(await page.$$('#externalInput .foxwarm-user-message-bubble').then(nodes => nodes.length), 1)
-  assert.match(await page.$eval('#externalInput .foxwarm-user-message-bubble', bubble => bubble.textContent), /ordinary external user input/)
+  assert.equal(await page.$$('#externalInput .foxwarm-user-message-bubble').then(nodes => nodes.length), 0)
   assert.equal(await page.$eval('#direct .foxwarm-chat-timeline > div', row => getComputedStyle(row).justifyContent), 'flex-end')
   assert.deepEqual(await page.$eval('#direct .foxwarm-lightweight-metadata-line:last-of-type', line => ({
     text: line.textContent,
@@ -186,6 +200,8 @@ test('heavy system and non-channel messages use kind-tagged thread cards while d
   assert.equal(await page.$$('#direct img').then(nodes => nodes.length), 1, 'direct attachment metadata preserves inline image rendering')
   assert.equal(await page.$eval('#event .foxwarm-chat-timeline > div', row => getComputedStyle(row).justifyContent), 'flex-start')
   assert.equal(await page.$eval('#event .foxwarm-system-message-preview', preview => preview.textContent), 'wait-timeout: wait timeout reached for sessionId: `child/session`')
+  assert.equal(await page.$eval('#task .foxwarm-system-message-preview', preview => preview.textContent), 'Task completed: task_fixture')
+  assert.equal(await page.$$('#task .foxwarm-system-message-preview a').then(nodes => nodes.length), 0, 'Task preview is not an inter-agent reply/source prefix')
   assert.equal(await page.$eval('#interAgent .foxwarm-system-message-preview', preview => preview.textContent), 'From parent/child:')
   assert.equal(await page.$eval('#interAgent .foxwarm-system-message-result-preview', preview => preview.textContent), 'first inter-agent preview line\nsecond inter-agent preview line\nthird inter-agent preview line\nfourth inter-agent preview line')
   assert.deepEqual(await page.$eval('#interAgent .foxwarm-system-message-result-preview', preview => ({
@@ -206,6 +222,17 @@ test('heavy system and non-channel messages use kind-tagged thread cards while d
   await page.click('#interAgent .foxwarm-system-message-preview a')
   assert.match(page.url(), /#session\/parent%2Fchild$/)
   assert.equal(await page.$eval('#interAgent [data-system-message-card] button', button => button.getAttribute('aria-expanded')), 'false', 'preview link navigation does not expand the card')
+  await page.click('#task [data-system-message-card] button')
+  assert.deepEqual(await page.$$eval('#task .foxwarm-system-message-body a', links => links.map(link => link.getAttribute('href'))), [
+    '#session/worker%2Fsession',
+    '#session/creator%2Fsession',
+    '#session/worker%2Fsession',
+    '#session/old%2Fsession',
+    '#session/worker%2Fsession',
+  ], 'Task metadata fields and source attributes use the shared Session link renderer')
+  await page.click('#task .foxwarm-system-message-body a')
+  assert.match(page.url(), /#session\/worker%2Fsession$/)
+  assert.equal(await page.$eval('#task [data-system-message-card] button', button => button.getAttribute('aria-expanded')), 'true', 'Task source link navigation preserves the expanded card')
   assert.equal(await page.$$('#event img').then(nodes => nodes.length), 1, 'event image remains rendered')
 })
 
@@ -225,6 +252,41 @@ test('user metadata follows userText rather than an unrelated inverse-control co
   assert.equal(colors.metadata, colors.body)
   assert.notEqual(colors.metadata, 'rgb(11, 18, 32)', 'metadata does not borrow the dark inverse label color')
   assert.equal(colors.background, 'rgb(38, 59, 96)')
+})
+
+test('new and persisted external input share preview, expanded selection copy and Search', async () => {
+  await mountFixture()
+  await browser.defaultBrowserContext().overridePermissions(fixtureUrl, ['clipboard-read', 'clipboard-write'])
+  for (const id of ['externalInput', 'legacyExternalInput']) {
+    assert.equal(await page.$eval(`#${id} .foxwarm-system-message-preview`, preview => preview.textContent), 'ordinary external user input')
+    assert.match(await page.$eval(`#${id} .foxwarm-system-message-tag svg`, icon => icon.getAttribute('class')), /lucide-bell/)
+    await page.click(`#${id} [aria-label="Expand external-input message"]`)
+    const bodyText = await page.$eval(`#${id} .foxwarm-system-message-body`, body => {
+      const range = document.createRange()
+      range.selectNodeContents(body)
+      const selection = window.getSelection()
+      selection.removeAllRanges()
+      selection.addRange(range)
+      return body.textContent
+    })
+    assert.ok(bodyText.includes('ordinary external user input'))
+    if (id === 'externalInput') {
+      assert.ok(bodyText.includes('  ordinary external user input\nsecond external line  '), 'expanded body preserves the original text whitespace')
+      assert.ok(bodyText.endsWith('</foxwarm-system>'))
+    }
+    await page.keyboard.down('Control')
+    await page.keyboard.press('c')
+    await page.keyboard.up('Control')
+    const copied = await page.evaluate(() => navigator.clipboard.readText())
+    assert.ok(copied.includes('ordinary external user input'), 'native selection copy includes the external body')
+    assert.ok(copied.includes('kind="external-input"'), 'copy retains the provenance wrapper')
+    await page.click(`#${id} [aria-label="Collapse external-input message"]`)
+    const matches = await page.evaluate(id => window.searchExternalInput(id), id)
+    assert.equal(matches.length, 1)
+    assert.equal(matches[0].surface, 'system')
+    assert.equal(matches[0].groupKey, undefined, 'external input is not a transparent tool-group member')
+    await page.waitForSelector(`#${id} .foxwarm-system-message-body[data-search-surface="system"]`)
+  }
 })
 
 test('system cards expand/collapse, preserve session links, and retain width containment', async () => {

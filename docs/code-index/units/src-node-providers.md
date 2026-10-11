@@ -3,6 +3,8 @@
 Files: src/nodes/providerRegistry.ts, src/nodes/providers.ts, src/nodes/executableProvider.ts
 Secondary files: src/nodeExecutionService.ts, src/nodes/manager.ts, src/nodeExecution.test.ts, src/nodes/executableProvider.test.ts, src/nodes/executableProviderTestFixture.ts, docs/executable-node-provider-protocol.md
 
+Internal foreground-tool cancellation is fenced before provider effect. `foregroundToolCancellation` only forwards an active exec signal to `supportsExecWaitCancellation` backends; other provider calls receive the independent hard-cancellation signal, preserving owner-loss/deadline cleanup without treating ordinary Stop as abort-to-kill. External/lifecycle cancellation retains its established behavior. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
+
 ## Purpose
 
 `NodeToolRequest` admits a disjoint explicit external-owner branch for Main-local verified inbound callers without `sourceSessionId` or Agent. The authenticated CLI Node provider handles that branch over negotiated v3; the first-party resident Docker-worktree provider alone also opts in to owner-aware primitive files and exec through an in-process marker. Main-local call options carry a live-context fence to remote final send or resident primitive/process launch, plus an exact Docker generation binding for retained results. Other primitive providers fail before effect, and the internal Session request shape and provider behavior remain unchanged. Multiple primitive calls in a file mutation cannot turn an already-attempted effect into a false pre-effect error.

@@ -4,6 +4,7 @@ import { SESSIONS_DIR } from '../config';
 import { externalizeMessages, externalizeQueueItems } from '../imageBlobs';
 import type { QueueItem, Session } from '../types';
 import { getManagedSessionState, setManagedSessionState } from './managedState';
+import { migrateLegacySessionGoal } from './taskContext';
 import { serializeSessionHistoryPayload, writeSessionHistoryAtomically } from './metadataStore';
 
 export class SessionAuthorityPostCommitError extends Error {
@@ -78,8 +79,15 @@ export async function prepareAuthoritativeSessionState(session: Session): Promis
 
 /** Worker-safe writer: writes only the authoritative per-session JSON, never the shared Main catalog. */
 export async function writeAuthoritativeSessionState(session: Session): Promise<void> {
-  const payload = await prepareAuthoritativeSessionState(session);
-  const historyFile = path.join(SESSIONS_DIR, `${session.id}.json`);
-  await fs.ensureDir(path.dirname(historyFile));
-  await writeSessionHistoryAtomically(session.id, payload);
+  const legacyGoal = session.goalState;
+  try {
+    await migrateLegacySessionGoal(session);
+    const payload = await prepareAuthoritativeSessionState(session);
+    const historyFile = path.join(SESSIONS_DIR, `${session.id}.json`);
+    await fs.ensureDir(path.dirname(historyFile));
+    await writeSessionHistoryAtomically(session.id, payload);
+  } catch (error) {
+    if (legacyGoal) session.goalState = legacyGoal;
+    throw error;
+  }
 }

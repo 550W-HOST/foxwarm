@@ -26,7 +26,7 @@ await writeFile(entryPath, `
   window.openedImages = []
   window.open = (...args) => { window.openedImages.push(args); return null }
   const pasted = ${JSON.stringify(pasted)}
-  const common = { sessionId: 'fixture/main', isMobile: false, groupTools: false, showUsageBadge: false, showUserMessageMetadata: false }
+  const common = { sessionId: 'fixture/main', isMobile: false, timelineView: 'detailed', showUsageBadge: false, showUserMessageMetadata: false }
   const commonVisible = { ...common, showUserMessageMetadata: true }
   const sourceOpen = '<foxwarm-message type="channel" channelType="webui" time="2026-09-10 17:31:53 +0800" hint="direct user message via channel">'
   const sourceClose = '</foxwarm-message>'

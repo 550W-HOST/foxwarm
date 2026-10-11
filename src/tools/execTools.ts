@@ -1,3 +1,4 @@
+import { throwIfToolStopped } from '../toolCallControls';
 import {
     ToolArgs,
     ToolContext,
@@ -113,9 +114,11 @@ export async function tool_exec(args: ToolArgs, ctx: ToolContext) {
         nodeId,
         cwd,
         sessionCwd: ctx.toolExecutionSnapshot?.cwd ?? ctx.session?.cwd,
+        onBeforeProcessLaunch: () => throwIfToolStopped(ctx.signal),
     });
 
-    const status = await runtime.waitForExecCompletion(execEntry.id, timeoutSeconds * 1000);
+    const status = await runtime.waitForExecCompletion(execEntry.id, timeoutSeconds * 1000, ctx.signal);
+    const waitEndedBy = !status && ctx.signal?.aborted ? 'Stop or Run queued' : undefined;
     if (status) {
         try {
             const nextCwd = await runtime.readFinishedExecWorkingDirectory(execEntry);
@@ -136,7 +139,7 @@ export async function tool_exec(args: ToolArgs, ctx: ToolContext) {
 
     const nextCwd = await runtime.readLiveExecWorkingDirectory(execEntry);
     await runtime.markExecForBackgroundNotification(execEntry.id);
-    const result = await runtime.buildBackgroundTimeoutResult(execEntry, timeoutSeconds, resolvedTimeout.warning);
+    const result = await runtime.buildBackgroundTimeoutResult(execEntry, timeoutSeconds, resolvedTimeout.warning, waitEndedBy);
     if (ctx.deferSessionCwdSync && typeof nextCwd === 'string' && nextCwd.trim()) {
         return {
             ...(ctx.programmatic ? await runtime.buildProgrammaticExecResult(execEntry, null, result) : { output: result }),

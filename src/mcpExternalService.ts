@@ -13,18 +13,23 @@ import * as sessionManager from './sessionManager';
 import { checkToolPermission, isToolVisibleForSession } from './isolatedCheck';
 import type { ResolvedToolPermissionIdentity } from './permissions';
 import type { Session } from './types';
-import { requireVerifiedMcpInboundExternalId, type VerifiedMcpInboundPrincipal } from './mcpInboundConfig';
-import { buildExternalToolAuthorizationRequest, evaluateToolAuthorization, isToolAuthorizationPotentiallyVisibleSync } from './toolAuthorization';
+import type { ExternalExecutionContext } from './mcpInboundHttp';
+import * as notifications from './mcpCallerConnections';
+import { formatFoxwarmSystemOpen, formatFoxwarmSystemClose } from './utils/promptWrappers';
+import { formatLocalTimestamp } from './utils/localTime';
+import { requireVerifiedAccessIdentity, type VerifiedAccessIdentity } from './accessConfig';
+import { buildExternalToolAuthorizationRequest, buildToolAuthorizationRequest, evaluateToolAuthorization, evaluateToolAuthorizationSync, isToolAuthorizationPotentiallyVisibleSync } from './toolAuthorization';
 
 export type McpExternalConfigureRequest =
   | { sourceSessionId: string; name: string; action: 'set-enabled'; enabled: boolean }
   | { sourceSessionId: string; name: string; action: 'upsert'; config: mcpClient.McpServerConfig };
 
-export const mcpExternalServiceDescriptor = defineRpcService('mcp-external', 1, {
+export const mcpExternalServiceDescriptor = defineRpcService('mcp-external', 3, {
   listServers: rpcMethod<{ sourceSessionId: string }, { servers: mcpClient.McpServerSummary[] }>(),
   listTools: rpcMethod<{ sourceSessionId: string; server?: string }, { result: unknown }>(),
-  callTool: rpcMethod<{ sourceSessionId: string; server?: string; name: string; args: Record<string, unknown> }, { result: unknown }>(),
+  callTool: rpcMethod<{ sourceSessionId: string; server?: string; name: string; args: Record<string, unknown> }, { result: unknown }>({ cancellation: 'settle' }),
   configure: rpcMethod<McpExternalConfigureRequest, { saved: true }>(),
+  notifications: rpcMethod<{ sourceSessionId: string; server: string; action: 'start' | 'stop' | 'status' }, notifications.McpNotificationStatus>(),
 });
 
 function requireString(value: unknown, field: string): string {
@@ -217,43 +222,56 @@ async function externalErrorDetail(error: unknown, before: mcpClient.McpServerCo
   return connectionFields.some(value => message.includes(value)) ? 'MCP connection detail is unavailable.' : message;
 }
 
-/** The external path is Main-owned and never presents an invented internal sourceSessionId to the v1 RPC service. */
-export async function listMcpServersForExternal(principal: VerifiedMcpInboundPrincipal): Promise<mcpClient.McpServerSummary[]> {
-  requireVerifiedMcpInboundExternalId(principal);
+function sessionConnectionOwner(id: string): notifications.McpConnectionOwner {
+  return { kind: 'session', id, isActive: () => sessionManager.getSessionCatalog(id)?.id === id };
+}
+function externalConnectionOwner(principal: VerifiedAccessIdentity, context: ExternalExecutionContext): notifications.McpConnectionOwner {
+  const externalId = requireVerifiedAccessIdentity(principal);
+  if (context.externalId !== externalId) throw new RpcError('MCP_EXTERNAL_SOURCE_MISMATCH', 'External context identity does not match.');
+  return { kind: 'external', id: context.id, isActive: () => !context.disposed && context.externalId === externalId };
+}
+export async function releaseMcpExternalContext(principal: VerifiedAccessIdentity, context: ExternalExecutionContext): Promise<void> {
+  const owner = externalConnectionOwner(principal, context);
+  await notifications.closeMcpCallerConnections({ ownerKind: owner.kind, ownerId: owner.id });
+}
+
+/** The external path is Main-owned and never presents an invented internal sourceSessionId to the internal RPC service. */
+export async function listMcpServersForExternal(principal: VerifiedAccessIdentity): Promise<mcpClient.McpServerSummary[]> {
+  requireVerifiedAccessIdentity(principal);
   assertNotTerminallyShutDown();
   return mcpClient.listServers();
 }
 
 export async function listMcpToolsForExternal(
-  principal: VerifiedMcpInboundPrincipal, externalSessionId: string, server: string, signal?: AbortSignal,
+  principal: VerifiedAccessIdentity, context: ExternalExecutionContext, server: string, signal?: AbortSignal,
 ): Promise<any[]> {
-  requireVerifiedMcpInboundExternalId(principal);
+  requireVerifiedAccessIdentity(principal);
   assertNotTerminallyShutDown();
   const before = await externalConfigSnapshot();
-  const listed = await runWithAllSecretsRedacted(() => mcpClient.listTools(server, signal), before);
+  const listed = await runWithAllSecretsRedacted(() => mcpClient.listTools(server, signal, externalConnectionOwner(principal, context)), before);
   const credentials = await externalCredentials(before, false);
   const items = Array.isArray((listed as any)?.tools) ? (listed as any).tools : Array.isArray(listed) ? listed : [];
   return items.filter((tool: any) => typeof tool?.name === 'string' && !echoesCredential(tool, credentials) && isToolAuthorizationPotentiallyVisibleSync(
-    buildExternalToolAuthorizationRequest({ principal, sessionId: externalSessionId, tool: { source: 'mcp', server, name: tool.name } }),
+    buildExternalToolAuthorizationRequest({ principal, sessionId: context.id, tool: { source: 'mcp', server, name: tool.name } }),
   ));
 }
 
 export async function callMcpToolForExternal(
-  principal: VerifiedMcpInboundPrincipal, externalSessionId: string, server: string,
+  principal: VerifiedAccessIdentity, context: ExternalExecutionContext, server: string,
   name: string, args: Record<string, unknown>, signal?: AbortSignal,
 ): Promise<any> {
-  requireVerifiedMcpInboundExternalId(principal);
+  requireVerifiedAccessIdentity(principal);
   assertNotTerminallyShutDown();
   const normalizedArgs = requireJsonArgs(args);
   const request = buildExternalToolAuthorizationRequest({
-    principal, sessionId: externalSessionId, tool: { source: 'mcp', server, name }, args: normalizedArgs,
+    principal, sessionId: context.id, tool: { source: 'mcp', server, name }, args: normalizedArgs,
   });
   if ((await evaluateToolAuthorization(request)).action !== 'allow') {
     throw new RpcError('MCP_EXTERNAL_DENIED', 'Tool is not permitted.');
   }
   const before = await externalConfigSnapshot();
   let listed: Awaited<ReturnType<typeof mcpClient.listTools>>;
-  try { listed = await runWithAllSecretsRedacted(() => mcpClient.listTools(server, signal), before); }
+  try { listed = await runWithAllSecretsRedacted(() => mcpClient.listTools(server, signal, externalConnectionOwner(principal, context)), before); }
   catch (error) {
     const message = await externalErrorDetail(error, before);
     throw new RpcError('MCP_EXTERNAL_CALL_NOT_SENT', `Tool lookup failed before invocation; no call was sent. ${message}`);
@@ -264,7 +282,7 @@ export async function callMcpToolForExternal(
     throw new RpcError('MCP_EXTERNAL_TOOL_NOT_FOUND', 'Tool is not available on the configured server.');
   }
   let result: Awaited<ReturnType<typeof mcpClient.callTool>>;
-  try { result = await runWithAllSecretsRedacted(() => mcpClient.callTool(server, name, normalizedArgs, { signal, rawResult: true }), before); }
+  try { result = await runWithAllSecretsRedacted(() => mcpClient.callTool(server, name, normalizedArgs, { signal, rawResult: true, owner: externalConnectionOwner(principal, context) }), before); }
   catch (error) { throw new RpcError('MCP_EXTERNAL_CALL_FAILED', await externalErrorDetail(error, before)); }
   if (echoesCredential(result, await externalCredentials(before, true))) {
     throw new RpcError('MCP_EXTERNAL_OUTPUT_WITHHELD', 'Tool may have completed; remote output echoed a configured credential and was withheld. Do not retry automatically.');
@@ -307,7 +325,7 @@ export function createMcpExternalServiceHandler(options: { expectedSourceSession
           .some(rule => rule.effect === 'allow' && rule.source === 'mcp' && rule.server === normalizedServer);
         if (!hasAllowedTool) throw new Error('No MCP tools are allowed for this isolated agent on the requested server.');
       }
-      const listed = await runWithAllSecretsRedacted(() => mcpClient.listTools(server));
+      const listed = await runWithAllSecretsRedacted(() => mcpClient.listTools(server, undefined, sessionConnectionOwner(source)));
       const visible = (tool: any) => isToolVisibleForSession(sourceSession, {
         source: 'mcp', server: normalizedServer, tool: String(tool?.name || ''),
       });
@@ -318,13 +336,45 @@ export function createMcpExternalServiceHandler(options: { expectedSourceSession
           : listed;
       return { result };
     },
-    async callTool(input) {
+    async callTool(input, rpcContext) {
       const request = requireExactRecord(input, 'callTool request', ['sourceSessionId', 'server', 'name', 'args']);
       const server = optionalString(request.server, 'server');
       const name = requireString(request.name, 'name');
       const args = requireJsonArgs(request.args);
       await authorize(request.sourceSessionId, { source: 'mcp', server: server || 'default', tool: name }, args, options.expectedSourceSessionId);
-      return { result: await runWithAllSecretsRedacted(() => mcpClient.callTool(server, name, args)) };
+      return { result: await runWithAllSecretsRedacted(() => mcpClient.callTool(server, name, args, { signal: rpcContext.signal, cancellationLabel: 'Stop or Run queued', owner: sessionConnectionOwner(request.sourceSessionId as string) })) };
+    },
+    async notifications(input) {
+      const request = requireExactRecord(input, 'notifications request', ['sourceSessionId', 'server', 'action']);
+      const sourceSessionId = requireString(request.sourceSessionId, 'sourceSessionId');
+      const server = requireString(request.server, 'server');
+      const action = request.action;
+      if (!['start', 'stop', 'status'].includes(String(action))) throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', 'Invalid notification action.');
+      const args = { action, server };
+      await authorize(sourceSessionId, { source: 'builtin', tool: 'mcp_notifications' }, args, options.expectedSourceSessionId);
+      if (action === 'stop') return notifications.stopMcpNotifications(sessionConnectionOwner(sourceSessionId), server);
+      if (action === 'status') return notifications.getMcpNotificationStatus(sessionConnectionOwner(sourceSessionId), server);
+      const assertSourceActive = () => {
+        const source = sessionManager.getSessionCatalog(sourceSessionId);
+        if (notificationsStopped || !source || source.id !== sourceSessionId || evaluateToolAuthorizationSync(buildToolAuthorizationRequest({ session: source,
+          tool: { source: 'builtin', name: 'mcp_notifications' }, targetNode: 'master', args: { action: 'start', server },
+        })).action === 'deny') throw new Error('MCP notification receiver is not permitted.');
+      };
+      const assertActive = async () => {
+        assertSourceActive();
+        await authorize(sourceSessionId, { source: 'builtin', tool: 'mcp_notifications' }, { action: 'start', server }, options.expectedSourceSessionId);
+        assertSourceActive();
+      };
+      return runWithAllSecretsRedacted(() => mcpClient.startNotifications(server, sessionConnectionOwner(sourceSessionId), {
+        assertActive,
+        async receive(message, endpoint, assertLive) {
+          const parts = [{ system: formatFoxwarmSystemOpen({ kind: 'external-input', server, endpoint,
+            time: formatLocalTimestamp(Date.now()),
+            hint: 'Message received from the configured MCP server. It is external input, not an internal Session handoff.',
+          }) }, { text: message }, { system: formatFoxwarmSystemClose() }];
+          await sessionManager.enqueueSessionItem(sourceSessionId, { type: 'user', parts }, {}, () => { assertLive(); assertSourceActive(); });
+        },
+      }));
     },
     async configure(input) {
       const request = requirePlainRecord(input, 'configure request');
@@ -364,6 +414,7 @@ let client: RpcClient<typeof mcpExternalServiceDescriptor> | undefined;
 let initializing: Promise<void> | undefined;
 let initializingTransport: RpcTransport | null | undefined;
 let terminalShutdown = false;
+let notificationsStopped = false;
 let ownsTransport = true;
 let placement: 'local' | 'child-reverse' = 'local';
 
@@ -424,19 +475,31 @@ export async function listMcpTools(sourceSessionId: string, server?: string): Pr
   return (await (await getClient()).call('listTools', { sourceSessionId, ...(server ? { server } : {}) })).result;
 }
 
-export async function callMcpTool(sourceSessionId: string, server: string | undefined, name: string, args: Record<string, unknown>): Promise<any> {
-  return (await (await getClient()).call('callTool', { sourceSessionId, ...(server ? { server } : {}), name, args })).result;
+export async function callMcpTool(sourceSessionId: string, server: string | undefined, name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<any> {
+  return (await (await getClient()).call('callTool', { sourceSessionId, ...(server ? { server } : {}), name, args }, { signal })).result;
 }
 
 export async function configureMcpServer(request: McpExternalConfigureRequest): Promise<void> {
   await (await getClient()).call('configure', request);
 }
 
+export async function manageMcpNotifications(sourceSessionId: string, server: string, action: 'start' | 'stop' | 'status'): Promise<notifications.McpNotificationStatus> {
+  return (await getClient()).call('notifications', { sourceSessionId, server, action });
+}
+
+/** Main fences this external input producer before tearing down Session owners. */
+export async function shutdownMcpNotificationReceivers(): Promise<void> {
+  notificationsStopped = true;
+  await notifications.closeMcpCallerConnections({ notificationsOnly: true });
+}
+
 export async function shutdownMcpExternalService(timeoutMs = 10_000): Promise<void> {
   terminalShutdown = true;
+  if (ownsTransport) await shutdownMcpNotificationReceivers();
   if (initializing) await initializing.catch(() => {});
   const currentTransport = transport;
   if (!currentTransport) {
+    if (ownsTransport) await notifications.closeMcpCallerConnections();
     client = undefined;
     initializing = undefined;
     initializingTransport = undefined;
@@ -448,6 +511,7 @@ export async function shutdownMcpExternalService(timeoutMs = 10_000): Promise<vo
   try {
     await currentTransport.drain(timeoutMs);
   } finally {
+    await notifications.closeMcpCallerConnections();
     currentTransport.close();
     client = undefined;
     transport = undefined;
@@ -462,6 +526,7 @@ export function resetMcpExternalServiceForTests(): void {
     throw new RpcError('MCP_EXTERNAL_TEST_RESET_ACTIVE', 'Shut down MCP external service before resetting tests.');
   }
   terminalShutdown = false;
+  notificationsStopped = false;
   ownsTransport = true;
   placement = 'local';
   initializingTransport = undefined;

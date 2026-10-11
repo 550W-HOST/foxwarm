@@ -24,9 +24,9 @@ Owns channel ingress around the canonical turn runner: authorization, slash-comm
 | `MessageRouter.buildChannelUserQueueItem(ctx, message)` | Builds the canonical prompt-ready channel queue item and preserves `clientMessageId` plus content/provenance source identity; platform reply receipts remain adapter-local. |
 | `MessageRouter.maybeCreateGuestSessionForUnauthorizedMessage(ctx)` | Resolves configured guest access without bypassing authorization policy. |
 | `MessageRouter.createGuestSession(config)` | Creates single/inherited guest sessions with current isolation semantics. |
-| `MessageRouter.handleCommandIfNeeded(ctx, text)` | Parses and dispatches slash commands with raw multiline arguments. |
+| `MessageRouter.handleCommandIfNeeded(ctx, text, whoamiOnly?)` | Parses and dispatches slash commands with raw multiline arguments; the early pass accepts only source identity discovery. |
 | `MessageRouter.resolveSessionForIncomingMessage(ctx)` | Uses the serialized channel get-or-create boundary. |
-| `MessageRouter.handleMessage(ctx, message)` | Authorizes and handles commands, then materializes deferred channel media only for canonically authorized ingress before enqueueing and triggering the local runner. |
+| `MessageRouter.handleMessage(ctx, message)` | Replies to `/whoami` before authorization/Session work; otherwise authorizes and handles commands, then materializes deferred channel media only for canonically authorized ingress before enqueueing and triggering the local runner. |
 | `MessageRouter.processSessionQueue(sessionId, options)` | Delegates directly to `SessionTurnRunner.processSessionQueue`. |
 | `MessageRouter.processSessionRetry(sessionId)` | Delegates directly to `SessionTurnRunner.processSessionRetry`. |
 
@@ -39,6 +39,7 @@ Owns channel ingress around the canonical turn runner: authorization, slash-comm
 
 ## Behavior and invariants
 
+- `/whoami` bypasses allowlist and attachment lookup only for the current source identity query; canonical contract: [D-pipeline-channel-identity-query](../threads/message-processing-pipeline.md#d-pipeline-channel-identity-query).
 - Authorization and command dispatch complete before ordinary session queue insertion. Deferred channel media is materialized only after the original ingress is canonically authorized and its session is resolved; unauthorized and first-message guest fallback paths remain metadata-only and perform no media fetch/write.
 - Source wrappers are created once at ingress. Queue processing receives prompt-ready parts and does not reconstruct channel metadata.
 - Text-only WebUI ingress, including ordinary file descriptor text parts, is persisted as one source-wrapped `system` part in the user message; image data keeps separate wrapper and content parts. User-authored pasted-text wrappers remain exact text inside either shape and do not change ingress authority.

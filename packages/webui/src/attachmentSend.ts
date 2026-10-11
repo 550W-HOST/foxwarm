@@ -20,11 +20,13 @@ export async function uploadReferencedFiles(
   attachments: readonly ReferencedFile[],
   uploadUrl: string,
   fetchImpl: typeof fetch = fetch,
+  sessionId?: string,
 ): Promise<UploadedReferencedFile[]> {
   const uploaded: UploadedReferencedFile[] = []
   for (const { ref, file } of attachments) {
     const formData = new FormData()
     formData.append('file', file, buildAttachmentUploadName(ref, file.name))
+    if (sessionId) formData.append('sessionId', sessionId)
     const response = await fetchImpl(uploadUrl, { method: 'POST', body: formData })
     if (!response.ok) throw new Error(`Failed to upload ${file.name}`)
     const data = await response.json()

@@ -115,8 +115,8 @@ async function buildFixtureBundle() {
     createRoot(document.getElementById('reasoning-message')).render(React.createElement(ReasoningCard, { thinking: 'completed reasoning', tone: 'message', defaultExpanded: false }))
     createRoot(document.getElementById('reasoning-processing')).render(React.createElement(ReasoningCard, { thinking: 'active reasoning', tone: 'processing', defaultExpanded: false }))
     createRoot(document.getElementById('web-search')).render(React.createElement(WebSearchCard, { action: { type: 'search', query: 'surface query', queries: ['surface query'] } }))
-    createRoot(document.getElementById('system')).render(React.createElement(ChatTimeline, { sessionId: 'fixture/main', messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="event" type="wait-timeout">\\nsystem body\\n</foxwarm-system>' }] }], isMobile: false, groupTools: false, showUsageBadge: false }))
-    createRoot(document.getElementById('assistant')).render(React.createElement(ChatTimeline, { sessionId: 'fixture/main', messages: [{ role: 'model', parts: [{ text: 'assistant body' }] }], isMobile: false, groupTools: false, showUsageBadge: false }))
+    createRoot(document.getElementById('system')).render(React.createElement(ChatTimeline, { sessionId: 'fixture/main', messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="event" type="wait-timeout">\\nsystem body\\n</foxwarm-system>' }] }], isMobile: false, timelineView: 'detailed', showUsageBadge: false }))
+    createRoot(document.getElementById('assistant')).render(React.createElement(ChatTimeline, { sessionId: 'fixture/main', messages: [{ role: 'model', parts: [{ text: 'assistant body' }] }], isMobile: false, timelineView: 'detailed', showUsageBadge: false }))
     createRoot(document.getElementById('context')).render(React.createElement(ContextBlockCard, { sessionId: 'fixture/main', messageKey: 'context', block: { id: 1, level: 1, rawStartSeq: 1, rawEndSeq: 2 }, text: 'context summary', nestedDepth: 0, renderNestedMessages: () => null }))
   `
   const result = await build({

@@ -12,6 +12,7 @@ export interface MessagePart {
     thinkingSummaries?: string[]; // OpenAI Responses
     encryptedThinking?: string;  // OpenAI Responses
     signature?: string; // kimi-k2.5
+    redactedThinking?: string; // Anthropic Messages opaque redacted_thinking data
     /** Ordered, concrete-model-scoped OpenAI Responses output metadata. */
     openaiResponses?: OpenAIResponsesPartMeta;
   };
@@ -130,6 +131,8 @@ export interface LlmRequestTiming {
 
 export interface Message {
   role: 'user' | 'model' | 'tool';
+  /** Persisted compact-completion diagnostics, excluded from model input. */
+  compaction?: { planner: CompactionPlannerDebug };
   /** Message-level provider metadata echoed back on later requests. */
   providerMeta?: MessageProviderMeta;
   /**
@@ -159,6 +162,17 @@ export interface Message {
     preservedFromBlockId?: number;
     [key: string]: any;
   };
+}
+
+export interface CompactionPlannerDebug {
+  /** Number of planner rounds, including rejected submissions and repairs. */
+  steps: number;
+  /** Tool names returned by the planner in occurrence order, whether accepted or not. */
+  toolCalls: string[];
+  /** Sum of reported usage for this invocation only; reasoning is part of output. */
+  usage?: TokenUsage;
+  /** Newly appended planner instructions, responses and feedback, without inherited history. */
+  messages: Message[];
 }
 
 export interface ToolScriptSubCall {
@@ -263,6 +277,7 @@ export interface SessionGoalState {
 }
 
 export interface ContextBlockMessageMeta {
+  frictionScore?: number;
   id: number;
   level: number;
   rawStartSeq: number;
@@ -330,7 +345,28 @@ export interface QueueSource {
   senderId?: string;
 }
 
+export interface LinkedTaskCompletion {
+  taskId: string;
+  attachedSessionId: string;
+}
+
+export interface SessionEnqueueOptions {
+  trigger?: boolean;
+}
+
+/** Trusted delivery metadata, applied before the existing queue boundary. */
+export interface SessionDeliveryOptions extends SessionEnqueueOptions {
+  taskNotification?: {
+    taskId: string;
+    event: 'assigned' | 'note' | 'completed' | 'transferred' | 'released';
+    recipient?: 'new' | 'previous';
+    sourceKind?: 'session' | 'user';
+  };
+}
+
 export interface QueueItem {
+  /** Internal passive ingress: stays durable but does not independently start processing. */
+  trigger?: false;
   type: 'user' | 'intersession' | 'background' | 'trigger' | 'onboot' | 'compact-commit';
   source?: QueueSource;
   sourceSessionId?: string;
@@ -474,10 +510,11 @@ export interface OpenAIResponsesContent {
 }
 
 export interface AnthropicContentBlock {
-  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'image';
+  type: 'text' | 'thinking' | 'redacted_thinking' | 'tool_use' | 'tool_result' | 'image';
   text?: string;
   thinking?: string;
   signature?: string;  // For kimi-k2.5 thinking signature
+  data?: string; // Opaque Anthropic redacted_thinking payload
   id?: string;
   name?: string;
   input?: Record<string, any>;

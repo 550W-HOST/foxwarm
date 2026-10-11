@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
+import { Channel, registerChannel, unregisterChannel } from '../channel';
 import * as sessionManager from '../sessionManager';
-import { definitions, send_to_channel as tool_send_to_channel } from '../tools';
+import { callTool, call_tool, definitions, send_to_channel as tool_send_to_channel } from '../tools';
+import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from '../toolAuthorization';
 import { tool_send_file } from '../toolsSessionAgent';
 
 test('send_to_channel tool schema uses channelTargetId and drops channelId parameter', () => {
@@ -13,26 +15,38 @@ test('send_to_channel tool schema uses channelTargetId and drops channelId param
   assert.deepEqual(def?.parameters?.required, ['channelTargetId', 'message']);
 });
 
-test('tool_send_to_channel sends via channelTargetId and no longer accepts channelId arg', async () => {
+test('direct and unified send_to_channel deliver to registered, unattached targets and retain authorization and platform errors', async () => {
   const sourceSessionId = `channel_management_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  await sessionManager.getSession(sourceSessionId);
-  const original = sessionManager.sendToChannelTargetId;
-  let capturedTarget: string | undefined;
-  let capturedMessage: string | undefined;
+  const session = await sessionManager.getSession(sourceSessionId);
+  const sent: Array<{ conversationId: string; message: string }> = [];
+  const channel: Channel = {
+    name: 'unattached-send', platform: 'test',
+    start: async () => {}, stop: async () => {}, onMessage: () => {}, sendTyping: async () => {},
+    sendMessage: async (conversationId, message) => {
+      if (message === 'platform failure') throw new Error('Platform requires recent inbound context');
+      sent.push({ conversationId, message });
+    },
+  };
+  registerChannel(channel.name, channel);
+  const channelTargetId = `${channel.name}:group:room-42`;
+  const ctx = { sessionId: sourceSessionId, session };
 
   try {
-    (sessionManager as any).sendToChannelTargetId = async (channelTargetId: string, message: string) => {
-      capturedTarget = channelTargetId;
-      capturedMessage = message;
-    };
+    assert.equal(sessionManager.getSessionByChannel(channel.name, 'group:room-42'), undefined);
+    for (const send of [
+      (message: string) => tool_send_to_channel({ channelTargetId, message }, ctx),
+      (message: string) => callTool('send_to_channel', { channelTargetId, message }, ctx),
+      (message: string) => call_tool({ toolId: 'builtin:send_to_channel', args: { channelTargetId, message } }, ctx),
+    ]) {
+      assert.equal(await send('hello'), `Message sent to channel target \`${channelTargetId}\``);
+    }
+    assert.deepEqual(sent, Array.from({ length: 3 }, () => ({ conversationId: 'group:room-42', message: 'hello' })));
+    assert.equal(sessionManager.getSessionByChannel(channel.name, 'group:room-42'), undefined);
 
-    const result = await tool_send_to_channel(
-      { channelTargetId: 'mainbot:conversation-42', message: 'hello' },
-      { sessionId: sourceSessionId },
+    await assert.rejects(
+      () => callTool('send_to_channel', { channelTargetId, message: 'platform failure' }, ctx),
+      /Platform requires recent inbound context/,
     );
-    assert.equal(result, 'Message sent to channel target `mainbot:conversation-42`');
-    assert.equal(capturedTarget, 'mainbot:conversation-42');
-    assert.equal(capturedMessage, 'hello');
 
     await assert.rejects(
       () => tool_send_to_channel(
@@ -41,8 +55,24 @@ test('tool_send_to_channel sends via channelTargetId and no longer accepts chann
       ),
       /channelTargetId is required/,
     );
+
+    setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
+version: 1
+defaultAction: allow
+rules:
+- id: deny-channel-send
+  match: { tool: { source: builtin, name: send_to_channel } }
+  action: deny
+`));
+    for (const send of [
+      () => tool_send_to_channel({ channelTargetId, message: 'denied' }, ctx),
+      () => callTool('send_to_channel', { channelTargetId, message: 'denied' }, ctx),
+      () => call_tool({ toolId: 'builtin:send_to_channel', args: { channelTargetId, message: 'denied' } }, ctx),
+    ]) await assert.rejects(send, /denies builtin capability/i);
+    assert.equal(sent.length, 3);
   } finally {
-    (sessionManager as any).sendToChannelTargetId = original;
+    setToolAuthorizationPolicyForTests(undefined);
+    unregisterChannel(channel.name);
     await sessionManager.deleteSession(sourceSessionId).catch(() => false);
   }
 });

@@ -14,7 +14,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult, typ
 import { HttpServer } from './httpServer';
 import * as mcpClient from './mcpClient';
 import { McpInboundMcpCatalog } from './mcpInboundCatalog';
-import { normalizeMcpInboundConfig } from './mcpInboundConfig';
+import { normalizeAccessConfig } from './accessConfig';
 import { McpInboundHttpService } from './mcpInboundHttp';
 import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from './toolAuthorization';
 
@@ -22,8 +22,8 @@ const alpha = 'synthetic-alpha-inbound-credential';
 const beta = 'synthetic-beta-inbound-credential';
 const outboundSecret = 'synthetic-configured-outbound-secret';
 const headerSecret = 'synthetic-configured-auth-header-secret';
-const inboundConfig = normalizeMcpInboundConfig({ enabled: true, identities: {
-  alpha: { token: alpha }, beta: { token: beta },
+const inboundConfig = normalizeAccessConfig({ identities: {
+  alpha: { token: alpha, surfaces: { mcp: {} } }, beta: { token: beta, surfaces: { mcp: {} } },
 } });
 const POLICY = `version: 1
 defaultAction: allow

@@ -434,6 +434,7 @@ test('timer tools create, update, list, and delete through the session-agent fac
       }, ctx));
       const timerId = created.match(/Timer `([^`]+)` created/)?.[1];
       assert.ok(timerId, created);
+      assert.doesNotMatch(created, /Message:|tool facade original/);
 
       const listed = String(await tool_list_timers({}, ctx));
       assert.match(listed, new RegExp(timerId));
@@ -446,7 +447,7 @@ test('timer tools create, update, list, and delete through the session-agent fac
       }, ctx));
       assert.ok(updated.includes(`Timer \`${timerId}\` updated`), updated);
       assert.match(updated, /Mode: cron: \*\/10 \* \* \* \*/);
-      assert.match(updated, /tool facade updated/);
+      assert.doesNotMatch(updated, /Message:|tool facade updated/);
 
       const listedAfterUpdate = String(await tool_list_timers({}, ctx));
       assert.match(listedAfterUpdate, /cron: \*\/10 \* \* \* \*/);

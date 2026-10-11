@@ -1,3 +1,4 @@
+import type { TimelineView } from '../chatPreferences'
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp, Code2, MessageSquareText, Search, SquareTerminal, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
@@ -21,7 +22,7 @@ import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
 import { buildReferencedAttachmentParts } from '../attachmentRefs'
 import { postReferencedMessage, toLegacyUploadedFiles, uploadReferencedFiles } from '../attachmentSend'
 import { formatSessionHeaderSubtitle } from '../sessionHeader'
-import { createLatestRequestGate, loadPageOnce, runLatestModelOptionsRequest } from '../modelOptionsLoader'
+import { createLatestRequestGate, loadPageOnce, MODEL_OPTIONS_CHANGED_EVENT, refreshModelOptions, runLatestModelOptionsRequest } from '../modelOptionsLoader'
 import { webUiRealtime } from '../realtime'
 import SessionUiSettingsMenu from './SessionUiSettingsMenu'
 import {
@@ -56,6 +57,42 @@ function getAsrStreamUrl() {
 const ASR_CONTEXT_MAX_CHARS = 2400
 const ASR_CONTEXT_MAX_MESSAGES = 8
 const DEFAULT_VISIBLE_TIMELINE_MESSAGES = 100
+const SEARCH_HISTORY_STORAGE_KEY = 'foxwarm.chat.search-history'
+const SEARCH_HISTORY_LIMIT = 20
+
+function readSearchHistory(): string[] {
+  try {
+    const raw = window.localStorage.getItem(SEARCH_HISTORY_STORAGE_KEY)
+    if (!raw) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((value): value is string => typeof value === 'string' && value.trim().length > 0).slice(0, SEARCH_HISTORY_LIMIT)
+  } catch {
+    return []
+  }
+}
+
+function writeSearchHistory(history: string[]): void {
+  try {
+    window.localStorage.setItem(SEARCH_HISTORY_STORAGE_KEY, JSON.stringify(history))
+  } catch {
+    // Browser storage can be unavailable or full; Search remains usable in memory.
+  }
+}
+
+function getSelectedFindText(): string | null {
+  const activeElement = document.activeElement
+  if (activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement) {
+    const start = activeElement.selectionStart
+    const end = activeElement.selectionEnd
+    if (start !== null && end !== null && start !== end) return activeElement.value.slice(start, end)
+  }
+
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null
+  const text = selection.toString()
+  return text || null
+}
 
 type HistoryResponse = {
   session?: SessionListRecord
@@ -142,6 +179,7 @@ interface ChatProps {
   searchShortcutActive?: boolean
   canonicalSessionId?: string
   sessionDisplayName?: string
+  webUiIdentityMode?: boolean
   onBack?: () => void
   onOpenTerminal?: () => void
   onOpenCode?: () => void
@@ -149,11 +187,11 @@ interface ChatProps {
   onOpenCodeCommit?: (target: CodeCommitTarget) => void | Promise<void>
   onOpenModelSettings?: () => void
   sendKeyMode?: 'modEnter' | 'enter'
-  groupTools?: boolean
+  timelineView?: TimelineView
   showUsageBadge?: boolean
   showUserMessageMetadata?: boolean
   onSendKeyModeChange?: (mode: 'modEnter' | 'enter') => void
-  onGroupToolsChange?: (enabled: boolean) => void
+  onTimelineViewChange?: (mode: TimelineView) => void
   onShowUsageBadgeChange?: (enabled: boolean) => void
   onShowUserMessageMetadataChange?: (enabled: boolean) => void
 }
@@ -199,7 +237,7 @@ type SessionListRecord = {
   isolated?: boolean
 }
 
-const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onGroupToolsChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', timelineView = 'detailed', showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onTimelineViewChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
   const [timelineState, dispatchTimeline] = useReducer(timelineReducer, { messages: [], queuedMessages: [] })
   const messages = timelineState.messages
   const queuedMessages = timelineState.queuedMessages
@@ -238,6 +276,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   const [searchNavigation, setSearchNavigation] = useState(0)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const searchAppliedNavigationRef = useRef(0)
+  const searchHistoryRef = useRef<string[]>([])
+  const searchHistoryIndexRef = useRef<number | null>(null)
+  const searchHistoryDraftRef = useRef('')
   const searchHighlightName = `foxwarm-chat-search-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
   const [historyLoaded, setHistoryLoaded] = useState(false)
   const [isFullHistoryLoaded, setIsFullHistoryLoaded] = useState(false)
@@ -381,13 +422,15 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       }
     }
 
-    fetchAsrStatus()
+    if (!webUiIdentityMode) void fetchAsrStatus()
+    else setAsrAvailable(false)
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [webUiIdentityMode])
 
   const fetchModels = useCallback(async () => {
+    if (webUiIdentityMode) return
     await runLatestModelOptionsRequest(modelRequestGateRef.current, () => loadPageOnce('webui:models', async () => {
       const res = await fetch(`${API_BASE_PATH}/models`)
       if (!res.ok) throw new Error(`Failed to load models (${res.status})`)
@@ -401,12 +444,19 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       }
       if (state.loading !== undefined) setModelsRefreshing(state.loading)
     })
-  }, [])
+  }, [webUiIdentityMode])
 
   useEffect(() => {
-    void fetchModels()
-    return () => modelRequestGateRef.current.invalidate()
-  }, [fetchModels])
+    const handleModelsChanged = () => { void fetchModels() }
+    if (!webUiIdentityMode) {
+      window.addEventListener(MODEL_OPTIONS_CHANGED_EVENT, handleModelsChanged)
+      void fetchModels()
+    }
+    return () => {
+      window.removeEventListener(MODEL_OPTIONS_CHANGED_EVENT, handleModelsChanged)
+      modelRequestGateRef.current.invalidate()
+    }
+  }, [fetchModels, webUiIdentityMode])
 
   useEffect(() => {
     if (!sessionBusy) {
@@ -1543,7 +1593,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   }, [messages, scrollToBottom, streamingAssistantDraft])
 
   const snapshotSystemMessage = useMemo<Message | null>(() => {
-    const snapshotText = persistentMemorySnapshot.trim()
+    const snapshotText = webUiIdentityMode ? '' : persistentMemorySnapshot.trim()
 
     if (!snapshotText) {
       return null
@@ -1557,7 +1607,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         synthetic: 'persistentMemorySnapshot',
       },
     }
-  }, [persistentMemorySnapshot])
+  }, [webUiIdentityMode, persistentMemorySnapshot])
 
   const visibleMessages = useMemo(() => {
     if (showFullTimeline || messages.length <= DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
@@ -1568,10 +1618,23 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
 
   const hiddenMessageCount = messages.length - visibleMessages.length
 
-  const searchFields = useMemo(() => searchOpen ? projectSessionSearchFields(messages, groupTools) : [], [groupTools, messages, searchOpen])
+  const searchFields = useMemo(() => searchOpen ? projectSessionSearchFields(messages, timelineView) : [], [timelineView, messages, searchOpen])
   const searchMatches = useMemo(() => findSessionSearchMatches(searchFields, searchQuery), [searchFields, searchQuery])
   const currentSearchIndex = searchMatches.findIndex(match => match.id === searchMatchId)
   const selectedSearchMatch = searchMatches[currentSearchIndex >= 0 ? currentSearchIndex : 0] || null
+
+  const loadSearchHistory = useCallback(() => {
+    const history = readSearchHistory()
+    searchHistoryRef.current = history
+    return history
+  }, [])
+
+  const recordSearchHistory = useCallback((query: string) => {
+    if (!query.trim()) return
+    const history = [query, ...searchHistoryRef.current.filter(item => item !== query)].slice(0, SEARCH_HISTORY_LIMIT)
+    searchHistoryRef.current = history
+    writeSearchHistory(history)
+  }, [])
 
   const streamingAssistantMessage = useMemo(() => (
     buildStreamingAssistantMessage(streamingAssistantDraft)
@@ -1593,11 +1656,41 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   }, [leaveBottomFollow, messages.length, showFullTimeline])
 
   const closeSearch = useCallback(() => {
+    recordSearchHistory(searchQuery)
     setSearchOpen(false)
     setSearchQuery('')
     setSearchMatchId(null)
+    searchHistoryIndexRef.current = null
+    searchHistoryDraftRef.current = ''
     lastSearchQueryRef.current = ''
-  }, [])
+  }, [recordSearchHistory, searchQuery])
+
+  const navigateSearchHistory = useCallback((direction: -1 | 1): boolean => {
+    const history = searchHistoryRef.current
+    const currentIndex = searchHistoryIndexRef.current
+    if (!history.length) return false
+
+    if (direction < 0) {
+      if (currentIndex === null) searchHistoryDraftRef.current = searchQuery
+      const nextIndex = currentIndex === null ? 0 : Math.min(currentIndex + 1, history.length - 1)
+      searchHistoryIndexRef.current = nextIndex
+      setSearchQuery(history[nextIndex])
+      setSearchMatchId(null)
+      return true
+    }
+
+    if (currentIndex === null) return false
+    if (currentIndex === 0) {
+      searchHistoryIndexRef.current = null
+      setSearchQuery(searchHistoryDraftRef.current)
+    } else {
+      const nextIndex = currentIndex - 1
+      searchHistoryIndexRef.current = nextIndex
+      setSearchQuery(history[nextIndex])
+    }
+    setSearchMatchId(null)
+    return true
+  }, [searchQuery])
 
   const stepSearch = useCallback((direction: -1 | 1) => {
     if (!searchMatches.length) return
@@ -1623,19 +1716,27 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
 
   useEffect(() => { if (searchOpen) { searchInputRef.current?.focus(); searchInputRef.current?.select() } }, [searchOpen])
 
-  const activateSearch = useCallback(() => {
+  const activateSearch = useCallback((selectedText?: string | null) => {
+    loadSearchHistory()
     setSearchOpen(true)
+    if (selectedText && selectedText.trim()) {
+      setSearchQuery(selectedText)
+      setSearchMatchId(null)
+      searchHistoryIndexRef.current = null
+      searchHistoryDraftRef.current = ''
+    }
     searchInputRef.current?.focus()
     searchInputRef.current?.select()
-  }, [])
+  }, [loadSearchHistory])
 
   useEffect(() => {
     if (!searchShortcutActive) return
     const onFindShortcut = (event: KeyboardEvent) => {
       if (event.key.toLowerCase() !== 'f' || !(event.ctrlKey || event.metaKey)
         || event.altKey || event.shiftKey || event.isComposing) return
+      const selectedText = getSelectedFindText()
       event.preventDefault()
-      activateSearch()
+      activateSearch(selectedText)
     }
     window.addEventListener('keydown', onFindShortcut)
     return () => window.removeEventListener('keydown', onFindShortcut)
@@ -1644,6 +1745,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     setSearchOpen(false)
     setSearchQuery('')
     setSearchMatchId(null)
+    searchHistoryIndexRef.current = null
+    searchHistoryDraftRef.current = ''
     lastSearchQueryRef.current = ''
   }, [sessionId])
 
@@ -1836,7 +1939,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     let requestText = userMessage
     let uploadedFiles
     try {
-      uploadedFiles = await uploadReferencedFiles(files, `${API_BASE_PATH}/upload`)
+      uploadedFiles = await uploadReferencedFiles(files, `${API_BASE_PATH}/upload`, fetch, webUiIdentityMode ? sessionId : undefined)
     } catch (err) {
       console.error('File upload failed:', err)
       setLoading(false)
@@ -2086,7 +2189,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       <ContentHeader
         icon={<MessageSquareText className="h-5 w-5" />}
         title={sessionDisplayName || sessionRecord?.displayName || sessionId}
-        subtitle={(
+        subtitle={webUiIdentityMode ? null : (
           <span data-session-header-subtitle className="font-mono text-[12px]" title={sessionRecord?.cwd || undefined}>
             {sessionHeaderSubtitle}
           </span>
@@ -2098,10 +2201,23 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
             <input
               ref={searchInputRef}
               value={searchQuery}
-              onChange={event => setSearchQuery(event.target.value)}
+              onChange={event => {
+                setSearchQuery(event.target.value)
+                searchHistoryIndexRef.current = null
+                searchHistoryDraftRef.current = ''
+              }}
               onKeyDown={event => {
                 if (event.key === 'Escape') { event.preventDefault(); closeSearch() }
-                if (event.key === 'Enter') { event.preventDefault(); stepSearch(event.shiftKey ? -1 : 1) }
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  recordSearchHistory(searchQuery)
+                  searchHistoryIndexRef.current = null
+                  searchHistoryDraftRef.current = ''
+                  stepSearch(event.shiftKey ? -1 : 1)
+                }
+                if (!event.nativeEvent.isComposing && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+                  if (navigateSearchHistory(event.key === 'ArrowUp' ? -1 : 1)) event.preventDefault()
+                }
               }}
               type="search"
               aria-label="Search messages"
@@ -2115,9 +2231,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
             {!isFullHistoryLoaded && <span className="foxwarm-chat-lg-label text-xs text-fw-text-muted">Earlier messages may still load.</span>}
           </div>
         ) : undefined}
-        actions={(
+        actions={webUiIdentityMode ? null : (
           <>
-            <button type="button" onClick={activateSearch} aria-label="Find in chat" title="Find in chat" className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover">
+            <button type="button" onClick={() => activateSearch()} aria-label="Find in chat" title="Find in chat" className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover">
               <Search className="h-4 w-4" /><span className="foxwarm-chat-sm-label">Find</span>
             </button>
             {onOpenCode && (
@@ -2143,8 +2259,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
             <SessionUiSettingsMenu
               sendKeyMode={sendKeyMode}
               onSendKeyModeChange={onSendKeyModeChange}
-              groupTools={groupTools}
-              onGroupToolsChange={onGroupToolsChange}
+              timelineView={timelineView}
+              onTimelineViewChange={onTimelineViewChange}
               showUsageBadge={showUsageBadge}
               onShowUsageBadgeChange={onShowUsageBadgeChange}
               showUserMessageMetadata={showUserMessageMetadata}
@@ -2207,24 +2323,25 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
             <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full">
               <ThreadCardHeightContext.Provider value={cardHeightContext}>
                 <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-                  <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} />
+                  <ChatTimeline sessionId={sessionId} historyMessages={messages} runtimeState={sessionRecord?.runtimeState} busyStartedAt={sessionRecord?.busyStartedAt} isRunningTool={sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} />
                 </ToolScriptProgressContext.Provider>
               </ThreadCardHeightContext.Provider>
             </div>
             <ProcessingStatus
+              timelineView={timelineView}
               sessionBusy={sessionBusy}
               runtimeState={sessionRecord?.runtimeState}
               sessionQueueLength={sessionQueueLength}
               turnIncomplete={sessionRecord?.runtimeState?.state === 'idle' && turnIncomplete}
               loading={loading}
               isMobile={isMobile}
-              onStop={handleStop}
-              onRunQueued={handleRunQueued}
-              onContinue={handleContinue}
+              onStop={webUiIdentityMode ? undefined : handleStop}
+              onRunQueued={webUiIdentityMode ? undefined : handleRunQueued}
+              onContinue={webUiIdentityMode ? undefined : handleContinue}
             />
             {queuedMessages.length > 0 && (
               <div className="foxwarm-queued-preview min-w-0 max-w-full" data-queued-preview="true" aria-label="Queued messages">
-                <ThreadCardHeightContext.Provider value={cardHeightContext}><ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={false} showTimeDividers={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} /></ThreadCardHeightContext.Provider>
+                <ThreadCardHeightContext.Provider value={cardHeightContext}><ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} timelineView={timelineView} showUsageBadge={false} showTimeDividers={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} /></ThreadCardHeightContext.Provider>
               </div>
             )}
             <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />
@@ -2260,6 +2377,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       <ChatComposer
         compactModelSelector={compactModelSelector}
         sessionId={sessionId}
+        webUiIdentityMode={webUiIdentityMode}
         sessionMissing={sessionMissing}
         loading={loading}
         asrAvailable={asrAvailable}
@@ -2285,7 +2403,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         onChangeChildModel={updateChildModel}
         onChangeEffort={updateSessionEffort}
         onChangeChildEffort={updateChildEffort}
-        onRefreshModels={fetchModels}
+        onRefreshModels={refreshModelOptions}
         modelsRefreshing={modelsRefreshing}
         onOpenModelSettings={onOpenModelSettings || (() => {})}
         sendKeyMode={sendKeyMode}
@@ -2294,7 +2412,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         onCreateStreamingTranscriber={handleCreateStreamingTranscriber}
       />
 
-      {showDebugInfo && (
+      {!webUiIdentityMode && showDebugInfo && (
         <SessionDebugModal
           source={{
             sessionId,
@@ -2307,7 +2425,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
             sessionBusy,
             sessionQueueLength,
             queuedPreviewCount: queuedMessages.length,
-            groupTools,
+            timelineView,
             showUsageBadge,
             showUserMessageMetadata,
             sendKeyMode,
@@ -2332,11 +2450,12 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   && prev.onOpenCodeCommit === next.onOpenCodeCommit
   && prev.onOpenModelSettings === next.onOpenModelSettings
   && prev.sendKeyMode === next.sendKeyMode
-  && prev.groupTools === next.groupTools
+  && prev.timelineView === next.timelineView
   && prev.showUsageBadge === next.showUsageBadge
+  && prev.webUiIdentityMode === next.webUiIdentityMode
   && prev.showUserMessageMetadata === next.showUserMessageMetadata
   && prev.onSendKeyModeChange === next.onSendKeyModeChange
-  && prev.onGroupToolsChange === next.onGroupToolsChange
+  && prev.onTimelineViewChange === next.onTimelineViewChange
   && prev.onShowUsageBadgeChange === next.onShowUsageBadgeChange
   && prev.onShowUserMessageMetadataChange === next.onShowUserMessageMetadataChange
 ))

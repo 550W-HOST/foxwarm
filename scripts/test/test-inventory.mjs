@@ -11,8 +11,6 @@ export const appRuntimeE2e = [
 ]
 
 export const standaloneSelftests = [
-  'lib/selftest/applyPatchSelfTest.js',
-  'lib/selftest/goalReminderSelfTest.js',
   'lib/selftest/queueDrainSelfTest.js',
   'lib/selftest/toolLoopStallSelfTest.js',
 ]

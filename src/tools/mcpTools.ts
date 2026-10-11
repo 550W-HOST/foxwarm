@@ -67,3 +67,7 @@ export async function tool_list_mcp_servers(_args: ToolArgs, ctx?: ToolContext) 
         servers,
     };
 }
+
+export async function tool_mcp_notifications(args: ToolArgs, ctx?: ToolContext) {
+    return mcpExternal.manageMcpNotifications(requireSourceSessionId(ctx), args.server, args.action);
+}

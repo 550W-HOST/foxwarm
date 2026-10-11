@@ -6,7 +6,7 @@
 import fs from 'fs-extra';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import { CompactionRequest, isQueueItem, Session, Message, MessagePart, QueueItem, TokenUsage, SessionStreamEvent } from './types';
+import { CompactionRequest, isQueueItem, SessionDeliveryOptions, SessionEnqueueOptions, Session, Message, MessagePart, QueueItem, TokenUsage, SessionStreamEvent } from './types';
 import { logger } from './common';
 import { ChannelFile, ChannelSendFileOptions } from './channel';
 import * as llm from './llm';
@@ -467,11 +467,13 @@ async function generateAvailableSessionName(agentName: string = 'main'): Promise
 }
 
 async function allocateForkSessionId(sourceSessionId: string, suffix?: string, replaceMainLeaf = false): Promise<string> {
-  const requestedSuffix = (suffix || 'fork').trim() || 'fork';
+  const requestedSuffix = suffix === undefined ? 'fork' : suffix;
+  validateSessionName(requestedSuffix);
   const baseId = replaceMainLeaf
     ? buildChildSessionId(sourceSessionId, requestedSuffix)
     : `${sourceSessionId}_${requestedSuffix}`;
 
+  validateSessionName(baseId.split('/').at(-1)!);
   if (!await isSessionIdReserved(baseId)) {
     return baseId;
   }
@@ -505,6 +507,7 @@ async function allocateChildSessionId(parentSessionId: string, suffix: string): 
   const requestedSuffix = (suffix || 'child').trim() || 'child';
   const baseId = buildChildSessionId(parentSessionId, requestedSuffix);
 
+  validateSessionName(baseId.split('/').at(-1)!);
   if (!await isSessionIdReserved(baseId)) {
     return baseId;
   }
@@ -601,7 +604,7 @@ export function releaseSessionsForDestructiveLifecycle(claimId: string): void {
   }
   for (const sessionId of releasedSessionIds) {
     const session = sessions.get(sessionId);
-    if (session && !session.busy && session.queue.some(isQueueItem)) {
+    if (session && !session.busy && session.queue.some(item => isQueueItem(item) && item.trigger !== false)) {
       try {
         void Promise.resolve(onSessionTriggered?.(sessionId)).catch(error => {
           logger.error({ err: error, sessionId }, 'Failed to resume queued work after destructive lifecycle claim release');
@@ -702,7 +705,7 @@ export function setSessionPersistenceFaultInjectorForTests(injector: ((phase: 'h
   sessionPersistenceFaultInjector = injector;
 }
 
-// Track active in-flight LLM requests so /stop can abort the underlying HTTP call.
+// Track the current provider request or foreground tool batch for /stop.
 const sessionAbortControllers = new Map<string, AbortController>();
 const standaloneCompactSessions = new Set<string>();
 
@@ -949,6 +952,7 @@ async function getSessionUnlocked(sessionId: string, persistNew: boolean = true)
     // A persisted live record may be hydrated here even though it already has
     // archive rows. Only the absence of live persistence starts a new lifetime.
     isNew = reservation === null;
+    if (isNew) validateSessionName(realId.split('/').at(-1)!);
     mustHydratePersistedLifetime = reservation === 'live';
     session = {
       id: realId,
@@ -1176,6 +1180,7 @@ export async function createSession(sessionId: string, sessionData: any): Promis
 }
 
 async function createSessionUnlocked(sessionId: string, sessionData: any): Promise<void> {
+  validateSessionName(sessionId.split('/').at(-1)!);
   await assertSessionIdAvailableForNewLifetime(sessionId);
   assertSessionDestructiveMutationAllowed([sessionData?.parentSessionId], 'receive a new child session');
   if (sessionData && typeof sessionData === 'object') {
@@ -1717,11 +1722,12 @@ export function getChannelBySession(sessionId: string): { channelId: string; con
  * @param isChildSession Whether this is a child session (for multi-agent)
  * @returns New session ID
  */
-export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { displayName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { displayName?: string; node?: string; model?: string; effort?: ModelEffort; taskId?: string; sourceOverride?: Session }): Promise<string> {
   return withSessionIdentityLock(() => forkSessionUnlocked(sourceSessionId, suffix, isChildSession, options));
 }
 
-async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { displayName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { displayName?: string; node?: string; model?: string; effort?: ModelEffort; taskId?: string; sourceOverride?: Session }): Promise<string> {
+  if (suffix !== undefined) validateSessionName(suffix);
   assertSessionDestructiveMutationAllowed([sourceSessionId], 'receive a new fork session');
   // sourceOverride lets a trusted caller (e.g. the Main management facade)
   // supply a detached read-only snapshot of a worker-owned authority instead
@@ -1816,7 +1822,7 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
   });
 
   const systemMessage = isChildSession
-    ? `You are a child session forked from parent session \`${realSourceSessionId}\`. Your current session ID is \`${newSessionId}\`. ${buildChildCompletionInstruction(realSourceSessionId)}`
+    ? `You are a child session forked from parent session \`${realSourceSessionId}\`. Your current session ID is \`${newSessionId}\`. ${options?.taskId ? buildTaskChildCompletionInstruction(options.taskId) : buildChildCompletionInstruction(realSourceSessionId)}`
     : `Session forked from ${realSourceSessionId} by user command. Your current session ID is \`${newSessionId}\`.`;
 
   appendedForkMessages.push({
@@ -1909,11 +1915,15 @@ export function resolveSpawnedSessionModelEffort(
   return { model: normalized.model, effort: normalized.effort };
 }
 
-export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = false, options?: { agentName?: string; displayName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+function buildTaskChildCompletionInstruction(taskId: string): string {
+  return `This Session is linked to task ${taskId}. Complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report.`;
+}
+
+export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = false, options?: { agentName?: string; displayName?: string; node?: string; model?: string; effort?: ModelEffort; taskId?: string; sourceOverride?: Session }): Promise<string> {
   return withSessionIdentityLock(() => createChildSessionUnlocked(parentSessionId, suffix, fork, options));
 }
 
-async function createChildSessionUnlocked(parentSessionId: string, suffix: string, fork: boolean = false, options?: { agentName?: string; displayName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+async function createChildSessionUnlocked(parentSessionId: string, suffix: string, fork: boolean = false, options?: { agentName?: string; displayName?: string; node?: string; model?: string; effort?: ModelEffort; taskId?: string; sourceOverride?: Session }): Promise<string> {
   validateChildSessionSuffix(suffix);
   assertSessionDestructiveMutationAllowed([parentSessionId], 'receive a new child session');
   const parentSession = options?.sourceOverride || await getSessionUnlocked(parentSessionId);
@@ -1988,7 +1998,7 @@ async function createChildSessionUnlocked(parentSessionId: string, suffix: strin
 
     const initialMessage: Message = {
       role: 'user',
-      parts: [systemPart(`${formatSessionIdentityHint({ parentSessionId: realParentSessionId, sessionId: childSessionId, variant: 'new-child', timestamp: Date.now() })}\nYou are a child session (new, empty context). ${buildChildCompletionInstruction(realParentSessionId)}`)],
+      parts: [systemPart(`${formatSessionIdentityHint({ parentSessionId: realParentSessionId, sessionId: childSessionId, variant: 'new-child', timestamp: Date.now() })}\nYou are a child session (new, empty context). ${options?.taskId ? buildTaskChildCompletionInstruction(options.taskId) : buildChildCompletionInstruction(realParentSessionId)}`)],
       __meta: { timestamp: Date.now() }
     };
 
@@ -2086,13 +2096,13 @@ async function updateChildSessionParentIdsCritical(oldParentSessionId: string, n
   return updated;
 }
 
-export async function sendToSession(targetSessionId: string, message: string, fromSessionId?: string): Promise<{ requestedSessionId: string; resolvedSessionId: string }> {
+export async function sendToSession(targetSessionId: string, message: string, fromSessionId?: string, options?: SessionDeliveryOptions): Promise<{ requestedSessionId: string; resolvedSessionId: string }> {
   return await sessionRelations.sendToSession({
     getExistingSession,
     getSessionCatalog,
     getAgentMetadata,
     enqueueSessionItem,
-  }, targetSessionId, message, fromSessionId);
+  }, targetSessionId, message, fromSessionId, options);
 }
 
 export async function validateSessionWaitTargets(sourceSessionId: string, targetSessionIds: string[]): Promise<string[]> {
@@ -2467,7 +2477,7 @@ async function reclaimManagedSessionIfStale(session: Session): Promise<boolean> 
 }
 
 async function maybeWakeManagedSessionOwner(session: Session, managed: ManagedSessionState): Promise<void> {
-  if (!managed.pendingInbox.length) {
+  if (!managed.pendingInbox.some(item => item.trigger !== false)) {
     return;
   }
 
@@ -2501,7 +2511,7 @@ async function maybeWakeManagedSessionOwner(session: Session, managed: ManagedSe
 }
 
 async function maybeResumeManagedSessionControllerRun(session: Session, managed: ManagedSessionState): Promise<boolean> {
-  if (!managed.controllerRunId || !managed.pendingInbox.length) {
+  if (!managed.controllerRunId || !managed.pendingInbox.some(item => item.trigger !== false)) {
     return false;
   }
   try {
@@ -2531,7 +2541,7 @@ async function maybeResumeManagedSessionControllerRun(session: Session, managed:
 }
 
 async function enqueueSessionItemForLoadedSession(session: Session, item: QueueItem,
-  assertAdmissionActive?: () => void): Promise<void> {
+  options: SessionEnqueueOptions = {}, assertAdmissionActive?: () => void): Promise<void> {
   const sessionId = session.id;
   item = (await externalizeQueueItemImages(item)).item;
   let receiptPlan: AcceptedExternalEventReceiptPlan | undefined;
@@ -2562,15 +2572,14 @@ async function enqueueSessionItemForLoadedSession(session: Session, item: QueueI
     }
   }
   const managedBeforeEnqueue = !!getManagedSessionState(session);
-  const rollbackSnapshot = item.externalEventId
+  const rollbackSnapshot = (item.externalEventId || options.trigger === false)
     ? { meta: structuredClone(session.meta), queue: structuredClone(session.queue) }
     : undefined;
   let persistedAfterExternalReceipt = false;
   const persistSession = async (): Promise<void> => {
-    // External inbound send promises awaited durable admission. The ordinary
-    // compatibility save logs/swallow failures, so this producer uses the
-    // existing strict authority writer without changing internal producers.
-    if (assertAdmissionActive) await saveSessionForSessionCritical(session);
+    // External admission and passive notices require an awaited durable save.
+    // Ordinary internal producers retain their existing compatibility writer.
+    if (assertAdmissionActive || options.trigger === false) await saveSessionForSessionCritical(session);
     else await saveSession(sessionId);
     if (item.externalEventId) persistedAfterExternalReceipt = true;
   };
@@ -2617,9 +2626,9 @@ async function enqueueSessionItemForLoadedSession(session: Session, item: QueueI
       managed.revision += 1;
       setManagedSessionState(session, managed);
       await persistSession();
-      const resumedControllerRun = await maybeResumeManagedSessionControllerRun(session, managed);
-      if (!resumedControllerRun) {
-        await maybeWakeManagedSessionOwner(session, managed);
+      if (options.trigger !== false) {
+        const resumedControllerRun = await maybeResumeManagedSessionControllerRun(session, managed);
+        if (!resumedControllerRun) await maybeWakeManagedSessionOwner(session, managed);
       }
     }
 
@@ -2628,13 +2637,13 @@ async function enqueueSessionItemForLoadedSession(session: Session, item: QueueI
       session.queue.push(...directQueueItems);
       await persistSession();
 
-      if (!managedBeforeEnqueue && !session.busy) {
+      if (options.trigger !== false && !managedBeforeEnqueue && !session.busy) {
         assertSessionDestructiveMutationAllowed([sessionId], 'start queued work');
         void onSessionTriggered?.(sessionId);
       }
     }
   } catch (error) {
-    if (rollbackSnapshot && !persistedAfterExternalReceipt) {
+    if (rollbackSnapshot && !persistedAfterExternalReceipt && !isSessionAuthorityPostCommitError(error)) {
       session.meta = rollbackSnapshot.meta;
       session.queue = rollbackSnapshot.queue;
     }
@@ -2642,13 +2651,13 @@ async function enqueueSessionItemForLoadedSession(session: Session, item: QueueI
   }
 }
 
-let workerEnqueueSink: ((sessionId: string, item: QueueItem, assertAdmissionActive?: () => void) => Promise<void>) | undefined;
+let workerEnqueueSink: ((sessionId: string, item: QueueItem, options?: SessionEnqueueOptions, assertAdmissionActive?: () => void) => Promise<void>) | undefined;
 let workerDeleteHandler: ((sessionId: string) => Promise<boolean>) | undefined;
 let workerForkSourceProvider: ((sessionId: string) => Promise<Session | undefined>) | undefined;
 let workerFenceChecker: ((sessionId: string) => boolean) | undefined;
 let workerCatalogFieldsUpdater: ((sessionId: string, patch: { parentSessionId?: string | null; displayName?: string | null }) => Promise<void>) | undefined;
 
-export function setSessionWorkerEnqueueSink(handler: ((sessionId: string, item: QueueItem, assertAdmissionActive?: () => void) => Promise<void>) | undefined): void {
+export function setSessionWorkerEnqueueSink(handler: ((sessionId: string, item: QueueItem, options?: SessionEnqueueOptions, assertAdmissionActive?: () => void) => Promise<void>) | undefined): void {
   workerEnqueueSink = handler;
 }
 
@@ -2726,8 +2735,10 @@ export function assertAgentMetadataMutationAllowed(operation: string): void {
 }
 
 export async function enqueueSessionItem(sessionId: string, item: QueueItem,
-  assertAdmissionActive?: () => void): Promise<void> {
+  options: SessionEnqueueOptions = {}, assertAdmissionActive?: () => void): Promise<void> {
   assertAdmissionActive?.();
+  const { trigger: _untrustedTrigger, ...ordinaryItem } = item;
+  item = options.trigger === false ? { ...ordinaryItem, trigger: false } : ordinaryItem;
   if (workerEnqueueSink) {
     // Session-worker placement: all Main-side producers share one durable
     // ingress boundary. Managed sessions remain explicitly unsupported there;
@@ -2738,14 +2749,14 @@ export async function enqueueSessionItem(sessionId: string, item: QueueItem,
     if (stub && getManagedSessionState(stub as Session)) {
       throw new RpcError('SESSION_WORKER_QUEUE_UNSUPPORTED', 'Managed sessions are not supported by Session-worker placement yet.', true);
     }
-    await workerEnqueueSink(canonicalSessionId, item, assertAdmissionActive);
+    await workerEnqueueSink(canonicalSessionId, item, options, assertAdmissionActive);
     return;
   }
   const canonicalSessionId = resolveLoadedSessionId(sessionId);
   const releaseAdmission = await enterStandaloneCompactAdmission(canonicalSessionId);
   try {
     const session = await getSession(canonicalSessionId);
-    await enqueueSessionItemForLoadedSession(session, item, assertAdmissionActive);
+    await enqueueSessionItemForLoadedSession(session, item, options, assertAdmissionActive);
   } finally {
     releaseAdmission();
   }
@@ -2825,7 +2836,7 @@ export async function requestSessionCompaction(
           });
 
           const triggerQueuedSession = onSessionTriggered;
-          if (!session.busy && session.queue.length > 0 && triggerQueuedSession) {
+          if (!session.busy && session.queue.some(item => item.trigger !== false) && triggerQueuedSession) {
             try {
               void Promise.resolve(triggerQueuedSession(sessionId)).catch(error => {
                 logger.error({ err: error, sessionId }, 'Failed to trigger queued work after standalone session compaction');
@@ -3271,6 +3282,7 @@ export async function setSessionCompactThreshold(sessionId: string, thresholdTok
 export async function deleteSession(sessionId: string, owningClaimId?: string): Promise<boolean> {
   assertSessionDestructiveMutationAllowed([sessionId], 'be deleted', owningClaimId);
   if (workerDeleteHandler) await workerDeleteHandler(sessionId);
+  await (await import('./mcpCallerConnections')).closeMcpCallerConnections({ ownerKind: 'session', ownerId: sessionId });
   clearActiveSessionRuntimeState(sessionId);
 
   if (!sessions.has(sessionId)) {
@@ -3400,12 +3412,12 @@ export async function resumeBusySessions(): Promise<void> {
       busySessionIds.push(sessionId);
       continue;
     }
-    if (workerPlacement ? (metadata.queueLength || 0) > 0 : (session.queue?.length || 0) > 0) {
+    if (workerPlacement ? (metadata.queueLength || 0) > 0 : session.queue?.some(item => item.trigger !== false)) {
       queuedSessionIds.push(sessionId);
     }
 
     const managed = getManagedSessionState(session as Session);
-    if (workerPlacement ? (metadata.managedPendingCount || 0) > 0 : !!managed?.pendingInbox?.length) {
+    if (workerPlacement ? (metadata.managedPendingCount || 0) > 0 : !!managed?.pendingInbox?.some(item => item.trigger !== false)) {
       managedPendingSessionIds.push(sessionId);
     }
   }
@@ -3469,7 +3481,7 @@ export async function resumeBusySessions(): Promise<void> {
     try {
       const session = await getSession(sessionId);
       if (await reclaimManagedSessionIfStale(session)) {
-        if (!session.busy && session.queue.length > 0) {
+        if (!session.busy && session.queue.some(item => item.trigger !== false)) {
           onSessionTriggered?.(sessionId);
         }
         continue;

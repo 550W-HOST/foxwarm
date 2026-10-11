@@ -229,11 +229,16 @@ const markdown = new Marked({
   extensions: [displayMathBlockExtension, displayMathPrefixExtension, displayMathExtension, inlineMathExtension],
 })
 
-const sanitizeHtml = (html: string): string => {
+const sanitizeHtml = (html: string, allowTableScrollWrapper = false): string => {
   return DOMPurify.sanitize(html, {
     FORBID_TAGS: ['img', 'video', 'audio', 'iframe', 'embed', 'object', 'script', 'style'],
     FORBID_ATTR: ['src', 'xlink:href', 'action', 'formaction'],
-    ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'u', 's', 'code', 'pre', 'blockquote', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'a', 'table', 'thead', 'tbody', 'tr', 'th', 'td'],
+    ALLOWED_TAGS: [
+      'p', 'br', 'strong', 'em', 'u', 's', 'code', 'pre', 'blockquote',
+      'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'a',
+      ...(allowTableScrollWrapper ? ['div'] : []),
+      'table', 'thead', 'tbody', 'tr', 'th', 'td',
+    ],
     ALLOWED_ATTR: ['class', 'href', 'target', 'rel'],
     ALLOW_UNKNOWN_PROTOCOLS: false,
     ALLOWED_URI_REGEXP: /^(?:https?|mailto|tel):/i,
@@ -249,17 +254,25 @@ const replaceMathPlaceholders = (html: string, placeholders: MathPlaceholder[]):
   return placeholders.reduce((current, placeholder) => current.split(placeholder.marker).join(placeholder.html), html)
 }
 
-const renderMarkdownTokens = (tokens: Token[], sanitizer: HtmlSanitizer): string => {
+const renderMarkdownTokens = (tokens: Token[], sanitizer: HtmlSanitizer, wrapTables = false): string => {
   const previousContext = activeMathRenderContext
   const context: MathRenderContext = {
     markerPrefix: createMathMarkerPrefix(),
     placeholders: [],
   }
+  const renderer = wrapTables ? new markdown.Renderer(markdown.defaults) : undefined
+
+  if (renderer) {
+    const renderTable = renderer.table
+    renderer.table = function (token) {
+      return `<div class="foxwarm-markdown-table-scroll">${renderTable.call(this, token)}</div>`
+    }
+  }
 
   activeMathRenderContext = context
   let html = ''
   try {
-    html = markdown.parser(tokens) as string
+    html = markdown.parser(tokens, renderer ? { ...markdown.defaults, renderer } : undefined) as string
   } finally {
     activeMathRenderContext = previousContext
   }
@@ -270,6 +283,14 @@ const renderMarkdownTokens = (tokens: Token[], sanitizer: HtmlSanitizer): string
 
 export const renderMarkdownWithSanitizer = (text: string, sanitizer: HtmlSanitizer = sanitizeHtml): string => {
   return renderMarkdownTokens(markdown.lexer(text), sanitizer)
+}
+
+const sanitizeAssistantHtml = (html: string): string => sanitizeHtml(html, true)
+
+const tokenContainsTable = (token: Token): boolean => {
+  if (token.type === 'table') return true
+  if (token.type === 'list') return token.items.some((item: Tokens.ListItem) => item.tokens.some(tokenContainsTable))
+  return 'tokens' in token && Array.isArray(token.tokens) && token.tokens.some(tokenContainsTable)
 }
 
 export const renderMarkdown = (text: string): string => renderMarkdownWithSanitizer(text)
@@ -290,7 +311,7 @@ export const renderMarkdownSegments = (text: string): Array<Extract<MarkdownRend
 
 export const renderAssistantMarkdownSegmentsWithSanitizer = (
   text: string,
-  sanitizer: HtmlSanitizer = sanitizeHtml,
+  sanitizer?: HtmlSanitizer,
 ): MarkdownRenderSegment[] => {
   const segments: MarkdownRenderSegment[] = []
 
@@ -310,7 +331,8 @@ export const renderAssistantMarkdownSegmentsWithSanitizer = (
       })
       continue
     }
-    const html = renderMarkdownTokens([token], sanitizer)
+    const wrapTables = tokenContainsTable(token)
+    const html = renderMarkdownTokens([token], sanitizer ?? (wrapTables ? sanitizeAssistantHtml : sanitizeHtml), wrapTables)
     if (html) segments.push({ kind: 'html', tokenIndex, html })
   }
   return segments

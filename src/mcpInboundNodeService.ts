@@ -1,6 +1,6 @@
 import { parseApplyPatchInput } from '../packages/shared/dist/applyPatch';
 import type { ExternalNodeOwner } from '../packages/shared/dist/nodeProtocol';
-import { requireVerifiedMcpInboundExternalId, type VerifiedMcpInboundPrincipal } from './mcpInboundConfig';
+import { requireVerifiedAccessIdentity, type VerifiedAccessIdentity } from './accessConfig';
 import type { ExternalExecutionContext } from './mcpInboundHttp';
 import { nodeProviderRegistry } from './nodes/providers';
 import { FIRST_PARTY_DOCKER_EXTERNAL_OWNER, type NodeDescriptor, type NodeProvider } from './nodes/providerRegistry';
@@ -29,8 +29,8 @@ function firstPartyDocker(node: NodeDescriptor, provider: NodeProvider): provide
 
 export class ExternalNodeBeforeEffectError extends Error {}
 
-function owner(principal: VerifiedMcpInboundPrincipal, context: ExternalExecutionContext): ExternalNodeOwner {
-  const externalId = requireVerifiedMcpInboundExternalId(principal);
+function owner(principal: VerifiedAccessIdentity, context: ExternalExecutionContext): ExternalNodeOwner {
+  const externalId = requireVerifiedAccessIdentity(principal);
   if (context.externalId !== externalId) throw new Error('External Node context owner mismatch.');
   return { kind: 'external', externalId, contextId: context.id };
 }
@@ -59,7 +59,7 @@ function pathFacts(nodeId: string, name: string, args: Record<string, unknown>):
 }
 
 /** The Node registry is the only capability and target resolver; no Session-shaped Main RPC call occurs here. */
-export async function listExternalNodeTools(principal: VerifiedMcpInboundPrincipal, context: ExternalExecutionContext) {
+export async function listExternalNodeTools(principal: VerifiedAccessIdentity, context: ExternalExecutionContext) {
   owner(principal, context);
   assertContextActive(context);
   const result: Array<{ nodeId: string; name: string; description: string; inputSchema?: unknown }> = [];
@@ -93,7 +93,7 @@ export async function listExternalNodeTools(principal: VerifiedMcpInboundPrincip
 }
 
 export async function callExternalNodeTool(
-  principal: VerifiedMcpInboundPrincipal, context: ExternalExecutionContext,
+  principal: VerifiedAccessIdentity, context: ExternalExecutionContext,
   nodeId: string, name: string, args: Record<string, unknown>,
 ): Promise<unknown> {
   const effectOwner = owner(principal, context);
@@ -159,7 +159,7 @@ export async function callExternalNodeTool(
 }
 
 export async function externalExecResult(
-  principal: VerifiedMcpInboundPrincipal, context: ExternalExecutionContext, execId?: string, limit = 5,
+  principal: VerifiedAccessIdentity, context: ExternalExecutionContext, execId?: string, limit = 5,
 ): Promise<unknown> {
   const effectOwner = owner(principal, context);
   assertContextActive(context);
@@ -208,7 +208,7 @@ export async function externalExecResult(
   }
 }
 
-export function releaseExternalNodeContext(principal: VerifiedMcpInboundPrincipal, context: ExternalExecutionContext): void {
+export function releaseExternalNodeContext(principal: VerifiedAccessIdentity, context: ExternalExecutionContext): void {
   const effectOwner = owner(principal, context);
   context.disposed = true;
   const nodes = new Set([...(context.externalExecNodes || []),
@@ -219,7 +219,7 @@ export function releaseExternalNodeContext(principal: VerifiedMcpInboundPrincipa
 }
 
 export async function externalNodeAction(
-  principal: VerifiedMcpInboundPrincipal, context: ExternalExecutionContext,
+  principal: VerifiedAccessIdentity, context: ExternalExecutionContext,
   action: 'list' | 'status' | 'select', nodeId?: string,
 ) {
   const effectOwner = owner(principal, context);

@@ -1,4 +1,4 @@
-import { WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
+import { WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Activity, ArrowDownLeft, ArrowUpRight, Database, ArrowLeft, Bot, ChevronRight, CircleDot, Clock3, ExternalLink, FileText, FolderOpen, GitFork, Layers3, ListFilter, MemoryStick, MessageSquare, Network, Save, Search, Server, Shield, Trash2 } from 'lucide-react'
@@ -1019,6 +1019,7 @@ export default function ArchitectureView({
               </div>
               {surface !== 'nodes' && summary.managedCount > 0 ? renderMetaBadge(`${summary.managedCount} managed`, 'active') : null}
               {nodeTargetsError ? renderMetaBadge('node status unavailable', 'warning') : null}
+              <WorkbenchPaneControls />
             </div>
           </div>
 

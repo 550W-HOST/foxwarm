@@ -77,7 +77,7 @@ before(async () => {
     class FixtureSocket {
       static CLOSED = 3
       static instances = []
-      constructor() { this.readyState = 0; FixtureSocket.instances.push(this); queueMicrotask(() => { this.readyState = 1; this.onopen?.({}) }) }
+      constructor() { this.readyState = 0; FixtureSocket.instances.push(this); queueMicrotask(() => { this.readyState = 1; this.onopen?.({}); this.emit({ type: 'connected' }) }) }
       close() { this.readyState = FixtureSocket.CLOSED }
       send(raw) { const payload = JSON.parse(raw); if (payload.type !== 'set-subscriptions') return; queueMicrotask(() => {
         this.emit({ type: 'subscriptions-accepted', revision: payload.revision, sessionListResolutions: {}, sessionResolutions: { 'fixture/height': 'fixture/height' } })
@@ -88,7 +88,7 @@ before(async () => {
     window.WebSocket = FixtureSocket
     window.emitStream = text => FixtureSocket.instances.at(-1)?.emit({ type: 'session-event', sessionId: 'fixture/height', event: { type: 'model-stream-update', streamId: 'fixture-stream', text } })
     createRoot(document.getElementById('root')).render(React.createElement(Chat, {
-      sessionId: 'fixture/height', canonicalSessionId: 'fixture/height', sessionDisplayName: 'Height test', groupTools: size.startsWith('group') || size.startsWith('ctx'),
+      sessionId: 'fixture/height', canonicalSessionId: 'fixture/height', sessionDisplayName: 'Height test', timelineView: size.startsWith('group') || size.startsWith('ctx') ? 'grouped' : 'detailed',
     }))
   `
   const result = await build({ stdin: { contents: source, resolveDir: packageDir, sourcefile: 'height-fixture.tsx' }, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })

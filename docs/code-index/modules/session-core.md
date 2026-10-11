@@ -25,7 +25,7 @@ Canonical image references in live history, queues, archives, and forks are owne
 - [src-session-agent-ops](../units/src-session-agent-ops.md) — agent creation, inheritance/isolation metadata, moves, and snapshot refresh.
 - [src-session-misc](../units/src-session-misc.md) — archive append helpers, relations, message visibility, snapshot refresh, and child reminders.
 - [src-managed-sessions](../units/src-managed-sessions.md) — exclusive leases, inbox interception, step execution, and controller wakeup.
-- [src-session-goal](../units/src-session-goal.md) — long-horizon goal persistence and bounded reminders.
+- [src-session-task-context](../units/src-session-task-context.md) — legacy Goal migration and request-only task reminders.
 
 Active history transformation, compaction, archive-store, and vector retrieval are owned by [session context](./session-context.md).
 

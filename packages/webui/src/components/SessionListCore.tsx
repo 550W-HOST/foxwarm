@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, List, GitBranch, Server } from 'lucide-react'
+import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, List, GitBranch, Server, Copy } from 'lucide-react'
 import RuntimeBusySpinner from './RuntimeBusySpinner'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
+import { copyTextToClipboard } from './chatShared'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
 import { collapseSessionListExpandedBranch, compareSessionListSessions, getSessionListAutoExpandedPath, getSessionListChildDisclosure, getSessionListDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
@@ -996,6 +997,15 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     setContextMenu(null)
   }
 
+  const copySessionId = async (sessionId: string) => {
+    try {
+      await copyTextToClipboard(sessionId)
+    } catch (error) {
+      console.error('Failed to copy session ID:', error)
+    }
+    setContextMenu(null)
+  }
+
   const forkSession = async (sessionId: string) => {
     try {
       const token = getStoredAuthToken()
@@ -1394,6 +1404,12 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         icon: isPinned ? <PinOff size={14} /> : <Pin size={14} />,
         label: isPinned ? 'Unpin from top' : 'Pin to top',
         onSelect: () => { void togglePinned(contextMenu.sessionId, !isPinned) },
+      },
+      {
+        key: 'copy-id',
+        icon: <Copy size={14} />,
+        label: 'Copy ID',
+        onSelect: () => { void copySessionId(contextMenu.sessionId) },
       },
       {
         key: 'rename',

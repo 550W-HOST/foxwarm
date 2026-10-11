@@ -8,6 +8,7 @@ interface CollapsedSidebarContainerProps {
   onSelectSearch: () => void
   onSelectSetup: () => void
   onSelectLogs: () => void
+  onSelectTasks?: () => void
   onToggleCollapsed: () => void
   unreadSessionIds?: ReadonlySet<string>
 }

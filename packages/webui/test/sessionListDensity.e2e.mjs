@@ -27,6 +27,8 @@ before(async () => {
       window.fixtureTheme = setThemeSelection
       window.fixtureDrops = []
       window.fixturePinRequests = []
+      window.fixtureClipboardWrites = []
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => { window.fixtureClipboardWrites.push(text) } } })
       window.fetch = async (url, options) => {
         if (String(url).endsWith('/pin')) {
           const id = decodeURIComponent(String(url).split('/').at(-2))
@@ -153,7 +155,10 @@ test('default normal rows, detailed toggle, persistence, canonical status, theme
     assert.equal(await page.evaluate(() => window.fixtureSelected), 'demo/wait')
     await page.click(row('wait'), { button: 'right' })
     await page.waitForSelector('[role="menu"]')
-    await page.keyboard.press('Escape')
+    assert.deepEqual(await page.$$eval('[role="menu"] button', buttons => buttons.slice(0, 4).map(button => button.textContent.trim())), ['Pin to top', 'Copy ID', 'Rename', 'Archive'])
+    await page.focus('[role="menu"] button:nth-of-type(2)')
+    await page.keyboard.press('Enter')
+    assert.deepEqual(await page.evaluate(() => window.fixtureClipboardWrites), ['demo/wait'])
     await page.reload()
     await page.waitForSelector('[data-session-list-density="normal"]')
     for (const themeId of ['foxwarm.default', 'foxwarm.550a-mono', 'foxwarm.seaglass']) {

@@ -60,7 +60,7 @@ test('archive store bootstraps/imports legacy jsonl archives and infers fork lin
   ];
 
   const parentBlocks = [
-    makeBlockRecord('parent', 1, 1, 2, 'alpha summary block', 2500),
+    { ...makeBlockRecord('parent', 1, 1, 2, 'alpha summary block', 2500), frictionScore: 0 },
   ];
   const childBlocks = [
     ...parentBlocks,
@@ -103,6 +103,8 @@ test('archive store bootstraps/imports legacy jsonl archives and infers fork lin
   );
 
   const archivedBlocks = await layeredContext.readArchiveBlocksByIdRange('child');
+  assert.equal(archivedBlocks[0].frictionScore, 0);
+  assert.equal(Object.prototype.hasOwnProperty.call(archivedBlocks[1], 'frictionScore'), false);
   assert.deepEqual(
     archivedBlocks.map(record => ({ id: record.id, inherited: !!record.inherited, source: record.sourceSessionId, summary: record.summary })),
     [

@@ -95,7 +95,7 @@ before(async () => {
     const cases = ${JSON.stringify(cases)}
     for (const [id, messages] of Object.entries(cases)) {
       createRoot(document.getElementById(id)).render(React.createElement(ChatTimeline, {
-        sessionId: 'fixture/main', messages, isMobile: false, groupTools: id !== 'reasoningRuns', showUsageBadge: true,
+        sessionId: 'fixture/main', messages, isMobile: false, timelineView: id === 'reasoningRuns' ? 'detailed' : 'grouped', showUsageBadge: true,
       }))
     }
   `

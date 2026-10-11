@@ -122,13 +122,14 @@ send_to_session({
   waitAnySessions?: string[],
   waitExecIds?: string[],
   waitForInput?: true,
-  wakeIfNoActivityAfterSeconds?: number,
+  wakeIfNoActivityAfterSeconds?: number | null,
 }
 ```
 
 用于在当前这一批工具调用完成后暂停当前 session，直到新消息或事件到达。常见用法是和 `send_to_session(...)` / `create_child_session(...)` 搭配。
 
 如果传入 `wakeIfNoActivityAfterSeconds`，且这段时间内没有其它消息或事件唤醒 session，系统会用一次性 fallback system message 唤醒它。
+如果等待 `waitExecIds` 时省略该字段，系统会在 600 秒后使用同样的 fallback 唤醒；传入 `null` 可以关闭这个默认 fallback。`waitForInput:true` 保持输入主导的等待，不会添加 exec 默认 fallback。
 
 ## 常用命令
 

@@ -26,6 +26,7 @@ before(async () => {
             msg: { role: 'model', parts: [{ functionCall: call }] },
             nextMsg: { role: 'tool', parts: response ? [{ functionResponse: response }] : [] },
             messageKeyPrefix: id,
+            runningTool: true,
           }))),
       ))
     }
@@ -60,7 +61,9 @@ test('nested activity survives live completion and historical reload using displ
   })
   await page.waitForFunction(() => document.querySelector('#current')?.textContent.includes('nested_probe'))
   assert.equal(await page.$$eval('#current .animate-pulse', elements => elements.length), 1)
+  assert.equal(await page.$eval('#current .foxwarm-tool-result-preview', node => node.textContent), 'Running...')
   await page.click('#current .foxwarm-tool-header-toggle')
+  assert.ok(await page.$eval('#current .foxwarm-tool-result-content', node => node.textContent.includes('Running...') && node.textContent.includes('live target')))
   await page.evaluate(() => {
     const subCalls = [{ id: 'tss_1', name: 'nested_probe', status: 'completed', startedAt: 1, completedAt: 4, durationMs: 3, argsSummary: 'persisted target' }]
     const response = (id, name, legacy = false) => ({
@@ -77,6 +80,7 @@ test('nested activity survives live completion and historical reload using displ
   })
   await page.waitForFunction(() => ['current', 'unified', 'legacy', 'legacy-unified'].every(id => document.getElementById(id)?.textContent.includes('nested_probe')))
   assert.equal(await page.$$eval('#current .animate-pulse', elements => elements.length), 0)
+  assert.equal(await page.$eval('#current .foxwarm-tool-result-content', node => node.textContent.includes('Running...')), false)
   assert.ok(await page.$eval('#current', element => element.textContent.includes('persisted target')))
   assert.ok(await page.$eval('#current', element => element.textContent.includes('author result')))
   await page.reload()

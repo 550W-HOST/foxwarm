@@ -26,6 +26,13 @@ async function command(input: any): Promise<unknown> {
       setTimeout(() => controller.abort(new RpcError('TEST_CANCEL', 'test cancelled', true)), input.cancelAfterMs);
       return pending;
     }
+    case 'settle': {
+      const controller = new AbortController();
+      const pending = client.call('settle', { delayMs: input.delayMs, fail: input.fail },
+        { signal: controller.signal, ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}) });
+      const timer = setTimeout(() => controller.abort(), input.cancelAfterMs);
+      try { return await pending; } finally { clearTimeout(timer); }
+    }
     case 'backpressure': {
       const first = client.call('wait', { delayMs: input.delayMs });
       await new Promise(resolve => setTimeout(resolve, 5));

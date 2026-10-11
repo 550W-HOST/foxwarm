@@ -3,7 +3,7 @@ import * as mcpExternal from './mcpExternalService';
 import * as nodeExternal from './mcpInboundNodeService';
 import * as pairingExternal from './mcpInboundPairingService';
 import * as sessionExternal from './mcpInboundSessionService';
-import type { VerifiedMcpInboundPrincipal } from './mcpInboundConfig';
+import type { VerifiedAccessIdentity } from './accessConfig';
 import { McpInboundSafeError, type ExternalExecutionContext, type McpInboundCatalog } from './mcpInboundHttp';
 import { buildUnifiedToolId, parseUnifiedToolId } from './tools/resolvedTools';
 import { compareUnifiedSearchResults, scoreUnifiedToolQuery } from './tools/unifiedSearch';
@@ -73,6 +73,7 @@ const sessionTool: Tool = {
       count: { type: 'integer', minimum: 1, maximum: 50, description: 'Maximum entries to return. Defaults to 20 for list and 10 for read.' },
       previewLength: { type: 'integer', minimum: 1000, maximum: 20000, description: 'Total character budget for the read preview. Omit to use the normal preview budget.' },
       message: { type: 'string', description: 'Non-empty message to queue when action is send.' },
+      allowReply: { type: 'boolean', description: "Allow the receiving Session to send an explicit reply through the client's active Foxwarm notification connection. Omitted or false does not provide a reply destination." },
     },
   },
 };
@@ -120,13 +121,13 @@ function toolError(message: string): CallToolResult {
 
 /** Main-owned adapter: never invokes the internal Session RPC service or forges a Session ID. */
 export class McpInboundMcpCatalog implements McpInboundCatalog {
-  async listTools(_context: ExternalExecutionContext, _principal: VerifiedMcpInboundPrincipal): Promise<Tool[]> {
+  async listTools(_context: ExternalExecutionContext, _principal: VerifiedAccessIdentity): Promise<Tool[]> {
     return [discoverTool, callTool, nodeTool, execResultTool, sessionTool];
   }
 
   async callTool(
     context: ExternalExecutionContext, name: string, args: Record<string, unknown>, signal: AbortSignal,
-    principal: VerifiedMcpInboundPrincipal,
+    principal: VerifiedAccessIdentity,
   ): Promise<CallToolResult> {
     if (!plainObject(args)) return toolError('Tool arguments must be an object.');
     if (name === discoverTool.name) return this.discover(context, principal, args, signal);
@@ -137,24 +138,30 @@ export class McpInboundMcpCatalog implements McpInboundCatalog {
     return toolError('Tool is not available.');
   }
 
-  releaseContext(context: ExternalExecutionContext, principal: VerifiedMcpInboundPrincipal): void {
+  async releaseContext(context: ExternalExecutionContext, principal: VerifiedAccessIdentity): Promise<void> {
     nodeExternal.releaseExternalNodeContext(principal, context);
+    await mcpExternal.releaseMcpExternalContext(principal, context);
   }
 
   private async sessionAction(
-    context: ExternalExecutionContext, principal: VerifiedMcpInboundPrincipal, args: Record<string, unknown>,
+    context: ExternalExecutionContext, principal: VerifiedAccessIdentity, args: Record<string, unknown>,
   ): Promise<CallToolResult> {
     const action = args.action;
     const fields = action === 'list' ? ['action', 'start', 'count']
       : action === 'read' ? ['action', 'sessionId', 'start', 'count', 'previewLength']
-        : action === 'send' ? ['action', 'sessionId', 'message'] : [];
+        : action === 'send' ? ['action', 'sessionId', 'message', 'allowReply', 'reply'] : [];
     if (!fields.length || !fieldsOnly(args, fields)
       || (action !== 'list' && (typeof args.sessionId !== 'string' || !args.sessionId))
       || (action === 'send' && (typeof args.message !== 'string' || !args.message.trim()))
+      || (args.reply !== undefined && typeof args.reply !== 'boolean')
+      || (args.allowReply !== undefined && typeof args.allowReply !== 'boolean')
       || (action !== 'send' && ((args.start !== undefined && (!Number.isSafeInteger(args.start) || (action === 'list' && (args.start as number) < 0)))
         || (args.count !== undefined && (!Number.isInteger(args.count) || (args.count as number) < 1 || (args.count as number) > 50))
         || (args.previewLength !== undefined && (!Number.isInteger(args.previewLength) || (args.previewLength as number) < 1000 || (args.previewLength as number) > 20000))))) {
       return toolError('Invalid Session action arguments.');
+    }
+    if (args.allowReply !== undefined && args.reply !== undefined && args.allowReply !== args.reply) {
+      return toolError('allowReply and legacy reply must agree when both are provided.');
     }
     try {
       const result = action === 'list'
@@ -162,7 +169,7 @@ export class McpInboundMcpCatalog implements McpInboundCatalog {
         : action === 'read'
           ? await sessionExternal.readExternalSession(principal, context, args.sessionId as string,
             args.start as number | undefined, args.count as number | undefined, args.previewLength as number | undefined)
-          : await sessionExternal.sendExternalSession(principal, context, args.sessionId as string, args.message as string);
+          : await sessionExternal.sendExternalSession(principal, context, args.sessionId as string, args.message as string, (args.allowReply ?? args.reply) === true);
       return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result as Record<string, unknown> };
     } catch (error) {
       if (isToolAuthorizationPolicyUnavailable(error)) return toolError('Tool policy is unavailable; Session action failed closed.');
@@ -174,7 +181,7 @@ export class McpInboundMcpCatalog implements McpInboundCatalog {
   }
 
   private async discover(
-    context: ExternalExecutionContext, principal: VerifiedMcpInboundPrincipal,
+    context: ExternalExecutionContext, principal: VerifiedAccessIdentity,
     args: Record<string, unknown>, signal: AbortSignal,
   ): Promise<CallToolResult> {
     const options = discoveryArgs(args);
@@ -204,7 +211,7 @@ export class McpInboundMcpCatalog implements McpInboundCatalog {
         if (signal.aborted) throw new McpInboundSafeError('Discovery was cancelled.');
         let tools: any[];
         try {
-          tools = await mcpExternal.listMcpToolsForExternal(principal, context.id, server.name, signal);
+          tools = await mcpExternal.listMcpToolsForExternal(principal, context, server.name, signal);
         } catch (error) {
           if (isToolAuthorizationPolicyUnavailable(error)) throw new McpInboundSafeError('Tool policy is unavailable; discovery failed closed.');
           totalKnown = false;
@@ -268,7 +275,7 @@ export class McpInboundMcpCatalog implements McpInboundCatalog {
   }
 
   private async nodeAction(
-    context: ExternalExecutionContext, principal: VerifiedMcpInboundPrincipal, args: Record<string, unknown>,
+    context: ExternalExecutionContext, principal: VerifiedAccessIdentity, args: Record<string, unknown>,
   ): Promise<CallToolResult> {
     if (!fieldsOnly(args, ['action', 'nodeId']) || !['list', 'status', 'select'].includes(String(args.action))
       || (args.action === 'select' ? typeof args.nodeId !== 'string' || !args.nodeId : args.nodeId !== undefined)) {
@@ -285,7 +292,7 @@ export class McpInboundMcpCatalog implements McpInboundCatalog {
   }
 
   private async execResult(
-    context: ExternalExecutionContext, principal: VerifiedMcpInboundPrincipal, args: Record<string, unknown>,
+    context: ExternalExecutionContext, principal: VerifiedAccessIdentity, args: Record<string, unknown>,
   ): Promise<CallToolResult> {
     if (!fieldsOnly(args, ['execId', 'limit']) || (args.execId !== undefined && (typeof args.execId !== 'string' || !args.execId))
       || (args.limit !== undefined && (!Number.isInteger(args.limit) || (args.limit as number) < 1 || (args.limit as number) > 20))) {
@@ -301,7 +308,7 @@ export class McpInboundMcpCatalog implements McpInboundCatalog {
   }
 
   private async call(
-    context: ExternalExecutionContext, principal: VerifiedMcpInboundPrincipal,
+    context: ExternalExecutionContext, principal: VerifiedAccessIdentity,
     args: Record<string, unknown>, signal: AbortSignal,
   ): Promise<CallToolResult> {
     if (!fieldsOnly(args, ['toolId', 'args']) || typeof args.toolId !== 'string' || !args.toolId
@@ -349,7 +356,7 @@ export class McpInboundMcpCatalog implements McpInboundCatalog {
     }
     try {
       // The authoritative Main service verifies the principal and the exact concrete policy on every call.
-      const result = await mcpExternal.callMcpToolForExternal(principal, context.id, resolved.server, resolved.name, args.args as Record<string, unknown> || {}, signal);
+      const result = await mcpExternal.callMcpToolForExternal(principal, context, resolved.server, resolved.name, args.args as Record<string, unknown> || {}, signal);
       if (result && typeof result === 'object' && Array.isArray(result.content)) return result as CallToolResult;
       const text = typeof result === 'string' ? result : JSON.stringify(result);
       return { content: [{ type: 'text', text: text || '' }] };

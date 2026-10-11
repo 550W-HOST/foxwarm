@@ -3,6 +3,8 @@
 Files: src/nodeExecutionService.ts, src/nodeExecution.ts, src/nodeExecution.test.ts
 Secondary files: src/llm.ts, src/tools/nodeTools.ts, src/tools/unifiedTools.test.ts, src/toolscript.test.ts, src/nodeExecutionExternalPlacement.test.ts, src/index.ts
 
+The `node-execution@6` execute method retains settled receipts on ordinary caller cancellation. Main pre-effect admission checks the signal; only providers advertising `supportsExecWaitCancellation` receive it during internal exec waiting, avoiding an unsupported adapter's ordinary-Stop abort-to-kill path while forwarding independent hard cancellation for its existing deadline/owner-loss cleanup. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
+
 ## Purpose
 
 Provides the versioned RPC boundary for canonical Node tool execution over provider backends and bounded topology, lifecycle, and file-transfer operations. Main-local callers use a local transport; a Session worker borrows its one reverse transport to reach the same Main-owned handler. Main resolves every non-master Node through the generic provider registry, while the colocated `master` Node preserves direct local named-handler execution.

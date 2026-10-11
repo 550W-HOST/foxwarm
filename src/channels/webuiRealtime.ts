@@ -1,5 +1,7 @@
+import { webUiSessionScopeAllows } from '../webuiSessionScope';
 import http from 'node:http';
 import type { WebSocket } from 'ws';
+import type { HttpAuthContext } from '../httpServer';
 import { LOG_SOCKET_BUFFER_BYTES, type LogSubscription } from './webuiLogs';
 
 export const WEBUI_REALTIME_PATH = '/api/webui/stream';
@@ -17,12 +19,15 @@ type ResolvedRealtimeIds = {
   canonicalIds: string[];
   missingIds: string[];
   requestedToCanonical: Record<string, string>;
+  agentsByCanonicalId?: Record<string, string>;
 };
 
 export type WebUiRealtimeSocket = Pick<WebSocket, 'readyState' | 'send' | 'close' | 'ping' | 'on'> & { bufferedAmount?: number };
 
 export type WebUiRealtimeDependencies = {
   checkToken: (req: http.IncomingMessage) => boolean;
+  isAuthCurrent?: (auth: HttpAuthContext) => boolean;
+  getAuthContext?: (req: http.IncomingMessage) => Promise<HttpAuthContext | null>;
   resolveIds: (ids: string[]) => ResolvedRealtimeIds;
   loadSessionState: (canonicalSessionId: string) => Promise<WebUiRealtimeEnvelope>;
   loadModelStreamSnapshot?: (canonicalSessionId: string) => Promise<WebUiRealtimeEnvelope>;
@@ -34,6 +39,8 @@ export type WebUiRealtimeDependencies = {
 
 type WebUiRealtimeClient = {
   socket: WebUiRealtimeSocket;
+  auth: HttpAuthContext;
+  request: http.IncomingMessage;
   closed: boolean;
   listActive: boolean;
   listIds: Set<string>;
@@ -116,6 +123,14 @@ export class WebUiRealtimeHub {
     this.dependencies = dependencies;
   }
 
+  private webUiCanAccessSession(auth: Extract<HttpAuthContext, { role: 'webui' }>, sessionId: string): boolean {
+    return webUiSessionScopeAllows(auth.sessionIds, sessionId, id => {
+      const resolved = this.dependencies.resolveIds([id]);
+      const canonicalId = resolved.requestedToCanonical[id];
+      return canonicalId ? { id: canonicalId, agent: resolved.agentsByCanonicalId?.[canonicalId] } : undefined;
+    });
+  }
+
   hasSessionSubscribers(sessionId: string): boolean {
     for (const client of this.clients) {
       if (!client.closed && client.sessionIds.has(sessionId)) return true;
@@ -127,14 +142,27 @@ export class WebUiRealtimeHub {
     return this.clients.size;
   }
 
+  revokeIdentities(identityIds: ReadonlySet<string>): void {
+    for (const client of [...this.clients]) {
+      if (client.auth.role !== 'webui' || !identityIds.has(client.auth.identityId)) continue;
+      try { client.socket.close(1008, 'Access changed'); } catch {}
+      this.cleanupClient(client);
+    }
+  }
+
   async handleConnection(socket: WebUiRealtimeSocket, req: http.IncomingMessage): Promise<void> {
-    if (!this.dependencies.checkToken(req)) {
+    const auth = this.dependencies.getAuthContext
+      ? await this.dependencies.getAuthContext(req)
+      : this.dependencies.checkToken(req) ? { role: 'admin' as const } : null;
+    if (!auth || this.dependencies.isAuthCurrent?.(auth) === false) {
       socket.close(1008, 'Unauthorized');
       return;
     }
 
     const client: WebUiRealtimeClient = {
       socket,
+      auth,
+      request: req,
       closed: false,
       listActive: false,
       listIds: new Set(),
@@ -200,10 +228,26 @@ export class WebUiRealtimeHub {
   private async applySubscriptions(client: WebUiRealtimeClient, message: SetSubscriptionsMessage): Promise<void> {
     if (client.closed || message.revision < client.requestedRevision || message.revision <= client.revision) return;
 
+    if (this.dependencies.getAuthContext) {
+      const fresh = await this.dependencies.getAuthContext(client.request);
+      if (!fresh || (client.auth.role === 'webui' && (fresh.role !== 'webui' || fresh.identityId !== client.auth.identityId))) {
+        throw new Error('Realtime credentials are no longer valid.');
+      }
+      client.auth = fresh;
+    }
     if (message.logs && !this.dependencies.subscribeLogs) throw new Error('Logs are unavailable.');
     if (client.logsId !== message.logs?.id) { client.stopLogs?.(); client.stopLogs = undefined; client.logsId = undefined; }
     const resolvedList = this.dependencies.resolveIds(message.sessionListIds);
     const resolvedSessions = this.dependencies.resolveIds(message.sessionIds);
+    if (client.auth.role === 'webui') {
+      // The WebUI identity UI never subscribes to the catalog. Reject rather than
+      // filtering to prevent list snapshots or invalidations leaking topology.
+      if (message.logs || message.sessionListActive || message.sessionListIds.length
+        || message.sessionIds.some(id => !resolvedSessions.requestedToCanonical[id]
+          || !this.webUiCanAccessSession(client.auth as Extract<HttpAuthContext, { role: 'webui' }>, id))) {
+        throw new Error('WebUI subscription is not bound to this session.');
+      }
+    }
     const previousSessionIds = client.sessionIds;
     const carriesSupersededInitialization = client.initializing;
     client.revision = message.revision;
@@ -232,6 +276,16 @@ export class WebUiRealtimeHub {
     ]);
     if (client.closed || client.revision !== revision || client.requestedRevision !== revision) {
       return;
+    }
+    if (client.auth.role === 'webui') {
+      const latest = this.dependencies.resolveIds(message.sessionIds);
+      if (message.sessionIds.some(id => !latest.requestedToCanonical[id]
+        || !this.webUiCanAccessSession(client.auth as Extract<HttpAuthContext, { role: 'webui' }>, id)
+        || latest.requestedToCanonical[id] !== resolvedSessions.requestedToCanonical[id])
+        || sessionSnapshots.some((snapshot, index) => snapshot.type === 'session-state'
+          && (snapshot.session as { id?: string } | undefined)?.id !== resolvedSessions.canonicalIds[index])) {
+        throw new Error('WebUI session binding changed during subscription.');
+      }
     }
 
     if (listSnapshot) this.safeSend(client, listSnapshot);
@@ -269,6 +323,18 @@ export class WebUiRealtimeHub {
 
   private safeSend(client: WebUiRealtimeClient, payload: WebUiRealtimeEnvelope): void {
     if (client.closed || !socketIsOpen(client.socket)) return;
+    if (this.dependencies.isAuthCurrent?.(client.auth) === false) {
+      try { client.socket.close(1008, 'Access changed'); } catch {}
+      this.cleanupClient(client);
+      return;
+    }
+    if (client.auth.role === 'webui' && payload.sessionId
+      && (!this.webUiCanAccessSession(client.auth, payload.sessionId)
+        || this.dependencies.resolveIds([payload.sessionId]).requestedToCanonical[payload.sessionId] !== payload.sessionId)) {
+      try { client.socket.close(1012, 'Session identity changed'); } catch {}
+      this.cleanupClient(client);
+      return;
+    }
     try {
       client.socket.send(JSON.stringify(payload));
     } catch {
@@ -287,13 +353,40 @@ export class WebUiRealtimeHub {
   }
 
   private startKeepalive(client: WebUiRealtimeClient): () => void {
+    let checking = false;
     const timer = setInterval(() => {
       if (client.closed || !socketIsOpen(client.socket)) return;
-      try {
-        client.socket.ping();
-      } catch {
+      const ping = () => {
+        if (client.closed || !socketIsOpen(client.socket)) return;
+        try { client.socket.ping(); } catch { this.cleanupClient(client); }
+      };
+      if (client.auth.role !== 'webui' || !this.dependencies.getAuthContext) return ping();
+      const identityId = client.auth.identityId;
+      if (checking) return;
+      checking = true;
+      void this.dependencies.getAuthContext(client.request).then(auth => {
+        if (client.closed) return;
+        if (auth?.role !== 'webui' || auth.identityId !== identityId) {
+          try { client.socket.close(1008, 'Unauthorized'); } catch {}
+          this.cleanupClient(client);
+          return;
+        }
+        if ([...client.sessionIds].some(id => {
+          const current = this.dependencies.resolveIds([id]).requestedToCanonical[id];
+          return !current || !this.webUiCanAccessSession(auth, id) || current !== id;
+        })) {
+          // The old canonical stream has ended. Reconnect so its requested ID
+          // can resolve through the committed alias to the new canonical ID.
+          try { client.socket.close(1012, 'Session identity changed'); } catch {}
+          this.cleanupClient(client);
+          return;
+        }
+        client.auth = auth;
+        ping();
+      }).catch(() => {
+        try { client.socket.close(1008, 'Unauthorized'); } catch {}
         this.cleanupClient(client);
-      }
+      }).finally(() => { checking = false; });
     }, this.dependencies.keepaliveIntervalMs ?? WEBUI_REALTIME_KEEPALIVE_MS);
     timer.unref?.();
     return () => clearInterval(timer);

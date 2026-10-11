@@ -29,6 +29,7 @@ const {
   isCollapsibleSystemText,
   isLightweightStructuredSystem,
   isSystemLikeText,
+  getLlmErrorMessageDetails,
   isLightweightSystemTextLine,
   getSystemMessageKind,
   getSystemMessagePreviewDescriptor,
@@ -140,6 +141,20 @@ test('foxwarm snapshot system tags are system-like and collapsible, not lightwei
   })
 })
 
+test('new and persisted external-input headers are heavy system cards, not direct-user metadata', () => {
+  for (const header of ['<foxwarm-system kind="external-input">', '<foxwarm-system kind="external-input" />']) {
+    assert.equal(isLightweightStructuredSystem(header), false)
+    assert.equal(isHeavySystemTextLine(header), true)
+    assert.equal(isCollapsibleSystemText(header), true)
+    assert.deepEqual(getSystemMessagePreviewDescriptor({ role: 'user', parts: [{ system: header }, { text: 'external body' }] }), {
+      kind: 'external-input', source: 'foxwarm-system', previewPrefix: '',
+    })
+  }
+  for (const kind of ['time', 'session', 'channel-mode']) {
+    assert.equal(isLightweightStructuredSystem(`<foxwarm-system kind="${kind}" />`), true)
+  }
+})
+
 test('legacy system prefixes remain supported', () => {
   assert.equal(isSystemLikeText('[SYSTEM: current time = now]'), true)
   assert.equal(isSystemLikeText('[FROM: telegram:chat]'), true)
@@ -201,4 +216,48 @@ test('system preview descriptors use only supported non-empty wrapper metadata',
   assert.deepEqual(descriptor('<foxwarm-message type="channel">\nold wrapper\n</foxwarm-message>\n<foxwarm-system kind="time" />\n<foxwarm-system kind="session" />\n<foxwarm-system kind="event" type="wait-timeout">\ntimeout\n</foxwarm-system>'), {
     kind: 'event', source: 'foxwarm-system', previewPrefix: 'wait-timeout: ',
   })
+})
+
+test('LLM retry metadata strips the warning prefix and counts logical body lines', () => {
+  const message = {
+    role: 'model',
+    modelVisible: false,
+    parts: [{ text: '⚠️ LLM Error: Attempt 1/5 failed\nAttempt 2/5 failed\n\nAttempt 3/5 failed' }],
+    __meta: { noticeType: 'llm-retry' },
+  }
+  assert.deepEqual(getLlmErrorMessageDetails(message), {
+    bodyText: 'Attempt 1/5 failed\nAttempt 2/5 failed\n\nAttempt 3/5 failed',
+    lineCount: 4,
+  })
+  assert.deepEqual(getSystemMessagePreviewDescriptor(message), {
+    kind: 'llm error', source: 'legacy', previewPrefix: '', bodyText: 'Attempt 1/5 failed\nAttempt 2/5 failed\n\nAttempt 3/5 failed', lineCount: 4,
+  })
+})
+
+test('LLM retry metadata classifies malformed prefix text without deleting its body', () => {
+  const message = {
+    role: 'model',
+    parts: [{ text: 'Attempt 4/5 failed without warning prefix\nsecond line' }],
+    __meta: { noticeType: 'llm-retry' },
+  }
+  assert.deepEqual(getLlmErrorMessageDetails(message), {
+    bodyText: 'Attempt 4/5 failed without warning prefix\nsecond line',
+    lineCount: 2,
+  })
+})
+
+test('LLM error classification requires retry metadata and a single text-only model part', () => {
+  const cases = [
+    { role: 'model', parts: [{ text: '⚠️ LLM Error: ordinary text without retry metadata' }] },
+    { role: 'model', parts: [{ text: 'ordinary assistant text mentions llm error' }], __meta: { noticeType: 'other' } },
+    { role: 'model', parts: [{ text: '⚠️ LLM Error: body' }, { text: 'second part' }], __meta: { noticeType: 'llm-retry' } },
+    { role: 'model', parts: [{ text: '⚠️ LLM Error: body', functionCall: { name: 'exec', args: {} } }], __meta: { noticeType: 'llm-retry' } },
+    { role: 'user', parts: [{ text: '⚠️ LLM Error: user text' }], __meta: { noticeType: 'llm-retry' } },
+    { role: 'tool', parts: [{ functionResponse: { name: 'exec', response: { error: 'llm error: tool failure' } } }], __meta: { noticeType: 'llm-retry' } },
+  ]
+
+  for (const message of cases) {
+    assert.equal(getLlmErrorMessageDetails(message), null, JSON.stringify(message))
+    assert.notEqual(getSystemMessagePreviewDescriptor(message).kind, 'llm error', JSON.stringify(message))
+  }
 })

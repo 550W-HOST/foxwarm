@@ -159,7 +159,7 @@ test('stop waits for the active exec segment and skips the following barrier too
     const result = await resultPromise;
     const responses = functionResponses(result);
     assert.deepEqual(responses.map(item => item.tool_use_id), ['a', 'b', 'barrier']);
-    assert.match(String(responses[2].response.error), /not started because the session was stopped/);
+    assert.match(String(responses[2].response.error), /not started/);
     assert.equal(responses[2].executionTiming, undefined, 'skipped tools must not claim a duration');
   } finally {
     session.stopping = false;
@@ -281,5 +281,136 @@ test('adjacent exec segment enforces the internal concurrency limit of four', as
     (nodesManager as any).getNode = originalGetNode;
     (nodesManager as any).executeTool = originalExecuteTool;
     await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
+test('Stop keeps started exec receipts and skips the unstarted tail of the same parallel queue', async () => {
+  const sessionId = makeSessionId('parallel_stop_tail');
+  const session = await createSession(sessionId);
+  session.currentNode = 'remote-stop-tail';
+  const originalGetNode = nodesManager.getNode;
+  const originalExecute = nodesManager.executeTool;
+  const releases: Array<(value: string) => void> = [];
+  const starts: string[] = [];
+  let fourStarted!: () => void;
+  const started = new Promise<void>(resolve => { fourStarted = resolve; });
+  (nodesManager as any).getNode = () => ({ id: session.currentNode, ws: {}, tools: new Set(['exec']) });
+  (nodesManager as any).executeTool = async () => new Promise<string>(resolve => {
+    releases.push(resolve);
+    if (releases.length === 4) fourStarted();
+  });
+  try {
+    const pending = executeTools(Array.from({ length: 6 }, (_, i) => ({ id: `stop-${i}`, name: 'exec', args: { command: String(i) } })),
+      { sessionId, session, onToolStart: ({ id }: any) => starts.push(id) }, session);
+    await started;
+    session.stopping = true;
+    assert.equal(sessionManager.abortSessionInFlight(sessionId), true);
+    for (const [index, release] of releases.entries()) release(`actual-${index}`);
+    const results = functionResponses(await pending);
+    assert.deepEqual(results.slice(0, 4).map(item => item.response.output), ['actual-0', 'actual-1', 'actual-2', 'actual-3']);
+    assert.equal(releases.length, 4);
+    assert.deepEqual(starts, ['stop-0', 'stop-1', 'stop-2', 'stop-3']);
+    assert(results.slice(4).every(item => /not started/.test(item.response.error) && !item.executionTiming));
+  } finally {
+    session.stopping = false;
+    (nodesManager as any).getNode = originalGetNode;
+    (nodesManager as any).executeTool = originalExecute;
+    await sessionManager.deleteSession(sessionId);
+  }
+});
+
+test('Stop after async preparation prevents a file effect, while Stop during result formatting preserves completed output', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-stop-settlement-'));
+  const sessionId = makeSessionId('stop_settlement');
+  const session = await createSession(sessionId, root);
+  const forbidden = path.join(root, 'must-not-write');
+  const { createExecRuntime } = await import('./execManager');
+  const runtime = createExecRuntime({ getDefaultCwd: () => root, getExecTempDir: () => path.join(root, 'exec') });
+  let formattingStarted!: () => void;
+  const formatting = new Promise<void>(resolve => { formattingStarted = resolve; });
+  let releaseFormatting!: () => void;
+  const release = new Promise<void>(resolve => { releaseFormatting = resolve; });
+  const originalFormat = runtime.buildForegroundExecResult;
+  runtime.buildForegroundExecResult = async (...args) => {
+    const actual = await originalFormat(...args);
+    formattingStarted();
+    await release;
+    return actual;
+  };
+  try {
+    const prepared = await executeTools([{ id: 'prepared', name: 'write', args: { filePath: forbidden, content: 'never' } }], {
+      sessionId, session, onToolStart: async () => {
+        await Promise.resolve();
+        session.stopping = true;
+        sessionManager.abortSessionInFlight(sessionId);
+      },
+    }, session);
+    assert.match(functionResponses(prepared)[0].response.error, /not started/);
+    assert.equal(await fs.pathExists(forbidden), false);
+    session.stopping = false;
+    const pending = executeTools([{ id: 'complete', name: 'exec', args: { command: 'printf real-result' } }],
+      { sessionId, session, execRuntime: runtime }, session);
+    await formatting;
+    session.stopping = true;
+    assert.equal(sessionManager.abortSessionInFlight(sessionId), true);
+    releaseFormatting();
+    assert.match(functionResponses(await pending)[0].response.output, /real-result[\s\S]*Exit code: 0/);
+    assert.equal(runtime.listRunningExecs().length, 0);
+  } finally {
+    releaseFormatting();
+    await runtime.shutdown();
+    session.stopping = false;
+    await sessionManager.deleteSession(sessionId);
+    await fs.remove(root);
+  }
+});
+
+test('Stop ends native exec waiting with partial output and its real background identity, without killing the command', { timeout: 15_000 }, async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-stop-exec-wait-'));
+  const sessionId = makeSessionId('stop_exec_wait');
+  const session = await createSession(sessionId, root);
+  const ready = path.join(root, 'ready');
+  const release = path.join(root, 'release');
+  let completed!: (message: string) => void;
+  const notification = new Promise<string>(resolve => { completed = resolve; });
+  const { createExecRuntime } = await import('./execManager');
+  const runtime = createExecRuntime({ getDefaultCwd: () => root, getExecTempDir: () => path.join(root, 'exec'),
+    completionDispatcher: async (_entry, _status, message) => { completed(message); },
+  });
+  await runtime.initialize();
+  const command = `printf partial; touch '${ready}'; while [ ! -f '${release}' ]; do sleep 0.05; done; printf finished`;
+  const pending = executeTools([{ id: 'active', name: 'exec', args: { command, timeout: 60 } },
+    { id: 'tail', name: 'write', args: { filePath: path.join(root, 'forbidden'), content: 'never' } }],
+    { sessionId, session, execRuntime: runtime }, session);
+  try {
+    const deadline = Date.now() + 5000;
+    while (!await fs.pathExists(ready)) {
+      if (Date.now() > deadline) throw new Error('Managed test command did not become ready.');
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    const before = Date.now();
+    session.stopping = true;
+    assert.equal(sessionManager.abortSessionInFlight(sessionId), true);
+    const result = functionResponses(await pending);
+    assert(Date.now() - before < 1500, 'Stop must not wait for the original 60-second timeout');
+    assert.match(result[0].response.output, /partial[\s\S]*Stop or Run queued[\s\S]*not killed/);
+    assert.doesNotMatch(result[0].response.output, /exceed|longer than 60|timeout.*60/i);
+    const entry = runtime.listRunningExecs()[0];
+    assert(entry && entry.notifyOnCompletion);
+    assert.match(result[0].response.output, new RegExp(`execId: ${entry.id}`));
+    assert.equal(await fs.pathExists(path.join(root, 'forbidden')), false);
+    assert.equal(sessionManager.abortSessionInFlight(sessionId), false);
+    await fs.writeFile(release, 'finish normally');
+    assert(await runtime.waitForExecCompletion(entry.id, 5000));
+    await runtime.reconcileNow();
+    assert.match(await notification, /finished[\s\S]*Exit code: 0/);
+    assert.equal(runtime.listRunningExecs().length, 0);
+  } finally {
+    await fs.writeFile(release, 'finish normally');
+    await pending.catch(() => {});
+    await runtime.shutdown();
+    session.stopping = false;
+    await sessionManager.deleteSession(sessionId);
+    await fs.remove(root);
   }
 });

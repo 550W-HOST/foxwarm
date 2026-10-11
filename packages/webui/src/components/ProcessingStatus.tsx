@@ -1,5 +1,6 @@
 import { memo } from 'react'
 import RuntimeBusySpinner from './RuntimeBusySpinner'
+import type { TimelineView } from '../chatPreferences'
 import { getRuntimeStateSummary, type SessionRuntimeState } from '../sessionRuntimeState'
 
 interface ProcessingStatusProps {
@@ -9,6 +10,7 @@ interface ProcessingStatusProps {
   turnIncomplete: boolean
   loading: boolean
   isMobile: boolean
+  timelineView?: TimelineView
   onStop?: () => void
   onRunQueued?: () => void
   onContinue?: () => void
@@ -23,6 +25,7 @@ const ProcessingStatus = memo(function ProcessingStatus({
   turnIncomplete,
   loading,
   isMobile,
+  timelineView,
   onStop,
   onRunQueued,
   onContinue,
@@ -33,7 +36,12 @@ const ProcessingStatus = memo(function ProcessingStatus({
   const showRuntimeStatus = runtimeStateName !== 'idle' && !loading
   const runtimeSummary = getRuntimeStateSummary(runtimeState, sessionBusy)
   const isCompacting = runtimeStateName === 'requesting-model' && runtimeState?.active?.phase === 'compaction'
-  const visibleRuntimeSummary = isCompacting
+  const visibleRuntimeSummary = timelineView === 'conversation' && (runtimeStateName === 'requesting-model' || runtimeStateName === 'running-tool')
+    ? isCompacting ? 'Compacting…' : 'Working…'
+    : timelineView === 'conversation' && runtimeStateName === 'waiting'
+    ? runtimeState?.waiting?.reason ? `Waiting · ${runtimeState.waiting.reason}`
+      : runtimeState?.waiting?.waitingFor === 'input' || runtimeState?.waiting?.waitForInput ? 'Waiting for input' : 'Waiting'
+    : isCompacting
     ? 'Compacting...'
     : runtimeStateName === 'requesting-model'
     ? runtimeSummary.replace(/^thinking\b/, 'Thinking...')
@@ -90,10 +98,10 @@ const ProcessingStatus = memo(function ProcessingStatus({
                 </span>
                 {(isActive || sessionQueueLength > 0) && (
                   <div className={`ml-auto flex items-center gap-1 ${tone.controls}`}>
-                    {isActive && (
+                    {isActive && onStop && (
                       <button type="button" onClick={onStop} className={controlButtonClass}>Stop</button>
                     )}
-                    {sessionQueueLength > 0 && (
+                    {sessionQueueLength > 0 && onRunQueued && (
                       <button type="button" onClick={onRunQueued} className={controlButtonClass}>Run queued</button>
                     )}
                   </div>
@@ -114,8 +122,8 @@ const ProcessingStatus = memo(function ProcessingStatus({
               {turnIncomplete && <span className="w-2 h-2 bg-fw-warning dark:bg-fw-warning rounded-full" data-processing-status-dot="static" />}
               <span>{turnIncomplete ? `Turn interrupted${sessionQueueLength > 0 ? ` • ${queuedLabel} pending` : ''}` : `${queuedLabel} pending`}</span>
               <div className="flex items-center gap-1 text-fw-warning dark:text-fw-warning">
-                {turnIncomplete && <button type="button" onClick={onContinue} className={controlButtonClass}>Continue</button>}
-                {sessionQueueLength > 0 && <button type="button" onClick={onRunQueued} className={controlButtonClass}>Run queued</button>}
+                {turnIncomplete && onContinue && <button type="button" onClick={onContinue} className={controlButtonClass}>Continue</button>}
+                {sessionQueueLength > 0 && onRunQueued && <button type="button" onClick={onRunQueued} className={controlButtonClass}>Run queued</button>}
               </div>
             </div>
           </div>

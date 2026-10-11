@@ -86,6 +86,7 @@ function assertDockerMountPath(value: string): void {
 }
 
 export class DockerWorktreeNodeProvider implements NodeProvider {
+  readonly supportsExecWaitCancellation = true;
   readonly id: string;
   readonly [FIRST_PARTY_DOCKER_EXTERNAL_OWNER] = true;
   private readonly stateDir: string;
@@ -689,6 +690,7 @@ export class DockerWorktreeNodeProvider implements NodeProvider {
       session: { id: request.sourceSessionId, agent: request.context.agent, currentNode: request.nodeId, ...(request.context.cwd ? { cwd: request.context.cwd } : {}) },
       runtimeNodeId: request.nodeId,
       execRuntime: runtime,
+      signal: options?.signal,
       detachedReadOnlySession: true,
       skipExecPreSave: true,
       deferSessionCwdSync: request.context.deferSessionCwdSync === true,
@@ -715,7 +717,7 @@ export class DockerWorktreeNodeProvider implements NodeProvider {
       const entry = await runtime.startPersistentExec({
         execId: id, command, externalOwner: request.owner, nodeId: node.nodeId,
         cwd: request.args.cwd, sessionCwd: request.context.cwd,
-        onBeforeProcessLaunch: () => { options?.assertExternalOwnerActive?.(); launchAttempted = true; },
+        onBeforeProcessLaunch: () => { options?.signal?.throwIfAborted(); options?.assertExternalOwnerActive?.(); launchAttempted = true; },
       });
       const status = await runtime.waitForExecCompletion(entry.id, timeout.effectiveSeconds * 1000);
       if (status) {

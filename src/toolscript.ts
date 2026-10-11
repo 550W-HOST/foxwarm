@@ -1,3 +1,4 @@
+import { throwIfToolStopped, toolFailureMessage } from './toolCallControls';
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
@@ -11,13 +12,14 @@ import * as sessionManager from './sessionManager';
 import { checkPathAccess } from './isolatedCheck';
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './tools/placement';
 import { resolveObjectArgWithJsonFallback } from './jsonObjectArgs';
-import type { Message, MessagePart, Session, ToolScriptSubCall } from './types';
+import type { Message, MessagePart, Session, ToolScriptSubCall, LinkedTaskCompletion } from './types';
 import { RpcError } from './rpc';
 import { isToolAuthorizationPolicyUnavailable } from './toolAuthorization';
 
 type ToolArgs = Record<string, any>;
 
 type ToolContext = {
+  signal?: AbortSignal;
   sessionId?: string;
   session?: Session;
   broadcast?: (text: string, options?: any) => Promise<void>;
@@ -25,6 +27,7 @@ type ToolContext = {
   toolScriptRunId?: string;
   toolUseId?: string;
   onToolScriptSubCalls?: (subCalls: ToolScriptSubCall[]) => void;
+  onLinkedTaskCompletion?: (completion: LinkedTaskCompletion) => void;
   sessionPlacement?: 'local' | 'session-worker';
   programmatic?: true;
 };
@@ -151,7 +154,7 @@ type ToolScriptResult = {
 
 type ToolScriptExecutionResult = { stdout?: string } & Pick<ToolScriptResult,
   'status' | 'runId' | 'result' | 'error' | 'waitingReason' | 'continuationId' | 'question' | 'waitingFor'
-  | 'imageParts' | 'inlineData' | 'inlineDataItems'>;
+  | 'imageParts' | 'inlineData' | 'inlineDataItems'> & { __toolPostAction?: { completedLinkedTask: LinkedTaskCompletion } };
 
 type RuntimeState = {
   stdoutParts: string[];
@@ -479,8 +482,9 @@ function buildCallToolWrapperArgs(positionalArgs: any[], kwargs: Record<string, 
     }
 
     return {
-      source: metadata.source || (NODE_ENVIRONMENT_BUILTIN_NAMES.includes(first as any) ? 'node' : 'builtin'),
-      name: first,
+      ...(first.includes(':')
+        ? { toolId: first, ...(metadata.source !== undefined ? { source: metadata.source } : {}) }
+        : { source: metadata.source || (NODE_ENVIRONMENT_BUILTIN_NAMES.includes(first as any) ? 'node' : 'builtin'), name: first }),
       ...(metadata.toolId !== undefined ? { toolId: metadata.toolId } : {}),
       ...(metadata.server !== undefined ? { server: metadata.server } : {}),
       ...(metadata.nodeId !== undefined ? { nodeId: metadata.nodeId } : {}),
@@ -716,6 +720,18 @@ function buildBaseResult(run: ToolScriptRunRecord): ToolScriptResult {
   };
 }
 
+/** Forward only completion receipts emitted by the Task facade in this execution slice. */
+async function executeWithTaskCompletion(ctx: ToolContext, execute: (context: ToolContext) => Promise<ToolScriptResult>): Promise<ToolScriptExecutionResult> {
+  let completion: LinkedTaskCompletion | undefined;
+  const result = await execute({ ...ctx, onLinkedTaskCompletion: signal => {
+    completion = { ...signal };
+    ctx.onLinkedTaskCompletion?.({ ...signal });
+  } });
+  return { ...projectExecutionResult(result, ctx),
+    ...(completion ? { __toolPostAction: { completedLinkedTask: completion } } : {}),
+  };
+}
+
 /** Keep execution responses lean; complete diagnostics remain in the persisted run. */
 function projectExecutionResult(result: ToolScriptResult, ctx: ToolContext): ToolScriptExecutionResult {
   ctx.onToolScriptSubCalls?.((result.subCalls || []).map(subCall => ({ ...subCall })));
@@ -854,24 +870,15 @@ function normalizeErrorMessage(error: any, record?: ToolScriptRunRecord, runtime
     return augmentWithContext('Unknown ToolScript error');
   }
   if (typeof error === 'string') {
-    if (/Snapshot has already been resumed/i.test(error)) {
-      return augmentWithContext(`${error}\n\nThis usually indicates a ToolScript runtime/snapshot lifecycle failure rather than a literal double-resume in user code. Repeated host calls and resource-limit exhaustion are common triggers.`);
-    }
     return augmentWithContext(error);
   }
   if (typeof error?.display === 'function') {
     try {
       const displayText = String(error.display('traceback'));
-      if (/Snapshot has already been resumed/i.test(displayText)) {
-        return augmentWithContext(`${displayText}\n\nThis usually indicates a ToolScript runtime/snapshot lifecycle failure rather than a literal double-resume in user code. Repeated host calls and resource-limit exhaustion are common triggers.`);
-      }
       return augmentWithContext(displayText);
     } catch {}
   }
   if (typeof error?.message === 'string' && error.message) {
-    if (/Snapshot has already been resumed/i.test(error.message)) {
-      return augmentWithContext(`${error.message}\n\nThis usually indicates a ToolScript runtime/snapshot lifecycle failure rather than a literal double-resume in user code. Repeated host calls and resource-limit exhaustion are common triggers.`);
-    }
     return augmentWithContext(error.message);
   }
   if (typeof error?.toString === 'function') {
@@ -908,7 +915,7 @@ function projectOneShotResultParts(allParts: MessagePart[] | undefined): Message
   return parts;
 }
 
-async function requestModelWithoutContext(prompt: string, session: Session, model?: string): Promise<{ text: string; parts: MessagePart[] }> {
+async function requestModelWithoutContext(prompt: string, session: Session, model?: string, signal?: AbortSignal): Promise<{ text: string; parts: MessagePart[] }> {
   const result = await llm.requestLlmOnce({
     contents: [{
       role: 'user',
@@ -923,6 +930,7 @@ async function requestModelWithoutContext(prompt: string, session: Session, mode
     notifySessionEvents: false,
     registerAbortController: false,
     purpose: 'toolscript-one-shot',
+    abortSignal: signal,
   });
 
   return {
@@ -1099,6 +1107,7 @@ async function executeScriptHostCall(
   state: RuntimeState,
   ctx: ToolContext,
 ): Promise<any> {
+  throwIfToolStopped(ctx.signal);
   const startHostCall = (summaryName?: string) => {
     state.hostCallCount += 1;
     state.lastHostCall = {
@@ -1189,7 +1198,7 @@ async function executeScriptHostCall(
     }
     startHostCall();
     try {
-      const result = await requestModelWithoutContext(prompt, session, model);
+      const result = await requestModelWithoutContext(prompt, session, model, ctx.signal);
       finishHostCall('completed');
       return normalizeMontyValue(result);
     } catch (error: any) {
@@ -1403,6 +1412,7 @@ async function advanceExecution(args: {
     const kwargs = progress.kwargs && typeof progress.kwargs === 'object' ? progress.kwargs : {};
 
     if (functionName === 'ask_agent') {
+      throwIfToolStopped(ctx.signal);
       const questionValue = positionalArgs.length > 0 ? positionalArgs[0] : kwargs.question;
       const question = formatQuestion(questionValue);
       record.snapshotBase64 = await dumpMontySnapshot(progress);
@@ -1416,54 +1426,9 @@ async function advanceExecution(args: {
       return buildBaseResult(record);
     }
 
+    let result: any;
     try {
-      const result = await executeScriptHostCall(functionName, positionalArgs, kwargs, runtimeState, ctx);
-      if (functionName === 'open_managed_session' && result && typeof result === 'object' && (result as any).sessionId && (result as any).leaseId) {
-        upsertManagedLeaseRef(record, {
-          sessionId: String((result as any).sessionId),
-          leaseId: String((result as any).leaseId),
-          ...(ctx.toolScriptRunId ? { controllerRunId: ctx.toolScriptRunId } : {}),
-        });
-      }
-      if (functionName === 'release_managed_session' && result && typeof result === 'object' && (result as any).sessionId) {
-        const leaseId = kwargs.lease_id ?? kwargs.leaseId ?? positionalArgs[1];
-        if (typeof leaseId === 'string') {
-          removeManagedLeaseRef(record, String((result as any).sessionId), leaseId);
-        }
-      }
-      if (result && typeof result === 'object' && (result as any).__toolscriptWaitForManagedEvent) {
-        record.snapshotBase64 = await dumpMontySnapshot(progress);
-        markRunWaiting(record, {
-          reason: 'managed_event',
-          waitingSince: Date.now(),
-          managedEvent: {
-            sessionId: String((result as any).sessionId),
-            leaseId: String((result as any).leaseId),
-            ...(typeof (result as any).expectedRevision === 'number' ? { expectedRevision: (result as any).expectedRevision } : {}),
-            ...((result as any).runMode ? { runMode: (result as any).runMode } : {}),
-            ...((result as any).inboxOrder ? { inboxOrder: (result as any).inboxOrder } : {}),
-          },
-        }, runtimeState);
-        if ((result as any).sessionId && (result as any).leaseId) {
-          upsertManagedLeaseRef(record, {
-            sessionId: String((result as any).sessionId),
-            leaseId: String((result as any).leaseId),
-            ...(ctx.toolScriptRunId ? { controllerRunId: ctx.toolScriptRunId } : {}),
-          });
-        }
-        await saveRun(record);
-        return buildBaseResult(record);
-      }
-      if (shouldPauseForTimeout(record)) {
-        record.snapshotBase64 = await dumpMontySnapshot(progress);
-        markRunWaiting(record, buildTimeoutWaitingState(record, runtimeState, {
-          mode: 'return',
-          value: normalizeMontyValue(result),
-        }), runtimeState);
-        await saveRun(record);
-        return buildBaseResult(record);
-      }
-      progress = await progress.resume(result);
+      result = await executeScriptHostCall(functionName, positionalArgs, kwargs, runtimeState, ctx);
     } catch (error: any) {
       if (isToolAuthorizationPolicyUnavailable(error)) throw error;
       if (shouldPauseForTimeout(record)) {
@@ -1472,14 +1437,62 @@ async function advanceExecution(args: {
           mode: 'exception',
           exception: {
             type: 'RuntimeError',
-            message: error?.message || String(error),
+            message: toolFailureMessage(error, ctx.signal),
           },
         }), runtimeState);
         await saveRun(record);
         return buildBaseResult(record);
       }
-      progress = await progress.resumeError(buildMontyResumeError('RuntimeError', error?.message || String(error)));
+      progress = await progress.resumeError(buildMontyResumeError('RuntimeError', toolFailureMessage(error, ctx.signal)));
+      continue;
     }
+
+    if (functionName === 'open_managed_session' && result && typeof result === 'object' && (result as any).sessionId && (result as any).leaseId) {
+      upsertManagedLeaseRef(record, {
+        sessionId: String((result as any).sessionId),
+        leaseId: String((result as any).leaseId),
+        ...(ctx.toolScriptRunId ? { controllerRunId: ctx.toolScriptRunId } : {}),
+      });
+    }
+    if (functionName === 'release_managed_session' && result && typeof result === 'object' && (result as any).sessionId) {
+      const leaseId = kwargs.lease_id ?? kwargs.leaseId ?? positionalArgs[1];
+      if (typeof leaseId === 'string') {
+        removeManagedLeaseRef(record, String((result as any).sessionId), leaseId);
+      }
+    }
+    if (result && typeof result === 'object' && (result as any).__toolscriptWaitForManagedEvent) {
+      record.snapshotBase64 = await dumpMontySnapshot(progress);
+      markRunWaiting(record, {
+        reason: 'managed_event',
+        waitingSince: Date.now(),
+        managedEvent: {
+          sessionId: String((result as any).sessionId),
+          leaseId: String((result as any).leaseId),
+          ...(typeof (result as any).expectedRevision === 'number' ? { expectedRevision: (result as any).expectedRevision } : {}),
+          ...((result as any).runMode ? { runMode: (result as any).runMode } : {}),
+          ...((result as any).inboxOrder ? { inboxOrder: (result as any).inboxOrder } : {}),
+        },
+      }, runtimeState);
+      if ((result as any).sessionId && (result as any).leaseId) {
+        upsertManagedLeaseRef(record, {
+          sessionId: String((result as any).sessionId),
+          leaseId: String((result as any).leaseId),
+          ...(ctx.toolScriptRunId ? { controllerRunId: ctx.toolScriptRunId } : {}),
+        });
+      }
+      await saveRun(record);
+      return buildBaseResult(record);
+    }
+    if (shouldPauseForTimeout(record)) {
+      record.snapshotBase64 = await dumpMontySnapshot(progress);
+      markRunWaiting(record, buildTimeoutWaitingState(record, runtimeState, {
+        mode: 'return',
+        value: normalizeMontyValue(result),
+      }), runtimeState);
+      await saveRun(record);
+      return buildBaseResult(record);
+    }
+    progress = await progress.resume(result);
   }
 }
 
@@ -1688,7 +1701,7 @@ export async function tool_run_script(args: ToolArgs, ctx: ToolContext): Promise
 
   const runId = newRunId();
   const record = createRunRecord({ runId, mode, session, filePath: filePath || '<inline>', scriptPath, timeoutSecs });
-  return projectExecutionResult(await startRun(record, code, scriptArgs, { ...ctx, sessionId, session, toolScriptRunId: runId }), ctx);
+  return executeWithTaskCompletion(ctx, context => startRun(record, code, scriptArgs, { ...context, sessionId, session, toolScriptRunId: runId }));
 }
 
 export async function tool_start_toolscript_run(args: ToolArgs, ctx: ToolContext): Promise<ToolScriptExecutionResult> {
@@ -1723,10 +1736,10 @@ export async function tool_continue_script(args: ToolArgs, ctx: ToolContext): Pr
   const stdoutBeforeContinue = record.stdout || '';
 
   if (record.waiting.reason === 'agent') {
-    return projectExecutionResult(withStdoutDelta(
-      await resumeRun(record, args?.input, { ...ctx, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue failed'),
+    return executeWithTaskCompletion(ctx, async context => withStdoutDelta(
+      await resumeRun(record, args?.input, { ...context, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue failed'),
       stdoutBeforeContinue,
-    ), ctx);
+    ));
   }
 
   if (record.waiting.reason === 'timeout') {
@@ -1735,15 +1748,15 @@ export async function tool_continue_script(args: ToolArgs, ctx: ToolContext): Pr
       throw new Error(`ToolScript run \`${runId}\` is waiting on timeout but has no pending resume payload.`);
     }
     if (pendingResume.mode === 'return') {
-      return projectExecutionResult(withStdoutDelta(
-        await resumeRun(record, pendingResume.value, { ...ctx, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue after timeout failed'),
+      return executeWithTaskCompletion(ctx, async context => withStdoutDelta(
+        await resumeRun(record, pendingResume.value, { ...context, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue after timeout failed'),
         stdoutBeforeContinue,
-      ), ctx);
+      ));
     }
-    return projectExecutionResult(withStdoutDelta(
-      await resumeRun(record, { __toolscriptResumeException: pendingResume.exception }, { ...ctx, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue after timeout failed'),
+    return executeWithTaskCompletion(ctx, async context => withStdoutDelta(
+      await resumeRun(record, { __toolscriptResumeException: pendingResume.exception }, { ...context, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue after timeout failed'),
       stdoutBeforeContinue,
-    ), ctx);
+    ));
   }
 
   throw new Error(`ToolScript run \`${runId}\` is not waiting for continue_script.`);

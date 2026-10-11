@@ -355,3 +355,12 @@ test('agent metadata deletion removes the durable entry without mutating returne
     });
   });
 });
+
+
+test('legacy Agent policy setter references require explicit permission review', () => {
+  for (const effect of ['allow', 'deny']) {
+    assert.throws(() => normalizeAgentToolRules([{ effect, source: 'builtin', tool: 'set_tool_rules' }]), /obsolete builtin `set_tool_rules`.*broader `set_config`/);
+  }
+  assert.deepEqual(normalizeAgentToolRules([{ effect: 'deny', source: 'mcp', server: 'synthetic', tool: 'set_tool_rules' }]),
+    [{ effect: 'deny', source: 'mcp', server: 'synthetic', tool: 'set_tool_rules' }]);
+});

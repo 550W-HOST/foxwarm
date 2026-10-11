@@ -14,6 +14,8 @@ Use this entry to choose the relevant operation. Read only the linked section ne
 - Memory is stable operating context, not a progress log. Put task-specific procedures and detailed references in docs or skills, with short pointers from memory where needed.
 - Shared inheritance does not move files or private documents. Give another agent an accessible reference rather than assuming it has the source agent's files.
 - Agent isolation and Session Node selection are different operations. A routing choice does not create a security boundary or authorize another environment.
+- Legacy Agent `isolated` authorization is [deprecated and planned for removal](../../docs/code-index/modules/tools-and-permissions.md#d-tools-legacy-isolation-deprecation). Before an approved migration, explicitly decide how to handle its separate guards and persisted automation. [Access-control's offline rules generator](../access-control/references/isolated-rules.md) is a conservative migration baseline, not incoming protection or a requirement to preserve every legacy restriction.
+- This skill owns Agent lifecycle, memory, inheritance, isolation, and Node binding. Entry identities, restricted WebUI Session scope, and generic MCP/internal tool policy belong to [access-control](../access-control/SKILL.md); access grants do not create or migrate Agents.
 - Destructive cleanup needs an explicit target and authority. Check dependencies and the current delete contract before deleting an agent or its data.
 
 ## Choose a workflow
@@ -41,6 +43,8 @@ An edit made in the current conversation normally needs no snapshot refresh: its
 
 ## Related workflows
 
+- Use [access-control](../access-control/SKILL.md) for `access.identities`, scoped WebUI access, concrete tool rules, and safe policy updates. Generic policy currently applies alongside legacy Agent isolation; neither a browser binding nor a policy allow automatically disables the remaining guards.
+- Use [mcp-management](../mcp-management/SKILL.md) for outbound/inbound MCP connections and explicit replies between instances.
 - Use `isolated-worker` for a temporary isolated worker on an existing Node or a configured provider-backed worktree Node.
 - Use `node-setup` for connection, pairing, approval, and bootstrap work.
 - Use `agent-skill-creator` when a reusable procedure belongs in a skill rather than always-loaded memory.

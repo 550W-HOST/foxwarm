@@ -2,6 +2,7 @@ import * as sessionManager from '../sessionManager';
 import { executeMainManagementTool } from '../mainManagementTools';
 import { formatArchiveBlockContextText, formatArchiveBlockTimeRange, getArchiveBlockEndTimestamp, getArchiveBlockStartTimestamp, renderBlockMessage, type ArchiveBlockRecord } from '../session/layeredContext';
 import type { ArchiveMessageRecord } from '../session/archive';
+import { normalizeFrictionScore } from '../session/compactPlan';
 import type { Message, Session } from '../types';
 import * as vector from '../vector';
 import {
@@ -282,6 +283,7 @@ type RecallTargetSpec =
 export type ContextBlockExpansionKind = 'child-blocks' | 'messages';
 
 export interface ContextBlockExpansionBlockPayload {
+  frictionScore?: number;
   id: number;
   level: number;
   sourceKind: ArchiveBlockRecord['sourceKind'];
@@ -328,7 +330,9 @@ function contextBlockExpansionError(message: string, statusCode: number, code: s
 }
 
 function buildContextBlockExpansionBlockPayload(block: ArchiveBlockRecord): ContextBlockExpansionBlockPayload {
+  const frictionScore = normalizeFrictionScore(block.frictionScore);
   return {
+    ...(frictionScore !== undefined ? { frictionScore } : {}),
     id: block.id,
     level: block.level,
     sourceKind: block.sourceKind,

@@ -42,6 +42,7 @@ Persisted conversation attachments and broadcast selection are owned by [session
 - `reloadManagedChannels` stops all current managed Telegram/Matrix/WeWork/Weixin/QQ Bot instances, rebuilds factories from config, and starts every enabled/configured instance.
 - Registry IDs are unique across adapter types.
 - Internal WebUI/TUI pass channel authorization; external sources require allowlist or explicit per-attachment allow-all-users.
+- `/whoami` is the source-only discovery exception, available without authorization or an attachment; see [D-pipeline-channel-identity-query](../threads/message-processing-pipeline.md#d-pipeline-channel-identity-query).
 - Inbound files go to the agent's master `.temp/channel-files` area unless an isolated session targets its bound remote node. Descriptors report node and path without prescribing a file tool.
 - Session broadcast is fire-and-forget; platform send failures are logged. `turnFinal` is a generic completion option that platform adapters may consume.
 - Managed ordinary-text channel instances may opt into bounded in-memory tool progress with `channelProgress.intervalMs`; WebUI and the active WeWork stream-card target are excluded.

@@ -1,3 +1,4 @@
+import { configInstaller } from './configInstaller';
 import { logger } from './common';
 import { TelegramChannel } from './channels/telegramChannel';
 import { MatrixChannel } from './channels/matrixChannel';
@@ -44,7 +45,9 @@ import {
     getDefaultChannelConfigByType,
     getNormalizedChannelConfigs,
     MAIN_AGENT_MEMORY_DIR,
-    MCP_INBOUND_CONFIG,
+    ACCESS_CONFIG,
+    ACCESS_RUNTIME,
+    hasAccessSurface,
     NODE_TOKEN_FILE,
     SESSION_WORKERS_CONFIG,
     SESSION_WORKERS_ENABLED,
@@ -281,7 +284,7 @@ async function start() {
             (sessionId, operation, admit) => sessionManager.withSessionDestructiveMutationAdmission([sessionId], operation, admit),
         );
         sessionManager.setSessionWorkerEnqueueSink(
-            (sessionId, item, assertAdmissionActive) => sessionWorkerIngress!.enqueueEnsuringWorker(sessionId, item, assertAdmissionActive).then(() => {}),
+            (sessionId, item, options, assertAdmissionActive) => sessionWorkerIngress!.enqueueEnsuringWorker(sessionId, item, options, assertAdmissionActive).then(() => {}),
         );
         sessionManager.setSessionWorkerDeleteHandler(
             sessionId => teardownSessionWorkerForDelete({ store: sessionWorkerStore!, supervisor: sessionWorkerSupervisor! }, sessionId),
@@ -402,8 +405,9 @@ async function start() {
     await initializeTimers();
 
     // The Node HTTP/WebSocket surface also serves headless inbound MCP deployments.
-    if (ENABLE_WEBUI || ENABLE_TRIGGER || MCP_INBOUND_CONFIG.enabled) {
+    if (ENABLE_WEBUI || ENABLE_TRIGGER || hasAccessSurface(ACCESS_CONFIG, 'mcp')) {
         const token = await ensureToken();
+        ACCESS_RUNTIME.reserveInstanceToken(token);
         const nodeToken = await ensureNodeToken();
         await initializeNodeRegistry();
         
@@ -414,10 +418,11 @@ async function start() {
         // Add nodes WebSocket handler to HTTP server
         registerNodeWebSocket(httpServerInstance, nodeToken);
         registerNodeHttpRoutes(httpServerInstance);
-        if (MCP_INBOUND_CONFIG.enabled) {
-            mcpInboundHttp = new McpInboundHttpService(MCP_INBOUND_CONFIG, new McpInboundMcpCatalog());
-            mcpInboundHttp.register(httpServerInstance);
-        }
+        // Register once on the existing listener. An empty live identity map
+        // rejects requests; later saves can enable the first MCP surface.
+        mcpInboundHttp = new McpInboundHttpService(ACCESS_RUNTIME, new McpInboundMcpCatalog());
+        mcpInboundHttp.register(httpServerInstance);
+        configInstaller.setHttpAvailable(true);
         
         // Start HTTP server
         await httpServerInstance.start();
@@ -591,6 +596,8 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
         void Promise.resolve()
             .then(() => mcpInboundHttp?.stop())
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to stop MCP inbound cleanly'))
+            .then(() => mcpExternal.shutdownMcpNotificationReceivers())
+            .catch((err: Error) => logger.error({ err, signal }, 'Failed to stop MCP notification receivers cleanly'))
             .then(() => shutdownToolScriptRuntime())
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down ToolScript runtime cleanly'))
             .then(() => nodeExecution.shutdownNodeExecution())

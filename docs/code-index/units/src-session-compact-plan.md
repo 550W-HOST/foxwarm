@@ -1,10 +1,10 @@
 # Unit: src-session-compact-plan
 
-Files: src/session/compactPlan.ts, src/session/compactPlan.test.ts, src/session/sessionAutoCompactUsageGuard.test.ts, src/toolsSessionAgent/sessionCompactThreshold.test.ts
+Files: src/session/compactPlan.ts, src/session/compactPlan.test.ts, src/session/compactPlanRepair.ts, src/session/compactPlanRepair.test.ts, src/session/sessionAutoCompactUsageGuard.test.ts, src/toolsSessionAgent/sessionCompactThreshold.test.ts
 
 ## Purpose
 
-Defines the model-facing `submit_compact_plan` schema, candidate/policy types, compact prompt, quota calculations, plan normalization, and validation feedback. It does not mutate sessions; `src/session/history.ts` owns job execution and commit.
+Defines the model-facing `submit_compact_plan` schema, candidate/policy types, compact prompt, quota calculations, plan normalization, and validation feedback, and operation-scoped arguments-file repair. It does not mutate live sessions; `src/session/history.ts` owns job execution and commit.
 
 ## Key exports
 
@@ -14,9 +14,12 @@ Defines the model-facing `submit_compact_plan` schema, candidate/policy types, c
 - `clampCompactFraction`, `calculateBlockCompactionWindow` — candidate/force window math.
 - `buildMessageCandidateItem`, `buildBlockCandidateItem`, and target-level selection helpers.
 - `buildCompactPromptText` — sectioned goal, range, summary, preservation, quota, and fact instructions.
+- `normalizeFrictionScore` — best-effort integer 0–100 parsing for optional block metadata.
 - `normalizeMemoryFacts` — best-effort per-block fact parsing/sanitization with plan-wide caps and deduplication.
 - `validateCompactPlanArgs` — structural, range, overlap, barrier, and quota validation.
 - `buildCompactPlanValidationFeedback` — actionable retry text.
+- `CompactPlanRepairFile` — create, read, bounded current-content preview, exact edit/patch, and best-effort cleanup of a private planning artifact.
+- `compactPlanSubmissionUsesFile` — enforce the exclusive file/direct submission forms before plan validation.
 
 ## Stable-symbol index
 
@@ -24,9 +27,12 @@ Defines the model-facing `submit_compact_plan` schema, candidate/policy types, c
 |---|---|
 | `calculateBlockCompactionWindow` | Oldest candidate window, newest hard keep, and high-backlog requested coverage |
 | `buildCompactPromptText` | One planning prompt over validated candidate segments and run policies |
+| `normalizeFrictionScore` | Accepts integer 0–100 scores, including zero, and skips invalid auxiliary values |
 | `normalizeMemoryFacts` | Optional `replaceAsBlocks[].memoryFacts` parsing that cannot invalidate the block plan |
 | `validateCompactPlanArgs` | Canonical one-pass tool-argument parser, range resolver, and validator |
 | `buildCompactPlanValidationFeedback` | Converts validation detail into bounded retry guidance |
+| `CompactPlanRepairFile` | Invocation-bound descriptor I/O, bounded verbatim preview, and existing master-file authorization for exact repair edits |
+| `compactPlanSubmissionUsesFile` | Rejects mixed direct fields and file submissions |
 
 ## Current policy inputs
 
@@ -49,14 +55,15 @@ Defines the model-facing `submit_compact_plan` schema, candidate/policy types, c
 - `removePreservedMessages` can name only previously marked preserved active-history entries listed to the planner.
 - Preserved raw tokens do not count as replaced quota; stranded single-block lifts do not count as block reduction.
 - Quota coverage may accumulate across segments, but one operation never crosses a segment.
+- Optional missing/invalid `frictionScore` values are omitted without invalidating a plan. Source scores appear only in dedicated block-candidate prompts; see [execution friction](../threads/context-compaction-and-recall.md#d-context-block-execution-friction).
 - Optional malformed block memory facts are skipped rather than failing a valid compaction plan; the bounded total and text deduplication apply across all created blocks.
 - Successful validation returns each normalized create-block entry with its resolved candidate-index range; runtime commit consumes that range without reinterpreting source endpoints.
 
 ## Integration
 
-- `COMPACT_PLAN_TOOL_DEFINITION` requires `replaceAsBlocks` and exposes an explicit direct-array-or-JSON-string union. The direct-array branch describes required block fields and nested optional `memoryFacts`; there is no top-level fact argument.
+- `COMPACT_PLAN_TOOL_DEFINITION` exposes optional `argsFilePath` alongside direct fields without a top-level schema combinator or required direct field. Direct submissions still require `replaceAsBlocks`, which exposes an explicit direct-array-or-JSON-string union. The direct-array branch describes required block fields and nested optional `memoryFacts` and `frictionScore`; there is no top-level fact argument.
 - Its caller-facing copy explains plan submission, candidate-only ranges, preservation/removal, and per-block durable facts; schema tests assert the union and required fields rather than editorial wording.
-- The dedicated compact runtime accepts the plan tool and rejects other calls with feedback.
+- The dedicated compact runtime accepts a single plan submission or, while a repair file is pending, an exact-file edit/patch. Its lifecycle and security contract is canonical in [D-context-compact-runtime-gate](../threads/context-compaction-and-recall.md#d-context-compact-runtime-gate).
 - The supported block input is `replaceAsBlocks`, preferably a direct array or alternatively a JSON string encoding that array. `preserveMessages` / `removePreservedMessages` remain direct arrays. Obsolete top-level `createBlocksJson` and `createBlocks` are rejected.
 - Validated resolved operations are consumed by [src-session-history](./src-session-history.md).
 - Cross-module behavior and rationale are canonical in [context compaction and recall](../threads/context-compaction-and-recall.md).

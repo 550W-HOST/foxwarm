@@ -19,12 +19,18 @@ Implements persisted foreground/background ToolScript runs in the Monty 0.0.19 P
 
 ToolScript result/run types are internal, not exported TypeScript API types.
 
+Host calls inherit only the current invocation signal and check it before another host effect; persisted background resumption receives a fresh context, not an old turn signal. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
+
 ## Host API
+
+The default-injected `run_script` description includes the Python-subset syntax, synchronous `call_tool` usage with a tool name or tool ID, and a minimal inline example with `args` and `return`.
 
 - `call_tool(...)` — normalize shorthand or a unified descriptor, dynamically load `./tools`, and invoke the exported `call_tool` handler with the outer exact `ToolContext`, including its trusted placement/persist hooks and programmatic producer hint.
 - `request_model_without_context(prompt, model?)` — production one-shot model request using the current session's raw effort and optional model selection but not its history; returns the text plus canonical parts (text and Blob-referenced images) without reasoning, function calls, provider metadata, or image bytes.
 - `ask_agent(question)` — persist a snapshot and return an agent continuation.
 - `open_managed_session`, `session_step`, `release_managed_session`, `wait_for_managed_event` — explicit managed-session controller operations.
+
+The exact-owner Task facade emits a process-local completion receipt containing taskId/attachedSessionId. Each run/continue slice forwards only receipts actually emitted during that slice into its internal outer post-action; nested script contexts forward the same trusted callback. Script return values, stdout and saved run data are never scanned for completion claims. The existing child-handoff consumer handles the receipt; TaskService remains the sole completion/creator-notification owner.
 
 Unknown external function names are returned to Monty as runtime exceptions that list the available host API. Monty OS-function suspensions are rejected rather than exposed or mounted. There is no separate ToolScript file-I/O or MCP client path; scripts compose normal Foxwarm tools through `call_tool`.
 
@@ -48,6 +54,7 @@ Unknown external function names are returned to Monty as runtime exceptions that
 - On Node, the WASM fallback runs in-process rather than in the native subprocess pool, so it does not provide the native backend's subprocess crash isolation or hard watchdog. Monty's memory, recursion, and duration limits still apply, and Foxwarm continues to reject OS-function suspensions and mounts so host effects cannot bypass `call_tool`.
 - Default slice timeout is 30 seconds; memory, recursion, and duration limits are passed to Monty. Monty 0.0.19 has no allocation-count limit.
 - Timeout is checked at safe host-call boundaries and does not interrupt an in-progress host call. When exceeded, the run stores the pending return/exception plus snapshot and returns a continuable timeout state.
+- Host-call failures are injected back into the suspended script only at the host-call boundary. Once a host result has been returned, later script/runtime errors propagate as their original Monty traceback without attempting a second resume of the consumed snapshot.
 - Foreground and background runs both execute the initial slice inside `run_script`. Automatic wake is limited to background managed-event waits; agent-input and timeout waits require `continue_script`.
 - `ask_agent` and managed-event waits persist snapshots together with the exact VM/snapshot-format identity; completed/current-runtime failed/cancelled runs clear resumable snapshots.
 - A snapshot is loaded into a fresh pool session when a run continues, so waiting runs survive a Foxwarm process restart. Native and WASM pools share the same Monty 0.0.19 snapshot format and persisted runtime identity, so a waiting run can resume after the selected backend changes. Old or unknown snapshot formats fail with a deterministic restart-the-run error while retaining the historical record and incompatible snapshot. Completed historical records remain readable without conversion.
@@ -69,7 +76,7 @@ Unknown external function names are returned to Monty as runtime exceptions that
 - Ordinary top-level source reads `args` and preserves native return/final-expression behavior and host suspensions. Legacy main auto-call is governed by [D-toolscript-top-level-source](#d-toolscript-top-level-source).
 - Script-only read/exec/search fields and byte/capability limits are canonical in [D-dispatch-programmatic-tool-data](../threads/tool-dispatch.md#d-dispatch-programmatic-tool-data).
 
-- `call_tool` accepts the supported string shorthand and the current unified descriptor. String shorthand for direct Node-capability names resolves to `source=node`; descriptor examples use `source=node` with omitted `nodeId` for the current Node.
+- `call_tool` accepts string shorthand and the current unified descriptor. A string containing `:` is passed as `toolId` to the canonical resolver, which owns supported prefixes, format errors, concrete authorization and routing; it never falls back to a builtin name. Explicit keyword `toolId` retains precedence, and positional/keyword tool-argument merging is unchanged. Plain string shorthand for direct Node-capability names resolves to `source=node`; descriptor examples use `source=node` with omitted `nodeId` for the current Node. An explicit `builtin:read` remains invalid because file tools are Node capabilities.
 - `continue_script.input` is a string at the tool boundary; structured input is passed as JSON text and parsed by the script.
 - Documented user automation may still call hidden `start_toolscript_run`; current model guidance and bundled skills use `run_script({ mode: "background" })`.
 - Hidden direct MCP runtime handlers still exist, but ToolScript examples use unified `call_tool` so builtin/MCP/node dispatch shares one path.

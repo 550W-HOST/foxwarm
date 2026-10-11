@@ -6,6 +6,7 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 
 ## Key units
 
+- [src-tasks](../units/src-tasks.md) — small Session-shared task tool, atomic claim ownership and bounded persistent output.
 - [src-tools](../units/src-tools.md) — registry, schemas, builtin implementations, and unified discovery/dispatch.
 - [src-mcp-inbound-catalog](../units/src-mcp-inbound-catalog.md) — authenticated external MCP discovery/call wrappers over Main's existing outbound MCP client and exact generic policy.
 - [src-mcp-inbound-node-service](../units/src-mcp-inbound-node-service.md) — verified Main-local external Node file/exec dispatch, selection and scoped results, registered by inbound MCP wrappers.
@@ -16,7 +17,7 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 - [src-permissions](../units/src-permissions.md) — exact persisted agent tool-rule validation/matching and default isolated fallback behavior.
 - [src-tool-authorization](../units/src-tool-authorization.md) — generic ordered runtime policy, cached strict loading, canonical request matching, and atomic replacement.
 - [src-isolated-check](../units/src-isolated-check.md) — current isolated-session tool, path, channel, timer, and archive checks.
-- [src-apply-patch](../units/src-apply-patch.md) — structured patch parsing and application.
+- [shared-apply-patch](../units/shared-apply-patch.md) — sole structured patch parser/matcher; Main wrappers and authorization consume shared directly.
 - [src-browser](../units/src-browser.md) — Puppeteer browser manager.
 - [src-exec-manager](../units/src-exec-manager.md) — persistent command execution integration.
 
@@ -45,6 +46,7 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 - Pending write references are scoped, bounded, expire, and may reuse their cached payload at any independently authorized write target in the same session and agent.
 - Oversized tool results are saved and replaced with a bounded line-aware excerpt before entering model context.
 - Image results receive stable IDs before model serialization.
+- The single `task` builtin uses Main-owned persistent storage and context-derived Session ownership; see [task contracts](../units/src-tasks.md).
 - Timer builtins remain discoverable but are not injected into the default model schema.
 - MCP server configuration/listing builtins remain discoverable but are not injected into the default model schema.
 - Patch application preserves the source line-ending convention.
@@ -59,9 +61,15 @@ Tool resolution across builtin, MCP, and generic Node sources is documented in [
 - Free-form object arguments may provide JSON-string fallbacks where provider schemas cannot express arbitrary nested objects reliably.
 - `read` and `read_memory` treat optional `startLine`/`endLine` values of `0` as omitted.
 - Persisted or external compatibility aliases are retained only where source readers still support them. Removed internal tool names are not documented as active interfaces.
-- Persisted authorization rules that still name removed `update_session_snapshot` fail validation with an explicit migration error instead of silently ceasing to deny the renamed `refresh_session_snapshot` capability.
+- Persisted authorization rules that still name removed `set_tool_rules` require explicit permission migration to `set_config` with deliberate target restrictions; there is no command alias. Rules naming removed `update_session_snapshot` fail validation with an explicit migration error instead of silently ceasing to deny the renamed `refresh_session_snapshot` capability.
 
 ## Design decisions
+
+### D-tools-legacy-isolation-deprecation
+
+[2026-10-10] The legacy Agent `isolated` authorization mode is deprecated and planned for removal. The current invariants above still describe implemented behavior; deprecation does not itself disable existing guards or migrate an installation. Generic tool authorization is the migration direction, not a permanent second layer alongside legacy isolation.
+
+The isolated-like rule generator provides a conservative migration baseline, not a requirement to reproduce every legacy behavior. During removal, remaining differences require explicit decisions: express a boundary through generic policy, retain an independent invariant, or retire the old restriction. No removal date or complete migration contract is established by this decision.
 
 ### D-tools-unified-discovery
 

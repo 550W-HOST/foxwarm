@@ -130,6 +130,10 @@ export default function GlobalUiSettingsMenu({ menuAlign = 'end', menuSide = 'bo
           <div className="px-4 py-3">
             <div className="mb-2 text-xs font-medium text-fw-text-muted">Application</div>
             <div className="space-y-1">
+              <ReloadAppButton className={menuButtonClass}>
+                <span className="inline-flex items-center gap-2"><RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />Reload WebUI</span>
+              </ReloadAppButton>
+              {onOpenLogs && <button type="button" className={menuButtonClass} onClick={() => { onOpenLogs(); setOpen(false) }}><span className="inline-flex items-center gap-2"><FileText className="h-3.5 w-3.5" aria-hidden="true" />Open logs</span></button>}
               {onOpenSetup && (
                 <button
                   type="button"
@@ -143,10 +147,6 @@ export default function GlobalUiSettingsMenu({ menuAlign = 'end', menuSide = 'bo
                   {setupActive && <span className="text-[10px] uppercase tracking-wide">active</span>}
                 </button>
               )}
-              <ReloadAppButton className={menuButtonClass}>
-                <span className="inline-flex items-center gap-2"><RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />Reload WebUI</span>
-              </ReloadAppButton>
-              {onOpenLogs && <button type="button" className={menuButtonClass} onClick={() => { onOpenLogs(); setOpen(false) }}><span className="inline-flex items-center gap-2"><FileText className="h-3.5 w-3.5" aria-hidden="true" />Open logs</span></button>}
             </div>
           </div>
         </div>

@@ -1,3 +1,4 @@
+import { STOPPED_TOOL_NOT_STARTED_MESSAGE } from './toolCallControls';
 import axios, { AxiosResponse } from 'axios';
 import crypto, { randomUUID } from 'crypto';
 import fs from 'fs-extra';
@@ -7,7 +8,7 @@ import { StringDecoder } from 'string_decoder';
 import zlib from 'zlib';
 import * as tools from './tools';
 import { logger } from './common';
-import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, ToolScriptSubCall, TokenUsage, ToolDefinition, ModelStreamPart, ModelStreamPartDelta, ModelStreamToolCall } from './types';
+import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, ToolScriptSubCall, LinkedTaskCompletion, TokenUsage, ToolDefinition, ModelStreamPart, ModelStreamPartDelta, ModelStreamToolCall } from './types';
 import { clearModelStreamDraft, resetModelStreamDraft, updateModelStreamDraft } from './modelStreamDraft';
 import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig, NormalizedOpenAIImageGenerationConfig, ModelEffort, MODEL_EFFORTS, getConcreteModelEffortConfig, HANDOFF_CONFIRMATION_ENABLED, PROVIDER_IMAGE_OUTPUT_FORMAT } from './config';
 import * as sessionManager from './sessionManager';
@@ -18,7 +19,7 @@ import { checkGenericToolAuthorizationForSession, checkPathAccess, isToolVisible
 import { isPermissionNeutralBuiltinDispatcher } from './permissions';
 import { builtinNodeArgumentSelectsPlacement, NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './tools/placement';
 import type { ResolvedTool } from './tools/resolvedTools';
-import { executeResolvedTool, resolveDirectTool } from './tools/resolvedTools';
+import { executeResolvedTool, parseUnifiedToolCall, resolveDirectTool } from './tools/resolvedTools';
 import { expandHomePath } from './utils/pathResolve';
 import {
     collectOpenAIChatCompletionsStream as collectOpenAIChatCompletionsStreamProvider,
@@ -1499,8 +1500,8 @@ function getHistoricalConcreteModelId(message: Message): string | undefined {
 }
 
 /** Keep persisted presentation metadata out of canonical request journals and provider input. */
-function stripFunctionResponseDisplayMeta(contents: Message[]): Message[] {
-    return contents.map(message => ({
+function stripRequestDisplayMeta(contents: Message[]): Message[] {
+    return contents.map(({ compaction: _compaction, ...message }) => ({
         ...message,
         parts: message.parts.map(part => {
             if (!part.functionResponse?.__meta) return part;
@@ -1531,6 +1532,7 @@ function prepareHistoryForConcreteModel(contents: Message[], destinationModelId:
                     thinkingSummaries: _thinkingSummaries,
                     encryptedThinking: _encryptedThinking,
                     signature: _signature,
+                    redactedThinking: _redactedThinking,
                     openaiResponses: _openaiResponses,
                     ...remainingProviderMeta
                 } = providerMeta;
@@ -1603,10 +1605,15 @@ export function convertToAnthropicFormat(contents: Message[], config: ModelConfi
         
         for (const part of msg.parts || []) {
             // Handle thinking (with signature support)
-            if (part.thinking && part.providerMeta?.signature) {
+            if (typeof part.thinking === 'string' && part.providerMeta?.signature) {
                 const thinkingBlock: AnthropicContentBlock = { type: 'thinking', thinking: part.thinking };
                 thinkingBlock.signature = part.providerMeta?.signature;
                 content.push(thinkingBlock);
+            }
+
+            // Preserve opaque redacted thinking separately from ordinary thinking.
+            if (typeof part.providerMeta?.redactedThinking === 'string') {
+                content.push({ type: 'redacted_thinking', data: part.providerMeta.redactedThinking });
             }
 
             // Handle system/meta parts by merging them back into user text for providers without developer messages
@@ -1766,6 +1773,7 @@ type ExecutedToolCall = PreparedToolCall & {
     successfulSendToSessionTarget?: string;
     successfulWaitAfterSendTarget?: string;
     successfulFinishAfterSend: boolean;
+    completedLinkedTask?: LinkedTaskCompletion;
     deferredExecCwdSync?: { nextCwd: string };
     fatalCurrentTurn?: { code: string; message: string };
 };
@@ -1826,6 +1834,9 @@ async function prepareToolCall(
     notifyStart = true,
     presetResult?: any,
 ): Promise<PreparedToolCall> {
+    if (presetResult === undefined && (toolContext.signal?.aborted || session.stopping)) {
+        presetResult = { error: STOPPED_TOOL_NOT_STARTED_MESSAGE };
+    }
     const toolId = call.id || `tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const argsPreview = buildToolArgsPreview(call);
     const sessionId = session.id;
@@ -1845,6 +1856,9 @@ async function prepareToolCall(
                     toolContext.sessionPlacement === 'session-worker');
             }
         } catch (error) { placementError = error; }
+    }
+    if (presetResult === undefined && (toolContext.signal?.aborted || session.stopping)) {
+        presetResult = { error: STOPPED_TOOL_NOT_STARTED_MESSAGE };
     }
     const toolArgs = resolved?.args || { ...(call.args || {}) };
     const executionNode = resolved?.executionNode || snapshot?.currentNode || session.currentNode || 'master';
@@ -1916,7 +1930,7 @@ function planToolCalls(functionCalls: FunctionCall[]): PlannedToolCall[] {
         if (isSingleToolCancellationRequested(call)) return { call: executionCall, presetResult: buildCanceledToolResult() };
         if (!call.argsParseError && (call.name === 'send_to_session' || call.name === 'create_child_session')) {
             try {
-                validateInterAgentHandoffConfirmationForMode(executionCall.args, HANDOFF_CONFIRMATION_ENABLED);
+                validateInterAgentHandoffConfirmationForMode(executionCall.args, HANDOFF_CONFIRMATION_ENABLED, call.name);
             } catch (error) {
                 return { call: executionCall, presetResult: buildHandoffConfirmationError(error) };
             }
@@ -1937,11 +1951,15 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
     let successfulSendToSessionTarget: string | undefined;
     let successfulWaitAfterSendTarget: string | undefined;
     let successfulFinishAfterSend = false;
+    let completedLinkedTask: LinkedTaskCompletion | undefined;
     let deferredExecCwdSync: { nextCwd: string } | undefined;
     let fatalCurrentTurn: { code: string; message: string } | undefined;
 
     try {
         if (prepared.placementError) throw prepared.placementError;
+        if (result === undefined && (toolContext.signal?.aborted || toolContext.session?.stopping)) {
+            return buildSkippedToolCall(prepared, STOPPED_TOOL_NOT_STARTED_MESSAGE);
+        }
         if (result === undefined && prepared.resolved) {
             const runtimeContext = { ...toolContext, toolUseId: prepared.toolId };
             const localToolContext = prepared.sessionSnapshot
@@ -1981,11 +1999,15 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
                 stopCurrentTurn = !!result.__toolLoopControl.stopCurrentTurn;
             }
             if (result.__toolPostAction && typeof result.__toolPostAction === 'object') {
+                const taskCall = prepared.resolved?.source === 'builtin' && prepared.resolved.name === 'task';
+                const taskScriptCall = prepared.resolved?.source === 'builtin' && ['run_script', 'continue_script', 'start_toolscript_run'].includes(prepared.resolved.name);
+                const completion = result.__toolPostAction.completedLinkedTask;
+                if ((taskCall || taskScriptCall) && completion?.attachedSessionId === prepared.sessionId) completedLinkedTask = completion;
                 waitForReply = result.__toolPostAction.waitForReply === true;
                 explicitWaitId = typeof result.__toolPostAction.explicitWaitId === 'string'
                     ? result.__toolPostAction.explicitWaitId
                     : undefined;
-                successfulSendToSessionTarget = (prepared.call.name === 'send_to_session' || prepared.call.name === 'create_child_session')
+                successfulSendToSessionTarget = (prepared.call.name === 'send_to_session' || prepared.call.name === 'create_child_session' || taskCall)
                     && typeof result.__toolPostAction.successfulSendToSessionTarget === 'string'
                     ? result.__toolPostAction.successfulSendToSessionTarget
                     : undefined;
@@ -2033,25 +2055,36 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
         successfulSendToSessionTarget,
         successfulWaitAfterSendTarget,
         successfulFinishAfterSend,
+        completedLinkedTask,
         deferredExecCwdSync,
         fatalCurrentTurn,
     };
 }
 
 async function runBoundedToolCalls(
-    prepared: PreparedToolCall[],
+    planned: PlannedToolCall[],
     toolContext: any,
-): Promise<Array<ExecutedToolCall | undefined>> {
-    const results: Array<ExecutedToolCall | undefined> = new Array(prepared.length);
+    session: Session,
+    snapshot: ToolExecutionSnapshot,
+    offset: number,
+    total: number,
+): Promise<ExecutedToolCall[]> {
+    const results: ExecutedToolCall[] = new Array(planned.length);
     let nextIndex = 0;
-    const workers = Array.from({ length: Math.min(PARALLEL_EXEC_LIMIT, prepared.length) }, async () => {
+    let fatal = false;
+    const workers = Array.from({ length: Math.min(PARALLEL_EXEC_LIMIT, planned.length) }, async () => {
         while (true) {
             const index = nextIndex++;
-            if (index >= prepared.length) return;
+            if (index >= planned.length) return;
+            const item = planned[index];
+            const prepared = await prepareToolCall(item.call, offset + index, total, toolContext, session, snapshot, true, item.presetResult
+                ?? (fatal ? { error: 'Tool call was not started because tool authorization policy was unavailable.' } : undefined));
             try {
-                results[index] = await runPreparedToolCall(prepared[index], toolContext);
+                results[index] = await runPreparedToolCall(prepared, toolContext);
+                fatal = fatal || !!results[index].fatalCurrentTurn;
             } catch (error: any) {
-                results[index] = buildFailedToolCall(prepared[index], error);
+                results[index] = buildFailedToolCall(prepared, error);
+                fatal = fatal || !!results[index].fatalCurrentTurn;
             }
         }
     });
@@ -2073,7 +2106,7 @@ function buildFailedToolCall(prepared: PreparedToolCall, error: any): ExecutedTo
     };
 }
 
-function buildSkippedToolCall(prepared: PreparedToolCall, message = 'Tool call was not started because the session was stopped.'): ExecutedToolCall {
+function buildSkippedToolCall(prepared: PreparedToolCall, message = STOPPED_TOOL_NOT_STARTED_MESSAGE): ExecutedToolCall {
     return {
         ...prepared,
         result: { error: message },
@@ -2082,6 +2115,19 @@ function buildSkippedToolCall(prepared: PreparedToolCall, message = 'Tool call w
         waitForReply: false,
         successfulFinishAfterSend: false,
     };
+}
+
+function isFailedNodeSelection(execution: ExecutedToolCall, planned: PlannedToolCall): boolean {
+    if (planned.presetResult !== undefined || !execution.result?.error) return false;
+    try {
+        // Resolution itself can reject arguments before returning a target.
+        // Reuse the canonical unified parser, without resolving or executing again.
+        const target = execution.resolved || (execution.call.name === 'call_tool'
+            ? parseUnifiedToolCall(execution.call.args || {})
+            : { source: 'builtin', name: execution.call.name, args: execution.call.args || {} });
+        return target.source === 'builtin' && target.name === 'node'
+            && typeof target.args.action === 'string' && target.args.action.trim().toLowerCase() === 'select';
+    } catch { return false; }
 }
 
 async function replayDeferredExecCwd(execution: ExecutedToolCall, toolContext: any): Promise<ExecutedToolCall> {
@@ -2135,7 +2181,6 @@ export async function executeTools(
         }
         sourceSession = existing;
     }
-    session = sourceSession;
     toolContext = {
         ...toolContext,
         sessionId: sourceSession.id,
@@ -2146,16 +2191,40 @@ export async function executeTools(
         sessionPlacement: options?.currentSessionEffects?.placement || 'local',
         ...(options?.currentSessionEffects?.execRuntime ? { execRuntime: options.currentSessionEffects.execRuntime } : {}),
     };
+    const abortController = new AbortController();
+    const parentSignal: AbortSignal | undefined = toolContext.signal;
+    const abortFromParent = () => abortController.abort(parentSignal?.reason);
+    if (parentSignal?.aborted || sourceSession.stopping) abortFromParent();
+    else parentSignal?.addEventListener('abort', abortFromParent, { once: true });
+    const effects = options?.currentSessionEffects;
+    if (effects) effects.registerAbortController(sourceSession.id, abortController);
+    else sessionManager.registerSessionAbortController(sourceSession.id, abortController);
+    toolContext = { ...toolContext, signal: abortController.signal };
+    try {
+        return await executeToolBatch(functionCalls, toolContext, sourceSession, effects);
+    } finally {
+        parentSignal?.removeEventListener('abort', abortFromParent);
+        if (effects) effects.clearAbortController(sourceSession.id, abortController);
+        else sessionManager.clearSessionAbortController(sourceSession.id, abortController);
+    }
+}
+
+async function executeToolBatch(
+    functionCalls: FunctionCall[],
+    toolContext: any,
+    session: Session,
+    effects?: CurrentSessionEffects,
+): Promise<Message> {
     const plannedCalls = planToolCalls(functionCalls);
     const executions: ExecutedToolCall[] = [];
     let cursor = 0;
     let fatalCurrentTurn = false;
 
     while (cursor < plannedCalls.length) {
-        if (session?.stopping) {
+        if (session?.stopping || toolContext.signal.aborted) {
             for (; cursor < plannedCalls.length; cursor++) {
                 const planned = plannedCalls[cursor];
-                const prepared = await prepareToolCall(planned.call, cursor, plannedCalls.length, toolContext, session, undefined, false, planned.presetResult);
+                const prepared = await prepareToolCall(planned.call, cursor, plannedCalls.length, toolContext, session, undefined, false, planned.presetResult ?? { error: STOPPED_TOOL_NOT_STARTED_MESSAGE });
                 executions.push(planned.presetResult !== undefined
                     ? await runPreparedToolCall(prepared, toolContext)
                     : buildSkippedToolCall(prepared));
@@ -2169,6 +2238,19 @@ export async function executeTools(
             const execution = await runPreparedToolCall(prepared, toolContext);
             executions.push(execution);
             cursor++;
+            if (isFailedNodeSelection(execution, planned)) {
+                fatalCurrentTurn = !!execution.fatalCurrentTurn;
+                const message = 'Tool call was not started because Node selection failed earlier in this batch.';
+                for (; cursor < plannedCalls.length; cursor++) {
+                    const skipped = plannedCalls[cursor];
+                    const skippedPrepared = await prepareToolCall(skipped.call, cursor, plannedCalls.length, toolContext, session,
+                        undefined, false, skipped.presetResult ?? { error: message });
+                    executions.push(skipped.presetResult !== undefined
+                        ? await runPreparedToolCall(skippedPrepared, toolContext)
+                        : buildSkippedToolCall(skippedPrepared, message));
+                }
+                break;
+            }
             if (execution.fatalCurrentTurn) {
                 fatalCurrentTurn = true;
                 for (; cursor < plannedCalls.length; cursor++) {
@@ -2186,28 +2268,15 @@ export async function executeTools(
         const segmentStart = cursor;
         while (cursor < plannedCalls.length && plannedCalls[cursor].call.name === 'exec') cursor++;
         const snapshot: ToolExecutionSnapshot = {
-            currentNode: sourceSession.currentNode || 'master',
-            cwd: typeof sourceSession.cwd === 'string' ? sourceSession.cwd : undefined,
+            currentNode: session.currentNode || 'master',
+            cwd: typeof session.cwd === 'string' ? session.cwd : undefined,
         };
-        const preparedSegment: PreparedToolCall[] = [];
-        for (let index = segmentStart; index < cursor; index++) {
-            const planned = plannedCalls[index];
-            preparedSegment.push(await prepareToolCall(
-                planned.call,
-                index,
-                plannedCalls.length,
-                toolContext,
-                session,
-                snapshot,
-                true,
-                planned.presetResult,
-            ));
+        const settled = await runBoundedToolCalls(plannedCalls.slice(segmentStart, cursor), toolContext,
+            session, snapshot, segmentStart, plannedCalls.length);
+        for (const execution of settled) {
+            executions.push(await replayDeferredExecCwd(execution, toolContext));
         }
-        const settled = await runBoundedToolCalls(preparedSegment, toolContext);
-        for (let index = 0; index < preparedSegment.length; index++) {
-            executions.push(await replayDeferredExecCwd(settled[index] || buildSkippedToolCall(preparedSegment[index]), toolContext));
-        }
-        if (executions.slice(-preparedSegment.length).some(execution => execution.fatalCurrentTurn)) {
+        if (settled.some(execution => execution.fatalCurrentTurn)) {
             fatalCurrentTurn = true;
             for (; cursor < plannedCalls.length; cursor++) {
                 const skipped = plannedCalls[cursor];
@@ -2225,6 +2294,7 @@ export async function executeTools(
     let batchHasError = false;
     let waitForReply = false;
     const explicitWaitIds: string[] = [];
+    let completedLinkedTask: LinkedTaskCompletion | undefined;
     const successfulSendToSessionTargets: string[] = [];
     const successfulWaitAfterSendTargets: string[] = [];
     let successfulFinishAfterSend = false;
@@ -2271,13 +2341,14 @@ export async function executeTools(
             successfulWaitAfterSendTargets.push(execution.successfulWaitAfterSendTarget);
         }
         successfulFinishAfterSend = successfulFinishAfterSend || execution.successfulFinishAfterSend;
+        completedLinkedTask = completedLinkedTask || execution.completedLinkedTask;
         fatalError = fatalError || execution.fatalCurrentTurn;
     }
 
     if (stopCurrentTurn && batchHasError) {
         for (const waitId of explicitWaitIds) {
-            if (options?.currentSessionEffects) {
-                await options.currentSessionEffects.clearWaitById(toolContext.sessionId || session?.id, waitId);
+            if (effects) {
+                await effects.clearWaitById(toolContext.sessionId || session?.id, waitId);
             } else {
                 await sessionManager.clearSessionWaitById(toolContext.sessionId || session?.id, waitId);
             }
@@ -2292,8 +2363,9 @@ export async function executeTools(
     } else if (stopCurrentTurn) {
         logger.debug({ sessionId: toolContext.sessionId || session?.id, toolCount: functionCalls.length }, 'Suppressing stopCurrentTurn because a tool in the batch returned an error');
     }
-    if (waitForReply || successfulFinishAfterSend || successfulSendToSessionTargets.length || successfulWaitAfterSendTargets.length) {
+    if (waitForReply || successfulFinishAfterSend || completedLinkedTask || successfulSendToSessionTargets.length || successfulWaitAfterSendTargets.length) {
         (toolMessage as any).__toolPostAction = {
+            ...(completedLinkedTask ? { completedLinkedTask } : {}),
             ...(waitForReply ? { waitForReply: true } : {}),
             ...(successfulFinishAfterSend ? { finishAfterSend: true } : {}),
             ...(successfulSendToSessionTargets.length ? { successfulSendToSessionTargets } : {}),
@@ -2342,6 +2414,7 @@ export async function chat(
         abortSignal?: AbortSignal;
         onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
         prepareRetry?: (signal: AbortSignal) => Promise<boolean>;
+        requestContext?: () => Promise<Message[]>;
         maxRetries?: number;
         purpose?: LlmRequestPurpose;
         compactPlanBackground?: boolean;
@@ -2403,18 +2476,27 @@ export async function chat(
     }
     
     // Convert to appropriate format based on provider
-    const getCommittedHistoryForRetry = () => session.history
+    const normalOwnedRequest = (options?.purpose || 'normal-turn') === 'normal-turn' && options?.snapshotAuthority !== 'detached';
+    let requestContext = normalOwnedRequest && options?.requestContext ? await options.requestContext() : [];
+    const getCommittedHistoryForRetry = () => [...session.history
         .filter(isModelVisibleMessage)
         .map((message: Message): Message => {
             const { __meta, ...msg } = message;
             const modelId = getHistoricalConcreteModelId(message);
             return modelId ? { ...msg, __meta: { modelId } } : msg;
-        });
+        }), ...requestContext];
     const contentsForLlm = getCommittedHistoryForRetry();
     const partialCommitEnabled = (options?.purpose || 'normal-turn') === 'normal-turn'
         && options?.snapshotAuthority !== 'detached' && !!options?.onIntermediateAssistantText;
-    const prepareRetry = (options?.purpose || 'normal-turn') === 'normal-turn'
-        && options?.snapshotAuthority !== 'detached' ? options?.prepareRetry : undefined;
+    const prepareRetry = normalOwnedRequest && (options?.prepareRetry || options?.requestContext)
+        ? async (signal: AbortSignal): Promise<boolean> => {
+            const changed = options.prepareRetry ? await options.prepareRetry(signal) : false;
+            if (!options.requestContext) return changed;
+            const nextContext = await options.requestContext();
+            const contextChanged = JSON.stringify(nextContext) !== JSON.stringify(requestContext);
+            requestContext = nextContext;
+            return changed || contextChanged;
+        } : undefined;
     const availableToolDefinitions = await resolveSessionToolDefinitions(session, options?.toolDefinitions);
     const previousPromptCacheKey = session.promptCacheKey;
     const promptCacheKey = ensurePromptCacheKey(session);
@@ -3172,6 +3254,8 @@ async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: an
                 const thinkingPart: MessagePart = { thinking: block.thinking };
                 if (block.signature) thinkingPart.providerMeta = { signature: block.signature };
                 allParts.push(thinkingPart);
+            } else if (block.type === 'redacted_thinking' && typeof block.data === 'string') {
+                allParts.push({ providerMeta: { redactedThinking: block.data } });
             } else if (block.type === 'tool_use') {
                 allParts.push({ functionCall: { id: block.id, name: block.name, args: block.input } });
             }
@@ -3232,10 +3316,15 @@ async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: an
             ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
         } : null;
     } else {
+        const getReportedTokenCount = (value: unknown): number | undefined =>
+            typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+        const inputTokens = getReportedTokenCount(resp?.usage?.input_tokens);
+        const cacheCreationTokens = getReportedTokenCount(resp?.usage?.cache_creation_input_tokens) ?? 0;
+        const cachedTokens = getReportedTokenCount(resp?.usage?.cache_read_input_tokens) ?? 0;
         usage = resp?.usage ? {
-            inputTokens: resp.usage.input_tokens,
-            outputTokens: resp.usage.output_tokens,
-            cachedTokens: resp.usage.cache_read_input_tokens || 0,
+            inputTokens: inputTokens === undefined ? undefined : inputTokens + cacheCreationTokens,
+            outputTokens: getReportedTokenCount(resp.usage.output_tokens),
+            cachedTokens,
         } : null;
     }
 
@@ -3360,7 +3449,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
     // Repair the provider-neutral source form first. This exact canonical
     // array is journaled before clone-only provider hydration, so durable
     // session image references are never expanded into provider base64 here.
-    let canonicalContents = stripFunctionResponseDisplayMeta(stripReservedProviderImageHelperFields(
+    let canonicalContents = stripRequestDisplayMeta(stripReservedProviderImageHelperFields(
         fixToolCalls(structuredClone(options.contents || [])),
     ));
     const resolvedModel = options.modelsConfigOverride
@@ -3474,7 +3563,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
                 }
                 if (resumeFromCommittedHistory) {
                     modelStreamEmitter.close();
-                    canonicalContents = stripFunctionResponseDisplayMeta(stripReservedProviderImageHelperFields(
+                    canonicalContents = stripRequestDisplayMeta(stripReservedProviderImageHelperFields(
                         fixToolCalls(structuredClone(options.getCommittedHistoryForRetry!())),
                     ));
                     requestId = randomUUID();
