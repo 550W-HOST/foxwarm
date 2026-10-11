@@ -77,3 +77,7 @@ Identity move and Archive reservation code use [Archive identity](../units/archi
 ## Current boundary
 
 The .NET source contains Main-local task service APIs, attached-child binding, persisted child-handoff boundary state, valid legacy Goal migration on owning saves, request-local task context, and compaction progress checkpoint calls. Request context is model-request-only and does not append history or wake a Session. Existing `OpenAIRequestText` child-reminder compatibility handling is separate from the persisted boundary state.
+
+## External Node placement
+
+Current external Node selection uses the existing owner save lane; it does not replace Session ownership or authority. [Remote Node integration](./remote-node-compatibility.md#net-external-node-integration) defines placement, failed-selection batching, namespace separation and the remote lifecycle phase boundary. Main-owned history/status/deletion remain available while a selected Node is offline.

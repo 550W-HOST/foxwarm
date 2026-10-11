@@ -28,6 +28,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
     };
     private readonly Foxwarm.McpClient mcp;
     internal Foxwarm.McpClient OutboundMcp => mcp;
+    internal Foxwarm.Nodes.NodeConnectionHub Nodes { get; }
+    internal Foxwarm.Nodes.NodeBootstrap? Bootstrap { get; set; }
     private readonly ModelRouting modelRouting = new();
     internal LlmRequestJournalStore Journal { get; }
     internal TaskService Tasks { get; }
@@ -57,6 +59,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         HandoffConfirmationEnabled = models.HandoffConfirmationEnabled;
         this.root = Path.GetFullPath(root);
         Journal = new LlmRequestJournalStore(this.root);
+        Nodes = new(this.root);
+        Nodes.Changed += () => TopologyChanged?.Invoke();
         var workspaceRoot = Path.GetFullPath(workspace);
         toolWorkspace = workspaceRoot;
         authorization = new ToolAuthorizationAuthority(this.root);
@@ -170,6 +174,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             HistoricalExecOwners
         );
         var definitions = WorkspaceTools.Definitions();
+        foreach (var definition in Foxwarm.Nodes.NodeToolDefinitions.All()) definitions.Add(definition?.DeepClone());
         foreach (var definition in LocalExecManager.Definitions())
             definitions.Add(definition?.DeepClone());
         definitions.Add(ArchiveRecallTool.Definition());
@@ -203,7 +208,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         tools = SessionToolExecutor.CreateRegistry(
             definitions,
             mcp,
-            owner => agents.AgentDirectory(owner.Agent)
+            owner => agents.AgentDirectory(owner.Agent),
+            Nodes
         );
         clientOptions = options with { Tools = tools.ModelDefinitions() };
         this.models = models;
@@ -507,7 +513,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 );
             },
             () => ModelDefinitions(hosted),
-            Tasks
+            Tasks,
+            () => ExecutionEnvironment(hosted)
         );
         var registry = new SessionRegistry(
             store,
@@ -584,6 +591,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         ToolScript.BeginShutdown();
         executor.BeginShutdown();
         mcp.BeginShutdown();
+        Nodes.BeginShutdown();
         websockets.BeginShutdown();
         waitTimeouts.Stop();
         waitLiveness.Stop();
@@ -601,6 +609,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         await ToolScript.DisposeAsync();
         await executor.DisposeAsync();
         await mcp.DisposeAsync();
+        Nodes.Dispose();
         await websockets.DisposeAsync();
         Journal.Dispose();
         Tasks.Dispose();

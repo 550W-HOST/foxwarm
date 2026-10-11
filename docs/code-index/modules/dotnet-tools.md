@@ -11,6 +11,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [Unified tools and Session tool execution](../units/tools-registry.md)
 - [Local file, exec, delivery, and workspace tools](../units/tools-local-io.md)
 - [Tool authorization and isolation compatibility](../units/tool-authorization.md)
+- [External Node trust and ordinary tools](../units/external-nodes.md)
 - [Outbound MCP client](../units/mcp.md)
 
 ## Tests and callers

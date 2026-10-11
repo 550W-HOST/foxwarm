@@ -33,7 +33,7 @@ public sealed class SessionExecutionEnvironmentTests
     [InlineData("master", "/owned/process/workspace/../workspace/", true)]
     [InlineData("master", "workspace", true)]
     [InlineData("master", "/different", true)]
-    [InlineData("remote", null, false)]
+    [InlineData("remote", "C:\\remote\\project", true)]
     [InlineData("Master", null, false)]
     [InlineData("\u0085master", null, false)]
     public void Master_admission_keeps_raw_cwd_for_effect_resolution_and_retains_exact_source_node_boundary(
@@ -52,7 +52,7 @@ public sealed class SessionExecutionEnvironmentTests
         if (supported)
             validate();
         else
-            Assert.Throws<UnsupportedSessionExecutionEnvironmentException>(validate);
+            Assert.Throws<InvalidDataException>(validate);
     }
 
     [Fact]
@@ -78,7 +78,7 @@ public sealed class SessionExecutionEnvironmentTests
     }
 
     [Fact]
-    public async Task Dormant_unsupported_execution_is_not_corrupt_or_deleted_and_preserves_authority_for_retry()
+    public async Task Offline_remote_session_admits_history_and_allows_Main_owned_deletion()
     {
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
@@ -97,34 +97,25 @@ public sealed class SessionExecutionEnvironmentTests
         Assert.Empty(manager.Owners());
         Assert.Equal("remote", manager.Catalog.Get("foreign")!["currentNode"]!.GetValue<string>());
         await new SessionRuntime(manager).UpdateDisplayNameAsync("foreign", "Inspectable metadata");
-        var error = await Assert.ThrowsAsync<UnsupportedSessionExecutionEnvironmentException>(() =>
-            manager.RequiredAsync("foreign")
-        );
-        Assert.Contains("execution environment", error.Message);
-        Assert.Empty(manager.Owners());
+        var owner = await manager.RequiredAsync("foreign");
+        Assert.Equal("remote", manager.CurrentNode(owner));
+        Assert.False(manager.Nodes.Online("remote"));
         Assert.Equal(original, await File.ReadAllTextAsync(file));
         Assert.Equal("exact", manager.Catalog.Resolve("foreign")["kind"]!.GetValue<string>());
-        var repaired = JsonNode.Parse(original)!.AsObject();
-        repaired["currentNode"] = " master ";
-        repaired["cwd"] = work + "/.";
-        await File.WriteAllTextAsync(file, repaired.ToJsonString());
-        var owner = await manager.RequiredAsync("foreign");
-        var projection = manager.CatalogPresentations(["foreign"], true)[0];
-        Assert.Equal(" master ", projection["currentNode"]!.GetValue<string>());
-        Assert.Equal(work + "/.", projection["cwd"]!.GetValue<string>());
-        Assert.Equal(repaired.ToJsonString(), await File.ReadAllTextAsync(file));
         Assert.Same(owner, await manager.RequiredAsync("foreign"));
+        await manager.DeleteAsync("foreign");
+        Assert.Null(manager.Catalog.Get("foreign"));
     }
 
     [Fact]
-    public async Task Mandatory_foreign_environment_cannot_arm_a_siblings_original_deadline()
+    public async Task Malformed_Node_identity_cannot_arm_a_siblings_original_deadline()
     {
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
         var work = Path.Combine(temp.Path, "work");
         Directory.CreateDirectory(work);
         await Seed(data, "deadline", new JsonObject());
-        await Seed(data, "foreign", new JsonObject { ["currentNode"] = "remote" });
+        await Seed(data, "foreign", new JsonObject { ["currentNode"] = "remote/invalid" });
         var file = Path.Combine(data, "state", "sessions", "deadline.json");
         var raw = JsonNode.Parse(await File.ReadAllTextAsync(file))!.AsObject();
         raw["meta"]!["wait"] = new JsonObject
@@ -150,7 +141,7 @@ public sealed class SessionExecutionEnvironmentTests
             Options,
             HostModels.ForTest(Options)
         );
-        await Assert.ThrowsAsync<UnsupportedSessionExecutionEnvironmentException>(() =>
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
             manager.LoadAsync()
         );
         await Task.Delay(100);

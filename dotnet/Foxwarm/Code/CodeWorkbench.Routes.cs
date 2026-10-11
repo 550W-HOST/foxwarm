@@ -109,37 +109,6 @@ internal sealed partial class CodeWorkbench
     internal void Register(WebApplication app)
     {
         app.MapGet(
-            "/api/nodes",
-            () =>
-                Results.Json(
-                    new
-                    {
-                        nodes = new[]
-                        {
-                            new
-                            {
-                                id = "master",
-                                type = "master",
-                                displayName = "master",
-                                online = true,
-                                services = hasPty
-                                    ? new Dictionary<string, int>
-                                    {
-                                        ["vscode-fs"] = 1,
-                                        ["vscode-git"] = 2,
-                                        ["vscode-pty"] = 1,
-                                    }
-                                    : new Dictionary<string, int>
-                                    {
-                                        ["vscode-fs"] = 1,
-                                        ["vscode-git"] = 2,
-                                    },
-                            },
-                        },
-                    }
-                )
-        );
-        app.MapGet(
             "/api/vscode-web/fs/workspace-roots",
             context =>
                 Guard(

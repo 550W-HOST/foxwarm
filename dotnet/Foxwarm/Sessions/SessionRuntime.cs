@@ -47,6 +47,7 @@ internal sealed record SessionMetadata(
 /// <summary>Session-semantic in-process API. Channels receive cloned projections, never mutable owners.</summary>
 internal sealed class SessionRuntime(SessionManager manager)
 {
+    internal SessionManager Manager => manager;
     internal Action<string>? SemanticOwnerLookupObserved { get; set; }
 
     public SessionOwner? Owner(string id)

@@ -19,10 +19,11 @@ internal sealed record RegisteredTool(
     Func<SessionToolExecutor, JsonObject, CancellationToken, Task<JsonObject>> Execute
 );
 
-internal sealed class ToolRegistry(Foxwarm.McpClient mcp, Func<SessionOwner, string> workspace)
+internal sealed class ToolRegistry(Foxwarm.McpClient mcp, Func<SessionOwner, string> workspace, Foxwarm.Nodes.NodeConnectionHub? nodes = null)
 {
     private readonly Dictionary<string, RegisteredTool> entries = new(StringComparer.Ordinal);
     internal Foxwarm.McpClient Mcp => mcp;
+    internal Foxwarm.Nodes.NodeConnectionHub? Nodes => nodes;
     internal IEnumerable<RegisteredTool> Entries => entries.Values;
 
     internal void Register(
@@ -46,15 +47,18 @@ internal sealed class ToolRegistry(Foxwarm.McpClient mcp, Func<SessionOwner, str
                 .ToArray()
         );
 
-    internal ResolvedTool Resolve(string invocation, JsonObject args)
+    internal ResolvedTool Resolve(string invocation, JsonObject args, string currentNode = "master")
     {
         if (invocation != "call_tool")
         {
             if (!entries.TryGetValue(invocation, out var direct))
+            {
+                if (currentNode != "master" && nodes is not null && nodes.Definitions(currentNode).Any(value => SessionWait.Text(value?["name"]) == invocation)) return new(invocation, "node", invocation, (JsonObject)args.DeepClone(), ExecutionNode: currentNode);
                 throw new InvalidDataException("Unknown tool: " + invocation);
+            }
             if (invocation is "send_file" or "image_write_to_file")
-                LocalNode(Text(args, "node"));
-            return new(invocation, direct.Source, invocation, (JsonObject)args.DeepClone());
+                LocalNode(TargetNode(Text(args, "node"), currentNode));
+            return new(invocation, direct.Source, invocation, (JsonObject)args.DeepClone(), ExecutionNode: direct.Source == "node" ? currentNode : "master");
         }
         Keys(args, ["toolId", "source", "name", "server", "nodeId", "args", "argsJson"]);
         var source = Text(args, "source")?.Trim();
@@ -102,6 +106,13 @@ internal sealed class ToolRegistry(Foxwarm.McpClient mcp, Func<SessionOwner, str
             throw new InvalidDataException(
                 "Tool `call_tool` is a dispatcher/container, not a concrete builtin capability."
             );
+        var targetNode = TargetNode(node, currentNode);
+        if (source == "node" && targetNode != "master")
+        {
+            if (nodes is null || !nodes.Definitions(targetNode).Any(value => SessionWait.Text(value?["name"]) == name))
+                throw new InvalidDataException("Tool is not advertised by Node: " + name);
+            return new(invocation, source, name, targetArgs, ExecutionNode: targetNode);
+        }
         if (!entries.TryGetValue(name, out var registration))
             throw new InvalidDataException("Unknown tool: " + name);
         if (registration.Source != source)
@@ -113,8 +124,8 @@ internal sealed class ToolRegistry(Foxwarm.McpClient mcp, Func<SessionOwner, str
         else if (node is not null)
             throw new InvalidDataException("Builtin tools do not support Node selection.");
         if (source == "builtin" && name is "send_file" or "image_write_to_file")
-            LocalNode(Text(targetArgs, "node"));
-        return new(invocation, source, name, targetArgs);
+            LocalNode(TargetNode(Text(targetArgs, "node"), source == "node" ? targetNode : currentNode));
+        return new(invocation, source, name, targetArgs, ExecutionNode: source == "node" ? targetNode : "master");
     }
 
     internal async Task<JsonNode?> ExecuteAsync(
@@ -137,7 +148,10 @@ internal sealed class ToolRegistry(Foxwarm.McpClient mcp, Func<SessionOwner, str
                     owner.Hosted,
                     generation
                 )
-                : await entries[resolved.Name].Execute(owner, resolved.Args, cancellationToken);
+                : resolved.Source == "node" && resolved.ExecutionNode != "master"
+                    ? await (nodes ?? throw new InvalidOperationException("Remote Nodes are unavailable.")).ExecuteAsync(
+                        resolved.ExecutionNode, resolved.Name, resolved.Args, owner.Hosted.Id, owner.Hosted.Agent, owner.ExecutionNode, owner.ExecutionCwd, owner.Programmatic, cancellationToken)
+                    : await entries[resolved.Name].Execute(owner, resolved.Args, cancellationToken);
         if (owner.Programmatic)
         {
             owner.ScriptBudget!.JsonValue(result);
@@ -149,6 +163,10 @@ internal sealed class ToolRegistry(Foxwarm.McpClient mcp, Func<SessionOwner, str
             owner.CurrentCallId
         );
     }
+
+    internal static string TargetNode(string? node, string currentNode) => string.IsNullOrWhiteSpace(node) || node.Trim().Equals("current", StringComparison.OrdinalIgnoreCase) ? SessionGoal.Trim(currentNode) : node.Trim();
+
+    internal JsonArray NodeDefinitions(string id) => id == "master" ? new JsonArray(entries.Values.Where(entry => entry.Source == "node").Select(entry => (JsonNode?)entry.Definition.DeepClone()).ToArray()) : (nodes ?? throw new InvalidDataException("Remote Nodes are unavailable.")).Definitions(id);
 
     internal static void LocalNode(string? node)
     {

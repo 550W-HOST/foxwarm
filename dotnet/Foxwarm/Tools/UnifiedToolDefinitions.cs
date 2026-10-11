@@ -38,7 +38,7 @@ internal static class UnifiedToolDefinitions
         },
         "nodeId": {
           "type": "string",
-          "description": "Node to search. Omit or use current to search master, the local execution Node."
+          "description": "Node to search. Omit or use current to search this session's execution Node."
         },
         "limit": {
           "type": "integer",

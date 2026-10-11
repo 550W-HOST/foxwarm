@@ -96,29 +96,29 @@ internal static partial class UnifiedTools
         {
             try
             {
-                ToolRegistry.LocalNode(ToolRegistry.Text(args, "nodeId"));
-                foreach (var entry in registry.Entries.Where(entry => entry.Source == "node"))
+                var nodeId = ToolRegistry.TargetNode(ToolRegistry.Text(args, "nodeId"), owner is null ? "master" : SessionWait.Text(owner.Entry.Snapshot().AuthorityEnvelope["currentNode"]) ?? "master");
+                foreach (var definition in registry.NodeDefinitions(nodeId).OfType<JsonObject>().Where(definition => nodeId == "master" || SessionWait.Text(definition["name"]) != "exec"))
                 {
-                    var name = SessionWait.Text(entry.Definition["name"])!;
-                    var description = SessionWait.Text(entry.Definition["description"]) ?? "";
-                    if (visible is not null && !visible("node", name, null))
+                    var name = SessionWait.Text(definition["name"])!;
+                    var description = SessionWait.Text(definition["description"]) ?? "";
+                    if (visible is not null && !visible("node", name, nodeId))
                         continue;
-                    var score = Score(query, name, description, "master");
+                    var score = Score(query, name, description, nodeId);
                     if (score >= 0)
                         collected.Add(
                             new(
                                 "node",
                                 name,
                                 description,
-                                entry.Definition["parameters"],
-                                "master",
-                                !entry.DefaultInject,
+                                definition["parameters"],
+                                nodeId,
+                                true,
                                 score
                             )
                         );
                 }
             }
-            catch (InvalidDataException error)
+            catch (Exception error) when (error is InvalidDataException or InvalidOperationException)
             {
                 warnings.Add(error.Message);
             }

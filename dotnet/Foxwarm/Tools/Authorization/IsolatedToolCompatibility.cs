@@ -125,41 +125,43 @@ internal static class IsolatedToolCompatibility
         AgentIsolation isolation,
         string source,
         string name,
-        string? server
+        string? server,
+        string node = "master"
     ) =>
         isolation
             .Rules.OfType<JsonObject>()
             .Where(rule =>
                 SessionWait.Text(rule["source"]) == source
                 && SessionWait.Text(rule["tool"]) == name
-                && (source != "node" || SessionWait.Text(rule["node"]) == "master")
+                && (source != "node" || SessionWait.Text(rule["node"]) == node)
                 && (source != "mcp" || SessionWait.Text(rule["server"]) == server)
             )
             .Select(rule => SessionWait.Text(rule["effect"]))
             .FirstOrDefault();
 
-    private static bool Forbidden(string source, string name) =>
-        source == "node" && name == "exec" || source == "builtin" && Structural.Contains(name);
+    private static bool Forbidden(string source, string name, string node = "master") =>
+        source == "node" && node == "master" && name == "exec" || source == "builtin" && Structural.Contains(name);
 
     internal static bool Visible(
         AgentIsolation isolation,
         string source,
         string name,
         string? server,
-        bool unknownNode = false
+        bool unknownNode = false,
+        string node = "master"
     )
     {
         if (!isolation.Isolated)
             return true;
-        if (Forbidden(source, name))
+        if (Forbidden(source, name, node))
             return false;
-        var exact = Exact(isolation, source, name, server);
+        var exact = Exact(isolation, source, name, server, node);
         if (exact is not null)
             return exact == "allow";
         if (unknownNode)
             return true;
         return source == "node"
-            ? name is "read" or "write" or "edit" or "apply_patch"
+            ? node != "master" || name is "read" or "write" or "edit" or "apply_patch"
             : source == "builtin" && DefaultBuiltins.Contains(name);
     }
 
@@ -171,19 +173,19 @@ internal static class IsolatedToolCompatibility
     {
         if (!isolation.Isolated)
             return;
-        if (Forbidden(request.Source, request.Name))
+        if (Forbidden(request.Source, request.Name, request.TargetNode ?? "master"))
             throw new ToolAuthorizationDeniedException(
                 "Isolated Agent cannot use this structurally restricted capability."
             );
         var ownDirectory = AuthorizationPaths.CanonicalPotential(request.AgentDirectory!);
-        var exact = Exact(isolation, request.Source, request.Name, request.Server);
+        var exact = Exact(isolation, request.Source, request.Name, request.Server, request.TargetNode ?? "master");
         if (exact == "deny")
             throw new ToolAuthorizationDeniedException("Agent tool rule denies this capability.");
         if (exact != "allow")
         {
             var allowed =
                 request.Source == "node"
-                    ? request.Name is "read" or "write" or "edit"
+                    ? request.TargetNode != "master" || request.Name is "read" or "write" or "edit"
                         && request.Paths.Count > 0
                         && request.Paths.All(path =>
                             ToolAuthorizationEvaluation.Within(path.Resolved, ownDirectory)
@@ -203,7 +205,7 @@ internal static class IsolatedToolCompatibility
         }
         // Exact capability allow never bypasses handler-local physical/target/action boundaries.
         if (
-            request.Source == "node" && request.Name is "read" or "write" or "edit" or "apply_patch"
+            request.Source == "node" && request.TargetNode == "master" && request.Name is "read" or "write" or "edit" or "apply_patch"
             || request.Source == "builtin"
                 && request.Name is "set_config" or "send_file" or "image_write_to_file"
         )

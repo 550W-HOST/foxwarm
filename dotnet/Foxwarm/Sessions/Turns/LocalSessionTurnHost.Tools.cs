@@ -17,12 +17,19 @@ public sealed partial class LocalSessionTurnHost
     {
         var results = new TurnToolExecution?[planned.Count];
         var cursor = 0;
+        var selectionFailed = false;
         while (cursor < planned.Count)
         {
+            if (selectionFailed)
+            {
+                results[cursor++] = new(UnsupportedTurnToolExecutor.ToolError("tool_call_skipped", "Tool call was not started because Node selection failed."));
+                continue;
+            }
             if (SessionWait.Text(planned[cursor].Call["name"]) != "exec")
             {
                 results[cursor] = await ExecutePlannedToolAsync(planned[cursor], token)
                     .ConfigureAwait(false);
+                if (IsNodeSelection(planned[cursor].Call) && !SelectionSucceeded(results[cursor]!.Response)) selectionFailed = true;
                 cursor++;
                 continue;
             }
@@ -135,6 +142,22 @@ public sealed partial class LocalSessionTurnHost
         }
         return parts;
     }
+
+    private static bool IsNodeSelection(JsonObject call)
+    {
+        var name = SessionWait.Text(call["name"]);
+        var args = call["args"] as JsonObject;
+        if (name == "node") return SessionWait.Text(args?["action"])?.Trim().Equals("select", StringComparison.OrdinalIgnoreCase) == true;
+        if (name != "call_tool" || args is null) return false;
+        if (SessionWait.Text(args["toolId"]) != "builtin:node" && !(SessionWait.Text(args["source"]) == "builtin" && SessionWait.Text(args["name"]) == "node")) return false;
+        try
+        {
+            var target = ToolRegistry.ObjectArg(args, "args", "argsJson");
+            return SessionWait.Text(target?["action"])?.Trim().Equals("select", StringComparison.OrdinalIgnoreCase) == true;
+        }
+        catch (Exception error) when (error is InvalidDataException or System.Text.Json.JsonException) { return false; }
+    }
+    private static bool SelectionSucceeded(JsonNode? result) => result is JsonObject value && value["error"] is null && value["canceled"]?.GetValue<bool>() != true && SessionWait.Text(value["nodeId"]) is { Length: > 0 };
 
     private async Task<TurnToolExecution> ExecutePlannedToolAsync(
         (JsonObject Call, JsonObject? Preset) planned,

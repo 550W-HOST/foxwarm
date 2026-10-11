@@ -1,3 +1,4 @@
+using Foxwarm.Tools;
 using System.Text.Json.Nodes;
 
 namespace Foxwarm.Sessions;
@@ -94,6 +95,30 @@ internal sealed partial class AgentCatalog
         {
             createGate.Release();
         }
+    }
+
+    internal Task SetNodeAsync(string name, string? node) => SetIsolationAsync(name, node, true, null);
+
+    internal async Task SetIsolationAsync(string name, string? node, bool updateNode, JsonArray? rules)
+    {
+        await createGate.WaitAsync();
+        try
+        {
+            if (!Exists(name)) throw new InvalidDataException("Agent not found.");
+            var next = MetadataSnapshot();
+            var row = next[name] as JsonObject ?? new JsonObject(); next[name] = row;
+            if (updateNode)
+            {
+                if (node is null) { row.Remove("isolated"); row.Remove("isolatedNode"); }
+                else { row["isolated"] = true; row["isolatedNode"] = node; }
+            }
+            if (rules is not null) row["toolRules"] = rules.DeepClone();
+            _ = IsolatedToolCompatibility.Metadata(row);
+            try { AtomicIndexWrite(indexPath, Payload(List().Where(id => id != "main"), next).ToJsonString()); }
+            catch (AuthorityCommittedException) { lock (stateGate) metadata = next; throw; }
+            lock (stateGate) metadata = next;
+        }
+        finally { createGate.Release(); }
     }
 
     private static JsonObject Payload(IEnumerable<string> names, JsonObject metadata) =>

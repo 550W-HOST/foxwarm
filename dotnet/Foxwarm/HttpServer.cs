@@ -36,6 +36,8 @@ internal sealed class HttpServer
             )
             .ToLowerInvariant();
         var builder = WebApplication.CreateBuilder(args);
+        // Node authentication uses Source-compatible query credentials. Do not log request URLs.
+        builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
         builder.WebHost.UseUrls($"http://{bindAddress}:{port}");
         builder.Logging.ClearProviders();
         builder.WebHost.ConfigureKestrel(server =>
@@ -88,12 +90,12 @@ internal sealed class HttpServer
             }
         );
         app.UseRouting();
-        app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
+        app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30), KeepAliveTimeout = TimeSpan.FromSeconds(10) });
         var loginFile = Path.Combine(AppContext.BaseDirectory, "packages", "webui", "login.html");
         app.Use(
             async (context, next) =>
             {
-                if (code?.IsCapabilityRequest(context) == true)
+                if (context.Request.Path == "/node_ws" || Foxwarm.Nodes.NodeBootstrap.IsPublicPath(context.Request.Path) || code?.IsCapabilityRequest(context) == true)
                 {
                     await next();
                     return;
@@ -224,6 +226,7 @@ internal sealed class HttpServer
                 return Results.Accepted();
             }
         );
+        Foxwarm.Nodes.NodeRoutes.Register(app, sessions, address);
         App = app;
     }
 

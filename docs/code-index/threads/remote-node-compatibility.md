@@ -11,7 +11,27 @@ CLI/browser/Android/sandbox Node
   -> current TypeScript Main or package consumer
 ```
 
-These remain real repository components, but are not shown as a .NET `SessionOwner` child chain: the current .NET host has local file/exec/terminal/MCP implementations and compatibility adapters without a blanket claim that remote Node/Worker runtimes are wired into .NET Main.
+These remain real repository components. The .NET host now connects the ordinary external Node path below, while the broader Source protocol remains a compatibility reference rather than a blanket runtime-support claim.
+
+## .NET external Node integration
+
+```text
+Administrator onboarding / Node pairing
+  -> ApprovedNodeRegistry + independent Node credentials
+  -> /node_ws -> NodeConnectionHub (protocol 1–3, capability snapshot)
+  -> SessionOwner + SessionSaveLane Node selection
+  -> ToolRegistry + concrete authorization
+  -> advertised ordinary Node tool -> exact-connection reply
+  -> existing JSON / image / ToolScript result pipeline
+```
+
+The [external Node unit](../units/external-nodes.md) owns the concrete trust/connection symbols. The `.NET` stage connects persistent approved credentials, pending approval/rejection/offline claim/one-hour expiry, administrator onboarding/list/inspect/rename/remove, packaged setup assets, credential-authenticated registration, incompatible quarantine, replacement fencing, browser JSON heartbeat, current/explicit-target ordinary tools, and request-time placement context. Agent binding is existing Agent metadata, not a new principal, Session or worker platform.
+
+Selection commits `currentNode` and clears `cwd` through the real owner save lane. Failure or cancellation fences every remaining unstarted model-batch call, including neutral wrappers and later selections. Node/cwd capture preserves remote namespaces and the existing Main-local unset-cwd invocation semantics. Offline Nodes do not block Main-owned history/status/deletion, and remote effects never fall back to Main. Peer results cannot create Main control receipts or path/cwd authority.
+
+Remote persistent exec/completion authority/ACK/waits/Stop, Node file transfer/copy, remote ToolScript source, image delivery, Code/PTY services and Shell HTTP remain separate phases. Negotiating protocol 3 does not expose external-owner, Session-event or Worker behavior. Ordinary inline native ToolScript calls are connected. Official CLI and Chrome MV3 extension qualification uses real owned host/client processes; physical Android hardware remains unqualified.
+
+The following sections describe the broader Source/package contracts, not additional current `.NET` capabilities.
 
 ## Pairing and capability boundary
 
@@ -27,14 +47,15 @@ Remote background exec completion is a narrower acknowledged protocol exception.
 
 ## Tool-result and transport compatibility
 
-Current CLI/browser writers use structured image result fields; any old source-specific image shapes belong only in a read-old adapter at remote response ingress, never in generic image processing or new writers. Browser extension `browser_*` tools and shared Puppeteer `browse_*` tools remain distinct. Heartbeat is asymmetric where current clients require it: protocol ping/pong is the transport liveness contract, while an extension JSON ping/pong mismatch remains a compatibility gap rather than a documented working path.
+Current CLI/browser writers use structured image result fields; any old source-specific image shapes belong only in a read-old adapter at remote response ingress, never in generic image processing or new writers. Browser extension `browser_*` tools and shared Puppeteer `browse_*` tools remain distinct. The .NET transport supports both socket ping/pong liveness and the official extension's JSON ping/pong. The extension path is qualified without changing its client.
 
 ## Current gaps
 
-Remote Node topology and Worker ownership remain migration work. Root package start/build still targets TypeScript Main (`lib/index.js`); `.NET Program.cs` is an experiment/host entry with explicit environment requirements, not a switched root launcher. Vector admission/search is not a current .NET capability.
+The full remote execution/transfer/service lifecycle and Worker ownership remain migration work. Root package start/build still targets TypeScript Main (`lib/index.js`); `.NET Program.cs` is an experiment/host entry with explicit environment requirements, not a switched root launcher. Vector admission/search is not a current .NET capability.
 
 ## Canonical units and tests
 
+- [External Node trust and ordinary tools](../units/external-nodes.md)
 - [Shared Node protocol](../units/shared-node-protocol.md)
 - [Shared persistent exec](../units/shared-persistent-exec.md)
 - [CLI Node](../units/cli-node-client.md)

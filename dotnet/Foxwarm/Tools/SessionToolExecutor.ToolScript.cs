@@ -30,7 +30,7 @@ internal sealed partial class SessionToolExecutor
                 scriptScope.Value = new(literal, budget);
                 try
                 {
-                    var resolved = registry.Resolve("call_tool", wrapper);
+                    var resolved = registry.Resolve("call_tool", wrapper, sessions.CurrentNode(hosted));
                     var concrete = new JsonObject
                     {
                         ["name"] = resolved.Name,
@@ -84,6 +84,7 @@ internal sealed partial class SessionToolExecutor
             {
                 await sessions.WaitForIdentityMutationAsync(hosted.Id, currentToken);
                 hosted.Entry.RequireIdentityAuthority();
+                if (sessions.CurrentNode(hosted) != "master") throw new NotSupportedException("Remote ToolScript source loading is not connected in this phase. Supply inline code.");
                 var files = Files ?? sessions.IdentityWorkspace(hosted);
                 var actual = files.Paths.FilePath(file);
                 await sessions.AuthorizeToolAsync(

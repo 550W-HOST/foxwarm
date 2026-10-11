@@ -29,13 +29,16 @@ internal sealed partial class SessionManager
         string agentName,
         bool createMainSession = true,
         string? initialMemory = null,
-        string? inherit = null
+        string? inherit = null,
+        string? isolatedNode = null
     )
     {
         await EnsureIdentityStartupAsync();
         if (!accepting)
             throw new InvalidOperationException("Host is shutting down.");
         RequireAgentCreation(agentName);
+        isolatedNode = string.IsNullOrWhiteSpace(isolatedNode) ? null : isolatedNode.Trim();
+        if (isolatedNode is not null) RequireApprovedAgentNode(isolatedNode);
         inherit = string.IsNullOrWhiteSpace(inherit) ? null : inherit.Trim();
         using var operation = TrackCreation();
         var gate = CreationKey(SessionIdentity.Build(agentName, "main"));
@@ -54,10 +57,10 @@ internal sealed partial class SessionManager
                     error
                 );
             }
-            if (!createMainSession)
-                return (agentName, null);
             try
             {
+                if (isolatedNode is not null) await agents.SetNodeAsync(agentName, isolatedNode);
+                if (!createMainSession) return (agentName, null);
                 var session = await CreateNamedLockedAsync(
                     agentName,
                     "main",
@@ -414,8 +417,7 @@ internal sealed partial class SessionManager
                         state.AuthorityEnvelope["parentSessionId"] = parentId;
                     if (displayName is not null)
                         state.AuthorityEnvelope["displayName"] = displayName;
-                    if (timerCreation)
-                        state.AuthorityEnvelope["currentNode"] = timerNode ?? "master";
+                    state.AuthorityEnvelope["currentNode"] = BoundNode(agentName) ?? (timerCreation ? timerNode : parentId is not null ? CurrentNode(Find(parentId)!) : null) ?? "master";
                     if (model is not null)
                         state.AuthorityEnvelope["model"] = model;
                     if (effort is not null)

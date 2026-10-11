@@ -36,6 +36,7 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
             ?? await runtime.GetOwnerAsync(context.SessionId)
             ?? throw new InvalidDataException("Session not found.");
         var command = message.Text.Trim();
+        if (command == "/node" || command.StartsWith("/node ", StringComparison.Ordinal)) return await HandleNodeCommandAsync(command, owner);
         if (IsIdentityMoveCommand(message.Text))
             return await HandleIdentityMoveCommandAsync(context, message.Text, owner);
         if (IsDeleteCommand(message.Text))

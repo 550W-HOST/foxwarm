@@ -17,3 +17,5 @@ Setup/Agent changes are authenticated and explicit. Setup save success means the
 ## Tests
 
 `WebUiStartupTests.cs`; `AppConfigurationRulesTests.cs`; AgentMemory/setup/model configuration tests.
+
+Agent creation and PUT updates accept existing `isolatedNode` metadata through the [external Node unit](./external-nodes.md). Binding changes use the established owner/save lane; they do not create a remote environment.

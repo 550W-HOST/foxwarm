@@ -31,10 +31,10 @@ MessageRouter -> SessionRuntime -> SessionOwner / SessionTurnRunner
                                   |             +-- compaction, Archive, Agent memory
                                   `-- Session catalog and authority persistence
 
-Current non-.NET/unsupported boundaries:
+Current integration boundaries:
   Vector-backed admission/search remains disabled or unsupported in the .NET host;
-  remote Node and Worker implementations remain in TypeScript/Python packages and
-  are not claimed as wired into this .NET owner chain.
+  ordinary external Node tools connect through .NET trust/transport/dispatch;
+  persistent remote exec, transfer, services and Worker ownership remain separate boundaries.
 
 Optional remote and compatibility components:
   CLI Node, browser extension, Android Node, sandbox runtime, VS Code Web assets,
@@ -67,6 +67,7 @@ Optional remote and compatibility components:
 | [Code and terminal](./modules/dotnet-code-terminal.md) | Code workbench/file/Git services, Code helper IPC, and native/managed terminal sessions. |
 | [Tasks and timers](./modules/dotnet-tasks-timers.md) | Task authority/service, cron parsing, timer persistence, and scheduling. |
 | [Images](./modules/dotnet-images.md) | Blob storage, codecs, transport conversion, provider deduplication, and token estimates. |
+| [External Nodes](./modules/dotnet-nodes.md) | Persistent trust, authenticated WebSocket negotiation, placement and ordinary remote tools. |
 | [MCP](./modules/dotnet-mcp.md) | Official SDK client connections, configuration, pooling, and outbound server calls. |
 
 ## Remaining repository components
@@ -96,5 +97,5 @@ Optional remote and compatibility components:
 ## Current gaps and open questions
 
 - **Current gap:** .NET Vector admission/search is disabled or explicitly unsupported (`WebUIChannel.History` returns `VECTOR_DISABLED`; identity-move/configuration paths do not make Vector a runtime capability). The TypeScript Vector implementation remains a compatibility/reference boundary only.
-- **Current gap:** remote Node and Worker packages exist, but their full owner/runtime path is not claimed as connected to the .NET Main owner chain.
+- **Current gap:** ordinary external Nodes are connected, but persistent remote exec, file transfer/delivery, Code/PTY services, Shell HTTP and Worker ownership are not yet connected to the .NET Main owner chain.
 - **Unconfirmed:** which remaining TypeScript Main routes and channel adapters will be retired versus retained as compatibility services after the .NET Main reaches production parity.

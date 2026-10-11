@@ -268,10 +268,7 @@ internal sealed partial class SessionManager
     )
     {
         var node = SessionGoal.Trim(SessionWait.Text(envelope["currentNode"]) ?? "");
-        if (node.Length > 0 && node != "master")
-            throw new UnsupportedSessionExecutionEnvironmentException(
-                $"The .NET host does not support this Session's execution environment: currentNode '{node}' is not master."
-            );
+        if (node.Length > 0 && node != "master") Foxwarm.Nodes.ApprovedNodeRegistry.ValidateId(node);
     }
 
     private readonly object admissionObservationGate = new();

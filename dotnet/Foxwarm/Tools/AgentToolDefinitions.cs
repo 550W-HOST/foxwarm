@@ -126,8 +126,45 @@ internal static class AgentToolDefinitions
             )
         );
 
+    private static JsonObject IsolationRules() => new()
+    {
+        ["type"] = "array",
+        ["maxItems"] = 256,
+        ["description"] = "Replace this agent's legacy isolated-tool rules. Use an empty array to clear them. These rules apply only while the agent is isolated.",
+        ["items"] = new JsonObject
+        {
+            ["oneOf"] = new JsonArray(new[] { "builtin", "node", "mcp" }.Select(source =>
+            {
+                var properties = new JsonObject
+                {
+                    ["effect"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("allow", "deny") },
+                    ["source"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray(source) },
+                    ["tool"] = new JsonObject { ["type"] = "string", ["maxLength"] = 128 }
+                };
+                var required = new JsonArray("effect", "source", "tool");
+                if (source != "builtin")
+                {
+                    var key = source == "node" ? "node" : "server";
+                    properties[key] = new JsonObject { ["type"] = "string", ["maxLength"] = 128 };
+                    required.Add(key);
+                }
+                return (JsonNode?)new JsonObject { ["type"] = "object", ["additionalProperties"] = false, ["properties"] = properties, ["required"] = required };
+            }).ToArray())
+        }
+    };
+
     public static IReadOnlyList<JsonObject> Definitions() =>
         [
+            Tool(
+                "set_agent_isolated",
+                "Set or clear legacy agent-level isolation and its non-master Node binding. These restrictions apply to all sessions in the agent, in addition to any instance-wide tool authorization policy.",
+                Parameters(new JsonObject
+                {
+                    ["agentName"] = String("Agent to update."),
+                    ["nodeId"] = String("Non-master Node to bind. An empty string clears isolation; omission leaves the current binding unchanged."),
+                    ["toolRules"] = IsolationRules()
+                }, "agentName")
+            ),
             Tool(
                 "move_session",
                 "Rename a session or move it to another agent, optionally creating the destination agent. The old session ID remains an alias.",

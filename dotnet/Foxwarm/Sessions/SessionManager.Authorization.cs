@@ -43,7 +43,8 @@ internal sealed partial class SessionManager
         string name,
         string? server,
         JsonObject args,
-        IReadOnlyList<AuthorizationPath> paths
+        IReadOnlyList<AuthorizationPath> paths,
+        string node = "master"
     ) =>
         new(
             source,
@@ -53,7 +54,7 @@ internal sealed partial class SessionManager
             paths,
             owner.Agent,
             owner.Id,
-            "master",
+            node,
             toolWorkspace,
             agents.AgentDirectory(owner.Agent),
             agents.MemoryDirectory(owner.Agent)
@@ -134,8 +135,11 @@ internal sealed partial class SessionManager
             throw new InvalidOperationException(
                 "Tool source is no longer the current Session owner."
             );
-        var paths =
-            resolved.Source == "node"
+        if (resolved.Source == "node") RequireNodeBoundary(owner, resolved.ExecutionNode);
+        var remote = resolved.Source == "node" && resolved.ExecutionNode != "master";
+        var paths = remote
+            ? RemoteAuthorizationPaths(resolved)
+            :            resolved.Source == "node"
                 && resolved.Name is "read" or "write" or "edit" or "apply_patch" or "exec"
             || resolved.Source == "builtin"
                 && resolved.Name
@@ -165,7 +169,8 @@ internal sealed partial class SessionManager
             resolved.Name,
             resolved.Server,
             resolved.Args,
-            paths
+            paths,
+            resolved.Source == "node" ? resolved.ExecutionNode : resolved.Name == "node" && SessionWait.Text(resolved.Args["nodeId"]) is string targetNode ? targetNode.Trim() : "master"
         );
         var policy = await authorization.LoadAsync(token);
         if (concreteTarget is not null)
@@ -204,19 +209,23 @@ internal sealed partial class SessionManager
         string source,
         string name,
         string? server = null,
-        bool unknownNode = false
+        bool unknownNode = false,
+        string? node = null
     )
     {
         if (name == "call_tool" && source == "builtin")
             return true;
-        var request = AuthorizationRequest(owner, source, name, server, new(), []);
+        var targetNode = node ?? (source == "node" ? CurrentNode(owner) : "master");
+        if (source == "node" && AgentIsolated(owner.Agent) && targetNode != (RecordedIsolationNode(owner.Agent) ?? "master")) return false;
+        var request = AuthorizationRequest(owner, source, name, server, new(), [], targetNode);
         return ToolAuthorizationEvaluation.Visible(authorization.Load(), request, unknownNode)
             && IsolatedToolCompatibility.Visible(
                 Isolation(owner.Agent),
                 source,
                 name,
                 server,
-                unknownNode
+                unknownNode,
+                targetNode
             );
     }
 
@@ -228,15 +237,25 @@ internal sealed partial class SessionManager
             throw new InvalidOperationException(
                 "Model request source is no longer the current Session owner."
             );
-        return new JsonArray(
-            tools
-                .Entries.Where(entry =>
-                    entry.DefaultInject
-                    && ToolVisible(owner, entry.Source, SessionWait.Text(entry.Definition["name"])!)
-                )
-                .Select(entry => (JsonNode?)ToolCallControls.ForModel(entry.Definition))
-                .ToArray()
-        );
+        var node = CurrentNode(owner);
+        var definitions = tools.Entries.Where(entry => entry.DefaultInject && entry.Source != "node" && ToolVisible(owner, entry.Source, SessionWait.Text(entry.Definition["name"])!)).Select(entry => (JsonNode?)ToolCallControls.ForModel(entry.Definition)).ToList();
+        foreach (var definition in (node == "master" ? tools.NodeDefinitions(node) : Nodes.DiscoveredDefinitions(node)).OfType<JsonObject>())
+            {
+                var name = SessionWait.Text(definition["name"])!;
+                if (node != "master" && (name == "exec" || tools.Entries.Any(entry => entry.Source == "builtin" && SessionWait.Text(entry.Definition["name"]) == name))) continue;
+                if (ToolVisible(owner, "node", name, node: node)) definitions.Add(ToolCallControls.ForModel(definition));
+            }
+        return new JsonArray(definitions.ToArray());
+    }
+
+    private static IReadOnlyList<AuthorizationPath> RemoteAuthorizationPaths(ResolvedTool resolved)
+    {
+        var paths = new List<AuthorizationPath>();
+        foreach (var key in new[] { "filePath", "cwd" })
+            if (SessionWait.Text(resolved.Args[key]) is string raw) paths.Add(new(key, raw, null, resolved.ExecutionNode));
+        if (resolved.Name == "apply_patch" && SessionWait.Text(resolved.Args["input"]) is string patch)
+            foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(patch, @"^\*\*\* (?:Add|Update|Delete) File: (.+)$", System.Text.RegularExpressions.RegexOptions.Multiline)) paths.Add(new("input", match.Groups[1].Value.TrimEnd('\r'), null, resolved.ExecutionNode));
+        return paths;
     }
 
     internal async Task<JsonObject> InstallConfigAsync(

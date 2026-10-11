@@ -33,7 +33,9 @@ internal sealed partial class SessionToolExecutor(
     private SessionManager Manager => sessions;
     private readonly AsyncLocal<TurnToolInvocation?> invocation = new();
 
-    private sealed record ExecSnapshot(string? Cwd);
+    private sealed record ExecSnapshot(string Node, string? Cwd);
+    internal string ExecutionNode => invocation.Value?.Node ?? execSnapshot.Value?.Node ?? sessions.CurrentNode(hosted);
+    internal string? ExecutionCwd => invocation.Value is { } active ? active.Cwd : execSnapshot.Value is { } captured ? captured.Cwd : SessionWait.Text(hosted.Entry.Snapshot().AuthorityEnvelope["cwd"]);
 
     private readonly AsyncLocal<ExecSnapshot?> execSnapshot = new();
     internal string CurrentCallId => invocation.Value?.CallId ?? "";
@@ -44,8 +46,8 @@ internal sealed partial class SessionToolExecutor(
     internal IDisposable CaptureDirectExecSegment()
     {
         var previous = execSnapshot.Value;
-        var raw = SessionWait.Text(hosted.Entry.Snapshot().AuthorityEnvelope["cwd"]);
-        execSnapshot.Value = new(raw);
+        var placement = sessions.ExecutionPlacement(hosted);
+        execSnapshot.Value = new(placement.Node, placement.Cwd);
         return new ExecSegmentScope(() => execSnapshot.Value = previous);
     }
 
@@ -64,7 +66,7 @@ internal sealed partial class SessionToolExecutor(
             var args =
                 call["args"] as JsonObject
                 ?? throw new InvalidDataException("Tool arguments must be an object.");
-            var resolved = registry.Resolve("exec", args);
+            var resolved = registry.Resolve("exec", args, execSnapshot.Value?.Node ?? sessions.CurrentNode(hosted));
             await AuthorizeAsync(resolved, token);
             return null;
         }
@@ -121,9 +123,13 @@ internal sealed partial class SessionToolExecutor(
         await sessions.WaitForIdentityMutationAsync(hosted.Id, token);
         hosted.Entry.RequireIdentityAuthority();
         var previous = invocation.Value;
+        var placement = sessions.ExecutionPlacement(hosted);
+        var captured = execSnapshot.Value ?? new ExecSnapshot(placement.Node, placement.Cwd);
         var current = new TurnToolInvocation(SessionWait.Text(call["id"]) ?? "")
         {
             Files = workspace is WorkspaceTools ? sessions.IdentityWorkspace(hosted) : null,
+            Node = captured.Node,
+            Cwd = captured.Cwd,
         };
         invocation.Value = current;
         try
@@ -207,7 +213,7 @@ internal sealed partial class SessionToolExecutor(
             var args =
                 functionCall["args"] as JsonObject
                 ?? throw new InvalidDataException("Tool arguments must be an object.");
-            var resolved = registry.Resolve(name, args);
+            var resolved = registry.Resolve(name, args, ExecutionNode);
             while (true)
             {
                 await sessions.WaitForIdentityMutationAsync(hosted.Id, cancellationToken);
@@ -215,8 +221,8 @@ internal sealed partial class SessionToolExecutor(
                 var identity = hosted.Id;
                 if (invocation.Value is { } current && workspace is WorkspaceTools)
                 {
-                    current.Files = sessions.IdentityWorkspace(hosted);
-                    current.ExecFiles = sessions.IdentityWorkspace(hosted, execSnapshot.Value?.Cwd);
+                    current.Files = sessions.IdentityWorkspace(hosted, current.Cwd, current.Node);
+                    current.ExecFiles = sessions.IdentityWorkspace(hosted, current.Cwd, current.Node);
                 }
                 if (invocation.Value?.Files is { } files)
                 {
@@ -471,10 +477,11 @@ internal sealed partial class SessionToolExecutor(
     internal static ToolRegistry CreateRegistry(
         JsonArray definitions,
         Foxwarm.McpClient mcp,
-        Func<SessionOwner, string> path
+        Func<SessionOwner, string> path,
+        Foxwarm.Nodes.NodeConnectionHub? nodes = null
     )
     {
-        var registry = new ToolRegistry(mcp, path);
+        var registry = new ToolRegistry(mcp, path, nodes);
         var handlers = new Dictionary<
             string,
             Func<SessionToolExecutor, JsonObject, CancellationToken, Task<JsonObject>>
@@ -507,6 +514,7 @@ internal sealed partial class SessionToolExecutor(
                 "move_session",
                 "delete_session",
                 "create_agent",
+                "set_agent_isolated",
                 "create_session",
                 "create_child_session",
                 "send_to_session",
@@ -578,13 +586,17 @@ internal sealed partial class SessionToolExecutor(
                 args,
                 token
             );
+        handlers["node"] = (owner, args, token) => owner.Manager.ExecuteNodeToolAsync(owner.Hosted, args, token);
+        handlers["node_bootstrap_info"] = (owner, args, _) => Task.FromResult(owner.Manager.NodeBootstrapInfo(args));
+        handlers["node_pair_list"] = (owner, args, _) => Task.FromResult(owner.Manager.NodePairList(args));
+        handlers["node_pair_approve"] = (owner, args, _) => owner.Manager.NodePairApproveAsync(args);
         handlers["search_tools"] = (owner, args, token) =>
             UnifiedTools.SearchAsync(
                 registry,
                 args,
                 token,
                 (source, name, server) =>
-                    owner.Manager.ToolVisible(owner.Hosted, source, name, server),
+                    owner.Manager.ToolVisible(owner.Hosted, source, name, source == "mcp" ? server : null, node: source == "node" ? server : null),
                 owner.ScriptBudget,
                 owner.Hosted
             );
@@ -608,6 +620,10 @@ internal sealed partial class SessionToolExecutor(
                 name
                     is not (
                         "mcp_config"
+                        or "set_agent_isolated"
+                        or "node_bootstrap_info"
+                        or "node_pair_list"
+                        or "node_pair_approve"
                         or "list_mcp_servers"
                         or "delete_session"
                         or "set_config"
@@ -651,6 +667,8 @@ internal sealed record TurnToolReceipt(
 internal sealed class TurnToolInvocation(string callId)
 {
     internal string CallId { get; } = callId;
+    internal string Node { get; set; } = "master";
+    internal string? Cwd { get; set; }
     internal WorkspaceTools? Files { get; set; }
     internal WorkspaceTools? ExecFiles { get; set; }
     internal JsonObject? Timing { get; set; }

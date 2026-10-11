@@ -71,7 +71,7 @@ internal sealed partial class WebUIChannel
                         await JsonNode.ParseAsync(request.Body) as JsonObject
                         ?? throw new InvalidDataException("Agent creation needs an object.");
                     if (
-                        body.Any(item => item.Key is not ("agentId" or "inheritAgent"))
+                        body.Any(item => item.Key is not ("agentId" or "inheritAgent" or "isolatedNode"))
                         || body["agentId"] is not JsonValue agent
                         || !agent.TryGetValue<string>(out var name)
                     )
@@ -81,7 +81,8 @@ internal sealed partial class WebUIChannel
                         : body["inheritAgent"]!.GetValue<string>()?.Trim();
                     var created = await sessions.CreateAgentAsync(
                         name.Trim(),
-                        inherit: string.IsNullOrEmpty(inherit) ? null : inherit
+                        inherit: string.IsNullOrEmpty(inherit) ? null : inherit,
+                        isolatedNode: body["isolatedNode"]?.GetValue<string>()
                     );
                     return Results.Json(
                         new
@@ -162,22 +163,9 @@ internal sealed partial class WebUIChannel
                         || !body.ContainsKey("inheritAgent") && !body.ContainsKey("isolatedNode")
                     )
                         throw new InvalidDataException("Provide inheritAgent and/or isolatedNode.");
-                    if (
-                        body.ContainsKey("isolatedNode")
-                        && (
-                            sessions.AgentIsolated(agentId)
-                            || body["isolatedNode"] is not null
-                                && !string.IsNullOrWhiteSpace(
-                                    body["isolatedNode"]!.GetValue<string>()
-                                )
-                        )
-                    )
-                        return Results.Json(
-                            new { error = "Changing Agent isolation has not been implemented." },
-                            statusCode: 501
-                        );
                     if (!sessions.Agents().Contains(agentId))
                         return Results.NotFound(new { error = "Agent not found." });
+                    if (body.ContainsKey("isolatedNode")) await sessions.SetAgentNodeAsync(agentId, SessionWait.Text(body["isolatedNode"]));
                     if (body.ContainsKey("inheritAgent"))
                         await sessions.SetAgentInheritAsync(
                             agentId,
