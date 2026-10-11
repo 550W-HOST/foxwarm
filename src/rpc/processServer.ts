@@ -102,7 +102,10 @@ export class ProcessRpcServer {
 
     const linked = buildLinkedAbortController(undefined, message.deadlineAt);
     this.activeRequests.set(message.requestId, linked.controller);
+    let settleCancellation = false;
     try {
+      settleCancellation = this.registry.getService(message.service, message.serviceVersion)
+        .descriptor.methods[message.method]?.cancellation === 'settle';
       const result = await this.registry.invoke(
         message.service,
         message.serviceVersion,
@@ -123,7 +126,8 @@ export class ProcessRpcServer {
           ),
         },
       );
-      if (!linked.controller.signal.aborted) {
+      if (!linked.controller.signal.aborted || (settleCancellation
+        && linked.controller.signal.reason?.code === 'RPC_CANCELLED')) {
         this.send({
           kind: this.kind('rpc-response'),
           protocolVersion: RPC_PROTOCOL_VERSION,
@@ -135,6 +139,7 @@ export class ProcessRpcServer {
       }
     } catch (error) {
       this.respondError(message.requestId, linked.controller.signal.aborted
+        && !(settleCancellation && linked.controller.signal.reason?.code === 'RPC_CANCELLED')
         ? (linked.controller.signal.reason || error)
         : error);
     } finally {

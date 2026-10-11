@@ -452,6 +452,40 @@ test('resident Docker exec reuses canonical foreground, cwd, failure, artifact-r
     assert.equal(programmatic.content, 'script-data\n'); assert.equal(programmatic.status, 'completed'); assert.equal(programmatic.exitCode, 7);
     assert.equal(programmatic.truncated, false); assert.ok(programmatic.logPath.startsWith(artifactDir));
 
+    const ready = path.join(repo, 'stop-ready');
+    const release = path.join(repo, 'stop-release');
+    const controller = new AbortController();
+    const waiting = invokeProviderTool(provider, { sourceSessionId: 'session-exec', nodeId: 'n', toolName: 'exec',
+      args: { command: `printf partial; touch '${ready}'; while [ ! -f '${release}' ]; do sleep 0.05; done; printf finished`, timeout: 60 },
+      context: { agent: 'main', currentNode: 'n', cwd: repo, deferSessionCwdSync: true } }, { signal: controller.signal });
+    try {
+      const deadline = Date.now() + 5000;
+      while (!await fs.pathExists(ready)) {
+        if (Date.now() > deadline) throw new Error('Docker adapter fixture did not become ready.');
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      const before = Date.now();
+      controller.abort();
+      const actual = await waiting as any;
+      const interrupted = typeof actual === 'string' ? actual : actual.output;
+      assert(Date.now() - before < 1500);
+      assert.match(interrupted, /partial[\s\S]*not killed/);
+      assert.match(interrupted, /execId:/);
+      assert.doesNotMatch(interrupted, /timeout.*60|longer than 60/i);
+      const running = (await fs.readJson(path.join(artifactDir, 'running-exec.json'))).execs[0];
+      await fs.writeFile(release, 'finish normally');
+      const completedBy = Date.now() + 5000;
+      while (!await fs.pathExists(running.statusPath)) {
+        if (Date.now() > completedBy) throw new Error('Docker adapter command did not complete normally after handoff.');
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      assert.equal((await fs.readJson(running.statusPath)).exitCode, 0);
+      assert.match(await fs.readFile(running.logPath, 'utf8'), /partialfinished/);
+    } finally {
+      await fs.writeFile(release, 'finish normally');
+      await waiting.catch(() => {});
+    }
+
     const envArgs = launches[0].filter((_value, index, all) => index > 0 && all[index - 1] === '-e');
     assert.ok(envArgs.every(value => /^(TERM|FOXWARM_EXEC_[A-Z_]+)=/.test(value))); assert.equal(envArgs.some(value => /HOME|DOCKER|SESSION/.test(value)), false);
     const artifactFiles = (await fs.readdir(artifactDir, { recursive: true }) as string[]).map(item => path.join(artifactDir, item)); const logPath = artifactFiles.find(item => item.endsWith('.log')); assert.ok(logPath);

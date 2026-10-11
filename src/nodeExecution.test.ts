@@ -815,6 +815,7 @@ test('select and subsequent exec/file calls share the newly selected environment
         { id: 'file', name: 'read', args: { filePath: 'target.txt' } },
       ], { sessionId: sourceId }, owner, worker ? { currentSessionEffects: {
         placement: 'session-worker', persistSession: async () => { persists++; },
+        registerAbortController: () => {}, clearAbortController: () => {},
       } as any } : undefined);
       const responses = batchResponses(result);
       assert.deepEqual(responses.map(item => item.tool_use_id), ['select', 'exec-a', 'exec-b', 'file']);
@@ -878,6 +879,7 @@ test('select failures in validation, availability, authorization, and canonical 
       ], { sessionId: sourceId, onToolStart: ({ name }: any) => starts.push(name) }, session,
       scenario.worker ? { currentSessionEffects: {
         placement: 'session-worker', persistSession: async () => { persists++; },
+        registerAbortController: () => {}, clearAbortController: () => {},
       } as any } : undefined);
       const responses = batchResponses(result);
       assert.deepEqual(responses.map(item => item.tool_use_id), ['select', 'old-node-exec', 'file', 'wait', 'unresolved', 'canceled']);
@@ -940,4 +942,33 @@ test('ordinary errors, other node actions, external same-name tools, and cancele
     (nodeExecution as any).executeNodeTool = originalNodeExecute;
     await cleanup(sourceId);
   }
+});
+
+test('foreground Stop does not forward abort-to-kill to a provider without exec-wait handoff support', async () => {
+  const controller = new AbortController();
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  let finish!: () => void;
+  const finished = new Promise<void>(resolve => { finish = resolve; });
+  let backendSignal: AbortSignal | undefined;
+  const provider = {
+    id: 'no-wait-handoff',
+    listNodes: (): [] => [],
+    getNode: (nodeId: string) => ({ id: nodeId, provider: 'no-wait-handoff', type: 'fixture', kind: 'remote' as const,
+      availability: 'ready' as const, primitiveBackends: { exec: true as const } }),
+    invokeExec: async (_request: any, options: any) => {
+      backendSignal = options.signal;
+      entered();
+      await finished;
+      return { output: 'actual provider result' };
+    },
+  };
+  const registry = new NodeProviderRegistry([provider]);
+  const pending = registry.invokeTool({ sourceSessionId: 'fixture', nodeId: 'fixture', toolName: 'exec', args: {}, context: { agent: 'main' } },
+    { signal: controller.signal, foregroundToolCancellation: true });
+  await started;
+  controller.abort();
+  finish();
+  assert.equal(backendSignal, undefined, 'Stop cannot reach a provider abort-to-kill mechanism');
+  assert.deepEqual(await pending, { output: 'actual provider result' });
 });

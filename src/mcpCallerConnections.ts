@@ -172,7 +172,8 @@ async function setup(entry: McpCallerConnection) {
   }
 }
 
-export async function withMcpCallerConnection<T>(options: McpConnectionOptions, fn: (entry: McpCallerConnection) => Promise<T>): Promise<T> {
+export async function withMcpCallerConnection<T>(options: McpConnectionOptions, fn: (entry: McpCallerConnection) => Promise<T>, signal?: AbortSignal): Promise<T> {
+  signal?.throwIfAborted();
   const owner = options.owner;
   if (owner && !owner.isActive()) throw new Error('MCP connection owner is unavailable.');
   let byServer = owner ? connections.get(key(owner)) : undefined;
@@ -188,11 +189,26 @@ export async function withMcpCallerConnection<T>(options: McpConnectionOptions, 
   }
   if (entry.idle) clearTimeout(entry.idle);
   entry.active++;
+  let preparing = true;
+  const cancelSetup = () => {
+    // A shared connection may also carry an independent background invocation.
+    // Do not close it out from under another in-flight request.
+    if (preparing && entry.active === 1) void dispose(entry);
+  };
+  signal?.addEventListener('abort', cancelSetup, { once: true });
   try {
+    if (signal?.aborted) cancelSetup();
     await entry.setup;
+    preparing = false;
+    signal?.removeEventListener('abort', cancelSetup);
+    signal?.throwIfAborted();
     assertLive(entry);
     return await fn(entry);
+  } catch (error) {
+    if (signal?.aborted && entry.active === 1) await dispose(entry);
+    throw error;
   } finally {
+    signal?.removeEventListener('abort', cancelSetup);
     entry.active--;
     if (!owner) await dispose(entry);
     else scheduleIdle(entry);

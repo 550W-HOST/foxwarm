@@ -1,3 +1,4 @@
+import { throwIfToolStopped } from '../toolCallControls';
 import { resolveObjectArgWithJsonFallback } from '../jsonObjectArgs';
 import * as mcpExternal from '../mcpExternalService';
 import { executeNodeTool } from '../nodeExecution';
@@ -168,8 +169,10 @@ async function checkPermission(resolved: ResolvedTool, ctx: ToolContext): Promis
 
 export async function executeResolvedTool(resolved: ResolvedTool, ctx: ToolContext): Promise<any> {
   if (!ctx.sessionId) throw new Error('Tool execution requires an active source session.');
-  if (resolved.source === 'mcp') return mcpExternal.callMcpTool(ctx.sessionId, resolved.server, resolved.name, resolved.args);
+  throwIfToolStopped(ctx.signal);
+  if (resolved.source === 'mcp') return mcpExternal.callMcpTool(ctx.sessionId, resolved.server, resolved.name, resolved.args, ctx.signal);
   await checkPermission(resolved, ctx);
+  throwIfToolStopped(ctx.signal);
   // Only a concrete file capability can report a path. Bind its Node identity to
   // the trusted resolved target, never to a remote result or the current UI Node.
   const { onResolvedPaths, ...toolCtx } = ctx;
@@ -179,7 +182,7 @@ export async function executeResolvedTool(resolved: ResolvedTool, ctx: ToolConte
       const result = await executeNodeTool(ctx.sessionId, resolved.executionNode, resolved.name, resolved.args,
         resolved.routingSnapshot
           ? { ...resolved.routingSnapshot, ...(ctx.deferSessionCwdSync ? { deferSessionCwdSync: true } : {}) }
-          : (ctx.deferSessionCwdSync ? { currentNode: resolved.executionNode, deferSessionCwdSync: true } : undefined), ctx.programmatic);
+          : (ctx.deferSessionCwdSync ? { currentNode: resolved.executionNode, deferSessionCwdSync: true } : undefined), ctx.programmatic, ctx.signal);
       if (!fileTool || !result || typeof result !== 'object' || Array.isArray(result)
         || !Object.prototype.hasOwnProperty.call(result, RESOLVED_PATH_SIDECAR)) return result;
       const { [RESOLVED_PATH_SIDECAR]: paths, ...visible } = result;

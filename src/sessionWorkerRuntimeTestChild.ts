@@ -122,6 +122,11 @@ async function start(): Promise<void> {
       };
     }
     if (parts) await options.appendMessage({ role: 'user', parts });
+    if (process.env.FOXWARM_TEST_STOP_MCP_TOOLS && chatCount === 1) {
+      const calls = JSON.parse(process.env.FOXWARM_TEST_STOP_MCP_TOOLS);
+      await options.appendMessage({ role: 'model', parts: calls.map((functionCall: any) => ({ functionCall })) });
+      return { toolCalls: calls, allParts: calls.map((functionCall: any) => ({ functionCall })) };
+    }
     if (process.env.FOXWARM_TEST_CHANNEL_TARGET && chatCount === 1) {
       const call = {
         id: 'worker-unattached-send', name: 'send_to_channel',

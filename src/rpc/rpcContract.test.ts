@@ -64,6 +64,21 @@ async function runContract(name: string, createTransport: () => Promise<RpcTrans
       controller.abort(abortReason);
       await assert.rejects(waiting, (error: any) => error === abortReason);
 
+      for (const fail of [false, true]) {
+        const cooperative = new AbortController();
+        const settled = client.call('settle', { delayMs: 40, fail }, { signal: cooperative.signal });
+        const timer = setTimeout(() => cooperative.abort(new Error('caller stopped')), 10);
+        try {
+          if (fail) await assert.rejects(settled, { code: 'SETTLED_FAILURE', message: 'actual handler error' });
+          else assert.deepEqual(await settled, { completed: true, aborted: true });
+        } finally { clearTimeout(timer); }
+      }
+      const cooperativeDeadline = new AbortController();
+      const bounded = client.call('settle', { delayMs: 100 }, { signal: cooperativeDeadline.signal, timeoutMs: 30 });
+      const cancelTimer = setTimeout(() => cooperativeDeadline.abort(), 10);
+      try { await assert.rejects(bounded, { code: 'RPC_DEADLINE_EXCEEDED' }); }
+      finally { clearTimeout(cancelTimer); }
+
       await transport.drain();
       await assert.rejects(client.call('echo', { nested: { value: 1 } }), (error: any) => error.code === 'RPC_DRAINING');
     } finally {

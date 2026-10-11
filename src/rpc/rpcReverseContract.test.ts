@@ -53,6 +53,11 @@ test('reverse process RPC preserves unary contract, bounds, cancellation, drain,
     assert.equal((await call('fail', { code: 'EXPECTED_REVERSE' })).error.details.safe.value, 1);
     assert.equal((await call('deadline', { delayMs: 100, timeoutMs: 10 })).error.code, 'RPC_DEADLINE_EXCEEDED');
     assert.equal((await call('cancel', { delayMs: 100, cancelAfterMs: 10 })).error.code, 'TEST_CANCEL');
+    assert.deepEqual((await call('settle', { delayMs: 40, cancelAfterMs: 10 })).result, { completed: true, aborted: true });
+    assert.equal((await call('settle', { delayMs: 40, cancelAfterMs: 10, fail: true })).error.code, 'SETTLED_FAILURE');
+    assert.equal((await call('settle', { delayMs: 100, cancelAfterMs: 10, timeoutMs: 30 })).error.code, 'RPC_DEADLINE_EXCEEDED');
+    // The deadline ends caller waiting, not the handler's resource ownership.
+    await new Promise(resolve => setTimeout(resolve, 100));
     const pressure = await call('backpressure', { delayMs: 30 });
     assert.equal(pressure.result.second.code, 'RPC_BACKPRESSURE');
     assert.deepEqual(pressure.result.first, { completed: true });

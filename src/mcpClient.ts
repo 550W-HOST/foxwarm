@@ -466,13 +466,15 @@ function httpOptions(name: string, config: McpServerConfig, owner?: McpConnectio
 }
 
 async function withServerConnection<T>(serverName: string, config: McpServerConfig,
-  fn: (connection: Pick<McpCallerConnection, 'client' | 'reception'>) => Promise<T>, owner?: McpConnectionOwner): Promise<T> {
-  if (normalizeTransport(config) !== 'stdio') return withMcpCallerConnection(httpOptions(serverName, config, owner), fn);
+  fn: (connection: Pick<McpCallerConnection, 'client' | 'reception'>) => Promise<T>, owner?: McpConnectionOwner, signal?: AbortSignal): Promise<T> {
+  signal?.throwIfAborted();
+  if (normalizeTransport(config) !== 'stdio') return withMcpCallerConnection(httpOptions(serverName, config, owner), fn, signal);
 
   const connection = await getOrCreatePooledStdioConnection(serverName, config);
   connection.lastUsedAt = Date.now();
   clearStdioIdleTimer(connection);
   try {
+    signal?.throwIfAborted();
     return await fn(connection);
   } finally {
     connection.lastUsedAt = Date.now();
@@ -609,39 +611,56 @@ export async function listTools(serverName?: string, signal?: AbortSignal, owner
   const { name, config } = await getServerConfig(serverName);
   return withServerConnection(name, config, async ({ client }) => {
     return signal ? await client.listTools(undefined, { signal }) : await client.listTools();
-  }, owner);
+  }, owner, signal);
 }
 
-export async function callTool(serverName: string | undefined, tool: string, args?: Record<string, any>, options: { signal?: AbortSignal; rawResult?: boolean; owner?: McpConnectionOwner } = {}) {
+export async function callTool(serverName: string | undefined, tool: string, args?: Record<string, any>, options: { signal?: AbortSignal; rawResult?: boolean; owner?: McpConnectionOwner; cancellationLabel?: string } = {}) {
   const { name, config } = await getServerConfig(serverName);
-  return withServerConnection(name, config, async ({ client, reception }) => {
-    if (tool === 'foxwarm_session' && args?.action === 'send'
-      && client.getServerCapabilities?.()?.experimental?.[MCP_NOTIFICATION_CAPABILITY]?.version === 1) {
-      if (typeof args.allowReply === 'boolean' && typeof args.reply === 'boolean' && args.allowReply !== args.reply) {
-        throw new Error('allowReply and legacy reply must agree when both are provided. No tool call was sent.');
+  let dispatched = false;
+  try {
+    return await withServerConnection(name, config, async ({ client, reception }) => {
+      if (tool === 'foxwarm_session' && args?.action === 'send'
+        && client.getServerCapabilities?.()?.experimental?.[MCP_NOTIFICATION_CAPABILITY]?.version === 1) {
+        if (typeof args.allowReply === 'boolean' && typeof args.reply === 'boolean' && args.allowReply !== args.reply) {
+          throw new Error('allowReply and legacy reply must agree when both are provided. No tool call was sent.');
+        }
+        if (args.allowReply === true || args.reply === true) {
+          if (!reception) throw new Error('Start mcp_notifications for this Session before requesting explicit replies. No tool call was sent.');
+          await reception.assertActive();
+        }
       }
-      if (args.allowReply === true || args.reply === true) {
-        if (!reception) throw new Error('Start mcp_notifications for this Session before requesting explicit replies. No tool call was sent.');
-        await reception.assertActive();
+      options.signal?.throwIfAborted();
+      const params = { name: tool, arguments: args || {} };
+      const requestOptions = {
+        ...(config.timeoutSeconds === undefined ? {} : { timeout: config.timeoutSeconds * 1000 }),
+        ...(options.signal ? { signal: options.signal } : {}),
+      };
+      try {
+        dispatched = true;
+        const result = !Object.keys(requestOptions).length
+          ? await client.callTool(params)
+          : await client.callTool(params, undefined, requestOptions);
+        return options.rawResult ? result : normalizeMcpToolResult(result);
+      } catch (error) {
+        // The SDK dispatches cancellation asynchronously. Keep this short-lived HTTP
+        // transport open briefly so its best-effort notification can reach the server.
+        if (options.signal?.aborted) await new Promise(resolve => setTimeout(resolve, 100));
+        throw error;
       }
+    }, options.owner, options.signal);
+  } catch (error: any) {
+    const signal = options.signal;
+    const isCancellation = signal?.aborted && (!dispatched || error === signal.reason
+      || error?.name === 'AbortError'
+      || (error?.code === -32001 && String(error?.message).includes(String(signal.reason))));
+    if (isCancellation) {
+      const label = options.cancellationLabel || 'caller cancellation';
+      throw new Error(dispatched
+        ? `MCP call was cancelled by ${label} after dispatch. No result was received; the remote tool may already have executed or caused side effects. Cancellation does not roll those effects back.`
+        : `MCP call was not started because ${label} cancelled it; the tool was not executed.`);
     }
-    const params = { name: tool, arguments: args || {} };
-    const requestOptions = {
-      ...(config.timeoutSeconds === undefined ? {} : { timeout: config.timeoutSeconds * 1000 }),
-      ...(options.signal ? { signal: options.signal } : {}),
-    };
-    try {
-      const result = !Object.keys(requestOptions).length
-        ? await client.callTool(params)
-        : await client.callTool(params, undefined, requestOptions);
-      return options.rawResult ? result : normalizeMcpToolResult(result);
-    } catch (error) {
-      // The SDK dispatches cancellation asynchronously. Keep this short-lived HTTP
-      // transport open briefly so its best-effort notification can reach the server.
-      if (options.signal?.aborted) await new Promise(resolve => setTimeout(resolve, 100));
-      throw error;
-    }
-  }, options.owner);
+    throw error;
+  }
 }
 
 export async function upsertServer(name: string, server: McpServerConfig) {

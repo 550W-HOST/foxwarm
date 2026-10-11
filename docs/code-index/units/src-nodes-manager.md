@@ -2,6 +2,8 @@
 
 Files: src/nodes/manager.ts, src/nodes/protocolCompatibility.test.ts, src/nodes/sessionEventCapability.ts, src/nodes/sessionEventCapability.test.ts, src/nodes/remoteExecLiveness.ts, src/nodes/remoteExecLiveness.test.ts, src/nodes/legacyToolResultCompatibility.ts, src/nodes/legacyToolResultCompatibility.test.ts
 
+Optional CLI `execWaitCancellation` plus existing background-registration support permits request-scoped `tool_call_cancel`; settlement, timeout and disconnect remove its listener. Legacy Nodes retain their actual receipt with an explicit early-wait limitation. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
+
 ## Purpose
 
 Maintains the in-memory authenticated remote-node transport/runtime and routes tool/file/session requests between Foxwarm sessions and remote WebSocket connections, plus exec-only Shell HTTP connections. The manager still registers the local `master` record for existing local/compound/service behavior, while generic Node discovery and non-master provider resolution live in `src/nodes/providerRegistry.ts`.

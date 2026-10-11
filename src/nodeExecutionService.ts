@@ -63,8 +63,8 @@ export type NodeLifecycleRequest = {
 };
 export type NodeLifecycleResponse = { result: NodeLifecycleResult };
 
-export const nodeExecutionServiceDescriptor = defineRpcService('node-execution', 5, {
-  execute: rpcMethod<NodeExecutionRequest, NodeExecutionResponse>(),
+export const nodeExecutionServiceDescriptor = defineRpcService('node-execution', 6, {
+  execute: rpcMethod<NodeExecutionRequest, NodeExecutionResponse>({ cancellation: 'settle' }),
   list: rpcMethod<NodeTopologyListRequest, NodeTopologyListResponse>(),
   select: rpcMethod<NodeSelectRequest, NodeSelectResponse>(),
   copy: rpcMethod<NodeCopyRequest, NodeCopyResponse>(),
@@ -278,7 +278,7 @@ export function createNodeExecutionServiceHandler(options: {
                 ...(providerRouting.deferSessionCwdSync === true ? { deferSessionCwdSync: true } : {}),
               } : {}),
             },
-          }, { signal: rpcContext.signal }),
+          }, { signal: rpcContext.signal, foregroundToolCancellation: true }),
         };
       } catch (error) {
         rethrowProviderError(error);

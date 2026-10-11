@@ -1,3 +1,4 @@
+import { throwIfToolStopped } from '../toolCallControls';
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from '../tools/placement';
 import { nodesManager } from './manager';
 import { CLI_NODE_CAPABILITIES } from '../../packages/shared/dist/nodeCapabilities';
@@ -77,6 +78,8 @@ export type NodeDefaultCwdRequest = {
 };
 
 export type NodeProviderCallOptions = {
+  /** Internal turn cancellation may end exec waiting but must never kill a provider launcher. */
+  foregroundToolCancellation?: true;
   signal?: AbortSignal;
   /** Main-local external context fence, checked immediately before a provider effect. */
   assertExternalOwnerActive?: () => void;
@@ -140,6 +143,8 @@ export type NodeLifecycleProviderSummary = {
 };
 
 export interface NodeProvider {
+  /** Cancellation ends foreground exec waiting with a real background receipt, never by killing its launcher. */
+  readonly supportsExecWaitCancellation?: true;
   readonly id: string;
   readonly [FIRST_PARTY_DOCKER_EXTERNAL_OWNER]?: true;
   initialize?(): Promise<void>;
@@ -301,6 +306,11 @@ export class NodeProviderRegistry {
         'NODE_EXECUTION_TOOL_UNAVAILABLE',
         `Tool \`${request.toolName}\` not available on node \`${request.nodeId}\`.`,
       );
+    }
+    if (options?.foregroundToolCancellation) {
+      throwIfToolStopped(options.signal);
+      options = { ...options, signal: request.toolName === 'exec' && resolved.provider.supportsExecWaitCancellation
+        ? options.signal : undefined };
     }
     if (resolved.descriptor.primitiveBackends) {
       return this.invokePrimitiveTool(resolved.provider, resolved.descriptor, request, options);
@@ -703,6 +713,7 @@ export class MasterNodeProvider implements NodeProvider {
 }
 
 export class AuthenticatedRemoteNodeProvider implements NodeProvider {
+  readonly supportsExecWaitCancellation = true;
   readonly id = 'authenticated-remote';
 
   private descriptorForRuntimeNode(nodeId: string): NodeDescriptor | undefined {
@@ -804,6 +815,7 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
       request.sourceSessionId,
       routingSnapshot,
       request.context.programmatic,
+      options?.signal,
     );
   }
 

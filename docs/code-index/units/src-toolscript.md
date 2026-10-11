@@ -19,6 +19,8 @@ Implements persisted foreground/background ToolScript runs in the Monty 0.0.19 P
 
 ToolScript result/run types are internal, not exported TypeScript API types.
 
+Host calls inherit only the current invocation signal and check it before another host effect; persisted background resumption receives a fresh context, not an old turn signal. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
+
 ## Host API
 
 The default-injected `run_script` description includes the Python-subset syntax, synchronous `call_tool` usage with a tool name or tool ID, and a minimal inline example with `args` and `return`.

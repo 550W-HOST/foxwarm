@@ -1,3 +1,4 @@
+import { throwIfToolStopped } from './toolCallControls';
 import {
   LocalRpcTransport,
   RpcClient,
@@ -77,15 +78,18 @@ export async function executeNodeTool(
   args: Record<string, unknown>,
   routingSnapshot?: NodeExecutionRoutingSnapshot,
   programmatic?: true,
+  signal?: AbortSignal,
 ): Promise<any> {
-  const response = await (await getClient()).call('execute', {
+  const executionClient = await getClient();
+  throwIfToolStopped(signal);
+  const response = await executionClient.call('execute', {
     sourceSessionId,
     nodeId,
     toolName,
     args,
     ...(routingSnapshot ? { routingSnapshot } : {}),
     ...(programmatic ? { programmatic } : {}),
-  });
+  }, { signal });
   return response.result;
 }
 

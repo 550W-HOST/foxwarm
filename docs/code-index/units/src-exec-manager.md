@@ -13,11 +13,11 @@ Provides a thin application-level wrapper around `PersistentExecManager` (from t
 - `getDefaultExecRuntime()` — read-only access to the factory-built process-default runtime; callers cannot replace or stop it
 - `initializeExecManager(options?)` — bootstraps the persistent exec manager
 - `startPersistentExec(options)` — launches a new tracked shell execution
-- `waitForExecCompletion(execId, timeoutMs)` — blocks until exec finishes or times out
+- `waitForExecCompletion(execId, timeoutMs, signal?)` — waits for completion, timeout, or foreground wait interruption without terminating the process
 - `markExecForBackgroundNotification(execId)` — flags an exec to notify on completion
 - `finalizeForegroundExec(execId)` — cleans up a foreground exec entry
 - `buildForegroundExecResult(entry, status, warning?)` — formats completed exec output and optional footer warning for display
-- `buildBackgroundTimeoutResult(entry, timeoutSeconds, warning?)` — formats timeout message and optional metadata warning for backgrounded exec
+- `buildBackgroundTimeoutResult(entry, timeoutSeconds, warning?, waitEndedBy?)` — formats the existing partial-output/background receipt, distinguishing an interrupted wait from a timeout
 - `readFinishedExecWorkingDirectory(entry)` — reads final cwd of a completed exec
 - `readLiveExecWorkingDirectory(entry)` — reads current cwd of a running exec
 - `listRunningExecs()` — returns all currently tracked exec entries
@@ -31,11 +31,11 @@ Provides a thin application-level wrapper around `PersistentExecManager` (from t
 | `completionDispatcher` (default) | ~46–51 | Default completion callback that queues a session system event |
 | `initializeExecManager(options?)` | ~53–58 | Sets custom dispatcher and initializes the underlying manager |
 | `startPersistentExec(options)` | ~60–62 | Delegates exec start to PersistentExecManager with default nodeId |
-| `waitForExecCompletion(execId, timeoutMs)` | ~64–66 | Delegates wait-for-completion to the manager |
+| `waitForExecCompletion(execId, timeoutMs, signal?)` | ~64–66 | Delegates wait-for-completion to the manager |
 | `markExecForBackgroundNotification(execId)` | ~68–70 | Delegates background notification marking |
 | `finalizeForegroundExec(execId)` | ~72–74 | Delegates foreground exec cleanup |
 | `buildForegroundExecResult(entry, status, warning?)` | ~66 | Delegates foreground result formatting, including the `--- / Exit code` footer and optional timeout-clamp warning |
-| `buildBackgroundTimeoutResult(entry, timeoutSeconds, warning?)` | ~70 | Delegates background timeout result formatting and optional timeout-clamp warning |
+| `buildBackgroundTimeoutResult(entry, timeoutSeconds, warning?, waitEndedBy?)` | ~70 | Delegates partial background receipt formatting with timeout or interruption reason |
 | `readFinishedExecWorkingDirectory(entry)` | ~84–86 | Delegates reading finished exec cwd |
 | `readLiveExecWorkingDirectory(entry)` | ~88–90 | Delegates reading live exec cwd |
 | `listRunningExecs()` | ~92–94 | Returns list of running execs from manager |

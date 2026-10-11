@@ -705,7 +705,7 @@ export function setSessionPersistenceFaultInjectorForTests(injector: ((phase: 'h
   sessionPersistenceFaultInjector = injector;
 }
 
-// Track active in-flight LLM requests so /stop can abort the underlying HTTP call.
+// Track the current provider request or foreground tool batch for /stop.
 const sessionAbortControllers = new Map<string, AbortController>();
 const standaloneCompactSessions = new Set<string>();
 

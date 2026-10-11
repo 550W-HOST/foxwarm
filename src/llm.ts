@@ -1,3 +1,4 @@
+import { STOPPED_TOOL_NOT_STARTED_MESSAGE, toolFailureMessage } from './toolCallControls';
 import axios, { AxiosResponse } from 'axios';
 import crypto, { randomUUID } from 'crypto';
 import fs from 'fs-extra';
@@ -1833,6 +1834,9 @@ async function prepareToolCall(
     notifyStart = true,
     presetResult?: any,
 ): Promise<PreparedToolCall> {
+    if (presetResult === undefined && (toolContext.signal?.aborted || session.stopping)) {
+        presetResult = { error: STOPPED_TOOL_NOT_STARTED_MESSAGE };
+    }
     const toolId = call.id || `tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const argsPreview = buildToolArgsPreview(call);
     const sessionId = session.id;
@@ -1852,6 +1856,9 @@ async function prepareToolCall(
                     toolContext.sessionPlacement === 'session-worker');
             }
         } catch (error) { placementError = error; }
+    }
+    if (presetResult === undefined && (toolContext.signal?.aborted || session.stopping)) {
+        presetResult = { error: STOPPED_TOOL_NOT_STARTED_MESSAGE };
     }
     const toolArgs = resolved?.args || { ...(call.args || {}) };
     const executionNode = resolved?.executionNode || snapshot?.currentNode || session.currentNode || 'master';
@@ -1950,6 +1957,9 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
 
     try {
         if (prepared.placementError) throw prepared.placementError;
+        if (result === undefined && (toolContext.signal?.aborted || toolContext.session?.stopping)) {
+            return buildSkippedToolCall(prepared, STOPPED_TOOL_NOT_STARTED_MESSAGE);
+        }
         if (result === undefined && prepared.resolved) {
             const runtimeContext = { ...toolContext, toolUseId: prepared.toolId };
             const localToolContext = prepared.sessionSnapshot
@@ -2052,19 +2062,29 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
 }
 
 async function runBoundedToolCalls(
-    prepared: PreparedToolCall[],
+    planned: PlannedToolCall[],
     toolContext: any,
-): Promise<Array<ExecutedToolCall | undefined>> {
-    const results: Array<ExecutedToolCall | undefined> = new Array(prepared.length);
+    session: Session,
+    snapshot: ToolExecutionSnapshot,
+    offset: number,
+    total: number,
+): Promise<ExecutedToolCall[]> {
+    const results: ExecutedToolCall[] = new Array(planned.length);
     let nextIndex = 0;
-    const workers = Array.from({ length: Math.min(PARALLEL_EXEC_LIMIT, prepared.length) }, async () => {
+    let fatal = false;
+    const workers = Array.from({ length: Math.min(PARALLEL_EXEC_LIMIT, planned.length) }, async () => {
         while (true) {
             const index = nextIndex++;
-            if (index >= prepared.length) return;
+            if (index >= planned.length) return;
+            const item = planned[index];
+            const prepared = await prepareToolCall(item.call, offset + index, total, toolContext, session, snapshot, true, item.presetResult
+                ?? (fatal ? { error: 'Tool call was not started because tool authorization policy was unavailable.' } : undefined));
             try {
-                results[index] = await runPreparedToolCall(prepared[index], toolContext);
+                results[index] = await runPreparedToolCall(prepared, toolContext);
+                fatal = fatal || !!results[index].fatalCurrentTurn;
             } catch (error: any) {
-                results[index] = buildFailedToolCall(prepared[index], error);
+                results[index] = buildFailedToolCall(prepared, error);
+                fatal = fatal || !!results[index].fatalCurrentTurn;
             }
         }
     });
@@ -2086,7 +2106,7 @@ function buildFailedToolCall(prepared: PreparedToolCall, error: any): ExecutedTo
     };
 }
 
-function buildSkippedToolCall(prepared: PreparedToolCall, message = 'Tool call was not started because the session was stopped.'): ExecutedToolCall {
+function buildSkippedToolCall(prepared: PreparedToolCall, message = STOPPED_TOOL_NOT_STARTED_MESSAGE): ExecutedToolCall {
     return {
         ...prepared,
         result: { error: message },
@@ -2161,7 +2181,6 @@ export async function executeTools(
         }
         sourceSession = existing;
     }
-    session = sourceSession;
     toolContext = {
         ...toolContext,
         sessionId: sourceSession.id,
@@ -2172,16 +2191,40 @@ export async function executeTools(
         sessionPlacement: options?.currentSessionEffects?.placement || 'local',
         ...(options?.currentSessionEffects?.execRuntime ? { execRuntime: options.currentSessionEffects.execRuntime } : {}),
     };
+    const abortController = new AbortController();
+    const parentSignal: AbortSignal | undefined = toolContext.signal;
+    const abortFromParent = () => abortController.abort(parentSignal?.reason);
+    if (parentSignal?.aborted || sourceSession.stopping) abortFromParent();
+    else parentSignal?.addEventListener('abort', abortFromParent, { once: true });
+    const effects = options?.currentSessionEffects;
+    if (effects) effects.registerAbortController(sourceSession.id, abortController);
+    else sessionManager.registerSessionAbortController(sourceSession.id, abortController);
+    toolContext = { ...toolContext, signal: abortController.signal };
+    try {
+        return await executeToolBatch(functionCalls, toolContext, sourceSession, effects);
+    } finally {
+        parentSignal?.removeEventListener('abort', abortFromParent);
+        if (effects) effects.clearAbortController(sourceSession.id, abortController);
+        else sessionManager.clearSessionAbortController(sourceSession.id, abortController);
+    }
+}
+
+async function executeToolBatch(
+    functionCalls: FunctionCall[],
+    toolContext: any,
+    session: Session,
+    effects?: CurrentSessionEffects,
+): Promise<Message> {
     const plannedCalls = planToolCalls(functionCalls);
     const executions: ExecutedToolCall[] = [];
     let cursor = 0;
     let fatalCurrentTurn = false;
 
     while (cursor < plannedCalls.length) {
-        if (session?.stopping) {
+        if (session?.stopping || toolContext.signal.aborted) {
             for (; cursor < plannedCalls.length; cursor++) {
                 const planned = plannedCalls[cursor];
-                const prepared = await prepareToolCall(planned.call, cursor, plannedCalls.length, toolContext, session, undefined, false, planned.presetResult);
+                const prepared = await prepareToolCall(planned.call, cursor, plannedCalls.length, toolContext, session, undefined, false, planned.presetResult ?? { error: STOPPED_TOOL_NOT_STARTED_MESSAGE });
                 executions.push(planned.presetResult !== undefined
                     ? await runPreparedToolCall(prepared, toolContext)
                     : buildSkippedToolCall(prepared));
@@ -2225,28 +2268,15 @@ export async function executeTools(
         const segmentStart = cursor;
         while (cursor < plannedCalls.length && plannedCalls[cursor].call.name === 'exec') cursor++;
         const snapshot: ToolExecutionSnapshot = {
-            currentNode: sourceSession.currentNode || 'master',
-            cwd: typeof sourceSession.cwd === 'string' ? sourceSession.cwd : undefined,
+            currentNode: session.currentNode || 'master',
+            cwd: typeof session.cwd === 'string' ? session.cwd : undefined,
         };
-        const preparedSegment: PreparedToolCall[] = [];
-        for (let index = segmentStart; index < cursor; index++) {
-            const planned = plannedCalls[index];
-            preparedSegment.push(await prepareToolCall(
-                planned.call,
-                index,
-                plannedCalls.length,
-                toolContext,
-                session,
-                snapshot,
-                true,
-                planned.presetResult,
-            ));
+        const settled = await runBoundedToolCalls(plannedCalls.slice(segmentStart, cursor), toolContext,
+            session, snapshot, segmentStart, plannedCalls.length);
+        for (const execution of settled) {
+            executions.push(await replayDeferredExecCwd(execution, toolContext));
         }
-        const settled = await runBoundedToolCalls(preparedSegment, toolContext);
-        for (let index = 0; index < preparedSegment.length; index++) {
-            executions.push(await replayDeferredExecCwd(settled[index] || buildSkippedToolCall(preparedSegment[index]), toolContext));
-        }
-        if (executions.slice(-preparedSegment.length).some(execution => execution.fatalCurrentTurn)) {
+        if (settled.some(execution => execution.fatalCurrentTurn)) {
             fatalCurrentTurn = true;
             for (; cursor < plannedCalls.length; cursor++) {
                 const skipped = plannedCalls[cursor];
@@ -2317,8 +2347,8 @@ export async function executeTools(
 
     if (stopCurrentTurn && batchHasError) {
         for (const waitId of explicitWaitIds) {
-            if (options?.currentSessionEffects) {
-                await options.currentSessionEffects.clearWaitById(toolContext.sessionId || session?.id, waitId);
+            if (effects) {
+                await effects.clearWaitById(toolContext.sessionId || session?.id, waitId);
             } else {
                 await sessionManager.clearSessionWaitById(toolContext.sessionId || session?.id, waitId);
             }

@@ -1,6 +1,6 @@
 # Unit: src-llm
 
-Files: src/llm.ts, src/llmStreamingTimeout.ts, src/modelStreamDraft.ts, src/llmRequestTiming.ts, src/providerImageDedup.ts, src/llm.test.ts, src/llmStreamingTimeout.test.ts, src/llmStreamingTimeout.integration.test.ts, src/openaiWsChat.integration.test.ts, src/llmRequestTiming.test.ts, src/llmRouting.test.ts, src/llmVirtualRouting.test.ts, src/llmVirtualMessageMeta.test.ts, src/providerImageDedup.test.ts, src/providerImageRequest.test.ts, src/parallelToolExecution.test.ts, src/imageGenerationRequest.test.ts, src/imageGenerationStorage.test.ts, src/imageGenerationTimeout.test.ts, src/imageGenerationTransport.integration.test.ts
+Files: src/llm.ts, src/llmStreamingTimeout.ts, src/modelStreamDraft.ts, src/llmRequestTiming.ts, src/providerImageDedup.ts, src/llm.test.ts, src/llmStreamingTimeout.test.ts, src/llmStreamingTimeout.integration.test.ts, src/openaiWsChat.integration.test.ts, src/llmRequestTiming.test.ts, src/llmRouting.test.ts, src/llmVirtualRouting.test.ts, src/llmVirtualMessageMeta.test.ts, src/providerImageDedup.test.ts, src/providerImageRequest.test.ts, src/parallelToolExecution.test.ts, src/stopActiveTools.test.ts, src/imageGenerationRequest.test.ts, src/imageGenerationStorage.test.ts, src/imageGenerationTimeout.test.ts, src/imageGenerationTransport.integration.test.ts
 Secondary files: src/llmRequestJournal.ts, src/llmProviders/openaiWsState.ts, src/llmToolDefinitions.test.ts
 
 ## Purpose
@@ -24,6 +24,8 @@ Owns provider request routing, Anthropic conversion/parsing, session prompt snap
 - `getOpenAIRequestApi(providerType)` — exact OpenAI surface routing.
 - `DEFAULT_LLM_MAX_ATTEMPTS` plus compatibility `DEFAULT_LLM_MAX_RETRIES`; `classifyHttpFailure`.
 - `fixToolCalls(contents)` — provider-safe tool-call/response history normalization.
+
+- `executeToolBatch` owns scheduling, result normalization and receipt folding behind `executeTools`' owner/signal lifecycle. Tool batches register and clear their foreground controller through the exact current owner. Queue admission and prepared launch use the scoped signal, while settled receipts remain intact through formatting and history append. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands). `stopActiveTools.test.ts` covers real loopback MCP, same-caller independent work, nested ToolScript, and exact Worker reverse-RPC history pairing.
 
 ## Provider routing
 

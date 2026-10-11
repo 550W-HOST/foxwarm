@@ -3,6 +3,8 @@
 Files: `src/mcpCallerConnections.ts`, `src/mcpCallerConnections.test.ts`, `src/mcpNotifications.test.ts`, `src/mcpNotificationsTestMain.ts`
 Secondary files: `src/mcpClient.ts`, `src/mcpExternalService.ts`, `src/mcpInboundHttp.ts`, `src/mcpInboundCatalog.ts`, `src/channel.ts`, `src/sessionManager.ts`
 
+Cancelled HTTP/SSE calls dispose their caller/server binding only when no other in-flight invocation shares it; otherwise SDK request cancellation leaves the shared binding intact. Disposed bindings are removed before reuse and their notification reception ends. Successful returned results do not trigger late abort cleanup. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
+
 ## Purpose
 
 Owns the single caller/server HTTP connection lifecycle shared by ordinary MCP discovery/calls and opt-in Session notifications. The canonical cross-module contract is [D-dispatch-mcp-explicit-notifications](../threads/tool-dispatch.md#d-dispatch-mcp-explicit-notifications). The bundled mcp-management outbound and explicit-reply references document its user-facing lifecycle.

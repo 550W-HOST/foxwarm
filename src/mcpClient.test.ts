@@ -189,6 +189,8 @@ test('MCP call timeout uses SDK RequestOptions and preserves pooled stdio reuse 
     const clients: any[] = [];
     const transports: any[] = [];
     let failNextCall = false;
+    let requestStarted!: () => void;
+    const started = new Promise<void>(resolve => { requestStarted = resolve; });
     class FakeTransport {
       pid = 1234;
       onclose?: () => void;
@@ -201,6 +203,10 @@ test('MCP call timeout uses SDK RequestOptions and preserves pooled stdio reuse 
       async connect(_transport: any) {}
       async callTool(...args: any[]) {
         calls.push(args);
+        if (args[2]?.signal) {
+          requestStarted();
+          await new Promise((_resolve, reject) => args[2].signal.addEventListener('abort', () => reject(args[2].signal.reason), { once: true }));
+        }
         if (failNextCall) {
           failNextCall = false;
           throw new Error('RequestTimeout');
@@ -235,6 +241,15 @@ test('MCP call timeout uses SDK RequestOptions and preserves pooled stdio reuse 
       assert.equal(clients.length, 1);
       assert.equal(transports.length, 1);
       assert.equal(transports[0].closeCount, 0);
+      const controller = new AbortController();
+      const pending = callTool('stdio', 'probe', {}, { signal: controller.signal });
+      await started;
+      controller.abort();
+      await assert.rejects(pending, /cancel/i);
+      assert.equal(transports[0].closeCount, 0, 'request-level cancellation does not close a shared stdio server');
+      assert.equal(await callTool('stdio', 'probe'), 'ok');
+      assert.equal(clients.length, 1);
+      assert.equal(transports.length, 1);
     } finally {
       await resetMcpConnectionsForTests();
     }

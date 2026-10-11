@@ -5,6 +5,8 @@ export const DEFAULT_RPC_BUILD_ID = 'foxwarm-1.0.0';
 
 export type RpcMethodDefinition<Input, Output> = {
   readonly kind: 'unary';
+  /** Cooperative tool cancellation signals the handler and retains its settled receipt. */
+  readonly cancellation?: 'settle';
   readonly _input?: Input;
   readonly _output?: Output;
 };
@@ -24,8 +26,8 @@ export type RpcServiceDescriptor<Methods extends RpcMethodMap = RpcMethodMap, Ev
   readonly events: Events;
 };
 
-export function rpcMethod<Input, Output>(): RpcMethodDefinition<Input, Output> {
-  return { kind: 'unary' };
+export function rpcMethod<Input, Output>(options: { cancellation?: 'settle' } = {}): RpcMethodDefinition<Input, Output> {
+  return { kind: 'unary', ...options };
 }
 
 export function rpcEvent<Payload>(): RpcEventDefinition<Payload> {

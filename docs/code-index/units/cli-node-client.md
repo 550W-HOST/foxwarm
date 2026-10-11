@@ -2,6 +2,8 @@
 
 Files: packages/cli-node/src/client.ts, packages/cli-node/src/nodeProtocolCompatibility.test.ts, packages/cli-node/src/sessionEventAck.test.ts, packages/cli-node/src/nodePtyService.ts, packages/cli-node/src/nodePtyService.test.ts, packages/cli-node/scripts/build-bundle.js, packages/cli-node-runtime/package.json, packages/cli-node-runtime/package-lock.json
 
+The CLI advertises optional `execWaitCancellation` and keeps foreground exec controllers by exact call ID. `tool_call_cancel` interrupts only that call's wait; the usual partial-output/background registration and acknowledged completion remain authoritative. Late cancellation cannot address a handed-off exec. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
+
 ## Purpose
 
 Current CLI capability negotiation advertises `programmaticToolData`; trusted call metadata reaches shared read/exec producers without widening ordinary results. Older peers keep native results. See [programmatic data](../threads/tool-dispatch.md#d-dispatch-programmatic-tool-data).

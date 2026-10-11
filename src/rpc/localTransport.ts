@@ -84,7 +84,8 @@ export class LocalRpcTransport implements RpcTransport {
         // A caller-provided abort reason belongs to the caller and must retain
         // object identity. Handler-owned failures cross the same serialized DTO
         // boundary used by the child-process transport.
-        if (options.signal?.aborted && options.signal.reason instanceof Error) {
+        if (descriptor.methods[methodName]?.cancellation !== 'settle'
+          && options.signal?.aborted && options.signal.reason instanceof Error) {
           throw options.signal.reason;
         }
         throw deserializeRpcError(cloneRpcDto(serializeRpcError(error)));
@@ -92,17 +93,30 @@ export class LocalRpcTransport implements RpcTransport {
     );
     handlerPromise.finally(() => this.finishRequest()).catch(() => {});
 
+    const settleCancellation = descriptor.methods[methodName]?.cancellation === 'settle';
+    let deadlineTimer: NodeJS.Timeout | undefined;
     const abortPromise = new Promise<never>((_resolve, reject) => {
       linked.controller.signal.addEventListener('abort', () => {
+        if (settleCancellation && options.signal?.aborted
+          && (deadlineAt === undefined || Date.now() < deadlineAt)) return;
         reject(linked.controller.signal.reason instanceof Error
           ? linked.controller.signal.reason
           : new RpcError('RPC_CANCELLED', 'RPC request cancelled.', true));
       }, { once: true });
+      // A linked controller aborts only once. Keep the deadline effective even
+      // when an earlier cooperative caller cancellation is waiting for a receipt.
+      if (settleCancellation && deadlineAt !== undefined) {
+        deadlineTimer = setTimeout(() => {
+          reject(new RpcError('RPC_DEADLINE_EXCEEDED', 'RPC request deadline exceeded.', true));
+        }, Math.max(0, deadlineAt - Date.now()));
+        deadlineTimer.unref?.();
+      }
     });
 
     try {
       return await Promise.race([handlerPromise, abortPromise]);
     } finally {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
       linked.dispose();
     }
   }

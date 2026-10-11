@@ -24,10 +24,10 @@ export type McpExternalConfigureRequest =
   | { sourceSessionId: string; name: string; action: 'set-enabled'; enabled: boolean }
   | { sourceSessionId: string; name: string; action: 'upsert'; config: mcpClient.McpServerConfig };
 
-export const mcpExternalServiceDescriptor = defineRpcService('mcp-external', 2, {
+export const mcpExternalServiceDescriptor = defineRpcService('mcp-external', 3, {
   listServers: rpcMethod<{ sourceSessionId: string }, { servers: mcpClient.McpServerSummary[] }>(),
   listTools: rpcMethod<{ sourceSessionId: string; server?: string }, { result: unknown }>(),
-  callTool: rpcMethod<{ sourceSessionId: string; server?: string; name: string; args: Record<string, unknown> }, { result: unknown }>(),
+  callTool: rpcMethod<{ sourceSessionId: string; server?: string; name: string; args: Record<string, unknown> }, { result: unknown }>({ cancellation: 'settle' }),
   configure: rpcMethod<McpExternalConfigureRequest, { saved: true }>(),
   notifications: rpcMethod<{ sourceSessionId: string; server: string; action: 'start' | 'stop' | 'status' }, notifications.McpNotificationStatus>(),
 });
@@ -336,13 +336,13 @@ export function createMcpExternalServiceHandler(options: { expectedSourceSession
           : listed;
       return { result };
     },
-    async callTool(input) {
+    async callTool(input, rpcContext) {
       const request = requireExactRecord(input, 'callTool request', ['sourceSessionId', 'server', 'name', 'args']);
       const server = optionalString(request.server, 'server');
       const name = requireString(request.name, 'name');
       const args = requireJsonArgs(request.args);
       await authorize(request.sourceSessionId, { source: 'mcp', server: server || 'default', tool: name }, args, options.expectedSourceSessionId);
-      return { result: await runWithAllSecretsRedacted(() => mcpClient.callTool(server, name, args, { owner: sessionConnectionOwner(request.sourceSessionId as string) })) };
+      return { result: await runWithAllSecretsRedacted(() => mcpClient.callTool(server, name, args, { signal: rpcContext.signal, cancellationLabel: 'Stop or Run queued', owner: sessionConnectionOwner(request.sourceSessionId as string) })) };
     },
     async notifications(input) {
       const request = requireExactRecord(input, 'notifications request', ['sourceSessionId', 'server', 'action']);
@@ -475,8 +475,8 @@ export async function listMcpTools(sourceSessionId: string, server?: string): Pr
   return (await (await getClient()).call('listTools', { sourceSessionId, ...(server ? { server } : {}) })).result;
 }
 
-export async function callMcpTool(sourceSessionId: string, server: string | undefined, name: string, args: Record<string, unknown>): Promise<any> {
-  return (await (await getClient()).call('callTool', { sourceSessionId, ...(server ? { server } : {}), name, args })).result;
+export async function callMcpTool(sourceSessionId: string, server: string | undefined, name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<any> {
+  return (await (await getClient()).call('callTool', { sourceSessionId, ...(server ? { server } : {}), name, args }, { signal })).result;
 }
 
 export async function configureMcpServer(request: McpExternalConfigureRequest): Promise<void> {

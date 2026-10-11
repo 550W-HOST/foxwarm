@@ -62,6 +62,8 @@ Implements the core tool registry and execution layer for the agent system. Defi
 | `tool_apply_patch_memory` | Applies patch edits to memory files |
 
 ### tools/execTools.ts — Shell command execution
+
+`toolCallControls` supplies `throwIfToolStopped`, `toolFailureMessage`, and the shared unstarted receipt text; model-requested cancellation planning is unchanged. The trusted ToolContext carries a foreground signal. Dispatch checks it after permission/preparation; exec passes it to the shared wait and uses the normal background receipt on interruption. Result settlement is not aborted. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
 | Function | Description |
 |----------|-------------|
 | `tool_exec` | Executes shell commands with timeout and background support |

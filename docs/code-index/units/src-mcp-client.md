@@ -2,6 +2,8 @@
 
 Files: src/mcpClient.ts, src/mcpClient.test.ts, src/mcpResultNormalization.test.ts
 
+Tool requests forward the foreground signal through SDK RequestOptions. Stdio request cancellation preserves its shared pool; HTTP/SSE uses the caller-connection lifecycle. Abort diagnostics do not relabel ordinary timeout/disconnect as Stop and never claim remote rollback. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
+
 ## Purpose
 
 Owns persisted MCP server configuration, safe summaries, transport connection lifecycle, tool discovery/invocation, and result normalization at the MCP boundary.

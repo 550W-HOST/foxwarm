@@ -222,7 +222,7 @@ export class NodeClient {
   private getNodeCapabilities() {
     return {
       ...CLI_NODE_CAPABILITIES,
-      features: { remoteExecBackgroundRegistration: true, programmaticToolData: true, ...(!this.toolCallInterceptor ? { externalToolOwner: 1 } : {}) },
+      features: { execWaitCancellation: true, remoteExecBackgroundRegistration: true, programmaticToolData: true, ...(!this.toolCallInterceptor ? { externalToolOwner: 1 } : {}) },
       services: {
         ...CLI_NODE_CAPABILITIES.services,
         ...(this.nodePtyService ? { 'vscode-pty': 1 } : {}),
@@ -626,6 +626,9 @@ export class NodeClient {
         logger.warn({ pendingId: message.pendingId, reason: message.reason }, 'Node pairing rejected');
         this.pairingRejected = true;
         break;
+      case 'tool_call_cancel':
+        this.foregroundExecCalls.get(message.callId)?.abort();
+        break;
       case 'tool_call':
         await this.handleToolCall(message);
         break;
@@ -749,6 +752,8 @@ export class NodeClient {
     }
   }
 
+  private readonly foregroundExecCalls = new Map<string, AbortController>();
+
   private async handleToolCall(message: any): Promise<void> {
     if (Object.prototype.hasOwnProperty.call(message, 'owner')) {
       await this.handleExternalToolCall(message);
@@ -763,9 +768,9 @@ export class NodeClient {
       ? message.agentName
       : 'main';
     let execStarted = false;
-
+    const controller = tool === 'exec' ? new AbortController() : undefined;
+    if (controller) this.foregroundExecCalls.set(callId, controller);
     logger.info({ callId, tool }, 'Executing tool');
-
     try {
       // Interceptor hook: allow external code to approve/reject before execution
       if (this.toolCallInterceptor) {
@@ -801,6 +806,7 @@ export class NodeClient {
           cwd: typeof message.sessionCwd === 'string' ? message.sessionCwd : undefined,
         },
         runtimeNodeId: this.connectedNodeId || this.requestedName,
+        signal: controller?.signal,
         backgroundExecId: typeof message.backgroundExecId === 'string' ? message.backgroundExecId : undefined,
         completionCapability: typeof message.completionCapability === 'string' ? message.completionCapability : undefined,
         onExecStarted: () => { execStarted = true; },
@@ -848,6 +854,8 @@ export class NodeClient {
         },
         ...(tool === 'exec' ? { execStarted } : {}),
       });
+    } finally {
+      if (controller) this.foregroundExecCalls.delete(callId);
     }
   }
 

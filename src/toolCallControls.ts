@@ -2,6 +2,20 @@ import type { FunctionCall, ToolDefinition } from './types';
 
 export const CANCEL_TOOL_ARGUMENT = '__cancelTool';
 export const CANCEL_ALL_TOOLS_ARGUMENT = '__cancelAllToolsThisTurn';
+export const STOPPED_TOOL_NOT_STARTED_MESSAGE = 'Tool call was not started because Stop or Run queued cancelled it; it was not executed.';
+
+export function throwIfToolStopped(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error(STOPPED_TOOL_NOT_STARTED_MESSAGE);
+}
+
+export function toolFailureMessage(error: any, signal?: AbortSignal): string {
+  const cancelled = signal?.aborted && (error === signal.reason || error?.name === 'AbortError'
+    || error?.code === 'ABORT_ERR' || error?.code === 'RPC_CANCELLED');
+  return cancelled
+    ? 'Tool call was cancelled by Stop or Run queued after dispatch. No result was received; it may already have executed or caused side effects.'
+    : error?.message || String(error);
+}
+
 export const COMPACT_PLAN_TOOL_NAME = 'submit_compact_plan';
 
 export const INTER_AGENT_HANDOFF_RECALL_PREFIX = 'Before composing this inter-agent handoff, have I recalled the applicable communication rules, the user\'s actual request, and the scope this recipient needs?';

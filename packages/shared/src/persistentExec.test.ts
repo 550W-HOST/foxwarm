@@ -796,3 +796,20 @@ test('programmatic exec data is a retained byte snapshot, not display text or st
 
   } finally { await manager.shutdown(); await fs.remove(root); }
 });
+
+test('an already available exec completion wins over an aborted foreground wait', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-exec-stop-settled-'));
+  const manager = new PersistentExecManager({ getDefaultCwd: () => root, getExecTempDir: () => root });
+  try {
+    const entry = await manager.startPersistentExec({ command: 'printf completed' });
+    const actual = await manager.waitForExecCompletion(entry.id, 5000);
+    assert(actual);
+    const controller = new AbortController();
+    controller.abort();
+    assert.deepEqual(await manager.waitForExecCompletion(entry.id, 60_000, controller.signal), actual);
+    await manager.finalizeForegroundExec(entry.id);
+  } finally {
+    await manager.shutdown();
+    await fs.remove(root);
+  }
+});

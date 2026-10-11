@@ -28,6 +28,8 @@ export { findWriteParentIssue, formatWriteContentRefRetryHint, formatWriteParent
 
 // Tool context type
 export interface ToolContext {
+    /** Current foreground invocation only; never retained by independent background work. */
+    signal?: AbortSignal;
     sessionId?: string;
     session?: any;
     broadcast?: (text: string, options?: any) => Promise<void>;

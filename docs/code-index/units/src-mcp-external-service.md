@@ -9,7 +9,7 @@ Provides the versioned RPC owner through which internal direct, unified, ToolScr
 
 ## Key exports
 
-- `mcpExternalServiceDescriptor` — fixed `mcp-external@2` methods for redacted server list, optional-server tool list, named call, tagged managed configuration update and source-scoped notification management.
+- `mcpExternalServiceDescriptor` — fixed `mcp-external@3` methods for redacted server list, optional-server tool list, named call, tagged managed configuration update and source-scoped notification management.
 - `listMcpServers()`, `listMcpTools()`, `callMcpTool()`, `configureMcpServer()` — local client facade used by production callers.
 - `manageMcpNotifications(sourceSessionId, server, action)` — concrete builtin authorization, source-scoped receiver lifecycle and ordinary durable notification ingress.
 - `releaseMcpExternalContext(principal, context)` — await disposal of all HTTP connections owned by that verified inbound context.
@@ -17,6 +17,8 @@ Provides the versioned RPC owner through which internal direct, unified, ToolScr
 - `initializeMcpExternalService()`, `shutdownMcpExternalService()` — owned-local or borrowed-reverse initialization and terminal fencing.
 - `resetMcpExternalServiceForTests()` — explicit test-only reopening after a completed shutdown.
 - `listMcpServersForExternal(principal)`, `listMcpToolsForExternal(principal, context, server, signal?)`, `callMcpToolForExternal(principal, context, server, name, args, signal?)` — Main-local outbound MCP catalog/call entry points for real HTTP-verified external identity, never serialized as internal RPC objects.
+
+Named calls forward the RPC context signal to the SDK and use method-declared settled-receipt cancellation, preserving completed results and real errors. Internal cancellation diagnostics distinguish unstarted tools from possibly executed remote requests. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
 
 ## Runtime behavior
 

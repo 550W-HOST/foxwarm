@@ -26,12 +26,14 @@ Manages persistent (background) command execution with lifecycle tracking, log c
 - `PERSISTENT_EXEC_ID_PATTERN`, `LEGACY_PERSISTENT_EXEC_ID_PATTERN`, `isSupportedPersistentExecId(...)` — current petname grammar plus the read-compatible pre-petname `exec_` grammar
 - `getRunningExec`, `hasRunningExecs`, `getResolvedExecCwd` — owner-local inspection and final cwd for bounded external result lookup and post-exit cleanup.
 
+Foreground wait interruption and receipt precedence follow [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands). The shared manager reads available real status before returning from an aborted wait, removes its wait listener at settlement, and uses the existing background registry/notification path without changing process operations.
+
 ## Function Index
 
 | Function | Lines (approx) | Description |
 |----------|----------------|-------------|
 | `resolveExecTimeoutSeconds(timeoutValue)` | ~20 | Preserves default/valid timeouts, rejects invalid or below-minimum values, and clamps finite oversized values with a warning |
-| `sleep(ms)` | ~82 | Promise-based delay helper |
+| `sleep(ms, signal?)` | helper | Delay with scoped listener cleanup; foreground cancellation wakes the wait without terminating a process |
 | `escapeInlineCode(text)` | ~86 | Escapes backticks for inline code display |
 | `summarizeCommandForNotification(text, maxLength)` | ~90 | Truncates command text for notification previews |
 | `formatExecTimeoutSeconds(seconds)` | ~96 | Formats timeout value as string |
@@ -50,7 +52,7 @@ Manages persistent (background) command execution with lifecycle tracking, log c
 | `PersistentExecManager.waitForExecPaths(pathsPath)` | ~310 | Polls for the paths JSON file written by the child |
 | `PersistentExecManager.waitForCompletion(entry, timeoutSeconds)` | ~335 | Polls status file until process finishes or times out |
 | `PersistentExecManager.buildForegroundExecResult(entry, status)` | ~580 | Formats completed foreground output with line-aware excerpting and an exit-code footer |
-| `PersistentExecManager.buildBackgroundTimeoutResult(entry, timeoutSeconds)` | ~390 | Formats partial output when process exceeds timeout |
+| `PersistentExecManager.buildBackgroundTimeoutResult(entry, timeoutSeconds, warning?, waitEndedBy?)` | formatter | Preserves partial output and the real background identity, naming timeout or interrupted foreground waiting |
 | `PersistentExecManager.buildCompletionMessage(entry, status)` | ~400 | Builds notification message for background completion |
 | `PersistentExecManager.readFinishedExecWorkingDirectory(entry)` | ~410 | Reads final cwd from file after process exits |
 | `PersistentExecManager.readLiveExecWorkingDirectory(entry)` | ~414 | Delegates live cwd lookup; the native backend currently supports Linux `/proc` only |

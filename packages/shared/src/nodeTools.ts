@@ -15,6 +15,7 @@ import type { ExternalNodeOwner } from './nodeProtocol';
 import { nativeProcessOperations } from './processOperations';
 
 export interface NodeToolContext {
+  signal?: AbortSignal;
   sessionId?: string;
   /** Trusted caller context, not a tool argument or permission identity. */
   programmatic?: true;
@@ -231,8 +232,12 @@ export async function exec(args: ToolArgs, ctx: NodeToolContext = {}) {
     sessionCwd: ctx.externalOwner ? ctx.externalCwd : ctx.session?.cwd,
     completionCapability: ctx.completionCapability,
     onProcessStarted: ctx.onExecStarted,
+    onBeforeProcessLaunch: () => {
+      if (ctx.signal?.aborted) throw new Error('Exec was not started because Stop or Run queued cancelled it; the command was not executed.');
+    },
   });
-  const status = await manager.waitForExecCompletion(entry.id, timeoutSeconds * 1000);
+  const status = await manager.waitForExecCompletion(entry.id, timeoutSeconds * 1000, ctx.signal);
+  const waitEndedBy = !status && ctx.signal?.aborted ? 'Stop or Run queued' : undefined;
   if (status) {
     try {
       const output = await manager.buildForegroundExecResult(entry, status, resolvedTimeout.warning);
@@ -247,7 +252,7 @@ export async function exec(args: ToolArgs, ctx: NodeToolContext = {}) {
   }
   ctx.onExecBackground?.(entry.id);
   await manager.markExecForBackgroundNotification(entry.id);
-  const output = await manager.buildBackgroundTimeoutResult(entry, timeoutSeconds, resolvedTimeout.warning);
+  const output = await manager.buildBackgroundTimeoutResult(entry, timeoutSeconds, resolvedTimeout.warning, waitEndedBy);
   return ctx.programmatic ? manager.buildProgrammaticExecResult(entry, null, output) : output;
 }
 

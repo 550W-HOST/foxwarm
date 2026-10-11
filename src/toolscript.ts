@@ -1,3 +1,4 @@
+import { throwIfToolStopped, toolFailureMessage } from './toolCallControls';
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
@@ -18,6 +19,7 @@ import { isToolAuthorizationPolicyUnavailable } from './toolAuthorization';
 type ToolArgs = Record<string, any>;
 
 type ToolContext = {
+  signal?: AbortSignal;
   sessionId?: string;
   session?: Session;
   broadcast?: (text: string, options?: any) => Promise<void>;
@@ -913,7 +915,7 @@ function projectOneShotResultParts(allParts: MessagePart[] | undefined): Message
   return parts;
 }
 
-async function requestModelWithoutContext(prompt: string, session: Session, model?: string): Promise<{ text: string; parts: MessagePart[] }> {
+async function requestModelWithoutContext(prompt: string, session: Session, model?: string, signal?: AbortSignal): Promise<{ text: string; parts: MessagePart[] }> {
   const result = await llm.requestLlmOnce({
     contents: [{
       role: 'user',
@@ -928,6 +930,7 @@ async function requestModelWithoutContext(prompt: string, session: Session, mode
     notifySessionEvents: false,
     registerAbortController: false,
     purpose: 'toolscript-one-shot',
+    abortSignal: signal,
   });
 
   return {
@@ -1104,6 +1107,7 @@ async function executeScriptHostCall(
   state: RuntimeState,
   ctx: ToolContext,
 ): Promise<any> {
+  throwIfToolStopped(ctx.signal);
   const startHostCall = (summaryName?: string) => {
     state.hostCallCount += 1;
     state.lastHostCall = {
@@ -1194,7 +1198,7 @@ async function executeScriptHostCall(
     }
     startHostCall();
     try {
-      const result = await requestModelWithoutContext(prompt, session, model);
+      const result = await requestModelWithoutContext(prompt, session, model, ctx.signal);
       finishHostCall('completed');
       return normalizeMontyValue(result);
     } catch (error: any) {
@@ -1408,6 +1412,7 @@ async function advanceExecution(args: {
     const kwargs = progress.kwargs && typeof progress.kwargs === 'object' ? progress.kwargs : {};
 
     if (functionName === 'ask_agent') {
+      throwIfToolStopped(ctx.signal);
       const questionValue = positionalArgs.length > 0 ? positionalArgs[0] : kwargs.question;
       const question = formatQuestion(questionValue);
       record.snapshotBase64 = await dumpMontySnapshot(progress);
@@ -1432,13 +1437,13 @@ async function advanceExecution(args: {
           mode: 'exception',
           exception: {
             type: 'RuntimeError',
-            message: error?.message || String(error),
+            message: toolFailureMessage(error, ctx.signal),
           },
         }), runtimeState);
         await saveRun(record);
         return buildBaseResult(record);
       }
-      progress = await progress.resumeError(buildMontyResumeError('RuntimeError', error?.message || String(error)));
+      progress = await progress.resumeError(buildMontyResumeError('RuntimeError', toolFailureMessage(error, ctx.signal)));
       continue;
     }
 
