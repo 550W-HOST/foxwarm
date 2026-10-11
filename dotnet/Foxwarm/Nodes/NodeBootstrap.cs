@@ -88,8 +88,15 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
     }
 
     internal string ShellCommand(string url, string id, string auth) =>
-        "curl -fsSL " + Quote(url.TrimEnd('/') + "/node/run-shell.sh") + " -o run-shell.sh\n"
-        + "NODE_AUTH_TOKEN=" + Quote(auth) + " sh ./run-shell.sh --host=" + Quote(url.TrimEnd('/')) + " --node-id=" + Quote(id);
+        "curl -fsSL "
+        + Quote(url.TrimEnd('/') + "/node/run-shell.sh")
+        + " -o run-shell.sh\n"
+        + "NODE_AUTH_TOKEN="
+        + Quote(auth)
+        + " sh ./run-shell.sh --host="
+        + Quote(url.TrimEnd('/'))
+        + " --node-id="
+        + Quote(id);
 
     internal JsonObject Info()
     {
@@ -123,9 +130,10 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
                         context.Response.StatusCode = 503;
                         return;
                     }
-                    context.Response.ContentType = name.EndsWith(".yaml")
-                        ? "text/yaml"
-                        : name == "run-shell.sh" ? "text/x-shellscript; charset=utf-8" : "text/plain; charset=utf-8";
+                    context.Response.ContentType =
+                        name.EndsWith(".yaml") ? "text/yaml"
+                        : name == "run-shell.sh" ? "text/x-shellscript; charset=utf-8"
+                        : "text/plain; charset=utf-8";
                     var text = await File.ReadAllTextAsync(path, context.RequestAborted);
                     await context.Response.WriteAsync(
                         text.Replace("__FOXWARM_DEFAULT_BASE_URL__", address.BaseUrl.TrimEnd('/')),

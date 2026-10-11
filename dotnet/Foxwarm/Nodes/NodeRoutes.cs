@@ -114,11 +114,17 @@ internal static class NodeRoutes
                 // Validate the URL before issuing a one-time credential.
                 var commands = bootstrap.Commands(Text(body, "baseUrl"), id);
                 var created = hub.Registry.Create(id);
-                return Task.FromResult(new JsonObject
-                {
-                    ["nodeId"] = created["nodeId"]!.DeepClone(),
-                    ["command"] = bootstrap.ShellCommand(commands["baseUrl"]!.GetValue<string>(), id, created["authToken"]!.GetValue<string>())
-                });
+                return Task.FromResult(
+                    new JsonObject
+                    {
+                        ["nodeId"] = created["nodeId"]!.DeepClone(),
+                        ["command"] = bootstrap.ShellCommand(
+                            commands["baseUrl"]!.GetValue<string>(),
+                            id,
+                            created["authToken"]!.GetValue<string>()
+                        ),
+                    }
+                );
             }
         );
         MapPost(

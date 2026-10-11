@@ -79,7 +79,10 @@ internal sealed partial class SessionManager
         if (!Nodes.Online(id))
             throw new InvalidOperationException("Node is offline or incompatible: " + id);
         token.ThrowIfCancellationRequested();
-        var defaultCwd = id == "master" ? agents.AgentDirectory(owner.Agent) : Nodes.ShellDefaultCwd(id) ?? "unknown";
+        var defaultCwd =
+            id == "master"
+                ? agents.AgentDirectory(owner.Agent)
+                : Nodes.ShellDefaultCwd(id) ?? "unknown";
         if (
             id != "master"
             && Nodes

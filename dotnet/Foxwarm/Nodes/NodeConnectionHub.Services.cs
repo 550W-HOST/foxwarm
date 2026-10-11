@@ -66,10 +66,7 @@ internal sealed partial class NodeConnectionHub
         lock (gate)
             return nodes
                 .Values.Where(c =>
-                    !c.Retired
-                    && c.Executable
-                    && c.Open
-                    && ServiceVersion(c, service) >= 1
+                    !c.Retired && c.Executable && c.Open && ServiceVersion(c, service) >= 1
                 )
                 .Select(c => new ServiceTarget(
                     c.Id!,

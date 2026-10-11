@@ -220,7 +220,13 @@ internal sealed partial class NodeConnectionHub
                 {
                     if (connection.Retired || !connection.Open || shutdown.IsCancellationRequested)
                         throw new IOException("Node unavailable before dispatch.");
-                    connection.Http.Dispatch(callId, call, args, currentNode == connection.Id ? cwd : null, programmatic);
+                    connection.Http.Dispatch(
+                        callId,
+                        call,
+                        args,
+                        currentNode == connection.Id ? cwd : null,
+                        programmatic
+                    );
                     attemptedSend = true;
                 }
             }

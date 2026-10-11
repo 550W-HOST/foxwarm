@@ -21,9 +21,10 @@ internal sealed partial class NodeConnectionHub : IDisposable
     {
         internal readonly WebSocket Socket = socket!;
         internal ShellRuntime? Http;
-        internal bool Open => Http is not null
-            ? !Http.Closed && DateTimeOffset.UtcNow - Http.LastSeen <= TimeSpan.FromSeconds(90)
-            : Socket.State == WebSocketState.Open;
+        internal bool Open =>
+            Http is not null
+                ? !Http.Closed && DateTimeOffset.UtcNow - Http.LastSeen <= TimeSpan.FromSeconds(90)
+                : Socket.State == WebSocketState.Open;
         internal readonly Guid Generation = Guid.NewGuid();
         internal readonly SemaphoreSlim SendGate = new(1, 1);
         internal string? Id;
@@ -203,11 +204,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
 
     private Connection Require(string id)
     {
-        if (
-            !nodes.TryGetValue(id, out var connection)
-            || connection.Retired
-            || !connection.Open
-        )
+        if (!nodes.TryGetValue(id, out var connection) || connection.Retired || !connection.Open)
             throw new InvalidOperationException("Node is offline: " + id);
         if (!connection.Executable)
             throw new InvalidOperationException("Node protocol is incompatible: " + id);
@@ -224,18 +221,17 @@ internal sealed partial class NodeConnectionHub : IDisposable
                 nodes.TryGetValue(id, out var connection);
                 record["id"] = id;
                 record["type"] = connection?.Type ?? record["nodeType"]?.GetValue<string>();
-                record["connected"] =
-                    connection is { Retired: false }
-                    && connection.Open;
+                record["connected"] = connection is { Retired: false } && connection.Open;
                 record["executable"] =
-                    connection is { Retired: false, Executable: true }
-                    && connection.Open;
-                record["services"] = connection is { Retired: false, Executable: true } && connection.Open
-                    ? connection.Capabilities["services"]?.DeepClone() ?? new JsonObject()
-                    : new JsonObject();
-                record["tools"] = connection is { Retired: false, Executable: true } && connection.Open
-                    ? ExecutableDefinitions(connection)
-                    : new JsonArray();
+                    connection is { Retired: false, Executable: true } && connection.Open;
+                record["services"] =
+                    connection is { Retired: false, Executable: true } && connection.Open
+                        ? connection.Capabilities["services"]?.DeepClone() ?? new JsonObject()
+                        : new JsonObject();
+                record["tools"] =
+                    connection is { Retired: false, Executable: true } && connection.Open
+                        ? ExecutableDefinitions(connection)
+                        : new JsonArray();
                 if (connection?.Protocol is not null)
                     record["protocolCompatibility"] = connection.Protocol.DeepClone();
                 record.Remove("capabilities"); // Offline snapshots are not live capabilities.
@@ -264,10 +260,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
     {
         var result = Registry.Approve(pendingId, nodeId);
         var delivered = false;
-        if (
-            pending.TryRemove(pendingId, out var connection)
-            && connection.Open
-        )
+        if (pending.TryRemove(pendingId, out var connection) && connection.Open)
         {
             try
             {

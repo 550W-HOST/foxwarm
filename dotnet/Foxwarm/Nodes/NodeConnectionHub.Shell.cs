@@ -15,28 +15,56 @@ internal sealed partial class NodeConnectionHub
     private Timer? shellExpiry;
 
     internal static bool IsShellPath(PathString path) =>
-        path == "/node/shell/register" || path == "/node/shell/poll" || path == "/node/shell/report";
+        path == "/node/shell/register"
+        || path == "/node/shell/poll"
+        || path == "/node/shell/report";
 
     // This is the actual transport capability, not the Main/CLI exec definition.
-    private static JsonObject ShellCapability() => new()
-    {
-        ["name"] = "exec",
-        ["description"] = "Run a POSIX shell command on this Node. Returns bounded output with its total byte count; full output is not retained. If the command outlasts timeout, it continues in the background and returns an execId. Completion is reported to the originating Session.",
-        ["parameters"] = new JsonObject
+    private static JsonObject ShellCapability() =>
+        new()
         {
-            ["type"] = "object",
-            ["properties"] = new JsonObject
+            ["name"] = "exec",
+            ["description"] =
+                "Run a POSIX shell command on this Node. Returns bounded output with its total byte count; full output is not retained. If the command outlasts timeout, it continues in the background and returns an execId. Completion is reported to the originating Session.",
+            ["parameters"] = new JsonObject
             {
-                ["command"] = new JsonObject { ["type"] = "string", ["description"] = "Shell command or pipeline to execute." },
-                ["cwd"] = new JsonObject { ["type"] = "string", ["description"] = "Working directory for this command. Relative paths use the Shell Node's startup directory. When omitted, use the session working directory or, if unset, the startup directory." },
-                ["timeout"] = new JsonObject { ["type"] = "number", ["description"] = "Seconds to wait before returning a still-running command as a background execution. Defaults to 15; values above 60 are reduced to 60.", ["default"] = 15, ["minimum"] = 1 },
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["command"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Shell command or pipeline to execute.",
+                    },
+                    ["cwd"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] =
+                            "Working directory for this command. Relative paths use the Shell Node's startup directory. When omitted, use the session working directory or, if unset, the startup directory.",
+                    },
+                    ["timeout"] = new JsonObject
+                    {
+                        ["type"] = "number",
+                        ["description"] =
+                            "Seconds to wait before returning a still-running command as a background execution. Defaults to 15; values above 60 are reduced to 60.",
+                        ["default"] = 15,
+                        ["minimum"] = 1,
+                    },
+                },
+                ["required"] = new JsonArray("command"),
             },
-            ["required"] = new JsonArray("command"),
-        },
-    };
+        };
 
-    private sealed class ShellTask(string id, ShellRuntime runtime, string callId, Invocation call,
-        string script, int timeout, string warning, bool programmatic)
+    private sealed class ShellTask(
+        string id,
+        ShellRuntime runtime,
+        string callId,
+        Invocation call,
+        string script,
+        int timeout,
+        string warning,
+        bool programmatic
+    )
     {
         internal readonly string Id = id;
         internal readonly ShellRuntime Runtime = runtime;
@@ -64,14 +92,30 @@ internal sealed partial class NodeConnectionHub
         private readonly Queue<ShellTask> queue = new();
         private TaskCompletionSource<ShellTask?>? pending;
 
-        internal void Dispatch(string callId, Invocation call, JsonObject args, string? sessionCwd, bool programmatic)
+        internal void Dispatch(
+            string callId,
+            Invocation call,
+            JsonObject args,
+            string? sessionCwd,
+            bool programmatic
+        )
         {
             if (Closed || call.Claim is null)
                 throw new InvalidDataException("Shell Node exec transport is unavailable.");
             var command = SessionWait.Text(args["command"]);
-            if (string.IsNullOrWhiteSpace(command) || Encoding.UTF8.GetByteCount(command) > 57344 || command.Contains('\0'))
-                throw new InvalidDataException("Shell Node command must be non-empty and at most 56 KiB.");
-            if (hub.shellTasks.Values.Count(task => task.Runtime.Connection.Id == Connection.Id && task.State != "finished") >= ShellMaxTasks)
+            if (
+                string.IsNullOrWhiteSpace(command)
+                || Encoding.UTF8.GetByteCount(command) > 57344
+                || command.Contains('\0')
+            )
+                throw new InvalidDataException(
+                    "Shell Node command must be non-empty and at most 56 KiB."
+                );
+            if (
+                hub.shellTasks.Values.Count(task =>
+                    task.Runtime.Connection.Id == Connection.Id && task.State != "finished"
+                ) >= ShellMaxTasks
+            )
                 throw new InvalidOperationException("Shell Node is busy; no command was started.");
             var explicitCwd = SessionWait.Text(args["cwd"]);
             if (args.ContainsKey("cwd") && string.IsNullOrWhiteSpace(explicitCwd))
@@ -79,13 +123,27 @@ internal sealed partial class NodeConnectionHub
             var directory = ResolveCwd(Cwd, explicitCwd ?? sessionCwd ?? Cwd);
             if (directory.Contains('\0') || Encoding.UTF8.GetByteCount(directory) > 4096)
                 throw new InvalidDataException("Shell Node cwd is invalid.");
-            var seconds = args["timeout"] is null ? 15 : SessionWait.Number(args["timeout"]) ?? double.NaN;
+            var seconds = args["timeout"] is null
+                ? 15
+                : SessionWait.Number(args["timeout"]) ?? double.NaN;
             if (!double.IsFinite(seconds) || seconds < 1)
-                throw new InvalidDataException("timeout must be a finite number of at least 1 second.");
-            var warning = seconds > 60 ? $"WARNING: Requested timeout {seconds.ToString(CultureInfo.InvariantCulture)}s exceeds the 60s maximum; using 60s.\n" : "";
-            var task = new ShellTask(Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16)), this, callId, call,
+                throw new InvalidDataException(
+                    "timeout must be a finite number of at least 1 second."
+                );
+            var warning =
+                seconds > 60
+                    ? $"WARNING: Requested timeout {seconds.ToString(CultureInfo.InvariantCulture)}s exceeds the 60s maximum; using 60s.\n"
+                    : "";
+            var task = new ShellTask(
+                Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16)),
+                this,
+                callId,
+                call,
                 "cd '" + directory.Replace("'", "'\"'\"'") + "' || exit 125\n" + command + "\n",
-                (int)Math.Ceiling(Math.Min(seconds, 60)), warning, programmatic);
+                (int)Math.Ceiling(Math.Min(seconds, 60)),
+                warning,
+                programmatic
+            );
             hub.shellTasks.Add(task.Id, task);
             queue.Enqueue(task);
             Flush();
@@ -97,9 +155,15 @@ internal sealed partial class NodeConnectionHub
             var parts = new List<string>();
             foreach (var part in absolute.Split('/'))
             {
-                if (part is "" or ".") continue;
-                if (part == "..") { if (parts.Count > 0) parts.RemoveAt(parts.Count - 1); }
-                else parts.Add(part);
+                if (part is "" or ".")
+                    continue;
+                if (part == "..")
+                {
+                    if (parts.Count > 0)
+                        parts.RemoveAt(parts.Count - 1);
+                }
+                else
+                    parts.Add(part);
             }
             return "/" + string.Join('/', parts);
         }
@@ -111,8 +175,13 @@ internal sealed partial class NodeConnectionHub
             while (count-- > 0)
             {
                 var task = queue.Dequeue();
-                if (task.CallId == callId) { hub.shellTasks.Remove(task.Id); removed = true; }
-                else queue.Enqueue(task);
+                if (task.CallId == callId)
+                {
+                    hub.shellTasks.Remove(task.Id);
+                    removed = true;
+                }
+                else
+                    queue.Enqueue(task);
             }
             return removed;
         }
@@ -134,7 +203,8 @@ internal sealed partial class NodeConnectionHub
 
         internal TaskCompletionSource<ShellTask?> Poll()
         {
-            if (pending is not null) throw new InvalidOperationException("Poll already pending.");
+            if (pending is not null)
+                throw new InvalidOperationException("Poll already pending.");
             LastSeen = DateTimeOffset.UtcNow;
             pending = new(TaskCreationOptions.RunContinuationsAsynchronously);
             var result = pending;
@@ -144,12 +214,14 @@ internal sealed partial class NodeConnectionHub
 
         internal void EndPoll(TaskCompletionSource<ShellTask?> source)
         {
-            if (ReferenceEquals(pending, source)) pending = null;
+            if (ReferenceEquals(pending, source))
+                pending = null;
         }
 
         private void Flush()
         {
-            if (pending is null || !queue.TryDequeue(out var task)) return;
+            if (pending is null || !queue.TryDequeue(out var task))
+                return;
             // Removal precedes handoff. Response loss can never put this command back.
             task.Delivered = true;
             pending.TrySetResult(task);
@@ -159,7 +231,8 @@ internal sealed partial class NodeConnectionHub
 
     internal string? ShellDefaultCwd(string id)
     {
-        lock (gate) return Require(id).Http?.Cwd;
+        lock (gate)
+            return Require(id).Http?.Cwd;
     }
 
     private ShellRuntime PublishShell(string id, string auth, string cwd)
@@ -171,18 +244,38 @@ internal sealed partial class NodeConnectionHub
             ["tools"] = new JsonArray(ShellCapability()),
             ["features"] = new JsonObject { ["remoteExecBackgroundRegistration"] = true },
         };
-        connection.Protocol = Protocol(new JsonObject { ["nodeProtocol"] = new JsonObject { ["min"] = 1, ["max"] = 3 } });
+        connection.Protocol = Protocol(
+            new JsonObject
+            {
+                ["nodeProtocol"] = new JsonObject { ["min"] = 1, ["max"] = 3 },
+            }
+        );
         Connection? old;
         lock (gate)
         {
-            if (shutdown.IsCancellationRequested) throw new IOException("Host is shutting down.");
+            if (shutdown.IsCancellationRequested)
+                throw new IOException("Host is shutting down.");
             // Recheck the credential and durably touch it inside revocation's publication lock.
-            Registry.Touch(id, auth, new JsonObject { ["nodeType"] = "shell-node", ["capabilities"] = connection.Capabilities.DeepClone() }, connection.Protocol);
+            Registry.Touch(
+                id,
+                auth,
+                new JsonObject
+                {
+                    ["nodeType"] = "shell-node",
+                    ["capabilities"] = connection.Capabilities.DeepClone(),
+                },
+                connection.Protocol
+            );
             nodes.TryGetValue(id, out old);
-            if (old is not null) old.Retired = true;
+            if (old is not null)
+                old.Retired = true;
             nodes[id] = connection;
         }
-        if (old is not null) { FailCalls(old, "Node connection replaced"); Close(old, "Node connection replaced", false); }
+        if (old is not null)
+        {
+            FailCalls(old, "Node connection replaced");
+            Close(old, "Node connection replaced", false);
+        }
         Changed?.Invoke();
         return runtime;
     }
@@ -196,13 +289,20 @@ internal sealed partial class NodeConnectionHub
             foreach (var connection in expired)
             {
                 // The exact-runtime check and removal stay under the lifecycle lock.
-                if (nodes.TryGetValue(connection.Id!, out var current) && ReferenceEquals(current, connection))
+                if (
+                    nodes.TryGetValue(connection.Id!, out var current)
+                    && ReferenceEquals(current, connection)
+                )
                 {
                     nodes.Remove(connection.Id!);
                     connection.Retired = true;
                 }
             }
-            foreach (var task in shellTasks.Values.Where(t => DateTimeOffset.UtcNow - t.Started > TimeSpan.FromHours(24)).ToArray())
+            foreach (
+                var task in shellTasks
+                    .Values.Where(t => DateTimeOffset.UtcNow - t.Started > TimeSpan.FromHours(24))
+                    .ToArray()
+            )
                 shellTasks.Remove(task.Id);
         }
         foreach (var connection in expired)
@@ -210,63 +310,114 @@ internal sealed partial class NodeConnectionHub
             FailCalls(connection, "Shell Node stopped polling; execution outcome may be unknown");
             Close(connection, "Shell Node stopped polling", false);
         }
-        if (expired.Length > 0) Changed?.Invoke();
+        if (expired.Length > 0)
+            Changed?.Invoke();
     }
 
-    private static async Task<byte[]> ShellBody(HttpRequest request, int limit, CancellationToken token)
+    private static async Task<byte[]> ShellBody(
+        HttpRequest request,
+        int limit,
+        CancellationToken token
+    )
     {
-        if (request.ContentType?.StartsWith("application/octet-stream", StringComparison.Ordinal) != true)
+        if (
+            request.ContentType?.StartsWith("application/octet-stream", StringComparison.Ordinal)
+            != true
+        )
             throw new InvalidDataException("Expected application/octet-stream.");
-        if (request.ContentLength > limit) throw new InvalidDataException("Body exceeds limit.");
+        if (request.ContentLength > limit)
+            throw new InvalidDataException("Body exceeds limit.");
         using var body = new MemoryStream();
         var block = new byte[Math.Min(limit + 1, 4096)];
         while (true)
         {
             var count = await request.Body.ReadAsync(block, token);
-            if (count == 0) break;
-            if (body.Length + count > limit) throw new InvalidDataException("Body exceeds limit.");
+            if (count == 0)
+                break;
+            if (body.Length + count > limit)
+                throw new InvalidDataException("Body exceeds limit.");
             body.Write(block, 0, count);
         }
         return body.ToArray();
     }
 
-    private static string ShellHeader(HttpRequest request, string key) => request.Headers[key].ToString();
+    private static string ShellHeader(HttpRequest request, string key) =>
+        request.Headers[key].ToString();
 
     private (string Id, string Auth)? AuthenticateShell(HttpContext context)
     {
         var id = ShellHeader(context.Request, "X-Foxwarm-Node");
         var auth = ShellHeader(context.Request, "Authorization");
-        if (!System.Text.RegularExpressions.Regex.IsMatch(id, "^[a-zA-Z0-9_-]+$") || !auth.StartsWith("Bearer ", StringComparison.Ordinal) || !Registry.Authenticate(id, auth[7..]))
-        { context.Response.StatusCode = 401; return null; }
+        if (
+            !System.Text.RegularExpressions.Regex.IsMatch(id, "^[a-zA-Z0-9_-]+$")
+            || !auth.StartsWith("Bearer ", StringComparison.Ordinal)
+            || !Registry.Authenticate(id, auth[7..])
+        )
+        {
+            context.Response.StatusCode = 401;
+            return null;
+        }
         return (id, auth[7..]);
     }
 
     internal void RegisterShellRoutes(WebApplication app)
     {
-        shellExpiry = new Timer(_ => CollectShell(), null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
+        shellExpiry = new Timer(
+            _ => CollectShell(),
+            null,
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromSeconds(10)
+        );
         foreach (var suffix in new[] { "register", "poll", "report" })
-            app.MapMethods("/node/shell/" + suffix, [suffix == "poll" ? "GET" : "POST"], async (HttpContext context) =>
-            {
-                var credential = AuthenticateShell(context);
-                if (credential is null) return;
-                try
+            app.MapMethods(
+                "/node/shell/" + suffix,
+                [suffix == "poll" ? "GET" : "POST"],
+                async (HttpContext context) =>
                 {
-                    if (suffix == "register")
+                    var credential = AuthenticateShell(context);
+                    if (credential is null)
+                        return;
+                    try
                     {
-                        var cwd = Encoding.UTF8.GetString(await ShellBody(context.Request, 4096, context.RequestAborted));
-                        if (!cwd.StartsWith('/') || cwd.Any(c => c is '\0' or '\r' or '\n')) throw new InvalidDataException("Invalid startup directory.");
-                        var runtime = PublishShell(credential.Value.Id, credential.Value.Auth, cwd);
-                        context.Response.Headers["X-Foxwarm-Connection"] = runtime.Id;
-                        ShellAck(context);
+                        if (suffix == "register")
+                        {
+                            var cwd = Encoding.UTF8.GetString(
+                                await ShellBody(context.Request, 4096, context.RequestAborted)
+                            );
+                            if (!cwd.StartsWith('/') || cwd.Any(c => c is '\0' or '\r' or '\n'))
+                                throw new InvalidDataException("Invalid startup directory.");
+                            var runtime = PublishShell(
+                                credential.Value.Id,
+                                credential.Value.Auth,
+                                cwd
+                            );
+                            context.Response.Headers["X-Foxwarm-Connection"] = runtime.Id;
+                            ShellAck(context);
+                        }
+                        else if (suffix == "poll")
+                            await PollShell(context, credential.Value.Id);
+                        else
+                            await ReportShell(context, credential.Value.Id);
                     }
-                    else if (suffix == "poll") await PollShell(context, credential.Value.Id);
-                    else await ReportShell(context, credential.Value.Id);
+                    catch (InvalidDataException)
+                    {
+                        if (!context.Response.HasStarted)
+                            context.Response.StatusCode = 400;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        if (!context.Response.HasStarted)
+                            context.Response.StatusCode = 409;
+                    }
+                    catch (IOException)
+                    {
+                        if (!context.Response.HasStarted)
+                            context.Response.StatusCode = 503;
+                    }
+                    catch (OperationCanceledException)
+                        when (context.RequestAborted.IsCancellationRequested) { }
                 }
-                catch (InvalidDataException) { if (!context.Response.HasStarted) context.Response.StatusCode = 400; }
-                catch (InvalidOperationException) { if (!context.Response.HasStarted) context.Response.StatusCode = 409; }
-                catch (IOException) { if (!context.Response.HasStarted) context.Response.StatusCode = 503; }
-                catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }
-            });
+            );
     }
 
     private static void ShellAck(HttpContext context)
@@ -281,19 +432,39 @@ internal sealed partial class NodeConnectionHub
         TaskCompletionSource<ShellTask?> poll;
         lock (gate)
         {
-            runtime = Require(id).Http ?? throw new InvalidOperationException("Not a Shell HTTP connection.");
-            if (runtime.Id != ShellHeader(context.Request, "X-Foxwarm-Connection")) throw new InvalidOperationException("Connection was replaced.");
+            runtime =
+                Require(id).Http
+                ?? throw new InvalidOperationException("Not a Shell HTTP connection.");
+            if (runtime.Id != ShellHeader(context.Request, "X-Foxwarm-Connection"))
+                throw new InvalidOperationException("Connection was replaced.");
             poll = runtime.Poll();
         }
         ShellTask? task;
-        try { task = await poll.Task.WaitAsync(TimeSpan.FromSeconds(25), context.RequestAborted); }
-        catch (TimeoutException) { ShellAck(context); return; }
-        finally { lock (gate) runtime.EndPoll(poll); }
-        if (task is null) { ShellAck(context); return; }
+        try
+        {
+            task = await poll.Task.WaitAsync(TimeSpan.FromSeconds(25), context.RequestAborted);
+        }
+        catch (TimeoutException)
+        {
+            ShellAck(context);
+            return;
+        }
+        finally
+        {
+            lock (gate)
+                runtime.EndPoll(poll);
+        }
+        if (task is null)
+        {
+            ShellAck(context);
+            return;
+        }
         context.Response.Headers["X-Foxwarm-Shell"] = ShellProtocol;
         context.Response.Headers["X-Foxwarm-Task"] = task.Id;
         context.Response.Headers["X-Foxwarm-Exec"] = task.Call.Claim!.ExecId;
-        context.Response.Headers["X-Foxwarm-Timeout"] = task.Timeout.ToString(CultureInfo.InvariantCulture);
+        context.Response.Headers["X-Foxwarm-Timeout"] = task.Timeout.ToString(
+            CultureInfo.InvariantCulture
+        );
         context.Response.ContentType = "application/x-foxwarm-shell; charset=utf-8";
         await context.Response.WriteAsync(task.Script, context.RequestAborted);
     }
