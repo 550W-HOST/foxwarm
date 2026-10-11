@@ -39,7 +39,9 @@ before(async () => {
       { role:'user', parts:[{text:'QUEUED_USER'}], __meta:{queuedPreview:true,queueType:'user',temporary:true,synthetic:'queue-user'} },
       { role:'user', parts:[{system:'<foxwarm-message type="timer">\\nQUEUED_INTERNAL\\n</foxwarm-message>'}], __meta:{queuedPreview:true,queueType:'background',temporary:true,synthetic:'queue-timer'} },
     ]
-    window.fixture = { fetches:[], controls:[] }
+    window.fixture = { fetches:[], controls:[], now:Date.now() }
+    Date.now = () => window.fixture.now
+    window.fixture.setNow = value => { window.fixture.now = value }
     window.fetch = async input => {
       window.fixture.fetches.push(String(input))
       const parent = String(input).includes('/40/expand')
@@ -66,7 +68,7 @@ before(async () => {
       window.fixture.matches = term => findSessionSearchMatches(projectSessionSearchFields(messages,prefs.timelineView),term)
       return <div className="foxwarm-chat-root">
         <SessionUiSettingsMenu {...prefs} onSendKeyModeChange={prefs.setSendKeyMode} onTimelineViewChange={prefs.setTimelineView} onShowUsageBadgeChange={prefs.setShowUsageBadge} onShowUserMessageMetadataChange={prefs.setShowUserMessageMetadata} onOpenDebugInfo={()=>{}} />
-        <div id="timeline"><ChatTimeline sessionId="fixture/main" messages={[...messages.slice(...slice),...(draft?[draft]:[])]} historyMessages={messages} isRunningTool={runtime.state==='running-tool'} isMobile={false} timelineView={prefs.timelineView} showUsageBadge={prefs.showUsageBadge} showUserMessageMetadata={prefs.showUserMessageMetadata} /></div>
+        <div id="timeline"><ChatTimeline sessionId="fixture/main" messages={[...messages.slice(...slice),...(draft?[draft]:[])]} historyMessages={messages} runtimeState={runtime} isRunningTool={runtime.state==='running-tool'} isMobile={false} timelineView={prefs.timelineView} showUsageBadge={prefs.showUsageBadge} showUserMessageMetadata={prefs.showUserMessageMetadata} /></div>
         <div id="status"><ProcessingStatus timelineView={prefs.timelineView} runtimeState={runtime} sessionBusy={runtime.busy} sessionQueueLength={2} turnIncomplete={runtime.state==='idle'} loading={false} isMobile={false} onStop={()=>window.fixture.controls.push('stop')} onContinue={()=>window.fixture.controls.push('continue')} onRunQueued={()=>window.fixture.controls.push('queued')} /></div>
         <div id="queue"><ChatTimeline sessionId="fixture/main" messages={queued} isMobile={false} timelineView={prefs.timelineView} showUsageBadge={false} showTimeDividers={false} /></div>
       </div>
@@ -234,16 +236,16 @@ test('only the full committed history tail LLM error is external; drafts, clippe
   assert.equal(await page.$('#queue [data-system-message-kind="llm error"]'), null)
 })
 
-test('Activity counts use recorded outcomes and subcalls, not script code or asynchronous sends', async () => {
+test('Activity counts use direct recorded outcomes, not script code or asynchronous sends', async () => {
   const model = (seq, parts, segmented = false) => ({role:'model',parts,__meta:{seq,...segmented?{llmRequestId:'stats-request',llmSegment:{outputStart:seq===13?8:0,outputEndExclusive:seq===13?9:8,complete:true}}:{}}})
-  const tool = (id,name,output,error = false,meta) => ({role:'tool',parts:[{functionResponse:{tool_use_id:id,name,response:error?{error:output}:{output},...meta?{__meta:{toolScriptSubCalls:meta}}:{}}}]})
+  const tool = (id,name,output,error = false) => ({role:'tool',parts:[{functionResponse:{tool_use_id:id,name,response:error?{error:output}:{output}}}]})
   const records = [
     model(1,[{thinking:'STATS_REASONING'},{functionCall:{id:'child-async',name:'create_child_session',args:{suffix:'async',message:'initial',afterSend:'continue'}}},{functionCall:{id:'child-task',name:'call_tool',args:{toolId:'builtin:create_child_session',args:{taskId:'fixture-task',suffix:'task'}}}},{text:'VISIBLE_BARRIER'}, {functionCall:{id:'send-good',name:'send_to_session',args:{sessionId:'fixture/target',message:'hello'}}},{functionCall:{id:'send-failed',name:'send_to_channel',args:{channelTargetId:'fixture:target',message:'hello'}}},{functionCall:{id:'script',name:'run_script',args:{code:'create_child_session(); send_to_session()'}}},{functionCall:{id:'background',name:'exec',args:{command:'long-job'}}}],true),
     tool('child-async','create_child_session','Child session created: `fixture/async` (new session). Initial message sent.'),
     tool('child-task','call_tool','Child session created: `fixture/task` (new session), but task assignment delivery failed.'),
     tool('send-good','send_to_session','Message sent to session `fixture/target`'),
     tool('send-failed','send_to_channel','SEND_FAILED',true),
-    tool('script','run_script','script completed',false,[{id:'tss_1',name:'create_child_session',status:'completed',startedAt:240000,completedAt:245000,durationMs:5000},{id:'tss_2',name:'send_to_session',status:'completed',startedAt:245000,completedAt:250000,durationMs:5000}]),
+    {role:'tool',parts:[{functionResponse:{tool_use_id:'script',name:'run_script',response:{runId:'fixture-script',status:'completed',result:'script output mentioning create_child_session and send_to_session'}}}]},
     tool('background','exec','Background command started'),
     {role:'user',parts:[{system:'<foxwarm-message type="inter-agent" sourceSessionId="fixture/child">\nRECEIVED_ONE\n</foxwarm-message>'}],__meta:{seq:8}},
     {role:'user',parts:[{system:'<foxwarm-system kind="external-input" server="fixture" endpoint="notify">\nRECEIVED_TWO\n</foxwarm-system>'}],__meta:{seq:9}},
@@ -253,15 +255,14 @@ test('Activity counts use recorded outcomes and subcalls, not script code or asy
     ctx(60),
     model(13,[{functionCall:{id:'no-evidence',name:'run_script',args:{code:'create_child_session(); send_to_session()'}}}],true),
     model(14,[{text:'CONTINUE_BARRIER'},{functionCall:{id:'script-continue',name:'continue_script',args:{runId:'fixture-script',continuationId:'next'}}}]),
-    {role:'tool',parts:[{functionResponse:{tool_use_id:'script-continue',name:'continue_script',response:{runId:'fixture-script',status:'completed'},__meta:{toolScriptSubCalls:[{id:'tss_1',name:'create_child_session',status:'completed',startedAt:240000},{id:'tss_2',name:'send_to_session',status:'completed',startedAt:245000},{id:'tss_3',name:'read',status:'completed',startedAt:270000}]}}}]},
+    {role:'tool',parts:[{functionResponse:{tool_use_id:'script-continue',name:'continue_script',response:{runId:'fixture-script',status:'completed'}}}]},
     {role:'user',parts:[{system:'<foxwarm-message type="channel" channelType="webui">\n<foxwarm-system kind="external-input" externalId="fixture-external" contextId="fixture-context">\nQUOTED_MCP_XML\n</foxwarm-system>\n</foxwarm-message>'}],__meta:{seq:16,clientMessageId:'fixture-human-quote'}},
   ]
-  records[5].parts[0].functionResponse.response.runId='fixture-script'
   await page.evaluate(records => { window.fixture.setMessages(records); window.fixture.setSlice([0,undefined]) }, records)
   await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Created 2 child sessions'))
   assert.deepEqual(await page.$$eval('#timeline [data-timeline-activity] > button', buttons => buttons.map(button => button.textContent.slice(1))), [
     'Called 2 tools',
-    'Created 2 child sessions · Sent 1 message · Received 3 messages · Called 5 tools',
+    'Created 2 child sessions · Sent 1 message · Received 3 messages · Called 4 tools',
     'Called 1 tool',
     'Called 1 tool',
   ])
@@ -272,7 +273,7 @@ test('Activity counts use recorded outcomes and subcalls, not script code or asy
   assert.ok((await page.$eval('#timeline', root => root.textContent)).includes('QUOTED_MCP_XML'), 'ordinary authored XML remains visible rather than becoming received communication')
   await page.evaluate(start => window.fixture.setSlice([start,undefined]), records.length - 2)
   await page.waitForFunction(() => document.querySelector('#timeline').querySelectorAll('[data-timeline-activity]').length === 1)
-  assert.equal(await page.$eval('#timeline [data-timeline-activity] > button', button => button.textContent.slice(1)), 'Called 1 tool', 'continuation snapshots do not recount old subcalls outside the viewport')
+  assert.equal(await page.$eval('#timeline [data-timeline-activity] > button', button => button.textContent.slice(1)), 'Activity', 'the clipped response does not recount its ordinary invocation already represented before the window')
 })
 
 test('ingress kinds and retry metadata fold, while human XML/code examples and ordinary warning text remain body', async () => {
@@ -299,4 +300,144 @@ test('ingress kinds and retry metadata fold, while human XML/code examples and o
   await page.click('[aria-label="Expand activity"]')
   await page.waitForFunction(() => document.querySelector('[data-activity-details]').textContent.includes('TOOL_ERROR'))
   assert.ok((await page.$eval('[data-activity-details]', root => root.textContent)).includes('RETRY_ERROR'))
+})
+
+
+const epoch = 1700000000000
+const timed = (seq, second, role, parts, request) => ({ role, parts, __meta: { seq, timestamp: epoch + second * 1000, ...request ? {
+  llmRequestId: request.id,
+  llmSegment: { outputStart: request.offset || 0, outputEndExclusive: (request.offset || 0) + parts.length, complete: !!request.end },
+  ...request.end ? { llmRequestTiming: { startedAt: epoch + request.start * 1000, completedAt: epoch + request.end * 1000, durationMs: (request.end - request.start) * 1000 } } : {},
+} : {} } })
+const incoming = (seq, second) => timed(seq, second, 'user', [{system:'<foxwarm-message type="inter-agent" sourceSessionId="fixture/worker">\nRECEIVED_WORK\n</foxwarm-message>'}])
+const boundaryRecords = () => [
+  timed(1,0,'user',[{text:'START_BODY'}]),
+  timed(2,5,'model',[{thinking:'PRE_BODY_REASONING'}],{id:'request-1'}),
+  timed(3,10,'model',[{text:'ARRANGED_BODY',providerMeta:{openaiResponses:{outputItem:{type:'message',id:'msg-arranged',phase:'commentary'}}}}],{id:'request-1',start:0,end:10,offset:1}),
+  incoming(4,70),
+  timed(5,71,'model',[{thinking:'AFTER_RECEIVE_REASONING'},{text:'   '}],{id:'request-2'}),
+  timed(6,72,'model',[],{id:'request-2',start:70,end:72,offset:2}),
+  timed(7,75,'user',[{system:'<foxwarm-system kind="time" time="fixture" />'}]),
+  incoming(8,100),
+  timed(9,101,'model',[{thinking:'LATE_REASONING'}],{id:'request-3'}),
+  timed(10,120,'model',[{text:'DONE_BODY'}],{id:'request-3',start:100,end:120,offset:1}),
+]
+const headers = () => page.$$eval('#timeline [data-timeline-activity] > button', buttons => buttons.map(button => button.textContent.slice(1)))
+const setRecords = async (records, runtime = {state:'idle',busy:false,queueLength:0}, now = epoch + 120000) => {
+  await page.evaluate(({records,runtime,now}) => { window.fixture.setNow(now); window.fixture.setDraft(null); window.fixture.setSlice([0,undefined]); window.fixture.setMessages(records); window.fixture.setRuntime(runtime) }, {records,runtime,now})
+  await page.waitForFunction(() => window.fixture.prefs.timelineView === 'conversation')
+}
+
+test('Activity elapsed uses adjacent visible boundaries, retaining leading idle and empty final processing evidence', async () => {
+  const records = boundaryRecords()
+  await setRecords(records)
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Waited for 1m28s'))
+  assert.deepEqual(await headers(), ['Worked for 10s', 'Worked for 22s · Waited for 1m28s · Received 2 messages'])
+  assert.deepEqual(await page.$$eval('#timeline .foxwarm-assistant-message-markdown', bodies => bodies.map(body => body.textContent.trim())), ['ARRANGED_BODY','DONE_BODY'])
+  assert.equal(await page.$eval('#timeline', root => root.querySelectorAll('[data-timeline-activity]').length), 2)
+  await page.$eval('#timeline', root => [...root.querySelectorAll('[aria-label="Expand activity"]')][1].click())
+  await page.waitForFunction(() => document.querySelector('[data-activity-details]').textContent.includes('AFTER_RECEIVE_REASONING'))
+  assert.equal(await page.$eval('#timeline', root => root.querySelectorAll('.foxwarm-assistant-message-markdown').length), 2)
+  assert.equal(await countMatches('LATE_REASONING'), 0)
+  // A successful empty request without committed segments produces no model history record.
+  // A later request beginning at the next input cannot account for that earlier processing.
+  await setRecords(records.filter((_,index) => index !== 4 && index !== 5))
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Elapsed 1m50s'))
+  assert.deepEqual(await headers(), ['Worked for 10s','Elapsed 1m50s · Received 2 messages'])
+  // Missing request data must not become an invented waiting interval.
+  delete records[9].__meta.llmRequestTiming
+  await setRecords(records)
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Elapsed 1m50s'))
+  assert.deepEqual(await headers(), ['Worked for 10s','Elapsed 1m50s · Received 2 messages'])
+  delete records[2].__meta.timestamp
+  await setRecords(records)
+  await page.waitForFunction(() => !document.querySelector('#timeline').textContent.includes('Elapsed'))
+  assert.deepEqual(await headers(), ['Activity','Received 2 messages'])
+})
+
+test('Shared logical request and parallel tools clip across text-plus-call and user boundaries without double work', async () => {
+  const calls = ['parallel-a','parallel-b'].map(id => ({functionCall:{id,name:'exec',args:{command:'echo actual'}}}))
+  const records = [
+    timed(1,0,'user',[{text:'FIRST_INPUT'}]),
+    timed(2,3,'model',[{thinking:'PARALLEL_REASONING'},{text:'TEXT_WITH_CALL'},...calls],{id:'parallel-request'}),
+    timed(3,5,'user',[{text:'INTERRUPTING_INPUT'}]),
+    timed(4,8,'model',[],{id:'parallel-request',start:0,end:8,offset:4}),
+    timed(5,14,'tool',calls.map((part,index) => ({functionResponse:{tool_use_id:part.functionCall.id,name:'exec',response:{output:'REAL_RESULT'},executionTiming:{startedAt:epoch+8000,completedAt:epoch+(index?14000:12000),durationMs:index?6000:4000}}}))),
+    timed(6,20,'model',[{text:'PARALLEL_DONE'}],{id:'next-request',start:14,end:20}),
+  ]
+  await setRecords(records)
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('PARALLEL_DONE'))
+  assert.deepEqual(await headers(), ['Worked for 3s','Worked for 2s · Called 2 tools','Worked for 15s'])
+  await page.evaluate(() => window.fixture.setSlice([4,undefined]))
+  await page.waitForFunction(() => document.querySelector('#timeline').querySelectorAll('[data-timeline-activity]').length === 1)
+  assert.deepEqual(await headers(), ['Worked for 15s'], 'viewport clipping retains the real left user boundary and does not recount calls')
+  // Empty/whitespace model text with only usage or phase metadata is not an Activity record.
+  await setRecords([records[0],timed(2,5,'model',[{text:'  ',providerMeta:{openaiResponses:{outputItem:{type:'message',phase:'final'}}}}],{id:'empty',start:0,end:5}),records[5]])
+  await page.waitForFunction(() => !document.querySelector('#timeline').textContent.includes('TEXT_WITH_CALL'))
+  assert.deepEqual(await headers(), [])
+})
+
+test('Open Activity clocks update from actual runtime and canonical endpoints, not streaming text arrival; idle coordination also waits', async () => {
+  const records = boundaryRecords()
+  await setRecords(records.slice(0,-1), {state:'requesting-model',since:epoch+100000,busy:true,queueLength:0}, epoch+110000)
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Worked for 12s'))
+  assert.deepEqual(await headers(), ['Worked for 10s','Worked for 12s · Waited for 1m28s · Received 2 messages'])
+  await page.evaluate(() => window.fixture.setDraft({role:'model',parts:[{text:'DONE_BODY'}],__meta:{temporary:true,synthetic:'draft',llmRequestId:'request-3',llmSegment:{outputStart:1,outputEndExclusive:2,complete:false}}}))
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('DONE_BODY'))
+  await page.evaluate(() => { window.timedStreamNode = [...document.querySelectorAll('#timeline .foxwarm-assistant-message-markdown')].find(body => body.textContent.includes('DONE_BODY')); window.fixture.setNow(1700000120000) })
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Worked for 22s'))
+  await setRecords(records)
+  await page.waitForFunction(() => window.timedStreamNode.isConnected)
+  assert.equal(await page.evaluate(() => window.timedStreamNode === [...document.querySelectorAll('#timeline .foxwarm-assistant-message-markdown')].find(body => body.textContent.includes('DONE_BODY'))), true)
+  await page.evaluate(() => window.fixture.setNow(1700000600000))
+  await new Promise(resolve => setTimeout(resolve,1100))
+  assert.deepEqual(await headers(), ['Worked for 10s','Worked for 22s · Waited for 1m28s · Received 2 messages'], 'closed boundaries do not grow with wall time')
+  await setRecords(records.slice(0,6), {state:'idle',busy:false,queueLength:0}, epoch+110000)
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Waited for 1m38s'))
+  await page.evaluate(() => window.fixture.setNow(1700000120000))
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Waited for 1m48s'))
+  await setRecords(records.slice(0,3), undefined, epoch+200000)
+  await page.waitForFunction(() => document.querySelector('#timeline').querySelectorAll('[data-timeline-activity]').length === 1)
+  assert.deepEqual(await headers(), ['Worked for 10s'], 'no forever-growing empty waiting row after the last visible model text')
+})
+
+test('Terminal LLM errors close at their stored timestamp; CTX and missing Stop endpoints do not invent work or waiting', async () => {
+  const records = boundaryRecords()
+  const error = timed(10,120,'model',[{text:'⚠️ LLM Error: FINAL_FAILURE'}])
+  error.__meta.noticeType='llm-retry'; error.__meta.retry={attempt:3,maxAttempts:3,final:true}
+  await setRecords([...records.slice(0,-1),error], undefined,epoch+200000)
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('FINAL_FAILURE'))
+  assert.deepEqual(await headers(), ['Worked for 10s','Elapsed 1m50s · Received 2 messages'])
+  await page.evaluate(() => window.fixture.setNow(1700000600000))
+  await new Promise(resolve => setTimeout(resolve,1100))
+  assert.deepEqual(await headers(), ['Worked for 10s','Elapsed 1m50s · Received 2 messages'])
+  // Normal Stop currently leaves idle unfinished history and no durable stop time. Do not fabricate one.
+  await setRecords(records.slice(0,-1), {state:'idle',busy:false,queueLength:0}, epoch+200000)
+  await page.waitForFunction(() => !document.querySelector('#timeline').textContent.includes('FINAL_FAILURE'))
+  assert.deepEqual(await headers(), ['Worked for 10s','Received 2 messages'])
+  const block = ctx(80); block.__meta.timestamp=epoch+90000
+  await setRecords([...records.slice(0,6),block,...records.slice(7)])
+  await page.waitForSelector('[aria-label="Expand CTX-BLOCK B#80"]')
+  assert.deepEqual(await headers(), ['Worked for 10s','Elapsed 1m20s · Received 1 message','Worked for 20s · Waited for 10s · Received 1 message'])
+})
+
+test('Direct Task notifications and hosted web search count actual effects; scripts remain ordinary top-level calls', async () => {
+  const output = (seq,id,name,data,subCalls) => ({role:'tool',parts:[{functionResponse:{tool_use_id:id,name,response:data,...subCalls?{__meta:{toolScriptSubCalls:subCalls}}:{}}}],__meta:{seq}})
+  const taskCall = (id,action) => ({functionCall:{id,name:'task',args:{action,notifySession:true,taskId:'fixture-task'}}})
+  const hosted = {providerMeta:{openaiResponses:{outputItem:{id:'ws-real',type:'web_search_call',status:'completed',action:{type:'search',query:'actual hosted query'}}}}}
+  const records = [
+    {role:'model',parts:[{thinking:'HOSTED_REASONING'},hosted,taskCall('task-create','create'),taskCall('task-assign','assign'),taskCall('task-note','update'),taskCall('task-quiet','update'),taskCall('task-failed','update'),{functionCall:{id:'script-one',name:'run_script',args:{code:'call_tool("create_child_session", args)'}}}],__meta:{seq:1}},
+    ...[['task-create',1],['task-assign',2],['task-note',1],['task-quiet',0],['task-failed',0]].map(([id,sentNotifications],index) => output(index+2,id,'task',{output:JSON.stringify({taskId:'fixture-task',status:'active',ownerSessionId:'fixture/owner',sentNotifications,...id==='task-failed'?{warning:'Delivery failed'}:{}})})),
+    output(7,'script-one','run_script',{runId:'script-effects',status:'waiting'},[{id:'tss_1',name:'task',status:'completed',startedAt:1},{id:'tss_2',name:'create_child_session',status:'completed',startedAt:1}]),
+    {role:'model',parts:[{text:'EFFECTS_BOUNDARY'}],__meta:{seq:8}},
+    {role:'model',parts:[hosted,{functionCall:{id:'script-two',name:'continue_script',args:{runId:'script-effects',continuationId:'next'}}}],__meta:{seq:9}},
+    output(10,'script-two','continue_script',{runId:'script-effects',status:'completed',result:{sentNotifications:900}},[{id:'tss_1',name:'task',status:'completed',startedAt:1}]),
+    {role:'model',parts:[{text:'EFFECTS_DONE'}],__meta:{seq:11}},
+  ]
+  await setRecords(records)
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('EFFECTS_DONE'))
+  assert.deepEqual(await headers(), ['Sent 4 messages · Called 7 tools','Called 1 tool'])
+  await page.evaluate(() => window.fixture.setSlice([8,undefined]))
+  await page.waitForFunction(() => document.querySelector('#timeline').querySelectorAll('[data-timeline-activity]').length === 1)
+  assert.deepEqual(await headers(), ['Called 1 tool'], 'script metadata/result data never expands invocation counts or claims internal sends')
 })

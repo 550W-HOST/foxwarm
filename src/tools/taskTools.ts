@@ -29,6 +29,7 @@ function buildTaskMutationReceipt(result: any): Record<string, unknown> {
     taskId: task.id,
     status: task.status,
     ownerSessionId: task.ownerSessionId ?? null,
+    sentNotifications: result.sentNotifications,
     ...(typeof result?.warning === 'string' ? { warning: result.warning } : {}),
   };
 }

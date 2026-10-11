@@ -47,11 +47,13 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
   let childSessionId: string;
   let taskAssignmentDelivered = true;
   let taskAssignmentWarning: string | undefined;
+  let sentNotifications = 0;
   if (taskId) {
     const attached = await taskService.createAttachedChild(taskId, currentSessionId, create, message);
     childSessionId = attached.childSessionId;
     taskAssignmentDelivered = attached.assignmentDelivered;
     taskAssignmentWarning = attached.warning;
+    sentNotifications = attached.sentNotifications;
   } else {
     childSessionId = await create();
   }
@@ -61,11 +63,11 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
       ? `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'}). Task assignment sent${taskAssignmentWarning ? ` with warning: ${taskAssignmentWarning}` : ''}.`
       : `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'}), but task assignment delivery failed${taskAssignmentWarning ? `: ${taskAssignmentWarning}` : '.'}`;
     if (taskAssignmentDelivered && afterSend === 'wait') {
-      return { output, __toolPostAction: { waitForReply: true, successfulSendToSessionTarget: childSessionId } };
+      return { output, sentNotifications, __toolPostAction: { waitForReply: true, successfulSendToSessionTarget: childSessionId } };
     }
     return taskAssignmentDelivered && afterSend === 'finish'
-      ? { ...buildEndTurnResult(), output, __toolPostAction: { finishAfterSend: true } }
-      : output;
+      ? { ...buildEndTurnResult(), output, sentNotifications, __toolPostAction: { finishAfterSend: true } }
+      : { output, sentNotifications };
   }
 
   if (message) {

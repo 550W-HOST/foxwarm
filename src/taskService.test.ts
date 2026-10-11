@@ -40,6 +40,7 @@ test('note-only updates notify a different owner only when requested, without ch
   await service.execute({ action: 'claim', taskId: owned }, 'first');
   const silent = await service.execute({ action: 'update', taskId: owned, note: 'Reviewer update' }, 'creator');
   assert.equal(silent.warning, undefined);
+  assert.equal(silent.sentNotifications, 0);
   assert.equal(sends.length, 0, 'omitting notifySession saves the note without notifying');
   assert.equal(service.get(owned).notes.at(-1).text, 'Reviewer update');
   await service.execute({ action: 'update', taskId: owned, note: 'Opted out', notifySession: false }, 'creator');
@@ -47,6 +48,7 @@ test('note-only updates notify a different owner only when requested, without ch
 
   const noted = await service.execute({ action: 'update', taskId: owned, note: 'Notify owner', notifySession: true }, 'creator');
   assert.equal(noted.warning, undefined);
+  assert.equal(noted.sentNotifications, 1);
   assert.equal(sends.length, 1);
   assert.equal(sends[0].target, 'first');
   assert.equal(sends[0].source, 'creator');
@@ -62,6 +64,7 @@ test('note-only updates notify a different owner only when requested, without ch
 
   fail = true;
   const failed = await service.execute({ action: 'update', taskId: owned, note: 'Delivery failure', notifySession: true }, 'creator');
+  assert.equal(failed.sentNotifications, 0);
   assert.match(failed.warning, /Note saved, but the owner notification could not be delivered/);
   assert.equal(service.get(owned).notes.at(-1).text, 'Delivery failure');
 });
@@ -75,6 +78,7 @@ test('WebUI user notes use the same note event and failure semantics without rol
   const taskId = (await service.execute({ action: 'create', title: 'User note target', ownerSessionId: 'first' }, 'creator')).task.id;
   const silent = await service.executeAsUser({ action: 'comment', taskId, note: 'Silent user note' });
   assert.equal(silent.warning, undefined);
+  assert.equal(silent.sentNotifications, 0);
   assert.equal(sends.length, 0, 'omitting notifySession does not notify for a user-authored comment');
   const result = await service.executeAsUser({ action: 'comment', taskId, note: 'User note', notifySession: true });
   assert.match(result.warning, /Note saved, but the owner notification could not be delivered/);
@@ -175,12 +179,12 @@ test('child attachment assigns or transfers with creator authority and serialize
   await enteredPromise;
   const competingClaim = service.execute({ action: 'claim', taskId }, 'first');
   finish();
-  assert.deepEqual(await creating, { childSessionId: 'child', assignmentDelivered: true });
+  assert.deepEqual(await creating, { childSessionId: 'child', assignmentDelivered: true, sentNotifications: 1 });
   await assert.rejects(() => competingClaim, /already claimed/);
   assert.equal(service.get(taskId).task.ownerSessionId, 'child');
   assert(service.get(taskId).notes.some((note: any) => /Attached new Session child/.test(note.text)));
   const transferred = await service.createAttachedChild(taskId, 'creator', async () => { effects++; return 'second'; });
-  assert.deepEqual(transferred, { childSessionId: 'second', assignmentDelivered: true });
+  assert.deepEqual(transferred, { childSessionId: 'second', assignmentDelivered: true, sentNotifications: 2 });
   assert.equal(service.get(taskId).task.ownerSessionId, 'second');
   assert.equal(service.get(taskId).task.attachedSessionId, 'second');
   assert.equal(effects, 2);
@@ -197,6 +201,7 @@ test('child assignment preserves delivery failure results without pretending the
   assert.deepEqual(result, {
     childSessionId: 'child',
     assignmentDelivered: false,
+    sentNotifications: 0,
     warning: 'Task assigned, but the new owner notification could not be delivered.',
   });
   assert.deepEqual(sends, [{ target: 'child', trigger: true }]);
@@ -215,6 +220,7 @@ test('child assignment reports passive previous-owner delivery failure while pre
   assert.deepEqual(result, {
     childSessionId: 'child',
     assignmentDelivered: true,
+    sentNotifications: 1,
     warning: 'Task assigned, but the previous owner notification could not be delivered.',
   });
   assert.deepEqual(sends, [{ target: 'first', trigger: false }, { target: 'child', trigger: true }]);
@@ -234,17 +240,20 @@ test('assignment notices commit before previous/new delivery, preserve independe
   await service.execute({ action: 'assign', taskId, ownerSessionId: 'first' }, 'creator');
   assert.equal(sends.length, 0);
   const notified = await service.execute({ action: 'assign', taskId, ownerSessionId: 'first', notifySession: true }, 'creator');
+  assert.equal(notified.sentNotifications, 1);
   assert.equal(notified.task.assignmentNotificationStatus, 'sent');
   assert.deepEqual(sends[0].taskNotification, { taskId, event: 'assigned', recipient: 'new' });
   assert.match(sends[0].message, /You have been assigned a task.*task_.*Notify\nStatus: active/);
   assert.ok(sends[0].message.length > 4000);
   assert.ok(sends[0].message.endsWith('x'.repeat(4000)));
   service.store.close();
-  await service.execute({ action: 'assign', taskId, ownerSessionId: 'first', notifySession: true }, 'creator');
+  const repeated = await service.execute({ action: 'assign', taskId, ownerSessionId: 'first', notifySession: true }, 'creator');
+  assert.equal(repeated.sentNotifications, 0);
   assert.equal(sends.length, 1, 'successful notification survives restart without resending');
   failTarget = 'first';
   const transferred = await service.execute({ action: 'assign', taskId, ownerSessionId: 'second', notifySession: true }, 'creator');
   assert.deepEqual(sends.slice(1).map(send => [send.target, send.trigger]), [['first', false], ['second', true]]);
+  assert.equal(transferred.sentNotifications, 1);
   assert.equal(transferred.task.ownerSessionId, 'second');
   assert.deepEqual(sends.slice(1).map(send => send.taskNotification), [
     { taskId, event: 'transferred', recipient: 'previous' },
@@ -255,6 +264,7 @@ test('assignment notices commit before previous/new delivery, preserve independe
   assert.match(transferred.warning, /previous owner notification/);
   failTarget = undefined;
   const retried = await service.execute({ action: 'assign', taskId, ownerSessionId: 'second', notifySession: true }, 'creator');
+  assert.equal(retried.sentNotifications, 1);
   assert.equal(retried.task.previousOwnerNotificationStatus, 'sent');
   assert.equal(sends.length, 4, 'only the failed previous recipient is retried');
   const released = await service.execute({ action: 'assign', taskId, ownerSessionId: null, notifySession: true }, 'creator');
@@ -267,6 +277,7 @@ test('assignment notices commit before previous/new delivery, preserve independe
   await service.execute({ action: 'assign', taskId, ownerSessionId: null, notifySession: true }, 'creator');
   assert.equal(sends.length, 5);
   const self = await service.execute({ action: 'assign', taskId, ownerSessionId: 'creator', notifySession: true }, 'creator');
+  assert.equal(self.sentNotifications, 0);
   assert.equal(self.task.assignmentNotificationStatus, 'skipped');
   assert.equal(sends.length, 5);
   await assert.rejects(() => service.execute({ action: 'assign', taskId, ownerSessionId: 'first', notifySession: 'yes' }, 'creator'), /boolean/);
@@ -356,6 +367,7 @@ test('create can commit an existing owner and optional assignment notification w
   assert.equal(sends.length, 0);
   await assert.rejects(() => service.execute({ action: 'claim', taskId: quiet.task.id }, 'second'), /already claimed/);
   const notified = await service.execute({ action: 'create', title: 'Notify on create', description: 'y'.repeat(4000), ownerSessionId: 'first', notifySession: true }, 'creator');
+  assert.equal(notified.sentNotifications, 1);
   assert.equal(notified.task.assignmentNotificationStatus, 'sent');
   assert.deepEqual(sends[0].options.taskNotification, { taskId: notified.task.id, event: 'assigned', recipient: 'new' });
   assert.equal(sends[0].options.trigger, undefined);
@@ -368,6 +380,7 @@ test('create can commit an existing owner and optional assignment notification w
   assert.match(failed.warning, /new owner notification/);
   fail = false;
   const self = await service.execute({ action: 'create', title: 'Self create', ownerSessionId: 'creator', notifySession: true }, 'creator', 40);
+  assert.equal(self.sentNotifications, 0);
   assert.equal(self.task.assignmentNotificationStatus, 'skipped');
   assert.equal(sends.length, 2, 'self target does not produce a redundant send');
   assert.deepEqual(service.store.taskContext('creator', Array.from({ length: 30 }, (_, i) => i + 12), true), [], 'self creation starts a fresh progress anchor');

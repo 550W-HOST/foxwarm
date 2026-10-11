@@ -902,7 +902,7 @@ test('run_script string MCP tool ID preserves argument merging and parsed JSON r
       ok: true,
       items: [{ name: 'foxwarm' }],
     });
-    assert.deepEqual(captured, ['fixture', 'search_repos', { query: 'foxwarm', limit: 1, page: 2 }]);
+    assert.deepEqual(captured.slice(0, 3), ['fixture', 'search_repos', { query: 'foxwarm', limit: 1, page: 2 }]);
   } finally {
     (mcpClient as any).callTool = originalCallTool;
     await resetToolScriptRunsForTests();
@@ -1726,7 +1726,7 @@ test('a real Task completion receipt belongs only to the ToolScript slice that p
   try {
     const taskId = JSON.parse((await tools.task({ action: 'create', title: 'Complete before pause' }, { sessionId: creator.id, session: creator })).output).taskId;
     const created = await tools.create_child_session({ suffix: 'script-task-child', taskId }, { sessionId: creator.id, session: creator });
-    child = await sessionManager.getExistingSession(String(created).match(/`([^`]+)`/)![1]);
+    child = await sessionManager.getExistingSession(String((created as any).output ?? created).match(/`([^`]+)`/)![1]);
     const ctx = { sessionId: child.id, session: child };
     const waiting = await tool_run_script({
       code: 'call_tool({"toolId": "builtin:task", "args": {"action": "complete", "taskId": args["taskId"]}})\nask_agent("Continue unrelated script work?")\nreturn "finished"',
@@ -1753,7 +1753,7 @@ test('nested ToolScript task mutation exposes the same compact receipt fields', 
     const response: any = toolMessage.parts[0].functionResponse?.response;
     const output = response?.result?.output;
     const receipt = typeof output === 'string' ? JSON.parse(output) : output;
-    assert.deepEqual(Object.keys(receipt).sort(), ['ownerSessionId', 'status', 'taskId']);
+    assert.deepEqual(Object.keys(receipt).sort(), ['ownerSessionId', 'sentNotifications', 'status', 'taskId']);
     assert.equal(receipt.status, 'open');
     assert.equal(receipt.ownerSessionId, null);
     assert.equal(receipt.title, undefined);

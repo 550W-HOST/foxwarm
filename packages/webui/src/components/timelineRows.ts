@@ -17,6 +17,7 @@ import { isReasoningPart } from './reasoningParts'
 import { getContextBlockMetaFromMessage } from './ContextBlockCard'
 import { isCommittedHistoryMessage } from '../chatHistoryState'
 import { buildConversationActivitySummary } from './conversationActivity'
+import { applyConversationTiming, type ConversationTimingContext } from './conversationTiming'
 import { getWebSearchAction } from '../webSearchAction'
 
 /**
@@ -78,7 +79,7 @@ export interface TimelineRowView {
   /** Undefined outside Conversation user rows; false retains legacy channel metadata rendering. */
   readonly literalUserText?: boolean
   /** Technical fragments only, in source order. Ordinary output is never duplicated here. */
-  readonly activity?: { readonly messages: Message[]; readonly summary: string }
+  readonly activity?: { readonly messages: Message[]; readonly summary: string; readonly dynamic?: boolean }
   readonly prevMsg: Message | null
   readonly nextMsg: Message | null
   readonly pairedToolResponse: Message | null
@@ -115,6 +116,7 @@ export interface TimelineRowsInput {
   readonly showTimeDividers: boolean
   readonly nestedDepth: number
   readonly activityDetails?: boolean
+  readonly timing?: ConversationTimingContext
   readonly historyMessages?: readonly Message[]
   readonly expandedGroupKeys: ReadonlySet<string>
 }
@@ -624,6 +626,12 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
   if (timelineView === 'conversation') {
     const historyTailLlmError = historyMessages ? getHistoryTailLlmError(historyMessages) : undefined
     const summaryForActivity = buildConversationActivitySummary(messages, historyMessages)
+    const boundary = (msg: Message, partIndex?: number): 'visible' | 'context' | undefined => {
+      if (getContextBlockMetaFromMessage(msg)) return 'context'
+      if (msg.role === 'user' && getConversationInputKind(msg) !== 'activity') return 'visible'
+      if (msg.role === 'model' && !getLlmErrorMessageDetails(msg) && (partIndex === undefined ? msg.parts.some(hasConversationText) : hasConversationText(msg.parts[partIndex]))) return 'visible'
+      return undefined
+    }
     let activityStart = -1
     let activityKey = ''
     let activityMessages: Message[] = []
@@ -672,10 +680,12 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       }
       if (msg.role === 'tool' || getLlmErrorMessageDetails(msg)) {
         addActivity(index, msg)
+        if (msg.__meta?.retry?.final === true) flushActivity()
         return
       }
       if (!contextBlock && !msg.parts.some(part => hasConversationText(part) || hasConversationImage(part))) {
-        if (msg.parts.length || getModelMessageUsage(msg)) addActivity(index, msg)
+        const parts = msg.parts.filter(part => part.system || part.functionCall || part.functionResponse || part.toolUseId || isReasoningPart(part) || getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem) || part.text === undefined && Object.keys(part).length > 0)
+        if (parts.length) addActivity(index, parts.length === msg.parts.length ? msg : { ...msg, parts })
         return
       }
       let visiblePartCount = 0
@@ -701,7 +711,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       }
     })
     flushActivity()
-    return { rows, cache: { rows: rowCache, groups: groupCache } }
+    return { rows: applyConversationTiming(rows, historyMessages || messages, boundary, input.timing), cache: { rows: rowCache, groups: groupCache } }
   }
 
   let cursor = 0
