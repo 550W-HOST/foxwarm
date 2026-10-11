@@ -220,3 +220,41 @@ test('CLI exec cancellation hands off waiting with partial output and completion
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+
+test('JSON exec cancellation ends pending approval promptly and a late approval cannot start the command', async () => {
+  const { client, sent, root } = await clientWithResponder(() => ({}));
+  let approve!: (result: boolean) => void;
+  let approvalSignal: AbortSignal | undefined;
+  const approval = new Promise<boolean>(resolve => { approve = resolve; });
+  (client as any).toolCallInterceptor = (_tool: string, _args: any, _sessionId: string, _callId: string, _timeout: number, signal: AbortSignal) => {
+    approvalSignal = signal;
+    return approval;
+  };
+  const forbidden = path.join(root, 'must-not-start');
+  const running = (client as any).handleMessage({ type: 'tool_call', callId: 'approval-exec', tool: 'exec', sessionId: 'session-a', agentName: 'main',
+    args: { command: `touch '${forbidden}'` } });
+  try {
+    const before = Date.now();
+    await (client as any).handleMessage({ type: 'tool_call_cancel', callId: 'approval-exec' });
+    const fallback = setTimeout(() => approve(true), 1000);
+    try { await running; }
+    finally { clearTimeout(fallback); }
+    assert(Date.now() - before < 200, 'Stop must not wait for the approval timer');
+    const skipped = sent.find(item => item.callId === 'approval-exec');
+    assert.equal(skipped.type, 'tool_call_error');
+    assert.equal(skipped.execStarted, false);
+    assert.match(skipped.error.message, /not started/);
+    assert.equal(approvalSignal?.aborted, true, 'TUI receives cancellation to remove its prompt and timer');
+    approve(true);
+    await approval;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(sent.filter(item => item.callId === 'approval-exec').length, 1);
+    assert.equal(await fs.stat(forbidden).then(() => true, () => false), false);
+    assert.equal((client as any).foregroundExecCalls.size, 0);
+  } finally {
+    approve(true);
+    await running.catch(() => {});
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

@@ -3,7 +3,7 @@
 Files: `src/mcpCallerConnections.ts`, `src/mcpCallerConnections.test.ts`, `src/mcpNotifications.test.ts`, `src/mcpNotificationsTestMain.ts`
 Secondary files: `src/mcpClient.ts`, `src/mcpExternalService.ts`, `src/mcpInboundHttp.ts`, `src/mcpInboundCatalog.ts`, `src/channel.ts`, `src/sessionManager.ts`
 
-Cancelled HTTP/SSE calls dispose their caller/server binding only when no other in-flight invocation shares it; otherwise SDK request cancellation leaves the shared binding intact. Disposed bindings are removed before reuse and their notification reception ends. Successful returned results do not trigger late abort cleanup. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
+Cancelled HTTP/SSE calls dispose their caller/server binding only when no other in-flight invocation shares it; otherwise SDK request cancellation leaves the shared binding intact. Disposed bindings are removed before reuse and their notification reception ends. Shared initialization admits a cancellable pre-dispatch wait per invocation without cancelling setup needed by another call; this wait listener ends before tool dispatch. Successful returned results do not trigger late abort cleanup. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
 
 ## Purpose
 

@@ -78,8 +78,9 @@ export type NodeDefaultCwdRequest = {
 };
 
 export type NodeProviderCallOptions = {
-  /** Internal turn cancellation may end exec waiting but must never kill a provider launcher. */
+  /** User Stop must not kill a provider launcher; hard lifecycle/deadline cancellation retains its own signal. */
   foregroundToolCancellation?: true;
+  hardCancellationSignal?: AbortSignal;
   signal?: AbortSignal;
   /** Main-local external context fence, checked immediately before a provider effect. */
   assertExternalOwnerActive?: () => void;
@@ -310,7 +311,7 @@ export class NodeProviderRegistry {
     if (options?.foregroundToolCancellation) {
       throwIfToolStopped(options.signal);
       options = { ...options, signal: request.toolName === 'exec' && resolved.provider.supportsExecWaitCancellation
-        ? options.signal : undefined };
+        ? options.signal : options.hardCancellationSignal };
     }
     if (resolved.descriptor.primitiveBackends) {
       return this.invokePrimitiveTool(resolved.provider, resolved.descriptor, request, options);

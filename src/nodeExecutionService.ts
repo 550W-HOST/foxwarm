@@ -278,7 +278,7 @@ export function createNodeExecutionServiceHandler(options: {
                 ...(providerRouting.deferSessionCwdSync === true ? { deferSessionCwdSync: true } : {}),
               } : {}),
             },
-          }, { signal: rpcContext.signal, foregroundToolCancellation: true }),
+          }, { signal: rpcContext.signal, hardCancellationSignal: rpcContext.hardCancellationSignal, foregroundToolCancellation: true }),
         };
       } catch (error) {
         rethrowProviderError(error);

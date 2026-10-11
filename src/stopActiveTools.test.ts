@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
 import { shutdownToolScriptRuntime } from './toolscript';
 after(() => shutdownToolScriptRuntime());
-import { fork } from 'node:child_process';
+import { fork, type ChildProcess } from 'node:child_process';
+import { createNodeExecutionServiceHandler, nodeExecutionServiceDescriptor } from './nodeExecutionService';
+import { ExecutableNodeProvider } from './nodes/executableProvider';
+import { NodeProviderRegistry } from './nodes/providerRegistry';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'fs-extra';
@@ -209,9 +212,52 @@ test('foreground ToolScript cannot swallow Stop and start another host tool', { 
   });
 });
 
-test('exact Worker Stop cancels reverse MCP execution and commits paired receipts before returning', { timeout: 20_000 }, async () => {
-  await fixture(async (root, remote) => {
-    const session = await sessionManager.getSession(`stop-worker-${randomUUID()}`);
+test('Main Stop ends shared MCP setup waiting before dispatch without interrupting the independent initializer', { timeout: 10_000 }, async () => {
+  await fixture(async (_root) => {
+    const connecting = gate();
+    const started = gate();
+    let closes = 0;
+    const dispatches: string[] = [];
+    class Transport { async close() { closes++; } }
+    class Client {
+      async connect() { started.resolve(); await connecting.promise; }
+      async close() { closes++; }
+      async callTool(input: any) { dispatches.push(input.arguments.tag); return { content: [{ type: 'text', text: input.arguments.tag }] }; }
+    }
+    mcpClient.setMcpSdkForTests({ Client, StreamableHTTPClientTransport: Transport, SSEClientTransport: Transport, StdioClientTransport: Transport });
+    const session = await sessionManager.getSession(`stop-shared-setup-${randomUUID()}`);
+    const independent = mcp.callMcpTool(session.id, 'stop-fixture', 'probe', { tag: 'independent' });
+    try {
+      await started.promise;
+      const admitted = gate();
+      const foreground = executeTools([mcpCall('unstarted-setup')], { sessionId: session.id, session, onToolStart: async () => admitted.resolve() }, session);
+      await admitted.promise;
+      await new Promise(resolve => setImmediate(resolve));
+      const before = Date.now();
+      session.stopping = true;
+      assert.equal(sessionManager.abortSessionInFlight(session.id), true);
+      const fallback = setTimeout(() => connecting.resolve(), 1000);
+      let result: any;
+      try { result = responses(await foreground)[0]; }
+      finally { clearTimeout(fallback); }
+      assert(Date.now() - before < 200, 'Stop must not wait for a shared connection to finish setup');
+      assert.match(result.response.error, /not.*executed|not started/i);
+      assert.deepEqual(dispatches, []);
+      assert.equal(closes, 0);
+      connecting.resolve();
+      assert.equal(await independent, 'independent');
+      assert.deepEqual(dispatches, ['independent']);
+    } finally {
+      connecting.resolve();
+      await independent.catch(() => {});
+      session.stopping = false;
+      await sessionManager.deleteSession(session.id);
+    }
+  });
+});
+
+async function withWorkerTools(root: string, session: any, calls: FunctionCall[], register: (registry: RpcServiceRegistry) => void,
+  run: (runtime: RpcClient<typeof sessionWorkerRuntimeServiceDescriptor>, store: SessionWorkerStore, child: ChildProcess, statePath: string) => Promise<void>) {
     const workerRoot = path.join(root, 'worker');
     const statePath = path.join(workerRoot, 'state', 'sessions', `${session.id}.json`);
     await fs.outputJson(statePath, serializeSessionHistoryPayload(session));
@@ -220,27 +266,28 @@ test('exact Worker Stop cancels reverse MCP execution and commits paired receipt
     store.open();
     const incarnationId = 'stop-test-incarnation';
     const ownership = store.beginGeneration(session.id, incarnationId);
-    const forbidden = path.join(root, 'worker-must-not-write');
     const child = fork(path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'), [], {
       env: { ...process.env, FOXWARM_DATA_DIR: workerRoot,
         FOXWARM_SESSION_WORKER_SESSION_ID: session.id,
         FOXWARM_SESSION_WORKER_GENERATION: String(ownership.generation),
         FOXWARM_SESSION_WORKER_INCARNATION_ID: incarnationId,
         FOXWARM_SESSION_WORKER_STORE_PATH: storePath,
-        FOXWARM_TEST_STOP_MCP_TOOLS: JSON.stringify([mcpCall('slow-worker'), { id: 'write', name: 'write', args: { filePath: forbidden, content: 'never' } }]),
+        FOXWARM_TEST_STOP_MCP_TOOLS: JSON.stringify(calls),
       }, serialization: 'advanced', stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
     });
     let stderr = '';
     child.stderr?.on('data', chunk => { stderr += String(chunk); });
     const transport = new ProcessRpcClientTransport(child, { generation: ownership.generation });
     const registry = new RpcServiceRegistry();
-    registry.register(mcp.mcpExternalServiceDescriptor, mcp.createMcpExternalServiceHandler({ expectedSourceSessionId: session.id }));
+    register(registry);
     const projections = new SessionWorkerProjectionRegistry();
     const identity = { sessionId: session.id, generation: ownership.generation, incarnationId };
     projections.establish(identity);
     registry.register(sessionWorkerPublicationServiceDescriptor, createSessionWorkerPublicationServiceHandler({ expected: identity, registry: projections }));
     registry.register(sessionTurnDeliveryServiceDescriptor, createSessionTurnDeliveryServiceHandler({ expectedSourceSessionId: session.id }));
     const reverse = new ProcessRpcServer(registry, { generation: ownership.generation, peer: child, direction: 'reverse', exitOnDisconnect: false });
+    child.once('disconnect', () => reverse.close());
+    child.once('exit', () => reverse.close());
     reverse.start();
     try {
       await transport.waitUntilReady();
@@ -250,6 +297,29 @@ test('exact Worker Stop cancels reverse MCP execution and commits paired receipt
       const control = new RpcClient(sessionWorkerControlServiceDescriptor, transport);
       const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, transport);
       await control.call('activate', {});
+      await run(runtime, store, child, statePath);
+    } catch (error) {
+      throw new Error(`${String(error)}\nWorker stderr: ${stderr}`);
+    } finally {
+      reverse.close();
+      await transport.close();
+      if (child.exitCode === null && child.signalCode === null) {
+        const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
+        child.kill('SIGTERM');
+        await exited;
+      }
+      store.close();
+    }
+}
+
+test('exact Worker Stop cancels reverse MCP execution and commits paired receipts before returning', { timeout: 20_000 }, async () => {
+  await fixture(async (root, remote) => {
+    const session = await sessionManager.getSession(`stop-worker-${randomUUID()}`);
+    const forbidden = path.join(root, 'worker-must-not-write');
+    try {
+      await withWorkerTools(root, session, [mcpCall('slow-worker'), { id: 'write', name: 'write', args: { filePath: forbidden, content: 'never' } }],
+        registry => registry.register(mcp.mcpExternalServiceDescriptor, mcp.createMcpExternalServiceHandler({ expectedSourceSessionId: session.id })),
+        async (runtime, store, _child, statePath) => {
       store.enqueueIntent(session.id, 'stop-test-input', 'enqueue', { type: 'user', parts: [{ text: 'Run the deterministic tool fixture.' }] });
       const running = runtime.call('runPending', { limit: 8 });
       await remote.started('slow-worker');
@@ -267,18 +337,64 @@ test('exact Worker Stop cancels reverse MCP execution and commits paired receipt
       assert.equal(state.busy, false);
       assert.equal(state.stopping, false);
       assert.deepEqual(remote.cancelled, ['slow-worker']);
-    } catch (error) {
-      throw new Error(`${String(error)}\nWorker stderr: ${stderr}`);
-    } finally {
-      reverse.close();
-      await transport.close();
-      if (child.exitCode === null && child.signalCode === null) {
+        });
+    } finally { await sessionManager.deleteSession(session.id); }
+  });
+});
+
+for (const stopFirst of [false, true]) {
+  test(`exact Worker exit cleans its one-shot executable provider${stopFirst ? ' after a prior Stop' : ''}`, { timeout: 15_000 }, async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-provider-close-'));
+    const logPath = path.join(root, 'provider.jsonl');
+    const session = await sessionManager.getSession(`provider-worker-${randomUUID()}`);
+    session.currentNode = 'fixture-sandbox';
+    const provider = new ExecutableNodeProvider({ id: 'close-fixture', type: 'executable', command: process.execPath,
+      args: [path.join(__dirname, 'nodes/executableProviderTestFixture.js'), 'delayed-exec', logPath], timeoutMs: 5000 });
+    const providers = new NodeProviderRegistry([provider]);
+    const settled = gate();
+    const stopped = gate();
+    let context: any;
+    try {
+      await withWorkerTools(root, session, [{ id: 'provider-exec', name: 'exec', args: { command: 'fixture' } }], registry => {
+        const handler = createNodeExecutionServiceHandler({ expectedSourceSessionId: session.id, providerRegistry: providers });
+        registry.register(nodeExecutionServiceDescriptor, { ...handler, async execute(input, ctx) {
+          context = ctx;
+          ctx.signal.addEventListener('abort', () => stopped.resolve(), { once: true });
+          try { return await handler.execute(input, ctx); }
+          finally { settled.resolve(); }
+        } });
+      }, async (runtime, store, child) => {
+        store.enqueueIntent(session.id, 'provider-input', 'enqueue', { type: 'user', parts: [{ text: 'Run the deterministic provider fixture.' }] });
+        const running = runtime.call('runPending', { limit: 8 });
+        void running.catch(() => {});
+        const readyBy = Date.now() + 5000;
+        while (!await fs.pathExists(`${logPath}.ready`)) {
+          if (Date.now() > readyBy) throw new Error('Provider exec fixture did not become ready.');
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        const providerPid = Number(await fs.readFile(`${logPath}.ready`, 'utf8'));
+        if (stopFirst) {
+          const stop = runtime.call('interrupt', {}, { timeoutMs: 5000 });
+          void stop.catch(() => {});
+          await stopped.promise;
+          assert.equal(context.signal.aborted, true);
+          assert.equal(context.hardCancellationSignal.aborted, false, 'user Stop must not kill a one-shot provider');
+          assert.doesNotThrow(() => process.kill(providerPid, 0), 'the actual provider remains alive before owner loss');
+        }
         const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
         child.kill('SIGTERM');
         await exited;
-      }
-      store.close();
+        await settled.promise;
+        assert.equal(context.hardCancellationSignal.aborted, true, 'owner loss remains observable after the ordinary signal already aborted');
+        assert.equal(context.hardCancellationSignal.reason.code, 'RPC_CLOSED');
+        assert.throws(() => process.kill(providerPid, 0), { code: 'ESRCH' }, 'owner loss cleans up its actual one-shot provider process');
+        await new Promise(resolve => setTimeout(resolve, 1600));
+        assert.equal(await fs.pathExists(`${logPath}.effect`), false, 'the owned provider process cannot cause a later effect after Worker exit');
+        await running.catch(() => {});
+      });
+    } finally {
       await sessionManager.deleteSession(session.id);
+      await fs.remove(root);
     }
   });
-});
+}

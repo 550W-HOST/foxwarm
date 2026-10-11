@@ -3,7 +3,7 @@
 Files: src/nodes/providerRegistry.ts, src/nodes/providers.ts, src/nodes/executableProvider.ts
 Secondary files: src/nodeExecutionService.ts, src/nodes/manager.ts, src/nodeExecution.test.ts, src/nodes/executableProvider.test.ts, src/nodes/executableProviderTestFixture.ts, docs/executable-node-provider-protocol.md
 
-Internal foreground-tool cancellation is fenced before provider effect. `foregroundToolCancellation` only forwards an active exec signal to `supportsExecWaitCancellation` backends; other provider calls retain their real eventual result rather than killing a launcher. External/lifecycle cancellation retains its established behavior. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
+Internal foreground-tool cancellation is fenced before provider effect. `foregroundToolCancellation` only forwards an active exec signal to `supportsExecWaitCancellation` backends; other provider calls receive the independent hard-cancellation signal, preserving owner-loss/deadline cleanup without treating ordinary Stop as abort-to-kill. External/lifecycle cancellation retains its established behavior. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
 
 ## Purpose
 

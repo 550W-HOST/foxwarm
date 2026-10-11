@@ -1,4 +1,4 @@
-import { STOPPED_TOOL_NOT_STARTED_MESSAGE, toolFailureMessage } from './toolCallControls';
+import { STOPPED_TOOL_NOT_STARTED_MESSAGE } from './toolCallControls';
 import axios, { AxiosResponse } from 'axios';
 import crypto, { randomUUID } from 'crypto';
 import fs from 'fs-extra';

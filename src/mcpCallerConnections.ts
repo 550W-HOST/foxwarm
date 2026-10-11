@@ -190,6 +190,7 @@ export async function withMcpCallerConnection<T>(options: McpConnectionOptions, 
   if (entry.idle) clearTimeout(entry.idle);
   entry.active++;
   let preparing = true;
+  let stopWaiting: (() => void) | undefined;
   const cancelSetup = () => {
     // A shared connection may also carry an independent background invocation.
     // Do not close it out from under another in-flight request.
@@ -198,9 +199,21 @@ export async function withMcpCallerConnection<T>(options: McpConnectionOptions, 
   signal?.addEventListener('abort', cancelSetup, { once: true });
   try {
     if (signal?.aborted) cancelSetup();
-    await entry.setup;
+    if (signal) {
+      // This only ends a pre-dispatch wait, not an invoked tool's receipt.
+      const cancelled = new Promise<never>((_resolve, reject) => {
+        stopWaiting = () => reject(signal.reason);
+        signal.addEventListener('abort', stopWaiting, { once: true });
+        if (signal.aborted) stopWaiting();
+      });
+      await Promise.race([entry.setup, cancelled]);
+    } else {
+      await entry.setup;
+    }
     preparing = false;
     signal?.removeEventListener('abort', cancelSetup);
+    if (stopWaiting) signal?.removeEventListener('abort', stopWaiting);
+    stopWaiting = undefined;
     signal?.throwIfAborted();
     assertLive(entry);
     return await fn(entry);
@@ -209,6 +222,7 @@ export async function withMcpCallerConnection<T>(options: McpConnectionOptions, 
     throw error;
   } finally {
     signal?.removeEventListener('abort', cancelSetup);
+    if (stopWaiting) signal?.removeEventListener('abort', stopWaiting);
     entry.active--;
     if (!owner) await dispose(entry);
     else scheduleIdle(entry);

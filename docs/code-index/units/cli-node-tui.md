@@ -31,7 +31,7 @@ This file is a standalone executable entry point (`#!/usr/bin/env node`) and doe
 - On startup, parses CLI args, instantiates a `NodeClient` with a `toolCallInterceptor` callback, starts the local trigger server, and connects to the master host.
 - Accepts the client's existing `--id`/`--auth-token` direct-auth inputs and shows the exact pending approval command in status when using the shared pairing token.
 - Polls `refresh()` every 3 seconds to update session list and message history.
-- Tool call approval flow: if not auto-approved (by `--auto-approve-all` or regex match), presents an interactive prompt; supports timeout-based auto-rejection derived from server timeout or `--timeout` flag.
+- Tool call approval flow: if not auto-approved (by `--auto-approve-all` or regex match), presents an interactive prompt; supports timeout-based auto-rejection derived from server timeout or `--timeout` flag. The interceptor's foreground exec signal resolves cancelled approval through the existing completion path, removes its listener and timer, and clears only its own prompt. A current-prompt ref supplies the same cleanup on unmount.
 - Keyboard-driven: arrow keys select sessions, Enter sends drafted text, Y/N approve/reject tool calls, Ctrl+R forces refresh, Q/Ctrl+C exits.
 - Sets `FOXWARM_NO_CONSOLE_LOG` env var to suppress library console output that would corrupt the TUI.
 

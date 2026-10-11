@@ -76,7 +76,7 @@ export interface NodeClientOptions {
   localTrigger?: boolean;
   localTriggerPort?: number;
   /** Optional hook called before each tool execution. Return false/'rejected'/'timeout' to reject. */
-  toolCallInterceptor?: (tool: string, args: any, sessionId: string, callId: string, timeoutMs?: number) => Promise<boolean | string>;
+  toolCallInterceptor?: (tool: string, args: any, sessionId: string, callId: string, timeoutMs?: number, signal?: AbortSignal) => Promise<boolean | string>;
   /** Optional status callback for UI integration */
   onStatus?: (event: string, detail?: Record<string, any>) => void;
 }
@@ -187,7 +187,7 @@ export class NodeClient {
   private localTriggerPort = 0;
   private localTriggerServer: http.Server | null = null;
   private localTriggerRuntime: LocalTriggerRuntime | null = null;
-  private toolCallInterceptor?: (tool: string, args: any, sessionId: string, callId: string, timeoutMs?: number) => Promise<boolean | string>;
+  private toolCallInterceptor?: (tool: string, args: any, sessionId: string, callId: string, timeoutMs?: number, signal?: AbortSignal) => Promise<boolean | string>;
   private onStatus?: (event: string, detail?: Record<string, any>) => void;
   private pendingRequests: Map<string, PendingRequest> = new Map();
   private nodePtyService?: NodePtyService;
@@ -774,7 +774,24 @@ export class NodeClient {
     try {
       // Interceptor hook: allow external code to approve/reject before execution
       if (this.toolCallInterceptor) {
-        const result = await this.toolCallInterceptor(tool, args, sessionId, callId, timeoutMs);
+        const approval = this.toolCallInterceptor(tool, args, sessionId, callId, timeoutMs, controller?.signal);
+        let stopWaiting: (() => void) | undefined;
+        let result: boolean | string;
+        try {
+          if (controller) {
+            const cancelled = new Promise<never>((_resolve, reject) => {
+              stopWaiting = () => reject(new Error('Exec was not started because Stop or Run queued cancelled it; the command was not executed.'));
+              controller.signal.addEventListener('abort', stopWaiting, { once: true });
+              if (controller.signal.aborted) stopWaiting();
+            });
+            result = await Promise.race([approval, cancelled]);
+          } else {
+            result = await approval;
+          }
+        } finally {
+          if (stopWaiting) controller?.signal.removeEventListener('abort', stopWaiting);
+        }
+        if (controller?.signal.aborted) throw new Error('Exec was not started because Stop or Run queued cancelled it; the command was not executed.');
         if (result !== true) {
           const reason = typeof result === 'string' ? result : 'rejected';
           const errorMsg = reason === 'timeout'
