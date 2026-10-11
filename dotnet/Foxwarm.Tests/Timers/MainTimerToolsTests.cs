@@ -433,6 +433,7 @@ public sealed class MainTimerToolsTests
     public async Task Malformed_store_returns_ordinary_paired_tool_error_without_poisoning_normal_host_or_authorization()
     {
         await using var f = await Fixture.Create(rawStore: "{broken");
+        await f.Manager.CreateNamedAsync("main", "main", null, null);
         var result = await f.Call("create_timer", Future());
         Assert.NotNull(result["error"]);
         Assert.False(f.Tools.PolicyUnavailable);

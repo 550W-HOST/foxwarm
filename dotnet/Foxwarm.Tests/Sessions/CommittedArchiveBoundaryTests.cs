@@ -83,7 +83,7 @@ public sealed class CommittedArchiveBoundaryTests
     }
 
     [Fact]
-    public async Task Fresh_and_noncompleted_predecessor_evidence_does_not_claim_or_create_llm_journal_authority()
+    public async Task Fresh_and_noncompleted_predecessor_evidence_does_not_claim_migrated_llm_journal_authority()
     {
         foreach (var status in new[] { "absent", "completed_with_failures" })
         {
@@ -114,8 +114,9 @@ public sealed class CommittedArchiveBoundaryTests
                 HostModels.ForTest(Options)
             );
             await manager.LoadMainHostAsync();
+            await manager.CreateNamedAsync("main", "main", null, null);
             Assert.Equal("main", Assert.Single(manager.Owners()).Id);
-            Assert.False(File.Exists(Path.Combine(data, "state", "llm-request-journal.sqlite")));
+            Assert.False(await manager.Journal.HasSqliteAuthorityAsync(LlmRequestJournalStore.MigrationId));
         }
     }
 

@@ -115,8 +115,16 @@ public sealed class SessionTurnTests
         Assert.False(cold.HasRunnableWork(reloaded));
         Assert.False(reloaded.Snapshot().Queue.Single().Trigger);
 
+        Task? processing = null;
+        cold.TriggerOverride = id => processing = cold.Runner.ProcessQueueAsync(id);
+        chat.QueueResult("answer");
         await cold.Ingress.EnqueueAsync("s", QueueItem.UserText("ordinary"));
-        Assert.True(cold.HasRunnableWork(reloaded));
+        Assert.NotNull(processing);
+        await processing.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Single(chat.Calls);
+        Assert.Empty(reloaded.Snapshot().Queue);
+        Assert.Contains(reloaded.Snapshot().History, row => row["parts"]!.AsArray().Any(part => part?["system"]?.GetValue<string>() == "passive"));
+        Assert.Contains(reloaded.Snapshot().History, row => row["parts"]!.AsArray().Any(part => part?["text"]?.GetValue<string>() == "ordinary"));
     }
 
     [Fact]

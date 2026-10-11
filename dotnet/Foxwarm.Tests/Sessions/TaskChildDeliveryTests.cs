@@ -63,6 +63,9 @@ public sealed class TaskChildDeliveryTests
         Assert.Equal(committedChild.Id, task["ownerSessionId"]!.GetValue<string>());
         Assert.Equal(committedChild.Id, task["attachedSessionId"]!.GetValue<string>());
         Assert.Equal("failed", task["assignmentNotificationStatus"]!.GetValue<string>());
+        File.Delete(Path.Combine(temp.Path, "data", "state", "experiment-faults",
+            SessionIdentity.ExecDirectorySegment(committedChild.Id) + ".catalog-projection"));
+        await manager.ShutdownAsync();
     }
 
     private sealed class TempDirectory : IDisposable

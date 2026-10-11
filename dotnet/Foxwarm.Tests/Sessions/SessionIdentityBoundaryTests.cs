@@ -324,7 +324,9 @@ public sealed class SessionIdentityBoundaryTests
         );
         await File.WriteAllTextAsync(
             Path.Combine(data, "state", "config.yaml"),
-            field + ": {enabled: true}\n"
+            field == "vector"
+                ? "vector: {enabled: true, baseUrl: 'http://127.0.0.1:1'}\n"
+                : field + ": {enabled: true}\n"
         );
         var configuration = new ModelConfiguration(data);
         await using var manager = new SessionManager(data, work, Options, configuration.Models);
