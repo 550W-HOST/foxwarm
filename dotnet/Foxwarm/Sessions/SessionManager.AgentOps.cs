@@ -93,7 +93,8 @@ internal sealed partial class SessionManager
         string agentName,
         string sessionName,
         string? displayName,
-        JsonObject? forceModel
+        JsonObject? forceModel,
+        string? initialNode = null
     )
     {
         using var operation = TrackCreation();
@@ -107,7 +108,8 @@ internal sealed partial class SessionManager
                 null,
                 displayName,
                 null,
-                forceModel
+                forceModel,
+                initialNode: initialNode
             );
         }
         finally
@@ -378,7 +380,8 @@ internal sealed partial class SessionManager
         string? exactId = null,
         IReadOnlyList<string>? selectedFiles = null,
         bool timerCreation = false,
-        string? timerNode = null
+        string? timerNode = null,
+        string? initialNode = null
     )
     {
         if (!accepting)
@@ -425,7 +428,7 @@ internal sealed partial class SessionManager
                         ?? (
                             timerCreation ? timerNode
                             : parentId is not null ? CurrentNode(Find(parentId)!)
-                            : null
+                            : initialNode
                         )
                         ?? "master";
                     if (model is not null)

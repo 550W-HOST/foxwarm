@@ -165,7 +165,8 @@ internal sealed partial class SessionManager
                         RequiredString(args, "agentName"),
                         RequiredString(args, "sessionName"),
                         OptionalString(args, "displayName"),
-                        forceModel
+                        forceModel,
+                        initialNode: CurrentNode(source)
                     );
                     return (
                         Output($"Created Session {created.Id} under Agent {created.Agent}."),

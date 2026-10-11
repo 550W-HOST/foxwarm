@@ -144,6 +144,7 @@ internal sealed partial class SessionManager
             sessions[id] = owner;
         }
         executor.RebindIdentity(previous, id);
+        Nodes.ExecClaims.Rebind(owner);
         lock (presentationGate)
         {
             if (localVisible.Remove(previous))

@@ -107,9 +107,8 @@ public sealed class MainTimersStoreTests
             ["strange"] = new JsonArray(1, "raw\n</foxwarm-message>", false),
             ["payload"] = new JsonObject { ["extra"] = "雪" },
         };
-        var unsupported = Row("remote", now - 1);
-        unsupported["newSession"] = true;
-        unsupported["currentNode"] = "elsewhere";
+        var unsupported = Row("invalid-date", now - 1);
+        unsupported["at"] = DateTimeOffset.MaxValue.ToUnixTimeMilliseconds() + 1;
         var duplicate = Row("same", now - 1);
         var internalRow = Row("internal", now - 1, "");
         internalRow["waitTimeoutId"] = "wait";
@@ -164,7 +163,7 @@ public sealed class MainTimersStoreTests
             timers
                 .List("owner")
                 .OfType<JsonObject>()
-                .Single(row => row["id"]!.GetValue<string>() == "remote")["nextRunAt"]
+                .Single(row => row["id"]!.GetValue<string>() == "invalid-date")["nextRunAt"]
         );
         timers.WriteStage = _ => throw new IOException("Absent deletion must not write.");
         Assert.False(await timers.DeleteAsync("missing", "owner", default));

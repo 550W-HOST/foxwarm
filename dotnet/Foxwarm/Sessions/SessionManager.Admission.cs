@@ -440,6 +440,7 @@ internal sealed partial class SessionManager
                 .Values.Select(slot => slot.Finished.Task)
                 .Concat(creations.Select(value => value.Task))
                 .Concat(deletionOperations.Select(operation => operation.Finished.Task))
+                .Concat(mutationAdmissions.Values.SelectMany(set => set).Select(value => value.Task))
                 .ToArray();
         }
         admissionStop.Cancel();

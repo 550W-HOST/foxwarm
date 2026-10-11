@@ -10,6 +10,7 @@ public sealed partial class SessionSaveLane
     internal Task<bool> AdmitTimerAsync(QueueItem item) =>
         AdmitWithReceiptAsync(item, null, SaveKind.BestEffort, timer: true);
 
+    private readonly HashSet<string> uncertainExternalReceipts = new(StringComparer.Ordinal);
     private static readonly AsyncLocal<bool> WaitCommitScope = new();
     internal static bool IsWaitCommit => WaitCommitScope.Value;
 
@@ -109,7 +110,15 @@ public sealed partial class SessionSaveLane
                 );
             });
             if (prepared.Snapshot is null)
+            {
+                // A prior committed-but-unsynced receipt needs strict durability, not a second queue insertion.
+                if (receipt is not null && uncertainExternalReceipts.Contains(receipt))
+                {
+                    await CommitWaitSnapshotAsync(entry.SnapshotForPersistence());
+                    uncertainExternalReceipts.Remove(receipt);
+                }
                 return;
+            }
             void Publish(SessionState state)
             {
                 PublishMeta(state.Meta, prepared.Snapshot.Meta);
@@ -152,16 +161,31 @@ public sealed partial class SessionSaveLane
                 }
                 catch (AuthorityCommittedException)
                 {
+                    if (receipt is not null)
+                    {
+                        uncertainExternalReceipts.Add(receipt);
+                        var durableReceipts = SessionWait.Strings(prepared.Snapshot.Meta["acceptedExternalEventIds"]);
+                        uncertainExternalReceipts.RemoveWhere(value => !durableReceipts.Contains(value, StringComparer.Ordinal));
+                    }
                     entry.WithState(Publish);
                     entry.InvokeQueuedCommitted(entry.Snapshot());
                     throw;
                 }
                 entry.WithState(Publish);
+                if (receipt is not null)
+                    uncertainExternalReceipts.Remove(receipt);
             }
+            var retained = SessionWait.Strings(entry.Snapshot().Meta["acceptedExternalEventIds"]);
+            uncertainExternalReceipts.RemoveWhere(value => !retained.Contains(value, StringComparer.Ordinal));
             entry.InvokeQueuedCommitted(entry.Snapshot());
         });
         return admitted;
     }
+
+    internal Task<bool> CommitRemoteExecCompletionAsync(string execId, string message, string eventId) =>
+        AdmitWithReceiptAsync(
+            new QueueItem(QueueItemType.Background, [new JsonObject { ["system"] = message }],
+                OpenFields: new JsonObject { ["execId"] = execId, ["externalEventId"] = eventId }), eventId);
 
     internal async Task<string?> StartWaitAsync(JsonObject declaration)
     {

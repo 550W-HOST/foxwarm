@@ -10,9 +10,10 @@ Persists queue admission and declared waits while preserving passive/trigger beh
 
 - `AdmitAsync`, `AdmitWithReceiptAsync`, and `AdmitTimerAsync` append supported queue items to active JSON and return whether the item was newly admitted.
 - `StartWaitAsync`, `ClearWaitAsync`, and `MutateWaitAsync` validate one wait declaration, update wait metadata, flush deferred items when required, and preserve stale-token protection.
+- `CommitRemoteExecCompletionAsync` stages the remote deterministic receipt and queue item in one strict save; the newest 32 accepted IDs bound deduplication. Committed-but-unsynced receipt retries finish strict durability without another queue insertion or wake.
 - `CommitWaitSnapshotAsync` publishes a wait-aware snapshot through the authority store; `PublishMeta` keeps metadata updates narrow.
 
-Callers: `SessionIngress`, `SessionManager` wait operations, timer tools, and WebUI wait/task routes. The turn runner triggers processing only after admission reports a runnable item and the owner is neither busy nor stopping.
+Callers: `SessionIngress`, `SessionManager` wait operations, timer tools, authenticated remote exec completion, and WebUI wait/task routes. The turn runner triggers processing only after admission reports a runnable item and the owner is neither busy nor stopping.
 
 ## Contract and side effects
 

@@ -107,9 +107,6 @@ internal static partial class UnifiedTools
                     var definition in registry
                         .NodeDefinitions(nodeId)
                         .OfType<JsonObject>()
-                        .Where(definition =>
-                            nodeId == "master" || SessionWait.Text(definition["name"]) != "exec"
-                        )
                 )
                 {
                     var name = SessionWait.Text(definition["name"])!;

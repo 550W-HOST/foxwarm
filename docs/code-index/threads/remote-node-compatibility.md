@@ -11,7 +11,7 @@ CLI/browser/Android/sandbox Node
   -> current TypeScript Main or package consumer
 ```
 
-These remain real repository components. The .NET host now connects the ordinary external Node path below, while the broader Source protocol remains a compatibility reference rather than a blanket runtime-support claim.
+These remain real repository components. The .NET host now connects the external Node tool/exec and authenticated Session-event paths below, while the broader Source protocol remains a compatibility reference rather than a blanket runtime-support claim.
 
 ## .NET external Node integration
 
@@ -21,7 +21,8 @@ Administrator onboarding / Node pairing
   -> /node_ws -> NodeConnectionHub (protocol 1–3, capability snapshot)
   -> SessionOwner + SessionSaveLane Node selection
   -> ToolRegistry + concrete authorization
-  -> advertised ordinary Node tool -> exact-connection reply
+  -> advertised Node tool/exec -> exact-connection reply
+  -> exact exec grant / current placement -> durable Session event admission + ACK
   -> existing JSON / image / ToolScript result pipeline
 ```
 
@@ -31,7 +32,7 @@ Credential revalidation/durable Touch and connection publication share the hub l
 
 Explicit selection commits `currentNode` and clears `cwd` through the real owner save lane. Agent binding is a separate metadata operation: a nonempty binding updates each Session's `currentNode` through that lane without clearing cwd; clearing isolation preserves selection and cwd, and rule-only updates do not change placement. A normal non-isolated model caller can bind its own Agent during its active turn. Existing isolated-caller restrictions and owner deletion/move admission fences remain in force; activity alone does not prohibit binding. Failure or cancellation of explicit selection fences every remaining unstarted model-batch call, including neutral wrappers and later selections. Node/cwd capture preserves remote namespaces and the existing Main-local unset-cwd invocation semantics. Offline Nodes do not block Main-owned history/status/deletion, and remote effects never fall back to Main. Peer results cannot create Main control receipts or path/cwd authority.
 
-Remote persistent exec/completion authority/ACK/waits/Stop, Node file transfer/copy, remote ToolScript source, image delivery, Code/PTY services and Shell HTTP remain separate phases. Negotiating protocol 3 does not expose external-owner, Session-event or Worker behavior. Ordinary inline native ToolScript calls are connected. Official CLI and Chrome MV3 extension qualification uses real owned host/client processes; physical Android hardware remains unqualified.
+The [remote exec unit](../units/remote-exec.md) connects foreground/background exec, Source-compatible signed start-time authority, strict bounded completion receipts/ACK, exact active waits and advertised Stop/Run queued handshakes. Rename/delete, disconnect/removal, restart and shutdown use the existing owner lifecycle; restart does not reconstruct active execution authority or resend commands. Named model-created Sessions, children, forks and timer-created Sessions preserve applicable source/captured or bound placement, including offline Main-owned admission. Node file transfer/copy, remote ToolScript source, image delivery, Code/PTY services and Shell HTTP remain separate phases. Negotiating protocol 3 alone does not expose external-owner or Worker behavior. Ordinary inline native ToolScript calls are connected. Official CLI and Chrome MV3 extension qualification uses real owned host/client processes; the exec/Session-event phase uses the unchanged official CLI and actual .NET save lanes, plus focused protocol peers for legacy and fault cases; physical Android hardware remains unqualified.
 
 The following sections describe the broader Source/package contracts, not additional current `.NET` capabilities.
 

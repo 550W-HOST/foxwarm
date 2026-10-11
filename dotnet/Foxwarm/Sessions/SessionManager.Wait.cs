@@ -80,7 +80,7 @@ internal sealed partial class SessionManager
                     .ToHashSet(StringComparer.Ordinal)
             );
             foreach (var id in exec)
-                if (!executor.IsOwnedActive(source.Id, id) && !queued.Contains(id))
+                if (!executor.IsOwnedActive(source.Id, id) && !Nodes.ExecClaims.Has(source, id) && !queued.Contains(id))
                     throw new InvalidDataException(
                         $"waitExecIds entry `{id}` is not an active exec owned by this Session and has no queued completion. Use the exact execId, never a PID, log path, or command text."
                     );

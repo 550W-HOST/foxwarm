@@ -39,15 +39,6 @@ internal sealed partial class MainTimers
                 record.Reason = "Unrecognized internal wait relationship.";
             return record;
         }
-        if (
-            Flag(row["newSession"])
-            && Text(row["currentNode"]) is string node
-            && SessionGoal.Trim(node).Length > 0
-            && SessionGoal.Trim(node) != "master"
-        )
-            record.Reason = "New-session placement is not available on Main.";
-        if (record.Reason is null)
-            record.Reason = placement(row);
         if (record.Reason is null && hasCron)
         {
             try
@@ -194,21 +185,6 @@ internal sealed partial class MainTimers
                 await deliver(payload);
                 delivered = true;
             }
-            catch (TimerPlacementUnavailableException error)
-            {
-                lock (gate)
-                    if (
-                        records.TryGetValue(record.Id, out var current)
-                        && ReferenceEquals(current, record)
-                    )
-                    {
-                        record.Reason = error.Message;
-                        record.Next = null;
-                    }
-                record.Stop();
-                Report("Timer retained unarmed: " + record.Id, error);
-                return;
-            }
             catch (Exception error)
             {
                 Report("Timer delivery failed: " + record.Id, error);
@@ -354,6 +330,3 @@ internal sealed partial class MainTimers
         return open + "\n" + (body.Length == 0 ? "" : body + "\n") + "</foxwarm-message>";
     }
 }
-
-internal sealed class TimerPlacementUnavailableException(string message)
-    : NotSupportedException(message);

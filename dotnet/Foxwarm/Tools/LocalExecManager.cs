@@ -148,6 +148,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             record.Id == execId && resolveLifetime(record.SessionId) == sessionId
         );
 
+    internal Func<string, string, bool>? RemoteIdentityReserved { get; set; }
+
     internal void BeginShutdown() => closing = true;
 
     internal async Task<JsonObject> ExecuteAsync(
@@ -394,6 +396,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 ]
                 + "-"
                 + ExecPetnames.Nouns[RandomNumberGenerator.GetInt32(ExecPetnames.Nouns.Length)];
+            if (RemoteIdentityReserved?.Invoke(sessionId, id) == true)
+                continue;
             if (
                 historicalOwners(sessionId)
                     .Any(owner =>

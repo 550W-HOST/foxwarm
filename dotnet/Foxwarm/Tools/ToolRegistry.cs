@@ -196,7 +196,8 @@ internal sealed class ToolRegistry(
                     owner.ExecutionNode,
                     owner.ExecutionCwd,
                     owner.Programmatic,
-                    cancellationToken
+                    cancellationToken,
+                    owner.Hosted
                 )
             : await entries[resolved.Name].Execute(owner, resolved.Args, cancellationToken);
         if (owner.Programmatic)

@@ -6,7 +6,7 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Nodes;
 
-internal sealed class NodeConnectionHub : IDisposable
+internal sealed partial class NodeConnectionHub : IDisposable
 {
     private readonly object gate = new();
     private readonly Dictionary<string, Connection> nodes = new(StringComparer.Ordinal);
@@ -30,11 +30,12 @@ internal sealed class NodeConnectionHub : IDisposable
         internal bool Retired;
     }
 
-    private sealed record Invocation(Connection Connection, TaskCompletionSource<JsonNode?> Result);
+    private sealed record Invocation(Connection Connection, TaskCompletionSource<JsonNode?> Result, RemoteExecAuthority.Claim? Claim, bool SupportsRegistration, SessionOwner? Owner);
 
     internal NodeConnectionHub(string root)
     {
         Registry = new(root);
+        ExecClaims = new(root);
         Registry.Expired += id => RejectSocket(id, "Pairing request expired after 1 hour");
         expiry = new Timer(
             _ =>
@@ -233,7 +234,6 @@ internal sealed class NodeConnectionHub : IDisposable
             connection.Capabilities["tools"]!
                 .AsArray()
                 .OfType<JsonObject>()
-                .Where(tool => tool["name"]!.GetValue<string>() != "exec")
                 .Select(tool => (JsonNode?)tool.DeepClone())
                 .ToArray()
         );
@@ -367,11 +367,15 @@ internal sealed class NodeConnectionHub : IDisposable
                 ReferenceEquals(pair.Value.Connection, connection)
                 && calls.TryRemove(pair.Key, out var call)
             )
+            {
+                if (call.Claim is not null)
+                    ExecClaims.Settle(call.Claim, false);
                 call.Result.TrySetException(
                     new IOException(
                         reason + ". Started effects may have occurred; they were not retried."
                     )
                 );
+            }
     }
 
     private static void Close(Connection connection, string reason, bool policy)
@@ -603,30 +607,23 @@ internal sealed class NodeConnectionHub : IDisposable
                         continue;
                     if (type is "tool_call_response" or "tool_call_error")
                     {
-                        var callId = SessionWait.Text(message["callId"]) ?? "";
-                        if (
-                            calls.TryGetValue(callId, out var call)
-                            && ReferenceEquals(call.Connection, connection)
-                            && calls.TryRemove(callId, out _)
-                        )
+                        HandleToolReply(connection, message, type == "tool_call_response");
+                        continue;
+                    }
+                    if (type is "session_event" or "remote_exec_background")
+                    {
+                        try
                         {
-                            if (type == "tool_call_response")
-                                call.Result.TrySetResult(
-                                    RemoteNodeResult.Normalize(message["result"])
-                                );
-                            else
-                                call.Result.TrySetException(
-                                    new InvalidOperationException(
-                                        "Node tool failed: "
-                                            + (
-                                                SessionWait.Text(
-                                                    (message["error"] as JsonObject)?["message"]
-                                                )
-                                                ?? SessionWait.Text(message["error"])
-                                                ?? "unspecified error"
-                                            )
-                                    )
-                                );
+                            var consumer = type == "session_event" ? SessionEvent : BackgroundRegistration;
+                            if (consumer is null)
+                                throw new InvalidOperationException("Node Session events are unavailable.");
+                            await consumer(id, message);
+                            if (type == "session_event" && SessionWait.Text(message["requestId"]) is string requestId)
+                                await SendAsync(connection, new JsonObject { ["type"] = "session_event_accepted", ["requestId"] = requestId }, lifetime.Token);
+                        }
+                        catch (Exception error) when (error is InvalidOperationException or IOException or InvalidDataException)
+                        {
+                            await SendAsync(connection, new JsonObject { ["type"] = "error", ["requestId"] = message["requestId"]?.DeepClone(), ["error"] = error.Message }, lifetime.Token);
                         }
                         continue;
                     }
@@ -666,85 +663,11 @@ internal sealed class NodeConnectionHub : IDisposable
         }
     }
 
-    internal async Task<JsonNode?> ExecuteAsync(
-        string id,
-        string tool,
-        JsonObject args,
-        string sessionId,
-        string agent,
-        string currentNode,
-        string? cwd,
-        bool programmatic,
-        CancellationToken token
-    )
-    {
-        if (tool == "exec")
-            throw new NotSupportedException(
-                "Remote exec completion authority is not connected in this phase."
-            );
-        Connection connection;
-        var callId = "call_" + Guid.NewGuid().ToString("N");
-        var call = new TaskCompletionSource<JsonNode?>(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        lock (gate)
-        {
-            connection = Require(id);
-            if (
-                !connection.Capabilities["tools"]!
-                    .AsArray()
-                    .Any(value => SessionWait.Text(value?["name"]) == tool)
-            )
-                throw new InvalidDataException("Tool is not advertised by Node: " + tool);
-            calls[callId] = new(connection, call);
-        }
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token, shutdown.Token);
-        deadline.CancelAfter(TimeSpan.FromSeconds(62));
-        try
-        {
-            var request = new JsonObject
-            {
-                ["type"] = "tool_call",
-                ["callId"] = callId,
-                ["tool"] = tool,
-                ["args"] = args.DeepClone(),
-                ["sessionId"] = sessionId,
-                ["agentName"] = agent,
-                ["timeoutMs"] = 62000,
-            };
-            if (currentNode == id && cwd is not null)
-                request["sessionCwd"] = cwd;
-            if (
-                programmatic
-                && connection.Capabilities["features"]?["programmaticToolData"]?.GetValue<bool>()
-                    == true
-            )
-                request["programmatic"] = true;
-            token.ThrowIfCancellationRequested();
-            lock (gate)
-            {
-                if (connection.Retired)
-                    throw new IOException("Node connection replaced before dispatch.");
-            }
-            await SendAsync(connection, request, deadline.Token);
-            return await call.Task.WaitAsync(deadline.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            throw new IOException(
-                "Node request canceled or timed out. Started effects may have occurred; they were not retried."
-            );
-        }
-        finally
-        {
-            calls.TryRemove(callId, out _);
-        }
-    }
-
     internal void BeginShutdown()
     {
         expiry.Change(Timeout.Infinite, Timeout.Infinite);
         shutdown.Cancel();
+        ExecClaims.Clear();
         string[] ids;
         lock (gate)
             ids = nodes.Keys.ToArray();

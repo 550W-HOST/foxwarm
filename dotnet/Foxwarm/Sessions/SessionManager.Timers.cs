@@ -134,8 +134,6 @@ internal sealed partial class SessionManager
                 var agent = SessionWait.Text(row["agentName"])!;
                 if (!agents.Exists(agent) || !Directory.Exists(agents.AgentDirectory(agent)))
                     throw new InvalidDataException("Timer target Agent does not exist: " + agent);
-                if (TimerPlacement(row) is string reason)
-                    throw new NotSupportedException(reason);
                 NormalizeTimerSettings(row);
             }
             token.ThrowIfCancellationRequested();
@@ -223,45 +221,13 @@ internal sealed partial class SessionManager
             row.Remove("effort");
     }
 
-    private string? TimerPlacement(JsonObject row)
-    {
-        var fresh = MainTimers.Flag(row["newSession"]);
-        var requested = SessionWait.Text(row["sessionId"]);
-        var target = requested is null ? null : AuthorizationTarget(requested);
-        var agent = fresh
-            ? TimerArguments.Optional(row["agentName"]) ?? target?.Agent ?? "main"
-            : target?.Agent;
-        if (
-            agent is not null
-            && agents.Exists(agent)
-            && RecordedIsolationNode(agent) is string bound
-            && SessionGoal.Trim(bound).Length > 0
-            && SessionGoal.Trim(bound) != "master"
-        )
-            return "Timer target Agent's bound Node is unavailable on Main.";
-        if (fresh && TimerArguments.Optional(row["currentNode"]) is string node && node != "master")
-            return "Timer's captured Node is unavailable on Main.";
-        return null;
-    }
-
     private async Task DeliverTimerAsync(JsonObject timer)
     {
-        if (TimerPlacement(timer) is string reason)
-            throw new TimerPlacementUnavailableException(reason);
         SessionOwner target;
         if (MainTimers.Flag(timer["newSession"]))
             target = await CreateTimerSessionAsync(timer);
         else
-        {
-            try
-            {
-                target = await RequiredAsync(SessionWait.Text(timer["sessionId"])!);
-            }
-            catch (UnsupportedSessionExecutionEnvironmentException error)
-            {
-                throw new TimerPlacementUnavailableException(error.Message);
-            }
-        }
+            target = await RequiredAsync(SessionWait.Text(timer["sessionId"])!);
         using var admission = BeginOwnerMutation(target);
         await WaitForIdentityMutationAsync(target.Id);
         target.Entry.RequireIdentityAuthority();
@@ -326,12 +292,7 @@ internal sealed partial class SessionManager
 
     private async Task ReconcileTimerWaitsAsync(SessionOwner owner)
     {
-        if (
-            !IsCurrentOwner(owner)
-            || RecordedIsolationNode(owner.Agent) is string node
-                && SessionGoal.Trim(node).Length > 0
-                && SessionGoal.Trim(node) != "master"
-        )
+        if (!IsCurrentOwner(owner))
             return;
         var waitId = owner.Entry.WithState(state => SessionWait.Text(state.Meta["wait"]?["id"]));
         foreach (var requested in timers.InternalOwners())

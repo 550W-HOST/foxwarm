@@ -19,7 +19,6 @@ internal sealed partial class MainTimers : IAsyncDisposable
 {
     private readonly string path;
     private readonly Func<JsonObject, Task> deliver;
-    private readonly Func<JsonObject, string?> placement;
     private readonly object gate = new();
     private readonly SemaphoreSlim saveLane = new(1, 1);
     private readonly Dictionary<string, TimerRecord> records = new(StringComparer.Ordinal);
@@ -38,13 +37,11 @@ internal sealed partial class MainTimers : IAsyncDisposable
 
     internal MainTimers(
         string root,
-        Func<JsonObject, Task> deliver,
-        Func<JsonObject, string?>? placement = null
+        Func<JsonObject, Task> deliver
     )
     {
         path = Path.Combine(root, "state", "timers.json");
         this.deliver = deliver;
-        this.placement = placement ?? (_ => null);
     }
 
     internal string? Unavailable => unavailable;

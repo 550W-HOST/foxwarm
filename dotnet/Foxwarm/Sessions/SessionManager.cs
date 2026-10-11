@@ -173,6 +173,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
             ResolveExecLifetime,
             HistoricalExecOwners
         );
+        executor.RemoteIdentityReserved = (session, id) => Find(session) is { } owner && Nodes.ExecClaims.Has(owner, id, activeOnly: false);
+        Nodes.LocalExecActive = (owner, id) => executor.IsOwnedActive(owner.Id, id);
+        Nodes.SessionEvent = AdmitNodeSessionEventAsync;
+        Nodes.BackgroundRegistration = RegisterRemoteExecBackgroundAsync;
         var definitions = WorkspaceTools.Definitions();
         foreach (var definition in Foxwarm.Nodes.NodeToolDefinitions.All())
             definitions.Add(definition?.DeepClone());
@@ -214,7 +218,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         );
         clientOptions = options with { Tools = tools.ModelDefinitions() };
         this.models = models;
-        timers = new(this.root, DeliverTimerAsync, TimerPlacement);
+        timers = new(this.root, DeliverTimerAsync);
         waitTimeouts = new SessionWaitTimeouts(this);
         waitLiveness = new WaitLiveness(this);
     }
