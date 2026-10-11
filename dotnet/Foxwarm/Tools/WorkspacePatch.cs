@@ -195,7 +195,12 @@ internal static class WorkspacePatch
                 matched = FindContext(input, context, cursor);
             if (matched < 0)
                 throw new InvalidDataException(
-                    FormatContextMismatch(section[hunkStart..(eof ? index + 1 : index)], cursor, eof, path)
+                    FormatContextMismatch(
+                        section[hunkStart..(eof ? index + 1 : index)],
+                        cursor,
+                        eof,
+                        path
+                    )
                 );
             patches.AddRange(local.Select(chunk => chunk with { Index = chunk.Index + matched }));
             cursor = matched + context.Count;
@@ -301,9 +306,8 @@ internal static class WorkspacePatch
 
     private static string FormatContextErrorPath(string path)
     {
-        var shortened = path.Length <= MaxContextErrorPathLength
-            ? path
-            : path[..60] + "…" + path[^59..];
+        var shortened =
+            path.Length <= MaxContextErrorPathLength ? path : path[..60] + "…" + path[^59..];
         return System.Text.Json.JsonSerializer.Serialize(shortened);
     }
 
@@ -317,7 +321,8 @@ internal static class WorkspacePatch
             return FailedHunkOmission[..Math.Min(maxLength, FailedHunkOmission.Length)];
         var headLength = (contentLength + 1) / 2;
         var tailLength = contentLength - headLength;
-        return hunk[..headLength] + FailedHunkOmission
+        return hunk[..headLength]
+            + FailedHunkOmission
             + (tailLength > 0 ? hunk[^tailLength..] : "");
     }
 
@@ -328,8 +333,14 @@ internal static class WorkspacePatch
         string path
     )
     {
-        var prefix = $"Could not match {(eof ? "EOF" : "patch")} context while patching {FormatContextErrorPath(path)} starting at line {start + 1}.\nFailed hunk:\n";
-        var formatted = prefix + FormatBoundedFailedHunk(patchLines, Math.Max(0, MaxContextErrorLength - prefix.Length));
+        var prefix =
+            $"Could not match {(eof ? "EOF" : "patch")} context while patching {FormatContextErrorPath(path)} starting at line {start + 1}.\nFailed hunk:\n";
+        var formatted =
+            prefix
+            + FormatBoundedFailedHunk(
+                patchLines,
+                Math.Max(0, MaxContextErrorLength - prefix.Length)
+            );
         return formatted[..Math.Min(MaxContextErrorLength, formatted.Length)];
     }
 

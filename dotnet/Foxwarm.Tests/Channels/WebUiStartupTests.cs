@@ -174,52 +174,94 @@ public sealed class WebUiStartupTests
         await File.WriteAllTextAsync(h.TokenPath, h.Token);
         h.Start();
         await h.Ready();
-        var raw = $"bot:\n  httpPort: {h.Port}\nllm:\n  maxOutput: 714\nchannels:\n  webui: {{enabled: false}}\naccess:\n  identities: {{}}\n";
-        var configResponse = await h.Client.PostAsJsonAsync("/api/setup/config", new { yaml = raw });
+        var raw =
+            $"bot:\n  httpPort: {h.Port}\nllm:\n  maxOutput: 714\nchannels:\n  webui: {{enabled: false}}\naccess:\n  identities: {{}}\n";
+        var configResponse = await h.Client.PostAsJsonAsync(
+            "/api/setup/config",
+            new { yaml = raw }
+        );
         Assert.Equal(HttpStatusCode.OK, configResponse.StatusCode);
         var config = (await configResponse.Content.ReadFromJsonAsync<JsonObject>())!;
         Assert.True(config["success"]!.GetValue<bool>());
         Assert.True(config["saved"]!.GetValue<bool>());
         Assert.Equal("config", config["target"]!.GetValue<string>());
         Assert.Empty(config["applied"]!.AsArray());
-        Assert.Equal(new[] { "access.identities", "channels" }, config["notApplied"]!.AsArray().Select(v => v!.GetValue<string>()));
-        Assert.Contains("llm", config["restartRequired"]!.AsArray().Select(v => v!.GetValue<string>()));
-        Assert.Contains("channels.webui", config["restartRequired"]!.AsArray().Select(v => v!.GetValue<string>()));
+        Assert.Equal(
+            new[] { "access.identities", "channels" },
+            config["notApplied"]!.AsArray().Select(v => v!.GetValue<string>())
+        );
+        Assert.Contains(
+            "llm",
+            config["restartRequired"]!.AsArray().Select(v => v!.GetValue<string>())
+        );
+        Assert.Contains(
+            "channels.webui",
+            config["restartRequired"]!.AsArray().Select(v => v!.GetValue<string>())
+        );
         Assert.Equal(h.ConfigPath, config["configPath"]!.GetValue<string>());
         Assert.Equal(raw, config["rawYaml"]!.GetValue<string>());
         Assert.Equal(1, config["channelCount"]!.GetValue<int>());
         Assert.False(config["reload"]!["available"]!.GetValue<bool>());
         Assert.Equal(raw, await File.ReadAllTextAsync(h.ConfigPath));
 
-        var channelResponse = await h.Client.PostAsJsonAsync("/api/setup/channels", new { channels = new { webui = new { enabled = true } } });
+        var channelResponse = await h.Client.PostAsJsonAsync(
+            "/api/setup/channels",
+            new { channels = new { webui = new { enabled = true } } }
+        );
         Assert.Equal(HttpStatusCode.OK, channelResponse.StatusCode);
         var channels = (await channelResponse.Content.ReadFromJsonAsync<JsonObject>())!;
         Assert.True(channels["success"]!.GetValue<bool>());
         Assert.True(channels["saved"]!.GetValue<bool>());
         Assert.Equal("config", channels["target"]!.GetValue<string>());
         Assert.Empty(channels["applied"]!.AsArray());
-        Assert.Equal(new[] { "access.identities", "channels" }, channels["notApplied"]!.AsArray().Select(v => v!.GetValue<string>()));
-        Assert.Contains("channels.webui", channels["restartRequired"]!.AsArray().Select(v => v!.GetValue<string>()));
+        Assert.Equal(
+            new[] { "access.identities", "channels" },
+            channels["notApplied"]!.AsArray().Select(v => v!.GetValue<string>())
+        );
+        Assert.Contains(
+            "channels.webui",
+            channels["restartRequired"]!.AsArray().Select(v => v!.GetValue<string>())
+        );
         Assert.NotNull(channels["channelsYaml"]);
         Assert.Equal(1, channels["channelCount"]!.GetValue<int>());
         Assert.False(channels["reload"]!["available"]!.GetValue<bool>());
-        Assert.Equal(714d, ConfigurationYaml.Parse(await File.ReadAllTextAsync(h.ConfigPath), "config")["llm"]!["maxOutput"]!.GetValue<double>());
+        Assert.Equal(
+            714d,
+            ConfigurationYaml.Parse(await File.ReadAllTextAsync(h.ConfigPath), "config")["llm"]![
+                "maxOutput"
+            ]!.GetValue<double>()
+        );
         // A saved disabled WebUI setting does not unmount the startup-captured administrator route.
-        Assert.Equal("admin", (await h.Client.GetFromJsonAsync<JsonObject>("/api/auth/session"))!["role"]!.GetValue<string>());
+        Assert.Equal(
+            "admin",
+            (await h.Client.GetFromJsonAsync<JsonObject>("/api/auth/session"))![
+                "role"
+            ]!.GetValue<string>()
+        );
 
-        var modelsRaw = "default: local/wire\nproviders:\n  local: {providerType: openai-responses, baseUrl: 'http://127.0.0.1:1', models: [wire]}\n";
-        var modelsResponse = await h.Client.PostAsJsonAsync("/api/setup/models", new { yaml = modelsRaw });
+        var modelsRaw =
+            "default: local/wire\nproviders:\n  local: {providerType: openai-responses, baseUrl: 'http://127.0.0.1:1', models: [wire]}\n";
+        var modelsResponse = await h.Client.PostAsJsonAsync(
+            "/api/setup/models",
+            new { yaml = modelsRaw }
+        );
         Assert.Equal(HttpStatusCode.OK, modelsResponse.StatusCode);
         var models = (await modelsResponse.Content.ReadFromJsonAsync<JsonObject>())!;
         Assert.True(models["success"]!.GetValue<bool>());
         Assert.True(models["saved"]!.GetValue<bool>());
         Assert.Equal("models", models["target"]!.GetValue<string>());
-        Assert.Equal(new[] { "models" }, models["applied"]!.AsArray().Select(v => v!.GetValue<string>()));
+        Assert.Equal(
+            new[] { "models" },
+            models["applied"]!.AsArray().Select(v => v!.GetValue<string>())
+        );
         Assert.Empty(models["notApplied"]!.AsArray());
         Assert.Empty(models["restartRequired"]!.AsArray());
         Assert.NotNull(models["models"]);
         Assert.NotNull(models["payload"]);
-        Assert.Equal(modelsRaw, await File.ReadAllTextAsync(Path.Combine(h.Data, "state", "models.yaml")));
+        Assert.Equal(
+            modelsRaw,
+            await File.ReadAllTextAsync(Path.Combine(h.Data, "state", "models.yaml"))
+        );
         await h.Stop();
     }
 

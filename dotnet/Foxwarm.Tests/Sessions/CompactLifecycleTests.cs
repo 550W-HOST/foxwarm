@@ -134,7 +134,9 @@ public sealed class CompactLifecycleTests
                         "apply_patch",
                         new JsonObject
                         {
-                            ["input"] = "*** Begin Patch\n*** Update File: " + path
+                            ["input"] =
+                                "*** Begin Patch\n*** Update File: "
+                                + path
                                 + "\n@@ repair-target\n-old-content-not-in-file\n+required-added-line-tail\n*** End Patch",
                         }
                     );
@@ -258,7 +260,8 @@ public sealed class CompactLifecycleTests
         var failedHunkRequest = JsonNode.Parse((await peer.RequestAt(7)).Body)!;
         var failedHunkOutput = Assert.Single(
             failedHunkRequest["input"]!.AsArray().OfType<JsonObject>(),
-            row => SessionWait.Text(row["type"]) == "function_call_output"
+            row =>
+                SessionWait.Text(row["type"]) == "function_call_output"
                 && SessionWait.Text(row["call_id"]) == "failed-hunk"
         );
         var feedback = failedHunkOutput["output"]!.GetValue<string>();

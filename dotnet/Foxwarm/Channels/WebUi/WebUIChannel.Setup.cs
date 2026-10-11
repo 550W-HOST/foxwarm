@@ -60,7 +60,9 @@ internal sealed partial class WebUIChannel
                     installation["success"] = true;
                     installation["configPath"] = configuration.AppPath;
                     installation["rawYaml"] = raw;
-                    installation["channelCount"] = ConfigurationYaml.Parse(raw, "app config")["channels"]
+                    installation["channelCount"] = ConfigurationYaml.Parse(raw, "app config")[
+                        "channels"
+                    ]
                         is JsonObject channels
                         ? channels.Count
                         : 0;
@@ -115,7 +117,9 @@ internal sealed partial class WebUIChannel
                     var installation = await configuration.SaveChannelsAsync(channels);
                     installation["success"] = true;
                     installation["configPath"] = configuration.AppPath;
-                    installation["channelsYaml"] = ModelConfiguration.ChannelsYamlForObject(channels);
+                    installation["channelsYaml"] = ModelConfiguration.ChannelsYamlForObject(
+                        channels
+                    );
                     installation["channelCount"] = channels.Count;
                     installation["reload"] = new JsonObject
                     {
