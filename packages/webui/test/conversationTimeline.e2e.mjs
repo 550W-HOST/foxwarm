@@ -510,3 +510,42 @@ test('An unmarked Activity uses its own start; user/CTX boundaries and source-or
   await page.waitForFunction(() => !document.querySelector('#timeline').textContent.includes('PREFIX_USER') && document.querySelectorAll('#timeline [data-timeline-time-separator]').length === 4)
   assert.deepEqual(await dividerTimes(),[1200,1500,1800,2100].map(iso))
 })
+
+test('Activity omits each short overhead gap before summing waiting without changing measured work', async () => {
+  await mode('conversation')
+  const work = (gap, modelSeconds, toolSeconds, leading = 0, cycles = 1) => {
+    const records = [timed(601,0,'user',[{text:'NOISE_START'}])]
+    let cursor = leading
+    for (let index=0; index<cycles; index++) {
+      const id = 'noise-'+index
+      const end = cursor+modelSeconds
+      records.push(timed(602+index*2,end,'model',[{thinking:'NOISE_REASONING'},call(id)],{id:'noise-request-'+index,start:cursor,end}))
+      const startedAt = end+gap
+      const completedAt = startedAt+toolSeconds
+      records.push(timed(603+index*2,completedAt,'tool',[{functionResponse:{name:'exec',tool_use_id:id,response:{output:'NOISE_RESULT'},executionTiming:{startedAt:epoch+startedAt*1000,completedAt:epoch+completedAt*1000,durationMs:toolSeconds*1000}}}]))
+      cursor = completedAt
+    }
+    records.push(timed(700,cursor+1,'model',[{text:'NOISE_DONE'}],{id:'noise-final',start:cursor,end:cursor+1}))
+    return records
+  }
+  for (const [records,expected] of [
+    [work(.405,30,31),'Worked for 1m2s · Called 1 tool'],
+    [work(.388,20,19),'Worked for 40s · Called 1 tool'],
+    [work(.4,1,1,0,10),'Worked for 21s · Called 10 tools'],
+    [work(1.999,20,19),'Worked for 40s · Called 1 tool'],
+    [work(2,20,19),'Worked for 40s · Waited for 2s · Called 1 tool'],
+    [work(.388,20,19,30),'Worked for 40s · Waited for 30s · Called 1 tool'],
+  ]) {
+    await setRecords(records)
+    await page.waitForFunction(expected => document.querySelector('#timeline [data-timeline-activity] > button')?.textContent.slice(1) === expected,{},expected)
+    assert.deepEqual(await headers(),[expected])
+  }
+  // The same filter applies at the open tail; reaching two seconds reveals a genuine longer gap.
+  const open = work(0,20,19).slice(0,-1)
+  await setRecords([...open,timed(700,40,'model',[],{id:'noise-final',start:39,end:40})],undefined,epoch+40388)
+  await page.waitForFunction(() => document.querySelector('#timeline [data-timeline-activity] > button')?.textContent.includes('Worked for 40s'))
+  assert.deepEqual(await headers(),['Worked for 40s · Called 1 tool'])
+  await page.evaluate(() => window.fixture.setNow(1700000042000))
+  await page.waitForFunction(() => document.querySelector('#timeline [data-timeline-activity] > button')?.textContent.includes('Waited for 2s'))
+  assert.deepEqual(await headers(),['Worked for 40s · Waited for 2s · Called 1 tool'])
+})

@@ -53,7 +53,7 @@ Renders a chat conversation as a vertical timeline of message bubbles, handling 
 | `useThreadCardHeightTransition` | `useThreadCardHeightTransition.ts` | Pins the existing card and its local in-flow parent slot before the toggle, measures the natural target without reducing the scroll range, then interpolates pixels and restores auto. |
 | `buildConversationActivitySummary` | `conversationActivity.ts` | Scoped counts from direct committed calls/results, hosted search items, actual Task notification receipts, and communication sources; script tools remain ordinary top-level invocations. |
 | `applyConversationTimeMarkers` | `timelineRows.ts` | Assigns one source-derived clock before an Activity/ordinary-body display unit, preserving raw baselines, row/cache identity, and independent user/CTX surfaces. |
-| `applyConversationTiming` | `conversationTiming.ts` | Visible-boundary elapsed ranges, clipped/unioned measured and live busy evidence, conservative missing-data fallback, and final error/CTX cuts. |
+| `applyConversationTiming` | `conversationTiming.ts` | Visible-boundary elapsed ranges, clipped/unioned measured and live busy evidence with per-gap waiting noise filtering, conservative missing-data fallback, and final error/CTX cuts. |
 | `getHistoryTailLlmError` | `timelineRows.ts` | Selects only the full committed history tail retry, excluding queued/provisional rows. |
 | `TimelineActivity` | `ChatTimeline.tsx` | Quiet collapsed Activity disclosure with a Detailed nested timeline of technical fragments only. |
 | `getConversationUserPartText` | `ChatTimeline.tsx` | Shares literal authored-body extraction for complete channel sources between rendering and Search, retaining outer metadata separately. |

@@ -14,16 +14,22 @@ const measured = (value: any): Span | undefined => {
   const end = timestamp(value?.completedAt)
   return start !== undefined && end !== undefined && end >= start && Number.isFinite(value?.durationMs) && value.durationMs >= 0 ? { start, end } : undefined
 }
-const unionDuration = (spans: readonly Span[], start: number, end: number): number => {
+const MIN_WAITING_GAP_MS = 2000
+const measureIntervals = (spans: readonly Span[], start: number, end: number): { busy: number; waiting: number } => {
   const clipped = spans.map(span => ({ start: Math.max(start, span.start), end: Math.min(end, span.end) }))
     .filter(span => span.end > span.start).sort((a, b) => a.start - b.start)
-  let total = 0
+  let busy = 0
+  let waiting = 0
   let previousEnd = start
   for (const span of clipped) {
-    total += Math.max(0, span.end - Math.max(span.start, previousEnd))
+    const gap = span.start - previousEnd
+    if (gap >= MIN_WAITING_GAP_MS) waiting += gap
+    busy += Math.max(0, span.end - Math.max(span.start, previousEnd))
     previousEnd = Math.max(previousEnd, span.end)
   }
-  return total
+  const tailGap = end - previousEnd
+  if (tailGap >= MIN_WAITING_GAP_MS) waiting += tailGap
+  return { busy, waiting }
 }
 
 /** Read-only timing over visible boundaries; never derives an idle interval from the first hidden record. */
@@ -105,8 +111,7 @@ export function applyConversationTiming(
         const nextTime = timestamp(inputs[index + 1]?.__meta?.timestamp) ?? end
         if (time === undefined || !covers(time) && !spans.some(span => span.start >= time && span.start < nextTime)) complete = false
       }
-      const busy = unionDuration(spans, start, end)
-      const waiting = end - start - busy
+      const { busy, waiting } = measureIntervals(spans, start, end)
       const labels = complete
         ? [busy > 0 ? `Worked for ${formatCompactDuration(busy)}` : '', waiting > 0 ? `Waited for ${formatCompactDuration(waiting)}` : ''].filter(Boolean)
         : [`Elapsed ${formatCompactDuration(end - start)}`]
