@@ -477,7 +477,13 @@ public sealed class ToolAuthorizationEffectsTests
         Assert.Equal(
             "tool_authorization_denied",
             Error(
-                await Call(execution.Tools, "call_tool", Obj("""{"toolId":"node:master/exec","args":{"command":"touch forbidden-exec"}}"""))
+                await Call(
+                    execution.Tools,
+                    "call_tool",
+                    Obj(
+                        """{"toolId":"node:master/exec","args":{"command":"touch forbidden-exec"}}"""
+                    )
+                )
             )
         );
         Assert.False(
@@ -487,7 +493,17 @@ public sealed class ToolAuthorizationEffectsTests
         await File.WriteAllTextAsync(other, "other");
         Assert.Equal(
             "tool_authorization_denied",
-            Error(await Call(execution.Tools, "call_tool", new JsonObject { ["toolId"] = "node:master/read", ["args"] = new JsonObject { ["filePath"] = other } }))
+            Error(
+                await Call(
+                    execution.Tools,
+                    "call_tool",
+                    new JsonObject
+                    {
+                        ["toolId"] = "node:master/read",
+                        ["args"] = new JsonObject { ["filePath"] = other },
+                    }
+                )
+            )
         );
         Assert.Equal(
             "tool_authorization_denied",

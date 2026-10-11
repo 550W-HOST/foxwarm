@@ -71,7 +71,9 @@ internal sealed partial class WebUIChannel
                         await JsonNode.ParseAsync(request.Body) as JsonObject
                         ?? throw new InvalidDataException("Agent creation needs an object.");
                     if (
-                        body.Any(item => item.Key is not ("agentId" or "inheritAgent" or "isolatedNode"))
+                        body.Any(item =>
+                            item.Key is not ("agentId" or "inheritAgent" or "isolatedNode")
+                        )
                         || body["agentId"] is not JsonValue agent
                         || !agent.TryGetValue<string>(out var name)
                     )
@@ -165,7 +167,11 @@ internal sealed partial class WebUIChannel
                         throw new InvalidDataException("Provide inheritAgent and/or isolatedNode.");
                     if (!sessions.Agents().Contains(agentId))
                         return Results.NotFound(new { error = "Agent not found." });
-                    if (body.ContainsKey("isolatedNode")) await sessions.SetAgentNodeAsync(agentId, SessionWait.Text(body["isolatedNode"]));
+                    if (body.ContainsKey("isolatedNode"))
+                        await sessions.SetAgentNodeAsync(
+                            agentId,
+                            SessionWait.Text(body["isolatedNode"])
+                        );
                     if (body.ContainsKey("inheritAgent"))
                         await sessions.SetAgentInheritAsync(
                             agentId,

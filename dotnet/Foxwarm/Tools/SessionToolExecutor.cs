@@ -34,8 +34,13 @@ internal sealed partial class SessionToolExecutor(
     private readonly AsyncLocal<TurnToolInvocation?> invocation = new();
 
     private sealed record ExecSnapshot(string Node, string? Cwd);
-    internal string ExecutionNode => invocation.Value?.Node ?? execSnapshot.Value?.Node ?? sessions.CurrentNode(hosted);
-    internal string? ExecutionCwd => invocation.Value is { } active ? active.Cwd : execSnapshot.Value is { } captured ? captured.Cwd : SessionWait.Text(hosted.Entry.Snapshot().AuthorityEnvelope["cwd"]);
+
+    internal string ExecutionNode =>
+        invocation.Value?.Node ?? execSnapshot.Value?.Node ?? sessions.CurrentNode(hosted);
+    internal string? ExecutionCwd =>
+        invocation.Value is { } active ? active.Cwd
+        : execSnapshot.Value is { } captured ? captured.Cwd
+        : SessionWait.Text(hosted.Entry.Snapshot().AuthorityEnvelope["cwd"]);
 
     private readonly AsyncLocal<ExecSnapshot?> execSnapshot = new();
     internal string CurrentCallId => invocation.Value?.CallId ?? "";
@@ -66,7 +71,11 @@ internal sealed partial class SessionToolExecutor(
             var args =
                 call["args"] as JsonObject
                 ?? throw new InvalidDataException("Tool arguments must be an object.");
-            var resolved = registry.Resolve("exec", args, execSnapshot.Value?.Node ?? sessions.CurrentNode(hosted));
+            var resolved = registry.Resolve(
+                "exec",
+                args,
+                execSnapshot.Value?.Node ?? sessions.CurrentNode(hosted)
+            );
             await AuthorizeAsync(resolved, token);
             return null;
         }
@@ -222,7 +231,11 @@ internal sealed partial class SessionToolExecutor(
                 if (invocation.Value is { } current && workspace is WorkspaceTools)
                 {
                     current.Files = sessions.IdentityWorkspace(hosted, current.Cwd, current.Node);
-                    current.ExecFiles = sessions.IdentityWorkspace(hosted, current.Cwd, current.Node);
+                    current.ExecFiles = sessions.IdentityWorkspace(
+                        hosted,
+                        current.Cwd,
+                        current.Node
+                    );
                 }
                 if (invocation.Value?.Files is { } files)
                 {
@@ -586,17 +599,27 @@ internal sealed partial class SessionToolExecutor(
                 args,
                 token
             );
-        handlers["node"] = (owner, args, token) => owner.Manager.ExecuteNodeToolAsync(owner.Hosted, args, token);
-        handlers["node_bootstrap_info"] = (owner, args, _) => Task.FromResult(owner.Manager.NodeBootstrapInfo(args));
-        handlers["node_pair_list"] = (owner, args, _) => Task.FromResult(owner.Manager.NodePairList(args));
-        handlers["node_pair_approve"] = (owner, args, _) => owner.Manager.NodePairApproveAsync(args);
+        handlers["node"] = (owner, args, token) =>
+            owner.Manager.ExecuteNodeToolAsync(owner.Hosted, args, token);
+        handlers["node_bootstrap_info"] = (owner, args, _) =>
+            Task.FromResult(owner.Manager.NodeBootstrapInfo(args));
+        handlers["node_pair_list"] = (owner, args, _) =>
+            Task.FromResult(owner.Manager.NodePairList(args));
+        handlers["node_pair_approve"] = (owner, args, _) =>
+            owner.Manager.NodePairApproveAsync(args);
         handlers["search_tools"] = (owner, args, token) =>
             UnifiedTools.SearchAsync(
                 registry,
                 args,
                 token,
                 (source, name, server) =>
-                    owner.Manager.ToolVisible(owner.Hosted, source, name, source == "mcp" ? server : null, node: source == "node" ? server : null),
+                    owner.Manager.ToolVisible(
+                        owner.Hosted,
+                        source,
+                        name,
+                        source == "mcp" ? server : null,
+                        node: source == "node" ? server : null
+                    ),
                 owner.ScriptBudget,
                 owner.Hosted
             );

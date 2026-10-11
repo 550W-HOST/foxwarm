@@ -101,7 +101,8 @@ internal sealed class SessionChatService(
                 );
                 await hosted.Entry.SaveLane.CommitMemorySnapshotAsync(value);
             }
-            if (executionContext is not null) value += "\n\n" + executionContext();
+            if (executionContext is not null)
+                value += "\n\n" + executionContext();
             return baseOptions.Instructions.Length == 0
                 ? value
                 : baseOptions.Instructions + "\n\n" + value;

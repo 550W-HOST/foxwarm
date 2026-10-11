@@ -141,9 +141,7 @@ public sealed class SessionExecutionEnvironmentTests
             Options,
             HostModels.ForTest(Options)
         );
-        await Assert.ThrowsAsync<InvalidDataException>(() =>
-            manager.LoadAsync()
-        );
+        await Assert.ThrowsAsync<InvalidDataException>(() => manager.LoadAsync());
         await Task.Delay(100);
         Assert.Null(manager.Find("foreign"));
         var owner = manager.Find("deadline")!;

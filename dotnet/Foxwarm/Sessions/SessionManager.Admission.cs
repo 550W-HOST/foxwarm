@@ -268,7 +268,8 @@ internal sealed partial class SessionManager
     )
     {
         var node = SessionGoal.Trim(SessionWait.Text(envelope["currentNode"]) ?? "");
-        if (node.Length > 0 && node != "master") Foxwarm.Nodes.ApprovedNodeRegistry.ValidateId(node);
+        if (node.Length > 0 && node != "master")
+            Foxwarm.Nodes.ApprovedNodeRegistry.ValidateId(node);
     }
 
     private readonly object admissionObservationGate = new();

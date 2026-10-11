@@ -87,11 +87,27 @@ internal sealed partial class SessionManager
                     Keys(args, ["agentName", "nodeId", "toolRules"], ["agentName"]);
                     var agent = RequiredString(args, "agentName");
                     var node = OptionalString(args, "nodeId")?.Trim();
-                    if (node == "") node = null;
-                    if (args.ContainsKey("toolRules") && args["toolRules"] is not JsonArray) throw new InvalidDataException("toolRules must be an array.");
-                    await SetAgentIsolationAsync(agent, node, args.ContainsKey("nodeId"), args["toolRules"] as JsonArray);
+                    if (node == "")
+                        node = null;
+                    if (args.ContainsKey("toolRules") && args["toolRules"] is not JsonArray)
+                        throw new InvalidDataException("toolRules must be an array.");
+                    await SetAgentIsolationAsync(
+                        agent,
+                        node,
+                        args.ContainsKey("nodeId"),
+                        args["toolRules"] as JsonArray
+                    );
                     var isolation = agents.MetadataSnapshot()[agent] as JsonObject;
-                    return (new JsonObject { ["success"] = true, ["isolated"] = AgentIsolated(agent), ["node"] = RecordedIsolationNode(agent), ["toolRuleCount"] = (isolation?["toolRules"] as JsonArray)?.Count ?? 0 }, false);
+                    return (
+                        new JsonObject
+                        {
+                            ["success"] = true,
+                            ["isolated"] = AgentIsolated(agent),
+                            ["node"] = RecordedIsolationNode(agent),
+                            ["toolRuleCount"] = (isolation?["toolRules"] as JsonArray)?.Count ?? 0,
+                        },
+                        false
+                    );
                 }
                 case "create_agent":
                 {

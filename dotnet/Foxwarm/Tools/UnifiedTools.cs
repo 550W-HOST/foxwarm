@@ -96,8 +96,21 @@ internal static partial class UnifiedTools
         {
             try
             {
-                var nodeId = ToolRegistry.TargetNode(ToolRegistry.Text(args, "nodeId"), owner is null ? "master" : SessionWait.Text(owner.Entry.Snapshot().AuthorityEnvelope["currentNode"]) ?? "master");
-                foreach (var definition in registry.NodeDefinitions(nodeId).OfType<JsonObject>().Where(definition => nodeId == "master" || SessionWait.Text(definition["name"]) != "exec"))
+                var nodeId = ToolRegistry.TargetNode(
+                    ToolRegistry.Text(args, "nodeId"),
+                    owner is null
+                        ? "master"
+                        : SessionWait.Text(owner.Entry.Snapshot().AuthorityEnvelope["currentNode"])
+                            ?? "master"
+                );
+                foreach (
+                    var definition in registry
+                        .NodeDefinitions(nodeId)
+                        .OfType<JsonObject>()
+                        .Where(definition =>
+                            nodeId == "master" || SessionWait.Text(definition["name"]) != "exec"
+                        )
+                )
                 {
                     var name = SessionWait.Text(definition["name"])!;
                     var description = SessionWait.Text(definition["description"]) ?? "";
@@ -118,7 +131,8 @@ internal static partial class UnifiedTools
                         );
                 }
             }
-            catch (Exception error) when (error is InvalidDataException or InvalidOperationException)
+            catch (Exception error)
+                when (error is InvalidDataException or InvalidOperationException)
             {
                 warnings.Add(error.Message);
             }

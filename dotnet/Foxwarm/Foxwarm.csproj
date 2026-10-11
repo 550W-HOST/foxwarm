@@ -7,11 +7,40 @@
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="Code/workbench.html" />
-    <Content Include="../../templates/node/**/*" Exclude="../../templates/node/run-shell.sh" Link="templates/node/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="../../packages/shared/**/*" Exclude="../../packages/shared/node_modules/**/*;../../packages/shared/**/*.tsbuildinfo" Link="packages/shared/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="../../packages/cli-node/**/*" Exclude="../../packages/cli-node/node_modules/**/*;../../packages/cli-node/**/*.tsbuildinfo" Link="packages/cli-node/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="../../packages/cli-node-runtime/**/*" Exclude="../../packages/cli-node-runtime/node_modules/**/*" Link="packages/cli-node-runtime/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="../../scripts/start-sandbox-node.sh" Link="scripts/start-sandbox-node.sh" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content
+      Include="../../templates/node/**/*"
+      Exclude="../../templates/node/run-shell.sh"
+      Link="templates/node/%(RecursiveDir)%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+    <Content
+      Include="../../packages/shared/**/*"
+      Exclude="../../packages/shared/node_modules/**/*;../../packages/shared/**/*.tsbuildinfo"
+      Link="packages/shared/%(RecursiveDir)%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+    <Content
+      Include="../../packages/cli-node/**/*"
+      Exclude="../../packages/cli-node/node_modules/**/*;../../packages/cli-node/**/*.tsbuildinfo"
+      Link="packages/cli-node/%(RecursiveDir)%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+    <Content
+      Include="../../packages/cli-node-runtime/**/*"
+      Exclude="../../packages/cli-node-runtime/node_modules/**/*"
+      Link="packages/cli-node-runtime/%(RecursiveDir)%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+    <Content
+      Include="../../scripts/start-sandbox-node.sh"
+      Link="scripts/start-sandbox-node.sh"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
     <Content
       Include="../../packages/webui/public/login.html"
       Link="packages/webui/login.html"

@@ -32,11 +32,16 @@ internal sealed partial class SessionManager
     private string ArchiveDatabase => Path.Combine(root, "state", "archive-store.sqlite");
     private SessionIdentityMoveJournal IdentityJournal => new(root);
 
-    internal WorkspaceTools IdentityWorkspace(SessionOwner owner, string? capturedCwd = null, string? capturedNode = null)
+    internal WorkspaceTools IdentityWorkspace(
+        SessionOwner owner,
+        string? capturedCwd = null,
+        string? capturedNode = null
+    )
     {
         var live = ExecutionPlacement(owner);
         var node = capturedNode ?? live.Node;
-        var cwd = node == "master" ? capturedCwd ?? (live.Node == "master" ? live.Cwd : null) : null;
+        var cwd =
+            node == "master" ? capturedCwd ?? (live.Node == "master" ? live.Cwd : null) : null;
         return new(
             agents.AgentDirectory(owner.Agent),
             pendingWrites,

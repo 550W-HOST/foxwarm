@@ -90,12 +90,22 @@ internal sealed class HttpServer
             }
         );
         app.UseRouting();
-        app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30), KeepAliveTimeout = TimeSpan.FromSeconds(10) });
+        app.UseWebSockets(
+            new WebSocketOptions
+            {
+                KeepAliveInterval = TimeSpan.FromSeconds(30),
+                KeepAliveTimeout = TimeSpan.FromSeconds(10),
+            }
+        );
         var loginFile = Path.Combine(AppContext.BaseDirectory, "packages", "webui", "login.html");
         app.Use(
             async (context, next) =>
             {
-                if (context.Request.Path == "/node_ws" || Foxwarm.Nodes.NodeBootstrap.IsPublicPath(context.Request.Path) || code?.IsCapabilityRequest(context) == true)
+                if (
+                    context.Request.Path == "/node_ws"
+                    || Foxwarm.Nodes.NodeBootstrap.IsPublicPath(context.Request.Path)
+                    || code?.IsCapabilityRequest(context) == true
+                )
                 {
                     await next();
                     return;

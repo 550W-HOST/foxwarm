@@ -1,5 +1,5 @@
-using Foxwarm.Tools;
 using System.Text.Json.Nodes;
+using Foxwarm.Tools;
 
 namespace Foxwarm.Sessions;
 
@@ -97,28 +97,60 @@ internal sealed partial class AgentCatalog
         }
     }
 
-    internal Task SetNodeAsync(string name, string? node) => SetIsolationAsync(name, node, true, null);
+    internal Task SetNodeAsync(string name, string? node) =>
+        SetIsolationAsync(name, node, true, null);
 
-    internal async Task SetIsolationAsync(string name, string? node, bool updateNode, JsonArray? rules)
+    internal async Task SetIsolationAsync(
+        string name,
+        string? node,
+        bool updateNode,
+        JsonArray? rules
+    )
     {
         await createGate.WaitAsync();
         try
         {
-            if (!Exists(name)) throw new InvalidDataException("Agent not found.");
+            if (!Exists(name))
+                throw new InvalidDataException("Agent not found.");
             var next = MetadataSnapshot();
-            var row = next[name] as JsonObject ?? new JsonObject(); next[name] = row;
+            var row = next[name] as JsonObject ?? new JsonObject();
+            next[name] = row;
             if (updateNode)
             {
-                if (node is null) { row.Remove("isolated"); row.Remove("isolatedNode"); }
-                else { row["isolated"] = true; row["isolatedNode"] = node; }
+                if (node is null)
+                {
+                    row.Remove("isolated");
+                    row.Remove("isolatedNode");
+                }
+                else
+                {
+                    row["isolated"] = true;
+                    row["isolatedNode"] = node;
+                }
             }
-            if (rules is not null) row["toolRules"] = rules.DeepClone();
+            if (rules is not null)
+                row["toolRules"] = rules.DeepClone();
             _ = IsolatedToolCompatibility.Metadata(row);
-            try { AtomicIndexWrite(indexPath, Payload(List().Where(id => id != "main"), next).ToJsonString()); }
-            catch (AuthorityCommittedException) { lock (stateGate) metadata = next; throw; }
-            lock (stateGate) metadata = next;
+            try
+            {
+                AtomicIndexWrite(
+                    indexPath,
+                    Payload(List().Where(id => id != "main"), next).ToJsonString()
+                );
+            }
+            catch (AuthorityCommittedException)
+            {
+                lock (stateGate)
+                    metadata = next;
+                throw;
+            }
+            lock (stateGate)
+                metadata = next;
         }
-        finally { createGate.Release(); }
+        finally
+        {
+            createGate.Release();
+        }
     }
 
     private static JsonObject Payload(IEnumerable<string> names, JsonObject metadata) =>

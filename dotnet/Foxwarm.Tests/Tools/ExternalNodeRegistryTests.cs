@@ -6,8 +6,19 @@ namespace Foxwarm.Tests;
 
 public sealed class ExternalNodeRegistryTests
 {
-    private static JsonObject Offer(int min, int max) => new() { ["nodeProtocol"] = new JsonObject { ["min"] = min, ["max"] = max } };
-    private static JsonObject Pair(string name = "candidate") => new() { ["requestedName"] = name, ["nodeType"] = "cli-node", ["capabilities"] = new JsonObject { ["tools"] = new JsonArray() } };
+    private static JsonObject Offer(int min, int max) =>
+        new()
+        {
+            ["nodeProtocol"] = new JsonObject { ["min"] = min, ["max"] = max },
+        };
+
+    private static JsonObject Pair(string name = "candidate") =>
+        new()
+        {
+            ["requestedName"] = name,
+            ["nodeType"] = "cli-node",
+            ["capabilities"] = new JsonObject { ["tools"] = new JsonArray() },
+        };
 
     [Fact]
     public void Direct_credentials_and_offline_pairing_claim_survive_restart_without_listing_secrets()
@@ -19,7 +30,8 @@ public sealed class ExternalNodeRegistryTests
         Assert.False(registry.Authenticate("direct", "wrong"));
         var request = registry.Request(Pair(), NodeConnectionHub.Protocol(Offer(1, 3)));
         var credentials = registry.Approve(request["id"]!.GetValue<string>(), null);
-        var summary = registry.ListApproved().ToJsonString() + registry.ListPending().ToJsonString();
+        var summary =
+            registry.ListApproved().ToJsonString() + registry.ListPending().ToJsonString();
         Assert.DoesNotContain("authToken", summary);
         Assert.DoesNotContain("tokenHash", summary);
         Assert.DoesNotContain(credentials["authToken"]!.GetValue<string>(), summary);
@@ -30,7 +42,9 @@ public sealed class ExternalNodeRegistryTests
         Assert.True(JsonNode.DeepEquals(credentials, claimed));
         Assert.Null(restarted.Claim("cli-node", "candidate"));
         restarted.Cleanup(ApprovedNodeRegistry.Now + ApprovedNodeRegistry.PairingTtl + 1);
-        Assert.True(restarted.Authenticate("candidate", credentials["authToken"]!.GetValue<string>()));
+        Assert.True(
+            restarted.Authenticate("candidate", credentials["authToken"]!.GetValue<string>())
+        );
     }
 
     [Fact]
@@ -41,14 +55,26 @@ public sealed class ExternalNodeRegistryTests
         var request = registry.Request(Pair(), NodeConnectionHub.Protocol(new()));
         var credential = registry.Approve(request["id"]!.GetValue<string>(), "unclaimed");
         registry.Cleanup(ApprovedNodeRegistry.Now + ApprovedNodeRegistry.PairingTtl + 10);
-        Assert.False(registry.Authenticate("unclaimed", credential["authToken"]!.GetValue<string>()));
+        Assert.False(
+            registry.Authenticate("unclaimed", credential["authToken"]!.GetValue<string>())
+        );
         Assert.Empty(registry.ListPending());
         var direct = registry.Create("before");
         registry.Rename("before", "after");
         Assert.False(registry.Authenticate("before", direct["authToken"]!.GetValue<string>()));
-        Assert.True(new ApprovedNodeRegistry(temp.Path).Authenticate("after", direct["authToken"]!.GetValue<string>()));
+        Assert.True(
+            new ApprovedNodeRegistry(temp.Path).Authenticate(
+                "after",
+                direct["authToken"]!.GetValue<string>()
+            )
+        );
         registry.Remove("after");
-        Assert.False(new ApprovedNodeRegistry(temp.Path).Authenticate("after", direct["authToken"]!.GetValue<string>()));
+        Assert.False(
+            new ApprovedNodeRegistry(temp.Path).Authenticate(
+                "after",
+                direct["authToken"]!.GetValue<string>()
+            )
+        );
     }
 
     [Fact]
@@ -65,7 +91,10 @@ public sealed class ExternalNodeRegistryTests
         File.WriteAllText(file, "not JSON");
         var restored = new ApprovedNodeRegistry(temp.Path);
         Assert.DoesNotContain("pairCode", restored.ListPending().ToJsonString());
-        Assert.Equal(credential["authToken"]!.GetValue<string>(), restored.Claim("cli-node", "candidate")!["authToken"]!.GetValue<string>());
+        Assert.Equal(
+            credential["authToken"]!.GetValue<string>(),
+            restored.Claim("cli-node", "candidate")!["authToken"]!.GetValue<string>()
+        );
     }
 
     [Theory]
@@ -90,19 +119,48 @@ public sealed class ExternalNodeRegistryTests
         var disjoint = NodeConnectionHub.Protocol(Offer(4, 9));
         Assert.Equal("upgrade-required", disjoint["status"]!.GetValue<string>());
         Assert.Null(disjoint["negotiated"]);
-        foreach (var raw in new[] { "null", "[]", "{\"min\":0,\"max\":3}", "{\"min\":2,\"max\":1}", "{\"min\":1.5,\"max\":3}", "{\"min\":1,\"max\":1000001}", "{\"min\":1,\"max\":3,\"future\":true}" })
-            Assert.Throws<InvalidDataException>(() => NodeConnectionHub.Protocol(new JsonObject { ["nodeProtocol"] = JsonNode.Parse(raw) }));
+        foreach (
+            var raw in new[]
+            {
+                "null",
+                "[]",
+                "{\"min\":0,\"max\":3}",
+                "{\"min\":2,\"max\":1}",
+                "{\"min\":1.5,\"max\":3}",
+                "{\"min\":1,\"max\":1000001}",
+                "{\"min\":1,\"max\":3,\"future\":true}",
+            }
+        )
+            Assert.Throws<InvalidDataException>(() =>
+                NodeConnectionHub.Protocol(
+                    new JsonObject { ["nodeProtocol"] = JsonNode.Parse(raw) }
+                )
+            );
     }
 
     [Fact]
     public void Remote_result_keeps_JSON_values_and_normalizes_only_documented_Node_carriers()
     {
-        foreach (var raw in new[] { "null", "false", "0", "\"hello\"", "[1,null,false]", "{\"result\":{\"sentNotifications\":99},\"cwd\":\"peer-path\"}" })
+        foreach (
+            var raw in new[]
+            {
+                "null",
+                "false",
+                "0",
+                "\"hello\"",
+                "[1,null,false]",
+                "{\"result\":{\"sentNotifications\":99},\"cwd\":\"peer-path\"}",
+            }
+        )
         {
             var value = JsonNode.Parse(raw);
             Assert.True(JsonNode.DeepEquals(value, RemoteNodeResult.Normalize(value)));
         }
-        var image = RemoteNodeResult.Normalize(JsonNode.Parse("{\"output\":\"__SCREENSHOT__:aGVsbG8=\",\"annotation\":false,\"__foxwarmResolvedToolPaths\":[{\"resolved\":\"peer\"}]}"))!;
+        var image = RemoteNodeResult.Normalize(
+            JsonNode.Parse(
+                "{\"output\":\"__SCREENSHOT__:aGVsbG8=\",\"annotation\":false,\"__foxwarmResolvedToolPaths\":[{\"resolved\":\"peer\"}]}"
+            )
+        )!;
         Assert.Null(image["output"]);
         Assert.Null(image["__foxwarmResolvedToolPaths"]);
         Assert.Equal("image/png", image["inlineData"]!["mimeType"]!.GetValue<string>());

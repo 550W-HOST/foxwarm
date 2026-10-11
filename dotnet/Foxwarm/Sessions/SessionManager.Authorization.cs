@@ -135,11 +135,12 @@ internal sealed partial class SessionManager
             throw new InvalidOperationException(
                 "Tool source is no longer the current Session owner."
             );
-        if (resolved.Source == "node") RequireNodeBoundary(owner, resolved.ExecutionNode);
+        if (resolved.Source == "node")
+            RequireNodeBoundary(owner, resolved.ExecutionNode);
         var remote = resolved.Source == "node" && resolved.ExecutionNode != "master";
-        var paths = remote
-            ? RemoteAuthorizationPaths(resolved)
-            :            resolved.Source == "node"
+        var paths =
+            remote ? RemoteAuthorizationPaths(resolved)
+            : resolved.Source == "node"
                 && resolved.Name is "read" or "write" or "edit" or "apply_patch" or "exec"
             || resolved.Source == "builtin"
                 && resolved.Name
@@ -170,7 +171,11 @@ internal sealed partial class SessionManager
             resolved.Server,
             resolved.Args,
             paths,
-            resolved.Source == "node" ? resolved.ExecutionNode : resolved.Name == "node" && SessionWait.Text(resolved.Args["nodeId"]) is string targetNode ? targetNode.Trim() : "master"
+            resolved.Source == "node" ? resolved.ExecutionNode
+                : resolved.Name == "node"
+                && SessionWait.Text(resolved.Args["nodeId"]) is string targetNode
+                    ? targetNode.Trim()
+                : "master"
         );
         var policy = await authorization.LoadAsync(token);
         if (concreteTarget is not null)
@@ -216,7 +221,12 @@ internal sealed partial class SessionManager
         if (name == "call_tool" && source == "builtin")
             return true;
         var targetNode = node ?? (source == "node" ? CurrentNode(owner) : "master");
-        if (source == "node" && AgentIsolated(owner.Agent) && targetNode != (RecordedIsolationNode(owner.Agent) ?? "master")) return false;
+        if (
+            source == "node"
+            && AgentIsolated(owner.Agent)
+            && targetNode != (RecordedIsolationNode(owner.Agent) ?? "master")
+        )
+            return false;
         var request = AuthorizationRequest(owner, source, name, server, new(), [], targetNode);
         return ToolAuthorizationEvaluation.Visible(authorization.Load(), request, unknownNode)
             && IsolatedToolCompatibility.Visible(
@@ -238,13 +248,35 @@ internal sealed partial class SessionManager
                 "Model request source is no longer the current Session owner."
             );
         var node = CurrentNode(owner);
-        var definitions = tools.Entries.Where(entry => entry.DefaultInject && entry.Source != "node" && ToolVisible(owner, entry.Source, SessionWait.Text(entry.Definition["name"])!)).Select(entry => (JsonNode?)ToolCallControls.ForModel(entry.Definition)).ToList();
-        foreach (var definition in (node == "master" ? tools.NodeDefinitions(node) : Nodes.DiscoveredDefinitions(node)).OfType<JsonObject>())
-            {
-                var name = SessionWait.Text(definition["name"])!;
-                if (node != "master" && (name == "exec" || tools.Entries.Any(entry => entry.Source == "builtin" && SessionWait.Text(entry.Definition["name"]) == name))) continue;
-                if (ToolVisible(owner, "node", name, node: node)) definitions.Add(ToolCallControls.ForModel(definition));
-            }
+        var definitions = tools
+            .Entries.Where(entry =>
+                entry.DefaultInject
+                && entry.Source != "node"
+                && ToolVisible(owner, entry.Source, SessionWait.Text(entry.Definition["name"])!)
+            )
+            .Select(entry => (JsonNode?)ToolCallControls.ForModel(entry.Definition))
+            .ToList();
+        foreach (
+            var definition in (
+                node == "master" ? tools.NodeDefinitions(node) : Nodes.DiscoveredDefinitions(node)
+            ).OfType<JsonObject>()
+        )
+        {
+            var name = SessionWait.Text(definition["name"])!;
+            if (
+                node != "master"
+                && (
+                    name == "exec"
+                    || tools.Entries.Any(entry =>
+                        entry.Source == "builtin"
+                        && SessionWait.Text(entry.Definition["name"]) == name
+                    )
+                )
+            )
+                continue;
+            if (ToolVisible(owner, "node", name, node: node))
+                definitions.Add(ToolCallControls.ForModel(definition));
+        }
         return new JsonArray(definitions.ToArray());
     }
 
@@ -252,9 +284,22 @@ internal sealed partial class SessionManager
     {
         var paths = new List<AuthorizationPath>();
         foreach (var key in new[] { "filePath", "cwd" })
-            if (SessionWait.Text(resolved.Args[key]) is string raw) paths.Add(new(key, raw, null, resolved.ExecutionNode));
-        if (resolved.Name == "apply_patch" && SessionWait.Text(resolved.Args["input"]) is string patch)
-            foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(patch, @"^\*\*\* (?:Add|Update|Delete) File: (.+)$", System.Text.RegularExpressions.RegexOptions.Multiline)) paths.Add(new("input", match.Groups[1].Value.TrimEnd('\r'), null, resolved.ExecutionNode));
+            if (SessionWait.Text(resolved.Args[key]) is string raw)
+                paths.Add(new(key, raw, null, resolved.ExecutionNode));
+        if (
+            resolved.Name == "apply_patch"
+            && SessionWait.Text(resolved.Args["input"]) is string patch
+        )
+            foreach (
+                System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(
+                    patch,
+                    @"^\*\*\* (?:Add|Update|Delete) File: (.+)$",
+                    System.Text.RegularExpressions.RegexOptions.Multiline
+                )
+            )
+                paths.Add(
+                    new("input", match.Groups[1].Value.TrimEnd('\r'), null, resolved.ExecutionNode)
+                );
         return paths;
     }
 

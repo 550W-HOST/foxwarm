@@ -140,7 +140,8 @@ internal static class IsolatedToolCompatibility
             .FirstOrDefault();
 
     private static bool Forbidden(string source, string name, string node = "master") =>
-        source == "node" && node == "master" && name == "exec" || source == "builtin" && Structural.Contains(name);
+        source == "node" && node == "master" && name == "exec"
+        || source == "builtin" && Structural.Contains(name);
 
     internal static bool Visible(
         AgentIsolation isolation,
@@ -178,18 +179,25 @@ internal static class IsolatedToolCompatibility
                 "Isolated Agent cannot use this structurally restricted capability."
             );
         var ownDirectory = AuthorizationPaths.CanonicalPotential(request.AgentDirectory!);
-        var exact = Exact(isolation, request.Source, request.Name, request.Server, request.TargetNode ?? "master");
+        var exact = Exact(
+            isolation,
+            request.Source,
+            request.Name,
+            request.Server,
+            request.TargetNode ?? "master"
+        );
         if (exact == "deny")
             throw new ToolAuthorizationDeniedException("Agent tool rule denies this capability.");
         if (exact != "allow")
         {
             var allowed =
                 request.Source == "node"
-                    ? request.TargetNode != "master" || request.Name is "read" or "write" or "edit"
-                        && request.Paths.Count > 0
-                        && request.Paths.All(path =>
-                            ToolAuthorizationEvaluation.Within(path.Resolved, ownDirectory)
-                        )
+                    ? request.TargetNode != "master"
+                        || request.Name is "read" or "write" or "edit"
+                            && request.Paths.Count > 0
+                            && request.Paths.All(path =>
+                                ToolAuthorizationEvaluation.Within(path.Resolved, ownDirectory)
+                            )
                     : request.Source == "builtin"
                         && DefaultBuiltins.Contains(request.Name)
                         && (
@@ -205,7 +213,9 @@ internal static class IsolatedToolCompatibility
         }
         // Exact capability allow never bypasses handler-local physical/target/action boundaries.
         if (
-            request.Source == "node" && request.TargetNode == "master" && request.Name is "read" or "write" or "edit" or "apply_patch"
+            request.Source == "node"
+                && request.TargetNode == "master"
+                && request.Name is "read" or "write" or "edit" or "apply_patch"
             || request.Source == "builtin"
                 && request.Name is "set_config" or "send_file" or "image_write_to_file"
         )

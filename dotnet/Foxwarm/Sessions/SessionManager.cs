@@ -174,7 +174,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             HistoricalExecOwners
         );
         var definitions = WorkspaceTools.Definitions();
-        foreach (var definition in Foxwarm.Nodes.NodeToolDefinitions.All()) definitions.Add(definition?.DeepClone());
+        foreach (var definition in Foxwarm.Nodes.NodeToolDefinitions.All())
+            definitions.Add(definition?.DeepClone());
         foreach (var definition in LocalExecManager.Definitions())
             definitions.Add(definition?.DeepClone());
         definitions.Add(ArchiveRecallTool.Definition());

@@ -35,7 +35,9 @@ internal sealed partial class SessionManager
             args,
             ["channelTargetId", "sessionId", "filePath", "node", "caption", "text"]
         );
-        ToolRegistry.LocalNode(ToolRegistry.TargetNode(ToolRegistry.Text(args, "node"), CurrentNode(owner)));
+        ToolRegistry.LocalNode(
+            ToolRegistry.TargetNode(ToolRegistry.Text(args, "node"), CurrentNode(owner))
+        );
         var raw = SessionGoal.Trim(ToolRegistry.Text(args, "filePath") ?? "");
         if (raw.Length == 0)
             throw new InvalidDataException("send_file requires filePath.");
@@ -184,7 +186,9 @@ internal sealed partial class SessionManager
     )
     {
         ToolRegistry.Keys(args, ["id", "filePath", "overwrite", "node"]);
-        ToolRegistry.LocalNode(ToolRegistry.TargetNode(ToolRegistry.Text(args, "node"), CurrentNode(owner)));
+        ToolRegistry.LocalNode(
+            ToolRegistry.TargetNode(ToolRegistry.Text(args, "node"), CurrentNode(owner))
+        );
         var id = ToolRegistry.Text(args, "id");
         var raw = ToolRegistry.Text(args, "filePath");
         if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(raw))
