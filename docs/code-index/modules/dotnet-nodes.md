@@ -1,13 +1,14 @@
 # Module: External Nodes
 
-Persistent administrator-approved trust, credential-authenticated WebSocket connections, compatible capability discovery, Session placement and ordinary external tools, exec and authenticated Session events.
+Persistent administrator-approved trust, credential-authenticated WebSocket and exec-only Shell HTTP connections, compatible capability discovery, Session placement and ordinary external tools, exec and authenticated Session events.
 
 ## Boundaries
 
-This module connects existing CLI/browser/Android Node protocol clients to the .NET host. It does not create environments, grant OS isolation, or connect Shell HTTP. Fixed Code/PTY services use advertised authenticated capabilities, not model-tool dispatch. Whole-file consumers connect through the existing CLI transfer protocol. Remote exec authority is transient and bounded; the client owns its process and pending replay. [Remote Node integration](../threads/remote-node-compatibility.md#net-external-node-integration) owns the canonical connected contract and remaining phase boundaries.
+This module connects existing CLI/browser/Android Node protocol clients to the .NET host. It does not create environments or grant OS isolation. Fixed Code/PTY services use advertised authenticated capabilities, not model-tool dispatch. Whole-file consumers connect through the existing CLI transfer protocol. Remote exec authority is transient and bounded; the client owns its process and pending replay. [Remote Node integration](../threads/remote-node-compatibility.md#net-external-node-integration) owns the canonical connected contract and remaining phase boundaries.
 
 ## Units
 
+- [External Shell HTTP exec transport](../units/external-shell-http.md)
 - [External Node trust and ordinary tools](../units/external-nodes.md)
 - [External Node Code service transport](../units/external-node-services.md)
 - [External Node file consumers](../units/external-node-files.md)

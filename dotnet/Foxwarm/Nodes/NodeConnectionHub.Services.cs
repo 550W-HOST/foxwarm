@@ -68,7 +68,7 @@ internal sealed partial class NodeConnectionHub
                 .Values.Where(c =>
                     !c.Retired
                     && c.Executable
-                    && c.Socket.State == System.Net.WebSockets.WebSocketState.Open
+                    && c.Open
                     && ServiceVersion(c, service) >= 1
                 )
                 .Select(c => new ServiceTarget(

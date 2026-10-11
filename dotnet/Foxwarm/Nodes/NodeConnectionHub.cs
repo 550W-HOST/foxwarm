@@ -17,9 +17,13 @@ internal sealed partial class NodeConnectionHub : IDisposable
     internal ApprovedNodeRegistry Registry { get; }
     internal event Action? Changed;
 
-    private sealed class Connection(WebSocket socket)
+    private sealed class Connection(WebSocket? socket = null)
     {
-        internal readonly WebSocket Socket = socket;
+        internal readonly WebSocket Socket = socket!;
+        internal ShellRuntime? Http;
+        internal bool Open => Http is not null
+            ? !Http.Closed && DateTimeOffset.UtcNow - Http.LastSeen <= TimeSpan.FromSeconds(90)
+            : Socket.State == WebSocketState.Open;
         internal readonly Guid Generation = Guid.NewGuid();
         internal readonly SemaphoreSlim SendGate = new(1, 1);
         internal string? Id;
@@ -122,7 +126,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
         lock (gate)
             return nodes.TryGetValue(id, out var connection)
                 && !connection.Retired
-                && connection.Socket.State == WebSocketState.Open;
+                && connection.Open;
     }
 
     internal bool Online(string id)
@@ -133,7 +137,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
             return nodes.TryGetValue(id, out var connection)
                 && !connection.Retired
                 && connection.Executable
-                && connection.Socket.State == WebSocketState.Open;
+                && connection.Open;
     }
 
     internal JsonArray DiscoveredDefinitions(string id)
@@ -144,7 +148,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
                 !nodes.TryGetValue(id, out var connection)
                 || connection.Retired
                 || !connection.Executable
-                || connection.Socket.State != WebSocketState.Open
+                || !connection.Open
             )
                 return new JsonArray();
             return Definitions(id);
@@ -202,7 +206,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
         if (
             !nodes.TryGetValue(id, out var connection)
             || connection.Retired
-            || connection.Socket.State != WebSocketState.Open
+            || !connection.Open
         )
             throw new InvalidOperationException("Node is offline: " + id);
         if (!connection.Executable)
@@ -222,14 +226,14 @@ internal sealed partial class NodeConnectionHub : IDisposable
                 record["type"] = connection?.Type ?? record["nodeType"]?.GetValue<string>();
                 record["connected"] =
                     connection is { Retired: false }
-                    && connection.Socket.State == WebSocketState.Open;
+                    && connection.Open;
                 record["executable"] =
                     connection is { Retired: false, Executable: true }
-                    && connection.Socket.State == WebSocketState.Open;
-                record["services"] = connection is { Retired: false, Executable: true }
+                    && connection.Open;
+                record["services"] = connection is { Retired: false, Executable: true } && connection.Open
                     ? connection.Capabilities["services"]?.DeepClone() ?? new JsonObject()
                     : new JsonObject();
-                record["tools"] = connection is { Retired: false, Executable: true }
+                record["tools"] = connection is { Retired: false, Executable: true } && connection.Open
                     ? ExecutableDefinitions(connection)
                     : new JsonArray();
                 if (connection?.Protocol is not null)
@@ -262,7 +266,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
         var delivered = false;
         if (
             pending.TryRemove(pendingId, out var connection)
-            && connection.Socket.State == WebSocketState.Open
+            && connection.Open
         )
         {
             try
@@ -392,6 +396,11 @@ internal sealed partial class NodeConnectionHub : IDisposable
 
     private static void Close(Connection connection, string reason, bool policy)
     {
+        if (connection.Http is not null)
+        {
+            connection.Http.Disconnect();
+            return;
+        }
         _ = CloseAsync(connection, reason, policy);
     }
 
@@ -402,7 +411,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
             await connection.SendGate.WaitAsync();
             try
             {
-                if (connection.Socket.State == WebSocketState.Open)
+                if (connection.Open)
                     await connection.Socket.CloseOutputAsync(
                         policy
                             ? WebSocketCloseStatus.PolicyViolation
@@ -725,6 +734,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
 
     internal void BeginShutdown()
     {
+        shellExpiry?.Change(Timeout.Infinite, Timeout.Infinite);
         expiry.Change(Timeout.Infinite, Timeout.Infinite);
         shutdown.Cancel();
         ExecClaims.Clear();
@@ -740,6 +750,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
     public void Dispose()
     {
         BeginShutdown();
+        shellExpiry?.Dispose();
         expiry.Dispose();
         shutdown.Dispose();
     }

@@ -8,6 +8,7 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
 {
     private static readonly string[] Templates =
     [
+        "run-shell.sh",
         "run.sh",
         "run-docker.sh",
         "run-interactive.sh",
@@ -64,6 +65,7 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
             ["baseUrl"] = url,
             ["commands"] = new JsonObject
             {
+                ["shell"] = ShellCommand(url, id, "YOUR_PER_NODE_AUTH_TOKEN"),
                 ["bareMetal"] = Download("run.sh") + " --dir=" + Quote(directory) + arguments,
                 ["bareMetalBackground"] =
                     Download("run.sh") + " --dir=" + Quote(directory) + arguments + " -d",
@@ -84,6 +86,10 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
             },
         };
     }
+
+    internal string ShellCommand(string url, string id, string auth) =>
+        "curl -fsSL " + Quote(url.TrimEnd('/') + "/node/run-shell.sh") + " -o run-shell.sh\n"
+        + "NODE_AUTH_TOKEN=" + Quote(auth) + " sh ./run-shell.sh --host=" + Quote(url.TrimEnd('/')) + " --node-id=" + Quote(id);
 
     internal JsonObject Info()
     {
@@ -119,7 +125,7 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
                     }
                     context.Response.ContentType = name.EndsWith(".yaml")
                         ? "text/yaml"
-                        : "text/plain; charset=utf-8";
+                        : name == "run-shell.sh" ? "text/x-shellscript; charset=utf-8" : "text/plain; charset=utf-8";
                     var text = await File.ReadAllTextAsync(path, context.RequestAborted);
                     await context.Response.WriteAsync(
                         text.Replace("__FOXWARM_DEFAULT_BASE_URL__", address.BaseUrl.TrimEnd('/')),

@@ -28,6 +28,7 @@ internal static class NodeRoutes
         var bootstrap = sessions.Bootstrap = new NodeBootstrap(hub, address);
         bootstrap.Register(app);
         app.Map("/node_ws", hub.HandleAsync);
+        hub.RegisterShellRoutes(app);
         app.MapGet(
             "/api/nodes/onboarding/pending",
             (HttpContext context) =>
@@ -104,14 +105,21 @@ internal static class NodeRoutes
             "/api/nodes/onboarding/create",
             (body, _) => Task.FromResult(hub.Registry.Create(Required(body, "nodeId")))
         );
-        // Shell HTTP is deliberately not advertised by the bootstrap output yet.
         MapPost(
             app,
             "/api/nodes/onboarding/create-shell",
-            (_, _) =>
-                throw new NotSupportedException(
-                    "Shell HTTP transport is not connected in this phase."
-                )
+            (body, _) =>
+            {
+                var id = Required(body, "nodeId");
+                // Validate the URL before issuing a one-time credential.
+                var commands = bootstrap.Commands(Text(body, "baseUrl"), id);
+                var created = hub.Registry.Create(id);
+                return Task.FromResult(new JsonObject
+                {
+                    ["nodeId"] = created["nodeId"]!.DeepClone(),
+                    ["command"] = bootstrap.ShellCommand(commands["baseUrl"]!.GetValue<string>(), id, created["authToken"]!.GetValue<string>())
+                });
+            }
         );
         MapPost(
             app,

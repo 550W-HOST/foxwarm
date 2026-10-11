@@ -103,6 +103,7 @@ internal sealed class HttpServer
             {
                 if (
                     context.Request.Path == "/node_ws"
+                    || Foxwarm.Nodes.NodeConnectionHub.IsShellPath(context.Request.Path)
                     || Foxwarm.Nodes.NodeBootstrap.IsPublicPath(context.Request.Path)
                     || code?.IsCapabilityRequest(context) == true
                 )

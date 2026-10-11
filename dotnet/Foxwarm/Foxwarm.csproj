@@ -9,7 +9,6 @@
     <EmbeddedResource Include="Code/workbench.html" />
     <Content
       Include="../../templates/node/**/*"
-      Exclude="../../templates/node/run-shell.sh"
       Link="templates/node/%(RecursiveDir)%(Filename)%(Extension)"
       CopyToOutputDirectory="PreserveNewest"
       CopyToPublishDirectory="PreserveNewest"

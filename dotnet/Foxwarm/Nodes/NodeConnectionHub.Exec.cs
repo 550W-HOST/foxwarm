@@ -213,8 +213,22 @@ internal sealed partial class NodeConnectionHub
                     throw new IOException("Node unavailable before dispatch.");
                 calls[callId] = call;
             }
-            attemptedSend = true;
-            await SendAsync(connection, request, deadline.Token);
+            if (connection.Http is not null)
+            {
+                // This transport queues a native shell task, not a WebSocket message.
+                lock (gate)
+                {
+                    if (connection.Retired || !connection.Open || shutdown.IsCancellationRequested)
+                        throw new IOException("Node unavailable before dispatch.");
+                    connection.Http.Dispatch(callId, call, args, currentNode == connection.Id ? cwd : null, programmatic);
+                    attemptedSend = true;
+                }
+            }
+            else
+            {
+                attemptedSend = true;
+                await SendAsync(connection, request, deadline.Token);
+            }
             dispatchAdmission?.Dispose();
             dispatchAdmission = null;
             using var cancellation =
@@ -259,7 +273,14 @@ internal sealed partial class NodeConnectionHub
         finally
         {
             dispatchAdmission?.Dispose();
-            calls.TryRemove(callId, out _);
+            lock (gate)
+            {
+                if (connection.Http?.Cancel(callId) == true && claim is not null)
+                    ExecClaims.Settle(claim, true);
+                else if (!attemptedSend && claim is not null)
+                    ExecClaims.Settle(claim, true);
+                calls.TryRemove(callId, out _);
+            }
         }
     }
 
