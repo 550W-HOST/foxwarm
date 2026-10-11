@@ -18,6 +18,8 @@ HTTP authorization happens before state-changing routes and static application c
 
 This is the current .NET experiment/host entry, not the repository's switched root launcher: root `package.json` still builds/starts the TypeScript `lib/index.js` path, while `Program` requires explicit experiment-host environment such as `FOXWARM_EXPERIMENT_TOOL_ROOT`. The index therefore maps .NET startup as the target Main implementation without claiming root CLI/packaging migration is complete.
 
+The separate test container documented in `test/README.md` publishes this executable and the current WebUI through `test/Dockerfile` and `test/docker-compose.yml`. Its Linux x64 image includes native Monty with notices, built Shared/CLI Node archive inputs, tracked Code extensions, the PTY helper and local Git. Official Code workbench assets use an optional read-only Compose override; optional HEIF libraries are not installed. Host build outputs, state and workspace are excluded from the Docker context. This packaging does not switch the root launcher or expand the implementation's phase boundaries.
+
 Protected `GET /api/auth/session` returns the ordinary administrator role used by the merged WebUI when WebUI is enabled. It uses the same token/cookie middleware as other protected routes; it does not introduce restricted identities or an access-management runtime.
 
 ## Tests

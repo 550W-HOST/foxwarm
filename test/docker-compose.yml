@@ -2,6 +2,7 @@ name: foxwarm-dotnet-test
 
 services:
   foxwarm-dotnet-test:
+    platform: linux/amd64
     build:
       context: ..
       dockerfile: test/Dockerfile

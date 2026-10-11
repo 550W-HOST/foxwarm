@@ -1,6 +1,6 @@
 # Main input-image prerequisites
 
-The .NET host supports image input, not image generation, cropping, exporting or generic file delivery. The original WebUI composer uploads images; native `read` and recognized official MCP SDK image content enter the same durable blob lifecycle. Provider preparation hydrates a clone for Responses HTTP/WS, Chat Completions or Anthropic-compatible Messages.
+This document covers the .NET host's image-input prerequisites, not image generation or cropping. The original WebUI composer uploads images; native `read` and recognized official MCP SDK image content enter the same durable blob lifecycle. Provider preparation hydrates a clone for Responses HTTP/WS, Chat Completions or Anthropic-compatible Messages. Connected export, generic delivery and external Node consumers are documented in [the host README](README.md) and [external Node file consumers](../docs/code-index/units/external-node-files.md).
 
 ## Raster input
 
@@ -24,6 +24,8 @@ LD_LIBRARY_PATH="$PWD/.temp/image-decoder/prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBR
 The script verifies pinned source-archive SHA-256 values and builds only the declared decode chain without global installation, plugin loading or encoders. It does not configure shared loader paths, package native binaries into the repository or establish a cross-platform deployment system. Keep the declared libraries available to the actual host process, including a published host outside the checkout. Changing `LD_LIBRARY_PATH` after a process has loaded the decoder does not requalify that process; use a fresh process for prerequisite changes.
 
 A missing, incompatible or decoder-less prerequisite produces a visible **local image-preparation error before provider I/O**. It does not trigger retry, failover or provider-health penalties. A cached HEIC variant cannot bypass the prerequisite check. PNG and other raster input do not load HEIF and remain usable without it. HEIC downloads preserve original bytes and are served as attachments rather than a fabricated browser preview.
+
+The standard [test container](../test/README.md) does not install this optional decode chain. Its raster dependency is supplied by NuGet publish; HEIC/HEIF remains unavailable without the exact separate native prerequisite.
 
 ## Upstream source and licensing
 

@@ -1,9 +1,11 @@
-node_modules/
-packages/webui/node_modules/
+**/node_modules/
 packages/webui/dist/
+packages/shared/dist/
+packages/cli-node/dist/
+dotnet/**/bin/
+dotnet/**/obj/
 packages/vscode-web/.cache/
-packages/vscode-web/assets/*.tar.gz
-packages/vscode-web/assets/*.tmp-*/
+packages/vscode-web/assets/
 lib/
 state/
 agents/
