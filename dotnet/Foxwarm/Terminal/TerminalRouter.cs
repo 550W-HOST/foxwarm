@@ -128,16 +128,11 @@ internal sealed partial class TerminalRouter : IAsyncDisposable
                         "Invalid terminal list.",
                         502
                     );
-                var found = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var value in values)
                 {
                     var record = Register(target, value);
-                    found.Add(record.Id);
                     result.Add(record.Describe());
                 }
-                foreach (var pair in remote)
-                    if (pair.Value.NodeId == target.NodeId && !found.Contains(pair.Key))
-                        await ForgetAsync(pair.Value, "Remote terminal is no longer available.");
             }
             catch (CodeServiceException) when (!token.IsCancellationRequested)
             {
