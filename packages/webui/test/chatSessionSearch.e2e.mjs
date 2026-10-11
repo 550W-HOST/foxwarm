@@ -61,8 +61,9 @@ before(async () => {
       if (url.includes('/context-blocks/')) {window.fixture.archiveRequests++;return new Response('{}',{status:404})}
       if (url.includes('/history')) {
         const wrapped = url.includes('fixture%2Fwrapped')
-        const messages = wrapped ? wrappedHistory : history
-        return new Response(JSON.stringify({session:{id:wrapped?'fixture/wrapped':'fixture/main',busy:false,runtimeState:{state:'idle'},queueLength:0,messageCount:messages.length,historyVersion:0,modelKey:'fixture/model'},messages,queuedMessages:[],queueLength:0,latestSeq:wrapped?503:129,historyVersion:0,prefixLength:0,historyComplete:true}),{status:200,headers:{'Content-Type':'application/json'}})
+        const compact = url.includes('fixture%2Fcompact-')
+        const messages = compact ? window.fixture.compactHistory : wrapped ? wrappedHistory : history
+        return new Response(JSON.stringify({session:{id:compact?window.fixture.compactSessionId:wrapped?'fixture/wrapped':'fixture/main',busy:compact?window.fixture.compactRuntime.busy:false,runtimeState:compact?window.fixture.compactRuntime:{state:'idle'},queueLength:0,messageCount:messages.length,historyVersion:0,modelKey:'fixture/model'},messages,queuedMessages:[],queueLength:0,latestSeq:compact?messages.at(-1).__meta.seq:wrapped?503:129,historyVersion:0,prefixLength:0,historyComplete:true}),{status:200,headers:{'Content-Type':'application/json'}})
       }
       if (url.includes('/models')) return new Response(JSON.stringify({models:[{key:'fixture/model',contextLimit:128000}]}),{status:200})
       if (url.includes('/asr/status')) return new Response(JSON.stringify({configured:false,available:false}),{status:200})
@@ -81,6 +82,14 @@ before(async () => {
       const [showUserMessageMetadata,setMetadata]=React.useState(false)
       window.fixture.setTimelineView=setTimelineView
       window.fixture.showWrappers=()=>{setSessionId('fixture/wrapped');setTimelineView('conversation')}
+      window.fixture.showCompactTiming=(messages,now,runtime)=>{
+        window.fixture.compactHistory=messages
+        window.fixture.now=now
+        Date.now=()=>window.fixture.now
+        window.fixture.compactRuntime=runtime
+        window.fixture.compactSessionId='fixture/compact-'+(window.fixture.compactSerial=(window.fixture.compactSerial||0)+1)
+        setSessionId(window.fixture.compactSessionId);setTimelineView('conversation')
+      }
       return React.createElement(Chat,{sessionId,timelineView,showUsageBadge:false,showUserMessageMetadata,onShowUserMessageMetadataChange:setMetadata})
     }
     createRoot(document.getElementById('root')).render(React.createElement(Fixture))
@@ -445,4 +454,61 @@ test('Conversation preserves literal channel bodies and Search indices for compl
   assert.equal((await snapshot()).visible, true)
   await page.click('[aria-label="Close search"]')
   assert.equal((await snapshot()).archive, 0)
+})
+
+const compactEpoch = 1700000000000
+const compactMarker = '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="none" currentSessionId="fixture/main" />'
+const compactPart = {system:compactMarker}
+const compactGoal = {system:'<foxwarm-system kind="goal-reminder">\nKeep the requested outcome in mind.\n</foxwarm-system>'}
+const compactMessage = paired => ({role:'user',parts:paired?[compactPart,compactGoal]:[compactPart],__meta:{seq:303,timestamp:compactEpoch+11000,...paired?{goalReminder:true,goalReminderKind:'compact-completion'}:{}}})
+const compactReply = {role:'model',parts:[{text:'COMPACT_DONE'}],__meta:{seq:302,timestamp:compactEpoch+10000,llmRequestId:'compact-reply',llmSegment:{complete:true},llmRequestTiming:{startedAt:compactEpoch,completedAt:compactEpoch+10036,durationMs:10036}}}
+const compactStart = {role:'user',parts:[{text:'COMPACT_REQUEST'}],__meta:{seq:301,timestamp:compactEpoch}}
+let compactScenario = 0
+const showCompact = async (records,second,runtime={state:'idle',busy:false,queueLength:0}) => {
+  const text='COMPACT_SCENARIO_'+(++compactScenario)
+  records=records.map(message=>message===compactReply?{...message,parts:[{text}]}:message)
+  await page.evaluate(({records,now,runtime})=>window.fixture.showCompactTiming(records,now,runtime),{records,now:compactEpoch+second*1000,runtime})
+  await page.waitForFunction(text=>document.querySelector('.foxwarm-chat-messages')?.textContent.includes(text),{},text)
+  await page.waitForFunction(()=>document.querySelectorAll('[data-timeline-activity]').length===1)
+}
+const compactHeaders = () => page.$$eval('[data-timeline-activity] > button',buttons=>buttons.map(button=>button.textContent))
+const continueVisible = () => page.$$eval('button',buttons=>buttons.some(button=>button.textContent.trim()==='Continue'))
+
+test('Actual Chat leaves compact-only maintenance unclocked both at the completed tail and after a new user boundary',async()=>{
+  for(const paired of [false,true]) {
+    const records=[compactStart,compactReply,compactMessage(paired)]
+    await showCompact(records,1811)
+    assert.equal(await continueVisible(),false,'completion maintenance keeps the completed turn classification')
+    assert.doesNotMatch((await compactHeaders()).join(' '),/Worked for|Waited for|Elapsed/)
+    await page.click('[aria-label="Expand activity"]')
+    await page.waitForFunction(()=>document.querySelector('[data-activity-details]')?.textContent.includes('compact-completed'))
+    if(paired) assert.ok(await page.$eval('[data-activity-details]',node=>node.textContent.includes('Keep the requested outcome')))
+    // The same history rendered later must not turn its maintenance event into a growing wait.
+    await showCompact(records,2411)
+    assert.doesNotMatch((await compactHeaders()).join(' '),/Worked for|Waited for|Elapsed/)
+    const next={role:'user',parts:[{text:'COMPACT_NEXT_USER'}],__meta:{seq:304,timestamp:compactEpoch+1920000,clientMessageId:'compact-next'}}
+    await showCompact([...records,next],1920)
+    assert.equal(await continueVisible(),true,'the new user request remains continuable')
+    assert.doesNotMatch((await compactHeaders()).join(' '),/Worked for|Waited for|Elapsed/,'closing the historical maintenance range cannot borrow the prior request\'s final 36ms or its idle gap')
+  }
+})
+
+test('Actual Chat retains real idle coordination timing through maintenance and does not ignore mixed or authored content',async()=>{
+  const incoming={role:'user',parts:[{system:'<foxwarm-message type="inter-agent" sourceSessionId="fixture/worker">\nREAL_COORDINATION\n</foxwarm-message>'}],__meta:{seq:305,timestamp:compactEpoch+15000}}
+  const request={startedAt:compactEpoch+15000,completedAt:compactEpoch+17000,durationMs:2000}
+  const reasoning={role:'model',parts:[{thinking:'REAL_REASONING'}],__meta:{seq:306,timestamp:compactEpoch+16000,llmRequestId:'coordination',llmSegment:{complete:false}}}
+  const completed={role:'model',parts:[],__meta:{seq:307,timestamp:compactEpoch+17000,llmRequestId:'coordination',llmRequestTiming:request,llmSegment:{complete:true}}}
+  const maintenance={...compactMessage(true),__meta:{...compactMessage(true).__meta,seq:308,timestamp:compactEpoch+18000}}
+  await showCompact([compactStart,compactReply,incoming,reasoning,completed,maintenance],30)
+  await page.waitForFunction(()=>document.querySelector('[data-timeline-activity] > button')?.textContent.includes('Waited for 17s'))
+  assert.match((await compactHeaders()).join(' '),/Worked for 2s.*Waited for 17s.*Received 1 message/)
+  assert.equal(await continueVisible(),false,'Continue=false does not mean that real coordination cannot wait')
+  const mixed={...maintenance,parts:[...maintenance.parts,...incoming.parts],__meta:{...maintenance.__meta,seq:309,timestamp:compactEpoch+18000}}
+  await showCompact([compactStart,compactReply,mixed],30,{state:'requesting-model',busy:true,since:compactEpoch+18000,queueLength:0})
+  await page.waitForFunction(()=>document.querySelector('[data-timeline-activity] > button')?.textContent.includes('Worked for'))
+  assert.match((await compactHeaders()).join(' '),/Worked for.*Received 1 message/,'a completion/reminder row with extra real content is not maintenance-only')
+  const quote={role:'user',parts:[{text:compactMarker}],__meta:{seq:310,timestamp:compactEpoch+20000,clientMessageId:'authored-compact-quote'}}
+  await showCompact([compactStart,compactReply,maintenance,quote],30)
+  await page.waitForFunction(()=>[...document.querySelectorAll('[data-search-surface="user"]')].some(node=>node.textContent.includes('compact-completed')))
+  assert.equal(await page.$$eval('[data-search-surface="user"]',nodes=>nodes.filter(node=>node.textContent.includes('compact-completed')).length),1,'authored text stays a visible body, not maintenance details')
 })

@@ -1,7 +1,7 @@
 import type { Message } from './chatShared'
 import { getLlmErrorMessageDetails, parseFoxwarmMetadataLine } from './chatShared'
 import { isCommittedHistoryMessage } from '../chatHistoryState'
-import { isSessionTurnIncomplete } from '../sessionContinuation'
+import { isCompactCompletionMaintenanceMessage, isSessionTurnIncomplete } from '../sessionContinuation'
 import type { SessionRuntimeState } from '../sessionRuntimeState'
 import { formatCompactDuration } from '../usageTiming'
 import type { TimelineRowView } from './timelineRows'
@@ -41,6 +41,7 @@ export function applyConversationTiming(
   const result = [...rows]
   const indices = new Map(history.map((message, index) => [message, index]))
   const committed = (message: Message) => isCommittedHistoryMessage(message) && !message.__meta?.queuedPreview
+  const timingEvidence = (message: Message) => committed(message) && !isCompactCompletionMaintenanceMessage(message)
   const sourceIndex = (message: Message) => indices.get(message) ?? (message.__meta ? history.findIndex(item => item.__meta === message.__meta) : -1)
   const firstIndex = rows.flatMap(row => [sourceIndex(row.msg), ...(row.activity?.messages.map(sourceIndex) || [])]).find(index => index >= 0) ?? 0
   let left: { time?: number; index: number } = { index: -1 }
@@ -51,6 +52,11 @@ export function applyConversationTiming(
   let pending: number[] = []
   const close = (right: { time?: number; index: number }, dynamic = false) => {
     if (!pending.length) return
+    const timedRowIndex = pending.find(index => result[index].activity!.messages.some(message => !isCompactCompletionMaintenanceMessage(message)))
+    if (timedRowIndex === undefined) {
+      pending = []
+      return
+    }
     const { time: start } = left
     const { time: end } = right
     if (start !== undefined && end !== undefined && end > start) {
@@ -59,7 +65,7 @@ export function applyConversationTiming(
       while (segmentStart > 0 && boundary(history[segmentStart]) !== 'context') segmentStart--
       let segmentEnd = right.index
       while (segmentEnd < history.length - 1 && boundary(history[segmentEnd]) !== 'context') segmentEnd++
-      const segment = history.slice(Math.max(0, segmentStart), segmentEnd + 1).filter(committed)
+      const segment = history.slice(Math.max(0, segmentStart), segmentEnd + 1).filter(timingEvidence)
       const requests = new Map<string, Span>()
       const spans: Span[] = []
       const responses = new Map()
@@ -83,7 +89,7 @@ export function applyConversationTiming(
       if (live) spans.push(live)
       const covers = (time: number | undefined) => time !== undefined && spans.some(span => span.start <= time && span.end >= time)
       let complete = true
-      const range = history.slice(Math.max(0, left.index), right.index + 1).filter(committed)
+      const range = history.slice(Math.max(0, left.index), right.index + 1).filter(timingEvidence)
       for (const message of range) {
         if (boundary(message) === 'context') { if (message !== history[left.index]) complete = false; continue }
         const time = timestamp(message.__meta?.timestamp)
@@ -115,10 +121,9 @@ export function applyConversationTiming(
       const labels = complete
         ? [busy > 0 ? `Worked for ${formatCompactDuration(busy)}` : '', waiting > 0 ? `Waited for ${formatCompactDuration(waiting)}` : ''].filter(Boolean)
         : [`Elapsed ${formatCompactDuration(end - start)}`]
-      const index = pending[0]
-      const row = result[index]
+      const row = result[timedRowIndex]
       const counts = row.activity!.summary === 'Activity' ? '' : row.activity!.summary
-      result[index] = { ...row, activity: { ...row.activity!, summary: [...labels, counts].filter(Boolean).join(' · ') || 'Activity', dynamic } }
+      result[timedRowIndex] = { ...row, activity: { ...row.activity!, summary: [...labels, counts].filter(Boolean).join(' · ') || 'Activity', dynamic } }
     }
     pending = []
   }
@@ -145,7 +150,7 @@ export function applyConversationTiming(
     }
   }
   if (pending.length) {
-    const last = history.filter(committed).slice(-1)[0]
+    const last = history.filter(timingEvidence).slice(-1)[0]
     const completedRequest = last?.role === 'model' && measured(last.__meta?.llmRequestTiming) && last.__meta?.llmSegment?.complete !== false && !last.parts.some(part => part.functionCall)
     const incompleteIdle = context.runtimeState?.state === 'idle' && isSessionTurnIncomplete(history) && !completedRequest
     // No recorded Stop time exists for an idle unfinished turn. Counts are safer than a growing guessed endpoint.
