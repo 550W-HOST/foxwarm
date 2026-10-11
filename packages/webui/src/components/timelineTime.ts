@@ -14,7 +14,10 @@ const sameLocalDay = (left: number, right: number): boolean => {
 }
 
 /** Compare the next request start with the preceding persisted end; grouped rows have no separate time line. */
-export const deriveTimelineTimeMarkers = (messages: readonly Message[], isGroupedEvent: (message: Message) => boolean): Array<TimelineTimeMarker | null> => {
+export const deriveTimelineTimeMarkers = (
+  messages: readonly Message[], isGroupedEvent: (message: Message) => boolean,
+  isVisibleUnitStart?: (message: Message) => boolean,
+): Array<TimelineTimeMarker | null> => {
   let previous: number | null = null
   let showedClock = false
   return messages.map(message => {
@@ -24,7 +27,7 @@ export const deriveTimelineTimeMarkers = (messages: readonly Message[], isGroupe
       : message.__meta?.timestamp)
     const current = message.__meta?.contextBlock ? end
       : validTimestamp(message.__meta?.llmRequestTiming?.startedAt) ?? end
-    const eligible = message.role !== 'tool' && !isGroupedEvent(message)
+    const eligible = isVisibleUnitStart ? isVisibleUnitStart(message) : message.role !== 'tool' && !isGroupedEvent(message)
     let marker: TimelineTimeMarker | null = null
     if (eligible && current !== null) {
       if (!showedClock || previous === null) {

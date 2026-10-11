@@ -535,11 +535,34 @@ const reuseWhenEqual = <T,>(previous: T | undefined, next: T, isEqual: (a: T, b:
   previous !== undefined && isEqual(previous, next) ? previous : next
 )
 
+/** Conversation disclosures and their immediately following ordinary text share one clock surface. */
+const applyConversationTimeMarkers = (rows: readonly TimelineRowView[], messages: readonly Message[]): TimelineRowView[] => {
+  const isBody = (row: TimelineRowView | undefined) => row?.msg.role === 'model'
+    && !getContextBlockMetaFromMessage(row.msg) && row.conversationPartIndex !== undefined
+    && hasConversationText(row.msg.parts[row.conversationPartIndex])
+  const sources = new Set<Message>()
+  const starts = new Set<TimelineRowView>()
+  rows.forEach((row, index) => {
+    if (rows[index - 1]?.activity && isBody(row)) return
+    const pairedActivity = row.activity && isBody(rows[index + 1])
+    if (!pairedActivity && (row.msg.role === 'tool' || isGroupableSystemMessage(row.msg))) return
+    if (!sources.has(row.msg)) starts.add(row)
+    sources.add(row.msg)
+  })
+  // Keep every raw persisted baseline, but only visible unit starts can own a clock.
+  const markers = deriveTimelineTimeMarkers(messages, isGroupableSystemMessage, message => sources.has(message))
+  const byMessage = new Map(messages.map((message, index) => [message, markers[index]]))
+  return rows.map(row => {
+    const marker = starts.has(row) ? byMessage.get(row.msg) ?? null : null
+    return row.timeMarker?.timestamp === marker?.timestamp ? row : { ...row, timeMarker: marker }
+  })
+}
+
 export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRowsCache | null): TimelineRowsResult => {
   const { messages, isRunningTool = false, isMobile, timelineView, showUsageBadge, showTimeDividers, nestedDepth, expandedGroupKeys, activityDetails, historyMessages } = input
   const grouped = timelineView === 'grouped'
   const requestTimings = deriveRequestTimings(messages)
-  const timeMarkers = showTimeDividers && nestedDepth === 0 ? deriveTimelineTimeMarkers(messages, isGroupableSystemMessage) : []
+  const timeMarkers = showTimeDividers && nestedDepth === 0 && timelineView !== 'conversation' ? deriveTimelineTimeMarkers(messages, isGroupableSystemMessage) : []
   const messageKeys = messages.map((msg, index) => getMessageStableKey(msg, index))
   const finalStandaloneStartIdx = getFinalStandaloneStartIdx(messages)
 
@@ -711,7 +734,12 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       }
     })
     flushActivity()
-    return { rows: applyConversationTiming(rows, historyMessages || messages, boundary, input.timing), cache: { rows: rowCache, groups: groupCache } }
+    const markedRows = showTimeDividers && nestedDepth === 0 ? applyConversationTimeMarkers(rows, messages).map(row => {
+      const cached = reuseWhenEqual(previous?.rows.get(row.key), row, sameRowView)
+      rowCache.set(row.key, cached)
+      return cached
+    }) : rows
+    return { rows: applyConversationTiming(markedRows, historyMessages || messages, boundary, input.timing), cache: { rows: rowCache, groups: groupCache } }
   }
 
   let cursor = 0

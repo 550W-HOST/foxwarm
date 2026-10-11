@@ -441,3 +441,72 @@ test('Direct Task notifications and hosted web search count actual effects; scri
   await page.waitForFunction(() => document.querySelector('#timeline').querySelectorAll('[data-timeline-activity]').length === 1)
   assert.deepEqual(await headers(), ['Called 1 tool'], 'script metadata/result data never expands invocation counts or claims internal sends')
 })
+
+const dividerTimes = () => page.$$eval('#timeline [data-timeline-time-separator] time', times => times.map(time => time.dateTime))
+
+test('Conversation keeps the 08:11 processing disclosure and 08:15 body under one clock, collapsed or expanded', async () => {
+  await mode('conversation')
+  await page.emulateTimezone('UTC')
+  const base = Date.UTC(2026,9,11,8)
+  const stamp = (seq, seconds, role, parts, request) => ({role,parts,__meta:{seq,timestamp:base+seconds*1000,...request?{
+    llmRequestId:request.id,llmRequestTiming:{startedAt:base+request.start*1000,completedAt:base+seconds*1000,durationMs:(seconds-request.start)*1000},
+  }:{}}})
+  const records = [
+    stamp(101,0,'user',[{text:'CLOCK_USER'}]),
+    stamp(102,665,'model',[{thinking:'UNIT_REASONING'},call('clock-unit')],{id:'clock-first',start:660}),
+    stamp(103,670,'tool',[{functionResponse:{name:'exec',tool_use_id:'clock-unit',response:{output:'UNIT_RESULT'},executionTiming:{startedAt:base+665000,completedAt:base+670000,durationMs:5000}}}]),
+    stamp(104,720,'user',[{system:'<foxwarm-message type="inter-agent" sourceSessionId="fixture/worker">\nUNIT_REPORT\n</foxwarm-message>'}]),
+    stamp(105,780,'model',[{thinking:'UNIT_LATER_REASONING'}],{id:'clock-second',start:720}),
+    stamp(106,905,'model',[{text:'UNIT_DONE'}],{id:'clock-body',start:900}),
+  ]
+  await setRecords(records,undefined,base+960000)
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('UNIT_DONE'))
+  const expected = [new Date(base).toISOString(),new Date(base+660000).toISOString()]
+  assert.deepEqual(await dividerTimes(), expected, 'the later request start is not a divider inside the processing/body unit')
+  assert.deepEqual(await headers(), ['Worked for 1m15s · Waited for 13m50s · Received 1 message · Called 1 tool'], 'the text accounting boundary and counts are unchanged')
+  assert.deepEqual(await page.$eval('#timeline', root => [...root.querySelectorAll('[data-timeline-time-separator], [data-timeline-activity], .foxwarm-assistant-message-card')].map(node => node.matches('[data-timeline-time-separator]') ? node.querySelector('time').dateTime : node.matches('[data-timeline-activity]') ? 'activity' : node.querySelector('.foxwarm-assistant-message-markdown').textContent.trim())), [...expected,'activity','UNIT_DONE'])
+  assert.equal(await countMatches('UNIT_DONE'),1)
+  await page.evaluate(() => { window.unitBody=document.querySelector('#timeline .foxwarm-assistant-message-card') })
+  if (process.env.FOXWARM_E2E_SCREENSHOT_PATH) await page.screenshot({path:process.env.FOXWARM_E2E_SCREENSHOT_PATH,fullPage:true})
+  await page.click('#timeline [aria-label="Expand activity"]')
+  await page.waitForFunction(() => document.querySelector('[data-activity-details]')?.textContent.includes('UNIT_RESULT') && document.querySelector('[data-timeline-activity]').style.height === '')
+  assert.deepEqual(await dividerTimes(),expected)
+  assert.equal(await page.evaluate(() => window.unitBody === document.querySelector('#timeline .foxwarm-assistant-message-card')),true)
+  if (process.env.FOXWARM_E2E_SCREENSHOT_PATH) await page.screenshot({path:process.env.FOXWARM_E2E_SCREENSHOT_PATH+'.expanded.png',fullPage:true})
+  await page.click('#timeline [aria-label="Collapse activity"]')
+  await page.waitForFunction(() => !document.querySelector('[data-activity-details]'))
+  assert.deepEqual(await dividerTimes(),expected)
+})
+
+test('An unmarked Activity uses its own start; user/CTX boundaries and source-oriented modes retain their dividers', async () => {
+  await mode('conversation')
+  const base = Date.UTC(2026,9,11,8)
+  const stamp = (seq,seconds,role,parts) => ({role,parts,__meta:{seq,timestamp:base+seconds*1000}})
+  const block = ctx(120); block.__meta={...block.__meta,seq:117,timestamp:base+1900000,contextBlock:{...block.__meta.contextBlock,rawStartTimestamp:base+1800000}}
+  const records = [
+    stamp(111,0,'user',[{text:'PREFIX_USER'}]),
+    stamp(112,0,'model',[call('clipped-clock')]),
+    stamp(113,600,'tool',[{functionResponse:{name:'exec',tool_use_id:'clipped-clock',response:{output:'CLIPPED_RESULT'}}}]),
+    stamp(114,900,'model',[{text:'AFTER_UNMARKED_ACTIVITY'}]),
+    stamp(115,1200,'user',[{text:'CLOCK_INTERRUPT'}]),
+    stamp(116,1500,'model',[{thinking:'BEFORE_CLOCK_CTX'}]),
+    block,
+    stamp(118,2100,'model',[{text:'AFTER_CLOCK_CTX'}]),
+  ]
+  await setRecords(records,undefined,base+2200000)
+  await page.evaluate(() => window.fixture.setSlice([2,undefined]))
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('AFTER_CLOCK_CTX') && !document.querySelector('#timeline').textContent.includes('PREFIX_USER'))
+  const iso = seconds => new Date(base+seconds*1000).toISOString()
+  assert.deepEqual(await dividerTimes(),[600,1200,1500,1800,2100].map(iso), 'a tool-first disclosure uses its persisted start, not the later 08:15 body time')
+  for (const value of ['detailed','grouped']) {
+    await mode(value)
+    assert.deepEqual(await dividerTimes(),[900,1200,1500,1800,2100].map(iso),value+' retains the original raw-message separators')
+  }
+  await mode('conversation')
+  // With no known start, omit the unit's clock instead of moving the later body's valid timestamp before it.
+  delete records[2].__meta.timestamp
+  await setRecords(records,undefined,base+2200000)
+  await page.evaluate(() => window.fixture.setSlice([2,undefined]))
+  await page.waitForFunction(() => !document.querySelector('#timeline').textContent.includes('PREFIX_USER') && document.querySelectorAll('#timeline [data-timeline-time-separator]').length === 4)
+  assert.deepEqual(await dividerTimes(),[1200,1500,1800,2100].map(iso))
+})
