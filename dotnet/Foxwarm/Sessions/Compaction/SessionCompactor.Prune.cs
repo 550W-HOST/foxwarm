@@ -7,6 +7,8 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionCompactor
 {
+    private sealed class PruningEstimateExceededException : Exception;
+
     private static readonly HashSet<string> RetainedResponseMetadata =
     [
         "status",
@@ -190,8 +192,8 @@ internal sealed partial class SessionCompactor
         var persistentSnapshot =
             snapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.GetValue<string>() ?? "";
         var after = EstimateHistory(rewritten, persistentSnapshot);
-        var limit = catalog.Select(snapshot).Model.ContextLimit;
-        if (after > Math.Max(1, (int)Math.Floor(limit * .5)))
+        var maximum = Math.Max(0, (int)Math.Ceiling(EstimateHistory(snapshot.History, persistentSnapshot) * .6) - 1);
+        if (after > maximum)
             return false;
         foreach (var seq in affected)
         {
@@ -216,6 +218,8 @@ internal sealed partial class SessionCompactor
         }
         token.ThrowIfCancellationRequested();
         sessions?.Tasks.TaskContext(snapshot.Id, TaskProgress.Sequences(snapshot), false, []);
+        try
+        {
         await hosted.Entry.SaveLane.CommitCompactionAsync(
             live =>
             {
@@ -235,6 +239,8 @@ internal sealed partial class SessionCompactor
                     .Concat(live.History.Skip(snapshot.History.Count))
                     .Select(row => (JsonObject)row.DeepClone())
                     .ToArray();
+                if (EstimateHistory(nextHistory, SessionWait.Text(live.AuthorityEnvelope["persistentMemorySnapshot"]) ?? "") > maximum)
+                    throw new PruningEstimateExceededException();
                 var staged = live.Snapshot() with
                 {
                     History = nextHistory,
@@ -250,6 +256,8 @@ internal sealed partial class SessionCompactor
             },
             token
         );
+        }
+        catch (PruningEstimateExceededException) { return false; }
         hosted.PublishStateChanged();
         return true;
     }

@@ -62,7 +62,8 @@ internal sealed partial class SessionCompactor
                 op.Last.EndTimestamp,
                 summary,
                 op.MemoryFacts is null ? null : (JsonArray)op.MemoryFacts.DeepClone(),
-                now
+                now,
+                op.FrictionScore
             );
             operations.Add((op, record));
         }

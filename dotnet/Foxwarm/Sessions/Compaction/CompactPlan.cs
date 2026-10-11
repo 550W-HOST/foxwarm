@@ -10,7 +10,8 @@ internal sealed record CompactOperation(
     int CandidateStart,
     int CandidateEnd,
     string Summary,
-    JsonArray? MemoryFacts
+    JsonArray? MemoryFacts,
+    int? FrictionScore = null
 )
 {
     public string Kind => First.Kind;
@@ -175,7 +176,8 @@ internal static class CompactPlanValidator
                     firstIndex,
                     endIndex,
                     summary,
-                    facts
+                    facts,
+                    Friction(item["frictionScore"])
                 )
             );
         }
@@ -257,6 +259,8 @@ internal static class CompactPlanValidator
         }
         return result;
     }
+
+    internal static int? Friction(JsonNode? node) => Number(node) is long value && value is >= 0 and <= 100 ? (int)value : null;
 
     private static long? Number(JsonNode? node) => CompactCandidateBuilder.Number(node);
 

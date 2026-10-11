@@ -18,7 +18,8 @@ public sealed record ArchiveBlockRecord(
     double? RawEndTimestamp,
     string Summary,
     JsonArray? MemoryFacts,
-    long CreatedAt
+    long CreatedAt,
+    int? FrictionScore = null
 )
 {
     public static string LocalTimestamp(double stamp)
@@ -66,6 +67,7 @@ public sealed record ArchiveBlockRecord(
             result["rawStartTimestamp"] = RawStartTimestamp;
         if (RawEndTimestamp is not null)
             result["rawEndTimestamp"] = RawEndTimestamp;
+        if (FrictionScore is int score) result["frictionScore"] = score;
         return result;
     }
 
@@ -77,7 +79,7 @@ public sealed record ArchiveBlockRecord(
                 new JsonObject
                 {
                     ["text"] =
-                        $"[CTX-BLOCK L{Level} B#{Id} raw#{RawStartSeq}{(RawStartSeq == RawEndSeq ? "" : $"-#{RawEndSeq}")}{TimeRange()}] {Summary}",
+                        $"[CTX-BLOCK L{Level} B#{Id} raw#{RawStartSeq}{(RawStartSeq == RawEndSeq ? "" : $"-#{RawEndSeq}")}{TimeRange()}{(FrictionScore is int score ? $" frictionScore={score}" : "")}] {Summary}",
                 }
             ),
             ["__meta"] = new JsonObject
@@ -111,6 +113,7 @@ public sealed partial class SqliteArchiveMessageStore
               summary TEXT NOT NULL,
               memory_facts_json TEXT,
               created_at INTEGER NOT NULL,
+              friction_score INTEGER,
               PRIMARY KEY (session_id, id)
             )
             """
@@ -146,11 +149,14 @@ public sealed partial class SqliteArchiveMessageStore
             ("summary", "TEXT", true, (string?)null, 0L),
             ("memory_facts_json", "TEXT", false, (string?)null, 0L),
             ("created_at", "INTEGER", true, (string?)null, 0L),
+            ("friction_score", "INTEGER", false, (string?)null, 0L),
         };
-        if (!actual.SequenceEqual(expected))
+        var hasFriction = actual.Any(item => item.Item1 == "friction_score");
+        if (!actual.OrderBy(item => item.Item1).SequenceEqual(expected.Where(item => hasFriction || item.Item1 != "friction_score").OrderBy(item => item.Item1)))
             throw new InvalidDataException(
                 "archive_blocks does not match the current TypeScript schema."
             );
+        if (!hasFriction) Execute(connection, "ALTER TABLE archive_blocks ADD COLUMN friction_score INTEGER");
     }
 
     private void ValidateBlock(ArchiveBlockRecord block, string? expectedIdentity = null)
@@ -166,6 +172,7 @@ public sealed partial class SqliteArchiveMessageStore
             || block.RawEndSeq < block.RawStartSeq
             || block.Summary.Trim().Length == 0
             || block.CreatedAt <= 0
+            || block.FrictionScore is < 0 or > 100
             || block.SourceKind is not ("message" or "block")
             || block.SourceKind == "message"
                 && (
@@ -196,7 +203,7 @@ public sealed partial class SqliteArchiveMessageStore
             using var lookup = connection.CreateCommand();
             lookup.Transaction = tx;
             lookup.CommandText =
-                "SELECT agent,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at FROM archive_blocks WHERE session_id=$s AND id=$id";
+                "SELECT agent,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at,friction_score FROM archive_blocks WHERE session_id=$s AND id=$id";
             lookup.Parameters.AddWithValue("$s", block.SessionId);
             lookup.Parameters.AddWithValue("$id", block.Id);
             using (var reader = lookup.ExecuteReader())
@@ -217,6 +224,7 @@ public sealed partial class SqliteArchiveMessageStore
                         && reader.GetString(10) == block.Summary
                         && NullableText(reader, 11) == block.MemoryFactsJson
                         && reader.GetInt64(12) == block.CreatedAt
+                        && (reader.IsDBNull(13) ? (int?)null : reader.GetInt32(13)) == block.FrictionScore
                     )
                         continue;
                     throw new InvalidDataException(
@@ -228,8 +236,8 @@ public sealed partial class SqliteArchiveMessageStore
             insert.Transaction = tx;
             insert.CommandText = """
                 INSERT INTO archive_blocks(session_id,agent,id,level,source_kind,source_start,source_end,source_block_ids_json,
-                  raw_start_seq,raw_end_seq,raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at)
-                VALUES($s,$agent,$id,$level,$kind,$first,$last,$ids,$rawFirst,$rawLast,$start,$end,$summary,$facts,$at)
+                  raw_start_seq,raw_end_seq,raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at,friction_score)
+                VALUES($s,$agent,$id,$level,$kind,$first,$last,$ids,$rawFirst,$rawLast,$start,$end,$summary,$facts,$at,$friction)
                 """;
             insert.Parameters.AddWithValue("$s", block.SessionId);
             insert.Parameters.AddWithValue("$agent", block.Agent);
@@ -255,6 +263,7 @@ public sealed partial class SqliteArchiveMessageStore
                 (object?)block.MemoryFactsJson ?? DBNull.Value
             );
             insert.Parameters.AddWithValue("$at", block.CreatedAt);
+            insert.Parameters.AddWithValue("$friction", (object?)block.FrictionScore ?? DBNull.Value);
             if (insert.ExecuteNonQuery() != 1)
                 throw new IOException("Archive block insert did not affect one row.");
             inserted.Add(block);
@@ -275,7 +284,7 @@ public sealed partial class SqliteArchiveMessageStore
         var canonical = ResolveReadOnly(connection, sessionId);
         using var command = connection.CreateCommand();
         command.CommandText =
-            "SELECT agent,id,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at FROM archive_blocks WHERE session_id=$s AND id BETWEEN $first AND $last ORDER BY id";
+             $"SELECT agent,id,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at,{(HasFrictionColumn(connection) ? "friction_score" : "NULL")} FROM archive_blocks WHERE session_id=$s AND id BETWEEN $first AND $last ORDER BY id";
         command.Parameters.AddWithValue("$s", canonical);
         command.Parameters.AddWithValue("$first", first);
         command.Parameters.AddWithValue("$last", last);
@@ -300,7 +309,8 @@ public sealed partial class SqliteArchiveMessageStore
                 NullableText(reader, 12) is string facts
                     ? JsonNode.Parse(facts) as JsonArray
                     : null,
-                reader.GetInt64(13)
+                reader.GetInt64(13),
+                reader.IsDBNull(14) ? null : reader.GetInt32(14)
             );
             ValidateBlock(block, canonical);
             blocks.Add(block);
@@ -316,7 +326,7 @@ public sealed partial class SqliteArchiveMessageStore
         var canonical = ResolveReadOnly(connection, sessionId);
         using var command = connection.CreateCommand();
         command.CommandText =
-            "SELECT agent,id,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at FROM archive_blocks WHERE session_id=$session AND ($first IS NULL OR id >= $first) AND ($last IS NULL OR id <= $last) ORDER BY id";
+             $"SELECT agent,id,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at,{(HasFrictionColumn(connection) ? "friction_score" : "NULL")} FROM archive_blocks WHERE session_id=$session AND ($first IS NULL OR id >= $first) AND ($last IS NULL OR id <= $last) ORDER BY id";
         command.Parameters.AddWithValue("$session", canonical);
         command.Parameters.AddWithValue("$first", (object?)first ?? DBNull.Value);
         command.Parameters.AddWithValue("$last", (object?)last ?? DBNull.Value);
@@ -341,7 +351,8 @@ public sealed partial class SqliteArchiveMessageStore
                 NullableText(reader, 12) is string facts
                     ? JsonNode.Parse(facts) as JsonArray
                     : null,
-                reader.GetInt64(13)
+                reader.GetInt64(13),
+                reader.IsDBNull(14) ? null : reader.GetInt32(14)
             );
             ValidateBlock(block, canonical);
             blocks.Add(block);
@@ -365,7 +376,7 @@ public sealed partial class SqliteArchiveMessageStore
                 DELETE FROM archive_blocks WHERE session_id=$s AND id=$id AND agent=$agent AND level=$level
                 AND source_kind=$kind AND source_start=$first AND source_end=$last AND source_block_ids_json IS $ids
                 AND raw_start_seq=$rawFirst AND raw_end_seq=$rawLast AND raw_start_timestamp IS $start
-                AND raw_end_timestamp IS $end AND summary=$summary AND memory_facts_json IS $facts AND created_at=$at
+                AND raw_end_timestamp IS $end AND summary=$summary AND memory_facts_json IS $facts AND created_at=$at AND friction_score IS $friction
                 """;
             command.Parameters.AddWithValue("$s", sessionId);
             command.Parameters.AddWithValue("$id", block.Id);
@@ -391,12 +402,22 @@ public sealed partial class SqliteArchiveMessageStore
                 (object?)block.MemoryFactsJson ?? DBNull.Value
             );
             command.Parameters.AddWithValue("$at", block.CreatedAt);
+            command.Parameters.AddWithValue("$friction", (object?)block.FrictionScore ?? DBNull.Value);
             if (command.ExecuteNonQuery() != 1)
                 throw new IOException(
                     $"Archive block rollback conflict for {sessionId} B#{block.Id}."
                 );
         }
         tx.Commit();
+    }
+
+    private static bool HasFrictionColumn(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA table_info(archive_blocks)";
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) if (reader.GetString(1) == "friction_score") return true;
+        return false;
     }
 
     private static string? NullableText(SqliteDataReader reader, int column) =>

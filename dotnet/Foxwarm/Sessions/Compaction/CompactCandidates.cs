@@ -16,7 +16,8 @@ internal sealed record CompactCandidate(
     string Preview,
     int Tokens,
     int Segment,
-    bool Stranded = false
+    bool Stranded = false,
+    int? FrictionScore = null
 )
 {
     public string Key =>
@@ -229,7 +230,8 @@ internal static class CompactCandidateBuilder
                         summary,
                         Tokens(summary),
                         segment,
-                        stranded
+                        stranded,
+                        CompactPlanValidator.Friction(block["frictionScore"])
                     )
                 );
                 priorKind = "block";

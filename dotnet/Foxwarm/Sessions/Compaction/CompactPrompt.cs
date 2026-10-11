@@ -29,6 +29,7 @@ internal static partial class CompactPrompt
                               "sourceStart":{"type":"integer","minimum":1,"description":"First message sequence number or block ID in the candidate range."},
                               "sourceEnd":{"type":"integer","minimum":1,"description":"Last message sequence number or block ID in the range, following its displayed history order."},
                               "summary":{"type":"string","description":"Summary of this range, retaining what is needed to continue the work."},
+                              "frictionScore":{"type":"integer","minimum":0,"maximum":100,"description":"Estimated execution friction in this range, as an integer from 0 (none observed) to 100 (severe or repeated friction). Flags possible workflow, skills, memory, or framework improvements; not task difficulty, a probability, or an established diagnosis."},
                               "memoryFacts":{"type":"array","description":"Durable facts supported by this range. Invalid fact entries are skipped.","items":{
                                 "type":"object","properties":{
                                   "kind":{"type":"string","enum":["decision","preference","fact","convention","environment"]},

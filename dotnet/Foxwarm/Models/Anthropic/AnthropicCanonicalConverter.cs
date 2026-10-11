@@ -42,6 +42,10 @@ internal static class AnthropicCanonicalConverter
                         };
                     parts.Add(thinking);
                     break;
+                case "redacted_thinking":
+                    if (SessionWait.Text(block["data"]) is string redacted)
+                        parts.Add(new JsonObject { ["providerMeta"] = new JsonObject { ["redactedThinking"] = redacted } });
+                    break;
                 case "tool_use":
                     var id = SessionWait.Text(block["id"]);
                     if (string.IsNullOrEmpty(id))
@@ -88,15 +92,18 @@ internal static class AnthropicCanonicalConverter
         response is JsonObject body && body["usage"] is JsonObject usage
             ? new JsonObject
             {
-                ["inputTokens"] = usage["input_tokens"]?.DeepClone(),
-                ["outputTokens"] = usage["output_tokens"]?.DeepClone(),
-                ["cachedTokens"] = CompletionsRequestSerializer.Truthy(
-                    usage["cache_read_input_tokens"]
-                )
+                ["inputTokens"] = Reported(usage["input_tokens"]) is double input
+                    ? System.Text.Json.JsonSerializer.SerializeToNode(input + (Reported(usage["cache_creation_input_tokens"]) ?? 0))
+                    : null,
+                ["outputTokens"] = Reported(usage["output_tokens"]) is not null ? usage["output_tokens"]?.DeepClone() : null,
+                ["cachedTokens"] = Reported(usage["cache_read_input_tokens"]) is not null
                     ? usage["cache_read_input_tokens"]!.DeepClone()
                     : JsonValue.Create(0),
             }
             : null;
+
+    private static double? Reported(JsonNode? node) =>
+        SessionWait.Number(node) is double value && double.IsFinite(value) ? value : null;
 
     private static JsonArray? TaggedThinking(string text)
     {

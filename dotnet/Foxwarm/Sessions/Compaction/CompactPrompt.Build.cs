@@ -123,7 +123,7 @@ internal static partial class CompactPrompt
                     lines.Add($"- {item.Key} {(preview.Length > 0 ? preview : "[empty message]")}");
                 else
                     lines.Add(
-                        $"- {item.Key} L{item.SourceLevel} raw{Range(item.RawStart, item.RawEnd)} {(preview.Length > 0 ? preview : "[empty block]")}"
+                        $"- {item.Key} L{item.SourceLevel} raw{Range(item.RawStart, item.RawEnd)}{(item.FrictionScore is int score ? $" frictionScore={score}" : "")} {(preview.Length > 0 ? preview : "[empty block]")}"
                     );
             }
         }
@@ -172,6 +172,11 @@ internal static partial class CompactPrompt
             "- Blocked range: \"Tried X but failed because Y. Blocked on user input / external dependency Z. Next: wait for Z or try workaround W.\"",
             "- Validation range: \"Tested X. Result supports/contradicts earlier B#N conclusion that Y. Next: Z.\"",
             "- Informational range: \"User shared X. Key identifiers: Y, Z. No decision yet.\"",
+            "",
+            "Execution friction:",
+            "Provide a frictionScore from 0 to 100 for each new block. Judge only the source range being summarized. Use 0 when no meaningful friction is evident; 1–29 for minor isolated obstacles; 30–59 for repeated misunderstandings, retries, corrections, or avoidable work; 60–79 for substantial recurring friction or blocked progress; and 80–100 for severe or systemic friction with strong evidence that the workflow or supporting tools need review.",
+            "Look for observable difficulties that may suggest improvements to skills, memory, workflows, or the framework. Task complexity, conversation length, expected negative tests, and reasonable exploration alone are not friction. Do not infer a root cause or current unresolved failure from the score. Later recovery does not erase friction observed within the summarized range.",
+            "When summarizing existing blocks, use their summaries and available frictionScore values as evidence and assess the new range yourself. Do not mechanically average or accumulate scores, and do not dilute an important incident merely because it is surrounded by routine work. Missing scores mean unscored, not zero.",
             "",
             "Memory facts:",
             "- Put durable facts only in the memoryFacts array of their matching replaceAsBlocks entry: explicit user decisions, preferences, project conventions, technical discoveries, environment/deploy constraints, or stable identifiers. Do not include trivial chat, tool mechanics, transient progress, or stale TODOs.",

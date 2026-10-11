@@ -4,7 +4,7 @@ Files: `dotnet/Foxwarm/Models/Anthropic/AnthropicCanonicalConverter.cs`, `dotnet
 
 ## Purpose
 
-Serializes canonical Session messages, tool calls, images, and system content for Anthropic Messages and OpenAI-compatible Chat Completions, then accumulates streaming deltas into one provider-neutral result.
+Serializes canonical Session messages, tool calls, images, and system content for Anthropic Messages and OpenAI-compatible Chat Completions, returns a provider-neutral result. Chat Completions also accumulates streaming deltas.
 
 ## Stable methods and callers
 
@@ -15,6 +15,8 @@ Callers: `SessionChatService`, `ConfiguredModelRequests`, `SessionOwner` turn ho
 ## Contract and side effects
 
 Provider-specific omissions/normalizations are confined to the adapter; canonical Session history and Archive records keep the provider-neutral form. HTTP errors, malformed SSE, partial tool calls, and usage accounting remain attempt-scoped failures and do not silently publish a successful assistant message.
+
+Anthropic Messages remains nonstreaming. Canonical conversion retains empty signed thinking and `redacted_thinking` data; same-concrete replay preserves the opaque evidence. Request-only concrete mismatch preparation removes signatures/redacted metadata without changing canonical history or Archive. Reported input usage includes finite cache-creation input tokens, while finite cached-read usage stays separate and is not subtracted.
 
 ## Tests
 

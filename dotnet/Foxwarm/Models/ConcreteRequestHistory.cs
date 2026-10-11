@@ -49,7 +49,7 @@ internal static class ConcreteRequestHistory
                     var preserveGenerated =
                         SessionWait.Text(generatedOutput?["type"]) == "image_generation_call";
                     foreach (
-                        var key in new[] { "thinkingSummaries", "encryptedThinking", "signature" }
+                        var key in new[] { "thinkingSummaries", "encryptedThinking", "signature", "redactedThinking" }
                     )
                         metadata.Remove(key);
                     if (!preserveGenerated)

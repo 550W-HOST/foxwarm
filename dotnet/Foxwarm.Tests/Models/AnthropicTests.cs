@@ -106,7 +106,7 @@ public sealed class AnthropicTests
             "file",
             message["parts"]![4]!["functionCall"]!["args"]!["path"]!.GetValue<string>()
         );
-        Assert.Equal(40, message["__meta"]!["usage"]!["inputTokens"]!.GetValue<int>());
+        Assert.Equal(139, message["__meta"]!["usage"]!["inputTokens"]!.GetValue<double>());
         Assert.Equal(12, message["__meta"]!["usage"]!["cachedTokens"]!.GetValue<int>());
         Assert.Null(
             AnthropicCanonicalConverter.ConvertAssistant(
@@ -129,6 +129,22 @@ public sealed class AnthropicTests
                 0
             )!["parts"]!.AsArray()
         );
+    }
+
+    [Fact]
+    public void Usage_accepts_only_finite_reported_numbers_and_does_not_invent_missing_input()
+    {
+        var usage = AnthropicCanonicalConverter.Usage(Obj(
+            """{"usage":{"input_tokens":0,"cache_creation_input_tokens":12.5,"output_tokens":"bad","cache_read_input_tokens":"bad"}}"""
+        ))!;
+        Assert.Equal(12.5, usage["inputTokens"]!.GetValue<double>());
+        Assert.Null(usage["outputTokens"]);
+        Assert.Equal(0, usage["cachedTokens"]!.GetValue<int>());
+        var missing = AnthropicCanonicalConverter.Usage(Obj(
+            """{"usage":{"cache_creation_input_tokens":55,"output_tokens":0}}"""
+        ))!;
+        Assert.Null(missing["inputTokens"]);
+        Assert.Equal(0, missing["outputTokens"]!.GetValue<int>());
     }
 
     [Fact]
