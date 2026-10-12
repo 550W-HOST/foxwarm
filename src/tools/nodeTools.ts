@@ -1,6 +1,10 @@
+import * as fsPromises from 'node:fs/promises';
+import path from 'path';
 import {
     ToolArgs,
     ToolContext,
+    enforceIsolatedPathAccess,
+    requireToolFilePath,
 } from './helpers';
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
@@ -16,6 +20,70 @@ import {
 } from '../nodeExecution';
 import { executeMainManagementTool } from '../mainManagementTools';
 import { resolveObjectArgWithJsonFallback } from '../jsonObjectArgs';
+
+function resolvePrivateNodeAuthTokenFilePath(filePathInput: string, ctx: ToolContext): string {
+    const filePath = requireToolFilePath(filePathInput, 'node_create_auth_token');
+    if (!path.isAbsolute(filePath)) {
+        throw new Error('node_create_auth_token filePath must be an absolute path on Main.');
+    }
+
+    const filePathResolved = path.resolve(filePath);
+    const agentName = ctx.session?.agent || 'main';
+    enforceIsolatedPathAccess(ctx, filePathResolved, agentName);
+    return filePathResolved;
+}
+
+async function unlinkCreatedNodeAuthTokenFile(filePath: string): Promise<boolean> {
+    try {
+        await fsPromises.unlink(filePath);
+        return true;
+    } catch (error: any) {
+        return error?.code === 'ENOENT';
+    }
+}
+
+export const tool_node_create_auth_token = async (args: ToolArgs, ctx: ToolContext): Promise<{ nodeId: string; filePath: string }> => {
+    if (!ctx?.sessionId) throw new Error('node_create_auth_token requires session context.');
+    if (ctx.sessionPlacement === 'session-worker') return executeMainManagementTool('node_create_auth_token', args, ctx);
+    const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
+    const filePath = requireToolFilePath(args?.filePath, 'node_create_auth_token');
+    if (!nodeId) throw new Error('node_create_auth_token nodeId is required.');
+    const resolvedFilePath = resolvePrivateNodeAuthTokenFilePath(filePath, ctx);
+
+    const { createApprovedNode } = await import('../nodes/registry');
+    let fileHandle: Awaited<ReturnType<typeof fsPromises.open>>;
+    try {
+        fileHandle = await fsPromises.open(resolvedFilePath, 'wx', 0o600);
+    } catch (error: any) {
+        if (error?.code === 'EEXIST') {
+            throw new Error(`Token file already exists: ${resolvedFilePath}. Existing files are not replaced.`);
+        }
+        throw error;
+    }
+
+    let created: { nodeId: string; authToken: string };
+    try {
+        created = await createApprovedNode(nodeId);
+    } catch (error: any) {
+        await fileHandle.close().catch(() => {});
+        if (!await unlinkCreatedNodeAuthTokenFile(resolvedFilePath)) {
+            throw new Error(`Node \`${nodeId}\` registry reservation failed, and its newly created credential file may remain at ${resolvedFilePath}. Inspect both before retrying.`);
+        }
+        throw new Error(`Node \`${nodeId}\` registry reservation failed after its newly created credential file was cleaned: ${error?.message || 'creation failed'}`);
+    }
+
+    try {
+        await fileHandle.writeFile(`${created.authToken}\n`, 'utf8');
+        await fileHandle.close();
+        return { nodeId: created.nodeId, filePath: resolvedFilePath };
+    } catch (error: any) {
+        await fileHandle.close().catch(() => {});
+        if (!await unlinkCreatedNodeAuthTokenFile(resolvedFilePath)) {
+            throw new Error(`Node \`${created.nodeId}\` remains reserved, and its credential file may remain at ${resolvedFilePath} after the write failed. Inspect the registry and file before retrying.`);
+        }
+        throw new Error(`Node \`${created.nodeId}\` remains reserved, but its credential file could not be written and was cleaned: ${error?.message || 'file write failed'}`);
+    }
+};
 
 export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) {
     const { sourceNode, sourcePath, targetNode, targetPath, overwrite = false } = args;
