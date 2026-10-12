@@ -19,7 +19,10 @@ Owns the timing and usage presentation rules for timeline rows: persisted reques
 | `deriveRequestTimings(messages)` | `usageTiming.ts` | Validates each model request and exposes its own API duration without aggregating inter-request gaps. |
 | `deriveTimelineTimeMarkers(messages, isGroupedEvent, isVisibleUnitStart?, getVisibleUnitStart?)` / `formatTimelineTimeMarker(marker)` | `timelineTime.ts` | Compare the next valid request start (timestamp fallback) with the preceding persisted timestamp, keep strict structured CTX range starts, accept Conversation unit-start selection without changing raw baselines, suppress non-independent tool/event dividers, and format the selected clock/date. |
 | `formatCompactDuration` / `formatDetailedDuration` | `usageTiming.ts` | Format compact API durations and exact millisecond details. |
-| `applyConversationTiming` | `conversationTiming.ts` | Visible-boundary elapsed ranges, clipped/unioned measured and live busy evidence with per-gap waiting noise filtering, runtime-confirmed pending batch receipts with conservative missing-data fallback, untimed canonical compact maintenance, and final error/CTX cuts. |
+| `readConversationWorkInterval` | `conversationTiming.ts` | Existing finite execution endpoints shared by duration union and standalone tool clocks. |
+| `getConversationActivityStart` / `getConversationLiveRequestStart` | `conversationTiming.ts` | CTX-local leading input/execution origins and authoritative requesting-model starts; exclude creation/maintenance and unknown earlier work. |
+| `selectTimelineTimeMarker` | `timelineTime.ts` | Reuses the minute/date comparison for committed units and a presentation-only live request. |
+| `applyConversationTiming` | `conversationTiming.ts` | Visible-boundary elapsed ranges with reliable leading origins and pre-first-part live work, clipped/unioned measured and live busy evidence with per-gap waiting noise filtering, runtime-confirmed pending batch receipts with conservative missing-data fallback, untimed canonical compact maintenance, and final error/CTX cuts. |
 | `isCompactCompletionMaintenanceMessage` | `../sessionContinuation.ts` | Shares exact canonical marker/generated reminder recognition for timing without changing the continuation classifier's legacy/read behavior. |
 
 ## Dependencies

@@ -12,12 +12,13 @@ import {
 import { readPersistedRequestTiming, deriveRequestTimings, type DerivedRequestTiming, type DurationSample } from '../usageTiming'
 import { getContextScrollbarAnchorKey, getMessageStableKey, getMessageViewportAnchorKey } from '../chatViewportState'
 import { parsePastedTextSegments } from '../pastedText'
-import { deriveTimelineTimeMarkers, type TimelineTimeMarker } from './timelineTime'
+import { deriveTimelineTimeMarkers, selectTimelineTimeMarker, type TimelineTimeMarker } from './timelineTime'
 import { isReasoningPart } from './reasoningParts'
 import { getContextBlockMetaFromMessage } from './ContextBlockCard'
 import { isCommittedHistoryMessage } from '../chatHistoryState'
 import { buildConversationActivitySummary } from './conversationActivity'
-import { applyConversationTiming, type ConversationTimingContext } from './conversationTiming'
+import { applyConversationTiming, readConversationWorkInterval, getConversationActivityStart, getConversationLiveRequestStart, type ConversationTimingContext } from './conversationTiming'
+import { isCompactCompletionMaintenanceMessage } from '../sessionContinuation'
 import { getWebSearchAction } from '../webSearchAction'
 
 /**
@@ -79,7 +80,7 @@ export interface TimelineRowView {
   /** Undefined outside Conversation user rows; false retains legacy channel metadata rendering. */
   readonly literalUserText?: boolean
   /** Technical fragments only, in source order. Ordinary output is never duplicated here. */
-  readonly activity?: { readonly messages: Message[]; readonly summary: string; readonly dynamic?: boolean }
+  readonly activity?: { readonly messages: Message[]; readonly summary: string; readonly dynamic?: boolean; readonly runtimeOnly?: boolean }
   readonly prevMsg: Message | null
   readonly nextMsg: Message | null
   readonly pairedToolResponse: Message | null
@@ -539,6 +540,7 @@ const reuseWhenEqual = <T,>(previous: T | undefined, next: T, isEqual: (a: T, b:
 const applyConversationTimeMarkers = (
   rows: readonly TimelineRowView[], messages: readonly Message[], history: readonly Message[],
   boundary: (message: Message) => 'visible' | 'context' | undefined,
+  timing?: ConversationTimingContext,
 ): TimelineRowView[] => {
   const isBody = (row: TimelineRowView | undefined) => row?.msg.role === 'model'
     && !getContextBlockMetaFromMessage(row.msg) && row.conversationPartIndex !== undefined
@@ -548,13 +550,16 @@ const applyConversationTimeMarkers = (
   rows.forEach((row, index) => {
     if (rows[index - 1]?.activity && isBody(row)) return
     const pairedActivity = row.activity && isBody(rows[index + 1])
-    if (!pairedActivity && (row.msg.role === 'tool' || isGroupableSystemMessage(row.msg))) return
+    if (!row.activity && !pairedActivity && (row.msg.role === 'tool' || isGroupableSystemMessage(row.msg))) return
     if (!sources.has(row.msg)) starts.add(row)
     sources.add(row.msg)
   })
+  const activities = new Map(rows.filter(row => row.activity && !row.activity.runtimeOnly).map(row => [row.msg.__meta, row]))
   // Resolve each logical origin within its CTX scope, then date later units from their visible cut.
   const unitStarts = new Map<Message['__meta'], number | null>()
   let scope: Message[] = []
+  let contextFloor: number | undefined
+  let hasContext = false
   const finishScope = () => {
     const requestOrigins = new Map<string, number>()
     for (const message of scope) {
@@ -562,6 +567,11 @@ const applyConversationTimeMarkers = (
       const timing = readPersistedRequestTiming(message.__meta.llmRequestTiming)
       if (timing && timing !== 'invalid') requestOrigins.set(message.__meta.llmRequestId, timing.startedAt)
     }
+    const firstBoundary = scope.findIndex(message => !!boundary(message))
+    const leading = scope.slice(0, firstBoundary < 0 ? undefined : firstBoundary + (scope[firstBoundary].role === 'model' ? 1 : 0))
+    const liveStart = getConversationLiveRequestStart(timing)
+    const scopedLiveStart = hasContext ? contextFloor !== undefined && liveStart !== undefined ? Math.max(contextFloor, liveStart) : undefined : liveStart
+    const leadingStart = getConversationActivityStart(leading, scope, scopedLiveStart)
     let previousVisible: Message | undefined
     const seenRequests = new Set<string>()
     for (const message of scope) {
@@ -575,6 +585,22 @@ const applyConversationTimeMarkers = (
         } else if (requestOrigins.has(id)) unitStarts.set(message.__meta, requestOrigins.get(id)!)
         seenRequests.add(id)
       }
+      const row = activities.get(message.__meta)
+      if (row) {
+        const maintenanceOnly = row.activity!.messages.every(isCompactCompletionMaintenanceMessage)
+        if (maintenanceOnly) unitStarts.set(message.__meta, null)
+        else if (!previousVisible && (unitStarts.get(message.__meta) !== null || message.__meta?.llmSegment?.outputStart === 0 && scopedLiveStart !== undefined)) unitStarts.set(message.__meta, leadingStart ?? null)
+        else if (!unitStarts.has(message.__meta) && (message.role === 'tool' || isGroupableSystemMessage(message))) {
+          const executions = message.parts.map(part => readConversationWorkInterval(part.functionResponse?.executionTiming)).filter((value): value is NonNullable<typeof value> => !!value)
+          const start = message.role === 'tool'
+            ? executions.length ? Math.min(...executions.map(value => value.start)) : undefined
+            : getConversationActivityStart([message], scope)
+          const cut = previousVisible?.__meta?.timestamp
+          const crossesCut = cut !== undefined && executions.some(value => value.start <= cut && value.end >= cut)
+          if (start !== undefined) unitStarts.set(message.__meta, crossesCut ? Math.max(start, cut!) : start)
+          else if (!isBody(rows[rows.indexOf(row) + 1])) unitStarts.set(message.__meta, null)
+        }
+      }
       if (boundary(message) === 'visible' || message.role === 'model' && message.parts.some(hasConversationImage)) previousVisible = message
     }
     scope = []
@@ -582,6 +608,8 @@ const applyConversationTimeMarkers = (
   for (const message of history) {
     if (boundary(message) === 'context') {
       finishScope()
+      hasContext = true
+      contextFloor = typeof message.__meta?.timestamp === 'number' && Number.isFinite(message.__meta.timestamp) && message.__meta.timestamp > 0 ? message.__meta.timestamp : undefined
       continue
     }
     if (isCommittedHistoryMessage(message) && !message.__meta?.synthetic && !message.__meta?.queuedPreview) scope.push(message)
@@ -592,6 +620,7 @@ const applyConversationTimeMarkers = (
     (message, fallback) => unitStarts.has(message.__meta) ? unitStarts.get(message.__meta)! : fallback)
   const byMessage = new Map(messages.map((message, index) => [message, markers[index]]))
   return rows.map(row => {
+    if (row.activity?.runtimeOnly) return row
     const marker = starts.has(row) ? byMessage.get(row.msg) ?? null : null
     return row.timeMarker?.timestamp === marker?.timestamp ? row : { ...row, timeMarker: marker }
   })
@@ -773,7 +802,19 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       }
     })
     flushActivity()
-    const markedRows = showTimeDividers && nestedDepth === 0 ? applyConversationTimeMarkers(rows, messages, historyMessages || messages, boundary).map(row => {
+    const liveStart = getConversationLiveRequestStart(input.timing)
+    if (nestedDepth === 0 && historyMessages && input.timing?.now !== undefined && liveStart !== undefined && messages.length
+      && !rows.at(-1)?.activity?.messages.some(message => !isCompactCompletionMaintenanceMessage(message))) {
+      emitRow(messages.length - 1, null, false, null, { key: 'conversation-live-request', activity: { messages: [], summary: 'Activity', runtimeOnly: true } })
+      const row = rows.at(-1)!
+      const last = historyMessages.findLast(message => isCommittedHistoryMessage(message) && !isCompactCompletionMaintenanceMessage(message))
+      const lastBoundary = historyMessages.findLast(message => isCommittedHistoryMessage(message) && !!boundary(message))
+      const baseline = last?.__meta?.contextBlock ? last.__meta.contextBlock.rawStartTimestamp : last?.__meta?.timestamp
+      const boundaryTime = lastBoundary?.__meta?.timestamp
+      const start = typeof boundaryTime === 'number' && Number.isFinite(boundaryTime) && boundaryTime > 0 ? Math.max(liveStart, boundaryTime) : liveStart
+      rows[rows.length - 1] = { ...row, anchorKey: undefined, scrollbarAnchorKey: undefined, timeMarker: showTimeDividers ? selectTimelineTimeMarker(start, typeof baseline === 'number' && Number.isFinite(baseline) ? baseline : null) : null }
+    }
+    const markedRows = showTimeDividers && nestedDepth === 0 ? applyConversationTimeMarkers(rows, messages, historyMessages || messages, boundary, input.timing).map(row => {
       const cached = reuseWhenEqual(previous?.rows.get(row.key), row, sameRowView)
       rowCache.set(row.key, cached)
       return cached
