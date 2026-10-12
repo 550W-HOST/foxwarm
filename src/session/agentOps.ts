@@ -480,6 +480,16 @@ export async function createSessionInAgent(options: {
     ? agentMeta.isolatedNode.trim()
     : undefined;
 
+  // Without an isolation binding or an explicit node, a new session follows the
+  // same agent's main session node (when it exists) before falling back to master.
+  let mainSessionNode: string | undefined;
+  if (!isolatedNode && !currentNode && agentName !== 'main') {
+    const mainSession = await deps.getExistingSession(`${agentName}/main`);
+    mainSessionNode = mainSession?.currentNode && mainSession.currentNode !== 'master'
+      ? mainSession.currentNode
+      : undefined;
+  }
+
   const modelEffort = normalizeProspectiveSessionModelEffortSettings(
     { model, effort },
     effort === undefined ? {} : { effort },
@@ -513,7 +523,7 @@ export async function createSessionInAgent(options: {
     vectorIndexPosition: 0,
     nextMessageSeq: 1,
     parentSessionId,
-    currentNode: isolatedNode || currentNode || 'master',
+    currentNode: isolatedNode || currentNode || mainSessionNode || 'master',
     model: modelEffort.model,
     effort: modelEffort.effort,
   });

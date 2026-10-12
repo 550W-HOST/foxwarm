@@ -11,7 +11,7 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 
 - `validateAgentName(agentName)` — validates agent name format
 - `validateSessionName(sessionName)` — validates session name format
-- `createSessionInAgent(options, deps)` — creates a new session scoped to an agent with optional explicit Node and model/effort settings
+- `createSessionInAgent(options, deps)` — creates a new session scoped to an agent with optional explicit Node and model/effort settings; without an isolation binding or explicit Node, a non-`main` agent's new session follows the same agent's `main` session Node (when it exists and is not `master`) before falling back to `master`
 - `createAgentWithSession(options, deps)` — creates a new agent directory and its initial session, inheriting source model/effort and future-child defaults when present; this agent-creation contract is distinct from spawned child/fork normalization
 - `moveSessionToTarget(options, deps)` — renames or moves a session across agents
 - `recoverPendingSessionIdentityMove(moveSessionArchiveIndex)` — finishes or reverses the one crash-interrupted identity move before normal session loading
