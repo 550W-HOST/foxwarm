@@ -272,10 +272,8 @@ test('vertical split collapse remains a horizontal tab bar after reload and expo
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.kind === 'pane')
     assert.equal(await page.$('[data-workbench-pane-drag-handle]'), null, 'closing the other pane removes the whole-pane drag control')
     assert.equal(await page.$('button[title="Collapse pane"]'), null)
-    assert.equal(await page.$('[role="textbox"][aria-label="Message"]'), null)
-    await page.click('button[title="Expand pane"]')
+    assert.equal((await state(page)).root.collapsed, false, 'moving the closed pane tab into the remaining pane activates and expands it')
     await page.waitForSelector('[data-tab-id="system:agents"]')
-    assert.equal((await state(page)).root.collapsed, false)
     await page.click('[data-tab-id="chat:e2e-a"]')
     await page.waitForSelector('[role="textbox"][aria-label="Message"]')
     assert.equal(await page.$('[data-workbench-pane-collapse]'), null, 'the restored lone pane has no collapse control')
@@ -816,6 +814,31 @@ test('persisted search tabs keep their identity while showing the current Histor
       if (!refresh) await page.reload({ waitUntil: 'domcontentloaded' })
       await page.waitForSelector('[data-history-search-view]')
     }
+  } finally { await page.close() }
+})
+
+test('opening an existing History tab from the footer expands its collapsed pane', async () => {
+  const historyTab = { id: 'history:existing', type: 'search', title: 'History' }
+  const page = await openFixture({
+    tabs: [system, chat('e2e-a'), historyTab],
+    activeTabId: 'chat:e2e-a',
+    layout: {
+      id: 'split-main',
+      kind: 'split',
+      direction: 'row',
+      sizes: [50, 50],
+      children: [
+        { id: 'pane-main', kind: 'pane', tabIds: ['system:agents', 'chat:e2e-a'], activeTabId: 'chat:e2e-a' },
+        { id: 'pane-history', kind: 'pane', tabIds: ['history:existing'], activeTabId: 'history:existing', collapsed: true },
+      ],
+    },
+  })
+  try {
+    await page.waitForSelector('[data-workbench-collapsed-tab="history:existing"]')
+    await page.click('[data-sidebar-footer] button[aria-label="Search history"]')
+    await page.waitForSelector('[data-history-tab-id="history:existing"]')
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.children.find(pane => pane.id === 'pane-history').collapsed === false)
+    assert.equal((await state(page)).tabsById['history:existing'].id, 'history:existing', 'the existing tab instance is activated rather than replaced')
   } finally { await page.close() }
 })
 

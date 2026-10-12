@@ -84,7 +84,7 @@ Manages a multi-pane workbench UI with tabbed panels, tab and whole-pane drag-an
 ## Behavior
 
 - The store persists to localStorage under `foxwarm_workbench_state_v4` using Zustand's persist middleware, with legacy migration from v3 keys.
-- Tab operations (upsert, remove, reorder, move) immutably transform the layout tree and tab registry, maintaining active tab fallback logic when tabs are removed.
+- Tab operations (upsert, remove, reorder, move) immutably transform the layout tree and tab registry, maintaining active tab fallback logic when tabs are removed. User activation (`activateTab`, `setPaneActiveTab`, or an activating insert/move) clears the target pane's collapsed state, including when the requested tab is already active; background insertion and route/hydration bookkeeping can preserve collapse explicitly.
 - Splitting a pane creates a new split node wrapping the original pane and a new sibling pane; empty panes are automatically removed from the tree after tab moves.
 - `normalizeLayoutNode` collapses single-child splits and deduplicates tab IDs on every tree mutation.
 - Drag-and-drop uses `@dnd-kit` with sortable tabs within rows and droppable zones on pane edges/center for cross-pane moves and splits.

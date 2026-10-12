@@ -796,7 +796,7 @@ function App() {
 
   useEffect(() => {
     if (route.tabId && tabsById[route.tabId] && route.tabId !== focusedActiveTabId) {
-      activateTab(route.tabId)
+      activateTab(route.tabId, { expandPane: false })
     }
   }, [route, tabsById, focusedActiveTabId, activateTab])
 
