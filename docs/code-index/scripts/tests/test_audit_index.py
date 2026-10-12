@@ -63,6 +63,22 @@ class DocumentSizeTests(unittest.TestCase):
         self.write_document(HEADER + "\u2014" * 9000)
         self.assertEqual(self.size_findings(), [("WARN", "threads/large.md")])
 
+    def test_size_uses_on_disk_bytes_so_crlf_line_endings_are_not_undercounted(self):
+        # Reading text normalizes CRLF to LF, which would drop one byte per line.
+        # The file below is exactly WARN_BYTES + 1 bytes on disk, but its
+        # LF-normalized text is WARN_BYTES, so only the on-disk size exceeds the limit.
+        header = b"# Large thread\r\n"
+        line = b"a" * 79 + b"\r\n"
+        data = header
+        while len(data) + len(line) <= WARN_BYTES + 1:
+            data += line
+        data += b"a" * (WARN_BYTES + 1 - len(data))
+        self.assertEqual(len(data), WARN_BYTES + 1)
+        self.assertEqual(len(data.decode("utf-8").replace("\r\n", "\n").encode("utf-8")), WARN_BYTES + 1 - data.count(b"\r\n"))
+        self.assertLessEqual(len(data.decode("utf-8").replace("\r\n", "\n").encode("utf-8")), WARN_BYTES)
+        self.large.write_bytes(data)
+        self.assertEqual(self.size_findings(), [("WARN", "threads/large.md")])
+
     def test_error_size_makes_the_command_fail(self):
         argv = ["audit_index.py", "--index-root", str(self.index_root), "--source-root", str(self.source_root)]
         self.write_document(ascii_document_of_bytes(WARN_BYTES + 1))

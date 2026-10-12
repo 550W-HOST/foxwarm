@@ -142,7 +142,7 @@ def audit(index_root: Path, source_root: Path, fail_on_cjk: bool) -> list[Findin
 
     for path, text in texts.items():
         rel = path.relative_to(index_root).as_posix()
-        size = len(text.encode("utf-8"))
+        size = path.stat().st_size
         if size > SIZE_ERROR_BYTES:
             findings.append(
                 Finding("ERROR", "file-size", rel, 1, f"{size:,} bytes exceeds the {SIZE_ERROR_BYTES:,}-byte error limit; split by responsibility")
