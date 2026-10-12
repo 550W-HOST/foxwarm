@@ -435,7 +435,7 @@ function App() {
   const [route, setRoute] = useState<RouteState>(initialRoute)
   const [setupOobe, setSetupOobe] = useState(false)
   const [focusModelsRequest, setFocusModelsRequest] = useState(0)
-  const [activeTerminals, setActiveTerminals] = useState<TerminalRegistryRecord[]>([])
+  const [activeTerminals, setActiveTerminals] = useState<TerminalRegistryRecord[] | null>(null)
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768)
   const [showSessionList, setShowSessionList] = useState<boolean>(() => !window.location.hash)
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -699,6 +699,8 @@ function App() {
   }, [allTabs, sessions])
 
   useEffect(() => {
+    if (!activeTerminals) return
+
     const activeTerminalMap = new Map(activeTerminals.map((terminal) => [terminal.id, terminal]))
     const terminalTabs = allTabs.filter((tab): tab is Extract<WorkbenchTab, { type: 'terminal' }> => tab.type === 'terminal')
     const terminalDraftTabs = terminalTabs.filter((tab) => !tab.terminalId)
@@ -750,7 +752,7 @@ function App() {
       upsertTab(makeTerminalTabFromRecord(terminal), { activate: false })
     })
 
-  }, [activeTerminals, allTabs, upsertTab])
+  }, [activeTerminals, allTabs, removeTab, upsertTab, updateTab])
 
   useEffect(() => {
     const trimmedInstanceName = webUiSettings.instanceName.trim()
@@ -1016,7 +1018,7 @@ function App() {
   const openTerminalTab = (options?: { nodeId?: string; path?: string; terminalId?: string; sourcePaneId?: string; preferPanel?: boolean }) => {
     if (options?.terminalId) {
       const existing = allTabs.find((tab) => tab.type === 'terminal' && tab.terminalId === options.terminalId)
-      const terminal = activeTerminals.find((item) => item.id === options.terminalId)
+      const terminal = activeTerminals?.find((item) => item.id === options.terminalId)
       const tab = existing || (terminal ? makeTerminalTabFromRecord(terminal) : null)
       if (tab) {
         upsertTab(tab, { activate: true })
