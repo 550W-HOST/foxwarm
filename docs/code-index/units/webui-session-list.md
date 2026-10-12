@@ -150,3 +150,5 @@ Renders a hierarchical, interactive session list for the Foxwarm web UI. `Sessio
 ## Sidebar chrome integration
 
 The expanded Sidebar's native list scrollbar keeps a stable gutter and hides only its idle track/thumb. Hover or keyboard focus reveals the thumb, coarse pointers keep it available, and forced colors use native colors. The collapsed rail retains Session initials with a stationary rounded-rectangle perimeter whose short dash advances through CSS stroke-dashoffset while busy, plus inset waiting/unread dots, avoiding corner clipping. Requesting-model and running-tool retain their semantic colors; reduced motion keeps a static perimeter segment. Desktop inset-panel integration is owned by [Workbench](./webui-workbench.md#behavior).
+
+The optional bounded global summary retains validated `cachedTokens`, `inputTokens`, and `outputTokens` from its existing `/session-list/architecture?limit=1&childLimit=1` read as `tokenUsage`. Absent/invalid totals remain unavailable rather than inferred from the loaded window or shown as zero. Footer usage adds no independent read owner or all-Session request.

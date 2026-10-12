@@ -1013,7 +1013,7 @@ function App() {
     return paneTabs[0]
   }
 
-  const openTerminalTab = (options?: { nodeId?: string; path?: string; terminalId?: string; sourcePaneId?: string }) => {
+  const openTerminalTab = (options?: { nodeId?: string; path?: string; terminalId?: string; sourcePaneId?: string; preferPanel?: boolean }) => {
     if (options?.terminalId) {
       const existing = allTabs.find((tab) => tab.type === 'terminal' && tab.terminalId === options.terminalId)
       const terminal = activeTerminals.find((item) => item.id === options.terminalId)
@@ -1045,9 +1045,10 @@ function App() {
         return
       }
 
-      if (getPaneHeight(sourcePaneId) > 700) {
+      if (options?.preferPanel || getPaneHeight(sourcePaneId) > 700) {
         const draftTab = makeTerminalDraftTab(nodeId, path)
-        const createdPaneId = splitPaneWithNewTab(sourcePaneId, draftTab, 'bottom')
+        const panelShare = Math.min(50, Math.max(25, 260 / Math.max(1, getPaneHeight(sourcePaneId)) * 100))
+        const createdPaneId = splitPaneWithNewTab(sourcePaneId, draftTab, 'bottom', options?.preferPanel ? [100 - panelShare, panelShare] : undefined)
         if (createdPaneId) {
           navigateToTab(draftTab.id)
           return
@@ -1058,6 +1059,44 @@ function App() {
     const tab = makeTerminalDraftTab(nodeId, path)
     upsertTab(tab, { paneId: sourcePaneId || undefined, activate: true })
     navigateToTab(tab.id)
+  }
+
+  const statusTerminalTarget = normalizeTerminalTarget(focusedActiveTab?.type === 'terminal'
+    ? focusedActiveTab
+    : focusedActiveTab?.type === 'vscode'
+      ? { nodeId: codeNodeId, cwd: codePath }
+      : { nodeId: currentContextSessionRecord?.currentNode, cwd: currentContextSessionRecord?.cwd || '/' })
+  const statusTerminalBelow = focusedPaneId ? findPaneBelow(root, focusedPaneId) : null
+  const statusTerminalTab = focusedActiveTab?.type === 'terminal' ? focusedActiveTab
+    : (statusTerminalBelow ? getTerminalTabInPane(statusTerminalBelow.id, { nodeId: statusTerminalTarget.nodeId, path: statusTerminalTarget.cwd }) : null)
+      || findTerminalForTarget(allTabs.filter((tab): tab is Extract<WorkbenchTab, { type: 'terminal' }> => tab.type === 'terminal'), statusTerminalTarget)
+  const statusTerminalPane = statusTerminalTab ? findPaneContainingTab(root, statusTerminalTab.id) : null
+  const statusTerminalVisible = !!statusTerminalPane && !statusTerminalPane.collapsed && statusTerminalPane.activeTabId === statusTerminalTab?.id
+  const toggleTerminalPanel = () => {
+    if (statusTerminalPane && statusTerminalTab) {
+      const otherTab = statusTerminalPane.tabIds.find(id => tabsById[id]?.type !== 'terminal')
+      const returnPane = paneNodes.find(pane => pane.id !== statusTerminalPane.id && !pane.collapsed)
+      if (!statusTerminalVisible && otherTab && statusTerminalPane.id === focusedPaneId) {
+        // Restored Terminal tabs sharing the source editor open as a bottom panel.
+        const panelShare = Math.min(50, Math.max(25, 260 / Math.max(1, getPaneHeight(statusTerminalPane.id)) * 100))
+        const panelId = dockTabToPaneEdge(statusTerminalTab.id, statusTerminalPane.id, 'bottom', [100 - panelShare, panelShare])
+        if (panelId) navigateToTab(statusTerminalTab.id)
+      } else if (statusTerminalVisible && otherTab) {
+        // A user-docked mixed pane keeps its other content visible.
+        navigateToTab(otherTab)
+      } else if (statusTerminalVisible && returnPane) {
+        setPaneCollapsed(statusTerminalPane.id, true)
+        if (focusedPaneId === statusTerminalPane.id) {
+          if (returnPane.activeTabId) navigateToTab(returnPane.activeTabId)
+          else focusPane(returnPane.id)
+        }
+      } else {
+        setPaneCollapsed(statusTerminalPane.id, false)
+        navigateToTab(statusTerminalTab.id)
+      }
+      return
+    }
+    openTerminalTab({ nodeId: statusTerminalTarget.nodeId, path: statusTerminalTarget.cwd, sourcePaneId: focusedPaneId || undefined, preferPanel: true })
   }
 
   const closeWorkbenchTab = async (tabId: string, options?: { deferRoute?: boolean }) => {
@@ -1471,7 +1510,7 @@ function App() {
           canonicalSessionId={sessionRecord?.id || tab.sessionId}
           sessionDisplayName={sessionRecord?.displayName}
           onBack={onBack}
-          onOpenTerminal={() => openTerminalTab({ nodeId: sessionRecord?.currentNode || 'master', path: sessionRecord?.cwd || '/', sourcePaneId })}
+          onOpenTerminal={isMobile ? () => openTerminalTab({ nodeId: sessionRecord?.currentNode || 'master', path: sessionRecord?.cwd || '/', sourcePaneId }) : undefined}
           onOpenCode={() => openCode(resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd))}
           onOpenCodeFile={(filePath, lines, target) => {
             const request = target
@@ -1642,7 +1681,14 @@ function App() {
         canCloseActiveTab={!!activeTab && !(activeTab.type === 'setup' && setupOobe)}
         renderContent={renderContent}
         onFocusPane={handleFocus}
-        onSetCollapsed={setPaneCollapsed}
+        onSetCollapsed={(targetPaneId, collapsed) => {
+          setPaneCollapsed(targetPaneId, collapsed)
+          if (collapsed && paneTabs.every(tab => tab.type === 'terminal')) {
+            const returnPane = paneNodes.find(candidate => candidate.id !== targetPaneId && !candidate.collapsed)
+            if (returnPane?.activeTabId) navigateToTab(returnPane.activeTabId)
+            else if (returnPane) focusPane(returnPane.id)
+          }
+        }}
         onSelectTab={navigateToTab}
         onCloseTab={(tabId) => { void closeWorkbenchTab(tabId) }}
         onKeepTab={keepWorkbenchTab}
@@ -1655,7 +1701,9 @@ function App() {
         onCloseAllTabs={() => { void closePaneTabsByPredicate(paneId, () => true) }}
         onSplitRight={() => handleSplit('right')}
         onSplitDown={() => handleSplit('bottom')}
-        onClosePane={handleClosePane}
+        onClosePane={paneTabs.length > 0 && paneTabs.every(tab => tab.type === 'terminal')
+          ? () => { setPaneCollapsed(paneId, true); void closePaneTabsByPredicate(paneId, () => true) }
+          : handleClosePane}
       />
     )
   }
@@ -2001,7 +2049,12 @@ function App() {
             onLayoutResize={updateSplitSizes}
           />
         </div>
-        <WorkbenchStatusBar running={busyCount} sessions={sessions} nodes={nodeTargets} />
+        <WorkbenchStatusBar running={busyCount} sessions={sessions} nodes={nodeTargets}
+          onToggleTerminal={toggleTerminalPanel} terminalVisible={statusTerminalVisible}
+          totalUsage={boundedSessions.globalSummary?.tokenUsage}
+          currentSessionId={focusedActiveTab?.type === 'chat' ? focusedActiveTab.sessionId : undefined}
+          currentSession={focusedActiveTab?.type === 'chat' ? currentContextSessionRecord : undefined}
+        />
       </div>
     </div>,
   ))

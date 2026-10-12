@@ -266,7 +266,7 @@ test('terminal targets normalize cwd and never reuse a different node at the sam
 
 test('session-header terminal orchestration keeps the session node and replaces a mismatched lower-pane target', async () => {
   const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8')
-  assert.match(app, /onOpenTerminal=\{\(\) => openTerminalTab\(\{ nodeId: sessionRecord\?\.currentNode \|\| 'master', path: sessionRecord\?\.cwd \|\| '\/', sourcePaneId \}\)\}/)
+  assert.match(app, /onOpenTerminal=\{isMobile \? \(\) => openTerminalTab\(\{ nodeId: sessionRecord\?\.currentNode \|\| 'master', path: sessionRecord\?\.cwd \|\| '\/', sourcePaneId \}\) : undefined\}/)
   const openTerminalStart = app.indexOf('const openTerminalTab')
   const openTerminalEnd = app.indexOf('const closeWorkbenchTab', openTerminalStart)
   const block = app.slice(openTerminalStart, openTerminalEnd)
@@ -595,4 +595,19 @@ test('sidebar session node resolution prefers the running tool node, then the se
   assert.equal(getResolvedSessionNodeId({ runtimeState: { tool: { name: 'exec', executionNode: 'mac-mini', startedAt: 1 } } }), 'mac-mini')
   assert.equal(getResolvedSessionNodeId({ currentNode: 'visualdust-a6000-ws1', runtimeState: { tool: undefined } }), 'visualdust-a6000-ws1')
   assert.equal(getResolvedSessionNodeId({ runtimeState: {} }), 'master')
+})
+
+
+test('bottom panel placement supports an explicit initial ratio without changing ordinary splits', async () => {
+  const { createPaneNode, createSplitNode, replacePaneWithSplit } = await loadTypeScriptModule('../src/workbench/utils.ts')
+  const source = createPaneNode(['chat:a'], 'chat:a', 'editor')
+  const other = createPaneNode(['chat:b'], 'chat:b', 'other')
+  const terminal = createPaneNode(['terminal:shell'], 'terminal:shell', 'terminal')
+  const root = createSplitNode('row', [source, other], [60, 40], 'root')
+  const panel = replacePaneWithSplit(root, 'editor', 'column', terminal, 'after', [70, 30])
+  assert.deepEqual(panel.sizes, [60, 40])
+  assert.deepEqual(panel.children[0].sizes, [70, 30])
+  assert.deepEqual(panel.children[0].children.map(pane => pane.id), ['editor', 'terminal'])
+  const ordinary = replacePaneWithSplit(source, 'editor', 'row', terminal, 'after')
+  assert.deepEqual(ordinary.sizes, [50, 50])
 })

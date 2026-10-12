@@ -2324,3 +2324,10 @@ html[data-foxwarm-theme] .collapsed-session-tile {
 @media (prefers-reduced-motion: reduce) {
   .collapsed-runtime-perimeter-segment { animation: none; }
 }
+
+/* Keep both usage counters usable in the narrowed desktop workbench column. */
+.foxwarm-workbench-frame { container: foxwarm-status-width / inline-size; }
+@container foxwarm-status-width (max-width: 620px) {
+  .foxwarm-status-item > span:first-of-type { display: none; }
+  .foxwarm-status-item { padding-inline: 6px; gap: 4px; }
+}
