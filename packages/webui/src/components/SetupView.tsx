@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CheckCircle2, Palette, RefreshCw, Settings, XCircle } from 'lucide-react'
+import { Bot, CheckCircle2, Palette, RefreshCw, Settings, SlidersHorizontal, XCircle } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import { buildModelsYaml, makeDefaultProvider } from '../setupModels'
 import { refreshModelOptions } from '../modelOptionsLoader'
@@ -117,6 +117,17 @@ function normalizeWeixinQrPayload(value: string): { imageSrc: string | null; raw
 export default function SetupView({ forced = false, onClose, onSetupChanged, focusModelsRequest = 0, onFocusModelsRequestHandled, webUiSettings, onInstanceNameChange, onTabIconChange }: SetupViewProps) {
   const tabHeader = useWorkbenchTabHeader()
   const [activeTab, setActiveTab] = useState<SetupTab>('appearance')
+  const setupRootRef = useRef<HTMLDivElement | null>(null)
+  const [verticalSections, setVerticalSections] = useState(false)
+  useEffect(() => {
+    const root = setupRootRef.current
+    if (!root) return
+    const sync = () => setVerticalSections(root.clientWidth >= 700)
+    sync()
+    const observer = new ResizeObserver(sync)
+    observer.observe(root)
+    return () => observer.disconnect()
+  }, [])
   const [modelsEditorFocusRequest, setModelsEditorFocusRequest] = useState(0)
   const [status, setStatus] = useState<SetupStatus | null>(null)
   const [loading, setLoading] = useState(true)
@@ -248,14 +259,14 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
   }
 
   const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
-    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return
     event.preventDefault()
     const currentIndex = SETUP_TABS.indexOf(activeTab)
     const nextTab = event.key === 'Home'
       ? SETUP_TABS[0]
       : event.key === 'End'
         ? SETUP_TABS[SETUP_TABS.length - 1]
-        : SETUP_TABS[(currentIndex + (event.key === 'ArrowRight' ? 1 : -1) + SETUP_TABS.length) % SETUP_TABS.length]
+        : SETUP_TABS[(currentIndex + (event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : -1) + SETUP_TABS.length) % SETUP_TABS.length]
     activateTab(nextTab, true)
   }
 
@@ -410,7 +421,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-fw-canvas">
+    <div ref={setupRootRef} className="foxwarm-setup-root flex h-full min-h-0 flex-col bg-fw-canvas">
       <ContentHeader
         icon={<Settings className="h-5 w-5" />}
         title={forced ? 'Foxwarm first-time setup' : 'Foxwarm Setup'}
@@ -437,14 +448,14 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
         }
       />
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4 md:p-6">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex min-h-0 w-full flex-1 flex-col">
           {loading && <div className="rounded-xl border border-fw-border bg-fw-surface p-4 text-sm text-fw-text dark:border-fw-border-muted dark:text-fw-text">Loading setup status…</div>}
           {error && <div className="mt-4 rounded-xl border border-fw-danger-border bg-fw-danger-surface p-4 text-sm text-fw-danger dark:border-fw-danger-border/60 dark:bg-fw-danger-surface-strong/30 dark:text-fw-danger">{error}</div>}
 
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-sm dark:border-fw-border-muted">
-            <div className="shrink-0 border-b border-fw-border px-2 pt-2 dark:border-fw-border-muted">
-              <div role="tablist" aria-label="Setup sections" className="flex gap-1">
+          <div className="foxwarm-setup-body flex min-h-0 flex-1 flex-col overflow-hidden">
+            <div className="foxwarm-setup-navigation shrink-0 border-b border-fw-border px-2 pt-2 dark:border-fw-border-muted">
+              <div role="tablist" aria-label="Setup sections" aria-orientation={verticalSections ? 'vertical' : 'horizontal'} className="foxwarm-setup-section-list flex gap-1">
                 <button
                   ref={appearanceTabRef}
                   id="setup-tab-appearance"
@@ -474,6 +485,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
                   onKeyDown={handleTabKeyDown}
                   className={`inline-flex min-w-0 items-center gap-2 rounded-t-lg border-b-2 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'models' ? 'border-fw-accent-border text-fw-accent dark:border-fw-accent-border dark:text-fw-accent' : 'border-transparent text-fw-text hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse'}`}
                 >
+                  <Bot className="h-4 w-4 shrink-0" aria-hidden="true" />
                   <span>Models</span>
                   {status && (status.models.exists && !status.models.hasPlaceholderSecrets ? (
                     <CheckCircle2 data-setup-tab-status="complete" className="h-4 w-4 shrink-0 text-fw-success dark:text-fw-success" aria-hidden="true" />
@@ -495,6 +507,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
                   onKeyDown={handleTabKeyDown}
                   className={`inline-flex min-w-0 items-center gap-2 rounded-t-lg border-b-2 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'config' ? 'border-fw-accent-border text-fw-accent dark:border-fw-accent-border dark:text-fw-accent' : 'border-transparent text-fw-text hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse'}`}
                 >
+                  <SlidersHorizontal className="h-4 w-4 shrink-0" aria-hidden="true" />
                   <span>Config</span>
                   {configTabStatus === 'complete' && <CheckCircle2 data-setup-tab-status="complete" className="h-4 w-4 shrink-0 text-fw-success dark:text-fw-success" aria-hidden="true" />}
                   {configTabStatus === 'attention' && <XCircle data-setup-tab-status="attention" className="h-4 w-4 shrink-0 text-fw-warning dark:text-fw-warning" aria-hidden="true" />}

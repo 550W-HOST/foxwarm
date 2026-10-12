@@ -9,7 +9,7 @@ Renders the compact global UI dropdown for color mode, Setup, reload, and Logs p
 ## Key Exports
 
 - `GlobalUiSettingsMenu` — default-exported React component rendering the global UI settings dropdown
-- `SessionUiSettingsMenu` — per-Chat header menu for send behavior, timeline view, usage badges, minimap visibility, direct-user metadata visibility, and Debug
+- `SessionUiSettingsMenu` — per-Chat header menu for send behavior, timeline view, usage badges, Full width, minimap visibility, direct-user metadata visibility, and Debug
 - `clampAnchoredMenuHorizontally` — pure preferred-alignment + viewport-gutter clamp helper
 - `readHorizontalViewportBounds` — intersects the layout/body bounds with the current visual viewport
 - Both menus use the existing send-mode union (`'modEnter' | 'enter'`) at their component boundary.
@@ -33,8 +33,9 @@ Renders the compact global UI dropdown for color mode, Setup, reload, and Logs p
 
 - Manages open/closed state of the dropdown menu with click-outside and Escape key dismissal via document event listeners.
 - Provides only the frequent `Auto` / `Light` / `Dark` color-mode control. Setup's Appearance tab repeats color mode above its palette preview and exclusively owns theme-family and portable file management.
-- The session-header menu provides the Detailed / Grouped / Conversation `timelineView` radio group, `showUsageBadge`, browser-local `Show minimap`, and `Show user message metadata`. Minimap remains disabled only when it is the sole enabled context display, so scrollbar/minimap preferences cannot become both disabled.
+- The session-header menu provides the Detailed / Grouped / Conversation `timelineView` radio group, `showUsageBadge`, browser-local `Full width` (default on), `Show minimap`, and `Show user message metadata`. Minimap remains disabled only when it is the sole enabled context display, so scrollbar/minimap preferences cannot become both disabled.
 - The session-header menu detects macOS/iOS to display the correct modifier key label (Cmd vs Ctrl) for the send-key option.
+- `Full width` is stored with the other browser-local Chat preferences and synchronized through storage events across App, popup, and embedded roots. Turning it off bounds and centers the common message column at 1100px; it does not resize the viewport, minimap, or individual timeline cards.
 - `useChatPreferences` is the single browser-local owner used by ordinary and embedded Chat roots. Setters write the established keys and update their own root; `storage` events update other roots without writeback effects or stale echoes.
 - Application rows are ordered Reload WebUI, Open logs (when available), then Open setup (when available), so Setup is the final action. Tasks uses [direct navigation](./webui-tasks.md#d-webui-tasks-navigation) instead of a row here. Rows place the Reload refresh, Logs document, and Setup gear icons before their labels; Reload has no trailing icon. The Setup active marker remains at the row end.
 - The global menu closes automatically after color-mode change or Setup/Logs activation. Both menus close on Escape/outside click; opening Debug also closes the session menu.

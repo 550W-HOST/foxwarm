@@ -13,6 +13,8 @@ interface SessionUiSettingsMenuProps {
   onTimelineViewChange: (mode: TimelineView) => void
   showUsageBadge: boolean
   onShowUsageBadgeChange: (enabled: boolean) => void
+  fullWidth?: boolean
+  onFullWidthChange?: (enabled: boolean) => void
   showUserMessageMetadata: boolean
   onShowUserMessageMetadataChange: (enabled: boolean) => void
   onOpenDebugInfo: () => void
@@ -25,6 +27,8 @@ export default function SessionUiSettingsMenu({
   onTimelineViewChange,
   showUsageBadge,
   onShowUsageBadgeChange,
+  fullWidth = true,
+  onFullWidthChange = () => {},
   showUserMessageMetadata,
   onShowUserMessageMetadataChange,
   onOpenDebugInfo,
@@ -167,6 +171,9 @@ export default function SessionUiSettingsMenu({
                   ))}
                 </div>
               </fieldset>
+              <button type="button" role="switch" aria-checked={fullWidth} onClick={() => onFullWidthChange(!fullWidth)} className={toggleRowClass}>
+                <span>Full width</span>{toggle(fullWidth)}
+              </button>
               <button type="button" onClick={() => onShowUsageBadgeChange(!showUsageBadge)} className={toggleRowClass}>
                 <span>Show usage badges</span>{toggle(showUsageBadge)}
               </button>

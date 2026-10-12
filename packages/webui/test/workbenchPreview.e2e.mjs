@@ -78,6 +78,11 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.href)
       const pathname = url.pathname
       if (pathname.endsWith('/api/auth/session')) return json({ role: 'admin' })
+      if (pathname.endsWith('/api/tasks')) {
+        const status = url.searchParams.get('status')
+        const total = status === 'open' ? 3 : status === 'active' ? 2 : 0
+        return json({ tasks: [], total, omitted: total })
+      }
       if (pathname.endsWith('/api/setup/status')) return json({ oobe: false, models: { exists: true, hasPlaceholderSecrets: false }, channels: [] })
       if (pathname.endsWith('/api/terminals') && options.method === 'POST' && terminalTemplate) {
         const request = JSON.parse(options.body)
@@ -138,11 +143,25 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
     window.WebSocket = FixtureWebSocket
   }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, codeNewWindow, responsiveChat, terminal })
   await page.goto(`${baseUrl}${hash}`, { waitUntil: 'domcontentloaded' })
+  await page.bringToFront()
   await page.waitForFunction(() => !!window.foxwarmTest, { timeout: 8_000 }).catch(async error => {
     const body = await page.evaluate(() => document.body.innerText).catch(() => '')
     throw new Error(`${error.message}; page errors: ${pageErrors.join(' | ')}; body: ${body.slice(0, 500)}`)
   })
   return page
+}
+
+async function clickReadyControl(page, selector) {
+  await page.waitForSelector(selector, { visible: true })
+  await page.hover(selector)
+  await page.waitForFunction(selector => {
+    const element = document.querySelector(selector)
+    if (!element) return false
+    const box = element.getBoundingClientRect()
+    const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)
+    return hit === element || element.contains(hit)
+  }, {}, selector)
+  await page.click(selector)
 }
 
 async function state(page) {
@@ -1011,12 +1030,12 @@ test('Application menu icons precede their labels and retain Setup, Logs, and re
     if (process.env.FOXWARM_APPLICATION_MENU_SCREENSHOT_PATH) {
       await page.screenshot({ path: process.env.FOXWARM_APPLICATION_MENU_SCREENSHOT_PATH })
     }
-    await page.click(`${menu} .lucide-settings`)
+    await clickReadyControl(page, `${menu} button:has(.lucide-settings)`)
     await page.waitForSelector('[data-setup-tab="appearance"]')
     assert.equal(await page.$(menu), null)
     await openMenu()
     assert.equal(await page.$eval(`${menu} .lucide-settings`, icon => icon.closest('button').textContent), 'Open setupactive')
-    await page.click(`${menu} .lucide-file-text`)
+    await clickReadyControl(page, `${menu} button:has(.lucide-file-text)`)
     await page.waitForSelector('[data-logs-view]')
     assert.equal((await state(page)).root.activeTabId, 'system:logs')
     assert.equal(await page.$(menu), null)
@@ -1430,5 +1449,117 @@ test('Tasks restores from its deployment-relative route, stays singleton, and mo
     await page.waitForSelector('[data-tasks-view]')
     assert.equal(await page.$('[data-pane-id]'), null, 'popup mounts only the Tasks leaf')
     assert.equal(await page.$('[data-workbench-tab-close]'), null)
+  } finally { await page.close() }
+})
+
+
+test('Full width defaults on, remembers its toggle, and bounds only the message column', async () => {
+  const page = await openFixture({ tabs: [chat('e2e-a', false)], responsiveChat: true, width: 1800 })
+  const column = '.foxwarm-chat-messages-content'
+  const readWidth = () => page.$eval(column, element => element.getBoundingClientRect().width)
+  try {
+    await page.waitForSelector(column)
+    assert.ok(await readWidth() > 1100, 'new browsers retain the full-width message layout')
+    await page.click('button[aria-label="Open session options"]')
+    await page.waitForSelector('[data-session-ui-settings-menu]', { visible: true })
+    const toggle = '[data-session-ui-settings-menu] button[role="switch"]'
+    assert.equal(await page.$eval(toggle, element => element.textContent.trim()), 'Full width')
+    assert.equal(await page.$eval(toggle, element => element.getAttribute('aria-checked')), 'true')
+    await clickReadyControl(page, toggle)
+    await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages-content').dataset.fullWidth === 'false')
+    assert.ok(await readWidth() <= 1100)
+    assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_chat_full_width_v1')), 'false')
+    await page.reload({ waitUntil: 'networkidle0' })
+    await page.waitForSelector(column)
+    assert.equal(await page.$eval(column, element => element.dataset.fullWidth), 'false')
+    assert.ok(await readWidth() <= 1100)
+    await page.setViewport({ width: 900, height: 900 })
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
+    await page.click('button[aria-label="Open session options"]')
+    await clickReadyControl(page, toggle)
+    await page.setViewport({ width: 1800, height: 900 })
+    await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages-content').getBoundingClientRect().width > 1100)
+  } finally { await page.close() }
+})
+
+test('Sidebar and tab scrollbars reveal without changing usable width or tab-content continuity', async () => {
+  const page = await openFixture({ tabs: [system, ...Array.from({ length: 12 }, (_, index) => chat(`e2e-long-session-${index}`, false))], activeTabId: 'chat:e2e-long-session-0', width: 1400 })
+  try {
+    const sidebar = '.foxwarm-sidebar-panel [data-session-list-scroll-container]'
+    await page.waitForSelector(sidebar)
+    await page.mouse.move(1390, 890)
+    const idle = await page.$eval(sidebar, element => ({ width: element.clientWidth, color: getComputedStyle(element).scrollbarColor }))
+    assert.equal(idle.color, 'rgba(0, 0, 0, 0) rgba(0, 0, 0, 0)')
+    await page.hover(sidebar)
+    const hovered = await page.$eval(sidebar, element => ({ width: element.clientWidth, color: getComputedStyle(element).scrollbarColor }))
+    assert.equal(hovered.width, idle.width)
+    assert.notEqual(hovered.color, idle.color)
+    await page.mouse.move(1390, 890)
+    await page.waitForSelector('.foxwarm-tab-overflow')
+    assert.equal(await page.$eval('.foxwarm-tab-overflow', element => getComputedStyle(element).opacity), '0')
+    const width = await page.$eval('.foxwarm-workbench-tab-row', element => element.clientWidth)
+    await page.hover('.foxwarm-workbench-tab-row')
+    assert.equal(await page.$eval('.foxwarm-tab-overflow', element => getComputedStyle(element).opacity), '1')
+    assert.equal(await page.$eval('.foxwarm-workbench-tab-row', element => element.clientWidth), width)
+    await page.mouse.wheel({ deltaY: 450 })
+    await page.waitForFunction(() => document.querySelector('.foxwarm-workbench-tab-row').scrollLeft > 0)
+    const seam = await page.evaluate(() => {
+      const tab = document.querySelector('[data-tab-active="true"]').getBoundingClientRect()
+      const strip = document.querySelector('.foxwarm-workbench-tab-strip').getBoundingClientRect()
+      return Math.abs(tab.bottom - strip.bottom)
+    })
+    assert.ok(seam <= 1, 'overlay scrolling does not reserve a stripe below the current tab')
+  } finally { await page.close() }
+})
+
+test('Desktop status bar opens upward details without navigation and stays outside Sidebar height', async () => {
+  const page = await openFixture()
+  try {
+    const bar = '[data-workbench-status-bar]'
+    const tasks = `${bar} button[aria-label="Tasks: 2 active, 5 unfinished"]`
+    await page.waitForSelector(tasks)
+    assert.equal(await page.$eval(bar, element => element.getBoundingClientRect().height), 24)
+    const hash = await page.evaluate(() => location.hash)
+    const colors = await page.$eval(tasks, element => ({ idle: getComputedStyle(element).backgroundColor }))
+    await page.hover(tasks)
+    assert.notEqual(await page.$eval(tasks, element => getComputedStyle(element).backgroundColor), colors.idle)
+    await page.click(tasks)
+    await page.waitForSelector('[data-workbench-status-popup]', { visible: true })
+    assert.equal(await page.evaluate(() => location.hash), hash)
+    assert.match(await page.$eval('[data-workbench-status-popup]', element => element.textContent), /Active2Open3/)
+    assert.equal(await page.evaluate(() => document.querySelector('[data-workbench-status-popup]').getBoundingClientRect().bottom < document.querySelector('[data-workbench-status-bar]').getBoundingClientRect().top), true)
+    await page.keyboard.press('Escape')
+    assert.equal(await page.$('[data-workbench-status-popup]'), null)
+    assert.equal(await page.$eval(tasks, element => document.activeElement === element), true)
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent('foxwarm-task-counts', { detail: { open: 1, active: 1 } })))
+    await page.waitForSelector(`${bar} button[aria-label="Tasks: 1 active, 2 unfinished"]`)
+    await page.click(`${bar} button[aria-label="Ready nodes: 1"]`)
+    await page.waitForSelector('[data-workbench-status-popup]', { visible: true })
+    assert.match(await page.$eval('[data-workbench-status-popup]', element => element.textContent), /master/)
+    assert.equal(await page.evaluate(() => location.hash), hash)
+    const bounds = await page.evaluate(() => {
+      const footer = document.querySelector('[data-workbench-status-bar]').getBoundingClientRect()
+      const sidebar = document.querySelector('.foxwarm-sidebar-panel').getBoundingClientRect()
+      return { inset: innerHeight - footer.bottom, sameBottom: Math.abs(sidebar.bottom - footer.bottom), outsideSidebar: footer.left > sidebar.right }
+    })
+    assert.equal(bounds.inset, 6); assert.ok(bounds.sameBottom < 1); assert.equal(bounds.outsideSidebar, true)
+  } finally { await page.close() }
+})
+
+test('Desktop text inputs use compact control typography and preserve keyboard entry', async () => {
+  const page = await openFixture()
+  try {
+    const selector = 'input[aria-label="Search sessions"]'
+    await page.waitForSelector(selector)
+    const style = await page.$eval(selector, element => {
+      const css = getComputedStyle(element)
+      return { font: parseFloat(css.fontSize), radius: parseFloat(css.borderTopLeftRadius), weight: css.fontWeight }
+    })
+    assert.ok(style.font <= 14, 'desktop fields do not inherit the touch-only 16px floor')
+    assert.ok(style.radius <= 4)
+    assert.equal(style.weight, '400')
+    await page.click(selector)
+    await page.keyboard.type('needle')
+    assert.equal(await page.$eval(selector, element => element.value), 'needle')
   } finally { await page.close() }
 })

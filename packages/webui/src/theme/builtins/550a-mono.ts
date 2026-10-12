@@ -11,7 +11,7 @@ const consoleTypography: Partial<ThemeVariant['typography']> = {
   smallFontSizePx: 11.5,
   controlFontSizePx: 12.5,
   messageFontSizePx: 15,
-  composerFontSizePx: 16,
+  composerFontSizePx: 14,
   codeFontSizePx: 12.5,
   uiLineHeight: 1.45,
   messageLineHeight: 1.65,
