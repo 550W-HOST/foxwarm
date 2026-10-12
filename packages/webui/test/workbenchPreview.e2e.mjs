@@ -296,6 +296,26 @@ test('a persisted lone collapsed pane keeps its tab expansion entry without pane
   } finally { await page.close() }
 })
 
+test('explicit hash navigation activates and expands an existing collapsed-pane tab', async () => {
+  const layout = {
+    id: 'split-main',
+    kind: 'split',
+    direction: 'row',
+    sizes: [50, 50],
+    children: [
+      { id: 'pane-main', kind: 'pane', tabIds: ['chat:e2e-a'], activeTabId: 'chat:e2e-a', collapsed: true },
+      { id: 'pane-other', kind: 'pane', tabIds: ['system:agents'], activeTabId: 'system:agents' },
+    ],
+  }
+  const page = await openFixture({ tabs: [chat('e2e-a', false), system], activeTabId: 'system:agents', hash: '#tab/system:agents', layout })
+  try {
+    await page.waitForSelector('[data-workbench-collapsed-tab="chat:e2e-a"]')
+    await page.evaluate(() => { window.location.hash = '#tab/chat%3Ae2e-a' })
+    await page.waitForSelector('[data-workbench-tab-handle="chat:e2e-a"]')
+    assert.equal((await state(page)).root.children.find(pane => pane.id === 'pane-main').collapsed, false, 'explicit hash navigation expands the activated pane')
+  } finally { await page.close() }
+})
+
 test('collapsing Terminal detaches without closing resources and kept Code stays mounted', async () => {
   const terminal = { id: 'term-collapse', nodeId: 'master', cwd: '/workspace', pid: 42, cols: 80, rows: 24 }
   const terminalTab = { id: 'terminal:term-collapse', type: 'terminal', terminalId: terminal.id, nodeId: terminal.nodeId, cwd: terminal.cwd, title: 'Terminal' }

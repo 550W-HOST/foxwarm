@@ -629,6 +629,9 @@ function App() {
   useEffect(() => {
     const handleHashChange = () => {
       const nextRoute = getHashState()
+      if (!setupOobe && nextRoute.tabId && tabsById[nextRoute.tabId]) {
+        activateTab(nextRoute.tabId)
+      }
       setRoute(setupOobe && nextRoute.tabId !== SETUP_TAB_ID ? { view: 'tab', tabId: SETUP_TAB_ID } : nextRoute)
       if (isMobile) {
         setShowSessionList(!window.location.hash)
@@ -637,7 +640,7 @@ function App() {
 
     window.addEventListener('hashchange', handleHashChange)
     return () => window.removeEventListener('hashchange', handleHashChange)
-  }, [isMobile, setupOobe])
+  }, [activateTab, isMobile, setupOobe, tabsById])
 
   useEffect(() => {
     if (setupOobe && route.tabId !== SETUP_TAB_ID) {
