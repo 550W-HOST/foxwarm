@@ -495,7 +495,6 @@ function App() {
   const closingRouteTabIdsRef = useRef<Set<string>>(new Set())
   const movedOutTerminalIdsRef = useRef<Set<string>>(new Set())
   const historySlotsRef = useRef(new Map<string, HTMLElement | null>())
-  const historyScrollTopRef = useRef(new Map<string, number>())
   const [, forceHistorySlotUpdate] = useState(0)
   const didInitializeEmptyWorkbenchRef = useRef(false)
   const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
@@ -512,8 +511,13 @@ function App() {
     [paneNodes, tabsById],
   )
   const registerHistorySlot = useCallback((tabId: string, element: HTMLElement | null) => {
-    if (historySlotsRef.current.get(tabId) === element) return
-    historySlotsRef.current.set(tabId, element)
+    if (element === null) {
+      if (!historySlotsRef.current.has(tabId)) return
+      historySlotsRef.current.delete(tabId)
+    } else {
+      if (historySlotsRef.current.get(tabId) === element) return
+      historySlotsRef.current.set(tabId, element)
+    }
     forceHistorySlotUpdate(value => value + 1)
   }, [])
   const handleVscodeFrameSlot = useCallback((element: HTMLElement | null) => setVscodeFrameSlot(element), [])
@@ -1899,8 +1903,6 @@ function App() {
           title: draft.query.trim() || 'History',
         } : current)}
         onSearchStarted={() => updateTab(tab.id, current => current.type === 'search' ? { ...current, searchStarted: true } : current)}
-        onScrollTopChange={(scrollTop) => historyScrollTopRef.current.set(tab.id, scrollTop)}
-        scrollTop={historyScrollTopRef.current.get(tab.id) || 0}
         onSetCollapsed={setPaneCollapsed}
         canClosePane={paneIds.length > 1}
         onClosePane={closePaneForHistory}

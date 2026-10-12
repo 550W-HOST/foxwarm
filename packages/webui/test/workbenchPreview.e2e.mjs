@@ -726,7 +726,7 @@ test('History tabs keep independent drafts/results across entries, pane collapse
     await page.click(footer)
     await page.waitForSelector('[data-history-search-view]')
     const firstTabId = await page.$eval('[data-tab-id^="history:"]', tab => tab.getAttribute('data-tab-id'))
-    await page.type('#history-search-query', 'alpha')
+    await page.type('[data-history-query-input]', 'alpha')
     await page.click('[data-history-search-view] button[type="submit"]')
     await page.waitForSelector('[data-history-result="history-outside/main"]')
     assert.equal(await page.$eval(`[data-tab-id="${firstTabId}"]`, tab => tab.textContent.includes('alpha')), true)
@@ -736,12 +736,33 @@ test('History tabs keep independent drafts/results across entries, pane collapse
     const tabIds = await page.$$eval('[data-tab-id^="history:"]', tabs => tabs.map(tab => tab.getAttribute('data-tab-id')))
     const secondTabId = tabIds.find(id => id !== firstTabId)
     assert.ok(secondTabId)
+    const associations = await page.evaluate(({ firstId, secondId }) => {
+      const read = id => {
+        const view = document.querySelector(`[data-history-tab-id="${id}"]`)
+        const input = view.querySelector('[data-history-query-input]')
+        const label = view.querySelector('label[for]')
+        const sessionInput = view.querySelector('[data-history-session-input]')
+        const list = sessionInput?.getAttribute('list')
+        const datalist = list ? view.querySelector(`#${CSS.escape(list)}`) : null
+        return { inputId: input.id, labelFor: label?.htmlFor, sessionList: list, datalistId: datalist?.id }
+      }
+      return { first: read(firstId), second: read(secondId) }
+    }, { firstId: firstTabId, secondId: secondTabId })
+    assert.notEqual(associations.first.inputId, associations.second.inputId)
+    assert.deepEqual(associations.first, { inputId: associations.first.inputId, labelFor: associations.first.inputId, sessionList: associations.first.sessionList, datalistId: associations.first.sessionList })
+    assert.deepEqual(associations.second, { inputId: associations.second.inputId, labelFor: associations.second.inputId, sessionList: associations.second.sessionList, datalistId: associations.second.sessionList })
+    const focusedAfterLabel = await page.$eval(`[data-history-tab-id="${secondTabId}"] label[for="${associations.second.inputId}"]`, label => {
+      label.click()
+      return { htmlFor: label.htmlFor, activeId: document.activeElement?.id }
+    })
+    assert.equal(focusedAfterLabel.htmlFor, associations.second.inputId)
+    assert.equal(focusedAfterLabel.activeId, associations.second.inputId)
     await page.click(footer)
     await page.waitForFunction(() => document.querySelectorAll('[data-tab-id^="history:"]').length === 2)
 
     await page.click(`[data-tab-id="${firstTabId}"]`)
     await page.waitForSelector(`[data-history-tab-id="${firstTabId}"] [data-history-result="history-outside/main"]`)
-    assert.equal(await page.$eval(`[data-history-tab-id="${firstTabId}"] #history-search-query`, input => input.value), 'alpha')
+    assert.equal(await page.$eval(`[data-history-tab-id="${firstTabId}"] [data-history-query-input]`, input => input.value), 'alpha')
     await page.$eval(`[data-history-tab-id="${firstTabId}"]`, element => { element.scrollTop = 20; element.dispatchEvent(new Event('scroll', { bubbles: true })) })
     await page.click(`[data-tab-id="${secondTabId}"]`)
     await page.waitForSelector(`[data-history-tab-id="${secondTabId}"]`)
@@ -753,13 +774,13 @@ test('History tabs keep independent drafts/results across entries, pane collapse
     await page.waitForSelector(`[data-workbench-collapsed-tab="${firstTabId}"]`)
     await page.click(`[data-workbench-collapsed-tab="${firstTabId}"]`)
     await page.waitForSelector(`[data-history-tab-id="${firstTabId}"] [data-history-result="history-outside/main"]`)
-    assert.equal(await page.$eval(`[data-history-tab-id="${firstTabId}"] #history-search-query`, input => input.value), 'alpha')
+    assert.equal(await page.$eval(`[data-history-tab-id="${firstTabId}"] [data-history-query-input]`, input => input.value), 'alpha')
 
     await page.setViewport({ width: 390, height: 800 })
     await page.waitForSelector('[data-sidebar-footer] button[aria-label="Search history"]')
     await page.click('[data-sidebar-footer] button[aria-label="Search history"]')
     await page.waitForSelector('[data-history-search-view]')
-    assert.deepEqual((await page.$$eval('[data-history-search-view] #history-search-query', inputs => inputs.map(input => input.value).sort())), ['', 'alpha'], 'mobile hiding keeps both History tab drafts')
+    assert.deepEqual((await page.$$eval('[data-history-search-view] [data-history-query-input]', inputs => inputs.map(input => input.value).sort())), ['', 'alpha'], 'mobile hiding keeps both History tab drafts')
   } finally { await page.close() }
 })
 
@@ -802,8 +823,8 @@ test('history result Open session reuses kept Chats or opens a preview while ret
   const history = { id: 'system:search', type: 'search', title: 'History' }
   const page = await openFixture({ tabs: [history, chat('e2e-a', false)], activeTabId: history.id })
   try {
-    await page.waitForSelector('#history-search-query')
-    await page.type('#history-search-query', 'entry')
+    await page.waitForSelector('[data-history-query-input]')
+    await page.type('[data-history-query-input]', 'entry')
     await page.click('button[type=submit]')
     await page.waitForFunction(() => document.querySelector('[data-history-result="history-outside/main"] header')?.textContent.includes('Outside the sidebar'))
     assert.equal(await page.$('[data-session-id="history-outside/main"]'), null)
@@ -812,8 +833,8 @@ test('history result Open session reuses kept Chats or opens a preview while ret
     assert.equal((await state(page)).tabsById['chat:e2e-a'].preview, false)
     assert.equal((await state(page)).tabsById['system:search'].type, 'search')
     await page.click('[data-tab-id="system:search"]')
-    await page.waitForSelector('#history-search-query')
-    await page.type('#history-search-query', 'entry')
+    await page.waitForSelector('[data-history-query-input]')
+    await page.type('[data-history-query-input]', 'entry')
     await page.click('button[type=submit]')
     await page.waitForSelector('[data-history-result="history-outside/main"]')
     await page.click('[data-history-result="history-outside/main"] a[aria-label="Open session"]')

@@ -1,9 +1,11 @@
 import HistorySearchView, { type HistorySearchDraft } from './HistorySearchView'
 import { WorkbenchPaneToolbar } from './WorkbenchPane'
+import WorkbenchTabErrorBoundary from './WorkbenchTabErrorBoundary'
 import { useWorkbenchTabMenu } from './useWorkbenchTabMenu'
 import type { WorkbenchTabHeaderValue } from './WorkbenchTabHeader'
 import type { WorkbenchPaneNode, WorkbenchTab } from '../workbench/types'
 import type { TimelineView } from '../chatPreferences'
+import { createPortal } from 'react-dom'
 import { useCallback, useLayoutEffect, useState } from 'react'
 
 export default function HistorySearchTabHost({
@@ -21,8 +23,6 @@ export default function HistorySearchTabHost({
   onOpenSession,
   onDraftChange,
   onSearchStarted,
-  onScrollTopChange,
-  scrollTop,
   onSetCollapsed,
   canClosePane,
   onClosePane,
@@ -47,8 +47,6 @@ export default function HistorySearchTabHost({
   onOpenSession?: (sessionId: string) => void
   onDraftChange: (draft: HistorySearchDraft) => void
   onSearchStarted: () => void
-  onScrollTopChange: (scrollTop: number) => void
-  scrollTop: number
   onSetCollapsed: (paneId: string, collapsed: boolean) => void
   canClosePane: boolean
   onClosePane: () => void
@@ -124,25 +122,35 @@ export default function HistorySearchTabHost({
     }
   }, [portalTarget, slot])
 
+  const content = portalTarget ? createPortal(
+    <WorkbenchTabErrorBoundary
+      key={tab.id}
+      tabId={tab.id}
+      tabTitle={tab.title}
+      canClose
+      onClose={() => onCloseTab(tab.id)}
+    >
+      <HistorySearchView
+        tabId={tab.id}
+        isMobile={isMobile}
+        timelineView={timelineView}
+        showUsageBadge={showUsageBadge}
+        showUserMessageMetadata={showUserMessageMetadata}
+        knownSessions={knownSessions}
+        onBack={onBack}
+        onOpenSession={onOpenSession}
+        initialDraft={{ query: tab.searchQuery || '', agentName: tab.searchAgentName || '', sessionId: tab.searchSessionId || '' }}
+        onDraftChange={onDraftChange}
+        onSearchStarted={onSearchStarted}
+        header={header}
+      />
+    </WorkbenchTabErrorBoundary>,
+    portalTarget,
+  ) : null
+
   return <>
     <div ref={setPortalRef} className="fixed z-30 overflow-hidden" style={{ visibility: 'hidden', pointerEvents: 'none' }} data-history-search-portal={tab.id} />
-    <HistorySearchView
-      tabId={tab.id}
-      isMobile={isMobile}
-      timelineView={timelineView}
-      showUsageBadge={showUsageBadge}
-      showUserMessageMetadata={showUserMessageMetadata}
-      knownSessions={knownSessions}
-      onBack={onBack}
-      onOpenSession={onOpenSession}
-      initialDraft={{ query: tab.searchQuery || '', agentName: tab.searchAgentName || '', sessionId: tab.searchSessionId || '' }}
-      onDraftChange={onDraftChange}
-      onSearchStarted={onSearchStarted}
-      portalTarget={portalTarget}
-      scrollTop={scrollTop}
-      onScrollTopChange={onScrollTopChange}
-      header={header}
-    />
+    {content}
     {menu}
   </>
 }

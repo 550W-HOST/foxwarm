@@ -209,7 +209,7 @@ test('History popup uses its short window title and keeps the Search history pag
     assert.equal(await page.$eval('[data-history-search-view] h2', heading => heading.textContent), 'Search history')
     assert.equal(await page.$('[data-pane-id]'), null)
     assert.equal(await page.$('[data-workbench-tab-close], [data-workbench-tab-handle]'), null)
-    await page.type('#history-search-query', 'popup fixture')
+    await page.type('[data-history-query-input]', 'popup fixture')
     await page.click('button[type=submit]')
     await page.waitForFunction(() => document.querySelector('[data-history-result="popup-history-hit"] header')?.textContent.includes('Popup session name'))
     const url = new URL(await page.$eval('a[aria-label="Open session"]', anchor => anchor.href))
