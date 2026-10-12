@@ -13,5 +13,5 @@ test('versioned runtime DTO additions advance every affected RPC contract', () =
   assert.equal(sessionWorkerPublicationServiceDescriptor.version, 3);
   assert.equal(sessionWorkerPresentationServiceDescriptor.version, 2);
   assert.equal(mainManagementToolServiceDescriptor.version, 15);
-  assert.equal(nodeExecutionServiceDescriptor.version, 5);
+  assert.equal(nodeExecutionServiceDescriptor.version, 6);
 });

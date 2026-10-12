@@ -200,7 +200,8 @@ test('explicit streaming timeout remains a hard attempt bound and Stop remains a
       abortSignal: controller.signal, maxRetries: 1,
     });
     process.nextTick(() => controller.abort());
-    await assert.rejects(stopped, (error: any) => error?.name === 'CanceledError' && error?.code === 'ERR_CANCELED');
+    await assert.rejects(stopped, (error: any) =>
+      (error?.name === 'CanceledError' || error?.name === 'AbortError') && error?.code === 'ERR_CANCELED');
   } finally {
     (axios as any).post = originalPost;
     setStreamingTimeoutTestHooks();

@@ -214,7 +214,7 @@ test('actual POSIX shell/curl Node uses Main dispatch, bounded output and scoped
     const background = await executeNodeTool(session.id, 'shell-fixture', 'exec', { command: 'printf once >> effect; sleep 4; printf completed', timeout: 1 });
     assert.ok(background.execId);
     assert.equal(hasRemoteExecLivenessClaim([session.id], 'main', background.execId), true);
-    const wait = await tool_wait({ waitExecIds: [background.execId] }, { sessionId: session.id, session } as any);
+    const wait = await tool_wait({ waitExecIds: [background.execId], wakeIfNoActivityAfterSeconds: null }, { sessionId: session.id, session } as any);
     assert.ok(wait);
     const oldTransport = nodesManager.getNode('shell-fixture')!.httpExec!;
     const replacement = await fetch(`${host}/node/shell/register`, {
