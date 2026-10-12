@@ -83,9 +83,9 @@ Transient presentation channel (subscription-gated): Main tracks per-session Web
 
 Generated-image delivery uses the same bounded, source-fenced `session-turn-delivery` reverse service with refs rather than text or raw bytes. Main verifies each blob before calling existing normal-attachment file delivery; failures are logged without a provider retry. See [D-image-generated-output-replay](../threads/image-blob-lifecycle.md#d-image-generated-output-replay).
 
-The bound runner reports no completed background compact job (`hasCompletedCompactJob:false`); explicit completed-job application remains unsupported. Awaited compaction and its exact-owner maintenance fences are unchanged. See [D-context-compact-scheduling-boundary](../threads/context-compaction-and-recall.md#d-context-compact-scheduling-boundary).
+The bound runner reports no completed background compact job (`hasCompletedCompactJob:false`); explicit completed-job application remains unsupported. Awaited compaction and its exact-owner maintenance fences are unchanged. See [D-context-compact-scheduling-boundary](../threads/compaction-lifecycle.md#d-context-compact-scheduling-boundary).
 
-`sessionWorkerHost.test.ts` covers exact-owner clear followed by awaited compaction, durable counter/history/wait state, and absence of Main hydration. `sessionWorkerDestructive.test.ts` verifies that a fenced fork derives its new counter/cap without changing detached source bytes or the Main stub. Shared numbering contract: [block ID high-water marks](../threads/context-compaction-and-recall.md#d-context-block-id-high-water).
+`sessionWorkerHost.test.ts` covers exact-owner clear followed by awaited compaction, durable counter/history/wait state, and absence of Main hydration. `sessionWorkerDestructive.test.ts` verifies that a fenced fork derives its new counter/cap without changing detached source bytes or the Main stub. Shared numbering contract: [block ID high-water marks](../threads/archive-and-recall.md#d-context-block-id-high-water).
 
 ## Canonical ownership
 

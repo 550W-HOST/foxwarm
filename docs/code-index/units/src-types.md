@@ -13,7 +13,7 @@ Defines the core TypeScript interfaces and type aliases used throughout the syst
 - `MessageProviderMeta` — Message-level opaque provider metadata persisted on assistant messages; JSON-object `providerSpecificFields` carries the OpenAI Chat Completions `provider_specific_fields` (e.g. `reasoning_signature`), and `sourceModelId` scopes their round-trip to the producing concrete model
 - `OpenAIResponsesPartMeta` — Ordered Responses output metadata/annotations scoped to the concrete model that produced the part
 - `Message` — Role-tagged message with parts and metadata, including optional persisted logical LLM request timing and half-open `llmSegment` output range/complete flag on normal Responses assistant rows; see [early commentary commit](../threads/streaming-pipeline.md#d-streaming-early-commentary-commit)
-- `CompactionPlannerDebug` — Invocation-local steps, ordered tool-name strings, optional usage and complete newly appended messages stored at top-level `Message.compaction.planner`; see [planner diagnostics](../threads/context-compaction-and-recall.md#d-context-compact-planner-debug)
+- `CompactionPlannerDebug` — Invocation-local steps, ordered tool-name strings, optional usage and complete newly appended messages stored at top-level `Message.compaction.planner`; see [planner diagnostics](../threads/context-compaction.md#d-context-compact-planner-debug)
 - `LlmRequestTiming` — Persisted wall-clock start/completion boundaries plus monotonic logical-request duration
 - `Session` — Full session state including authoritative history, queue, stats, raw `model`/`effort`, and future-child defaults
 - `QueueItem` / `QueueSource` — Current inbound content/event work plus the `compact-commit` safe-point item and origin metadata. Source metadata can retain WeWork stream IDs and QQ Bot passive-reply message IDs without persisting callbacks; retry and compact planning are not queue types
@@ -25,7 +25,7 @@ Defines the core TypeScript interfaces and type aliases used throughout the syst
 - `ChannelTurnProgress`, `ChannelTurnToolRef`, `ChannelTurnToolResult` — Transient per-turn channel display progress for LLM/tool status, currently consumed by WeWork stream-card aggregation; `tool-calls-start` can carry model text for atomic text+running-tool card updates.
 - `TokenUsage` / `SessionStats` / `SessionTokenTotals` — Token accounting. `TokenUsage.reasoningTokens` is an optional provider-reported component of `outputTokens`, never an additional total.
 - `AnthropicMessage` / `AnthropicContentBlock` / `OpenAIResponsesContent` — Provider-specific message formats
-- `ContextBlockMessageMeta` — Structured metadata attached to rendered CTX-BLOCK messages under `Message.__meta.contextBlock` for provenance, WebUI/API consumers, and optional [execution-friction](../threads/context-compaction-and-recall.md#d-context-block-execution-friction) input to later compact planning.
+- `ContextBlockMessageMeta` — Structured metadata attached to rendered CTX-BLOCK messages under `Message.__meta.contextBlock` for provenance, WebUI/API consumers, and optional [execution-friction](../threads/context-compaction.md#d-context-block-execution-friction) input to later compact planning.
 - `MaybePromise<T>`, `SessionReply`, `SessionBroadcast` — Utility types
 
 - `FunctionResponse.__meta.resolvedPaths` holds display-only `{ raw, resolved, nodeId }` targets per successful native file-tool call; see [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch.md#d-dispatch-native-agent-paths-and-code-targets).
