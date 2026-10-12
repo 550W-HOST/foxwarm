@@ -76,7 +76,7 @@ Represent node identity in URI authority and retain the real absolute POSIX path
 
 ### D-code-persistent-workspace
 
-Embedded Code uses one persistent multi-root workspace and an iframe that starts on first actual Code-tab visibility in an expanded pane of the displayed workbench surface, not merely because a restored or logically active Code tab exists. Once started, ordinary tab switching or hiding the workbench preserves the iframe and background workbench state. Collapsing the pane that owns the Code tab unmounts the kept iframe, including when Code is an inactive tab, without closing the tab or deleting backend resources. It starts again when Code is actually visible after expansion. Explicit Code-tab close destroys the iframe and resets its bridge lifecycle so reopening creates a fresh frame. New folders/requests use a fixed bridge instead of reloading/replacing it.
+Embedded Code uses one persistent multi-root workspace and an iframe that starts on first actual Code-tab visibility in an expanded pane of the displayed workbench surface, not merely because a restored or logically active Code tab exists. Once started, ordinary tab switching, hiding the workbench, and collapse of the owning pane preserve the same iframe and background workbench state. Collapse hides and pointer-disables the frame while its slot is unavailable, including when Code is an inactive tab; expansion reuses the existing frame. Explicit Code-tab close destroys the iframe and resets its bridge lifecycle so reopening creates a fresh frame. New folders/requests use a fixed bridge instead of reloading/replacing it.
 
 ### D-code-fixed-remote-services
 

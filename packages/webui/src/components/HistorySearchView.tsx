@@ -1,6 +1,7 @@
 import type { TimelineView } from '../chatPreferences'
-import { WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader, WorkbenchTabHeaderProvider, type WorkbenchTabHeaderValue } from './WorkbenchTabHeader'
+import { createPortal } from 'react-dom'
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
 import { ArrowUpRight, ChevronDown, ChevronUp, History, Search } from 'lucide-react'
 import ChatTimeline from './ChatTimeline'
 import type { Message } from './chatShared'
@@ -90,7 +91,10 @@ function HistoryRangeRow({ result, direction, onLoad }: {
   ) : <div data-history-range className={className}>{content}</div>
 }
 
-export default function HistorySearchView({ isMobile, timelineView, showUsageBadge, showUserMessageMetadata, knownSessions = [], onBack, onOpenSession }: {
+export type HistorySearchDraft = { query: string; agentName: string; sessionId: string }
+
+export default function HistorySearchView({ tabId, isMobile, timelineView, showUsageBadge, showUserMessageMetadata, knownSessions = [], onBack, onOpenSession, initialDraft, onDraftChange, onSearchStarted, portalTarget, scrollTop = 0, onScrollTopChange, header }: {
+  tabId?: string
   isMobile: boolean
   timelineView: TimelineView
   showUsageBadge: boolean
@@ -98,11 +102,19 @@ export default function HistorySearchView({ isMobile, timelineView, showUsageBad
   knownSessions?: string[]
   onBack?: () => void
   onOpenSession?: (sessionId: string) => void
+  initialDraft?: HistorySearchDraft
+  onDraftChange?: (draft: HistorySearchDraft) => void
+  onSearchStarted?: () => void
+  portalTarget?: HTMLElement | null
+  scrollTop?: number
+  onScrollTopChange?: (scrollTop: number) => void
+  header?: WorkbenchTabHeaderValue | null
 }) {
-  const tabHeader = useWorkbenchTabHeader()
-  const [query, setQuery] = useState('')
-  const [agentName, setAgentName] = useState('')
-  const [sessionId, setSessionId] = useState('')
+  const inheritedHeader = useWorkbenchTabHeader()
+  const tabHeader = header === undefined ? inheritedHeader : header
+  const [query, setQuery] = useState(initialDraft?.query || '')
+  const [agentName, setAgentName] = useState(initialDraft?.agentName || '')
+  const [sessionId, setSessionId] = useState(initialDraft?.sessionId || '')
   const [results, setResults] = useState<HistoryResult[]>([])
   const [sessionMetadata, setSessionMetadata] = useState(new Map<string, SessionHeaderMetadata>())
   const [loading, setLoading] = useState(false)
@@ -110,6 +122,11 @@ export default function HistorySearchView({ isMobile, timelineView, showUsageBad
   const [searched, setSearched] = useState(false)
   const generation = useRef(0)
   const requests = useRef(new Set<AbortController>())
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+
+  useLayoutEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollTop
+  }, [portalTarget, scrollTop])
 
   const invalidate = () => {
     generation.current += 1
@@ -162,6 +179,7 @@ export default function HistorySearchView({ isMobile, timelineView, showUsageBad
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
+    onSearchStarted?.()
     invalidate()
     const turn = generation.current
     const controller = new AbortController()
@@ -245,8 +263,8 @@ export default function HistorySearchView({ isMobile, timelineView, showUsageBad
     }
   }
 
-  return (
-    <div className="h-full min-h-0 overflow-y-auto bg-fw-canvas px-3 py-5 text-fw-text" data-history-search-view>
+  const view = (
+    <div ref={scrollRef} onScroll={event => onScrollTopChange?.(event.currentTarget.scrollTop)} className="h-full min-h-0 overflow-y-auto bg-fw-canvas px-3 py-5 text-fw-text" data-history-search-view data-history-tab-id={tabId}>
       <div className="mx-auto max-w-4xl space-y-5">
         <div className="flex items-center gap-3">
           {tabHeader ? <>
@@ -259,15 +277,15 @@ export default function HistorySearchView({ isMobile, timelineView, showUsageBad
         <form onSubmit={submit} className="space-y-3 rounded-lg border border-fw-border bg-fw-surface p-4">
           <label className="block text-sm font-medium" htmlFor="history-search-query">Search or message reference</label>
           <div className="flex gap-2">
-            <input id="history-search-query" value={query} onChange={event => { invalidate(); setQuery(event.target.value) }} placeholder="Search conversations or paste sessionId=… msg#123" className="min-w-0 flex-1 rounded border border-fw-border bg-fw-canvas px-3 py-2 text-fw-text-strong" />
+            <input id="history-search-query" value={query} onChange={event => { invalidate(); const value = event.target.value; setQuery(value); onDraftChange?.({ query: value, agentName, sessionId }) }} placeholder="Search conversations or paste sessionId=… msg#123" className="min-w-0 flex-1 rounded border border-fw-border bg-fw-canvas px-3 py-2 text-fw-text-strong" />
             <button type="submit" disabled={loading} className="inline-flex items-center gap-1 rounded bg-fw-accent px-3 py-2 text-white disabled:opacity-50"><Search size={16} /> Search</button>
           </div>
           <div className="flex flex-wrap gap-2">
             <label className="min-w-36 flex-1 text-xs">Agent (optional)
-              <input value={agentName} onChange={event => { invalidate(); setAgentName(event.target.value) }} placeholder="All agents" className="mt-1 w-full rounded border border-fw-border bg-fw-canvas px-2 py-1.5 text-sm text-fw-text-strong" />
+              <input value={agentName} onChange={event => { invalidate(); const value = event.target.value; setAgentName(value); onDraftChange?.({ query, agentName: value, sessionId }) }} placeholder="All agents" className="mt-1 w-full rounded border border-fw-border bg-fw-canvas px-2 py-1.5 text-sm text-fw-text-strong" />
             </label>
             <label className="min-w-40 flex-[2] text-xs">Session (optional)
-              <input list="history-known-sessions" value={sessionId} onChange={event => { invalidate(); setSessionId(event.target.value) }} placeholder="All sessions" className="mt-1 w-full rounded border border-fw-border bg-fw-canvas px-2 py-1.5 text-sm text-fw-text-strong" />
+              <input list="history-known-sessions" value={sessionId} onChange={event => { invalidate(); const value = event.target.value; setSessionId(value); onDraftChange?.({ query, agentName, sessionId: value }) }} placeholder="All sessions" className="mt-1 w-full rounded border border-fw-border bg-fw-canvas px-2 py-1.5 text-sm text-fw-text-strong" />
               <datalist id="history-known-sessions">{knownSessions.map(id => <option key={id} value={id} />)}</datalist>
             </label>
           </div>
@@ -310,4 +328,7 @@ export default function HistorySearchView({ isMobile, timelineView, showUsageBad
       </div>
     </div>
   )
+
+  const withHeader = header === undefined ? view : <WorkbenchTabHeaderProvider value={header}>{view}</WorkbenchTabHeaderProvider>
+  return portalTarget === undefined ? withHeader : portalTarget ? createPortal(withHeader, portalTarget) : null
 }

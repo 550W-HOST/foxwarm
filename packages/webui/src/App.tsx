@@ -3,7 +3,7 @@ import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSe
 import Chat from './components/Chat'
 import SessionList from './components/SessionList'
 import Sidebar from './components/Sidebar'
-import HistorySearchView from './components/HistorySearchView'
+import HistorySearchTabHost from './components/HistorySearchTabHost'
 import CollapsedSidebarContainer from './components/CollapsedSidebarContainer'
 import WorkbenchLayout from './components/WorkbenchLayout'
 import WorkbenchPane from './components/WorkbenchPane'
@@ -15,8 +15,8 @@ import { selectVisibleSessionIds, shouldAcknowledgeSessionNavigation, type Sessi
 import { useSessionIdleNotifications } from './sessionIdleNotifications'
 import { useBoundedSessionList } from './boundedSessionList'
 import { useWorkbenchStore } from './workbench/store'
-import type { WorkbenchTab } from './workbench/types'
-import { findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
+import type { WorkbenchLayoutNode, WorkbenchTab } from './workbench/types'
+import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
 import { makeVscodeWebUrl, normalizeCodePath, planCodeOpen, readCodeOpenInNewWindowPreference, readCodeWorkspaceNodePreference, readCodeWorkspacePathPreference, resolveSessionCodeTarget, resolveToolCodeFileTarget, selectCodeFrameStarted, VSCODE_WEB_TAB_ID, writeCodeOpenInNewWindowPreference, writeCodeWorkspaceNodePreference, writeCodeWorkspacePathPreference, type CodeCommitTarget, type CodeFileTarget, type CodeTarget } from './vscodeWeb'
 import { buildSessionCreationBody, type AgentSummary } from './agentCreation'
 import { MASTER_NODE_TARGET, parseWebUiNodeTargets, type WebUiNodeTarget } from './nodeTargets'
@@ -63,6 +63,7 @@ const TAB_HASH_PREFIX = 'tab/'
 const AGENTS_TAB_ID = 'system:agents'
 const SETUP_TAB_ID = 'system:setup'
 const SEARCH_TAB_ID = 'system:search'
+const HISTORY_TAB_PREFIX = 'history:'
 const LOGS_TAB_ID = 'system:logs'
 const TASKS_TAB_ID = 'system:tasks'
 const LAST_VISITED_SESSION_STORAGE_KEY = 'foxwarm_last_visited_session_v1'
@@ -423,8 +424,21 @@ function makeSetupTab(): WorkbenchTab {
   }
 }
 
+function makeHistoryTab(): Extract<WorkbenchTab, { type: 'search' }> {
+  return {
+    id: `${HISTORY_TAB_PREFIX}${createWorkbenchId('tab')}`,
+    type: 'search',
+    title: 'History',
+  }
+}
+
 function isRestorableRouteTabId(tabId: string): boolean {
-  return tabId.startsWith('chat:') || tabId === AGENTS_TAB_ID || tabId === SETUP_TAB_ID || tabId === SEARCH_TAB_ID || tabId === LOGS_TAB_ID || tabId === TASKS_TAB_ID
+  return tabId.startsWith('chat:') || tabId === AGENTS_TAB_ID || tabId === SETUP_TAB_ID || tabId === SEARCH_TAB_ID || tabId.startsWith(HISTORY_TAB_PREFIX) || tabId === LOGS_TAB_ID || tabId === TASKS_TAB_ID
+}
+
+function HistorySearchSlot({ tabId, onRegister }: { tabId: string; onRegister: (tabId: string, element: HTMLElement | null) => void }) {
+  const setRef = useCallback((element: HTMLElement | null) => onRegister(tabId, element), [onRegister, tabId])
+  return <div ref={setRef} className="h-full min-h-0 w-full" data-history-search-slot={tabId} />
 }
 
 function App() {
@@ -480,6 +494,9 @@ function App() {
   const currentRouteTabIdRef = useRef<string | null>(route.tabId)
   const closingRouteTabIdsRef = useRef<Set<string>>(new Set())
   const movedOutTerminalIdsRef = useRef<Set<string>>(new Set())
+  const historySlotsRef = useRef(new Map<string, HTMLElement | null>())
+  const historyScrollTopRef = useRef(new Map<string, number>())
+  const [, forceHistorySlotUpdate] = useState(0)
   const didInitializeEmptyWorkbenchRef = useRef(false)
   const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
@@ -494,10 +511,11 @@ function App() {
     () => paneNodes.filter((pane) => !pane.collapsed).map((pane) => pane.activeTabId ? tabsById[pane.activeTabId]?.type : null),
     [paneNodes, tabsById],
   )
-  const hasCollapsedCodePane = useMemo(
-    () => paneNodes.some((pane) => pane.collapsed && pane.tabIds.some((tabId) => tabsById[tabId]?.type === 'vscode')),
-    [paneNodes, tabsById],
-  )
+  const registerHistorySlot = useCallback((tabId: string, element: HTMLElement | null) => {
+    if (historySlotsRef.current.get(tabId) === element) return
+    historySlotsRef.current.set(tabId, element)
+    forceHistorySlotUpdate(value => value + 1)
+  }, [])
   const handleVscodeFrameSlot = useCallback((element: HTMLElement | null) => setVscodeFrameSlot(element), [])
   const handleFocusModelsRequestHandled = useCallback((handled: number) => {
     setFocusModelsRequest((current) => (current === handled ? 0 : current))
@@ -692,10 +710,17 @@ function App() {
 
   useEffect(() => {
     allTabs.forEach((tab) => {
-      if (!isChatTab(tab)) return
-      const nextTitle = sessionTitle(tab.sessionId)
+      if (isChatTab(tab)) {
+        const nextTitle = sessionTitle(tab.sessionId)
+        if (tab.title !== nextTitle) {
+          updateTab(tab.id, (current) => isChatTab(current) ? { ...current, title: nextTitle } : current)
+        }
+        return
+      }
+      if (tab.type !== 'search') return
+      const nextTitle = tab.searchQuery?.trim() || 'History'
       if (tab.title !== nextTitle) {
-        updateTab(tab.id, (current) => isChatTab(current) ? { ...current, title: nextTitle } : current)
+        updateTab(tab.id, (current) => current.type === 'search' ? { ...current, title: nextTitle } : current)
       }
     })
   }, [allTabs, sessions])
@@ -851,12 +876,11 @@ function App() {
 
   useLayoutEffect(() => {
     setVscodeFrameStarted((started) => {
-      if (hasCollapsedCodePane && !activePaneTabTypes.includes('vscode')) return false
       return selectCodeFrameStarted(started, activePaneTabTypes, {
         workbenchVisible: !isMobile || !showSessionList,
       })
     })
-  }, [activePaneTabTypes, hasCollapsedCodePane, isMobile, showSessionList])
+  }, [activePaneTabTypes, isMobile, showSessionList])
 
   const updateCodePath = (path: string) => {
     const normalized = writeCodeWorkspacePathPreference(localStorage, path)
@@ -983,8 +1007,12 @@ function App() {
   }
 
   const openSearchTab = () => {
-    upsertTab({ id: SEARCH_TAB_ID, type: 'search', title: 'History' }, { activate: true })
-    navigateToTab(SEARCH_TAB_ID)
+    const blank = allTabs.find((tab): tab is Extract<WorkbenchTab, { type: 'search' }> => (
+      tab.type === 'search' && !tab.searchStarted && !(tab.searchQuery || '').trim()
+    ))
+    const tab = blank || makeHistoryTab()
+    upsertTab(tab, { activate: true })
+    navigateToTab(tab.id)
   }
   notificationOpenSessionRef.current = (sessionId) => openChatTab(sessionId, 'notification')
 
@@ -1428,6 +1456,11 @@ function App() {
       return
     }
 
+    if (route.tabId === SEARCH_TAB_ID || route.tabId.startsWith(HISTORY_TAB_PREFIX)) {
+      upsertTab(route.tabId === SEARCH_TAB_ID ? { id: SEARCH_TAB_ID, type: 'search', title: 'History' } : { id: route.tabId, type: 'search', title: 'History' }, { activate: true })
+      return
+    }
+
     if (!route.tabId.startsWith('chat:')) {
       return
     }
@@ -1506,15 +1539,7 @@ function App() {
 
     if (tab.type === 'logs') return <Suspense fallback={<LazyViewFallback label="Loading logs…" />}><LogsView onBack={onBack} /></Suspense>
 
-    if (tab.type === 'search') return <HistorySearchView
-      isMobile={isMobile}
-      timelineView={timelineView}
-      showUsageBadge={showUsageBadge}
-      showUserMessageMetadata={showUserMessageMetadata}
-      knownSessions={sidebarSessions.map(session => session.id)}
-      onOpenSession={openChatTab}
-      onBack={onBack}
-    />
+    if (tab.type === 'search') return <HistorySearchSlot tabId={tab.id} onRegister={registerHistorySlot} />
 
     if (tab.type === 'agents') {
       return (
@@ -1825,6 +1850,69 @@ function App() {
     setDraggingItem(null)
   }
 
+  const getPaneCollapseDirection = (node: WorkbenchLayoutNode, paneId: string, parentDirection: 'row' | 'column' = 'column'): 'row' | 'column' => {
+    if (node.kind === 'pane') return node.id === paneId ? parentDirection : 'column'
+    for (const child of node.children) {
+      if (child.kind === 'pane' && child.id === paneId) return node.direction
+      if (child.kind === 'split') {
+        const found = getPaneCollapseDirection(child, paneId, node.direction)
+        if (findPaneNode(child, paneId)) return found
+      }
+    }
+    return 'column'
+  }
+
+  const renderHistoryKeepAlive = () => allTabs
+    .filter((tab): tab is Extract<WorkbenchTab, { type: 'search' }> => tab.type === 'search')
+    .map((tab) => {
+      const pane = findPaneContainingTab(root, tab.id)
+      const paneId = pane?.id || null
+      const closePaneForHistory = () => {
+        if (!paneId || paneIds.length <= 1) return
+        const currentPane = findPaneNode(useWorkbenchStore.getState().root, paneId)
+        const otherPaneId = getPaneIds(useWorkbenchStore.getState().root).find(id => id !== paneId)
+        if (!currentPane || !otherPaneId) return
+        currentPane.tabIds.forEach((tabId, index) => moveTabToPane(tabId, otherPaneId, { activate: index === currentPane.tabIds.length - 1 }))
+        closePane(paneId)
+        const nextActive = findPaneNode(useWorkbenchStore.getState().root, otherPaneId)?.activeTabId
+        if (nextActive) navigateToTab(nextActive)
+      }
+      return <HistorySearchTabHost
+        key={tab.id}
+        tab={tab}
+        pane={pane}
+        paneId={paneId}
+        collapseDirection={getPaneCollapseDirection(root, paneId || '')}
+        slot={historySlotsRef.current.get(tab.id) || null}
+        isMobile={isMobile}
+        timelineView={timelineView}
+        showUsageBadge={showUsageBadge}
+        showUserMessageMetadata={showUserMessageMetadata}
+        knownSessions={sidebarSessions.map(session => session.id)}
+        onBack={isMobile ? handleBackToList : undefined}
+        onOpenSession={openChatTab}
+        onDraftChange={(draft) => updateTab(tab.id, current => current.type === 'search' ? {
+          ...current,
+          searchQuery: draft.query,
+          searchAgentName: draft.agentName,
+          searchSessionId: draft.sessionId,
+          title: draft.query.trim() || 'History',
+        } : current)}
+        onSearchStarted={() => updateTab(tab.id, current => current.type === 'search' ? { ...current, searchStarted: true } : current)}
+        onScrollTopChange={(scrollTop) => historyScrollTopRef.current.set(tab.id, scrollTop)}
+        scrollTop={historyScrollTopRef.current.get(tab.id) || 0}
+        onSetCollapsed={setPaneCollapsed}
+        canClosePane={paneIds.length > 1}
+        onClosePane={closePaneForHistory}
+        onCloseTab={(tabId) => { void closeWorkbenchTab(tabId) }}
+        onKeepTab={keepWorkbenchTab}
+        onMoveTabToNewWindow={moveWorkbenchTabToNewWindow}
+        canMoveTabToNewWindow={() => true}
+        onCloseOtherTabs={(tabId) => { if (paneId) void closePaneTabsByPredicate(paneId, tab => tab.id !== tabId) }}
+        onCloseAllTabs={() => { if (paneId) void closePaneTabsByPredicate(paneId, () => true) }}
+      />
+    })
+
   const renderWorkbenchSurface = (content: ReactNode) => (
     <DndContext
       sensors={dragSensors}
@@ -1858,6 +1946,7 @@ function App() {
       onDragCancel={handleDragCancel}
     >
       {content}
+      {renderHistoryKeepAlive()}
       <DragOverlay>
         {draggingTab ? (
           <div className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong">
