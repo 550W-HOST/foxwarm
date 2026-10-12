@@ -65,7 +65,7 @@ async function buildFixtureBundle() {
       constructor() {
         this.readyState = 0
         FixtureWebSocket.instances.push(this)
-        queueMicrotask(() => { this.readyState = 1; this.onopen?.({}) })
+        queueMicrotask(() => { this.readyState = 1; this.onopen?.({}); this.emit({ type: 'connected' }) })
       }
       close() { this.readyState = FixtureWebSocket.CLOSED }
       send(raw) { const payload = JSON.parse(raw); if (payload.type !== 'set-subscriptions') return; queueMicrotask(() => {
