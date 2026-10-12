@@ -7,7 +7,7 @@ Cancelled HTTP/SSE calls dispose their caller/server binding only when no other 
 
 ## Purpose
 
-Owns the single caller/server HTTP connection lifecycle shared by ordinary MCP discovery/calls and opt-in Session notifications. The canonical cross-module contract is [D-dispatch-mcp-explicit-notifications](../threads/tool-dispatch.md#d-dispatch-mcp-explicit-notifications). The bundled mcp-management outbound and explicit-reply references document its user-facing lifecycle.
+Owns the single caller/server HTTP connection lifecycle shared by ordinary MCP discovery/calls and opt-in Session notifications. The canonical cross-module contract is [D-dispatch-mcp-explicit-notifications](../threads/tool-dispatch-mcp.md#d-dispatch-mcp-explicit-notifications). The bundled mcp-management outbound and explicit-reply references document its user-facing lifecycle.
 
 ## Stable symbols
 

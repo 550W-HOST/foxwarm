@@ -50,7 +50,7 @@ Provides a thin application-level wrapper around `PersistentExecManager` (from t
 - `../packages/shared/dist/processOperations` — native and injectable process primitives passed to the shared manager
 - `./tools` (test only) — `definitions`, `exec`, `read`
 
-- Main and Session-worker runtimes supply their actual `getAgentDir` callback to persistent exec; the Docker-worktree runtime intentionally omits it. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch.md#d-dispatch-native-agent-paths-and-code-targets).
+- Main and Session-worker runtimes supply their actual `getAgentDir` callback to persistent exec; the Docker-worktree runtime intentionally omits it. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch-node-execution.md#d-dispatch-native-agent-paths-and-code-targets).
 
 ## Behavior
 

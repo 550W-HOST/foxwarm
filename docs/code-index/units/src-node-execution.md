@@ -27,7 +27,7 @@ Every reverse method fences the exact expected source before lookup/effect. The 
 
 Direct adjacent `exec` calls pass the batch's captured Node/cwd snapshot plus a trusted deferred-cwd marker, allowing resident providers to return the existing private `__execBatchCwdSync` result for ordered application by the exact owner. Worker direct non-exec and unified builtins also pass the exact-owner snapshot when they target its current non-master Node because Main's projection is not authoritative yet. Dynamic explicit other-Node calls omit cwd, so cwd is not leaked across Node targets. The marker is routing metadata, never a model argument or visible result field.
 
-- Core rejects leading Agent path tokens for primitive filesystem/exec providers before invoking their target-local backends; URI/opaque ordinary paths remain provider-owned. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch.md#d-dispatch-native-agent-paths-and-code-targets).
+- Core rejects leading Agent path tokens for primitive filesystem/exec providers before invoking their target-local backends; URI/opaque ordinary paths remain provider-owned. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch-node-execution.md#d-dispatch-native-agent-paths-and-code-targets).
 
 ## Integration
 
@@ -46,4 +46,4 @@ Production initialization is bound to one exact local/borrowed transport; a conf
 
 Focused coverage proves shared direct/dynamic routing, master-local bypass with an RPC spy, isolated allow/deny, stale/offline/unadvertised rejection, parallel-exec and dynamic cwd snapshot behavior, result cloning, authenticated remote image/error handling, ToolScript nesting, terminal accepted-call drain/new-call fencing, lifecycle routing/confirmation/source fences/bounds, and deterministic sandbox-kind providers that list/select/invoke/manage Nodes without a WebSocket.
 
-Script data propagation and capability limits are canonical in [D-dispatch-programmatic-tool-data](../threads/tool-dispatch.md#d-dispatch-programmatic-tool-data).
+Script data propagation and capability limits are canonical in [D-dispatch-programmatic-tool-data](../threads/tool-dispatch-node-execution.md#d-dispatch-programmatic-tool-data).

@@ -88,7 +88,7 @@ The authenticated node ID is mandatory input to master-side session-event author
 
 Bootstrap distributes one minimal dynamic source archive with prebuilt CLI bundles when available, plus an explicit build fallback and separately installed optional PTY runtime.
 
-Generic Node/provider ownership is canonical in [D-dispatch-generic-node-providers](../threads/tool-dispatch.md#d-dispatch-generic-node-providers).
+Generic Node/provider ownership is canonical in [D-dispatch-generic-node-providers](../threads/tool-dispatch-node-execution.md#d-dispatch-generic-node-providers).
 
 ### D-node-isolated-worker-provider-compose
 

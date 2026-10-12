@@ -39,7 +39,7 @@ Owns persisted MCP server configuration, safe summaries, transport connection li
 
 ## Transport behavior
 
-- The first runtime read loads and normalizes the durable configuration (including fallback recovery) into one live snapshot. Later list/discovery/call reads use that snapshot; manual file edits remain invisible until process/store reinitialization. Managed writes publish a cloned snapshot only after durable persistence succeeds. Canonical contract: [D-dispatch-mcp-live-configuration](../threads/tool-dispatch.md#d-dispatch-mcp-live-configuration).
+- The first runtime read loads and normalizes the durable configuration (including fallback recovery) into one live snapshot. Later list/discovery/call reads use that snapshot; manual file edits remain invisible until process/store reinitialization. Managed writes publish a cloned snapshot only after durable persistence succeeds. Canonical contract: [D-dispatch-mcp-live-configuration](../threads/tool-dispatch-mcp.md#d-dispatch-mcp-live-configuration).
 - Managed upsert merges with the current named server and then runs one authoritative transport validator inside `mcpClient`: `stdio` requires a command, all HTTP/SSE/auto placements require a URL, and unknown transports fail before any durable write or live-snapshot publication. Tool wrappers retain argument parsing and user-facing success messages but do not duplicate these semantics.
 - Optional `timeoutSeconds` controls only `client.callTool`. Omission sends no request override and retains the installed SDK default (currently 60 seconds); managed input accepts finite 1-3600 seconds, while zero removes the persisted field and restores that default. Invocation converts the override to milliseconds and passes it through the SDK call's third `RequestOptions` argument. Connection setup, tool listing, retry/progress policy, and pool keys are unchanged.
 - The external inbound adapter can supply an SDK request AbortSignal to listing/calling and request the raw SDK result to preserve original text, structured content, images and `isError`. Internal callers supply a trusted Session owner and keep canonical normalization. When an external HTTP call is cancelled, the connection remains owned by its real external context and SDK cancellation retains its existing semantics; completion of a remote effect is not guaranteed to stop.
@@ -64,7 +64,7 @@ Owns persisted MCP server configuration, safe summaries, transport connection li
 - Internal normal calls and ToolScript use this source normalization. `rawResult:true` external MCP passthrough bypasses it and retains the original protocol representations; server wire output and persisted history are unchanged.
 - Valid MCP `image` content blocks with `image/*` MIME types become `inlineDataItems`; per-image annotations and `_meta` remain attached, and pure, mixed, and multiple-image results share the normal Foxwarm image pipeline.
 - Non-image content blocks other than plain duplicate structured JSON retain their original order and shape. Text, audio, resource/blob, malformed image, `isError`, `structuredContent`, `_meta`, annotations, and other metadata are not misclassified as images.
-- Multimodal promotion precedes output guarding as defined by [D-dispatch-output-boundary](../threads/tool-dispatch.md#d-dispatch-output-boundary).
+- Multimodal promotion precedes output guarding as defined by [D-dispatch-output-boundary](../threads/tool-dispatch-authorization.md#d-dispatch-output-boundary).
 
 ## Compatibility
 

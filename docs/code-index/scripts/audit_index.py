@@ -16,6 +16,8 @@ from urllib.parse import unquote
 LINK_RE = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
 CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]")
 DATE_RE = re.compile(r"\[20\d\d-\d\d-\d\d\]")
+SIZE_WARN_BYTES = 24 * 1024
+SIZE_ERROR_BYTES = 48 * 1024
 PRIVATE_PATTERNS = [
     ("personal Linux home path", re.compile(r"(?<![\w-])/home/[A-Za-z0-9._-]+/")),
     ("personal macOS home path", re.compile(r"(?<![\w-])/Users/[A-Za-z0-9._-]+/")),
@@ -140,6 +142,15 @@ def audit(index_root: Path, source_root: Path, fail_on_cjk: bool) -> list[Findin
 
     for path, text in texts.items():
         rel = path.relative_to(index_root).as_posix()
+        size = len(text.encode("utf-8"))
+        if size > SIZE_ERROR_BYTES:
+            findings.append(
+                Finding("ERROR", "file-size", rel, 1, f"{size:,} bytes exceeds the {SIZE_ERROR_BYTES:,}-byte error limit; split by responsibility")
+            )
+        elif size > SIZE_WARN_BYTES:
+            findings.append(
+                Finding("WARN", "file-size", rel, 1, f"{size:,} bytes exceeds the {SIZE_WARN_BYTES:,}-byte warning threshold; split if responsibilities diverge")
+            )
         for match in LINK_RE.finditer(text):
             raw = match.group(1).strip()
             if not raw or raw.startswith(("http://", "https://", "mailto:")):

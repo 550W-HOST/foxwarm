@@ -8,7 +8,7 @@ Manages persistent (background) command execution with lifecycle tracking, log c
 
 ## Key Exports
 
-- `buildProgrammaticExecResult` reads a retained, byte-budgeted log snapshot only for trusted script callers; ordinary display formatting and process lifecycle are unchanged. See [programmatic data](../threads/tool-dispatch.md#d-dispatch-programmatic-tool-data).
+- `buildProgrammaticExecResult` reads a retained, byte-budgeted log snapshot only for trusted script callers; ordinary display formatting and process lifecycle are unchanged. See [programmatic data](../threads/tool-dispatch-node-execution.md#d-dispatch-programmatic-tool-data).
 
 - `PersistentExecManager` — Main class orchestrating process spawning, tracking, reconciliation, and result formatting
 - `RunningExecEntry` — Interface describing a tracked running process, including its retained exact generated script path and either a Session/Agent or disjoint external owner
@@ -97,7 +97,7 @@ Foreground wait interruption and receipt precedence follow [Stop and Run queued]
 - Foreground and timeout-preview formatting preserves boundary whitespace in every non-empty captured/displayed output, including whitespace-only output. Only a zero-byte output uses the no-output placeholder. Metadata starts after the existing trailing LF or one added separator LF; when the capture had no trailing LF, the footer says so without treating the separator as command output.
 - Immediate background-timeout results place partial output before a metadata footer beginning with `---`. That footer says the process remains outstanding until its completion event and includes a best-effort process view. Native POSIX/Windows runtimes use the bounded managed-shell tree. An injected target boundary may supply a truthful formatter when its managed host PID represents a launcher rather than the shell itself, without changing lifecycle or output semantics. Snapshot races, permissions, unsupported platforms, and inspection failures produce an unavailable line instead of failing the exec result. Canonical contract: [D-persistent-exec-background-timeout-footer-tree](#d-persistent-exec-background-timeout-footer-tree).
 
-- The optional `getAgentDir` callback supplies the real native Agent root independently of default cwd and retained exec artifacts. Agent launches ensure `tmp` before validating cwd and inject reserved env only into spawn; external/primitive runtimes omit the root and strip inherited reserved values. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch.md#d-dispatch-native-agent-paths-and-code-targets).
+- The optional `getAgentDir` callback supplies the real native Agent root independently of default cwd and retained exec artifacts. Agent launches ensure `tmp` before validating cwd and inject reserved env only into spawn; external/primitive runtimes omit the root and strip inherited reserved values. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch-node-execution.md#d-dispatch-native-agent-paths-and-code-targets).
 - Child environment filtering removes only exact lowercase reserved names on POSIX (leaving `FW_TMP`/`FW_AGENTDIR` untouched), but removes case variants for Windows' case-insensitive environment. Parent `process.env` is never modified by this filtering.
 
 ## Integration

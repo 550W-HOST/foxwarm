@@ -58,7 +58,7 @@ Defines governed code-index maintenance and two first-draft initialization paths
 - Unit `Files:` entries declare one primary owner. Shared manifests and integration references belong under secondary files.
 - Worker prompts prefer stable symbols and sections over brittle line-number-heavy function indexes.
 - Generators create first drafts only and deliberately do not extract design decisions from a fixed source.
-- The ToolScript runner reads producer-owned script `content`, not display footers; unavailable/truncated captures and still-running exec results fail rather than masquerading as complete inputs. See [programmatic data](../threads/tool-dispatch.md#d-dispatch-programmatic-tool-data).
+- The ToolScript runner reads producer-owned script `content`, not display footers; unavailable/truncated captures and still-running exec results fail rather than masquerading as complete inputs. See [programmatic data](../threads/tool-dispatch-node-execution.md#d-dispatch-programmatic-tool-data).
 - The ToolScript runner imports only Monty's bundled `json` module. Its path and shell helpers are pure script logic; filesystem and process effects remain normal `call_tool` host calls.
 - The standalone runner validates every model-selected source path against the scanned allowlist, rejects unsafe output names and symlink escapes, and never writes failed/empty model output.
 - Existing non-empty documents are preserved unless `--force` explicitly authorizes replacement.
