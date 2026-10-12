@@ -499,6 +499,9 @@ function App() {
     [paneNodes, tabsById],
   )
   const handleVscodeFrameSlot = useCallback((element: HTMLElement | null) => setVscodeFrameSlot(element), [])
+  const handleFocusModelsRequestHandled = useCallback((handled: number) => {
+    setFocusModelsRequest((current) => (current === handled ? 0 : current))
+  }, [])
 
   const sessionTitle = (sessionId: string) => sessions.find((session) => session.id === sessionId || session.aliases?.includes(sessionId))?.displayName || sessionId
 
@@ -1541,6 +1544,7 @@ function App() {
             onClose={setupOobe ? undefined : () => { void closeWorkbenchTab(tab.id) }}
             onSetupChanged={() => { void fetchSetupStatus() }}
             focusModelsRequest={focusModelsRequest}
+            onFocusModelsRequestHandled={handleFocusModelsRequestHandled}
             webUiSettings={webUiSettings}
             onInstanceNameChange={saveWebUiInstanceName}
             onTabIconChange={saveWebUiTabIcon}

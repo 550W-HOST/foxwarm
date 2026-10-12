@@ -1990,6 +1990,64 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
   }
 })
 
+test('model picker Models focus is one-shot per request; later ordinary Setup opens keep their own tab', async () => {
+  const normalPage = await browser.newPage()
+  await attachRequestMocks(normalPage)
+  try {
+    const modelsEditorFocused = () => normalPage.evaluate(() => (
+      !!document.activeElement?.closest('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]')
+    ))
+    const openPickerAndConfigure = async () => {
+      await normalPage.click('[data-tab-id="chat:model-filter-normal"]')
+      const modelButton = await normalPage.waitForSelector('.foxwarm-model-selector-trigger', { timeout: 15_000 })
+      await modelButton.click()
+      await normalPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'), { timeout: 15_000 })
+      await normalPage.click('button[aria-label="Configure models"]')
+      await normalPage.waitForSelector('[data-setup-tab="models"][aria-selected="true"]', { timeout: 15_000 })
+      await normalPage.waitForFunction(() => (
+        !!document.activeElement?.closest('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]')
+      ), { timeout: 15_000 })
+    }
+    const openSetupFromSettingsMenu = async () => {
+      await normalPage.click('button[aria-label="Open UI settings"]')
+      await normalPage.waitForSelector('[data-global-ui-settings-menu]')
+      await normalPage.evaluate(() => {
+        const button = [...document.querySelectorAll('[data-global-ui-settings-menu] button')].find((candidate) => candidate.textContent?.includes('Open setup'))
+        button?.click()
+      })
+      await normalPage.waitForSelector('[data-tab-id="system:setup"]', { timeout: 15_000 })
+    }
+
+    await normalPage.evaluateOnNewDocument(() => {
+      try {
+        localStorage.setItem('foxwarm_theme_selection_v2', JSON.stringify({ version: 2, themeId: 'foxwarm.550a', colorMode: 'auto' }))
+      } catch {}
+    })
+    await normalPage.goto(`${baseUrl}/normal/#session/model-filter-normal`, { waitUntil: 'networkidle2' })
+    await openPickerAndConfigure()
+
+    await normalPage.click('[data-tab-id="system:setup"] button[title="Close tab"]')
+    await normalPage.waitForFunction(() => !document.querySelector('[data-tab-id="system:setup"]'), { timeout: 15_000 })
+
+    await openSetupFromSettingsMenu()
+    await normalPage.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]', { timeout: 15_000 })
+    await normalPage.waitForSelector('[data-setup-section="models"] [data-editor-ready="true"]', { timeout: 15_000 })
+    assert.equal(await modelsEditorFocused(), false, 'a reopened Setup must not reclaim Models focus from an old request')
+    assert.equal(await normalPage.$eval('[data-setup-tab="models"]', (tab) => tab.getAttribute('aria-selected')), 'false')
+
+    await normalPage.click('[data-setup-tab="config"]')
+    await normalPage.waitForSelector('[data-setup-tab="config"][aria-selected="true"]')
+    await openSetupFromSettingsMenu()
+    await normalPage.waitForSelector('[data-setup-tab="config"][aria-selected="true"]', { timeout: 15_000 })
+    assert.equal(await modelsEditorFocused(), false, 'ordinary activation of an open Setup keeps its tab and does not move focus')
+
+    await openPickerAndConfigure()
+    assert.equal(await normalPage.$$eval('[data-tab-id="system:setup"]', (tabs) => tabs.length), 1)
+  } finally {
+    await normalPage.close()
+  }
+})
+
 test('successful Setup save refreshes a mounted split-pane Chat; rejected saves keep options and manual Refresh refetches', async () => {
   const normalPage = await browser.newPage()
   const modelOptionsRequests = []
