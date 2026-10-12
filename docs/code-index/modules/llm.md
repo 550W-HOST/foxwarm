@@ -86,6 +86,10 @@ Request failure is exception-driven at the provider boundary. Router, channel, s
 
 [2026-10-12] Every Anthropic Messages request built by the Anthropic-format serializer carries the top-level `cache_control: { type: 'ephemeral' }` by default, using the protocol's automatic caching with the provider's default lifetime. The default is part of the attempt-local payload before the ordinary `extraFields` merge, so an explicit `extraFields.cache_control` replaces it. The serializer adds no `prompt_cache_key`, no per-block breakpoints, and no TTL policy; OpenAI Responses and Chat Completions payloads are unchanged.
 
+### D-llm-reject-unknown-provider-type
+
+[2026-10-12] An unset or empty `providerType` keeps the OpenAI default. Each supported concrete type uses its own protocol, and only `anthropic` uses the Anthropic serializer. Any other non-empty type is rejected at models-config expansion and, for entries that bypass that path, before request headers, auth, or body are built. Third-party compatible services select a supported protocol and set `baseUrl`; they do not get a catch-all protocol.
+
 ## Canonical ownership
 
 Retry presentation is canonical in [D-pipeline-display-only-retries](../threads/message-processing-pipeline.md#d-pipeline-display-only-retries). MCP result cleanup is canonical in [D-mcp-source-normalization](../units/src-mcp-client.md#d-mcp-source-normalization).

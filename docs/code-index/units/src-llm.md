@@ -37,7 +37,7 @@ Owns provider request routing, Anthropic conversion/parsing, session prompt snap
 | `anthropic` | Anthropic Messages at `<baseUrl>/v1/messages` |
 | `session-hash`, `failover` | Resolve a concrete leaf per outer attempt, then use that leaf's protocol |
 
-`getOpenAIRequestApi()` returns null for other values; the current request branch then uses Anthropic-format handling. Custom provider types therefore need Anthropic-compatible behavior unless source routing is extended.
+`getOpenAIRequestApi()` returns null for non-OpenAI values; only `anthropic` then uses Anthropic-format handling. Any other type throws an `unsupported providerType` error while the plan is built, before headers, auth, or body are assembled. Config validation rejects such types earlier, so this guard covers direct entry overrides.
 
 - Successful native file calls store ordered path targets on each `FunctionResponse.__meta`, outside the tool response. ToolScript execution stores nested activity there through an exact-target in-process hook; see [lean ToolScript execution results](../threads/tool-dispatch-node-execution.md#d-dispatch-toolscript-execution-projection). Request-local history removes this display-only field before provider-neutral request journaling and serialization. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch-node-execution.md#d-dispatch-native-agent-paths-and-code-targets).
 

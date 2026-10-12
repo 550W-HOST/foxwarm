@@ -239,7 +239,7 @@ test('models schema deliberately accepts current, legacy, custom, and backend-to
     {
       default: 'custom/model-a',
       providers: {
-        custom: { providerType: 'company-protocol', baseUrl: 'https://example.invalid', models: ['model-a'] },
+        custom: { providerType: 'anthropic', baseUrl: 'https://example.invalid', models: ['model-a'] },
       },
     },
     {
@@ -266,6 +266,8 @@ test('models schema deliberately accepts current, legacy, custom, and backend-to
     { providers: { invalid: { providerType: 'openai-responses', models: [{ id: 'model', historyReasoningField: 'reasoning' }] } } },
     { providers: { invalid: { providerType: 'anthropic', model: [{ id: 'model', historyReasoningField: 'reasoning_content' }] } } },
     { providers: { invalid: { providerType: 'company-protocol', models: [{ id: 'model', historyReasoningField: 'reasoning' }] } } },
+    { providers: { invalid: { providerType: 'company-protocol', baseUrl: 'https://example.invalid', models: ['model'] } } },
+    { providers: { invalid: { provider: 'anthropic-compatible', baseUrl: 'https://example.invalid', models: ['model'] } } },
   ]
   for (const fixture of invalidFixtures) {
     assert.equal(validateModelsSchema(fixture), false)
@@ -301,13 +303,13 @@ test('Setup lets both YAML editors fill their flex-owned panel space', async () 
   assert.equal((setupSource.match(/mt-4 min-h-72 flex-1/g) || []).length, 2)
 })
 
-test('models schema suggests known provider types while accepting custom strings and documents legacy readers', () => {
+test('models schema lists only known provider types and documents legacy readers', () => {
   const providerEntry = schemas.MODELS_CONFIG_SCHEMA.properties.providers.additionalProperties
   const provider = providerEntry.oneOf.find((entry) => entry.type === 'object')
   const alias = providerEntry.oneOf.find((entry) => entry.type === 'string')
   assert.equal(alias.pattern, '\\S')
   assert.deepEqual(provider.properties.providerType.anyOf[0].enum, [...schemas.KNOWN_PROVIDER_TYPES])
-  assert.equal(provider.properties.providerType.anyOf[1].type, 'string')
+  assert.deepEqual(provider.properties.providerType.anyOf[1], { const: '' })
   assert.equal(provider.properties.provider.deprecated, true)
   assert.equal(provider.properties.model.deprecated, true)
   assert.equal(schemas.MODELS_CONFIG_SCHEMA.properties.models.deprecated, true)

@@ -63,6 +63,7 @@ import { registerWebUiNodeOnboardingRoutes } from './webuiNodeOnboarding';
 import { WebUiRealtimeHub, WEBUI_REALTIME_PATH } from './webuiRealtime';
 import { buildQueuedPreviewMessages, MAX_QUEUED_PREVIEW_ITEMS, sanitizeQueuedPreviewParts } from './webuiQueuePreview';
 import { listProviderModels, parseProviderModelListRequest, ProviderModelListError } from '../providerModelList';
+import { isConcreteProviderType } from '../../packages/shared/dist/configSchemas';
 
 const WEBUI_UPLOAD_DIR = path.join(os.tmpdir(), 'foxwarm-uploads');
 const WEBUI_IDENTITY_FEATURES = {
@@ -444,6 +445,9 @@ export function getModelsSetupDiagnostics(modelsPath: string = getActiveModelsCo
 function buildProviderConfigFromSetup(body: any): { default: string; providers: Record<string, ProviderConfigEntry> } {
   const providerKey = String(body?.providerKey || body?.provider || 'openai').trim() || 'openai';
   const providerType = String(body?.providerType || 'openai-completions').trim() || 'openai-completions';
+  if (!isConcreteProviderType(providerType)) {
+    throw new Error(`Provider type \`${providerType}\` cannot be tested. Choose a concrete protocol.`);
+  }
   const baseUrl = String(body?.baseUrl || '').trim();
   const apiKey = String(body?.apiKey || '').trim();
   const modelLines = String(body?.models || body?.model || '')

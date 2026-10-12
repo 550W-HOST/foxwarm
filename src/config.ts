@@ -10,6 +10,7 @@ import { AccessConfigRuntime, normalizeAccessConfig, type AccessConfig } from '.
 export { normalizeAccessConfig, assertAccessTokensDoNotMatch, authenticateAccessBearer, authenticateAccessToken, hasAccessSurface } from './accessConfig';
 export type { AccessConfig, NormalizedAccessConfig, VerifiedAccessIdentity } from './accessConfig';
 import { DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS } from './llmStreamingTimeout';
+import { CONCRETE_PROVIDER_TYPES, VIRTUAL_PROVIDER_TYPES, isConcreteProviderType } from '../packages/shared/dist/configSchemas';
 
 export type ChannelProgressConfig = false | {
   intervalMs: number;
@@ -1499,6 +1500,13 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
     if (isVirtualProviderType(providerType)) {
       virtualEntries.push([providerKey, providerEntry, providerType]);
       continue;
+    }
+    if (!isConcreteProviderType(providerType)) {
+      throw new Error(
+        `Provider \`${providerKey}\` has unsupported providerType \`${providerType}\`. ` +
+        `Use one of: ${[...CONCRETE_PROVIDER_TYPES, ...VIRTUAL_PROVIDER_TYPES].join(', ')}. ` +
+        'For a compatible service, choose the protocol it speaks and set baseUrl.'
+      );
     }
 
     for (const field of ['targets', 'failureThreshold', 'cooldownMs'] as const) {

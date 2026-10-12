@@ -924,8 +924,30 @@ test('first-class effort defaults high and maps every canonical level across pro
       }
     }
 
-    await request('custom-anthropic-compatible', 'medium');
-    assert.equal(captured.at(-1)?.body.output_config.effort, 'medium');
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('unrecognized providerType is rejected before any request is sent instead of using Anthropic', async () => {
+  const originalPost = axios.post;
+  const captured: Array<{ url: string; body: any }> = [];
+  (axios as any).post = async (url: string, body: any) => {
+    captured.push({ url, body });
+    return { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'ok' }] } };
+  };
+
+  try {
+    await assert.rejects(requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'unknown provider' }] }],
+      systemPrompt: '',
+      modelEntryOverride: {
+        providerKey: 'fixture', providerType: 'company-protocol', baseUrl: 'https://fixture.example/v1', apiKey: 'fixture-key',
+        model: 'model', effort: { allowed: ['high'], default: 'high' }, extraFields: {}, extraHeaders: {},
+      } as any,
+      toolDefinitions: [], notifySessionEvents: false, registerAbortController: false, maxRetries: 1,
+    }), /unsupported providerType `company-protocol`/);
+    assert.equal(captured.length, 0);
   } finally {
     (axios as any).post = originalPost;
   }

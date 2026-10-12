@@ -2989,9 +2989,7 @@ function buildConcreteRequestPlan(options: {
                 },
             })) : undefined,
         };
-    } else {
-        // Preserve current custom-provider behavior: any concrete provider type
-        // not recognized as OpenAI-compatible uses Anthropic serialization.
+    } else if (providerType === 'anthropic') {
         messages = convertToAnthropicFormat(providerContents, modelEntry);
         url = `${baseUrl}/v1/messages`;
         headers = {
@@ -3014,6 +3012,10 @@ function buildConcreteRequestPlan(options: {
                 input_schema: fd.parameters,
             })) : undefined,
         };
+    } else {
+        // Reject before any headers, auth, or body are built: an unrecognized
+        // type must never be sent with Anthropic credentials or serialization.
+        throw new Error(`Model \`${modelKey}\` uses unsupported providerType \`${providerType}\`.`);
     }
 
     const templateVars: Record<string, string> = {

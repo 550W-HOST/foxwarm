@@ -188,6 +188,44 @@ test('Chat Completions history reasoning field defaults, inherits, and overrides
   assert.equal(parsed.models.omitted.historyReasoningField, 'reasoning_content');
 });
 
+test('providerType accepts known protocols, legacy provider, unset defaults, and virtual routes without unknown fallback', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'route',
+    providers: {
+      unset: { baseUrl: 'https://example.test/v1', models: ['model'] },
+      empty: { providerType: '', baseUrl: 'https://example.test/v1', models: ['model'] },
+      legacy: { provider: 'anthropic', baseUrl: 'https://example.test/anthropic', models: ['model'] },
+      responses: { providerType: 'openai-responses', baseUrl: 'https://example.test/v1', models: ['model'] },
+      ws: { providerType: 'openai-ws', baseUrl: 'https://example.test/v1', models: ['model'] },
+      completions: { providerType: 'openai-completions', baseUrl: 'https://example.test/v1', models: ['model'] },
+      route: { providerType: 'session-hash', targets: ['legacy/model'] },
+    },
+  });
+  assert.equal(parsed.models.unset.providerType, 'openai');
+  assert.equal(parsed.models.empty.providerType, 'openai');
+  assert.equal(parsed.models.legacy.providerType, 'anthropic');
+  assert.equal(parsed.models.responses.providerType, 'openai-responses');
+  assert.equal(parsed.models.ws.providerType, 'openai-ws');
+  assert.equal(parsed.models.completions.providerType, 'openai-completions');
+  assert.equal(parsed.models['legacy/model'].providerType, 'anthropic');
+  assert.equal(parsed.models.route.providerType, 'session-hash');
+});
+
+test('unrecognized providerType is rejected during models config validation for both fields', () => {
+  assert.throws(
+    () => loadModelsConfigFromObject({ default: 'custom', providers: {
+      custom: { providerType: 'company-protocol', baseUrl: 'https://example.test/v1', models: ['model'] },
+    } }),
+    /Provider `custom` has unsupported providerType `company-protocol`/,
+  );
+  assert.throws(
+    () => loadModelsConfigFromObject({ default: 'custom', providers: {
+      custom: { provider: 'anthropic-compatible', baseUrl: 'https://example.test/v1', models: ['model'] },
+    } }),
+    /unsupported providerType `anthropic-compatible`/,
+  );
+});
+
 test('history reasoning field rejects invalid values and non-Chat concrete or virtual providers', () => {
   const parse = (provider: any) => loadModelsConfigFromObject({ default: 'provider', providers: { provider } });
   assert.throws(
