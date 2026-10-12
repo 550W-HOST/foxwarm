@@ -201,7 +201,7 @@ test('Close all directly empties a multi-tab pane without route hydration', asyn
     }, { timeout: 5_000 })
 
     assert.equal(await closeAllPage.$$eval('[data-tab-id]', (elements) => elements.length), 0)
-    assert.equal(await closeAllPage.$$eval('[data-pane-id="pane-e2e-close-all"] button[title="Split right with active tab"], [data-pane-id="pane-e2e-close-all"] button[title="Split down with active tab"], [data-pane-id="pane-e2e-close-all"] button[title="Close pane"]', buttons => buttons.length), 3, 'empty panes keep their existing controls')
+    assert.equal(await closeAllPage.$$eval('[data-pane-id="pane-e2e-close-all"] button[title="Split right with active tab"], [data-pane-id="pane-e2e-close-all"] button[title="Split down with active tab"], [data-pane-id="pane-e2e-close-all"] button[title="Close pane"]', buttons => buttons.length), 2, 'empty root panes retain split controls and omit Close pane')
   } finally {
     await closeAllPage.close()
   }
