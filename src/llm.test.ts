@@ -1005,6 +1005,52 @@ test('first-class effort overrides known extraFields paths last without mutating
   }
 });
 
+test('Anthropic Messages requests enable ephemeral top-level caching by default and honor explicit extraFields', async () => {
+  const originalPost = axios.post;
+  const captured: any[] = [];
+  (axios as any).post = async (url: string, body: any) => {
+    captured.push({ url, body });
+    return {
+      status: 200, statusText: 'OK', headers: {},
+      data: url.endsWith('/responses') ? makeResponsesStream()
+        : url.endsWith('/chat/completions') ? makeChatCompletionStream()
+          : { content: [{ type: 'text', text: 'ok' }] },
+    };
+  };
+  const request = async (modelEntryOverride: any) => requestLlmOnce({
+    contents: [{ role: 'user', parts: [{ text: 'cache default' }] }], systemPrompt: '',
+    modelEntryOverride, toolDefinitions: [], notifySessionEvents: false,
+    registerAbortController: false, maxRetries: 1,
+  });
+  const anthropic = {
+    providerKey: 'fixture', providerType: 'anthropic', baseUrl: 'https://fixture.example', apiKey: '', model: 'claude',
+    extraFields: {}, extraHeaders: {},
+  };
+  const responses = {
+    providerKey: 'fixture', providerType: 'openai-responses', baseUrl: 'https://fixture.example/v1', apiKey: '', model: 'responses',
+    extraFields: {}, extraHeaders: {},
+  };
+  const chat = {
+    providerKey: 'fixture', providerType: 'openai-completions', baseUrl: 'https://fixture.example/v1', apiKey: '', model: 'chat',
+    extraFields: {}, extraHeaders: {},
+  };
+
+  try {
+    await request(anthropic);
+    assert.deepEqual(captured.at(-1)?.body.cache_control, { type: 'ephemeral' });
+
+    await request({ ...anthropic, extraFields: { cache_control: { type: 'ephemeral', ttl: '1h' } } });
+    assert.deepEqual(captured.at(-1)?.body.cache_control, { type: 'ephemeral', ttl: '1h' });
+
+    await request(responses);
+    assert.equal(captured.at(-1)?.body.cache_control, undefined);
+    await request(chat);
+    assert.equal(captured.at(-1)?.body.cache_control, undefined);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
 test('OpenAI Responses opt-in web search is appended to Foxwarm tools and excluded from compact plans', async () => {
   const originalPost = axios.post;
   const capturedBodies: any[] = [];

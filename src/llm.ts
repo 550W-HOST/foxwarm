@@ -3004,6 +3004,8 @@ function buildConcreteRequestPlan(options: {
         data = {
             model: modelName,
             max_tokens: MAX_OUTPUT,
+            // Top-level automatic prompt caching; explicit extraFields.cache_control overrides it below.
+            cache_control: { type: 'ephemeral' },
             system: request.systemPrompt,
             messages,
             tools: availableToolDefinitions.length > 0 ? availableToolDefinitions.map(fd => ({

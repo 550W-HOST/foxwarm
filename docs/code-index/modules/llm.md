@@ -82,6 +82,10 @@ Structured tool values remain structured until provider serialization, where one
 
 Request failure is exception-driven at the provider boundary. Router, channel, setup, and CLI boundaries choose presentation.
 
+### D-llm-anthropic-default-ephemeral-cache
+
+[2026-10-12] Every Anthropic Messages request built by the Anthropic-format serializer carries the top-level `cache_control: { type: 'ephemeral' }` by default, using the protocol's automatic caching with the provider's default lifetime. The default is part of the attempt-local payload before the ordinary `extraFields` merge, so an explicit `extraFields.cache_control` replaces it. The serializer adds no `prompt_cache_key`, no per-block breakpoints, and no TTL policy; OpenAI Responses and Chat Completions payloads are unchanged.
+
 ## Canonical ownership
 
 Retry presentation is canonical in [D-pipeline-display-only-retries](../threads/message-processing-pipeline.md#d-pipeline-display-only-retries). MCP result cleanup is canonical in [D-mcp-source-normalization](../units/src-mcp-client.md#d-mcp-source-normalization).
