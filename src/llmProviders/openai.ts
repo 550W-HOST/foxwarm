@@ -21,7 +21,7 @@ function makeAbortError(message = 'LLM request aborted'): Error & { code: string
     return error;
 }
 
-function parseSseEventBlock(block: string): any | null {
+export function parseSseEventBlock(block: string): any | null {
     const dataLines: string[] = [];
 
     for (const rawLine of block.replace(/\r/g, '').split('\n')) {

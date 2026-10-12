@@ -11,6 +11,7 @@ import {
   SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS,
   setStreamingTimeoutTestHooks,
 } from './llmStreamingTimeout';
+import { makeAnthropicMessageStream } from './testFixtures/anthropicMessageStream';
 
 const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-stream-timeout-'));
 fs.ensureDirSync(path.join(dataRoot, 'state'));
@@ -142,7 +143,7 @@ test('nonstreaming requests retain five-minute default and honor explicit timeou
   };
   const modelEntryOverride = {
     providerKey: 'fixture', providerType: 'anthropic', baseUrl: 'https://example.test', apiKey: '',
-    model: 'model', extraFields: {}, extraHeaders: {},
+    model: 'model', extraFields: { stream: false }, extraHeaders: {},
   } as any;
   try {
     await requestLlmOnce({
@@ -194,12 +195,19 @@ test('explicit streaming timeout remains a hard attempt bound and Stop remains a
 
     setStreamingTimeoutTestHooks({ set: () => ({ unref() {} }), clear() {} });
     const controller = new AbortController();
+    let markStarted!: () => void;
+    const attemptStarted = new Promise<void>(resolve => { markStarted = resolve; });
+    (axios as any).post = async (url: string, data: any, config: any) => {
+      markStarted();
+      return stall(url, data, config);
+    };
     const stopped = requestLlmOnce({
       contents: [{ role: 'user', parts: [{ text: 'stop' }] }], systemPrompt: '', model: 'fixture/model',
       promptCacheKey: 'stop', toolDefinitions: [], notifySessionEvents: false, registerAbortController: false,
       abortSignal: controller.signal, maxRetries: 1,
     });
-    process.nextTick(() => controller.abort());
+    await attemptStarted;
+    controller.abort();
     await assert.rejects(stopped, (error: any) => error?.name === 'CanceledError' && error?.code === 'ERR_CANCELED');
   } finally {
     (axios as any).post = originalPost;

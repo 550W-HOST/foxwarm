@@ -29,6 +29,7 @@ import { mergeModelStreamDeltaEvents } from './sessionWorkerHost';
 import { isSessionTurnIncomplete } from './sessionContinuation';
 import { clearOpenAIWsCompletedChains, getOpenAIWsCompletedChainCountForTests, setOpenAIWsTransportTestHooks } from './llmProviders/openaiWsTransport';
 import { isToolAuthorizationPolicyUnavailable, parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests, setToolAuthorizationPolicyPathForTests } from './toolAuthorization';
+import { makeAnthropicMessageStream } from './testFixtures/anthropicMessageStream';
 
 const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -672,7 +673,7 @@ test('requestLlmOnce can make a direct provider-specific request without a sessi
       status: 200,
       statusText: 'OK',
       headers: {},
-      data: {
+      data: makeAnthropicMessageStream({
         content: [
           { type: 'text', text: 'anthropic ok' },
         ],
@@ -682,7 +683,7 @@ test('requestLlmOnce can make a direct provider-specific request without a sessi
           cache_read_input_tokens: 22903,
           output_tokens: 3,
         },
-      },
+      }),
     };
   };
 
@@ -728,10 +729,10 @@ test('Anthropic usage keeps legacy input/output counts when cache fields are abs
     status: 200,
     statusText: 'OK',
     headers: {},
-    data: {
+    data: makeAnthropicMessageStream({
       content: [{ type: 'text', text: 'anthropic legacy usage' }],
       usage: { input_tokens: 7, output_tokens: 3 },
-    },
+    }),
   });
 
   try {
@@ -778,15 +779,15 @@ test('Anthropic thinking and redacted_thinking preserve empty blocks, order, and
       statusText: 'OK',
       headers: {},
       data: capturedBodies.length === 1
-        ? {
+        ? makeAnthropicMessageStream({
             content: [
               { type: 'thinking', thinking: '', signature: 'opaque-signature' },
               { type: 'redacted_thinking', data: 'opaque-redacted-data' },
               { type: 'tool_use', id: 'call_round_trip', name: 'read', input: { filePath: 'README.md' } },
               { type: 'text', text: 'The answer.' },
             ],
-          }
-        : { content: [{ type: 'text', text: 'ack' }] },
+          })
+        : makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ack' }] }),
     };
   };
 
@@ -872,7 +873,7 @@ test('first-class effort defaults high and maps every canonical level across pro
       headers: {},
       data: url.endsWith('/responses') ? makeResponsesStream()
         : url.endsWith('/chat/completions') ? makeChatCompletionStream()
-          : { content: [{ type: 'text', text: 'ok' }] },
+          : makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }] }),
     };
   };
 
@@ -934,7 +935,7 @@ test('unrecognized providerType is rejected before any request is sent instead o
   const captured: Array<{ url: string; body: any }> = [];
   (axios as any).post = async (url: string, body: any) => {
     captured.push({ url, body });
-    return { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'ok' }] } };
+    return { status: 200, statusText: 'OK', headers: {}, data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }] }) };
   };
 
   try {
@@ -962,7 +963,7 @@ test('first-class effort overrides known extraFields paths last without mutating
       status: 200, statusText: 'OK', headers: {},
       data: url.endsWith('/responses') ? makeResponsesStream()
         : url.endsWith('/chat/completions') ? makeChatCompletionStream()
-          : { content: [{ type: 'text', text: 'ok' }] },
+          : makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }] }),
     };
   };
   const allEfforts = ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -1036,7 +1037,7 @@ test('Anthropic Messages requests enable ephemeral top-level caching by default 
       status: 200, statusText: 'OK', headers: {},
       data: url.endsWith('/responses') ? makeResponsesStream()
         : url.endsWith('/chat/completions') ? makeChatCompletionStream()
-          : { content: [{ type: 'text', text: 'ok' }] },
+          : makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }] }),
     };
   };
   const request = async (modelEntryOverride: any) => requestLlmOnce({
@@ -1068,6 +1069,174 @@ test('Anthropic Messages requests enable ephemeral top-level caching by default 
     assert.equal(captured.at(-1)?.body.cache_control, undefined);
     await request(chat);
     assert.equal(captured.at(-1)?.body.cache_control, undefined);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('Anthropic Messages streams by default and extraFields.stream:false selects the JSON parser', async () => {
+  const originalPost = axios.post;
+  const captured: Array<{ body: any; config: any }> = [];
+  let mode: 'stream' | 'json' = 'stream';
+  (axios as any).post = async (_url: string, body: any, config: any) => {
+    captured.push({ body, config });
+    return {
+      status: 200, statusText: 'OK', headers: {},
+      data: mode === 'stream'
+        ? makeAnthropicMessageStream({ content: [{ type: 'text', text: 'streamed ok' }] })
+        : { content: [{ type: 'text', text: 'json ok' }], stop_reason: 'end_turn' },
+    };
+  };
+  const request = (extraFields: Record<string, unknown>) => requestLlmOnce({
+    contents: [{ role: 'user', parts: [{ text: 'transport' }] }], systemPrompt: '',
+    modelEntryOverride: {
+      providerKey: 'fixture', providerType: 'anthropic', baseUrl: 'https://fixture.example', apiKey: '', model: 'claude',
+      extraFields, extraHeaders: {},
+    },
+    toolDefinitions: [], notifySessionEvents: false, registerAbortController: false, maxRetries: 1,
+  });
+
+  try {
+    const streamed = await request({});
+    assert.equal(captured.at(-1)?.body.stream, true);
+    assert.equal(captured.at(-1)?.config.responseType, 'stream');
+    assert.equal(streamed.text, 'streamed ok');
+
+    mode = 'json';
+    const json = await request({ stream: false });
+    assert.equal(captured.at(-1)?.body.stream, false);
+    assert.notEqual(captured.at(-1)?.config.responseType, 'stream');
+    assert.equal(json.text, 'json ok');
+
+    const before = captured.length;
+    await assert.rejects(request({ stream: 'yes' }), /extraFields\.stream must be true or false/);
+    assert.equal(captured.length, before);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('Anthropic SSE stop reasons keep usable truncated text, never execute incomplete tools, and fail refusals and server turns explicitly', async () => {
+  const originalPost = axios.post;
+  let calls = 0;
+  let next: any;
+  (axios as any).post = async () => {
+    calls += 1;
+    return { status: 200, statusText: 'OK', headers: {}, data: makeAnthropicMessageStream(next) };
+  };
+  const request = () => requestLlmOnce({
+    contents: [{ role: 'user', parts: [{ text: 'stop' }] }], systemPrompt: '',
+    modelEntryOverride: {
+      providerKey: 'fixture', providerType: 'anthropic', baseUrl: 'https://fixture.example', apiKey: '', model: 'claude',
+      extraFields: {}, extraHeaders: {},
+    },
+    toolDefinitions: [], notifySessionEvents: false, registerAbortController: false, maxRetries: 1,
+  });
+
+  try {
+    next = { content: [{ type: 'text', text: 'partial' }], stop_reason: 'max_tokens', usage: { input_tokens: 5, output_tokens: 1000 } };
+    const truncated = await request();
+    assert.equal(truncated.text, 'partial');
+    assert.deepEqual(truncated.truncatedStop, { stopReason: 'max_tokens' });
+
+    next = {
+      content: [{ type: 'tool_use', id: 'toolu_cut', name: 'read', input: { filePath: 'README.md' } }],
+      stop_reason: 'max_tokens',
+    };
+    const cutTool = await request();
+    const cutCall = cutTool.allParts?.find(part => part.functionCall)?.functionCall;
+    assert.equal(cutCall?.args && Object.keys(cutCall.args).length, 0);
+    assert.match(String(cutCall?.argsParseError), /Tool call was not executed/);
+
+    next = { content: [{ type: 'tool_use', id: 'toolu_ok', name: 'read', input: { filePath: 'README.md' } }], stop_reason: 'tool_use' };
+    const complete = await request();
+    const okCall = complete.allParts?.find(part => part.functionCall)?.functionCall;
+    assert.deepEqual(okCall?.args, { filePath: 'README.md' });
+    assert.equal(okCall?.argsParseError, undefined);
+    assert.equal(complete.truncatedStop, undefined);
+
+    const beforeRefusal = calls;
+    next = {
+      content: [], stop_reason: 'refusal',
+      stop_details: { type: 'refusal', category: 'cyber', explanation: 'Declined by policy.' },
+    };
+    await assert.rejects(request(), /declined this request \(cyber\)\. Declined by policy\./);
+    assert.equal(calls, beforeRefusal + 1, 'refusals are not retried or switched automatically');
+
+    next = { content: [{ type: 'text', text: 'paused' }], stop_reason: 'pause_turn' };
+    await assert.rejects(request(), /paused a server-tool turn/);
+
+    next = { content: [{ type: 'server_tool_use', id: 'srvtoolu_1', name: 'web_search', input: { query: 'x' } }], stop_reason: 'end_turn' };
+    await assert.rejects(request(), /server tool block "server_tool_use" is not supported/);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('Anthropic thinking_tokens map to reasoningTokens inside outputTokens without summing cumulative usage', async () => {
+  const originalPost = axios.post;
+  (axios as any).post = async () => ({
+    status: 200, statusText: 'OK', headers: {},
+    data: makeAnthropicMessageStream({
+      content: [{ type: 'thinking', thinking: 'short plan', signature: 'SIG-USAGE' }, { type: 'text', text: 'answer' }],
+      usage: { input_tokens: 9, cache_creation_input_tokens: 2, cache_read_input_tokens: 4, output_tokens: 42, output_tokens_details: { thinking_tokens: 30 } },
+    }),
+  });
+  try {
+    const result = await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'usage' }] }], systemPrompt: '',
+      modelEntryOverride: {
+        providerKey: 'fixture', providerType: 'anthropic', baseUrl: 'https://fixture.example', apiKey: '', model: 'claude',
+        extraFields: {}, extraHeaders: {},
+      },
+      toolDefinitions: [], notifySessionEvents: false, registerAbortController: false, maxRetries: 1,
+    });
+    assert.equal(result.usage?.inputTokens, 11);
+    assert.equal(result.usage?.cachedTokens, 4);
+    assert.equal(result.usage?.outputTokens, 42);
+    assert.equal(result.usage?.reasoningTokens, 30);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('Anthropic SSE thinking and text reach the model stream events without signature leakage', async () => {
+  const originalPost = axios.post;
+  const events: any[] = [];
+  const effects: any = {
+    placement: 'local',
+    notifySessionEvent: (_sessionId: string, event: any) => { events.push(event); },
+    appendMessage: async (): Promise<void> => undefined,
+    persistSession: async (): Promise<void> => undefined,
+    registerAbortController: (): void => undefined,
+    clearAbortController: (): void => undefined,
+    clearWaitById: async (): Promise<boolean> => false,
+  };
+  (axios as any).post = async () => ({
+    status: 200, statusText: 'OK', headers: {},
+    data: makeAnthropicMessageStream({
+      content: [
+        { type: 'thinking', thinking: 'visible plan', signature: 'SIG-LEAK-CHECK' },
+        { type: 'text', text: 'Answer' },
+      ],
+    }),
+  });
+  try {
+    const result = await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'stream ui' }] }],
+      systemPrompt: '',
+      model: 'anthropic/claude-sonnet-4-5',
+      sessionId: makeId('anthropic_stream_ui'),
+      currentSessionEffects: effects,
+      toolDefinitions: [],
+      notifySessionEvents: true,
+      registerAbortController: false,
+      maxRetries: 1,
+    });
+    assert.equal(result.text, 'Answer');
+    assert.equal(events.some(event => event.type === 'model-stream-reset'), true);
+    assert.equal(events.some(event => event.type === 'model-stream-update'), true);
+    assert.equal(JSON.stringify(events).includes('SIG-LEAK-CHECK'), false);
   } finally {
     (axios as any).post = originalPost;
   }
@@ -1159,7 +1328,7 @@ test('OpenAI custom function tools explicitly use non-strict mode without changi
       headers: {},
       data: url.endsWith('/responses') ? makeResponsesStream()
         : url.endsWith('/chat/completions') ? makeChatCompletionStream()
-          : { content: [{ type: 'text', text: 'ok' }] },
+          : makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }] }),
     };
   };
 
@@ -1358,7 +1527,7 @@ test('a post-response journal failure never retries a successful provider genera
   let callCount = 0;
   (axios as any).post = async () => {
     callCount += 1;
-    return { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'one generation' }] } };
+    return { status: 200, statusText: 'OK', headers: {}, data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'one generation' }] }) };
   };
   setLlmRequestJournalFaultInjectorForTests((phase, record: any) => {
     if (phase === 'after-jsonl-append' && record.kind === 'attempt-result' && record.outcome === 'success') throw new Error('injected result journal failure');
@@ -1542,7 +1711,7 @@ test('all provider protocols hydrate canonical image refs only in outbound paylo
     await t.test('Anthropic Messages', async () => {
       (axios as any).post = async (_url: string, data: any) => {
         captured.push(data);
-        return { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } } };
+        return { status: 200, statusText: 'OK', headers: {}, data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } }) };
       };
       await requestLlmOnce({ contents: canonical, systemPrompt: '', modelEntryOverride: models.anthropic as any, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
     });
@@ -1595,7 +1764,7 @@ test('all provider protocols receive the same provider-safe HEIC hydration clone
     await t.test('Anthropic Messages', async () => {
       (axios as any).post = async (_url: string, data: any) => {
         captured.push(data);
-        return { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } } };
+        return { status: 200, statusText: 'OK', headers: {}, data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } }) };
       };
       await requestLlmOnce({ contents: canonical, systemPrompt: '', modelEntryOverride: models.anthropic as any, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
     });
@@ -1753,7 +1922,7 @@ test('all provider protocols filter historical reasoning only for a proven diffe
     await t.test('Anthropic Messages', async () => {
       (axios as any).post = async (_url: string, data: any) => {
         captured.set('anthropic', data);
-        return { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'ok' }] } };
+        return { status: 200, statusText: 'OK', headers: {}, data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }] }) };
       };
       await requestLlmOnce({ contents: history, systemPrompt: '', modelEntryOverride: models.anthropic as any, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
     });
@@ -3419,7 +3588,7 @@ test('Anthropic request serialization normalizes consecutive internal user messa
       status: 200,
       statusText: 'OK',
       headers: {},
-      data: { content: [{ type: 'text', text: 'ok' }] },
+      data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }] }),
     };
   };
 
@@ -3455,7 +3624,7 @@ test('Anthropic tool serialization keeps the persisted timing marker first in it
   let capturedBody: any = null;
   (axios as any).post = async (_url: string, data: any) => {
     capturedBody = data;
-    return { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'ok' }] } };
+    return { status: 200, statusText: 'OK', headers: {}, data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }] }) };
   };
 
   try {
@@ -3793,7 +3962,7 @@ test('normal Chat Completions and Anthropic retry preparation rebuilds committed
         bodies.push(body);
         if (bodies.length === 1) throw new Error('retry this transport failure');
         return { status: 200, statusText: 'OK', headers: {}, data: model.startsWith('anthropic/')
-          ? { content: [{ type: 'text', text: 'prepared answer' }] } : makeChatCompletionStream('prepared answer') };
+          ? makeAnthropicMessageStream({ content: [{ type: 'text', text: 'prepared answer' }] }) : makeChatCompletionStream('prepared answer') };
       };
       try {
         const result = await chat([{ text: 'initial input' }], session, 0, {
@@ -3998,10 +4167,10 @@ test('chat journals only historical concrete model provenance and strips all __m
       status: 200,
       statusText: 'OK',
       headers: {},
-      data: {
+      data: makeAnthropicMessageStream({
         content: [{ type: 'text', text: 'ok' }],
         usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0 },
-      },
+      }),
     };
   };
 
@@ -4059,7 +4228,7 @@ test('requestLlmOnce excludes presentation paths, ToolScript activity and planne
         capturedBody = body;
         const data = providerType === 'openai-completions' ? makeChatCompletionStream('ok')
           : providerType === 'openai-responses' ? makeResponsesStream('ok')
-          : { content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } };
+          : makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } });
         return { status: 200, statusText: 'OK', headers: {}, data };
       };
       const result = await requestLlmOnce({ contents, systemPrompt: '',
@@ -4159,7 +4328,7 @@ test('chat stores each model request usage and model id on its assistant message
         status: 200,
         statusText: 'OK',
         headers: {},
-        data: {
+        data: makeAnthropicMessageStream({
           content: [
             { type: 'tool_use', id: 'call_1', name: 'read', input: { filePath: 'README.md' } },
           ],
@@ -4168,7 +4337,7 @@ test('chat stores each model request usage and model id on its assistant message
             output_tokens: 5,
             cache_read_input_tokens: 2,
           },
-        },
+        }),
       };
     }
 
@@ -4176,7 +4345,7 @@ test('chat stores each model request usage and model id on its assistant message
       status: 200,
       statusText: 'OK',
       headers: {},
-      data: {
+      data: makeAnthropicMessageStream({
         content: [
           { type: 'text', text: 'done' },
         ],
@@ -4185,7 +4354,7 @@ test('chat stores each model request usage and model id on its assistant message
           output_tokens: 3,
           cache_read_input_tokens: 4,
         },
-      },
+      }),
     };
   };
 
@@ -4481,7 +4650,7 @@ test('compact-plan provider schemas export direct/file fields and returned calls
         exportedSchema = fixture.provider === 'anthropic' ? body.tools[0].input_schema
           : fixture.provider === 'openai-completions' ? body.tools[0].function.parameters : body.tools[0].parameters;
         const payload = fixture.payload();
-        let data: any = payload;
+        let data: any = fixture.provider === 'anthropic' ? makeAnthropicMessageStream(payload as any) : payload;
         if (fixture.provider !== 'anthropic') {
           const stream = new PassThrough();
           process.nextTick(() => { stream.end(`data: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n`); });
