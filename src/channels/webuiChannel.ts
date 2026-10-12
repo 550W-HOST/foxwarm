@@ -1525,6 +1525,8 @@ export class WebUIChannel implements Channel {
             const agents = await Promise.all(entries
               .filter(entry => {
                 if (!entry.isDirectory()) return false;
+                // Dot-prefixed directories are workspace scratch data, never Agents.
+                if (entry.name.startsWith('.')) return false;
                 try {
                   sessionManager.validateAgentName(entry.name);
                   return true;
