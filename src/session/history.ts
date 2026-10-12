@@ -49,6 +49,7 @@ import { appendBlocksToArchiveWithCommitInfo, renderBlockMessage, resolveNextSes
 import { isModelVisibleMessage } from './messageVisibility';
 import { captureSessionSemanticState, restoreSessionSemanticState } from './metadataStore';
 import { isSessionAuthorityPostCommitError } from './stateFile';
+import { parseUnifiedToolCall } from '../tools/resolvedTools';
 
 const TOOL_RESPONSE_RETAIN_HEAD_CHARS = 500;
 const TOOL_RESPONSE_RETAIN_TAIL_CHARS = 500;
@@ -413,10 +414,12 @@ function isSmallPayloadValue(value: unknown): boolean {
 function buildPrunedFunctionResponse(
   message: Message,
   part: MessagePart,
+  preservedToolUseIds: ReadonlySet<string>,
 ): { part: MessagePart; originalChars: number; prunedChars: number } | null {
   const functionResponse = part.functionResponse;
   const seq = message.__meta?.seq;
   if (!functionResponse || !Number.isSafeInteger(seq) || (seq || 0) < 1 || !isPlainRecord(functionResponse.response)) return null;
+  if (preservedToolUseIds.has(functionResponse.tool_use_id)) return null;
 
   const response = functionResponse.response;
   let originalText: string;
@@ -460,6 +463,43 @@ function buildPrunedFunctionResponse(
   };
 }
 
+/** Return IDs whose response is paired with a real builtin skill load call. */
+function collectSkillLoadToolUseIds(history: Message[]): Set<string> {
+  const counts = new Map<string, { total: number; skillLoads: number }>();
+  for (const message of history) {
+    for (const part of message.parts || []) {
+      const call = part.functionCall;
+      if (!call || typeof call.id !== 'string' || !call.id) continue;
+
+      let isSkillLoad = call.name === 'skill'
+        && call.args?.action === 'load'
+        && typeof call.args?.skillName === 'string'
+        && call.args.skillName.trim().length > 0;
+      if (call.name === 'call_tool') {
+        try {
+          const resolved = parseUnifiedToolCall(call.args || {});
+          isSkillLoad = resolved.source === 'builtin'
+            && resolved.name === 'skill'
+            && resolved.args?.action === 'load'
+            && typeof resolved.args?.skillName === 'string'
+            && resolved.args.skillName.trim().length > 0;
+        } catch {
+          isSkillLoad = false;
+        }
+      } else if (call.name === 'load_skill') {
+        isSkillLoad = typeof call.args?.skillName === 'string' && call.args.skillName.trim().length > 0;
+      }
+
+      const entry = counts.get(call.id) || { total: 0, skillLoads: 0 };
+      entry.total += 1;
+      if (isSkillLoad) entry.skillLoads += 1;
+      counts.set(call.id, entry);
+    }
+  }
+
+  return new Set([...counts].filter(([, entry]) => entry.total === 1 && entry.skillLoads === 1).map(([id]) => id));
+}
+
 export type ToolResponsePrunePlan = ToolNoiseCompactionResult & {
   snapshotHistory: Message[];
   rewrittenHistory: Message[];
@@ -478,6 +518,7 @@ export async function buildToolResponsePrunePlan(
 ): Promise<ToolResponsePrunePlan> {
   const snapshotHistory = structuredClone(session.history);
   const splitIndex = resolveCompactionSplitIndex(snapshotHistory, keepPercent);
+  const preservedToolUseIds = collectSkillLoadToolUseIds(snapshotHistory);
   let replacedFunctionResponses = 0;
   let touchedMessages = 0;
   const validatedArchiveSeqs: number[] = [];
@@ -504,7 +545,7 @@ export async function buildToolResponsePrunePlan(
     );
     const parts = message.parts.map(part => {
       if (!validArchive) return structuredClone(part);
-      const pruned = buildPrunedFunctionResponse(message, part);
+      const pruned = buildPrunedFunctionResponse(message, part, preservedToolUseIds);
       if (!pruned) return structuredClone(part);
       replacedFunctionResponses += 1;
       if (isPositiveSafeInteger(seq) && !validatedArchiveSeqs.includes(seq)) validatedArchiveSeqs.push(seq);

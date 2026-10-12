@@ -1592,6 +1592,46 @@ test('structured historical response payloads retain the full model-visible resp
   assert.match(pruned, /historical tool response pruned/);
 });
 
+test('historical pruning preserves paired skill loads but still prunes list and other large responses', async () => {
+  const { buildToolResponsePrunePlan } = require('./history') as typeof import('./history');
+  const { archive } = await loadDeps();
+  const large = 'SKILL-OR-TOOL-OUTPUT '.repeat(1800);
+  const calls = [
+    { id: 'direct-skill-load', name: 'skill', args: { action: 'load', skillName: 'code-index' } },
+    { id: 'unified-skill-load', name: 'call_tool', args: {
+      toolId: 'builtin:skill', args: { action: 'load', skillName: 'webui-markers' },
+    } },
+    { id: 'legacy-skill-load', name: 'load_skill', args: { skillName: 'timer-automation' } },
+    { id: 'skill-list', name: 'skill', args: { action: 'list' } },
+    { id: 'ordinary-read', name: 'read', args: { filePath: 'large.txt' } },
+  ];
+  const history: Message[] = [
+    { role: 'model', parts: calls.map(functionCall => ({ functionCall })), __meta: { seq: 1, timestamp: 1 } },
+    {
+      role: 'tool',
+      parts: calls.map(call => ({ functionResponse: {
+        tool_use_id: call.id, name: call.name, response: { output: `${call.id}:${large}` },
+      } })).concat({ functionResponse: {
+        tool_use_id: 'unpaired-skill', name: 'skill', response: { output: `unpaired-skill:${large}` },
+      } }),
+      __meta: { seq: 2, timestamp: 2 },
+    },
+    { role: 'user', parts: [{ text: 'recent' }], __meta: { seq: 3, timestamp: 3 } },
+  ];
+  const sessionId = makeSessionId('prune_skill_loads');
+  await archive.appendMessagesToArchive({ id: sessionId, agent: 'main', history: [], nextMessageSeq: 1 } as Session, history);
+
+  const plan = await buildToolResponsePrunePlan(sessionId, { history, persistentMemorySnapshot: '' }, 1 / 3);
+  assert.equal(plan.replacedFunctionResponses, 3);
+  const responses = plan.rewrittenHistory[1].parts.map(part => part.functionResponse!.response.output);
+  assert.equal(responses[0], `direct-skill-load:${large}`);
+  assert.equal(responses[1], `unified-skill-load:${large}`);
+  assert.equal(responses[2], `legacy-skill-load:${large}`);
+  assert.match(String(responses[3]), /historical tool response pruned/);
+  assert.match(String(responses[4]), /historical tool response pruned/);
+  assert.match(String(responses[5]), /historical tool response pruned/);
+});
+
 
 test('historical pruning requires exact effective archive provenance and accepts inherited exact identity', async () => {
   const { sessionHistory, archive } = await loadDeps();
