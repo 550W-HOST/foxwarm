@@ -1116,7 +1116,7 @@ test('Anthropic Messages streams by default and extraFields.stream:false selects
   }
 });
 
-test('Anthropic SSE stop reasons keep usable truncated text, never execute incomplete tools, and fail refusals and server turns explicitly', async () => {
+test('Anthropic SSE stop reasons keep usable truncated text, preserve complete tools, and fail refusals and server turns explicitly', async () => {
   const originalPost = axios.post;
   let calls = 0;
   let next: any;
@@ -1140,13 +1140,23 @@ test('Anthropic SSE stop reasons keep usable truncated text, never execute incom
     assert.deepEqual(truncated.truncatedStop, { stopReason: 'max_tokens' });
 
     next = {
-      content: [{ type: 'tool_use', id: 'toolu_cut', name: 'read', input: { filePath: 'README.md' } }],
+      content: [{ type: 'tool_use', id: 'toolu_cut', name: 'read', input: '{"filePath":' }],
       stop_reason: 'max_tokens',
     };
     const cutTool = await request();
     const cutCall = cutTool.allParts?.find(part => part.functionCall)?.functionCall;
     assert.equal(cutCall?.args && Object.keys(cutCall.args).length, 0);
     assert.match(String(cutCall?.argsParseError), /Tool call was not executed/);
+
+    next = {
+      content: [{ type: 'tool_use', id: 'toolu_complete', name: 'read', input: { filePath: 'README.md' } }],
+      stop_reason: 'max_tokens',
+    };
+    const completeAtLimit = await request();
+    const completeAtLimitCall = completeAtLimit.allParts?.find(part => part.functionCall)?.functionCall;
+    assert.deepEqual(completeAtLimitCall?.args, { filePath: 'README.md' });
+    assert.equal(completeAtLimitCall?.argsParseError, undefined);
+    assert.deepEqual(completeAtLimit.truncatedStop, { stopReason: 'max_tokens' });
 
     next = { content: [{ type: 'tool_use', id: 'toolu_ok', name: 'read', input: { filePath: 'README.md' } }], stop_reason: 'tool_use' };
     const complete = await request();
@@ -1237,6 +1247,52 @@ test('Anthropic SSE thinking and text reach the model stream events without sign
     assert.equal(events.some(event => event.type === 'model-stream-reset'), true);
     assert.equal(events.some(event => event.type === 'model-stream-update'), true);
     assert.equal(JSON.stringify(events).includes('SIG-LEAK-CHECK'), false);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('a local model-stream callback failure rejects the request without retrying the provider', async () => {
+  const originalPost = axios.post;
+  let calls = 0;
+  let eventCalls = 0;
+  const effects: any = {
+    placement: 'local',
+    notifySessionEvent: () => {
+      eventCalls++;
+      if (eventCalls > 1) throw new Error('local stream callback failed');
+    },
+    appendMessage: async (): Promise<void> => undefined,
+    persistSession: async (): Promise<void> => undefined,
+    registerAbortController: (): void => undefined,
+    clearAbortController: (): void => undefined,
+    clearWaitById: async (): Promise<boolean> => false,
+  };
+  (axios as any).post = async () => {
+    calls++;
+    return {
+      status: 200, statusText: 'OK', headers: {},
+      data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'answer' }] }),
+    };
+  };
+  try {
+    let callbackError: unknown;
+    await assert.rejects(() => requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'callback failure' }] }],
+      systemPrompt: '',
+      modelEntryOverride: {
+        providerKey: 'fixture', providerType: 'anthropic', baseUrl: 'https://fixture.example', apiKey: '', model: 'claude',
+        extraFields: {}, extraHeaders: {},
+      },
+      sessionId: makeId('anthropic_stream_callback_failure'),
+      currentSessionEffects: effects,
+      toolDefinitions: [],
+      notifySessionEvents: true,
+      registerAbortController: false,
+      maxRetries: 1,
+    }), error => { callbackError = error; return true; });
+    assert.match(String((callbackError as Error).message), /local stream callback failed/);
+    assert.equal(calls, 1);
   } finally {
     (axios as any).post = originalPost;
   }
@@ -2127,6 +2183,56 @@ test('assistant post-commit hook runs once only after append and its failure can
     assert.equal(dispatched, 0);
   } finally {
     (axios as any).post = originalPost;
+  }
+});
+
+test('a truncated-response notice failure does not undo the committed assistant result', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession(makeId('anthropic_truncated_notice'));
+  const dirPath = await fs.mkdtemp('/tmp/foxwarm-anthropic-tool-dispatch-');
+  const filePath = `${dirPath}/README.md`;
+  await fs.writeFile(filePath, 'dispatch proof');
+  session.cwd = dirPath;
+  session.model = 'anthropic/claude-sonnet-4-5';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="anthropic/claude-sonnet-4-5" />\n\nsystem prompt';
+  const appended: Message[] = [];
+  (axios as any).post = async () => ({
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    data: makeAnthropicMessageStream({
+      content: [
+        { type: 'text', text: 'partial answer' },
+        { type: 'tool_use', id: 'toolu_complete', name: 'read', input: { filePath: 'README.md' } },
+      ],
+      stop_reason: 'max_tokens',
+    }),
+  });
+  try {
+    const result = await chat([{ text: 'hello' }], session, 0, {
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+      appendMessage: async message => {
+        if (message.modelVisible === false) throw new Error('synthetic notice append failure');
+        appended.push(message);
+        session.history.push(message);
+      },
+    });
+    assert.equal(result.text, 'partial answer');
+    assert.equal(appended.filter(message => message.role === 'model').length, 1);
+    const assistant = appended.find(message => message.role === 'model');
+    assert.deepEqual(assistant?.parts.find(part => part.functionCall)?.functionCall?.args, { filePath: 'README.md' });
+    assert.deepEqual(session.history.filter(message => message.role === 'model').length, 1);
+    const dispatched = await new LocalSessionTurnHost(createDefaultCurrentSessionEffects()).executeTools(
+      [assistant!.parts.find(part => part.functionCall)!.functionCall!],
+      { sessionId: session.id, session },
+      session,
+    );
+    assert.match(String((dispatched.parts[0].functionResponse?.response as any)?.output), /dispatch proof/);
+  } finally {
+    (axios as any).post = originalPost;
+    await fs.remove(dirPath);
   }
 });
 

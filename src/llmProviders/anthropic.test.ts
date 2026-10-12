@@ -234,3 +234,42 @@ test('abort rejects the collector with an AbortError and destroys the stream', a
   await assert.rejects(pending, error => (error as Error).name === 'AbortError');
   assert.equal(stream.destroyed, true);
 });
+
+test('successful message_stop releases the transport without waiting for EOF', async () => {
+  const stream = new PassThrough();
+  const controller = new AbortController();
+  const pending = collectAnthropicMessagesStream(stream, controller.signal);
+  stream.write(sseText([
+    messageStart,
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: 'done' } },
+    { type: 'content_block_stop', index: 0 },
+    messageDelta('end_turn'),
+    { type: 'message_stop' },
+  ]));
+  const result = await pending;
+  assert.equal(result.content[0].text, 'done');
+  assert.equal(stream.destroyed, true);
+  assert.equal(stream.listenerCount('data'), 0);
+  assert.equal(stream.listenerCount('error'), 0);
+});
+
+test('raw and progress callback failures reject and clean up the owned transport', async () => {
+  for (const [name, options] of [
+    ['raw chunk', { onRawChunk: () => { throw new Error('raw chunk failed'); } }],
+    ['raw SSE block', { onRawSseBlock: () => { throw new Error('raw block failed'); } }],
+    ['progress', { onProgress: () => { throw new Error('progress failed'); } }],
+  ] as const) {
+    const stream = new PassThrough();
+    const controller = new AbortController();
+    const pending = collectAnthropicMessagesStream(stream, controller.signal, options);
+    stream.write(sseText([
+      messageStart,
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'ping' },
+    ]));
+    await assert.rejects(pending, error => String((error as Error).message).includes('failed'));
+    assert.equal(stream.destroyed, true, name);
+    assert.equal(stream.listenerCount('data'), 0, name);
+    assert.equal(stream.listenerCount('error'), 0, name);
+  }
+});

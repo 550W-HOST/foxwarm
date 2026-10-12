@@ -84,10 +84,19 @@ export async function collectAnthropicMessagesStream(
             stream.off?.('error', onError);
         };
 
+        const destroyTransport = () => {
+            try {
+                stream.destroy?.();
+            } catch {
+                // Cleanup must not replace the original provider or callback error.
+            }
+        };
+
         const finish = (callback: () => void) => {
             if (settled) return;
             settled = true;
             cleanup();
+            destroyTransport();
             callback();
         };
 
@@ -299,9 +308,9 @@ export async function collectAnthropicMessagesStream(
             while (boundaryIndex !== -1) {
                 const block = buffer.slice(0, boundaryIndex);
                 buffer = buffer.slice(boundaryIndex + 2);
-                options?.onRawSseBlock?.(block);
 
                 try {
+                    options?.onRawSseBlock?.(block);
                     const event = parseSseEventBlock(block);
                     if (event) handleEvent(event);
                 } catch (error) {
@@ -327,24 +336,27 @@ export async function collectAnthropicMessagesStream(
         const onAbort = () => {
             const error = makeAbortError();
             finish(() => reject(error));
-            try {
-                // This collector owns the abort rejection. Destroy without an
-                // error after removing listeners so Node cannot emit a queued
-                // unhandled stream error after the promise has settled.
-                stream.destroy?.();
-            } catch {}
         };
 
         const onData = (chunk: any) => {
-            appendDecodedText(typeof chunk === 'string' ? chunk : decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+            try {
+                appendDecodedText(typeof chunk === 'string' ? chunk : decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+            } catch (error) {
+                finish(() => reject(error));
+            }
         };
 
         const onEnd = () => {
-            appendDecodedText(decoder.end());
-            // A final event without a trailing blank line is still a complete event at end of stream.
-            if (buffer.trim() !== '') {
-                buffer += '\n\n';
-                drainEventBlocks();
+            try {
+                appendDecodedText(decoder.end());
+                // A final event without a trailing blank line is still a complete event at end of stream.
+                if (buffer.trim() !== '') {
+                    buffer += '\n\n';
+                    drainEventBlocks();
+                }
+            } catch (error) {
+                finish(() => reject(error));
+                return;
             }
             finish(() => reject(new Error('Anthropic message stream ended before message_stop.')));
         };

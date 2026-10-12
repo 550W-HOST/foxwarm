@@ -2599,12 +2599,16 @@ export async function chat(
             committedAssistantMessage = assistantMsg;
             if (result.truncatedStop) {
                 // Display-only notice: the model already has the truncated turn in history.
-                await appendMessage(createDisplayOnlyModelMessage(
-                    result.truncatedStop.stopReason === 'model_context_window_exceeded'
-                        ? 'The response stopped because the context window was reached. The text above may be incomplete.'
-                        : 'The response stopped at the output limit. The text above may be incomplete.',
-                    { noticeType: 'llm-stop', stopReason: result.truncatedStop.stopReason },
-                ));
+                try {
+                    await appendMessage(createDisplayOnlyModelMessage(
+                        result.truncatedStop.stopReason === 'model_context_window_exceeded'
+                            ? 'The response stopped because the context window was reached. The text above may be incomplete.'
+                            : 'The response stopped at the output limit. The text above may be incomplete.',
+                        { noticeType: 'llm-stop', stopReason: result.truncatedStop.stopReason },
+                    ));
+                } catch (error) {
+                    logger.error({ err: error, sessionId: session.id, stopReason: result.truncatedStop.stopReason }, 'Failed to append truncated-response notice');
+                }
             }
         } else {
             settleHistoryAppendFinalizer(
@@ -3327,20 +3331,11 @@ async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: an
             } else if (block.type === 'redacted_thinking' && typeof block.data === 'string') {
                 allParts.push({ providerMeta: { redactedThinking: block.data } });
             } else if (block.type === 'tool_use') {
-                if (truncatedStop) {
-                    // Output stopped at a limit, so this input may be partial.
-                    // Keep the call visible to the model as a tool error instead of dispatching it.
-                    allParts.push({
-                        functionCall: {
-                            id: block.id,
-                            name: block.name,
-                            args: {},
-                            argsParseError: `Tool call was not executed: the response stopped at ${truncatedStop.stopReason} before the tool input was known to be complete.`,
-                        },
-                    });
-                } else {
-                    allParts.push({ functionCall: { id: block.id, name: block.name, ...parseFunctionCallArgs(block.input) } });
+                const parsedArgs = parseFunctionCallArgs(block.input);
+                if (truncatedStop && parsedArgs.argsParseError) {
+                    parsedArgs.argsParseError = `Tool call was not executed: the response stopped at ${truncatedStop.stopReason} before the tool input was known to be complete. ${parsedArgs.argsParseError}`;
                 }
+                allParts.push({ functionCall: { id: block.id, name: block.name, ...parsedArgs } });
             }
         }
     }
