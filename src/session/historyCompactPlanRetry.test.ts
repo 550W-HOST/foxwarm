@@ -829,9 +829,9 @@ test('duplicate, missing, and reversed active raw sequence structure remains a c
   const history = [make(1, 'first'), make(undefined, 'missing'), make(2, 'after missing'), make(5, 'reversed first'), make(3, 'reversed second'), duplicate, structuredClone(duplicate)];
   const built = await sessionHistory.buildLayeredCompactCandidateEntries(history);
   const messages = built.candidateEntries.filter(entry => entry.item.kind === 'message');
-  assert.deepEqual(messages.map(entry => entry.item.kind === 'message' ? entry.item.startSeq : 0), [1, 2]);
+  assert.deepEqual(messages.map(entry => entry.item.kind === 'message' ? entry.item.startSeq : 0), [1, 2, 5]);
   assert.notEqual(messages[0].item.segmentId, messages[1].item.segmentId, 'missing seq splits otherwise contiguous raw candidates');
-  assert.equal(messages.some(entry => entry.item.kind === 'message' && entry.item.startSeq === 5), false, 'forward gap is a barrier');
+  assert.equal(messages.some(entry => entry.item.kind === 'message' && entry.item.startSeq === 5), true, 'forward gap admits the first valid row in a new segment');
   assert.equal(messages.some(entry => entry.item.kind === 'message' && entry.item.startSeq === 3), false, 'reversed row is not admitted after seq 5');
   assert.equal(messages.some(entry => entry.item.kind === 'message' && entry.item.startSeq === 4), false, 'duplicate seq rows are not admitted');
 });
@@ -1213,6 +1213,90 @@ test('successful compaction removes prior completion notices from the force-kept
     const archived = await archive.readArchiveMessagesBySeqRange(session.id, 3, 3);
     assert.equal(archived[0]?.message.parts[0]?.system, oldCompletion, 'old completion remains in durable archive');
     assert.equal(archived[0]?.message.parts[1]?.system, '<foxwarm-system kind="goal-reminder" />', 'historical paired Goal marker remains readable');
+  } finally {
+    (llm as any).chat = originalChat;
+    if (!SAVE_GENERATED_SESSION_LOGS) {
+      await fs.remove(path.join((await loadDeps()).tempRoot, 'logs', 'sessions', `${session.id}.jsonl`)).catch(() => {});
+      await fs.remove(path.join((await loadDeps()).tempRoot, 'logs', 'sessions', `${session.id}.blocks.jsonl`)).catch(() => {});
+    }
+  }
+});
+
+test('a second compact commit keeps a post-completion call/response exchange together across the deleted seq gap', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const sessionId = makeSessionId('compact_completion_gap_exchange');
+  const session: Session = {
+    id: sessionId,
+    agent: 'main',
+    history: [],
+    persistentMemorySnapshot: '',
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+    busy: false,
+    queue: [],
+    meta: { lastMessageTime: Date.now() },
+    nextMessageSeq: 1,
+    nextBlockId: 1,
+    historyVersion: 0,
+    promptCacheKey: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+  } as Session;
+  const oldCompletion = '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent" currentSessionId="child" />';
+  const afterCompletionCall = 'after-completion-call';
+  const messages: Message[] = [
+    ...Array.from({ length: 8 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' : 'model',
+      parts: [{ text: `first compact prefix ${index} ${'large '.repeat(2500)}` }],
+      __meta: { timestamp: 1000 + index },
+    } as Message)),
+    { role: 'user', parts: [{ system: oldCompletion }], __meta: { timestamp: 2000 } },
+    { role: 'model', parts: [{ functionCall: { id: afterCompletionCall, name: 'exec', args: { command: `echo after-completion ${'large '.repeat(2500)}` } } }], __meta: { timestamp: 2001 } },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: afterCompletionCall, name: 'exec', response: { output: `after-completion result ${'large '.repeat(2500)}` } } }], __meta: { timestamp: 2002 } },
+    { role: 'user', parts: [{ text: `tail user ${'large '.repeat(2500)}` }], __meta: { timestamp: 2003 } },
+    { role: 'model', parts: [{ text: `tail model ${'large '.repeat(2500)}` }], __meta: { timestamp: 2004 } },
+  ];
+  await archive.appendMessagesToArchive(session, messages);
+  session.history = messages;
+  const prompts: string[] = [];
+  const originalChat = llm.chat;
+  let plannerCall = 0;
+
+  try {
+    (llm as any).chat = async (
+      parts: MessagePart[] | null,
+      _activeSession: Session,
+      _iteration: number,
+      options?: { appendMessage?: (message: Message) => Promise<void> | void },
+    ): Promise<ChatResult> => {
+      prompts.push(flattenPrompt(parts));
+      const first = plannerCall++ === 0;
+      const toolCall = {
+        id: first ? 'first-gap-compact' : 'second-gap-compact',
+        name: 'submit_compact_plan',
+        args: {
+          replaceAsBlocks: [{
+            level: 1,
+            sourceKind: 'message',
+            sourceStart: first ? 1 : 10,
+            sourceEnd: first ? 6 : 11,
+            summary: first ? 'first pass summary' : 'second pass summary including the post-completion exchange',
+          }],
+        },
+      };
+      await Promise.resolve(options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] }));
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+
+    const deps = makeDepsForSession(session, { count: 0 });
+    await sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.5 }, 'await');
+    assert.equal(session.history.some(message => message.__meta?.seq === 9), false, 'first commit removes the old completion marker');
+    assert(session.history.some(message => message.__meta?.seq === 10), 'first commit leaves the later model call in active history');
+    assert(session.history.some(message => message.__meta?.seq === 11), 'first commit leaves the later tool response in active history');
+
+    await sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.2 }, 'await');
+    assert.equal(prompts.length, 2);
+    assert.match(prompts[1], /M#10-#11/);
+    assert.doesNotMatch(prompts[1], /M#11\b/);
+    assert.equal(session.history.some(message => message.__meta?.seq === 10), false, 'second commit compacts the model call');
+    assert.equal(session.history.some(message => message.__meta?.seq === 11), false, 'second commit compacts its paired response with the call');
   } finally {
     (llm as any).chat = originalChat;
     if (!SAVE_GENERATED_SESSION_LOGS) {

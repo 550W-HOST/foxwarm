@@ -881,6 +881,8 @@ export async function buildLayeredCompactCandidateEntries(olderHistory: Message[
 
   const entries: LayeredCompactCandidateEntry[] = [];
   const preservedMessageCandidates: PreservedMessageCandidateItem[] = [];
+  // Preserved messages that form one tool exchange: a model call plus the responses whose tool_use_id it issued.
+  const preservedExchanges: Array<{ callIds: Set<string>; items: PreservedMessageCandidateItem[] }> = [];
   let compactSegmentId = 1;
   let priorCandidateKind: 'message' | 'block' | undefined;
   let previousRawSeq: number | undefined;
@@ -890,12 +892,24 @@ export async function buildLayeredCompactCandidateEntries(olderHistory: Message[
     if (isPreservedMessage(message)) {
       if (hasValidRawStructure(message) && !shouldIgnoreMessageInCompactCandidates(message)) {
         const seq = message.__meta!.seq!;
-        preservedMessageCandidates.push({
+        const item: PreservedMessageCandidateItem = {
           seq, key: `M#${seq}`, preservedFromBlockId: message.__meta!.preservedFromBlockId!,
           preview: formatMessagePreviewText(message, 300, {
             skipEphemeralSystem: true, skipRagMemorySnippets: true, skipThinking: true,
           }).trim() || '[empty message]',
-        });
+        };
+        preservedMessageCandidates.push(item);
+        const responseIds = (message.parts || []).flatMap(part => part.functionResponse?.tool_use_id ? [part.functionResponse.tool_use_id] : []);
+        const openExchange = preservedExchanges[preservedExchanges.length - 1];
+        const answersOpenExchange = !!openExchange && message.role === 'tool'
+          && openExchange.items[openExchange.items.length - 1].seq + 1 === seq
+          && responseIds.some(id => openExchange.callIds.has(id));
+        if (answersOpenExchange) {
+          openExchange.items.push(item);
+        } else {
+          const callIds = new Set((message.parts || []).flatMap(part => part.functionCall?.id ? [part.functionCall.id] : []));
+          preservedExchanges.push({ callIds, items: [item] });
+        }
       }
       compactSegmentId += 1; priorCandidateKind = undefined; previousRawSeq = undefined; previousBlockRawEndSeq = undefined;
       continue;
@@ -931,14 +945,27 @@ export async function buildLayeredCompactCandidateEntries(olderHistory: Message[
       if (message.role === 'tool') previousRawSeq = undefined;
       continue;
     }
-    if (!hasValidRawStructure(message) || (previousRawSeq !== undefined && seq !== previousRawSeq + 1)) {
+    if (!hasValidRawStructure(message)) {
       compactSegmentId += 1; priorCandidateKind = undefined; previousRawSeq = message.role === 'tool' ? undefined : seq; continue;
+    }
+    if (previousRawSeq !== undefined && seq !== previousRawSeq + 1) {
+      compactSegmentId += 1; priorCandidateKind = undefined;
+      // A forward gap is a range boundary, not a malformed current row: admit the
+      // first valid message after it so a complete call/response run stays intact.
+      // Duplicate and reversed rows remain local barriers and are not admitted.
+      if (seq <= previousRawSeq) {
+        previousRawSeq = message.role === 'tool' ? undefined : seq;
+        continue;
+      }
     }
     if (!isModelVisibleMessage(message) || shouldRemoveOldCompactCompletionMessage(message)) {
       previousRawSeq = seq;
       continue;
     }
-    if (shouldIgnoreMessageInCompactCandidates(message)) { compactSegmentId += 1; priorCandidateKind = undefined; continue; }
+    if (shouldIgnoreMessageInCompactCandidates(message)) {
+      // The ignored message still occupies its seq: the next raw message continues the sequence from it.
+      compactSegmentId += 1; priorCandidateKind = undefined; previousRawSeq = seq; continue;
+    }
     if (priorCandidateKind && priorCandidateKind !== 'message') compactSegmentId += 1;
 
     let groupedEndHistoryIndex = historyIndex;
@@ -1002,6 +1029,14 @@ export async function buildLayeredCompactCandidateEntries(olderHistory: Message[
     return { ...policy, feasibleMaxBlocks, effectiveMinBlocks,
       ...(policy.requestedMinBlocks > 0 && feasibleMaxBlocks === 0 ? { skippedReason: 'no legal contiguous multi-block candidate segment is available' } : {}) };
   }).sort((a, b) => a.sourceLevel - b.sourceLevel);
+  for (const exchange of preservedExchanges) {
+    const exchangeStartSeq = exchange.items[0].seq;
+    const exchangeEndSeq = exchange.items[exchange.items.length - 1].seq;
+    for (const item of exchange.items) {
+      item.exchangeStartSeq = exchangeStartSeq;
+      item.exchangeEndSeq = exchangeEndSeq;
+    }
+  }
   return { candidateEntries, preservedMessageCandidates, messagePolicy, blockPolicies };
 }
 
