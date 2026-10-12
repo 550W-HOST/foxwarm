@@ -530,10 +530,11 @@ body {
   touch-action: manipulation;
 }
 
-/* Prevent iOS Safari zoom on input elements */
-input, textarea, select {
-  font-size: 16px !important;
-  touch-action: manipulation;
+/* Touch controls avoid iOS focus zoom; desktop inputs use the theme's
+ * dedicated control typography instead of forcing mobile-sized text. */
+input, textarea, select { touch-action: manipulation; }
+@media (pointer: coarse) {
+  input, textarea, select { font-size: 16px !important; }
 }
 
 /* Prevent overscroll on root element */
@@ -2038,7 +2039,7 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
   line-height: 1.2 !important;
 }
 
-@media (max-width: 640px) {
+@media (pointer: coarse) {
   .foxwarm-model-filter-input {
     font-size: 16px !important;
   }
@@ -2100,4 +2101,226 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
 @container foxwarm-chat (max-width: 420px) {
   .foxwarm-model-child-trigger { flex-shrink: 0; }
   .foxwarm-model-child-trigger > span { display: none; }
+}
+
+/* Desktop workbench chrome: inset surfaces separated by functional resize
+ * gutters. Mobile and embedded leaf views retain their edge-to-edge layout. */
+.foxwarm-desktop-workbench-shell {
+  gap: 6px;
+  padding: 6px;
+  background: var(--foxwarm-color-surface-sunken);
+}
+.foxwarm-desktop-workbench-shell .foxwarm-sidebar-panel {
+  border: 1px solid var(--foxwarm-color-border);
+  border-radius: 10px;
+}
+.foxwarm-desktop-workbench-shell .foxwarm-sidebar-panel > :first-child { border-radius: 10px 10px 0 0; }
+.foxwarm-desktop-workbench-shell .foxwarm-sidebar-panel > :last-child { border-radius: 0 0 10px 10px; }
+.foxwarm-desktop-workbench-shell .foxwarm-workbench-panel {
+  border-radius: 10px;
+  border-color: var(--foxwarm-color-border);
+  background: var(--foxwarm-color-canvas);
+}
+.foxwarm-desktop-workbench-shell .foxwarm-sidebar-resize { right: -6px; }
+.foxwarm-desktop-workbench-shell .foxwarm-workbench-resize-grip { opacity: 0; }
+.foxwarm-desktop-workbench-shell .foxwarm-workbench-separator:hover .foxwarm-workbench-resize-grip,
+.foxwarm-desktop-workbench-shell .foxwarm-workbench-separator:focus-visible .foxwarm-workbench-resize-grip { opacity: 1; }
+
+/* Inset editor tabs: inactive surfaces sit on the strip; the current tab joins
+ * the content surface, while reserved close slots prevent hover width jumps. */
+.foxwarm-workbench-tab-strip {
+  padding: 4px 4px 0;
+  border-bottom: 0;
+  background: var(--foxwarm-color-neutral-surface);
+}
+.foxwarm-workbench-tab-strip > div { gap: 6px; align-items: center; }
+.foxwarm-workbench-tab-drop-row { padding-bottom: 0; }
+.foxwarm-workbench-tab-row { gap: 2px; scrollbar-width: none; }
+.foxwarm-workbench-tab {
+  min-width: 100px;
+  max-width: 220px;
+  height: 36px;
+  padding: 0 10px;
+  margin-bottom: 0;
+  border: 0;
+  border-radius: 8px 8px 0 0;
+  font-size: 12px;
+  background: var(--foxwarm-color-neutral-surface);
+  color: var(--foxwarm-color-text-muted);
+  box-shadow: none;
+}
+.foxwarm-workbench-tab:hover { color: var(--foxwarm-color-text); background: var(--foxwarm-color-hover); }
+.foxwarm-workbench-tab[data-tab-active="true"] {
+  background: var(--foxwarm-color-surface);
+  color: var(--foxwarm-color-text-strong);
+  box-shadow: none;
+}
+.foxwarm-workbench-tab > svg { width: 14px; height: 14px; }
+.foxwarm-workbench-tab-close { opacity: 0; }
+.foxwarm-workbench-tab[data-tab-active="true"] .foxwarm-workbench-tab-close,
+.foxwarm-workbench-tab:hover .foxwarm-workbench-tab-close,
+.foxwarm-workbench-tab:focus-within .foxwarm-workbench-tab-close { opacity: 1; }
+.foxwarm-workbench-tab-toolbar { align-items: center; padding-bottom: 3px; }
+.foxwarm-workbench-tab-toolbar button { width: 28px; height: 28px; border-color: transparent; background: transparent; border-radius: 6px; }
+.foxwarm-workbench-tab-toolbar button:hover { background: var(--foxwarm-color-hover); }
+@media (pointer: coarse) { .foxwarm-workbench-tab-close { opacity: 1; } }
+
+/* Bound the shared message column, not the viewport or individual cards. */
+.foxwarm-chat-messages-content[data-full-width="false"] {
+  width: 100%;
+  max-width: 1100px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Keep the native scrollbar gutter stable and reveal only its thumb. */
+.foxwarm-sidebar-panel [data-session-list-scroll-container] {
+  scrollbar-gutter: stable;
+  scrollbar-color: transparent transparent;
+}
+.foxwarm-sidebar-panel [data-session-list-scroll-container]::-webkit-scrollbar-track {
+  background: transparent;
+}
+.foxwarm-sidebar-panel [data-session-list-scroll-container]::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-color: transparent;
+}
+.foxwarm-sidebar-panel [data-session-list-scroll-container]:is(:hover, :focus-within) {
+  scrollbar-color: var(--foxwarm-scrollbar-thumb) transparent;
+}
+.foxwarm-sidebar-panel [data-session-list-scroll-container]:is(:hover, :focus-within)::-webkit-scrollbar-thumb {
+  background-color: var(--foxwarm-scrollbar-thumb);
+}
+.foxwarm-sidebar-panel [data-session-list-scroll-container]::-webkit-scrollbar-thumb:hover {
+  background-color: var(--foxwarm-scrollbar-thumb-hover);
+}
+@media (pointer: coarse) {
+  .foxwarm-sidebar-panel [data-session-list-scroll-container] { scrollbar-color: var(--foxwarm-scrollbar-thumb) transparent; }
+  .foxwarm-sidebar-panel [data-session-list-scroll-container]::-webkit-scrollbar-thumb { background-color: var(--foxwarm-scrollbar-thumb); }
+}
+@media (forced-colors: active) {
+  .foxwarm-sidebar-panel [data-session-list-scroll-container] { scrollbar-color: auto; }
+}
+
+/* Setup uses section navigation directly within the workbench surface. */
+.foxwarm-setup-root { container: foxwarm-setup / inline-size; }
+.foxwarm-setup-body > [role="tabpanel"] { min-width: 0; }
+@container foxwarm-setup (min-width: 700px) {
+  .foxwarm-setup-body { flex-direction: row; }
+  .foxwarm-setup-navigation {
+    width: 176px;
+    padding: 16px 10px;
+    border-bottom: 0;
+    border-right: 1px solid var(--foxwarm-color-border-muted);
+  }
+  .foxwarm-setup-section-list { flex-direction: column; }
+  .foxwarm-setup-section-list [role="tab"] {
+    width: 100%;
+    padding: 10px 12px;
+    border: 0;
+    border-radius: 6px;
+    text-align: left;
+    color: var(--foxwarm-color-text);
+  }
+  .foxwarm-setup-section-list [role="tab"][aria-selected="true"] {
+    background: var(--foxwarm-color-accent-surface);
+    color: var(--foxwarm-color-accent);
+  }
+  .foxwarm-setup-section-list [data-setup-tab-status] { width: 14px; height: 14px; margin-left: auto; }
+  .foxwarm-setup-body > [role="tabpanel"] { padding: 24px; }
+}
+@container foxwarm-setup (max-width: 699px) {
+  .foxwarm-setup-navigation { padding: 4px 4px 0; overflow-x: auto; }
+  .foxwarm-setup-section-list [role="tab"] { padding: 10px 12px; font-size: 12px; }
+}
+
+/* Text-entry controls share compact, legible workbench typography. The code
+ * editor and its fallback retain their independent code-font contract. */
+html[data-foxwarm-theme] :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]), select, textarea):not(.monaco-editor *):not([data-editor-fallback] *) {
+  border-radius: min(4px, var(--foxwarm-control-radius-px)) !important;
+  font-size: var(--foxwarm-control-font-size-px) !important;
+  font-weight: 400;
+  color: var(--foxwarm-color-text) !important;
+}
+html[data-foxwarm-theme] :is(input, textarea):not(.monaco-editor *):not([data-editor-fallback] *)::placeholder {
+  color: var(--foxwarm-color-text-muted) !important;
+  opacity: 1;
+}
+html[data-foxwarm-theme] .foxwarm-chat-composer-textarea {
+  font-size: var(--foxwarm-composer-font-size-px) !important;
+  color: var(--foxwarm-color-text) !important;
+}
+@media (pointer: coarse) {
+  html[data-foxwarm-theme] :is(input, select, textarea, .foxwarm-chat-composer-textarea):not(.monaco-editor *):not([data-editor-fallback] *) { font-size: max(16px, var(--foxwarm-control-font-size-px)) !important; }
+}
+
+.foxwarm-sidebar-frame { z-index: 40; }
+.foxwarm-status-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  height: 24px; flex-shrink: 0;
+  font-size: 11px; font-variant-numeric: tabular-nums;
+  color: var(--foxwarm-color-text-muted);
+}
+.foxwarm-status-item {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 24px; padding: 0 8px; border-radius: 4px;
+  color: var(--foxwarm-color-text-muted); white-space: nowrap;
+}
+.foxwarm-status-item > svg { height: 14px; width: 14px; }
+.foxwarm-status-item:hover, .foxwarm-status-item:focus-visible {
+  background: color-mix(in srgb, var(--foxwarm-color-text-strong) 16%, var(--foxwarm-color-surface-sunken));
+  color: var(--foxwarm-color-text-strong);
+}
+.foxwarm-status-item[data-active="true"] {
+  background: var(--foxwarm-color-selected); color: var(--foxwarm-color-accent);
+}
+.foxwarm-status-item:focus-visible { outline: 1px solid var(--foxwarm-color-focus-ring); }
+.foxwarm-status-popup {
+  position: fixed; z-index: 110;
+  width: min(320px, calc(100vw - 16px)); max-height: min(360px, calc(100vh - 64px)); overflow-y: auto;
+  padding: 12px 14px; border-radius: 8px;
+  border: 1px solid var(--foxwarm-color-border);
+  background: var(--foxwarm-color-surface); color: var(--foxwarm-color-text);
+  box-shadow: var(--foxwarm-panel-shadow); font-size: 12px;
+}
+.foxwarm-status-popup:focus { outline: none; }
+/* Tab overflow is an overlay, not a second strip between tab and content. */
+.foxwarm-workbench-tab-row { scrollbar-width: none; }
+.foxwarm-workbench-tab-row::-webkit-scrollbar { display: none; }
+.foxwarm-tab-overflow {
+  position: absolute; inset-inline: 0; bottom: 0;
+  width: 100%; height: 6px; margin: 0;
+  appearance: none; background: transparent;
+  opacity: 0; pointer-events: none; box-shadow: none;
+}
+.foxwarm-workbench-tab-drop-row:hover .foxwarm-tab-overflow,
+.foxwarm-workbench-tab-drop-row:focus-within .foxwarm-tab-overflow { opacity: 1; pointer-events: auto; }
+.foxwarm-tab-overflow::-webkit-slider-runnable-track { height: 3px; background: transparent; }
+.foxwarm-tab-overflow::-webkit-slider-thumb {
+  appearance: none; width: var(--foxwarm-tab-scroll-thumb); height: 3px;
+  border-radius: 3px; background: var(--foxwarm-scrollbar-thumb);
+}
+.foxwarm-tab-overflow::-moz-range-track { height: 3px; background: transparent; }
+.foxwarm-tab-overflow::-moz-range-thumb {
+  width: var(--foxwarm-tab-scroll-thumb); height: 3px;
+  border: 0; border-radius: 3px; background: var(--foxwarm-scrollbar-thumb);
+}
+@media (pointer: coarse) { .foxwarm-tab-overflow { opacity: 1; pointer-events: auto; } }
+
+/* A moving dash follows the rail button's rounded rectangular perimeter;
+ * the path and the Session initial remain stationary. */
+html[data-foxwarm-theme] .collapsed-session-tile {
+  border-radius: var(--foxwarm-radius-medium-px) !important;
+}
+.collapsed-runtime-perimeter-segment {
+  rx: max(0px, calc(var(--foxwarm-radius-medium-px) - 1px));
+  stroke-dasharray: 22 78;
+  animation: collapsed-perimeter-travel 2s linear infinite;
+}
+@keyframes collapsed-perimeter-travel {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: -100; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .collapsed-runtime-perimeter-segment { animation: none; }
 }

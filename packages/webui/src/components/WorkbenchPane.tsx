@@ -172,7 +172,7 @@ export default function WorkbenchPane({
     <div
       data-pane-id={paneId}
       data-workbench-collapsed-pane={collapsed ? 'true' : undefined}
-      className={`relative flex min-h-0 min-w-0 overflow-hidden border ${containerChromeClass} ${collapsed ? verticalRail ? 'h-full w-12 flex-col' : 'h-10 w-full flex-row items-center' : 'h-full flex-col'}`}
+      className={`foxwarm-workbench-panel relative flex min-h-0 min-w-0 overflow-hidden border ${containerChromeClass} ${collapsed ? verticalRail ? 'h-full w-12 flex-col' : 'h-10 w-full flex-row items-center' : 'h-full flex-col'}`}
       onMouseDown={() => onFocusPane(paneId)}
     >
       {collapsed ? (

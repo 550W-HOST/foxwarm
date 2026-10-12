@@ -85,7 +85,7 @@ export default function Sidebar({
     ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent'
     : 'bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised/60 dark:text-fw-text-strong dark:hover:bg-fw-hover'
   return (
-    <div className="h-full bg-fw-surface border-r border-fw-border flex flex-col">
+    <div className="foxwarm-sidebar-panel h-full bg-fw-surface border-r border-fw-border flex flex-col">
       <div className="shrink-0 p-4 border-b border-fw-border space-y-3">
         <div className="flex items-center justify-between gap-2">
           <h1 className="text-xl font-bold text-fw-text-strong">🦊 Foxwarm</h1>

@@ -124,7 +124,7 @@ test('bounded composition recipes preserve the Default contract and project thro
   })
   assert.equal(theme.DEFAULT_THEME.variants.light.shape.messageRadiusPx, 8)
   assert.equal(theme.DEFAULT_THEME.variants.light.shape.cardRadiusPx, 0)
-  assert.equal(theme.DEFAULT_THEME.variants.light.shape.composerRadiusPx, 30)
+  assert.equal(theme.DEFAULT_THEME.variants.light.shape.composerRadiusPx, 6)
   assert.equal(theme.DEFAULT_THEME.variants.light.shape.cardInsetPx, 8)
 
   const runtime = await readFile(path.join(webuiRoot, 'src/theme/runtime.ts'), 'utf8')

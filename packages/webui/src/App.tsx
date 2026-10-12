@@ -6,6 +6,7 @@ import Sidebar from './components/Sidebar'
 import HistorySearchView from './components/HistorySearchView'
 import CollapsedSidebarContainer from './components/CollapsedSidebarContainer'
 import WorkbenchLayout from './components/WorkbenchLayout'
+import WorkbenchStatusBar from './components/WorkbenchStatusBar'
 import WorkbenchPane from './components/WorkbenchPane'
 import VscodeWebFrameHost, { type VscodeWebFrameHostHandle } from './components/VscodeWebFrameHost'
 import type { SessionMoveRequest } from './components/SessionListCore'
@@ -442,7 +443,7 @@ function App() {
     return Number.isFinite(saved) ? Math.min(420, Math.max(180, saved)) : 256
   })
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true')
-  const { sendKeyMode, setSendKeyMode, timelineView, setTimelineView, showUsageBadge, setShowUsageBadge, showUserMessageMetadata, setShowUserMessageMetadata } = useChatPreferences()
+  const { sendKeyMode, setSendKeyMode, timelineView, setTimelineView, showUsageBadge, setShowUsageBadge, showUserMessageMetadata, setShowUserMessageMetadata, fullWidth, setFullWidth } = useChatPreferences()
   const [webUiSettings, setWebUiSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
   const [vscodeFrameStarted, setVscodeFrameStarted] = useState(false)
   const [vscodeFrameSlot, setVscodeFrameSlot] = useState<HTMLElement | null>(null)
@@ -1490,6 +1491,8 @@ function App() {
           sendKeyMode={sendKeyMode}
           timelineView={timelineView}
           showUsageBadge={showUsageBadge}
+          fullWidth={fullWidth}
+          onFullWidthChange={setFullWidth}
           showUserMessageMetadata={showUserMessageMetadata}
           onSendKeyModeChange={setSendKeyMode}
           onTimelineViewChange={setTimelineView}
@@ -1935,9 +1938,9 @@ function App() {
   }
 
   return renderWithVscodeFrame(renderWorkbenchSurface(
-    <div className="foxwarm-safe-area-shell foxwarm-viewport-shell relative flex overflow-hidden bg-fw-canvas">
+    <div className="foxwarm-desktop-workbench-shell foxwarm-safe-area-shell foxwarm-viewport-shell relative flex overflow-hidden bg-fw-canvas">
       {!sidebarCollapsed ? (
-        <div className="relative h-full shrink-0" style={{ width: sidebarWidth }}>
+        <div className="foxwarm-sidebar-frame relative h-full shrink-0" style={{ width: sidebarWidth }}>
           <Sidebar
             sessions={sidebarSessions}
             agents={agents}
@@ -1973,7 +1976,7 @@ function App() {
             bounded={boundedPresentation}
           />
           <div
-            className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-col-resize bg-transparent transition hover:bg-fw-accent/40"
+            className="foxwarm-sidebar-resize absolute inset-y-0 right-0 z-20 w-1.5 cursor-col-resize bg-transparent transition hover:bg-fw-accent/40"
             onMouseDown={startSidebarResize}
           />
         </div>
@@ -1990,14 +1993,15 @@ function App() {
           unreadSessionIds={unreadSessionIds}
         />
       )}
-      <div className="flex-1 h-full min-h-0 overflow-hidden">
-        <div className="h-full min-h-0 overflow-hidden">
+      <div className="foxwarm-workbench-frame flex h-full min-h-0 min-w-0 flex-1 flex-col gap-1.5 overflow-hidden">
+        <div className="min-h-0 flex-1 overflow-hidden">
           <WorkbenchLayout
             node={root}
             renderPane={(paneId, collapseDirection) => renderPane(paneId, undefined, collapseDirection)}
             onLayoutResize={updateSplitSizes}
           />
         </div>
+        <WorkbenchStatusBar running={busyCount} sessions={sessions} nodes={nodeTargets} />
       </div>
     </div>,
   ))

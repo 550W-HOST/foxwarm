@@ -63,6 +63,7 @@ Queue-origin history deltas update committed and queued timelines through one re
 
 ## Other behavior
 
+- The message column retains full width by default; its optional 1100px centered reading layout is owned by [Chat preferences](./webui-settings-menu.md#behavior).
 - Responsive content follows the individual Chat root width; see [D-chat-container-layout](#d-chat-container-layout). App navigation remains viewport-owned.
 
 - Header state and cwd come from the per-session history/stream snapshot, including in Code leaf Chat.
