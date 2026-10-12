@@ -515,21 +515,24 @@ function registerAuthenticatedDynamicStatic(httpServer: HttpServer, mountPath: s
     }
     if (mountPath === VSCODE_WEB_STATIC_ROUTE && req.path === '/out/vs/workbench/workbench.web.main.internal.js') {
       void fs.readFile(path.join(directory, req.path), 'utf8').then((source) => {
-        const functionStart = source.indexOf('async function hvt(');
-        const functionEnd = functionStart < 0 ? -1 : source.indexOf('}function r2o(', functionStart);
-        if (functionStart < 0 || functionEnd < 0) throw new Error('Code webview origin hash function was not found.');
-        const originalFunction = source.slice(functionStart, functionEnd + 1);
+        // The minifier renames this helper between upstream releases. Match its
+        // stable webview-origin hash body rather than pinning generated symbols.
+        const functionMatch = source.match(/async function [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,[A-Za-z_$][\w$]*\)\{if\(!crypto\.subtle\)throw new Error\("'crypto\.subtle' is not available[^;]+;[\s\S]*?return [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)\}/);
+        if (!functionMatch || functionMatch.index === undefined) throw new Error('Code webview origin hash function was not found.');
+        const functionStart = functionMatch.index;
+        const originalFunction = functionMatch[0];
         const patchedFunction = originalFunction
-          .replace(/if\(!crypto\.subtle\)throw new Error\("'crypto\.subtle' is not available[^;]+;/, '')
+          .replace(/if\(!crypto\.subtle\)throw new Error\("[^\"]+"\);/, '')
           .replace(/crypto\.subtle\.digest\("sha-256",([A-Za-z_$][\w$]*)\)/, '(crypto.subtle ? crypto.subtle.digest("sha-256",$1) : globalThis.__foxwarmSha256Digest("sha-256",$1))');
         if (patchedFunction === originalFunction || !patchedFunction.includes('__foxwarmSha256Digest')) {
           throw new Error('Code webview origin hash function shape has changed.');
         }
-        const withWebviewHashFallback = source.slice(0, functionStart) + patchedFunction + source.slice(functionEnd + 1);
-        const clipboardProbe = 'async hasResources(){try{let e=await ao().navigator.clipboard.read();';
-        const firefoxSafeClipboardProbe = 'async hasResources(){if(/Firefox\\//.test(navigator.userAgent))return this.resources.length>0;try{let e=await ao().navigator.clipboard.read();';
-        const patchedSource = withWebviewHashFallback.replace(clipboardProbe, firefoxSafeClipboardProbe);
-        if (patchedSource === withWebviewHashFallback) throw new Error('Code Explorer clipboard probe shape has changed.');
+        const withWebviewHashFallback = source.slice(0, functionStart) + patchedFunction + source.slice(functionStart + originalFunction.length);
+        const clipboardProbe = /async hasResources\(\)\{try\{let ([A-Za-z_$][\w$]*)=await ([A-Za-z_$][\w$]*)\(\)\.navigator\.clipboard\.read\(\);/;
+        const clipboardMatch = withWebviewHashFallback.match(clipboardProbe);
+        if (!clipboardMatch || clipboardMatch.index === undefined) throw new Error('Code Explorer clipboard probe shape has changed.');
+        const firefoxSafeClipboardProbe = `async hasResources(){if(/Firefox\\//.test(navigator.userAgent))return this.resources.length>0;try{let ${clipboardMatch[1]}=await ${clipboardMatch[2]}().navigator.clipboard.read();`;
+        const patchedSource = withWebviewHashFallback.slice(0, clipboardMatch.index) + firefoxSafeClipboardProbe + withWebviewHashFallback.slice(clipboardMatch.index + clipboardMatch[0].length);
         res.setHeader('Content-Type', 'text/javascript; charset=utf-8');
         res.setHeader('Cache-Control', 'no-store');
         res.send(patchedSource);
