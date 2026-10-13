@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import {
   canConvertPasteToBlock,
@@ -1236,7 +1237,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
           }}
         />
       )}
-      {!disabled && activeAttachment && (
+      {!disabled && activeAttachment && createPortal(
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setActiveAttachmentRef(null) }}>
           <div role="dialog" aria-modal="true" aria-label="Attachment information" className="w-full max-w-lg rounded-lg border border-fw-border bg-fw-surface p-4 shadow-xl">
             {activeAttachment.mimeType.startsWith('image/') && resolveAttachmentFile(activeAttachment.ref) && (
@@ -1275,7 +1276,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
               <button type="button" className="rounded bg-fw-accent px-3 py-1.5 text-sm text-fw-text-inverse" onClick={() => setActiveAttachmentRef(null)}>Close</button>
             </div>
           </div>
-        </div>
+        </div>, document.body,
       )}
     </div>
   )

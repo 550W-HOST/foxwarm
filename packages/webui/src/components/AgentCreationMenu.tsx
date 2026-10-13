@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import { useEffect, useRef, useState } from 'react'
 import { Plus, X } from 'lucide-react'
 import { RANDOM_SESSION_ID_PLACEHOLDER, validateAgentId, validateSessionId, type AgentSummary } from '../agentCreation'
@@ -141,7 +142,7 @@ export default function AgentCreationMenu({
         <Plus className="h-4 w-4" />
       </button>
 
-      {mode && (
+      {mode && createPortal(
         <div className="fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto bg-fw-overlay/40 p-4" role="presentation" onMouseDown={(event) => {
           if (event.target === event.currentTarget) closeDialog()
         }}>
@@ -222,7 +223,7 @@ export default function AgentCreationMenu({
               </button>
             </div>
           </form>
-        </div>
+        </div>, document.body,
       )}
     </div>
   )

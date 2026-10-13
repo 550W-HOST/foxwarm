@@ -2121,6 +2121,12 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
   border-color: var(--foxwarm-color-border);
   background: var(--foxwarm-color-canvas);
 }
+.foxwarm-desktop-workbench-shell .foxwarm-workbench-content-slot {
+  border-radius: 0 0 9px 9px;
+}
+.foxwarm-desktop-workbench-shell .foxwarm-workbench-content-slot[data-workbench-sole-content] {
+  border-radius: 9px;
+}
 .foxwarm-desktop-workbench-shell .foxwarm-sidebar-resize { right: -6px; }
 .foxwarm-desktop-workbench-shell .foxwarm-workbench-resize-grip { opacity: 0; }
 .foxwarm-desktop-workbench-shell .foxwarm-workbench-separator:hover .foxwarm-workbench-resize-grip,

@@ -27,7 +27,7 @@
     "test:tool-args-header-e2e": "node --test test/toolArgsHeader.e2e.mjs",
     "test:legacy-edit-counts": "node --test test/legacyEditCounts.test.mjs",
     "test:legacy-edit-counts-e2e": "node --test test/legacyEditCounts.e2e.mjs",
-    "test:code-frame-overlay-e2e": "node --test test/codeFrame550aOverlay.e2e.mjs",
+    "test:code-frame-overlay-e2e": "node --test --test-name-pattern=\"^Code retains its iframe\" test/workbenchPreview.e2e.mjs",
     "test:scroll-e2e": "node --test test/scrollState.e2e.mjs",
     "test:lazy-timeline-restore-e2e": "node --test test/lazyTimelineRestore.e2e.mjs",
     "test:stream-follow-e2e": "node --test test/streamFollow.e2e.mjs",

@@ -86,7 +86,7 @@
 .tasks-detail-title { font-weight: 600; font-size: 17px; line-height: 26px; margin: 12px 0 8px; overflow-wrap: anywhere; }
 .tasks-detail-section { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--foxwarm-color-border-muted); }
 .tasks-note { padding: 12px 0; border-bottom: 1px solid var(--foxwarm-color-border-muted); }
-.tasks-workbench[data-task-narrow="true"] .tasks-detail-panel { position: fixed; inset: 0; width: auto; z-index: 40; padding: 20px; }
+.tasks-detail-panel[data-task-narrow="true"] { position: fixed; inset: 0; width: auto; z-index: 40; padding: 20px; }
 @container tasks (max-width: 950px) {
   .tasks-header { padding: 16px 18px 0; }
   .tasks-content { padding: 20px 18px; }
