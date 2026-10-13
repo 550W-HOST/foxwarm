@@ -37,7 +37,7 @@ async function serve(request, response) {
 }
 
 before(async () => {
-  browser = await puppeteer.launch({ browser: firefox ? 'firefox' : 'chrome', executablePath: browserPath, headless: true, args: firefox ? [] : ['--no-sandbox', '--disable-setuid-sandbox'] })
+  browser = await puppeteer.launch({ browser: firefox ? 'firefox' : 'chrome', executablePath: browserPath, headless: true, ignoreDefaultArgs: ['--hide-scrollbars'], args: firefox ? [] : ['--no-sandbox', '--disable-setuid-sandbox'] })
   server = createServer(serve)
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   baseUrl = `http://127.0.0.1:${server.address().port}/prefix/ui/`
@@ -793,6 +793,14 @@ test('History tabs keep independent drafts/results across entries, pane collapse
     await page.click('[data-history-search-view] button[type="submit"]')
     await page.waitForSelector('[data-history-result="history-outside/main"]')
     assert.equal(await page.$eval(`[data-tab-id="${firstTabId}"]`, tab => tab.textContent.includes('alpha')), true)
+    assert.equal(await page.$eval(`[data-tab-id="${firstTabId}"]`, tab => tab.title), 'alpha')
+    await page.click(`[data-history-tab-id="${firstTabId}"] [data-history-query-input]`, { clickCount: 3 })
+    await page.keyboard.type('draft')
+    assert.equal(await page.$eval(`[data-tab-id="${firstTabId}"]`, tab => tab.title), 'alpha')
+    assert.ok(await page.$(`[data-history-tab-id="${firstTabId}"] [data-history-result="history-outside/main"]`), 'draft edits do not clear submitted results')
+    await page.click(`[data-history-tab-id="${firstTabId}"] button[type="submit"]`)
+    await page.waitForSelector(`[data-history-tab-id="${firstTabId}"] [data-history-result="history-outside/main"]`)
+    assert.equal(await page.$eval(`[data-tab-id="${firstTabId}"]`, tab => tab.title), 'draft')
 
     await page.click(footer)
     await page.waitForFunction(id => document.querySelectorAll('[data-tab-id^="history:"]').length === 2 && !document.querySelector(`[data-tab-id="${id}"]`)?.classList.contains('hidden'), firstTabId)
@@ -825,7 +833,7 @@ test('History tabs keep independent drafts/results across entries, pane collapse
 
     await page.click(`[data-tab-id="${firstTabId}"]`)
     await page.waitForSelector(`[data-history-tab-id="${firstTabId}"] [data-history-result="history-outside/main"]`)
-    assert.equal(await page.$eval(`[data-history-tab-id="${firstTabId}"] [data-history-query-input]`, input => input.value), 'alpha')
+    assert.equal(await page.$eval(`[data-history-tab-id="${firstTabId}"] [data-history-query-input]`, input => input.value), 'draft')
     await page.$eval(`[data-history-tab-id="${firstTabId}"]`, element => { element.scrollTop = 20; element.dispatchEvent(new Event('scroll', { bubbles: true })) })
     await page.click(`[data-tab-id="${secondTabId}"]`)
     await page.waitForSelector(`[data-history-tab-id="${secondTabId}"]`)
@@ -843,13 +851,13 @@ test('History tabs keep independent drafts/results across entries, pane collapse
     await page.waitForSelector(`[data-workbench-collapsed-tab="${firstTabId}"]`)
     await page.click(`[data-workbench-collapsed-tab="${firstTabId}"]`)
     await page.waitForSelector(`[data-history-tab-id="${firstTabId}"] [data-history-result="history-outside/main"]`)
-    assert.equal(await page.$eval(`[data-history-tab-id="${firstTabId}"] [data-history-query-input]`, input => input.value), 'alpha')
+    assert.equal(await page.$eval(`[data-history-tab-id="${firstTabId}"] [data-history-query-input]`, input => input.value), 'draft')
 
     await page.setViewport({ width: 390, height: 800 })
     await page.waitForSelector('[data-sidebar-footer] button[aria-label="Search history"]')
     await page.click('[data-sidebar-footer] button[aria-label="Search history"]')
     await page.waitForSelector('[data-history-search-view]')
-    assert.deepEqual((await page.$$eval('[data-history-search-view] [data-history-query-input]', inputs => inputs.map(input => input.value).sort())), ['', 'alpha'], 'mobile hiding keeps both History tab drafts')
+    assert.deepEqual((await page.$$eval('[data-history-search-view] [data-history-query-input]', inputs => inputs.map(input => input.value).sort())), ['', 'draft'], 'mobile hiding keeps both History tab drafts')
   } finally { await page.close() }
 })
 
@@ -1101,7 +1109,7 @@ test('Chat follows each pane through real divider dragging without changing desk
       width: root.getBoundingClientRect().width,
       sm: visible('.foxwarm-chat-sm-label'), md: visible('.foxwarm-chat-md-label'),
       minimap: visible('.foxwarm-context-scrollbar-shell'),
-      gutter: getComputedStyle(root.querySelector('.foxwarm-chat-messages-content')).paddingRight,
+      gutter: `${parseFloat(getComputedStyle(messages).paddingRight) - parseFloat(getComputedStyle(messages).paddingLeft)}px`,
       nativeScrollbar: getComputedStyle(messages).scrollbarWidth,
       compact: root.querySelector('.foxwarm-model-selector-root').dataset.chatLayout,
       childLabel: visible('.foxwarm-model-child-trigger > span'),
@@ -1521,6 +1529,95 @@ test('Full width defaults on, remembers its toggle, and bounds only the message 
     await clickReadyControl(page, toggle)
     await page.setViewport({ width: 1800, height: 900 })
     await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages-content').getBoundingClientRect().width > 1100)
+  } finally { await page.close() }
+})
+
+test('Timeline, Composer, History and Tasks share the reading column and pane-local minimap clearance', async () => {
+  const history = { id: 'system:search', type: 'search', title: 'History' }
+  const tasks = { id: 'system:tasks', type: 'tasks', title: 'Tasks' }
+  const page = await openFixture({ tabs: [chat('e2e-a', false), history, tasks], responsiveChat: true, width: 1800 })
+  const geometry = () => page.evaluate(() => {
+    const rect = selector => {
+      const element = document.querySelector(selector)
+      const box = element.getBoundingClientRect()
+      return { left: box.left, right: box.right, width: box.width }
+    }
+    const scroller = document.querySelector('.foxwarm-chat-messages')
+    return {
+      timeline: rect('.foxwarm-chat-messages-content'), composer: rect('.foxwarm-chat-composer-inner'),
+      root: rect('.foxwarm-chat-root'),
+      scrollbar: scroller.offsetWidth - scroller.clientWidth,
+      overflow: document.documentElement.scrollWidth > innerWidth,
+    }
+  })
+  const aligned = async () => {
+    await page.waitForFunction(() => {
+      const timeline = document.querySelector('.foxwarm-chat-messages-content').getBoundingClientRect()
+      const composer = document.querySelector('.foxwarm-chat-composer-inner').getBoundingClientRect()
+      return timeline.width > 0 && Math.abs(timeline.left - composer.left) < 1 && Math.abs(timeline.right - composer.right) < 1
+    })
+    const boxes = await geometry()
+    for (const edge of ['left', 'right']) assert.ok(Math.abs(boxes.timeline[edge] - boxes.composer[edge]) < 1, `${edge} edge differs: ${JSON.stringify(boxes)}`)
+    assert.ok(boxes.composer.width <= 1100)
+    assert.equal(boxes.overflow, false)
+    return boxes
+  }
+  try {
+    await page.waitForSelector('.foxwarm-chat-messages-content')
+    await page.click('button[aria-label="Open session options"]')
+    await clickReadyControl(page, '[data-session-ui-settings-menu] button[role="switch"]')
+    await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages-content').dataset.fullWidth === 'false')
+    await page.click('button[aria-label="Open session options"]')
+    assert.equal((await aligned()).timeline.width, 1100)
+    if (process.env.FOXWARM_CONTENT_WIDTH_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.FOXWARM_CONTENT_WIDTH_SCREENSHOT_DIR}/chat-reading-column.png` })
+    for (const width of [1200, 900, 390]) {
+      await page.setViewport({ width, height: 900 })
+      if (width < 768) await page.evaluate(() => window.foxwarmTest.switchToSession('e2e-a'))
+      await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root').getBoundingClientRect().width > 0)
+      await aligned()
+    }
+    await page.setViewport({ width: 1800, height: 900 })
+    await page.evaluate(() => {
+      localStorage.setItem('foxwarm.contextScrollbar.showScrollbar', 'true')
+      localStorage.setItem('foxwarm.contextScrollbar.showMinimap', 'false')
+      window.dispatchEvent(new Event('foxwarm-context-scrollbar-settings'))
+    })
+    await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages').dataset.showContextMinimap === 'false')
+    assert.equal((await aligned()).timeline.width, 1100)
+    await page.setViewport({ width: 1200, height: 900 })
+    await aligned()
+    if (process.env.FOXWARM_CONTENT_WIDTH_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.FOXWARM_CONTENT_WIDTH_SCREENSHOT_DIR}/chat-without-minimap.png` })
+    await page.evaluate(() => {
+      localStorage.setItem('foxwarm.contextScrollbar.showMinimap', 'true')
+      window.dispatchEvent(new Event('foxwarm-context-scrollbar-settings'))
+    })
+    await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages').dataset.showContextMinimap === 'true')
+    await aligned()
+    await page.setViewport({ width: 1800, height: 900 })
+    for (const [id, selector] of [['system:search', '[data-history-search-view] > .foxwarm-content-column'], ['system:tasks', '.tasks-content']]) {
+      await page.waitForSelector(`[data-tab-id="${id}"]`, { visible: true })
+      await page.$eval(`[data-tab-id="${id}"]`, element => element.click())
+      await page.waitForSelector(selector, { visible: true })
+      assert.equal(await page.$eval(selector, element => element.getBoundingClientRect().width), 1100)
+      if (id === 'system:search') {
+        await page.type('[data-history-query-input]', 'shared width')
+        await page.$eval('[data-history-search-view] form button[type="submit"]', element => element.click())
+        await page.waitForSelector('[data-history-result]')
+      }
+      if (process.env.FOXWARM_CONTENT_WIDTH_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.FOXWARM_CONTENT_WIDTH_SCREENSHOT_DIR}/${id === 'system:search' ? 'history' : 'tasks'}-reading-column.png` })
+      if (id === 'system:tasks') {
+        const edges = await page.evaluate(() => ['.tasks-toolbar', '.tasks-content'].map(selector => {
+          const rect = document.querySelector(selector).getBoundingClientRect()
+          return [rect.left, rect.right]
+        }))
+        assert.deepEqual(edges[0], edges[1])
+      }
+      await page.setViewport({ width: 390, height: 900 })
+      await page.waitForFunction(selector => document.querySelector(selector)?.getBoundingClientRect().width > 0, {}, selector)
+      assert.ok(await page.$eval(selector, element => element.getBoundingClientRect().width <= 390 - 32))
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
+      await page.setViewport({ width: 1800, height: 900 })
+    }
   } finally { await page.close() }
 })
 

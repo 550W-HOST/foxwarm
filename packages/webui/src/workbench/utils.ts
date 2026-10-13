@@ -297,7 +297,7 @@ export function sanitizeTabsById(tabsById: Record<string, WorkbenchTab>, root: W
       return [[tabId, { ...sanitizedTab, title: 'Code' } as WorkbenchTab]]
     }
     if (sanitizedTab.type === 'search') {
-      const query = typeof sanitizedTab.searchQuery === 'string' ? sanitizedTab.searchQuery.trim() : ''
+      const query = typeof sanitizedTab.searchSubmittedQuery === 'string' ? sanitizedTab.searchSubmittedQuery.trim() : ''
       return [[tabId, { ...sanitizedTab, title: query || 'History' } as WorkbenchTab]]
     }
     return [[tabId, sanitizedTab as WorkbenchTab]]

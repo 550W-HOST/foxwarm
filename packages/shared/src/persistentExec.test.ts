@@ -15,6 +15,7 @@ import {
   generatePersistentExecPetname,
   isSupportedPersistentExecId,
   formatProcessTreeSnapshot,
+  formatExecDuration,
   truncateProcessCmdline,
   type PersistentExecManagerOptions,
   type RunningExecEntry,
@@ -141,6 +142,101 @@ async function createManager(root: string): Promise<PersistentExecManager> {
     getExecTempDir: () => path.join(root, 'exec'),
   });
 }
+
+test('exec duration formats subsecond and long runs without inventing invalid intervals', () => {
+  assert.equal(formatExecDuration(123), '123ms');
+  assert.equal(formatExecDuration(1234), '1.2s');
+  assert.equal(formatExecDuration(3_665_000), '1h 1m 5s');
+  assert.equal(formatExecDuration(-1), undefined);
+  assert.equal(formatExecDuration(NaN), undefined);
+});
+
+test('one managed process reports elapsed on Stop and fixed duration at completion, independent of delivery time', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-exec-process-duration-'));
+  const messages: string[] = [];
+  let acceptDelivery = false;
+  let now = Date.now();
+  const manager = new PersistentExecManager({
+    getDefaultCwd: () => root, getExecTempDir: () => root,
+    now: () => now,
+    completionDispatcher: async (_entry, _status, message) => {
+      messages.push(message);
+      if (!acceptDelivery) throw new Error('retry fixture');
+    },
+  });
+  try {
+    await manager.initialize();
+    const entry = await manager.startPersistentExec({ command: 'while [ ! -f release ]; do sleep 0.02; done; printf done' });
+    const controller = new AbortController();
+    controller.abort();
+    assert.equal(await manager.waitForExecCompletion(entry.id, 60_000, controller.signal), null);
+    now = entry.startedAt + 250;
+    const stopped = await manager.buildBackgroundTimeoutResult(entry, 60, undefined, 'Stop');
+    assert.match(stopped, /Stop ended this call's wait/);
+    assert.match(stopped, /\nElapsed: 250ms\n/);
+    assert.doesNotMatch(stopped, /Duration:/);
+    // Timeout and Stop share process elapsed, not their different wait budgets.
+    const timedOut = await manager.buildBackgroundTimeoutResult(entry, 1);
+    assert.match(timedOut, /\nElapsed: 250ms\n/);
+    assert.doesNotMatch(timedOut, /Duration:/);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    await fs.writeFile(path.join(root, 'release'), '');
+    const status = await manager.waitForExecCompletion(entry.id, 5000);
+    assert(status);
+    const duration = formatExecDuration(Date.parse(status.finishedAt) - entry.startedAt);
+    assert(duration);
+    assert.ok(Date.parse(status.finishedAt) - entry.startedAt >= 200);
+    const foreground = await manager.buildForegroundExecResult(entry, status);
+    assert.ok(foreground.includes(`\nDuration: ${duration}`));
+    assert.match(foreground, /^done\n---\nExit code: 0/);
+    await manager.markExecForBackgroundNotification(entry.id);
+    now = Date.parse(status.finishedAt) + 30_000;
+    await manager.reconcileNow();
+    assert.ok(messages[0].includes(`\nDuration: ${duration}\n`));
+    now += 60_000;
+    acceptDelivery = true;
+    await manager.reconcileNow();
+    assert.equal(messages[1], messages[0]);
+    assert.equal(manager.hasRunningExecs(), false);
+  } finally {
+    await fs.writeFile(path.join(root, 'release'), '');
+    for (const entry of manager.listRunningExecs()) await manager.waitForExecCompletion(entry.id, 5000);
+    await manager.shutdown();
+    await fs.remove(root);
+  }
+});
+
+test('recovered exec status without a measured finish keeps event time but reports unknown duration', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-exec-unknown-duration-'));
+  const registryPath = path.join(root, 'registry.json');
+  const entries = ['legacy-otter', 'fallback-otter', 'missing-otter'].map(id => buildExecEntry(path.join(root, `${id}.log`), {
+    id, startedAt: Date.now() - 10_000, notifyOnCompletion: true,
+  }));
+  const delivered: string[] = [];
+  const manager = new PersistentExecManager({
+    getDefaultCwd: () => root, getExecTempDir: () => root, registryPath,
+    isEntryRunning: () => false,
+    completionDispatcher: async (entry, status, message) => {
+      assert.ok(Number.isFinite(Date.parse(status.finishedAt)), 'completion event still has its existing timestamp');
+      assert.match(await manager.buildForegroundExecResult(entry, status), /\nDuration: unknown/);
+      delivered.push(message);
+    },
+  });
+  try {
+    await fs.writeJson(registryPath, { execs: entries });
+    await fs.writeJson(entries[0].statusPath, { exitCode: 0 });
+    await fs.writeJson(entries[1].statusPath, { exitCode: null, finishedAt: new Date().toISOString(), error: 'Process exited but no status file was written.' });
+    await manager.initialize();
+    assert.equal(delivered.length, 3);
+    for (const message of delivered) assert.match(message, /\nDuration: unknown\n/);
+    for (const finishedAt of ['invalid-date', new Date(entries[0].startedAt - 1).toISOString()]) {
+      assert.match(manager.buildCompletionMessage(entries[0], { exitCode: 0, finishedAt }), /\nDuration: unknown\n/);
+    }
+  } finally {
+    await manager.shutdown();
+    await fs.remove(root);
+  }
+});
 
 test('background process tree preserves topology and bounds cmdlines and process count', () => {
   const longCmdline = `worker ${'x'.repeat(140)}`;
@@ -521,8 +617,9 @@ test('persistent exec keeps ordinary and truncated-small text behavior', async (
 
   try {
     await fs.writeFile(logPath, 'ordinary output\n');
-    const ordinary = await manager.buildForegroundExecResult(buildExecEntry(logPath), { exitCode: 0, finishedAt: new Date().toISOString() });
-    assert.equal(ordinary, 'ordinary output\n---\nExit code: 0');
+    const status = { exitCode: 0, finishedAt: new Date().toISOString() };
+    const ordinary = await manager.buildForegroundExecResult(buildExecEntry(logPath, { startedAt: Date.parse(status.finishedAt) - 1000 }), status);
+    assert.equal(ordinary, 'ordinary output\n---\nExit code: 0\nDuration: 1s');
 
     await fs.writeFile(logPath, 'x'.repeat(24000));
     const truncated = await manager.buildForegroundExecResult(buildExecEntry(logPath), { exitCode: 0, finishedAt: new Date().toISOString() });
@@ -538,40 +635,41 @@ test('persistent exec preserves foreground output boundary whitespace and report
   const manager = await createManager(root);
   const logPath = path.join(root, 'command.log');
   const status = { exitCode: 0, finishedAt: new Date().toISOString() };
+  const entry = buildExecEntry(logPath, { startedAt: Date.parse(status.finishedAt) - 1000 });
 
   try {
     const indented = '    alpha\n  beta\n\tcharlie\n';
     await fs.writeFile(logPath, indented);
     assert.equal(
-      await manager.buildForegroundExecResult(buildExecEntry(logPath), status),
-      `${indented}---\nExit code: 0`,
+      await manager.buildForegroundExecResult(entry, status),
+      `${indented}---\nExit code: 0\nDuration: 1s`,
     );
 
     const whitespaceOnly = '  \t \n\n';
     await fs.writeFile(logPath, whitespaceOnly);
     assert.equal(
-      await manager.buildForegroundExecResult(buildExecEntry(logPath), status),
-      `${whitespaceOnly}---\nExit code: 0`,
+      await manager.buildForegroundExecResult(entry, status),
+      `${whitespaceOnly}---\nExit code: 0\nDuration: 1s`,
     );
 
     const trailingSpacesAndBlankLines = 'alpha\n   \n\n';
     await fs.writeFile(logPath, trailingSpacesAndBlankLines);
     assert.equal(
-      await manager.buildForegroundExecResult(buildExecEntry(logPath), status),
-      `${trailingSpacesAndBlankLines}---\nExit code: 0`,
+      await manager.buildForegroundExecResult(entry, status),
+      `${trailingSpacesAndBlankLines}---\nExit code: 0\nDuration: 1s`,
     );
 
     const noTrailingLf = 'alpha  ';
     await fs.writeFile(logPath, noTrailingLf);
     assert.equal(
-      await manager.buildForegroundExecResult(buildExecEntry(logPath), status),
-      `${noTrailingLf}\n---\nExit code: 0\nOriginal command output had no trailing newline.`,
+      await manager.buildForegroundExecResult(entry, status),
+      `${noTrailingLf}\n---\nExit code: 0\nDuration: 1s\nOriginal command output had no trailing newline.`,
     );
 
     await fs.writeFile(logPath, '');
     assert.equal(
-      await manager.buildForegroundExecResult(buildExecEntry(logPath), status),
-      '(No output)\n---\nExit code: 0',
+      await manager.buildForegroundExecResult(entry, status),
+      '(No output)\n---\nExit code: 0\nDuration: 1s',
     );
   } finally {
     await fs.remove(root);
@@ -595,7 +693,7 @@ test('persistent exec preserves timeout partial-output boundary whitespace and r
     await fs.writeFile(logPath, noTrailingLf);
     const noLfResult = await manager.buildBackgroundTimeoutResult(entry, 7);
     assert.ok(noLfResult.startsWith(`Partial Output:\n${noTrailingLf}\n---\n`));
-    assert.match(noLfResult, /Partial output captured so far had no trailing newline\.\nexecId: test-exec\nPID: 4321/);
+    assert.match(noLfResult, /Partial output captured so far had no trailing newline\.\nexecId: test-exec\nElapsed: [^\n]+\nPID: 4321/);
   } finally {
     await fs.remove(root);
   }

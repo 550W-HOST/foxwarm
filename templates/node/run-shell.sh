@@ -91,6 +91,12 @@ collect() {
 
 report() {
   dir=$1; kind=$2
+  # Capture once; report retries must not increase the command's duration.
+  if [ "$kind" = finished ]; then
+    process_elapsed=$(cat "$dir/duration")
+  else
+    process_elapsed=$(( $(date +%s) - $(cat "$dir/process-started") ))
+  fi
   while :; do
     # The existing completion authorization expires after 24 hours from dispatch.
     now=$(date +%s)
@@ -99,12 +105,13 @@ report() {
       code=$(http "$dir/report.headers" "$dir/report.body" report \
         -H "X-Foxwarm-Connection: $CONNECTION" -H "X-Foxwarm-Task: $(cat "$dir/id")" \
         -H 'X-Foxwarm-Result: finished' -H "X-Foxwarm-Bytes: $(cat "$dir/bytes")" \
+        -H "X-Foxwarm-Elapsed-Seconds: $process_elapsed" \
         -H "X-Foxwarm-Exit: $(cat "$dir/exit")" -H 'Content-Type: application/octet-stream' \
         --data-binary "@$dir/output") || code=000
     else
       code=$(http "$dir/background.headers" "$dir/background.body" report \
         -H "X-Foxwarm-Connection: $CONNECTION" -H "X-Foxwarm-Task: $(cat "$dir/id")" \
-        -H 'X-Foxwarm-Result: background' -H 'Content-Type: application/octet-stream' \
+        -H 'X-Foxwarm-Result: background' -H "X-Foxwarm-Elapsed-Seconds: $process_elapsed" -H 'Content-Type: application/octet-stream' \
         --data-binary '') || code=000
     fi
     headers="$dir/report.headers"
@@ -121,8 +128,10 @@ run_job() {
   # The collector drains all bytes; truncation never closes the command's pipe.
   (
     collect "$dir" & collector=$!
+    date +%s > "$dir/process-started"
     sh "$dir/script" > "$dir/pipe" 2>&1
     rc=$?
+    printf '%s\n' "$(( $(date +%s) - $(cat "$dir/process-started") ))" > "$dir/duration"
     wait "$collector"
     printf '%s\n' "$rc" > "$dir/exit"
     : > "$dir/ready"

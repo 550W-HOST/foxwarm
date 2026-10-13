@@ -330,11 +330,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   const capturedInteractionVersionRef = useRef(0)
   const pendingContentResizeRef = useRef<{ state: ChatViewportState; interactionVersion: number } | null>(null)
   const resizeRestoreFrameRef = useRef<number | null>(null)
-  const heightFollowHoldsRef = useRef(new Set<object>())
-  const heightFollowAnimatingRef = useRef(new Set<object>())
-  const heightFollowPendingContentRef = useRef(false)
-  const heightFollowPreparesRef = useRef(new Set<object>())
-  const heightFollowReleaseTimersRef = useRef(new Set<number>())
+  const cardHeightChangesRef = useRef(new Set<object>())
   const pendingContextScrollbarNavigationRef = useRef<{ anchorKey: string; fraction: number } | null>(null)
   const pendingScrollToTrueTopRef = useRef(false)
   const modelRequestGateRef = useRef(createLatestRequestGate())
@@ -489,13 +485,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   const scrollToBottom = useCallback(() => {
     const container = messagesContainerRef.current
     if (container) {
-      // Explicit bottom navigation and independent new content win over a card-only hold.
-      heightFollowReleaseTimersRef.current.forEach(timer => window.clearTimeout(timer))
-      heightFollowReleaseTimersRef.current.clear()
-      heightFollowHoldsRef.current.clear()
-      heightFollowAnimatingRef.current.clear()
-      heightFollowPendingContentRef.current = false
-      if (!heightFollowPreparesRef.current.size) container.style.removeProperty('overflow-anchor')
+      // Explicit bottom navigation and attached content updates use the same follow state.
       container.scrollTop = container.scrollHeight
       const state: ChatViewportState = { kind: 'bottom' }
       currentViewportStateRef.current = state
@@ -506,74 +496,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     }
   }, [viewportSessionId])
 
-  const prepareCardHeight = useCallback(() => {
-    const token = {}
-    heightFollowPreparesRef.current.add(token)
-    const container = messagesContainerRef.current
-    if (container) container.style.overflowAnchor = 'none'
-    return () => {
-      heightFollowPreparesRef.current.delete(token)
-      if (!heightFollowHoldsRef.current.size && !heightFollowPreparesRef.current.size) {
-        container?.style.removeProperty('overflow-anchor')
-      }
-    }
-  }, [])
-
-  const holdTallCardFollow = useCallback((card: HTMLElement, startHeight: number, targetHeight: number) => {
-    const container = messagesContainerRef.current
-    // Clicking a disclosure is viewport interaction, not a request to detach. Re-arm
-    // the existing ResizeObserver generation after its pointerdown invalidation.
-    capturedInteractionVersionRef.current = userInteractionVersionRef.current
-    if (!container || !shouldAutoScrollRef.current || pendingUserLeaveBottomRef.current || targetHeight <= startHeight) return () => {}
-    const viewport = container.getBoundingClientRect()
-    // Predict the card's top after bottom alignment, including the unscrolled distance
-    // below the current viewport. No fixed card-height cutoff or scrollTop snapshot.
-    const bottomAlignmentDelta = Math.max(0, container.scrollHeight - container.clientHeight - container.scrollTop)
-    if (card.getBoundingClientRect().top - bottomAlignmentDelta >= viewport.top) return () => {}
-    const hold = {}
-    heightFollowHoldsRef.current.add(hold)
-    heightFollowAnimatingRef.current.add(hold)
-    // An initial bottom restoration still pending when the user opens a card must
-    // not reassert bottom after the temporary hold expires.
-    if (pendingViewportRestoreRef.current?.kind === 'state' && pendingViewportRestoreRef.current.state.kind === 'bottom') {
-      pendingViewportRestoreRef.current = null
-    }
-    container.style.overflowAnchor = 'none'
-    return () => {
-      heightFollowAnimatingRef.current.delete(hold)
-      // A stream/history update while a tall card is still moving is distinct
-      // from the card's own resize. Follow once after the last active transition,
-      // without letting an earlier reversal release another card's hold.
-      if (heightFollowPendingContentRef.current) queueMicrotask(() => {
-        if (!heightFollowPendingContentRef.current || heightFollowAnimatingRef.current.size) return
-        heightFollowPendingContentRef.current = false
-        if (shouldAutoScrollRef.current && !pendingUserLeaveBottomRef.current && !pendingViewportRestoreRef.current) {
-          scrollToBottom()
-        }
-      })
-      // The final auto-height cleanup can deliver a ResizeObserver notification
-      // after transitionend. Drain that notification before normal follow resumes;
-      // a later token/layout update can use the unchanged follow latch as usual.
-      const timer = window.setTimeout(() => {
-        heightFollowReleaseTimersRef.current.delete(timer)
-        heightFollowHoldsRef.current.delete(hold)
-        if (heightFollowHoldsRef.current.size === 0 && heightFollowPreparesRef.current.size === 0 && messagesContainerRef.current === container) {
-          container.style.removeProperty('overflow-anchor')
-        }
-      }, 200)
-      heightFollowReleaseTimersRef.current.add(timer)
-    }
-  }, [scrollToBottom])
-
-  const cardHeightContext = useMemo(() => ({ before: prepareCardHeight, begin: holdTallCardFollow }), [prepareCardHeight, holdTallCardFollow])
-
   useEffect(() => () => {
-    heightFollowReleaseTimersRef.current.forEach(timer => window.clearTimeout(timer))
-    heightFollowReleaseTimersRef.current.clear()
-    heightFollowHoldsRef.current.clear()
-    heightFollowAnimatingRef.current.clear()
-    heightFollowPendingContentRef.current = false
-    heightFollowPreparesRef.current.clear()
+    cardHeightChangesRef.current.clear()
     messagesContainerRef.current?.style.removeProperty('overflow-anchor')
   }, [sessionId])
 
@@ -630,7 +554,6 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
 
   const captureCurrentViewportState = useCallback((): ChatViewportState | null => {
     if (pendingContentResizeRef.current) return pendingContentResizeRef.current.state
-    if (heightFollowHoldsRef.current.size && shouldAutoScrollRef.current && !pendingUserLeaveBottomRef.current) return currentViewportStateRef.current
     const followState = updateBottomFollowState()
     const bottomThresholdPx = followState.pendingUserLeave
       ? -1
@@ -660,7 +583,6 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     if (!container) return false
 
     if (state.kind === 'bottom') {
-      if (heightFollowHoldsRef.current.size) return false
       container.scrollTop = container.scrollHeight
       currentViewportStateRef.current = state
       currentViewportGeometryRef.current = null
@@ -718,6 +640,29 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     markUserViewportInteraction()
     updateBottomFollowState('leave')
   }, [markUserViewportInteraction, updateBottomFollowState])
+
+  const prepareCardHeight = useCallback(() => {
+    const token = {}
+    cardHeightChangesRef.current.add(token)
+    const container = messagesContainerRef.current
+    if (container) container.style.overflowAnchor = 'none'
+    return () => {
+      cardHeightChangesRef.current.delete(token)
+      if (!cardHeightChangesRef.current.size) container?.style.removeProperty('overflow-anchor')
+    }
+  }, [])
+
+  const beginCardHeight = useCallback((card: HTMLElement, startHeight: number, targetHeight: number) => {
+    const container = messagesContainerRef.current
+    if (!container) return
+    if (shouldAutoScrollRef.current && targetHeight > startHeight) {
+      const bottomAlignmentDelta = Math.max(0, container.scrollHeight - container.clientHeight - container.scrollTop)
+      if (card.getBoundingClientRect().top - bottomAlignmentDelta < container.getBoundingClientRect().top) leaveBottomFollow()
+    }
+    captureCurrentViewportState()
+  }, [captureCurrentViewportState, leaveBottomFollow])
+
+  const cardHeightContext = useMemo(() => ({ before: prepareCardHeight, begin: beginCardHeight }), [prepareCardHeight, beginCardHeight])
 
   const scrollToTop = useCallback(() => {
     const container = messagesContainerRef.current
@@ -809,7 +754,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     const container = messagesContainerRef.current
     if (container) {
       const handleWheel = (event: WheelEvent) => {
-        if (event.deltaY < 0) {
+        const readingAwayFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight > CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX
+        // Reading navigation away from the actual tail outranks pending reflow.
+        if (event.deltaY < 0 || (event.deltaY > 0 && readingAwayFromBottom)) {
           leaveBottomFollow()
         } else {
           markUserViewportInteraction()
@@ -1614,12 +1561,6 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
 
   useEffect(() => {
     if (pendingViewportRestoreRef.current || !shouldAutoScrollRef.current) return
-    if (heightFollowAnimatingRef.current.size) {
-      heightFollowPendingContentRef.current = true
-      return
-    }
-    // A fresh message/draft during only the final observer-settling grace is
-    // independent content: resume the existing follow immediately.
     scrollToBottom()
   }, [messages, scrollToBottom, streamingAssistantDraft])
 
@@ -1895,12 +1836,20 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     const container = messagesContainerRef.current
     if (!content || !container) return
 
+    const syncScrollbarGutter = () => {
+      if (container.clientWidth > 0) {
+        chatRootRef.current?.style.setProperty('--foxwarm-chat-scrollbar-gutter', `${container.offsetWidth - container.clientWidth}px`)
+      }
+    }
+    syncScrollbarGutter()
     const observer = new ResizeObserver(() => {
+      syncScrollbarGutter()
       if (resizeRestoreFrameRef.current !== null) {
         window.cancelAnimationFrame(resizeRestoreFrameRef.current)
       }
       resizeRestoreFrameRef.current = window.requestAnimationFrame(() => {
         resizeRestoreFrameRef.current = null
+        setShowScrollButton(container.scrollHeight - container.scrollTop - container.clientHeight > 200)
         const contentResize = pendingContentResizeRef.current
         if (contentResize) {
           if (contentResize.interactionVersion === userInteractionVersionRef.current) applyViewportState(contentResize.state)
@@ -1918,10 +1867,6 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         if (capturedInteractionVersionRef.current !== userInteractionVersionRef.current) return
 
         const pending = pendingViewportRestoreRef.current
-        if (heightFollowHoldsRef.current.size && !pending) {
-          setShowScrollButton(container.scrollHeight - container.scrollTop - container.clientHeight > 200)
-          return
-        }
         if (pending) {
           if (pending.interactionVersion === userInteractionVersionRef.current) {
             if (pending.kind === 'state') {
@@ -2332,7 +2277,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       )}
 
       <div className="foxwarm-chat-message-region relative min-h-0 flex-1">
-        <div id={chatMessageContainerId} ref={messagesContainerRef} className="foxwarm-chat-messages h-full overflow-x-hidden overflow-y-auto p-4">
+        <div id={chatMessageContainerId} ref={messagesContainerRef} className="foxwarm-chat-messages foxwarm-content-gutter h-full overflow-x-hidden overflow-y-auto py-4">
           {!isMobile && (
             <div className="foxwarm-context-scrollbar-overlay">
               <ContextScrollbar
@@ -2347,7 +2292,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
               />
             </div>
           )}
-          <div ref={messagesContentRef} data-full-width={fullWidth} className="foxwarm-chat-messages-content min-w-0 max-w-full">
+          <div ref={messagesContentRef} data-full-width={fullWidth} className="foxwarm-chat-messages-content foxwarm-content-column">
             {hiddenMessageCount > 0 && !showFullTimeline && (
               <div className="mb-3 rounded-lg border border-fw-border bg-fw-surface/80 px-3 py-2 text-xs text-fw-text-muted shadow-sm dark:border-fw-border dark:bg-fw-surface/80 dark:text-fw-text">
                 Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.

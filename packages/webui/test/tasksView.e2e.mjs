@@ -137,6 +137,8 @@ async function waitLoaded() {
 test('Tasks reads bounded status windows, switches Table/Board, and shows bounded details', async () => {
   await page.goto(fixtureUrl)
   await page.waitForSelector('[data-task-row]')
+  assert.equal(await page.$eval('.tasks-table-shell', element => element.getBoundingClientRect().width), 1100)
+  if (process.env.FOXWARM_CONTENT_WIDTH_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.FOXWARM_CONTENT_WIDTH_SCREENSHOT_DIR}/tasks-table.png` })
   assert.deepEqual(await page.$$eval('thead th', rows => rows.map(row => row.textContent)), ['Task', 'Status', 'Owner', 'Updated'])
   assert.match(await page.$eval('[data-task-new]', button => button.className), /bg-fw-accent/)
   assert.equal(await page.$$eval('[data-task-row]', rows => rows.length), 2)
@@ -175,6 +177,8 @@ test('Tasks reads bounded status windows, switches Table/Board, and shows bounde
   assert.equal(await page.$$eval('[data-task-row]', rows => rows.length), 4)
   assert.match(await page.$eval('[data-task-summary]', element => element.textContent), /4 tasks.*All.*Open 1.*Active 1.*Completed 1.*Cancelled 1/)
   await click('Board')
+  assert.equal(await page.$eval('[data-task-board]', element => element.getBoundingClientRect().width), 1100)
+  if (process.env.FOXWARM_CONTENT_WIDTH_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.FOXWARM_CONTENT_WIDTH_SCREENSHOT_DIR}/tasks-board.png` })
   assert.deepEqual(await page.$$eval('[data-task-column]', columns => columns.map(column => column.dataset.taskColumn)), statuses)
   for (const status of statuses) {
     assert.equal(await page.$$eval(`[data-task-column="${status}"] [data-task-card]`, cards => cards.length), 1)
@@ -182,6 +186,13 @@ test('Tasks reads bounded status windows, switches Table/Board, and shows bounde
   }
   await page.click('[data-task-card="task-completed"]')
   await page.waitForFunction(() => document.querySelector('[data-task-details] h4')?.textContent === 'completed task')
+  const inspectorLayout = await page.evaluate(() => ['.tasks-toolbar', '.tasks-content'].map(selector => {
+    const box = document.querySelector(selector).getBoundingClientRect()
+    return { left: box.left, right: box.right }
+  }))
+  assert.deepEqual(inspectorLayout[0], inspectorLayout[1], 'Filters stay aligned with the list beside the desktop inspector')
+  await page.setViewport({ width: 1050, height: 900 })
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Inspector and filters remain bounded just above the modal breakpoint')
   assert.match(await page.$eval('[data-task-details]', detail => detail.textContent), /Task details.*completed task.*Description.*A small task.*Parent.*task-parent.*Owner.*worker\/main.*Result.*The result is ready\..*2 more child tasks.*3 more notes/s)
   assert.ok(await page.$('[data-task-details] [data-session-copy="worker/main"]'))
   assert.deepEqual(await page.$eval('[data-task-details]', detail => ({ role: detail.getAttribute('role'), ariaModal: detail.getAttribute('aria-modal') })), { role: null, ariaModal: null })

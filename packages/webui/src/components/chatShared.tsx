@@ -172,6 +172,7 @@ export interface MessagePartProviderMeta {
 }
 
 export interface MessagePart {
+  phase?: 'commentary' | 'final_answer'
   text?: string
   system?: string
   thinking?: string

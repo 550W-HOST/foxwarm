@@ -25,17 +25,18 @@ fi
 START_CMD+="$(printf '%q' "$NODE_BIN") lib/index.js"
 
 # Check if session exists
-if tmux has-session -t "$SESSION" 2>/dev/null; then
+if tmux has-session -t "=$SESSION" 2>/dev/null; then
     echo "Session $SESSION already exists. Use restart.sh to restart."
     exit 1
 fi
 
 # Create new session
-tmux new-session -d -s "$SESSION" -n "$WINDOW_NAME" -c "$FOXWARM_DIR"
+PANE=$(tmux new-session -d -s "$SESSION" -n "$WINDOW_NAME" -c "$FOXWARM_DIR" -P -F '#{pane_id}') || exit 1
 echo "Created new tmux session: $SESSION"
 
 # Start foxwarm
-tmux send-keys -t "$SESSION:$WINDOW_NAME" "$START_CMD" Enter
+tmux send-keys -t "$PANE" -l "$START_CMD" || exit 1
+tmux send-keys -t "$PANE" Enter || exit 1
 
 echo "Foxwarm started in tmux session: $SESSION"
 echo "Attach with: tmux attach -t $SESSION"

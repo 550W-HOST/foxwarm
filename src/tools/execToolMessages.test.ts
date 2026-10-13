@@ -210,7 +210,7 @@ test('foreground exec truncated output keeps line-aware excerpt and footer metad
     assert.match(result, /\[foxwarm: line too long/);
     assert.match(result, /A{100}/);
     assert.match(result, /B{100}/);
-    assert.match(result, new RegExp(`---\nExit code: 0\nCommand output saved to: ${logPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    assert.match(result, new RegExp(`---\nExit code: 0\nDuration: [^\n]+\nCommand output saved to: ${logPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
     assert.match(result, /Foxwarm placeholders above .* are not original output content/);
     assert.match(result, /Original output: 1 line\(s\), 24000 character\(s\)\./);
   } finally {
@@ -231,7 +231,7 @@ test('foreground exec repeats a decorated line-range omission in its footer', as
     );
     const omission = result.match(/^--- \[foxwarm: (\d+) lines \(line range (\d+)-(\d+)\) omitted because (.+)\] ---$/m);
     assert.ok(omission);
-    assert.match(result, /---\nExit code: 0\nCommand output saved to:/);
+    assert.match(result, /---\nExit code: 0\nDuration: [^\n]+\nCommand output saved to:/);
     assert.match(result, /Foxwarm placeholders above \(line-range omission placeholders\) are not original output content\./);
     assert.ok(result.includes(`Omitted ${omission[1]} line(s) from original line range ${omission[2]}-${omission[3]} because ${omission[4]}.`));
     assert.match(result, /Original output: 1000 line\(s\), \d+ character\(s\)\./);
@@ -253,7 +253,7 @@ test('foreground exec warning remains in the footer when command output is trunc
       warning,
     );
 
-    assert.match(result, /---\nExit code: 1\nError: test failure\nWARNING: Requested timeout 120s exceeds the 60s maximum; using 60s\./);
+    assert.match(result, /---\nExit code: 1\nDuration: [^\n]+\nError: test failure\nWARNING: Requested timeout 120s exceeds the 60s maximum; using 60s\./);
     assert.match(result, /Command output saved to:/);
   } finally {
     await fs.remove(tempDir);
@@ -270,7 +270,7 @@ test('background timeout result includes oversized-timeout warning with final me
     const result = await buildBackgroundTimeoutResult(buildExecEntry(logPath), 60, warning);
     assert.match(result, /\[Process running longer than 60s\]/);
     assert.match(result, /WARNING: Requested timeout 120s exceeds the 60s maximum; using 60s\./);
-    assert.match(result, /execId: exec_test\nPID: 4321/);
+    assert.match(result, /execId: exec_test\nElapsed: [^\n]+\nPID: 4321/);
     assert.ok(result.endsWith(`Log file: ${logPath}`));
   } finally {
     await fs.remove(tempDir);
