@@ -76,6 +76,7 @@ export interface TimelineUsageBadgeView {
 export interface ConversationStepView {
   readonly key: string
   readonly title: string
+  readonly nativeContent: boolean
   readonly messages: Message[]
   readonly durationMs?: number
   readonly error: boolean
@@ -351,6 +352,7 @@ const buildConversationSteps = (messages: Message[]): ConversationStepView[] => 
       : message.parts.some(part => getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem)) ? 'Web search' : 'Activity'
     steps.push({
       key: getMessageStableKey(message, index), title, messages: members,
+      nativeContent: !getLlmErrorMessageDetails(message) && message.role !== 'user' && members.some(member => member.parts.some(part => hasConversationText(part) || isReasoningPart(part) || part.functionCall || part.functionResponse || getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem))),
       error: responses.some(response => getToolResponseStatus(response) === 'error') || !!getLlmErrorMessageDetails(message),
       ...(spans.length ? { durationMs: Math.max(...spans.map(span => span.end)) - Math.min(...spans.map(span => span.start)) } : {}),
     })

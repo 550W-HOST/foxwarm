@@ -1,4 +1,5 @@
 import type { TimelineView } from '../chatPreferences'
+import { getMessageStableKey } from '../chatViewportState'
 import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Eye, Code, FileJson, Copy, Check, Cloud, ChevronRight, Wrench, MessageSquare, AlertCircle } from 'lucide-react'
 import {
@@ -887,7 +888,8 @@ interface MessageRowProps {
   nestedDepth: number
   onOpenCodeFile?: OpenCodeFileHandler
   onOpenCodeCommit?: OpenCodeCommitHandler
-  renderNestedMessages: (messages: Message[], keyPrefix: string, nestedDepth: number, timelineView?: TimelineView) => ReactNode
+  renderNestedMessages: (messages: Message[], keyPrefix: string, nestedDepth: number, timelineView?: TimelineView, searchTarget?: SessionSearchMatch | null) => ReactNode
+  conversationDetails?: boolean
   groupFirst?: boolean
   surface?: 'all' | 'ordinary' | 'grouped'
   searchTarget?: SessionSearchMatch | null
@@ -902,6 +904,7 @@ const MessageRow = memo(function MessageRow({
   onOpenCodeFile,
   onOpenCodeCommit,
   renderNestedMessages,
+  conversationDetails = false,
   groupFirst = false,
   surface = 'all',
   searchTarget,
@@ -927,6 +930,8 @@ const MessageRow = memo(function MessageRow({
   } = row
   const llmError = useMemo(() => getLlmErrorMessageDetails(msg), [msg])
   const toolDisclosure = {
+    hideCollapsedContent: conversationDetails,
+    neutralSuccess: conversationDetails,
     expandedToolKeys: expandedTools.get(messageKey) || EMPTY_TOOL_KEYS,
     onToolToggle: useCallback((toolKey: string, expanded: boolean) => {
       onToolToggle(messageKey, toolKey, expanded, row.group?.key)
@@ -1045,7 +1050,7 @@ const MessageRow = memo(function MessageRow({
               if (contextBlock && partIndex === firstTextPartIndex && part.text) {
                 return <ContextBlockCard key={`ctx-block-${contextBlock.id}`} sessionId={sessionId} messageKey={messageKey} block={contextBlock} text={part.text} nestedDepth={nestedDepth} renderNestedMessages={renderNestedMessages} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'ctx' && rowSearchTarget.partIndex === partIndex} />
               }
-              return <AssistantTextCard conversation={row.conversationPartIndex !== undefined} key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={part.providerMeta?.openaiResponses?.annotations} onOpenCodeCommit={onOpenCodeCommit} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'model' && rowSearchTarget.partIndex === partIndex} />
+              return <AssistantTextCard conversation={conversationDetails || row.conversationPartIndex !== undefined} key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={part.providerMeta?.openaiResponses?.annotations} onOpenCodeCommit={onOpenCodeCommit} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'model' && rowSearchTarget.partIndex === partIndex} />
             })}
             {(surface !== 'grouped' || msg.role !== 'model') && <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />}
             {row.conversationPartIndex === undefined && surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup && pairedToolResponse ? <InterleavedToolGroup {...toolDisclosure} runningTool={runningTool} msg={msg} nextMsg={pairedToolResponse} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} /> : <ToolCallsBlock {...toolDisclosure} runningTool={runningTool} msg={msg} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} />)}
@@ -1062,6 +1067,7 @@ const MessageRow = memo(function MessageRow({
   prev.onToolToggle === next.onToolToggle &&
   prev.isMobile === next.isMobile &&
   (prev.row.msg.role !== 'user' || prev.row.systemLikeMessage || prev.showUserMessageMetadata === next.showUserMessageMetadata) &&
+  prev.conversationDetails === next.conversationDetails &&
   prev.groupFirst === next.groupFirst &&
   prev.surface === next.surface &&
   (prev.searchTarget?.rowKey === prev.row.key ? prev.searchTarget.id : null) === (next.searchTarget?.rowKey === next.row.key ? next.searchTarget.id : null) &&
@@ -1119,7 +1125,8 @@ const TimelineGroup = memo(function TimelineGroup({ group, rows, rowProps, onTog
   )
 })
 
-const ConversationUsage = memo(function ConversationUsage({ badge, pendingRequests, missingRequests, sessionId }: {
+const ConversationUsage = memo(function ConversationUsage({ badge, pendingRequests, missingRequests, sessionId, children }: {
+  children: ReactNode
   badge: TimelineUsageBadgeView | null | undefined
   pendingRequests: number
   missingRequests: number
@@ -1127,7 +1134,6 @@ const ConversationUsage = memo(function ConversationUsage({ badge, pendingReques
 }) {
   const [expanded, setExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
-  if (!badge && !pendingRequests && !missingRequests) return null
   const usage = badge?.usage
   const attribution = badge?.attribution
   const input = usage ? usage.cachedTokens + usage.inputTokens : 0
@@ -1141,19 +1147,22 @@ const ConversationUsage = memo(function ConversationUsage({ badge, pendingReques
     ['API time', formatDurationSummary(attribution.apiDurationsMs)],
     ['Time range', formatUsageTimes(attribution.timestamps)],
     ['Model', formatUsageModels(attribution.models)],
-  ] : [['Requests', `${pendingRequests + missingRequests}${pendingRequests ? ` · ${pendingRequests} pending` : ''}${missingRequests ? ` · ${missingRequests} unavailable` : ''}`]]
+  ] : []
   return <div className="min-w-0 text-xs text-fw-text-muted" data-conversation-usage>
-    <button type="button" aria-expanded={expanded} aria-label={expanded ? 'Hide process usage' : 'Show process usage'} className="rounded px-2 py-1 tabular-nums hover:bg-fw-hover focus-visible:outline focus-visible:outline-fw-focus-ring"
+    <div className="foxwarm-conversation-statistics flex min-w-0 items-start justify-between gap-3" data-conversation-statistics>
+      {children}
+      {usage && <button type="button" aria-expanded={expanded} aria-label={expanded ? 'Hide process usage' : 'Show process usage'} className="ml-auto shrink-0 whitespace-nowrap rounded px-2 py-1 text-right tabular-nums hover:bg-fw-hover focus-visible:outline focus-visible:outline-fw-focus-ring"
       onClick={() => setExpanded(value => !value)}>
-      {usage ? `${formatTokenCount(getUsageTotalTokens(usage))} tokens${pendingRequests || missingRequests ? ' · partial' : ''}` : pendingRequests ? 'Usage pending' : 'Usage unavailable'}
-    </button>
-    {expanded && <div className="mt-1 grid max-w-full gap-1 rounded border border-fw-border px-3 py-2" data-conversation-usage-details>
+        {`${formatTokenCount(getUsageTotalTokens(usage))} tokens${missingRequests ? ' · partial' : ''}`}
+      </button>}
+    </div>
+    {usage && expanded && <div className="flex min-w-0 justify-end"><div className="mt-1 grid w-fit min-w-0 max-w-full gap-1 rounded border border-fw-border px-3 py-2" data-conversation-usage-details>
       {rows.map(([label, value]) => <div key={label} className="flex min-w-0 justify-between gap-4"><span className="shrink-0">{label}</span><span className="min-w-0 break-words text-right tabular-nums">{value}</span></div>)}
       <div className="flex items-center justify-between gap-4"><span>Seq</span><span className="ml-auto">{seq?.label || 'unavailable'}</span>{seq && <button type="button" title="Copy message reference" aria-label="Copy message reference" onClick={async () => {
         await copyTextToClipboard(`sessionId=${sessionId} msg#${seq.target}`)
         setCopied(true)
       }}>{copied ? <Check size={12} /> : <Copy size={12} />}</button>}</div>
-    </div>}
+    </div></div>}
   </div>
 })
 
@@ -1184,21 +1193,28 @@ const TimelineActivity = memo(function TimelineActivity({ row, expanded, onToggl
   const { ref, prepare } = useThreadCardHeightTransition(expanded)
   const activity = row.activity!
   const preview = activity.preview
-  const showPreview = preview && (!expanded || rowProps.searchTarget?.rowKey === row.key)
+  const showPreview = preview && !expanded
   return (
     <div ref={ref} data-timeline-activity data-activity-expanded={expanded}
       data-chat-message-anchor-key={row.anchorKey} data-context-scrollbar-anchor-key={row.scrollbarAnchorKey}
       className={`min-w-0 ${row.widthClass} ${row.marginClass}`}>
-      <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-3 gap-y-1">
+      <ConversationUsage badge={activity.usage} pendingRequests={activity.pendingRequests || 0} missingRequests={activity.missingRequests || 0} sessionId={rowProps.sessionId}>
         {activity.runtimeOnly ? <div className="px-2 py-1 text-left text-xs text-fw-text-muted">{activity.summary}</div> : <button type="button" aria-expanded={expanded} aria-label={expanded ? 'Collapse activity' : 'Expand activity'}
           className="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1 text-left text-xs text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong focus-visible:outline focus-visible:outline-fw-focus-ring"
           onClick={() => { prepare(); onToggle(row.key, !expanded) }}>
           <ChevronRight size={13} aria-hidden="true" className={`shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} /><span>{activity.summary}</span>
         </button>}
-        <ConversationUsage badge={activity.usage} pendingRequests={activity.pendingRequests || 0} missingRequests={activity.missingRequests || 0} sessionId={rowProps.sessionId} />
-      </div>
+      </ConversationUsage>
       {expanded && !activity.runtimeOnly && <ol className="min-w-0 border-l border-fw-border py-1 pl-2" data-activity-details>
-        {activity.steps?.map(step => <ConversationStep key={step.key} step={step} rowProps={rowProps} />)}
+        {activity.steps?.map(step => {
+          if (!step.nativeContent) return <ConversationStep key={step.key} step={step} rowProps={rowProps} />
+          const previewIndex = preview ? step.messages.indexOf(preview.message) : -1
+          const search = previewIndex >= 0 && rowProps.searchTarget?.rowKey === row.key
+            ? { ...rowProps.searchTarget, rowKey: getMessageStableKey(preview!.message, previewIndex) } : null
+          return <li key={step.key} data-conversation-step data-search-row={previewIndex >= 0 ? row.key : undefined} className="min-w-0 py-1 pl-2">
+            {rowProps.renderNestedMessages(step.messages, step.key, rowProps.nestedDepth + 1, 'detailed', search)}
+          </li>
+        })}
       </ol>}
       {showPreview && <div data-conversation-preview data-search-row={row.key} className="min-w-0 px-2 pt-1 text-fw-text-muted">
         <AssistantTextCard conversation text={preview.message.parts[preview.partIndex].text || ''} message={preview.message} searchPartIndex={preview.partIndex} searchReveal={rowProps.searchTarget?.rowKey === row.key} onOpenCodeCommit={rowProps.onOpenCodeCommit} />
@@ -1222,7 +1238,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, isR
   const rowsCacheRef = useRef<TimelineRowsCache | null>(null)
   const [clockTick, setClockTick] = useState(0)
 
-  const renderNestedMessages = useCallback((nestedMessages: Message[], keyPrefix: string, nextNestedDepth: number, overrideView?: TimelineView) => (
+  const renderNestedMessages = useCallback((nestedMessages: Message[], keyPrefix: string, nextNestedDepth: number, overrideView?: TimelineView, nestedSearchTarget?: SessionSearchMatch | null) => (
     <ChatTimeline
       key={keyPrefix}
       sessionId={sessionId}
@@ -1230,6 +1246,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, isR
       isMobile={isMobile}
       timelineView={overrideView || timelineView}
       activityDetails={overrideView !== undefined}
+      searchTarget={nestedSearchTarget}
       showUsageBadge={overrideView ? false : nextNestedDepth > 0 ? false : showUsageBadge}
       showTimeDividers={false}
       showUserMessageMetadata={showUserMessageMetadata}
@@ -1303,7 +1320,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, isR
     if (expanded && groupKey) handleGroupToggle(groupKey, true)
   }, [handleGroupToggle])
 
-  const rowProps = { expandedTools, onToolToggle: handleToolToggle, isMobile, showUserMessageMetadata, sessionId, nestedDepth, onOpenCodeFile, onOpenCodeCommit, renderNestedMessages, searchTarget }
+  const rowProps = { conversationDetails: activityDetails, expandedTools, onToolToggle: handleToolToggle, isMobile, showUserMessageMetadata, sessionId, nestedDepth, onOpenCodeFile, onOpenCodeCommit, renderNestedMessages, searchTarget }
 
   return (
     <div className="foxwarm-chat-timeline min-w-0 max-w-full">

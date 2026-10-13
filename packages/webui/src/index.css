@@ -2356,3 +2356,14 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-user-message-bubble.fo
   color: inherit;
   opacity: 0.8;
 }
+
+/* Statistics and token totals share one type size, including console button defaults. */
+.foxwarm-conversation-statistics > button {
+  font-size: inherit !important;
+  line-height: inherit !important;
+}
+
+/* Header controls stay before the trailing time instead of overlapping it on hover. */
+.foxwarm-tool-header-toggle:is(:hover, :focus-within) > .foxwarm-tool-action-buttons {
+  opacity: 1;
+}

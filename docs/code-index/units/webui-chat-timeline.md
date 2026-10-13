@@ -35,8 +35,8 @@ Row derivation, timing, and thread-card families are documented in [webui-timeli
 | `InlineMetaPart` | ~143 | Renders system text inline with reduced opacity |
 | `CollapsibleUserText` | ~153 | User message text with expand/collapse for system content |
 | `SystemLikeMessageCard` | ~181 | Compact kind-tagged thread card for heavy system-like messages with a collapsible body |
-| `ConversationUsage` / `ConversationStep` | `ChatTimeline.tsx` | In-flow request/token attribution disclosure and independently lazy technical step details. |
-| `TimelineActivity` | `ChatTimeline.tsx` | Result-first process disclosure, readable live/no-reply preview, lazy ordered steps and in-flow aggregate usage. |
+| `ConversationUsage` / `ConversationStep` | `ChatTimeline.tsx` | Separate statistics/usage-detail rows and lazy system/input steps; native tools and reasoning render without that wrapper. |
+| `TimelineActivity` | `ChatTimeline.tsx` | Result-first process disclosure, direct expanded commentary, native one-layer tools/reasoning/search, readable live/no-reply preview and in-flow aggregate usage. |
 | `getConversationUserPartText` | `ChatTimeline.tsx` | Shares literal authored-body extraction for complete channel sources between rendering and Search, retaining outer metadata separately. |
 | `TimelineGroup` | `ChatTimeline.tsx` | Stable keyed counted tool-run wrapper inside a neutral in-flow measurement slot, first committed-row viewport anchor, ordinary model surfaces outside the historical Tool-style card, and local height transition. |
 | `ModelMessageContent` | ~230 | Renders model message parts (text, reasoning, images, tool calls) |
@@ -98,3 +98,5 @@ Row derivation, timing, and thread-card families are documented in [webui-timeli
 - Requires the current `sessionId` prop for CTX-BLOCK expansion fetches: `GET /api/sessions/:sessionId/context-blocks/:blockId/expand`.
 - Delegates tool rendering to `ToolTimelineItems` components which handle individual tool call/response display.
 - Relies on `chatShared` for markdown rendering, link handling, and message classification utilities shared across the chat UI.
+
+Conversation native step rendering forwards process-only tool presentation defaults through the existing Detailed renderer. Expanded preview text is shown only by its native prose surface, not duplicated below the process; its existing Search target is remapped to that same surface. The process statistics retain identical left/right type sizes and header geometry while usage details open below.

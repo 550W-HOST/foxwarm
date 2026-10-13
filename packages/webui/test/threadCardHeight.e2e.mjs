@@ -49,6 +49,18 @@ before(async () => {
       messages.splice(17, 1, ...entries, { role: 'model', parts: [{ text: 'Final answer' }], __meta: { seq: 18 + entries.length, timestamp: 1018 + entries.length } })
     }
 
+    if (size === 'conversation-process') {
+      messages.splice(17, 1,
+        { role: 'user', parts: [{ text: 'Inspect these files and keep the process running.' }], __meta: { seq: 18, timestamp: Date.now() - 60000 } },
+        ...Array.from({ length: 36 }, (_, index) => [
+          { role: 'model', parts: [
+            { text: 'Checking file batch ' + index, phase: 'commentary' },
+            ...Array.from({ length: 3 }, (_, tool) => ({ functionCall: { name: 'read', id: 'batch-' + index + '-' + tool, args: { filePath: 'src/fixture-' + index + '-' + tool + '.ts' } } })),
+          ], __meta: { seq: 19 + index * 2, timestamp: Date.now() - 58000 + index * 1500, llmRequestId: 'batch-request-' + index } },
+          { role: 'tool', parts: Array.from({ length: 3 }, (_, tool) => ({ functionResponse: { name: 'read', tool_use_id: 'batch-' + index + '-' + tool, response: { output: ('read result ' + index + '-' + tool + '\\n').repeat(65) } } })), __meta: { seq: 20 + index * 2, timestamp: Date.now() - 57000 + index * 1500 } },
+        ]).flat())
+    }
+
     window.fetch = async input => {
       const url = String(input)
       if (url.includes('/context-blocks/5/expand')) {
@@ -68,7 +80,7 @@ before(async () => {
         return new Response(JSON.stringify({ sessionId: 'fixture/height', blockId: 4, expansionKind: 'messages', messages: [{ role: 'model', parts: [{ text: 'Loaded archive detail ' + 'line\\n'.repeat(60) }], __meta: { seq: 1 } }, { role: 'model', parts: [{ functionCall: { id: 'nested-tool', name: 'exec', args: { command: 'echo nested' } } }], __meta: { seq: 2 } }, { role: 'tool', parts: [{ functionResponse: { name: 'exec', tool_use_id: 'nested-tool', response: { output: 'nested result' } } }], __meta: { seq: 3 } }, { role: 'model', parts: [{ text: 'archive tail' }], __meta: { seq: 4 } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       }
       const data = url.includes('/history')
-        ? { session: { id: 'fixture/height', busy: true, runtimeState: 'requesting-model', queueLength: 0 }, messages, queuedMessages: [], queueLength: 0 }
+        ? { session: { id: 'fixture/height', busy: true, runtimeState: size === 'conversation-process' ? { state: 'requesting-model', busy: true, since: Date.now() - 1000, queueLength: 0 } : 'requesting-model', queueLength: 0 }, messages, queuedMessages: [], queueLength: 0 }
         : url.includes('/models') ? { models: [] }
         : url.includes('/asr/status') ? { configured: false, available: false }
         : {}
@@ -88,7 +100,7 @@ before(async () => {
     window.WebSocket = FixtureSocket
     window.emitStream = text => FixtureSocket.instances.at(-1)?.emit({ type: 'session-event', sessionId: 'fixture/height', event: { type: 'model-stream-update', streamId: 'fixture-stream', text } })
     createRoot(document.getElementById('root')).render(React.createElement(Chat, {
-      sessionId: 'fixture/height', canonicalSessionId: 'fixture/height', sessionDisplayName: 'Height test', timelineView: size.startsWith('group') || size.startsWith('ctx') ? 'grouped' : 'detailed',
+      sessionId: 'fixture/height', canonicalSessionId: 'fixture/height', sessionDisplayName: 'Height test', timelineView: size === 'conversation-process' ? 'conversation' : size.startsWith('group') || size.startsWith('ctx') ? 'grouped' : 'detailed',
     }))
   `
   const result = await build({ stdin: { contents: source, resolveDir: packageDir, sourcefile: 'height-fixture.tsx' }, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
@@ -118,7 +130,7 @@ async function mount(size, reduced = false, width = 900, height = 600) {
   if (process.env.FOXWARM_E2E_BROWSER !== 'firefox') await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: reduced ? 'reduce' : 'no-preference' }])
   if (process.env.FOXWARM_E2E_BROWSER !== 'firefox') await page.setViewport({ width, height })
   await page.goto(`${baseUrl}/?size=${size}&reduced=${reduced ? '1' : '0'}`, { waitUntil: 'load' })
-  await page.waitForSelector(size.startsWith('group') ? '[data-tool-group]' : size.startsWith('ctx') ? '.foxwarm-context-block-card' : size === 'cards' || size === 'tool-small' ? '.foxwarm-tool-card' : '[data-system-message-card]')
+  await page.waitForSelector(size === 'conversation-process' ? '[data-timeline-activity]' : size.startsWith('group') ? '[data-tool-group]' : size.startsWith('ctx') ? '.foxwarm-context-block-card' : size === 'cards' || size === 'tool-small' ? '.foxwarm-tool-card' : '[data-system-message-card]')
   await wait(80)
   await page.$eval('.foxwarm-chat-messages', node => { node.scrollTop = node.scrollHeight; node.dispatchEvent(new Event('scroll')) })
   await wait(40)
@@ -785,4 +797,49 @@ test('expanded group member usage remains outside its card edge and clickable in
   assert.ok(sample.documentOverflow <= 1)
   await page.click('[data-tool-group] [data-usage-badge]')
   assert.equal(await page.$eval('[data-tool-group]', node => node.dataset.toolGroupExpanded), 'true', 'usage click does not collapse group')
+})
+
+
+test('reading a long live Conversation keeps a native multi-tool step in place through expansion and one stream update', async () => {
+  await mount('conversation-process')
+  await page.click('[aria-label="Expand activity"]')
+  await page.waitForFunction(() => !document.querySelector('[data-timeline-activity]').style.height)
+  await reattachViaBottomButton()
+  const viewport = await page.$eval('.foxwarm-chat-messages', node => node.getBoundingClientRect().toJSON())
+  await page.mouse.move(viewport.left + viewport.width * 0.6, viewport.top + viewport.height * 0.5)
+  await page.mouse.wheel({ deltaY: -650 })
+  await page.waitForFunction(() => {
+    const node = document.querySelector('.foxwarm-chat-messages')
+    return node.scrollHeight - node.scrollTop - node.clientHeight > 500
+  })
+  const target = await page.evaluate(() => {
+    const scroll = document.querySelector('.foxwarm-chat-messages')
+    const viewport = scroll.getBoundingClientRect()
+    const step = [...document.querySelectorAll('[data-conversation-step]')].find(node => {
+      const rect = node.getBoundingClientRect()
+      return rect.top > viewport.top + 30 && rect.top < viewport.bottom - 110
+    })
+    if (!step) throw new Error('No process step is visible after native wheel navigation')
+    window.readingStep = step
+    const button = step.querySelector('.foxwarm-tool-header-toggle') || step.querySelector('button')
+    const rect = button.getBoundingClientRect()
+    return { top: step.getBoundingClientRect().top, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+  })
+  await page.mouse.click(target.x, target.y)
+  await page.waitForFunction(() => [...window.readingStep.querySelectorAll('[style]')].every(node => !node.style.height))
+  const readGeometry = () => page.evaluate(() => {
+    const scroll = document.querySelector('.foxwarm-chat-messages')
+    return { top: window.readingStep.getBoundingClientRect().top, distance: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight }
+  })
+  assert.ok(await page.evaluate(() => !!window.readingStep.querySelector('.foxwarm-tool-expanded-content')), 'One native header click opens the full result')
+  let after = await readGeometry()
+  assert.ok(Math.abs(after.top - target.top) <= 3, JSON.stringify({ target, after }))
+  assert.ok(after.distance > 200)
+  const beforeStreamSteps = await page.$$eval('[data-conversation-step]', nodes => nodes.length)
+  await page.evaluate(() => window.emitStream('Still inspecting the remaining files.'))
+  await page.waitForFunction(count => document.querySelectorAll('[data-conversation-step]').length > count, {}, beforeStreamSteps)
+  await new Promise(resolve => setTimeout(resolve, 300))
+  after = await readGeometry()
+  assert.ok(Math.abs(after.top - target.top) <= 3, JSON.stringify({ target, after }))
+  assert.ok(after.distance > 200)
 })

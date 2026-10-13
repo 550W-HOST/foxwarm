@@ -136,3 +136,5 @@ Viewport state is ephemeral browser memory keyed by canonical session ID, not wo
 ## Canonical ownership
 
 Per-session versus global stream ownership is canonical in [D-webui-session-stream-ownership](../modules/webui.md#d-webui-session-stream-ownership). History/debug bootstrap ownership is canonical in [D-webui-history-bootstrap](../modules/webui.md#d-webui-history-bootstrap). Optimistic identity and stale-history reconciliation are canonical in [D-streaming-optimistic-message-identity](../threads/streaming-pipeline.md#d-streaming-optimistic-message-identity).
+
+`threadCardHeight.e2e.mjs` includes a targeted real-Chat Conversation check: open a long running process, explicitly attach to bottom, use native upward wheel navigation, expand a visible multi-call batch through its native header, then receive one stream update. Reading position must remain detached and stable.
