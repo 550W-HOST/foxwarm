@@ -7,6 +7,7 @@ import * as configModule from './config';
 import { loadModelsConfigFromObject } from './config';
 import * as sessionManager from './sessionManager';
 import { initArchiveStore } from './session/archiveStore';
+import { sessionCatalogStore } from './session/catalogStore';
 import { readArchiveMessages } from './session/archive';
 import { SessionAuthorityPostCommitError, writeAuthoritativeSessionState } from './session/stateFile';
 import { readSessionHistorySnapshot } from './session/metadataStore';
@@ -1618,6 +1619,11 @@ test('passive finish-window input stays durable without starting another process
 async function assertLinkedChildCompletion(scripted: boolean): Promise<void> {
   const { tool_task } = await import('./tools/taskTools');
   const { create_child_session } = await import('./tools');
+  // Earlier detached-owner cases persist authority files directly without the
+  // application startup catalog migration. Establish the empty catalog before
+  // this helper creates real Sessions through the public manager facade.
+  if (!sessionCatalogStore.exists()) sessionCatalogStore.initializeEmpty();
+  else sessionCatalogStore.open();
   const creator = await sessionManager.getSession(`task_link_creator_${Date.now()}`);
   const parent = await sessionManager.getSession(`task_link_parent_${Date.now()}`);
   let child: Session;
@@ -1625,8 +1631,10 @@ async function assertLinkedChildCompletion(scripted: boolean): Promise<void> {
   let requests = 0;
   try {
     const created = JSON.parse((await tool_task({ action: 'create', title: 'Linked work' }, { sessionId: creator.id, session: creator } as any)).output);
+    await tool_task({ action: 'assign', taskId: created.taskId, ownerSessionId: parent.id }, { sessionId: creator.id, session: creator } as any);
     const attached = await create_child_session({ suffix: 'task-link-child', taskId: created.taskId }, { sessionId: parent.id, session: parent } as any);
-    const childId = String(attached).match(/`([^`]+)`/)![1];
+    const attachedText = typeof attached === 'string' ? attached : String((attached as any)?.output ?? attached);
+    const childId = attachedText.match(/`([^`]+)`/)![1];
     child = await sessionManager.getExistingSession(childId);
     assert.equal(child.parentSessionId, parent.id);
     await sessionManager.sendToSession(child.id, 'Complete the attached task.', parent.id);

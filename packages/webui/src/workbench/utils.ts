@@ -1,6 +1,6 @@
 import type { WorkbenchLayoutNode, WorkbenchPaneNode, WorkbenchPersistedState, WorkbenchSplitNode, WorkbenchTab } from './types'
 
-const DEFAULT_SPLIT_SIZES = [50, 50]
+const DEFAULT_SPLIT_SIZES: [number, number] = [50, 50]
 
 export function createWorkbenchId(prefix: string): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -208,18 +208,18 @@ export function removePaneFromLayout(node: WorkbenchLayoutNode, paneId: string):
   }
 }
 
-export function replacePaneWithSplit(node: WorkbenchLayoutNode, paneId: string, direction: 'row' | 'column', newSibling: WorkbenchPaneNode, position: 'before' | 'after'): WorkbenchLayoutNode {
+export function replacePaneWithSplit(node: WorkbenchLayoutNode, paneId: string, direction: 'row' | 'column', newSibling: WorkbenchPaneNode, position: 'before' | 'after', sizes: [number, number] = DEFAULT_SPLIT_SIZES): WorkbenchLayoutNode {
   if (isPaneNode(node)) {
     if (node.id !== paneId) return node
     const orderedChildren = position === 'before'
       ? [newSibling, node]
       : [node, newSibling]
-    return createSplitNode(direction, orderedChildren, DEFAULT_SPLIT_SIZES)
+    return createSplitNode(direction, orderedChildren, sizes)
   }
 
   return normalizeLayoutNode({
     ...node,
-    children: node.children.map((child) => replacePaneWithSplit(child, paneId, direction, newSibling, position)),
+    children: node.children.map((child) => replacePaneWithSplit(child, paneId, direction, newSibling, position, sizes)),
   })
 }
 

@@ -71,7 +71,7 @@ before(async () => {
             <div data-activity-rail><CollapsedSidebar sessions={fixtureSessions.map(session => session.id === 'demo/child' ? { ...session, pinned: true } : session)} currentSession={current} unreadSessionIds={new Set(['demo/main', 'demo/wait'])} onSelectSession={noop} onCreateSession={noop} onSelectSearch={noop} onSelectSetup={noop} onSelectLogs={noop} onToggleCollapsed={noop} /></div>
             <div data-activity-timeline style={{ width: 520 }}>
               {fixtureSessions.map(session => <div key={session.id} data-activity-case={session.id}>
-                <ProcessingStatus sessionBusy={!!session.busy} runtimeState={session.runtimeState} sessionQueueLength={session.id === 'demo/idle' ? 2 : 0} turnIncomplete={false} loading={false} isMobile={false} />
+                <ProcessingStatus sessionBusy={!!session.busy} runtimeState={session.runtimeState} sessionQueueLength={session.id === 'demo/idle' ? 2 : 0} turnIncomplete={false} loading={false} isMobile={false} onStop={noop} />
               </div>)}
             </div>
           </div>}
@@ -643,12 +643,12 @@ test('busy rings share stepped motion across normal/detailed rows, rail and time
     const timeline = '[data-activity-timeline]'
     const railMain = `${rail} button[aria-label="Research workspace, Unread idle completion"]`
     const railTool = `${rail} button[aria-label="Evaluate the compact navigation"]`
-    assert.ok(await page.$(`${railTool} .runtime-busy-spinner`))
+    assert.ok(await page.$(`${railTool} [data-runtime-perimeter]`))
     const railWaiting = `${rail} button[aria-label="Waiting for review, Unread idle completion"]`
-    assert.equal(await page.$$eval(`${railMain} .runtime-busy-spinner`, nodes => nodes.length), 1)
+    assert.equal(await page.$$eval(`${railMain} [data-runtime-perimeter]`, nodes => nodes.length), 1)
     assert.equal(await page.$$eval(`${railMain} span.rounded-full`, nodes => nodes.length), 1, 'unread remains a separate filled dot')
     assert.equal(await page.$$eval(`${railWaiting} span.rounded-full`, nodes => nodes.length), 2, 'waiting and unread retain their separate dots')
-    assert.equal(await page.$(`${railWaiting} .runtime-busy-spinner`), null)
+    assert.equal(await page.$(`${railWaiting} [data-runtime-perimeter]`), null)
     for (const id of ['main', 'child', 'legacy']) {
       const selector = `${timeline} [data-activity-case="demo/${id}"]`
       assert.equal(await page.$$eval(`${selector} .runtime-busy-spinner`, nodes => nodes.length), 1)
@@ -667,11 +667,11 @@ test('busy rings share stepped motion across normal/detailed rows, rail and time
           const css = getComputedStyle(e)
           return { animation: css.animationName, duration: css.animationDuration, timing: css.animationTimingFunction, fill: css.fill, stroke: css.stroke, shadow: css.boxShadow }
         }))
-        assert.ok(styles.length >= 7)
+        assert.ok(styles.length >= 5)
         assert.ok(styles.every(css => css.animation === 'runtime-busy-spin' && css.duration === '1s' && css.timing === 'steps(20)' && css.fill === 'none' && css.shadow === 'none'))
         assert.equal(await page.$eval(`${row('wait')} [data-session-status] > span`, e => getComputedStyle(e).backgroundColor), await page.$eval(`${railWaiting} span.bg-fw-warning`, e => getComputedStyle(e).backgroundColor))
         assert.equal(await page.$eval(`${row('main')} [aria-label="Unread idle completion"]`, e => getComputedStyle(e).backgroundColor), await page.$eval(`${row('main')} .runtime-busy-spinner`, e => getComputedStyle(e).stroke))
-        assert.equal(await page.$eval(`${railTool} .runtime-busy-spinner`, e => getComputedStyle(e).stroke), await page.$eval(`${timeline} [data-activity-case="demo/child"] .runtime-busy-spinner`, e => getComputedStyle(e).stroke))
+        assert.equal(await page.$eval(`${railTool} [data-runtime-perimeter] rect`, e => getComputedStyle(e).stroke), await page.$eval(`${timeline} [data-activity-case="demo/child"] .runtime-busy-spinner`, e => getComputedStyle(e).stroke))
         if (process.env.FOXWARM_E2E_SCREENSHOT_DIR) {
           await mkdir(process.env.FOXWARM_E2E_SCREENSHOT_DIR, { recursive: true })
           await page.screenshot({ path: path.join(process.env.FOXWARM_E2E_SCREENSHOT_DIR, `busy-surfaces-${themeId}-${colorMode}.png`) })

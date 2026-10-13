@@ -66,8 +66,8 @@ export type WorkbenchStoreState = WorkbenchPersistedState & {
   reorderTabs: (paneId: string, activeTabId: string, overTabId: string) => void
   moveTabToPane: (tabId: string, targetPaneId: string, options?: { beforeTabId?: string | null; activate?: boolean }) => void
   splitPaneWithTab: (sourcePaneId: string, tabId: string, edge: 'left' | 'right' | 'top' | 'bottom') => string | null
-  splitPaneWithNewTab: (sourcePaneId: string, tab: WorkbenchTab, edge: 'left' | 'right' | 'top' | 'bottom') => string | null
-  dockTabToPaneEdge: (tabId: string, targetPaneId: string, edge: 'left' | 'right' | 'top' | 'bottom') => string | null
+  splitPaneWithNewTab: (sourcePaneId: string, tab: WorkbenchTab, edge: 'left' | 'right' | 'top' | 'bottom', sizes?: [number, number]) => string | null
+  dockTabToPaneEdge: (tabId: string, targetPaneId: string, edge: 'left' | 'right' | 'top' | 'bottom', sizes?: [number, number]) => string | null
   movePaneToEdge: (sourcePaneId: string, targetPaneId: string, edge: 'left' | 'right' | 'top' | 'bottom') => void
   closePane: (paneId: string) => void
   updateSplitSizes: (splitId: string, sizes: number[]) => void
@@ -358,7 +358,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
     return nextPaneId
   },
 
-  splitPaneWithNewTab: (sourcePaneId, tab, edge) => {
+  splitPaneWithNewTab: (sourcePaneId, tab, edge, sizes) => {
     const nextPaneId = createWorkbenchId('pane')
 
     set((state) => {
@@ -368,7 +368,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
       const direction = edge === 'left' || edge === 'right' ? 'row' : 'column'
       const position = edge === 'left' || edge === 'top' ? 'before' : 'after'
       const nextPane = createPaneNode([tab.id], tab.id, nextPaneId)
-      const nextRoot = replacePaneWithSplit(state.root, sourcePaneId, direction, nextPane, position)
+      const nextRoot = replacePaneWithSplit(state.root, sourcePaneId, direction, nextPane, position, sizes)
 
       return {
         tabsById: {
@@ -383,7 +383,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
     return nextPaneId
   },
 
-  dockTabToPaneEdge: (tabId, targetPaneId, edge) => {
+  dockTabToPaneEdge: (tabId, targetPaneId, edge, sizes) => {
     const nextPaneId = createWorkbenchId('pane')
 
     set((state) => {
@@ -400,7 +400,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
         return getPaneAfterTabRemoval(node, tabId)
       })
 
-      nextRoot = replacePaneWithSplit(nextRoot, targetPaneId, direction, nextPane, position)
+      nextRoot = replacePaneWithSplit(nextRoot, targetPaneId, direction, nextPane, position, sizes)
 
       const updatedSourcePane = findPaneNode(nextRoot, sourcePane.id)
       if (updatedSourcePane && updatedSourcePane.tabIds.length === 0 && getPaneIds(nextRoot).length > 1) {
