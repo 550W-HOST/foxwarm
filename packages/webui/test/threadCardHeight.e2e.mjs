@@ -28,7 +28,6 @@ before(async () => {
       __meta: { seq: index + 1, timestamp: 1000 + index },
     }))
     messages.push({ role: 'user', parts: [{ text: '<foxwarm-system kind="event">\\n' + body + '\\n</foxwarm-system>' }], __meta: { seq: 18, timestamp: 1018 } })
-    if (size === 'two-large') messages.push({ role: 'user', parts: [{ text: '<foxwarm-system kind="event">\\n' + body + '\\n</foxwarm-system>' }], __meta: { seq: 19, timestamp: 1019 } })
     if (size === 'small-with-tail') messages.push({ role: 'model', parts: [{ text: 'Final reference' }], __meta: { seq: 19, timestamp: 1019 } })
     if (size === 'tool-small') messages.splice(17, 1,
       { role: 'model', parts: [{ functionCall: { name: 'exec', id: 'reference-tool', args: { command: ('echo reference\\n').repeat(8) } } }], __meta: { seq: 18, timestamp: 1018 } },
@@ -49,19 +48,7 @@ before(async () => {
       messages.splice(17, 1, ...entries, { role: 'model', parts: [{ text: 'Final answer' }], __meta: { seq: 18 + entries.length, timestamp: 1018 + entries.length } })
     }
 
-    if (size === 'conversation-process') {
-      messages.splice(17, 1,
-        { role: 'user', parts: [{ text: 'Inspect these files and keep the process running.' }], __meta: { seq: 18, timestamp: Date.now() - 60000 } },
-        ...Array.from({ length: 36 }, (_, index) => [
-          { role: 'model', parts: [
-            { text: 'Checking file batch ' + index, phase: 'commentary' },
-            ...Array.from({ length: 3 }, (_, tool) => ({ functionCall: { name: 'read', id: 'batch-' + index + '-' + tool, args: { filePath: 'src/fixture-' + index + '-' + tool + '.ts' } } })),
-          ], __meta: { seq: 19 + index * 2, timestamp: Date.now() - 58000 + index * 1500, llmRequestId: 'batch-request-' + index } },
-          { role: 'tool', parts: Array.from({ length: 3 }, (_, tool) => ({ functionResponse: { name: 'read', tool_use_id: 'batch-' + index + '-' + tool, response: { output: ('read result ' + index + '-' + tool + '\\n').repeat(65) } } })), __meta: { seq: 20 + index * 2, timestamp: Date.now() - 57000 + index * 1500 } },
-        ]).flat())
-    }
-
-    if (size === 'conversation-worker') {
+    if (size === 'conversation-completed') {
       messages.splice(0, messages.length,
         { role: 'user', parts: [{ system: '<foxwarm-system kind="session-boundary" event="new-child" parentSessionId="fixture/main" currentSessionId="fixture/worker">\\nComplete the assigned investigation.\\n</foxwarm-system>' }], __meta: { seq: 1, timestamp: Date.now() - 60000 } },
         { role: 'user', parts: [{ system: '<foxwarm-message type="task" event="assigned" taskId="fixture-task">\\nInspect the supported implementation.\\n</foxwarm-message>' }], __meta: { seq: 2, timestamp: Date.now() - 59000 } },
@@ -71,6 +58,8 @@ before(async () => {
           { role: 'tool', parts: [{ functionResponse: { name: 'read', tool_use_id: 'worker-' + index, response: { output: ('worker result ' + index + '\\n').repeat(65) } } }], __meta: { seq: 5 + index * 2, timestamp: Date.now() - 56000 + index * 1800 } },
         ]).flat())
     }
+
+    if (size === 'conversation-completed') messages.push({ role: 'model', parts: [{ text: 'The assigned inspection is complete.\\n\\n' + '- Completed one supported check.\\n'.repeat(6), phase: 'final_answer' }], __meta: { seq: 60, timestamp: Date.now() - 1000, llmRequestId: 'worker-final' } })
 
     window.fetch = async input => {
       const url = String(input)
@@ -91,7 +80,7 @@ before(async () => {
         return new Response(JSON.stringify({ sessionId: 'fixture/height', blockId: 4, expansionKind: 'messages', messages: [{ role: 'model', parts: [{ text: 'Loaded archive detail ' + 'line\\n'.repeat(60) }], __meta: { seq: 1 } }, { role: 'model', parts: [{ functionCall: { id: 'nested-tool', name: 'exec', args: { command: 'echo nested' } } }], __meta: { seq: 2 } }, { role: 'tool', parts: [{ functionResponse: { name: 'exec', tool_use_id: 'nested-tool', response: { output: 'nested result' } } }], __meta: { seq: 3 } }, { role: 'model', parts: [{ text: 'archive tail' }], __meta: { seq: 4 } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       }
       const data = url.includes('/history')
-        ? { session: { id: 'fixture/height', busy: true, runtimeState: size.startsWith('conversation-') ? { state: 'requesting-model', busy: true, since: Date.now() - 1000, queueLength: 0 } : 'requesting-model', queueLength: 0 }, messages, queuedMessages: [], queueLength: 0 }
+        ? { session: { id: 'fixture/height', busy: size !== 'conversation-completed', runtimeState: size.startsWith('conversation-') ? { state: 'idle', busy: false, since: Date.now() - 1000, queueLength: 0 } : 'requesting-model', queueLength: 0 }, messages, queuedMessages: [], queueLength: 0 }
         : url.includes('/models') ? { models: [] }
         : url.includes('/asr/status') ? { configured: false, available: false }
         : {}
@@ -143,7 +132,7 @@ async function mount(size, reduced = false, width = 900, height = 600) {
   await page.goto(`${baseUrl}/?size=${size}&reduced=${reduced ? '1' : '0'}`, { waitUntil: 'load' })
   await page.waitForSelector(size.startsWith('conversation-') ? '[data-timeline-activity]' : size.startsWith('group') ? '[data-tool-group]' : size.startsWith('ctx') ? '.foxwarm-context-block-card' : size === 'cards' || size === 'tool-small' ? '.foxwarm-tool-card' : '[data-system-message-card]')
   await wait(80)
-  if (size !== 'conversation-worker') await page.$eval('.foxwarm-chat-messages', node => { node.scrollTop = node.scrollHeight; node.dispatchEvent(new Event('scroll')) })
+  if (size !== 'conversation-completed') await page.$eval('.foxwarm-chat-messages', node => { node.scrollTop = node.scrollHeight; node.dispatchEvent(new Event('scroll')) })
   await wait(40)
 }
 
@@ -469,7 +458,7 @@ test('group card keeps its header and transitions nested members with independen
   assert.equal(await page.$eval(group, node => node.dataset.toolGroupExpanded), 'false', 'the header itself collapses the group')
 })
 
-test('oversized group preserves its top until new content or explicit bottom navigation', async () => {
+test('oversized group leaves follow until explicit bottom navigation', async () => {
   await mount('group-large')
   const start = await page.$eval('.foxwarm-chat-messages', element => element.scrollTop)
   await page.click('[data-tool-group] [aria-label="Expand tool group"]')
@@ -486,7 +475,7 @@ test('oversized group preserves its top until new content or explicit bottom nav
   await page.click('[aria-label="Scroll to bottom"]')
   await wait(80)
   const bottom = await page.$eval('.foxwarm-chat-messages', node => node.scrollHeight - node.scrollTop - node.clientHeight)
-  assert.ok(bottom < 3, 'explicit bottom action overrides the animation hold')
+  assert.ok(bottom < 3, 'explicit bottom action rejoins follow')
 })
 
 
@@ -529,17 +518,27 @@ test('CTX asynchronous archive content grows after toggle and returns to natural
   assert.equal(await page.$eval(nestedGroup, node => node.querySelector('[aria-label="Expand tool group"]') !== null), true)
 })
 
-test('new streaming content after a tall expansion resumes the existing bottom follow latch', async () => {
+test('a tall expansion really leaves follow through animation and later content', async () => {
   await mount('large')
+  const before = await geometry()
   await toggle()
-  await wait(650)
+  await wait(85)
   await page.evaluate(() => window.emitStream('New assistant output\n\n'.repeat(20)))
-  await page.waitForSelector('.foxwarm-assistant-message-card')
-  await wait(240)
-  const afterStream = await page.$eval('.foxwarm-chat-messages', node => node.scrollHeight - node.scrollTop - node.clientHeight)
-  assert.ok(afterStream < 5, `next stream update follows bottom after the temporary hold: ${afterStream}`)
+  const samples = await page.evaluate(async () => {
+    const frames = []
+    for (let index = 0; index < 20; index++) {
+      await new Promise(requestAnimationFrame)
+      const scroll = document.querySelector('.foxwarm-chat-messages')
+      frames.push({ top: document.querySelector('[data-system-message-card]').getBoundingClientRect().top, scrollTop: scroll.scrollTop })
+    }
+    return frames
+  })
+  assert.ok(samples.every(sample => Math.abs(sample.top - before.top) < 3 && Math.abs(sample.scrollTop - before.scrollTop) < 3), JSON.stringify({ before, samples }))
+  await page.evaluate(() => window.emitStream('Later independent assistant output\n\n'.repeat(25)))
+  await wait(250)
+  const after = await geometry()
+  assert.ok(Math.abs(after.top - before.top) < 3 && after.distance > 200, JSON.stringify({ before, after }))
 })
-
 
 test('mobile chevron treatment keeps the outer card header and contained disclosure operable', { skip: process.env.FOXWARM_E2E_BROWSER === 'firefox' && 'Puppeteer BiDi does not support Firefox viewport emulation' }, async () => {
   await mount('group', false, 380, 640)
@@ -574,7 +573,7 @@ test('mobile chevron treatment keeps the outer card header and contained disclos
   assert.equal(await page.$eval('[data-tool-group]', node => node.dataset.toolGroupExpanded), 'false')
 })
 
-test('explicit bottom navigation during an active tall group transition wins over the hold', async () => {
+test('explicit bottom navigation during an active tall group transition rejoins follow', async () => {
   await mount('group-large')
   await page.click('[data-tool-group] [aria-label="Expand tool group"]')
   await page.waitForSelector('[aria-label="Scroll to bottom"]')
@@ -646,71 +645,19 @@ test('reversing both directions targets the new natural height from the currentl
   }
 })
 
-test('a token received while the final animation layout settles uses normal attached follow', async () => {
-  await mount('large')
+test('native upward scrolling during a short attached expansion wins over later content', async () => {
+  await mount('small')
   await toggle()
-  await wait(275)
-  const held = await page.$eval('.foxwarm-chat-messages', node => ({ distance: node.scrollHeight - node.scrollTop - node.clientHeight, overflowAnchor: node.style.overflowAnchor }))
-  assert.equal(held.overflowAnchor, 'none', 'the animation-only hold has not settled yet')
-  assert.ok(held.distance > 100)
-  await page.evaluate(() => window.emitStream('Next token after expand\n\n'.repeat(18)))
-  await wait(400)
-  const after = await page.$eval('.foxwarm-chat-messages', node => node.scrollHeight - node.scrollTop - node.clientHeight)
-  assert.ok(after < 5, `new token must not be lost to the post-animation observer hold: ${after}`)
-})
-
-
-test('a token during the active height transition waits until completion before following', async () => {
-  await mount('large')
-  const during = await page.$eval('[data-system-message-card] .foxwarm-thread-line-button', async button => {
-    const frames = async count => { for (let i = 0; i < count; i++) await new Promise(requestAnimationFrame) }
-    button.click()
-    await frames(5)
-    window.emitStream('Live token during expansion\n\n'.repeat(18))
-    await frames(4)
-    const view = document.querySelector('.foxwarm-chat-messages')
-    const card = document.querySelector('[data-system-message-card]')
-    return { cardTop: card.getBoundingClientRect().top, viewTop: view.getBoundingClientRect().top, distance: view.scrollHeight - view.scrollTop - view.clientHeight, styleHeight: card.style.height }
-  })
-  assert.ok(during.styleHeight.endsWith('px'), `card still animating: ${JSON.stringify(during)}`)
-  assert.ok(during.cardTop >= during.viewTop - 3, `active height cannot hide top: ${JSON.stringify(during)}`)
-  assert.ok(during.distance > 100, 'the token has not forced a premature bottom jump')
-  await wait(470)
-  const after = await page.$eval('.foxwarm-chat-messages', node => node.scrollHeight - node.scrollTop - node.clientHeight)
-  assert.ok(after < 5, 'the pending token follows once the active animation finishes')
-})
-
-test('manual upward intent during an active expansion cancels pending token follow', async () => {
-  await mount('large')
-  await page.$eval('[data-system-message-card] .foxwarm-thread-line-button', node => node.click())
-  await page.$eval('.foxwarm-chat-messages', node => { node.dispatchEvent(new WheelEvent('wheel', { deltaY: -70, bubbles: true })); node.scrollTop -= 70 })
+  await wait(70)
+  const bounds = await page.$eval('.foxwarm-chat-messages', node => node.getBoundingClientRect().toJSON())
+  await page.mouse.move(bounds.left + bounds.width * 0.7, bounds.top + bounds.height * 0.5)
+  await page.mouse.wheel({ deltaY: -100 })
+  await wait(40)
   await page.evaluate(() => window.emitStream('Detaching token\n\n'.repeat(18)))
-  await wait(550)
+  await wait(400)
   const distance = await page.$eval('.foxwarm-chat-messages', node => node.scrollHeight - node.scrollTop - node.clientHeight)
-  assert.ok(distance > 100, 'explicit upward intent outranks the pending stream follow')
+  assert.ok(distance > 100, 'explicit upward scrolling outranks attached content following')
 })
-
-test('two active tall cards do not release each other’s pending follow early', async () => {
-  await mount('two-large')
-  const during = await page.evaluate(async () => {
-    const frames = async count => { for (let i = 0; i < count; i++) await new Promise(requestAnimationFrame) }
-    const buttons = [...document.querySelectorAll('[data-system-message-card] .foxwarm-thread-line-button')]
-    buttons[0].click()
-    await frames(5)
-    buttons[1].click()
-    await frames(2)
-    window.emitStream('Concurrent card token\n\n'.repeat(20))
-    await frames(10)
-    const view = document.querySelector('.foxwarm-chat-messages')
-    return { distance: view.scrollHeight - view.scrollTop - view.clientHeight, heights: [...document.querySelectorAll('[data-system-message-card]')].map(card => card.style.height) }
-  })
-  assert.ok(during.heights.some(value => value.endsWith('px')), `at least one card still animates: ${JSON.stringify(during)}`)
-  assert.ok(during.distance > 100, `first card must not prematurely restore follow: ${JSON.stringify(during)}`)
-  await wait(500)
-  const after = await page.$eval('.foxwarm-chat-messages', node => node.scrollHeight - node.scrollTop - node.clientHeight)
-  assert.ok(after < 5, 'the pending token follows after both animations complete')
-})
-
 
 test('multi-level CTX and nested tool-group disclosures remain independently clickable at compact inset', async () => {
   await mount('ctx-deep')
@@ -811,111 +758,55 @@ test('expanded group member usage remains outside its card edge and clickable in
 })
 
 
-test('reading a long live Conversation keeps a native multi-tool step in place through expansion and one stream update', async () => {
-  await mount('conversation-process')
-  await page.click('[aria-label="Expand activity"]')
-  await page.waitForFunction(() => !document.querySelector('[data-timeline-activity]').style.height)
-  await reattachViaBottomButton()
-  const viewport = await page.$eval('.foxwarm-chat-messages', node => node.getBoundingClientRect().toJSON())
-  await page.mouse.move(viewport.left + viewport.width * 0.6, viewport.top + viewport.height * 0.5)
-  await page.mouse.wheel({ deltaY: -650 })
-  await page.waitForFunction(() => {
-    const node = document.querySelector('.foxwarm-chat-messages')
-    return node.scrollHeight - node.scrollTop - node.clientHeight > 500
-  })
-  const target = await page.evaluate(() => {
-    const scroll = document.querySelector('.foxwarm-chat-messages')
-    const viewport = scroll.getBoundingClientRect()
-    const step = [...document.querySelectorAll('[data-activity-details] .foxwarm-tool-card')].find(node => {
-      const rect = node.getBoundingClientRect()
-      return rect.top > viewport.top + 30 && rect.top < viewport.bottom - 110
-    })
-    if (!step) throw new Error('No process step is visible after native wheel navigation')
-    window.readingStep = step
-    const button = step.querySelector('.foxwarm-tool-header-toggle') || step.querySelector('button')
-    const rect = button.getBoundingClientRect()
-    return { top: step.getBoundingClientRect().top, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
-  })
-  await page.mouse.click(target.x, target.y)
-  await page.waitForFunction(() => [...window.readingStep.querySelectorAll('[style]')].every(node => !node.style.height))
-  const readGeometry = () => page.evaluate(() => {
-    const scroll = document.querySelector('.foxwarm-chat-messages')
-    return { top: window.readingStep.getBoundingClientRect().top, distance: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight }
-  })
-  assert.ok(await page.evaluate(() => !!window.readingStep.querySelector('.foxwarm-tool-expanded-content')), 'One native header click opens the full result')
-  let after = await readGeometry()
-  assert.ok(Math.abs(after.top - target.top) <= 3, JSON.stringify({ target, after }))
-  assert.ok(after.distance > 200)
-  await page.evaluate(() => window.emitStream('Still inspecting the remaining files.'))
-  await page.waitForFunction(() => document.querySelector('[data-activity-details]')?.textContent.includes('Still inspecting the remaining files.'))
-  await new Promise(resolve => setTimeout(resolve, 300))
-  after = await readGeometry()
-  assert.ok(Math.abs(after.top - target.top) <= 3, JSON.stringify({ target, after }))
-  assert.ok(after.distance > 200)
-})
-
-test('downward reading inside a tall Conversation leaves follow before a tool expansion receives a token', async () => {
-  await mount('conversation-process')
-  await page.click('[aria-label="Expand activity"]')
-  await page.waitForFunction(() => !document.querySelector('[data-timeline-activity]').style.height)
-  await wait(250)
-  const viewport = await page.$eval('.foxwarm-chat-messages', node => node.getBoundingClientRect().toJSON())
-  await page.mouse.move(viewport.left + viewport.width * 0.6, viewport.top + viewport.height * 0.6)
-  await page.mouse.wheel({ deltaY: 120 })
-  await wait(80)
-  const target = await page.evaluate(() => {
-    const scroll = document.querySelector('.foxwarm-chat-messages'), view = scroll.getBoundingClientRect()
-    const card = [...document.querySelectorAll('[data-activity-details] .foxwarm-tool-card')].find(node => {
-      const rect = node.getBoundingClientRect()
-      return rect.top > view.top + 30 && rect.top < view.bottom - 80
-    })
-    if (!card) throw new Error('No native tool visible after downward process reading')
-    window.readingCard = card
-    const rect = card.querySelector('.foxwarm-tool-header-toggle').getBoundingClientRect()
-    return { top: card.getBoundingClientRect().top, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, distance: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight }
-  })
-  assert.ok(target.distance > 200)
-  await page.mouse.click(target.x, target.y)
-  await wait(85)
-  await page.evaluate(() => window.emitStream('Token while reading a downward-navigated process.'))
-  await page.waitForFunction(() => document.querySelector('[data-activity-details]')?.textContent.includes('Token while reading a downward-navigated process.'))
-  await wait(450)
-  const after = await page.evaluate(() => {
-    const scroll = document.querySelector('.foxwarm-chat-messages')
-    return { top: window.readingCard.getBoundingClientRect().top, distance: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight }
-  })
-  assert.ok(Math.abs(after.top - target.top) <= 3, JSON.stringify({ target, after }))
-  assert.ok(after.distance > 200)
-})
-
-test('a worker with one Activity keeps a directly opened tool in view when a token arrives', async () => {
-  await mount('conversation-worker')
+test('a completed worker keeps its expanded process and tool in place through resize and later content', async () => {
+  await mount('conversation-completed', false, 1100, 800)
   assert.equal(await page.$$eval('[data-timeline-activity]', nodes => nodes.length), 1)
-  assert.equal(await page.$$eval('.foxwarm-conversation-reply:not([data-conversation-preview] *)', nodes => nodes.length), 0)
+  assert.equal(await page.$$eval('.foxwarm-conversation-reply', nodes => nodes.length), 1)
+  const position = () => page.evaluate(() => {
+    const scroll = document.querySelector('.foxwarm-chat-messages')
+    return { top: document.querySelector('[data-timeline-activity] button[aria-expanded]').getBoundingClientRect().top, scrollTop: scroll.scrollTop, distance: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight }
+  })
+  const before = await position()
   await page.click('[aria-label="Expand activity"]')
-  await page.waitForFunction(() => !document.querySelector('[data-timeline-activity]').style.height)
+  const processFrames = await page.evaluate(async () => {
+    const frames = []
+    for (let index = 0; index < 24; index++) {
+      await new Promise(requestAnimationFrame)
+      const scroll = document.querySelector('.foxwarm-chat-messages')
+      frames.push({ top: document.querySelector('[data-timeline-activity] button[aria-expanded]').getBoundingClientRect().top, scrollTop: scroll.scrollTop })
+    }
+    return frames
+  })
+  assert.ok(processFrames.every(sample => Math.abs(sample.top - before.top) < 3 && Math.abs(sample.scrollTop - before.scrollTop) < 3), JSON.stringify({ before, processFrames }))
   await wait(250)
+  await page.setViewport({ width: 1100, height: 760 })
+  await wait(250)
+  const resized = await position()
+  assert.ok(Math.abs(resized.top - before.top) < 3 && Math.abs(resized.scrollTop - before.scrollTop) < 3, JSON.stringify({ before, resized }))
   const target = await page.evaluate(() => {
     const scroll = document.querySelector('.foxwarm-chat-messages'), view = scroll.getBoundingClientRect()
     const card = [...document.querySelectorAll('[data-activity-details] .foxwarm-tool-card')].find(node => {
-      const rect = node.getBoundingClientRect()
-      return rect.top > view.top + 30 && rect.bottom < view.bottom - 8
+      const rect = node.querySelector('.foxwarm-tool-header-toggle').getBoundingClientRect()
+      return rect.top > view.top + 5 && rect.bottom < view.bottom - 5
     })
-    if (!card) throw new Error('No directly visible tool in the expanded single Activity')
+    if (!card) throw new Error('No visible native tool in the completed process')
     window.readingCard = card
     const rect = card.querySelector('.foxwarm-tool-header-toggle').getBoundingClientRect()
-    return { top: card.getBoundingClientRect().top, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, scrollTop: scroll.scrollTop, distance: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight }
+    return { top: rect.top, scrollTop: scroll.scrollTop, x: rect.left + rect.width * 0.55, y: rect.top + rect.height / 2 }
   })
-  assert.ok(target.distance > 200)
   await page.mouse.click(target.x, target.y)
-  await wait(85)
-  await page.evaluate(() => window.emitStream('One worker token while reading the opened tool.'))
-  await page.waitForFunction(() => document.querySelector('[data-activity-details]')?.textContent.includes('One worker token'))
-  await wait(450)
-  const after = await page.evaluate(() => {
-    const scroll = document.querySelector('.foxwarm-chat-messages')
-    return { top: window.readingCard.getBoundingClientRect().top, scrollTop: scroll.scrollTop, distance: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight }
+  const toolFrames = await page.evaluate(async () => {
+    const frames = []
+    for (let index = 0; index < 24; index++) {
+      await new Promise(requestAnimationFrame)
+      const scroll = document.querySelector('.foxwarm-chat-messages')
+      frames.push({ top: window.readingCard.querySelector('.foxwarm-tool-header-toggle').getBoundingClientRect().top, scrollTop: scroll.scrollTop })
+    }
+    return frames
   })
-  assert.ok(Math.abs(after.top - target.top) <= 3, JSON.stringify({ target, after }))
-  assert.ok(after.distance > 200)
+  assert.ok(toolFrames.every(sample => Math.abs(sample.top - target.top) < 3 && Math.abs(sample.scrollTop - target.scrollTop) < 3), JSON.stringify({ target, toolFrames }))
+  await page.evaluate(() => window.emitStream('Later content must not reclaim the completed process reading position.'))
+  await wait(200)
+  const after = await position()
+  assert.ok(Math.abs(after.scrollTop - target.scrollTop) < 3 && after.distance > 200, JSON.stringify({ target, after }))
 })
