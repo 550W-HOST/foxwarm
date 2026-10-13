@@ -61,6 +61,17 @@ before(async () => {
         ]).flat())
     }
 
+    if (size === 'conversation-worker') {
+      messages.splice(0, messages.length,
+        { role: 'user', parts: [{ system: '<foxwarm-system kind="session-boundary" event="new-child" parentSessionId="fixture/main" currentSessionId="fixture/worker">\\nComplete the assigned investigation.\\n</foxwarm-system>' }], __meta: { seq: 1, timestamp: Date.now() - 60000 } },
+        { role: 'user', parts: [{ system: '<foxwarm-message type="task" event="assigned" taskId="fixture-task">\\nInspect the supported implementation.\\n</foxwarm-message>' }], __meta: { seq: 2, timestamp: Date.now() - 59000 } },
+        { role: 'user', parts: [{ system: '<foxwarm-message type="inter-agent" sourceSessionId="fixture/main">\\nKeep the original behavior while checking the implementation.\\n</foxwarm-message>' }], __meta: { seq: 3, timestamp: Date.now() - 58000 } },
+        ...Array.from({ length: 28 }, (_, index) => [
+          { role: 'model', parts: [{ thinking: '**Inspecting batch ' + index + '**\\n\\nCheck the existing caller.' }, { text: 'Checking worker file batch ' + index, phase: 'commentary' }, { functionCall: { name: 'read', id: 'worker-' + index, args: { filePath: 'src/worker-' + index + '.ts' } } }], __meta: { seq: 4 + index * 2, timestamp: Date.now() - 57000 + index * 1800, llmRequestId: 'worker-request-' + index } },
+          { role: 'tool', parts: [{ functionResponse: { name: 'read', tool_use_id: 'worker-' + index, response: { output: ('worker result ' + index + '\\n').repeat(65) } } }], __meta: { seq: 5 + index * 2, timestamp: Date.now() - 56000 + index * 1800 } },
+        ]).flat())
+    }
+
     window.fetch = async input => {
       const url = String(input)
       if (url.includes('/context-blocks/5/expand')) {
@@ -80,7 +91,7 @@ before(async () => {
         return new Response(JSON.stringify({ sessionId: 'fixture/height', blockId: 4, expansionKind: 'messages', messages: [{ role: 'model', parts: [{ text: 'Loaded archive detail ' + 'line\\n'.repeat(60) }], __meta: { seq: 1 } }, { role: 'model', parts: [{ functionCall: { id: 'nested-tool', name: 'exec', args: { command: 'echo nested' } } }], __meta: { seq: 2 } }, { role: 'tool', parts: [{ functionResponse: { name: 'exec', tool_use_id: 'nested-tool', response: { output: 'nested result' } } }], __meta: { seq: 3 } }, { role: 'model', parts: [{ text: 'archive tail' }], __meta: { seq: 4 } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       }
       const data = url.includes('/history')
-        ? { session: { id: 'fixture/height', busy: true, runtimeState: size === 'conversation-process' ? { state: 'requesting-model', busy: true, since: Date.now() - 1000, queueLength: 0 } : 'requesting-model', queueLength: 0 }, messages, queuedMessages: [], queueLength: 0 }
+        ? { session: { id: 'fixture/height', busy: true, runtimeState: size.startsWith('conversation-') ? { state: 'requesting-model', busy: true, since: Date.now() - 1000, queueLength: 0 } : 'requesting-model', queueLength: 0 }, messages, queuedMessages: [], queueLength: 0 }
         : url.includes('/models') ? { models: [] }
         : url.includes('/asr/status') ? { configured: false, available: false }
         : {}
@@ -100,7 +111,7 @@ before(async () => {
     window.WebSocket = FixtureSocket
     window.emitStream = text => FixtureSocket.instances.at(-1)?.emit({ type: 'session-event', sessionId: 'fixture/height', event: { type: 'model-stream-update', streamId: 'fixture-stream', text } })
     createRoot(document.getElementById('root')).render(React.createElement(Chat, {
-      sessionId: 'fixture/height', canonicalSessionId: 'fixture/height', sessionDisplayName: 'Height test', timelineView: size === 'conversation-process' ? 'conversation' : size.startsWith('group') || size.startsWith('ctx') ? 'grouped' : 'detailed',
+      sessionId: 'fixture/height', canonicalSessionId: 'fixture/height', sessionDisplayName: 'Height test', timelineView: size.startsWith('conversation-') ? 'conversation' : size.startsWith('group') || size.startsWith('ctx') ? 'grouped' : 'detailed',
     }))
   `
   const result = await build({ stdin: { contents: source, resolveDir: packageDir, sourcefile: 'height-fixture.tsx' }, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
@@ -130,9 +141,9 @@ async function mount(size, reduced = false, width = 900, height = 600) {
   if (process.env.FOXWARM_E2E_BROWSER !== 'firefox') await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: reduced ? 'reduce' : 'no-preference' }])
   if (process.env.FOXWARM_E2E_BROWSER !== 'firefox') await page.setViewport({ width, height })
   await page.goto(`${baseUrl}/?size=${size}&reduced=${reduced ? '1' : '0'}`, { waitUntil: 'load' })
-  await page.waitForSelector(size === 'conversation-process' ? '[data-timeline-activity]' : size.startsWith('group') ? '[data-tool-group]' : size.startsWith('ctx') ? '.foxwarm-context-block-card' : size === 'cards' || size === 'tool-small' ? '.foxwarm-tool-card' : '[data-system-message-card]')
+  await page.waitForSelector(size.startsWith('conversation-') ? '[data-timeline-activity]' : size.startsWith('group') ? '[data-tool-group]' : size.startsWith('ctx') ? '.foxwarm-context-block-card' : size === 'cards' || size === 'tool-small' ? '.foxwarm-tool-card' : '[data-system-message-card]')
   await wait(80)
-  await page.$eval('.foxwarm-chat-messages', node => { node.scrollTop = node.scrollHeight; node.dispatchEvent(new Event('scroll')) })
+  if (size !== 'conversation-worker') await page.$eval('.foxwarm-chat-messages', node => { node.scrollTop = node.scrollHeight; node.dispatchEvent(new Event('scroll')) })
   await wait(40)
 }
 
@@ -872,6 +883,38 @@ test('downward reading inside a tall Conversation leaves follow before a tool ex
   const after = await page.evaluate(() => {
     const scroll = document.querySelector('.foxwarm-chat-messages')
     return { top: window.readingCard.getBoundingClientRect().top, distance: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight }
+  })
+  assert.ok(Math.abs(after.top - target.top) <= 3, JSON.stringify({ target, after }))
+  assert.ok(after.distance > 200)
+})
+
+test('a worker with one Activity keeps a directly opened tool in view when a token arrives', async () => {
+  await mount('conversation-worker')
+  assert.equal(await page.$$eval('[data-timeline-activity]', nodes => nodes.length), 1)
+  assert.equal(await page.$$eval('.foxwarm-conversation-reply:not([data-conversation-preview] *)', nodes => nodes.length), 0)
+  await page.click('[aria-label="Expand activity"]')
+  await page.waitForFunction(() => !document.querySelector('[data-timeline-activity]').style.height)
+  await wait(250)
+  const target = await page.evaluate(() => {
+    const scroll = document.querySelector('.foxwarm-chat-messages'), view = scroll.getBoundingClientRect()
+    const card = [...document.querySelectorAll('[data-activity-details] .foxwarm-tool-card')].find(node => {
+      const rect = node.getBoundingClientRect()
+      return rect.top > view.top + 30 && rect.bottom < view.bottom - 8
+    })
+    if (!card) throw new Error('No directly visible tool in the expanded single Activity')
+    window.readingCard = card
+    const rect = card.querySelector('.foxwarm-tool-header-toggle').getBoundingClientRect()
+    return { top: card.getBoundingClientRect().top, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, scrollTop: scroll.scrollTop, distance: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight }
+  })
+  assert.ok(target.distance > 200)
+  await page.mouse.click(target.x, target.y)
+  await wait(85)
+  await page.evaluate(() => window.emitStream('One worker token while reading the opened tool.'))
+  await page.waitForFunction(() => document.querySelector('[data-activity-details]')?.textContent.includes('One worker token'))
+  await wait(450)
+  const after = await page.evaluate(() => {
+    const scroll = document.querySelector('.foxwarm-chat-messages')
+    return { top: window.readingCard.getBoundingClientRect().top, scrollTop: scroll.scrollTop, distance: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight }
   })
   assert.ok(Math.abs(after.top - target.top) <= 3, JSON.stringify({ target, after }))
   assert.ok(after.distance > 200)

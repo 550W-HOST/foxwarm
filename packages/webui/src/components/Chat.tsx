@@ -506,23 +506,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     }
   }, [viewportSessionId])
 
-  const prepareCardHeight = useCallback(() => {
-    const token = {}
-    heightFollowPreparesRef.current.add(token)
-    const container = messagesContainerRef.current
-    if (container) container.style.overflowAnchor = 'none'
-    return () => {
-      heightFollowPreparesRef.current.delete(token)
-      if (!heightFollowHoldsRef.current.size && !heightFollowPreparesRef.current.size) {
-        container?.style.removeProperty('overflow-anchor')
-      }
-    }
-  }, [])
-
   const holdTallCardFollow = useCallback((card: HTMLElement, startHeight: number, targetHeight: number) => {
     const container = messagesContainerRef.current
-    // Clicking a disclosure is viewport interaction, not a request to detach. Re-arm
-    // the existing ResizeObserver generation after its pointerdown invalidation.
+    // Re-arm the observer generation after pointerdown. The preparation step
+    // has already captured any explicit reading intent before natural measurement.
     capturedInteractionVersionRef.current = userInteractionVersionRef.current
     if (!container || !shouldAutoScrollRef.current || pendingUserLeaveBottomRef.current || targetHeight <= startHeight) return () => {}
     const viewport = container.getBoundingClientRect()
@@ -564,8 +551,6 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       heightFollowReleaseTimersRef.current.add(timer)
     }
   }, [scrollToBottom])
-
-  const cardHeightContext = useMemo(() => ({ before: prepareCardHeight, begin: holdTallCardFollow }), [prepareCardHeight, holdTallCardFollow])
 
   useEffect(() => () => {
     heightFollowReleaseTimersRef.current.forEach(timer => window.clearTimeout(timer))
@@ -718,6 +703,27 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     markUserViewportInteraction()
     updateBottomFollowState('leave')
   }, [markUserViewportInteraction, updateBottomFollowState])
+
+  const prepareCardHeight = useCallback(() => {
+    const container = messagesContainerRef.current
+    // The initial tall disclosure preserves attached follow. A later disclosure
+    // while already reading away from the tail is explicit reading intent.
+    if (container && shouldAutoScrollRef.current && container.scrollHeight - container.scrollTop - container.clientHeight > CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX) {
+      leaveBottomFollow()
+      captureCurrentViewportState()
+    }
+    const token = {}
+    heightFollowPreparesRef.current.add(token)
+    if (container) container.style.overflowAnchor = 'none'
+    return () => {
+      heightFollowPreparesRef.current.delete(token)
+      if (!heightFollowHoldsRef.current.size && !heightFollowPreparesRef.current.size) {
+        container?.style.removeProperty('overflow-anchor')
+      }
+    }
+  }, [captureCurrentViewportState, leaveBottomFollow])
+
+  const cardHeightContext = useMemo(() => ({ before: prepareCardHeight, begin: holdTallCardFollow }), [prepareCardHeight, holdTallCardFollow])
 
   const scrollToTop = useCallback(() => {
     const container = messagesContainerRef.current
