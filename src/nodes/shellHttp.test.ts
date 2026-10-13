@@ -40,6 +40,7 @@ test('actual POSIX shell/curl Node uses Main dispatch, bounded output and scoped
   });
   let dropFinishedReply = false;
   let finishedRequests = 0;
+  const reportedDurations: string[] = [];
   let invalidPoll = true;
   server.app.use((req, res, next) => {
     if (invalidPoll && req.path === '/node/shell/poll') {
@@ -52,6 +53,7 @@ test('actual POSIX shell/curl Node uses Main dispatch, bounded output and scoped
   server.app.use((req, res, next) => {
     if (req.path === '/node/shell/report' && req.get('X-Foxwarm-Result') === 'finished') {
       finishedRequests++;
+      reportedDurations.push(req.get('X-Foxwarm-Elapsed-Seconds') || '');
       if (dropFinishedReply) {
         dropFinishedReply = false;
         // Drop the response after durable acceptance, not before command execution.
@@ -125,6 +127,7 @@ test('actual POSIX shell/curl Node uses Main dispatch, bounded output and scoped
     assert.match(short.output, new RegExp(startup.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(short.output, /hello/);
     assert.equal(short.exitCode, 7);
+    assert.match(short.output, /\nDuration: (?:<1s|~\d+s)\n/);
     assert.equal(short.content, undefined);
     const scriptShort = await executeNodeTool(session.id, 'shell-fixture', 'exec', { command: "printf '{\"ok\":true}\\n'; exit 7" }, undefined, true);
     assert.equal(scriptShort.content, '{"ok":true}\n'); assert.equal(scriptShort.exitCode, 7);
@@ -213,6 +216,8 @@ test('actual POSIX shell/curl Node uses Main dispatch, bounded output and scoped
     const beforeReports = finishedRequests;
     const background = await executeNodeTool(session.id, 'shell-fixture', 'exec', { command: 'printf once >> effect; sleep 4; printf completed', timeout: 1 });
     assert.ok(background.execId);
+    assert.match(background.output, /\nElapsed: ~\d+s$/);
+    assert.doesNotMatch(background.output, /Duration:/);
     assert.equal(hasRemoteExecLivenessClaim([session.id], 'main', background.execId), true);
     const wait = await tool_wait({ waitExecIds: [background.execId], wakeIfNoActivityAfterSeconds: null }, { sessionId: session.id, session } as any);
     assert.ok(wait);
@@ -231,10 +236,33 @@ test('actual POSIX shell/curl Node uses Main dispatch, bounded output and scoped
     await until(() => session.queue?.some(item => item.execId === background.execId), 'real Session completion');
     await until(() => finishedRequests >= beforeReports + 2, 'completion retry after lost ACK');
     assert.equal(session.queue.filter(item => item.execId === background.execId).length, 1);
+    const retriedDurations = reportedDurations.slice(beforeReports, beforeReports + 2);
+    assert.equal(retriedDurations.length, 2);
+    assert.ok(Number(retriedDurations[0]) >= 4);
+    assert.equal(retriedDurations[1], retriedDurations[0], 'lost completion ACK does not add report retry time to duration');
     assert.equal(await fs.readFile(path.join(startup, 'effect'), 'utf8'), 'once');
     assert.equal(hasRemoteExecLivenessClaim([session.id], 'main', background.execId), false);
     assert.ok(session.meta.acceptedExternalEventIds?.includes(`remote-exec-completion:${background.execId}`));
     assert.match(JSON.stringify(session.queue.find(item => item.execId === background.execId)), /completed/);
+    // An older client reports no source timing; Main must not substitute its
+    // dispatch-to-report interval for the remote process's duration.
+    const legacyHeaders = {
+      'X-Foxwarm-Node': 'shell-fixture', Authorization: `Bearer ${approved.authToken}`,
+      'X-Foxwarm-Connection': replacement.headers.get('X-Foxwarm-Connection')!,
+    };
+    const legacyCall = executeNodeTool(session.id, 'shell-fixture', 'exec', { command: ':' });
+    const legacyTask = await fetch(`${host}/node/shell/poll`, { headers: legacyHeaders });
+    assert.equal(legacyTask.status, 200);
+    await legacyTask.text();
+    const legacyReport = await fetch(`${host}/node/shell/report`, {
+      method: 'POST', headers: {
+        ...legacyHeaders, 'Content-Type': 'application/octet-stream',
+        'X-Foxwarm-Task': legacyTask.headers.get('X-Foxwarm-Task')!,
+        'X-Foxwarm-Result': 'finished', 'X-Foxwarm-Bytes': '0', 'X-Foxwarm-Exit': '0',
+      }, body: '',
+    });
+    assert.equal(legacyReport.status, 204);
+    assert.match((await legacyCall).output, /\nDuration: unknown\n/);
     assert.equal(stdout.includes(approved.authToken) || stderr.includes(approved.authToken), false);
     const bad = await fetch(`${host}/node/shell/register`, { method: 'POST', headers: { 'X-Foxwarm-Node': 'shell-fixture', Authorization: 'Bearer bad', 'Content-Type': 'application/octet-stream' }, body: startup });
     assert.equal(bad.status, 401);
