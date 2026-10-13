@@ -1,7 +1,7 @@
 # Unit: src-session-turn-runner
 
 Files: src/sessionTurnRunner.ts, src/sessionContinuation.ts
-Secondary files: src/sessionTurnRunnerDetachedOwner.test.ts, src/sessionWorkerHost.test.ts, src/messageRouter.test.ts, src/managedSessions.test.ts, src/toolsSessionAgent/handoffWait.test.ts, src/toolsSessionAgent/waitTool.test.ts, src/selftest/queueDrainSelfTest.ts, src/selftest/toolLoopStallSelfTest.ts
+Secondary files: src/sessionTurnRunnerDetachedOwner.test.ts, src/sessionTurnRunnerContextLimitCompact.test.ts, src/sessionWorkerHost.test.ts, src/messageRouter.test.ts, src/managedSessions.test.ts, src/toolsSessionAgent/handoffWait.test.ts, src/toolsSessionAgent/waitTool.test.ts, src/selftest/queueDrainSelfTest.ts, src/selftest/toolLoopStallSelfTest.ts
 
 ## Purpose
 
@@ -12,7 +12,7 @@ One turn-specific `SessionTurnHost` exposes only effects called by the runner. `
 ## Key exports
 
 - `SessionTurnRunner` — stateful local runner with one per-session reentrancy set.
-- `SessionTurnHost` — non-RPC interface for the runner's current persistence, compact, provider/tool, runtime-event, and channel-delivery effects.
+- `SessionTurnHost` — non-RPC interface for the runner's current persistence, compact, provider/tool, runtime-event, and channel-delivery effects. Its compact members include the compaction request result, the completed-job apply, and an interruption-aware wait for pending compact planning to settle.
 - `LocalSessionTurnHost` — in-process implementation shared by Main-local turns and the child host; it binds one effects owner and accepts a small coherent override object for exact snapshot, system-queue, compaction, safe-point pending-queue ingestion, intermediate delivery, and committed-final behavior. Unbound hosts preserve module-backed behavior. A bound host rejects every other ID and every different same-ID Session object before invoking effects.
 - `SessionTurnRunner.processSessionQueue(sessionId, options)` — canonical iterative queue owner from one busy claim through final finish-window recheck.
 - `SessionTurnRunner.processSessionRetry(sessionId)` — direct retry entry into the ordinary turn loop without queue control state.
@@ -51,6 +51,7 @@ Attached task completion carries an internal resolved-builtin signal that resolv
 - `prepareLlmRetry` binds the exact turn owner to the awaited LLM retry safe point. It ingests pending mailbox input, checks Stop/Run queued, applies ready compaction through `consumeLeadingQueuedTurnInputs`, checks controls again before selecting one finite strict append batch and after persistence, then restores the existing normal-turn requesting phase. Successful compact application or consumed input reports changed context; compact and strict-append failures propagate to owner cleanup rather than provider health/retry handling. Canonical policy: [D-pipeline-retry-input-safe-point](../threads/message-processing-pipeline.md#d-pipeline-retry-input-safe-point).
 - Child-reminder pending-input checks reuse the ordinary-input peek; a compact wake signal alone cannot suppress an otherwise-required reminder.
 - Completed compact jobs have priority at input-consumption safe points but their wake signals are not batch boundaries. Stop, waits, managed yields, tool-call/result ordering, and authority/mailbox fences retain their control boundaries.
+- The continuation trigger that compares the previous provider result's usage with the effective compact threshold is satisfied by a completed job committed at that same safe point, so one measurement never opens a second job. When that usage strictly exceeds the model context limit, the runner waits for the session's pending compact planning to settle, applies the settled result at its own safe point, and only then sends the next provider request; a terminal planning or commit failure ends the turn without that request, a completed job that fails at that safe point propagates instead of starting another job, and an interruption ends the turn without cancelling the compaction whether it releases the wait or was recorded before the wait registered.
 - Goal reminders are appended only at the pre-provider safe point after complete input/tool persistence. Continuation classification accepts generated compact-completion reminders with guidance in the current `hint` attribute or the legacy body, while retaining exact paired metadata and part-shape checks; the WebUI mirrors this compatibility.
 - Non-null provider `parts` are cleared only after `llm.chat` returns and has appended them.
 - Only `LlmRequestError` uses terminal provider presentation; other runtime errors retain the existing terminal runtime path except the fixed mutation-fenced Worker maintenance fatal described above.
@@ -63,6 +64,8 @@ Attached task completion carries an internal resolved-builtin signal that resolv
 ## Tests
 
 `src/messageRouter.test.ts` exercises the runner through public `MessageRouter` delegates and focused pure seam probes: queue/lifecycle boundaries, retry notices, provider failure, compact safe points, Stop/dequeue/retry, in-tool follow-ups, goal ordering, runtime state, and finish-window handoff. `src/managedSessions.test.ts` verifies idle/tool yields and manager/inbox ordering through real public managed steps. `src/sessionTurnRunnerDetachedOwner.test.ts` runs provider and real local-tool turns for an exact owner absent from the global map and checks many-turn iterative draining, compact-turn-compact ordering under one claim, retry-to-queued fresh turn identities, active-versus-yielded managed steps, exact stop/fenced release ownership, archive/history/state-file ordering, a real Responses held-stream case that persists commentary and encrypted-reasoning checkpoints before retry input, finish-window work, and busy/wait/persistence failure behavior.
+
+`src/sessionTurnRunnerContextLimitCompact.test.ts` drives real background compact jobs through a detached exact owner to pin the over-limit wait and commit-before-continuation order, the safe-point-commit skip above and below the limit, the terminal outcome of failed planning, and Stop releasing the wait without cancelling the job.
 
 ## Canonical ownership
 

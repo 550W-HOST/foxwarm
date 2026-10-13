@@ -2875,12 +2875,17 @@ export async function processSessionCompactionRequest(
   item: CompactionRequest,
   executionMode: 'auto' | 'await' | 'background' = 'auto',
   owner: sessionHistory.CompactOperationOwner = 'turn',
-): Promise<void> {
-  await sessionHistory.processSessionCompactionRequest(getSessionHistoryDeps(), sessionId, item, executionMode, owner);
+): Promise<sessionHistory.CompactionRequestResult> {
+  return sessionHistory.processSessionCompactionRequest(getSessionHistoryDeps(), sessionId, item, executionMode, owner);
 }
 
 export function hasCompletedCompactJob(sessionId: string): boolean {
   return sessionHistory.hasCompletedCompactJob(sessionId);
+}
+
+/** Waits for pending compact planning to settle without committing its result. */
+export async function waitForCompactPlanningSettle(sessionId: string, signal?: AbortSignal): Promise<sessionHistory.CompactPlanningSettleOutcome> {
+  return sessionHistory.waitForCompactPlanningSettle(sessionId, signal);
 }
 
 export async function applyCompletedCompactJob(sessionId: string): Promise<boolean> {
@@ -3214,6 +3219,10 @@ export function getDefaultCompactThresholdTokens(session: Pick<Session, 'model'>
 
 export function getEffectiveCompactThresholdTokens(session: Pick<Session, 'model' | 'compactThresholdTokens'>): number {
   return sessionHistory.getEffectiveCompactThresholdTokens(session);
+}
+
+export function getModelContextLimitTokens(session: Pick<Session, 'model'>): number {
+  return sessionHistory.getModelContextLimitTokens(session);
 }
 
 export async function setSessionChildModelDefault(sessionId: string, childModelDefault?: string): Promise<{

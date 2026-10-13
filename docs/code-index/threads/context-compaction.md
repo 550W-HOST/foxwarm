@@ -7,6 +7,7 @@ Owns what a compaction plan may summarize and what it records: triggers, respons
 ## Triggers and tool-response pruning
 
 - `checkAndCompactIfNeeded()` compares final usage with the effective compact threshold. The default is `llm.compactThresholdPercent` (85%) of the resolved model context window; a positive per-session threshold overrides it.
+- The runner's continuation trigger compares the previous provider result's total usage with that same threshold. A completed job committed at that safe point satisfies the trigger, and a measurement that strictly exceeds the resolved model context limit waits for pending compact planning before the next provider request. Wait, commit, and Stop rules are canonical in [compaction lifecycle](./compaction-lifecycle.md#commit-and-safe-points).
 - Explicit compact requests enter `processSessionCompactionRequest()`.
 - The default compact request keeps the newest 30% of rendered history (`llm.compactKeepPercent`, default `0.3`).
 
