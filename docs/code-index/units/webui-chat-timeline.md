@@ -1,7 +1,7 @@
 # Unit: webui-chat-timeline
 
 Files: packages/webui/src/components/ChatTimeline.tsx, packages/webui/test/messageCardPadding.e2e.mjs, packages/webui/test/messageWidth.e2e.mjs, packages/webui/test/timelineOverflowBoundary.e2e.mjs, packages/webui/test/streamMarkdownSelection.e2e.mjs, packages/webui/test/imageGenerationTimeline.e2e.mjs
-Secondary files: packages/webui/src/components/Chat.tsx, packages/webui/src/components/ToolTimelineItems.tsx, packages/webui/src/components/ImageParts.tsx, packages/webui/src/chatViewportState.ts, packages/webui/src/index.css
+Secondary files: packages/webui/test/conversationPresentationPreview.e2e.mjs, packages/webui/src/components/Chat.tsx, packages/webui/src/components/ToolTimelineItems.tsx, packages/webui/src/components/ImageParts.tsx, packages/webui/src/chatViewportState.ts, packages/webui/src/index.css
 
 ## Purpose
 
@@ -35,7 +35,8 @@ Row derivation, timing, and thread-card families are documented in [webui-timeli
 | `InlineMetaPart` | ~143 | Renders system text inline with reduced opacity |
 | `CollapsibleUserText` | ~153 | User message text with expand/collapse for system content |
 | `SystemLikeMessageCard` | ~181 | Compact kind-tagged thread card for heavy system-like messages with a collapsible body |
-| `TimelineActivity` | `ChatTimeline.tsx` | Quiet collapsed Activity disclosure with a Detailed nested timeline of technical fragments only. |
+| `ConversationUsage` / `ConversationStep` | `ChatTimeline.tsx` | In-flow request/token attribution disclosure and independently lazy technical step details. |
+| `TimelineActivity` | `ChatTimeline.tsx` | Result-first process disclosure, readable live/no-reply preview, lazy ordered steps and in-flow aggregate usage. |
 | `getConversationUserPartText` | `ChatTimeline.tsx` | Shares literal authored-body extraction for complete channel sources between rendering and Search, retaining outer metadata separately. |
 | `TimelineGroup` | `ChatTimeline.tsx` | Stable keyed counted tool-run wrapper inside a neutral in-flow measurement slot, first committed-row viewport anchor, ordinary model surfaces outside the historical Tool-style card, and local height transition. |
 | `ModelMessageContent` | ~230 | Renders model message parts (text, reasoning, images, tool calls) |
@@ -64,6 +65,7 @@ Row derivation, timing, and thread-card families are documented in [webui-timeli
 - A Responses metadata-only completion row with `parts:[]` renders no invented assistant text/card body; its real usage/timing badge follows the ordinary model-row path. Multiple segments retain independent stable row keys. [Canonical contract](../threads/streaming-pipeline.md#d-streaming-early-commentary-commit).
 - Collapsed Tool result/body rendering samples at most the first 800 source characters through one shared helper before applying the independent three-line visual clamp and conditional bottom fade. Expanded Tool results continue to render the complete response. This 800-character body bound does not change the separate 160/200-character one-line Tool call/header argument previews.
 - `MessageRow` decides layout (user right-aligned, model left-aligned), applies view-mode toggling (rendered vs source vs JSON), and conditionally shows copy buttons.
+- Conversation replies remove bubble chrome and retain lightweight source/copy controls beneath the reply; their user bubble text uses the body size. Process previews share readable Markdown without becoming final replies. Other modes retain their original card styling.
 - Ordinary assistant cards use an 8px inset on all four sides, while direct-user cards use 12px horizontally and 8px vertically in every theme. Switching an assistant card between Rendered, Raw, and JSON preserves its outer inset rather than adding a second content wrapper.
 - Ordinary assistant/model Markdown uses typed output from the shared renderer so complete top-level multiline display LaTeX and exact-language Mermaid fences can render through the shared per-block UI. Nested tokens remain in their original Markdown ancestry. Model text parts carrying OpenAI Responses URL annotations render a visible, deduplicated clickable Sources row beneath the rendered text with symmetric `my-2` vertical spacing; raw/JSON views continue to expose the original message metadata. These local controls coexist with, rather than replace, the assistant card's whole-message Rendered/Raw/JSON/copy controls. The canonical parsing, static/network-free Mermaid safety, raw-source, and lazy-loading contract is [D-webui-assistant-special-blocks](./webui-chat-shared.md#d-webui-assistant-special-blocks).
 - Streamed assistant Markdown and expanded Reasoning map stable top-level lexer tokens to memoized sanitized-HTML leaves. Unchanged earlier blocks therefore retain browser selection and DOM identity while the growing or semantically reinterpreted token remains free to update. Canonical contract: [D-webui-streaming-markdown-dom-stability](../threads/streaming-pipeline.md#d-webui-streaming-markdown-dom-stability).

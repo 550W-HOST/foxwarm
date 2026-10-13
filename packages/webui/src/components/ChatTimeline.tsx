@@ -1,6 +1,6 @@
 import type { TimelineView } from '../chatPreferences'
 import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Eye, Code, FileJson, Copy, Check, Cloud } from 'lucide-react'
+import { Eye, Code, FileJson, Copy, Check, Cloud, ChevronRight, Wrench, MessageSquare, AlertCircle } from 'lucide-react'
 import {
   IconToggleButton,
   copyTextToClipboard,
@@ -61,6 +61,8 @@ import {
   type TimelineRowView,
   type TimelineGroupView,
   type TimelineRowsCache,
+  type ConversationStepView,
+  type TimelineUsageBadgeView,
   type UsageAttribution,
 } from './timelineRows'
 
@@ -794,7 +796,7 @@ const WebSearchCitationLinks = memo(function WebSearchCitationLinks({ annotation
   )
 })
 
-const AssistantTextCard = memo(function AssistantTextCard({ text, message, annotations, onOpenCodeCommit, searchReveal = false, searchPartIndex }: { text: string; message: Message; annotations?: OpenAIResponsesAnnotation[]; onOpenCodeCommit?: OpenCodeCommitHandler; searchReveal?: boolean; searchPartIndex?: number }) {
+const AssistantTextCard = memo(function AssistantTextCard({ text, message, annotations, onOpenCodeCommit, searchReveal = false, searchPartIndex, conversation = false }: { conversation?: boolean; text: string; message: Message; annotations?: OpenAIResponsesAnnotation[]; onOpenCodeCommit?: OpenCodeCommitHandler; searchReveal?: boolean; searchPartIndex?: number }) {
   const [viewMode, setViewMode] = useState<ViewMode>('rendered')
   const displayedViewMode = searchReveal ? 'rendered' : viewMode
   const [copied, setCopied] = useState(false)
@@ -829,8 +831,8 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
   }, [text])
 
   return (
-    <div className="foxwarm-assistant-message-card min-w-0 max-w-full bg-fw-assistant-surface text-fw-assistant-text border border-fw-border px-2 py-2 rounded-lg cursor-text relative group">
-      <div className="foxwarm-assistant-action-buttons absolute right-1 top-1 flex gap-0.5 opacity-0 transition-opacity">
+    <div className={`foxwarm-assistant-message-card ${conversation ? 'foxwarm-conversation-reply flex flex-col' : ''} min-w-0 max-w-full bg-fw-assistant-surface text-fw-assistant-text border border-fw-border px-2 py-2 rounded-lg cursor-text relative group`}>
+      <div className={`foxwarm-assistant-action-buttons ${conversation ? 'order-last mt-1 self-start' : 'absolute right-1 top-1'} flex gap-0.5 opacity-0 transition-opacity`}>
         <IconToggleButton onClick={() => setViewMode('rendered')} active={displayedViewMode === 'rendered'} title="Rendered (Markdown)">
           <Eye size={12} />
         </IconToggleButton>
@@ -938,7 +940,7 @@ const MessageRow = memo(function MessageRow({
     const runsByStart = new Map(reasoningRuns.map(run => [run[0].partIndex, run]))
     for (const [partIndex, part] of msg.parts.entries()) {
       if (row.conversationPartIndex !== undefined) {
-        if (partIndex === row.conversationPartIndex && part.text && !part.toolUseId && !part.functionResponse) visible.push({ part, webSearchAction: null, partIndex })
+        if (!row.conversationImageOnly && partIndex === row.conversationPartIndex && part.text && !part.toolUseId && !part.functionResponse) visible.push({ part, webSearchAction: null, partIndex })
         continue
       }
       const reasoningRun = runsByStart.get(partIndex)
@@ -951,7 +953,7 @@ const MessageRow = memo(function MessageRow({
       if (webSearchAction) visible.push({ part, webSearchAction, partIndex })
     }
     return visible
-  }, [msg.parts, msg.role, reasoningRuns, row.conversationPartIndex])
+  }, [msg.parts, msg.role, reasoningRuns, row.conversationPartIndex, row.conversationImageOnly])
   const textLikeParts = useMemo(() => visibleModelParts.filter(item => !item.reasoningRun).map(item => item.part), [visibleModelParts])
   const attachmentCorrelations = useMemo(() => findAttachmentCorrelations(msg.parts), [msg.parts])
   const associatedImageParts = useMemo(() => new Set([...attachmentCorrelations.values()].flatMap(item => item.imagePart ? [item.imagePart] : [])), [attachmentCorrelations])
@@ -995,7 +997,7 @@ const MessageRow = memo(function MessageRow({
       <div
         className={`min-w-0 ${surface !== 'all' ? 'w-full' : widthClass} ${
           !systemLikeMessage && msg.role === 'user'
-            ? 'foxwarm-user-message-bubble bg-fw-user-surface text-fw-user-text px-3 py-2 rounded-lg'
+            ? `${row.literalUserText !== undefined ? 'foxwarm-conversation-user' : ''} foxwarm-user-message-bubble bg-fw-user-surface text-fw-user-text px-3 py-2 rounded-lg`
             : ''
         }`}
       >
@@ -1043,7 +1045,7 @@ const MessageRow = memo(function MessageRow({
               if (contextBlock && partIndex === firstTextPartIndex && part.text) {
                 return <ContextBlockCard key={`ctx-block-${contextBlock.id}`} sessionId={sessionId} messageKey={messageKey} block={contextBlock} text={part.text} nestedDepth={nestedDepth} renderNestedMessages={renderNestedMessages} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'ctx' && rowSearchTarget.partIndex === partIndex} />
               }
-              return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={part.providerMeta?.openaiResponses?.annotations} onOpenCodeCommit={onOpenCodeCommit} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'model' && rowSearchTarget.partIndex === partIndex} />
+              return <AssistantTextCard conversation={row.conversationPartIndex !== undefined} key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={part.providerMeta?.openaiResponses?.annotations} onOpenCodeCommit={onOpenCodeCommit} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'model' && rowSearchTarget.partIndex === partIndex} />
             })}
             {(surface !== 'grouped' || msg.role !== 'model') && <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />}
             {row.conversationPartIndex === undefined && surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup && pairedToolResponse ? <InterleavedToolGroup {...toolDisclosure} runningTool={runningTool} msg={msg} nextMsg={pairedToolResponse} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} /> : <ToolCallsBlock {...toolDisclosure} runningTool={runningTool} msg={msg} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} />)}
@@ -1117,6 +1119,62 @@ const TimelineGroup = memo(function TimelineGroup({ group, rows, rowProps, onTog
   )
 })
 
+const ConversationUsage = memo(function ConversationUsage({ badge, pendingRequests, missingRequests, sessionId }: {
+  badge: TimelineUsageBadgeView | null | undefined
+  pendingRequests: number
+  missingRequests: number
+  sessionId: string
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const [copied, setCopied] = useState(false)
+  if (!badge && !pendingRequests && !missingRequests) return null
+  const usage = badge?.usage
+  const attribution = badge?.attribution
+  const input = usage ? usage.cachedTokens + usage.inputTokens : 0
+  const seq = attribution ? formatUsageMessageSeq(attribution.messageSeqs) : null
+  const rows = usage && attribution ? [
+    ['Requests', `${(badge.callCount || 0) + missingRequests + pendingRequests}${pendingRequests ? ` · ${pendingRequests} pending` : ''}${missingRequests ? ` · ${missingRequests} unavailable` : ''}`],
+    ['Cached', usage.cachedTokens.toLocaleString()],
+    ['Input', usage.inputTokens.toLocaleString()],
+    ['Output', usage.outputTokens.toLocaleString()],
+    ['Cache share', input ? `${(usage.cachedTokens / input * 100).toFixed(1)}%` : 'unavailable'],
+    ['API time', formatDurationSummary(attribution.apiDurationsMs)],
+    ['Time range', formatUsageTimes(attribution.timestamps)],
+    ['Model', formatUsageModels(attribution.models)],
+  ] : [['Requests', `${pendingRequests + missingRequests}${pendingRequests ? ` · ${pendingRequests} pending` : ''}${missingRequests ? ` · ${missingRequests} unavailable` : ''}`]]
+  return <div className="min-w-0 text-xs text-fw-text-muted" data-conversation-usage>
+    <button type="button" aria-expanded={expanded} aria-label={expanded ? 'Hide process usage' : 'Show process usage'} className="rounded px-2 py-1 tabular-nums hover:bg-fw-hover focus-visible:outline focus-visible:outline-fw-focus-ring"
+      onClick={() => setExpanded(value => !value)}>
+      {usage ? `${formatTokenCount(getUsageTotalTokens(usage))} tokens${pendingRequests || missingRequests ? ' · partial' : ''}` : pendingRequests ? 'Usage pending' : 'Usage unavailable'}
+    </button>
+    {expanded && <div className="mt-1 grid max-w-full gap-1 rounded border border-fw-border px-3 py-2" data-conversation-usage-details>
+      {rows.map(([label, value]) => <div key={label} className="flex min-w-0 justify-between gap-4"><span className="shrink-0">{label}</span><span className="min-w-0 break-words text-right tabular-nums">{value}</span></div>)}
+      <div className="flex items-center justify-between gap-4"><span>Seq</span><span className="ml-auto">{seq?.label || 'unavailable'}</span>{seq && <button type="button" title="Copy message reference" aria-label="Copy message reference" onClick={async () => {
+        await copyTextToClipboard(`sessionId=${sessionId} msg#${seq.target}`)
+        setCopied(true)
+      }}>{copied ? <Check size={12} /> : <Copy size={12} />}</button>}</div>
+    </div>}
+  </div>
+})
+
+const ConversationStep = memo(function ConversationStep({ step, rowProps }: { step: ConversationStepView; rowProps: Omit<MessageRowProps, 'row'> }) {
+  const [expanded, setExpanded] = useState(false)
+  const { ref, prepare } = useThreadCardHeightTransition(expanded)
+  const Icon = step.error ? AlertCircle : step.messages.some(message => message.parts.some(part => part.functionCall || part.functionResponse)) ? Wrench : MessageSquare
+  return <li data-conversation-step className="min-w-0"><div ref={ref}>
+    <button type="button" aria-expanded={expanded} className="flex w-full min-w-0 items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-fw-text-muted hover:bg-fw-hover focus-visible:outline focus-visible:outline-fw-focus-ring"
+      onClick={() => { prepare(); setExpanded(value => !value) }}>
+      <ChevronRight size={12} className={`shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+      <Icon size={13} className={`shrink-0 ${step.error ? 'text-fw-danger' : ''}`} />
+      <span className="min-w-0 break-words">{step.title}</span>
+      {step.durationMs !== undefined && <span className="ml-auto shrink-0 tabular-nums">{formatCompactDuration(step.durationMs)}</span>}
+    </button>
+    {expanded && <div data-conversation-step-details className="min-w-0 py-1 pl-7">
+      {rowProps.renderNestedMessages(step.messages, step.key, rowProps.nestedDepth + 1, 'detailed')}
+    </div>}
+  </div></li>
+})
+
 const TimelineActivity = memo(function TimelineActivity({ row, expanded, onToggle, rowProps }: {
   row: TimelineRowView
   expanded: boolean
@@ -1124,16 +1182,26 @@ const TimelineActivity = memo(function TimelineActivity({ row, expanded, onToggl
   rowProps: Omit<MessageRowProps, 'row'>
 }) {
   const { ref, prepare } = useThreadCardHeightTransition(expanded)
+  const activity = row.activity!
+  const preview = activity.preview
+  const showPreview = preview && (!expanded || rowProps.searchTarget?.rowKey === row.key)
   return (
     <div ref={ref} data-timeline-activity data-activity-expanded={expanded}
-      data-chat-message-anchor-key={row.anchorKey} className={`min-w-0 ${row.widthClass} ${row.marginClass}`}>
-      {row.activity!.runtimeOnly ? <div className="px-2 py-1 text-left text-xs text-fw-text-muted">{row.activity!.summary}</div> : <button type="button" aria-expanded={expanded} aria-label={expanded ? 'Collapse activity' : 'Expand activity'}
-        className="flex items-center gap-2 rounded px-2 py-1 text-left text-xs text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong"
-        onClick={() => { prepare(); onToggle(row.key, !expanded) }}>
-        <span aria-hidden="true">{expanded ? '⌄' : '›'}</span><span>{row.activity!.summary}</span>
-      </button>}
-      {expanded && !row.activity!.runtimeOnly && <div className="min-w-0 pl-3" data-activity-details>
-        {rowProps.renderNestedMessages(row.activity!.messages, row.key, rowProps.nestedDepth + 1, 'detailed')}
+      data-chat-message-anchor-key={row.anchorKey} data-context-scrollbar-anchor-key={row.scrollbarAnchorKey}
+      className={`min-w-0 ${row.widthClass} ${row.marginClass}`}>
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-3 gap-y-1">
+        {activity.runtimeOnly ? <div className="px-2 py-1 text-left text-xs text-fw-text-muted">{activity.summary}</div> : <button type="button" aria-expanded={expanded} aria-label={expanded ? 'Collapse activity' : 'Expand activity'}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1 text-left text-xs text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong focus-visible:outline focus-visible:outline-fw-focus-ring"
+          onClick={() => { prepare(); onToggle(row.key, !expanded) }}>
+          <ChevronRight size={13} aria-hidden="true" className={`shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} /><span>{activity.summary}</span>
+        </button>}
+        <ConversationUsage badge={activity.usage} pendingRequests={activity.pendingRequests || 0} missingRequests={activity.missingRequests || 0} sessionId={rowProps.sessionId} />
+      </div>
+      {expanded && !activity.runtimeOnly && <ol className="min-w-0 border-l border-fw-border py-1 pl-2" data-activity-details>
+        {activity.steps?.map(step => <ConversationStep key={step.key} step={step} rowProps={rowProps} />)}
+      </ol>}
+      {showPreview && <div data-conversation-preview data-search-row={row.key} className="min-w-0 px-2 pt-1 text-fw-text-muted">
+        <AssistantTextCard conversation text={preview.message.parts[preview.partIndex].text || ''} message={preview.message} searchPartIndex={preview.partIndex} searchReveal={rowProps.searchTarget?.rowKey === row.key} onOpenCodeCommit={rowProps.onOpenCodeCommit} />
       </div>}
     </div>
   )
@@ -1162,7 +1230,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, isR
       isMobile={isMobile}
       timelineView={overrideView || timelineView}
       activityDetails={overrideView !== undefined}
-      showUsageBadge={overrideView ? showUsageBadge : nextNestedDepth > 0 ? false : showUsageBadge}
+      showUsageBadge={overrideView ? false : nextNestedDepth > 0 ? false : showUsageBadge}
       showTimeDividers={false}
       showUserMessageMetadata={showUserMessageMetadata}
       onOpenCodeFile={onOpenCodeFile}

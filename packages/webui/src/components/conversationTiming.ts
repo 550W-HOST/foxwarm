@@ -99,7 +99,7 @@ export function applyConversationTiming(
   let pending: number[] = []
   const close = (right: { time?: number; index: number }, dynamic = false) => {
     if (!pending.length) return
-    const timedRowIndex = pending.find(index => result[index].activity!.runtimeOnly || result[index].activity!.messages.some(message => !isCompactCompletionMaintenanceMessage(message)))
+    const timedRowIndex = pending.find(index => result[index].activity!.runtimeOnly || [...result[index].activity!.messages, ...result[index].activity!.sources || []].some(message => !isCompactCompletionMaintenanceMessage(message)))
     if (timedRowIndex === undefined) {
       pending = []
       return
@@ -174,7 +174,7 @@ export function applyConversationTiming(
       }
       const { busy, waiting } = measureIntervals(spans, start, end)
       const labels = complete
-        ? [busy > 0 || dynamic && liveRequestStart !== undefined ? `Worked for ${formatCompactDuration(busy)}` : '', waiting > 0 ? `Waited for ${formatCompactDuration(waiting)}` : ''].filter(Boolean)
+        ? [busy > 0 || dynamic && liveRequestStart !== undefined ? `Worked ${formatCompactDuration(busy)}` : '', waiting > 0 ? `Waited ${formatCompactDuration(waiting)}` : ''].filter(Boolean)
         : [`Elapsed ${formatCompactDuration(end - start)}`]
       const row = result[timedRowIndex]
       const counts = row.activity!.summary === 'Activity' ? '' : row.activity!.summary
@@ -186,6 +186,12 @@ export function applyConversationTiming(
     const row = rows[index]
     if (row.activity) {
       pending.push(index)
+      if (row.activity.closedAt) {
+        const right = { time: timestamp(row.activity.closedAt.__meta?.timestamp), index: sourceIndex(row.activity.closedAt) }
+        close(right)
+        left = right
+        continue
+      }
       const error = row.activity.messages.find(message => getLlmErrorMessageDetails(message) && message.__meta?.retry?.final === true)
       if (error) {
         const right = { time: timestamp(error.__meta?.timestamp), index: sourceIndex(error) >= 0 ? sourceIndex(error) : sourceIndex(row.msg) }
@@ -209,8 +215,10 @@ export function applyConversationTiming(
     const completedRequest = last?.role === 'model' && readConversationWorkInterval(last.__meta?.llmRequestTiming) && last.__meta?.llmSegment?.complete !== false && !last.parts.some(part => part.functionCall)
     const incompleteIdle = context.runtimeState?.state === 'idle' && isSessionTurnIncomplete(history) && !completedRequest
     // No recorded Stop time exists for an idle unfinished turn. Counts are safer than a growing guessed endpoint.
-    const end = incompleteIdle ? undefined : context.now
-    close({ time: end, index: history.length - 1 }, end !== undefined)
+    const runtime = context.runtimeState
+    const liveEndpoint = runtime?.state === 'waiting' || runtime?.busy && (runtime.state === 'requesting-model' || runtime.state === 'running-tool')
+    const end = incompleteIdle ? undefined : liveEndpoint ? context.now : completedRequest ? timestamp(last.__meta?.timestamp) : undefined
+    close({ time: end, index: history.length - 1 }, !!liveEndpoint && end !== undefined)
   }
   return result
 }

@@ -115,10 +115,10 @@ export function buildConversationActivitySummary(messages: readonly Message[], h
       }
     }
     const facts: string[] = []
-    if (created) facts.push(`Created ${created} child session${created === 1 ? '' : 's'}`)
-    if (sent) facts.push(`Sent ${sent} message${sent === 1 ? '' : 's'}`)
-    if (received) facts.push(`Received ${received} message${received === 1 ? '' : 's'}`)
-    if (called) facts.push(`Called ${called} tool${called === 1 ? '' : 's'}`)
+    if (called) facts.push(`${called} call${called === 1 ? '' : 's'}`)
+    if (created) facts.push(`${created} child session${created === 1 ? '' : 's'}`)
+    if (sent) facts.push(`${sent} sent`)
+    if (received) facts.push(`${received} received`)
     return facts.join(' · ') || 'Activity'
   }
 }

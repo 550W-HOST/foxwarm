@@ -2337,3 +2337,22 @@ html[data-foxwarm-theme] .collapsed-session-tile {
   .foxwarm-status-item > span:first-of-type { display: none; }
   .foxwarm-status-item { padding-inline: 6px; gap: 4px; }
 }
+
+/* Conversation replies are prose, not another thread card. Other timeline modes keep their chrome. */
+.foxwarm-assistant-message-card.foxwarm-conversation-reply {
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  padding: 0.25rem 0.5rem !important;
+}
+.foxwarm-user-message-bubble.foxwarm-conversation-user {
+  font-size: 0.875rem !important;
+}
+html[data-foxwarm-component-treatment="console"] .foxwarm-user-message-bubble.foxwarm-conversation-user {
+  font-size: var(--foxwarm-console-font-message) !important;
+}
+[data-conversation-preview] .foxwarm-conversation-reply {
+  color: inherit;
+  opacity: 0.8;
+}
