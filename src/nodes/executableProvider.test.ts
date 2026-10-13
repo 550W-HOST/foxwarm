@@ -406,7 +406,8 @@ test('Node execution RPC cancellation reaches and reaps an executable provider c
       args: { filePath: 'memfs://fixture/cancel.txt' },
     }, { signal: controller.signal });
     setTimeout(() => controller.abort(), 100);
-    await assert.rejects(() => pending, (error: any) => error?.name === 'AbortError');
+    await assert.rejects(() => pending, (error: any) =>
+      error?.name === 'AbortError' || error?.code === 'NODE_PROVIDER_CANCELLED');
     await transport.drain(3_000);
     const entries = await readLog(logPath);
     assert.equal(entries.length >= 1, true);

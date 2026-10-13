@@ -89,6 +89,13 @@ export interface SessionTurnHost {
   hasCompletedCompactJob: typeof sessionManager.hasCompletedCompactJob;
   applyCompletedCompactJob: typeof sessionManager.applyCompletedCompactJob;
   processSessionCompactionRequest: typeof sessionManager.processSessionCompactionRequest;
+  /**
+   * Waits for this session's pending compact planning to settle without
+   * committing its result: `completed` when a ready/failed result is
+   * observable for a safe-point commit, `none` when no compact work remains,
+   * and `released` when a Stop/dequeue interruption ended the wait.
+   */
+  waitForCompactPlanningSettle(sessionId: string): Promise<'completed' | 'none' | 'released'>;
   checkAndCompactIfNeeded: typeof sessionManager.checkAndCompactIfNeeded;
   startSessionWait(session: Session, options?: Parameters<typeof sessionManager.startSessionWaitForSession>[1]): Promise<sessionManager.SessionWaitState>;
   queueSessionSystemEvent: typeof sessionManager.queueSessionSystemEvent;
@@ -109,7 +116,7 @@ export interface SessionTurnHost {
 }
 
 export type LocalSessionTurnHostOverrides = Partial<Pick<SessionTurnHost,
-  'hasCompletedCompactJob' | 'applyCompletedCompactJob' | 'processSessionCompactionRequest' | 'checkAndCompactIfNeeded'
+  'hasCompletedCompactJob' | 'applyCompletedCompactJob' | 'processSessionCompactionRequest' | 'waitForCompactPlanningSettle' | 'checkAndCompactIfNeeded'
   | 'queueSessionSystemEvent' | 'refreshSessionSnapshot' | 'ingestPendingQueue' | 'deliverIntermediateText' | 'deliverCommittedFinal' | 'deliverGeneratedImages'
   | 'reportChannelProgress' | 'finishChannelProgress'>>;
 
@@ -209,6 +216,19 @@ export class LocalSessionTurnHost implements SessionTurnHost {
   hasCompletedCompactJob(sessionId: string): boolean { this.assertOwnerId(sessionId); return (this.overrides.hasCompletedCompactJob || sessionManager.hasCompletedCompactJob)(sessionId); }
   get applyCompletedCompactJob(): typeof sessionManager.applyCompletedCompactJob { return this.overrides.applyCompletedCompactJob || sessionManager.applyCompletedCompactJob; }
   get processSessionCompactionRequest(): typeof sessionManager.processSessionCompactionRequest { return this.overrides.processSessionCompactionRequest || sessionManager.processSessionCompactionRequest; }
+  get waitForCompactPlanningSettle(): SessionTurnHost['waitForCompactPlanningSettle'] {
+    return this.overrides.waitForCompactPlanningSettle || (async (sessionId: string) => {
+      this.assertOwnerId(sessionId);
+      const controller = new AbortController();
+      this.currentSessionEffects.registerAbortController(sessionId, controller);
+      try {
+        const outcome = await sessionManager.waitForCompactPlanningSettle(sessionId, controller.signal);
+        return outcome === 'aborted' ? 'released' : outcome;
+      } finally {
+        this.currentSessionEffects.clearAbortController(sessionId, controller);
+      }
+    });
+  }
   get checkAndCompactIfNeeded(): typeof sessionManager.checkAndCompactIfNeeded { return this.overrides.checkAndCompactIfNeeded || sessionManager.checkAndCompactIfNeeded; }
   startSessionWait(session: Session, options?: Parameters<typeof sessionManager.startSessionWaitForSession>[1]): Promise<sessionManager.SessionWaitState> { this.assertOwnerSession(session); return this.currentSessionEffects.startWait(session, options); }
   get queueSessionSystemEvent(): typeof sessionManager.queueSessionSystemEvent { return this.overrides.queueSessionSystemEvent || sessionManager.queueSessionSystemEvent; }
@@ -410,8 +430,12 @@ export class SessionTurnRunner {
     session: Session,
     pendingParts: MessagePart[] | null,
     assertCanConsume?: () => void,
+    // An over-limit continuation must not continue without its required
+    // compaction, so its safe point propagates a failed completed-job apply
+    // instead of reporting the swallow as "nothing was compacted here".
+    propagateCompactionFailure = false,
   ): Promise<{ parts: MessagePart[] | null; consumedInput: boolean; compacted: boolean }> {
-    const compacted = await this.runPendingCompactionIfNeeded(session.id, session, false, !!assertCanConsume);
+    const compacted = await this.runPendingCompactionIfNeeded(session.id, session, false, propagateCompactionFailure || !!assertCanConsume);
     assertCanConsume?.();
     let parts = pendingParts;
     let consumedInput = false;
@@ -623,20 +647,92 @@ export class SessionTurnRunner {
     return selected.compacted || selected.consumedInput;
   }
 
+  /**
+   * Resolves the model context limit and whether a previous provider
+   * measurement strictly exceeds it. The continuation guard and its safe-point
+   * failure handling share this rule.
+   */
+  private resolveContextLimitExceeded(session: Session, usage: TokenUsage | undefined): { contextLimit: number; exceeded: boolean } {
+    const contextLimit = sessionManager.getModelContextLimitTokens(session);
+    return { contextLimit, exceeded: !!usage && sessionManager.getUsageTotalTokens(usage) > contextLimit };
+  }
+
   private async maybeRequestAutoCompactionBeforeContinuation(
     session: Session,
     usage: TokenUsage | undefined,
     iteration: number,
-  ): Promise<void> {
-    if (!usage) return;
+    compactAppliedAtSafePoint: boolean,
+  ): Promise<'continue' | 'stopped'> {
+    if (!usage) return 'continue';
     const currentSize = sessionManager.getUsageTotalTokens(usage);
     const compactThreshold = sessionManager.getEffectiveCompactThresholdTokens(session);
-    if (currentSize <= compactThreshold) return;
-    logger.info({ currentSize, compactThreshold, sessionThresholdOverride: session.compactThresholdTokens, iteration }, 'Context size exceeded threshold before turn continuation, triggering compact');
-    await this.host.processSessionCompactionRequest(session.id, {
+    if (currentSize <= compactThreshold) return 'continue';
+    const { contextLimit, exceeded: exceedsContextLimit } = this.resolveContextLimitExceeded(session, usage);
+    if (compactAppliedAtSafePoint) {
+      // This safe point committed a compact result for an earlier request; the
+      // provider measurement in hand predates that commit, so it must not
+      // trigger another job. The next provider result re-measures the compacted
+      // history.
+      logger.info({ currentSize, compactThreshold, contextLimit, exceedsContextLimit, iteration }, 'Skipped auto compact because a completed compact result was applied at this safe point');
+      return 'continue';
+    }
+    logger.info({
+      currentSize, compactThreshold, sessionThresholdOverride: session.compactThresholdTokens, iteration, exceedsContextLimit,
+    }, 'Context size exceeded threshold before turn continuation, triggering compact');
+    const result = await this.host.processSessionCompactionRequest(session.id, {
       completionMarker: 'Compaction completed. You can continue working now.',
     }, 'auto');
-    logger.info('Compact requested, continuing with current history');
+    if (!exceedsContextLimit) {
+      logger.info('Compact requested, continuing with current history');
+      return 'continue';
+    }
+    if (result.applied) {
+      logger.info({ iteration }, 'Compact applied before turn continuation');
+      return 'continue';
+    }
+    if (session.stopping || session.meta?.runQueuedAfterStop) {
+      // A Stop that arrived while this request was in flight aborted the
+      // controllers registered at that moment, and this wait registers its own
+      // only now. Re-checking the synchronous stop state closes that window:
+      // the turn ends instead of waiting for the planner.
+      logger.info({ sessionId: session.id, iteration }, 'Stopping session ends the continuation before the compaction wait');
+      return 'stopped';
+    }
+    // The previous provider usage is already over this model's context limit,
+    // so the next request must wait for a compact result the safe point can
+    // commit; the wait itself never depends on that commit.
+    logger.info({
+      currentSize, contextLimit, iteration, backgroundPlanning: result.background,
+    }, 'Waiting for pending compaction before the next request because the previous usage exceeds the model context limit');
+    const outcome = await this.host.waitForCompactPlanningSettle(session.id);
+    if (outcome === 'released') {
+      logger.info({ sessionId: session.id, iteration }, 'Compaction wait released by interruption; halting continuation');
+      return 'stopped';
+    }
+    if (outcome === 'completed' && await this.runPendingCompactionIfNeeded(session.id, session, false, true)) {
+      logger.info({ iteration }, 'Compact committed before turn continuation');
+      return 'continue';
+    }
+    throw new Error(`Context compaction did not complete, so this turn stopped before sending a request that exceeds the model context limit (previous usage ${currentSize}, limit ${contextLimit}).`);
+  }
+
+  /**
+   * Ends the turn after an interruption released the compaction wait. Input
+   * consumed at this safe point is already canonical history, and the
+   * compaction itself stays pending for the stop boundary or a later safe
+   * point.
+   */
+  private async finishTurnAfterReleasedCompactionWait(
+    session: Session,
+    broadcast: Session['broadcast'] | undefined,
+    turnId: string,
+    iterationTextHandled: boolean,
+  ): Promise<void> {
+    if (iterationTextHandled) {
+      await this.finishTurnAfterIntermediate(session, broadcast, turnId);
+    } else {
+      await this.deliverProviderResultText(session, '_[Execution stopped by user]_', false, broadcast, turnId);
+    }
   }
 
   private async appendUserMessage(session: Session, parts: MessagePart[], clientMessageId?: string): Promise<void> {
@@ -943,12 +1039,18 @@ export class SessionTurnRunner {
 
         if (!hasTools) {
           if (providerTimeQueue) {
-            const queuedAfterLlm = await this.consumeLeadingQueuedTurnInputs(session, null);
+            const queuedAfterLlm = await this.consumeLeadingQueuedTurnInputs(
+              session, null, undefined, this.resolveContextLimitExceeded(session, result.usage).exceeded,
+            );
             if (!queuedAfterLlm.consumedInput) {
               await this.finishTurnAfterIntermediate(session, broadcast, turnId);
               break;
             }
-            await this.maybeRequestAutoCompactionBeforeContinuation(session, result.usage, iteration);
+            if (await this.maybeRequestAutoCompactionBeforeContinuation(session, result.usage, iteration, queuedAfterLlm.compacted) === 'stopped') {
+              stoppedByUser = true;
+              await this.finishTurnAfterReleasedCompactionWait(session, broadcast, turnId, iterationTextHandled);
+              break;
+            }
             iteration++;
             continue;
           }
@@ -1098,10 +1200,16 @@ export class SessionTurnRunner {
           }
           break;
         }
-        const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null);
+        const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(
+          session, null, undefined, this.resolveContextLimitExceeded(session, result.usage).exceeded,
+        );
         parts = queuedAfterTools.parts;
 
-        await this.maybeRequestAutoCompactionBeforeContinuation(session, result.usage, iteration);
+        if (await this.maybeRequestAutoCompactionBeforeContinuation(session, result.usage, iteration, queuedAfterTools.compacted) === 'stopped') {
+          stoppedByUser = true;
+          await this.finishTurnAfterReleasedCompactionWait(session, broadcast, turnId, iterationTextHandled);
+          break;
+        }
 
         iteration++;
       }

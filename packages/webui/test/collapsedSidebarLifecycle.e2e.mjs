@@ -140,6 +140,7 @@ test('collapsed Session-list controller follows the desktop rail mount and physi
           setTimeout(() => {
             this.readyState = 1
             this.onopen?.({})
+            this.onmessage?.({ data: JSON.stringify({ type: 'connected' }) })
           }, 0)
         }
         send(value) {

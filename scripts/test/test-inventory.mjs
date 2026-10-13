@@ -52,6 +52,7 @@ function classify(file) {
     || file === 'packages/sandbox-node-runtime/scripts/build-bundle.test.mjs') return 'sandbox-node'
   if (/^packages\/browser-node\/test\/.*\.test\.mjs$/.test(file)) return 'browser-node'
   if (/^packages\/android-node\/test_[^/]+\.py$/.test(file)) return 'python'
+  if (/^docs\/code-index\/scripts\/tests\/test_[^/]+\.py$/.test(file)) return 'python'
   if (/^scripts\/.*\.test\.(?:js|mjs)$/.test(file)) return 'scripts'
   if (/^skills\/.*\/tests\/test_[^/]+\.py$/.test(file)) return 'python'
   if (/^skills\/.*\.test\.js$/.test(file)) return 'skill-node'

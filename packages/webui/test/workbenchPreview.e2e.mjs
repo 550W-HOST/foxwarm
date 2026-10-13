@@ -110,6 +110,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
         return json({ results: ['history-outside/main', 'e2e-a'].map(sessionId => ({ key: sessionId, sessionId, kind: 'messages', firstSeq: 7, lastSeq: 7, hasEarlier: false, hasLater: false, messages: [{ role: 'user', parts: [{ text: ('Archived navigation fixture\n').repeat(40) }], __meta: { seq: 7, timestamp: 1700000000000 } }] })) })
       }
       if (pathname.endsWith('/api/session-list/descendant-activity')) return json({ results: [] })
+      if (pathname.endsWith('/api/session-list/architecture')) return json({ version: 1, revision: 'r1', sessions: [], nextCursor: null, children: [], focus: [], pathContext: [], forcedChildren: {}, summary: { total: 3, busy: 0, queued: 0, managed: 0, cachedTokens: 3000000000, inputTokens: 200000000, outputTokens: 30000000 } })
       if (pathname.includes('/api/session-list/')) return json({ sessions: [], results: [] })
       if (pathname.includes('/api/sessions/') && pathname.endsWith('/message')) {
         window.__sent.push({ path: pathname, body: options.body })
@@ -121,7 +122,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       }
       return json({})
     }
-    function sessionFixture(id) { return { id, aliases: [], archived: false, parentSessionId: null, childTotal: 0, messageCount: 0, lastMessageTime: 1, busy: false } }
+    function sessionFixture(id) { return { tokenUsage: id === 'e2e-a' ? { cachedTokens: 12000, inputTokens: 1000, outputTokens: 200 } : { cachedTokens: 2000, inputTokens: 400, outputTokens: 100 }, id, aliases: [], archived: false, parentSessionId: null, childTotal: 0, messageCount: 0, lastMessageTime: 1, busy: false } }
     class FixtureWebSocket {
       static OPEN = 1
       readyState = 1
@@ -953,7 +954,8 @@ test('550A Chat has one Code action, honors the new-tab preference, and dispatch
     await page.waitForSelector(`${header} button[title="Code"]`)
     assert.equal(await page.$$eval(`${header} button[title="Code"]`, buttons => buttons.length), 1)
     assert.equal(await page.$eval(`${header} button[title="Code"]`, button => button.textContent), 'Code')
-    assert.equal(await page.$eval(`${header} button[title="Terminal"]`, button => button.textContent), 'Terminal')
+    assert.equal(await page.$(`${header} button[title="Terminal"]`), null)
+    assert.equal(await page.$eval('[data-workbench-status-bar] button[title="Terminal"]', button => button.textContent), 'Terminal')
     assert.equal(await page.$(`${header} .lucide-external-link`), null)
     assert.equal(await page.$(`${header} button[title="Open code in a new browser tab"]`), null)
     assert.equal(await page.evaluate(() => document.documentElement.dataset.foxwarmComponentTreatment), 'console')
@@ -973,7 +975,7 @@ test('550A Chat has one Code action, honors the new-tab preference, and dispatch
     assert.deepEqual(opened[0].slice(1), ['_blank', 'noopener,noreferrer'])
     assert.equal((await state(page)).tabsById['vscode-web'], undefined)
 
-    await page.click(`${header} button[title="Terminal"]`)
+    await page.click('[data-workbench-status-bar] button[title="Terminal"]')
     await page.waitForFunction(() => Object.values(JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById).some(tab => tab.type === 'terminal'))
     const terminal = Object.values((await state(page)).tabsById).find(tab => tab.type === 'terminal')
     assert.equal(terminal.nodeId, 'master')
@@ -1097,7 +1099,7 @@ test('Chat follows each pane through real divider dragging without changing desk
     await page.click(other + editor); await page.keyboard.type('other draft remains')
     await resizeMain(1030)
     const wide = await paneLayout(main), narrow = await paneLayout(other)
-    assert.equal(wide.md, true); assert.equal(wide.minimap, true); assert.equal(wide.gutter, '32px'); assert.equal(wide.nativeScrollbar, 'none')
+    assert.equal(wide.md, false, 'desktop Terminal entry is owned by the status bar'); assert.equal(wide.minimap, true); assert.equal(wide.gutter, '32px'); assert.equal(wide.nativeScrollbar, 'none')
     assert.equal(narrow.md, false); assert.equal(narrow.minimap, false); assert.equal(narrow.gutter, '0px'); assert.notEqual(narrow.nativeScrollbar, 'none')
     assert.equal(wide.back, false); assert.equal(narrow.back, false)
     assert.equal(wide.overflow, false); assert.equal(narrow.overflow, false)
@@ -1296,11 +1298,15 @@ test('ordinary Terminal close selects another still-open tab rather than restori
   const page = await openFixture({ tabs: [system, tab], activeTabId: tab.id, terminal, hash: '#tab/terminal%3Aterm-fallback' })
   try {
     await page.bringToFront()
+    // The ready callback reconciles restored tab metadata before startup routing settles.
+    await page.waitForSelector('[data-tab-id="terminal:term-fallback"]')
+    await page.click('[data-tab-id="terminal:term-fallback"]')
     await page.waitForFunction(() => document.querySelector('[data-terminal-header]')?.textContent.includes('status ready'))
     await page.click('[data-tab-id="terminal:term-fallback"] button[title="Close tab"]')
     await page.waitForFunction(() => !JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById['terminal:term-fallback'] && decodeURIComponent(location.hash) === '#tab/system:agents')
     assert.deepEqual((await state(page)).root.tabIds, ['system:agents'])
-    assert.ok(await page.$('[data-workbench-tab-handle="system:agents"]'))
+    // The remaining tab mounts lazily; wait for its content before checking the route result.
+    await page.waitForSelector('h1::-p-text(System Architecture)')
     assert.deepEqual(await page.evaluate(() => window.__terminalDeletes), ['/prefix/ui/api/terminals/term-fallback'])
   } finally { await page.close() }
 })
@@ -1561,5 +1567,99 @@ test('Desktop text inputs use compact control typography and preserve keyboard e
     await page.click(selector)
     await page.keyboard.type('needle')
     assert.equal(await page.$eval(selector, element => element.value), 'needle')
+  } finally { await page.close() }
+})
+
+
+test('Status usage separates global totals from the focused Chat and follows focus changes', async () => {
+  const page = await openFixture({ tabs: [system, chat('e2e-a', false), chat('e2e-b', false)], responsiveChat: true, width: 1400 })
+  try {
+    const total = '[data-workbench-status-bar] button[aria-label="Total token usage"]'
+    const current = '[data-workbench-status-bar] button[aria-label="Current Session token usage"]'
+    await page.waitForFunction(() => document.querySelector('[aria-label="Total token usage"]')?.textContent.includes('3.2B'))
+    assert.match(await page.$eval(current, element => element.textContent), /13.2K/)
+    await clickReadyControl(page, total)
+    await page.waitForSelector('[data-workbench-status-popup]', { visible: true })
+    assert.match(await page.$eval('[data-workbench-status-popup]', element => element.textContent), /Total usageTokens3.2B.*Cached3B92.9%.*Input200M6.2%.*Output30M0.9%/)
+    await page.keyboard.press('Escape')
+    await clickReadyControl(page, current)
+    assert.match(await page.$eval('[data-workbench-status-popup]', element => element.textContent), /e2e-a.*Cached12K90.9%/)
+    await page.keyboard.press('Escape')
+    await page.click('[data-tab-id="chat:e2e-b"]')
+    await page.waitForFunction(() => document.querySelector('[aria-label="Current Session token usage"]')?.textContent.includes('2.5K'))
+    await clickReadyControl(page, current)
+    assert.match(await page.$eval('[data-workbench-status-popup]', element => element.textContent), /e2e-b.*Cached2K80.0%/)
+    await page.keyboard.press('Escape')
+    await page.click('[data-tab-id="system:agents"]')
+    await page.waitForSelector(current, { hidden: true })
+    assert.equal(await page.$(current), null)
+    assert.match(await page.$eval(total, element => element.textContent), /3.2B/)
+    await page.setViewport({ width: 850, height: 900 })
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
+    await page.setViewport({ width: 390, height: 844 })
+    await page.waitForSelector('[data-workbench-status-bar]', { hidden: true })
+    assert.equal(await page.$('[data-workbench-status-bar]'), null)
+  } finally { await page.close() }
+})
+
+
+test('Footer Terminal is a reusable bottom pane that collapses without PTY deletion and remains draggable', async () => {
+  const terminal = { id: 'term-panel', nodeId: 'master', cwd: '/', title: 'Panel shell', attached: true }
+  const page = await openFixture({ tabs: [system, chat('e2e-a', false)], terminal, responsiveChat: true, width: 1400 })
+  const control = '[data-workbench-status-bar] button[aria-label="Toggle terminal"]'
+  try {
+    assert.equal(await page.$eval('[data-workbench-status-bar] button', button => button.getAttribute('aria-label')), 'Toggle terminal')
+    await clickReadyControl(page, control)
+    await page.waitForSelector('[data-terminal-header]', { visible: true })
+    let snapshot = await state(page)
+    const panes = node => node.kind === 'pane' ? [node] : node.children.flatMap(panes)
+    const terminalTab = Object.values(snapshot.tabsById).find(tab => tab.type === 'terminal')
+    assert.ok(terminalTab)
+    const terminalPane = panes(snapshot.root).find(pane => pane.tabIds.includes(terminalTab.id))
+    const sourcePane = panes(snapshot.root).find(pane => pane.tabIds.includes('chat:e2e-a'))
+    assert.equal(snapshot.root.direction, 'column')
+    const box = await page.$eval(`[data-pane-id="${terminalPane.id}"]`, element => ({ y: element.getBoundingClientRect().y, height: element.getBoundingClientRect().height }))
+    assert.ok(box.height > 180 && box.height < 360, `panel has a bounded initial height: ${box.height}`)
+    assert.equal(await page.$eval(control, element => element.getAttribute('aria-expanded')), 'true')
+    const beforeResize = box.height
+    const divider = await page.$('[role="separator"]')
+    const dividerBox = await divider.boundingBox()
+    await page.mouse.move(dividerBox.x + dividerBox.width / 2, dividerBox.y + dividerBox.height / 2)
+    await page.mouse.down(); await page.mouse.move(dividerBox.x + dividerBox.width / 2, dividerBox.y - 60, { steps: 8 }); await page.mouse.up()
+    assert.ok(await page.$eval(`[data-pane-id="${terminalPane.id}"]`, element => element.getBoundingClientRect().height) > beforeResize + 30)
+    await page.click(`[data-pane-id="${terminalPane.id}"] button[aria-label="Collapse pane"]`)
+    await page.waitForSelector(`[data-pane-id="${terminalPane.id}"][data-workbench-collapsed-pane="true"]`)
+    assert.deepEqual((await state(page)).root.children.map(pane => pane.id), [sourcePane.id, terminalPane.id], 'Collapse keeps both panes and never merges Terminal into the editor')
+    assert.ok((await state(page)).tabsById[terminalTab.id], 'Collapse retains the tab')
+    assert.equal(await page.$('[data-terminal-header]'), null)
+    assert.deepEqual(await page.evaluate(() => window.__terminalDeletes), [])
+    await clickReadyControl(page, control)
+    await page.waitForSelector('[data-terminal-header]', { visible: true })
+    assert.equal(Object.values((await state(page)).tabsById).filter(tab => tab.type === 'terminal').length, 1)
+    assert.deepEqual(await page.evaluate(() => window.__terminalCreates), [], 'the exact existing PTY is reused')
+    await dragPane(page, terminalPane.id, sourcePane.id, 'right')
+    assert.equal((await state(page)).root.direction, 'row')
+    assert.ok(await page.$(`[data-workbench-pane-drag-handle="${terminalPane.id}"]`))
+    await clickReadyControl(page, control)
+    await page.waitForSelector(`[data-pane-id="${terminalPane.id}"][data-workbench-collapsed-pane="true"]`)
+    await clickReadyControl(page, control)
+    await page.waitForSelector('[data-terminal-header]', { visible: true })
+    assert.equal(Object.values((await state(page)).tabsById).filter(tab => tab.type === 'terminal').length, 1)
+    await page.click(`[data-pane-id="${terminalPane.id}"] button[aria-label="Close pane"]`)
+    await page.waitForFunction(id => !JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById[id], {}, terminalTab.id)
+    assert.deepEqual(await page.evaluate(() => window.__terminalDeletes), ['/prefix/ui/api/terminals/term-panel'])
+    assert.equal((await state(page)).root.kind, 'pane', 'closing the terminal panel leaves only the editor')
+    assert.equal(Object.values((await state(page)).tabsById).filter(tab => tab.type === 'terminal').length, 0, 'close never moves Terminal into the editor')
+    assert.deepEqual(await page.evaluate(() => window.__terminalCreates), [], 'Close does not recreate the just-deleted PTY')
+    await page.waitForFunction(() => decodeURIComponent(location.hash) === '#tab/chat:e2e-a')
+    await clickReadyControl(page, control)
+    await page.waitForFunction(() => Object.values(JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById).some(tab => tab.type === 'terminal' && tab.terminalId === 'term-reopened'))
+    assert.equal(await page.evaluate(() => window.__terminalCreates.length), 1, 'a closed PTY is recreated only by explicit reopen')
+    await clickReadyControl(page, control)
+    await page.setViewport({ width: 390, height: 844 })
+    await page.waitForSelector('[data-workbench-status-bar]', { hidden: true })
+    await page.evaluate(() => window.foxwarmTest.switchToSession('e2e-a'))
+    await page.waitForSelector('.foxwarm-chat-root button[title="Terminal"]', { visible: true })
+    assert.equal(await page.$('[data-workbench-status-bar]'), null)
   } finally { await page.close() }
 })

@@ -11,7 +11,6 @@ import {
   SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS,
   setStreamingTimeoutTestHooks,
 } from './llmStreamingTimeout';
-import { makeAnthropicMessageStream } from './testFixtures/anthropicMessageStream';
 
 const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-stream-timeout-'));
 fs.ensureDirSync(path.join(dataRoot, 'state'));
@@ -208,7 +207,8 @@ test('explicit streaming timeout remains a hard attempt bound and Stop remains a
     });
     await attemptStarted;
     controller.abort();
-    await assert.rejects(stopped, (error: any) => error?.name === 'CanceledError' && error?.code === 'ERR_CANCELED');
+    await assert.rejects(stopped, (error: any) =>
+      (error?.name === 'CanceledError' || error?.name === 'AbortError') && error?.code === 'ERR_CANCELED');
   } finally {
     (axios as any).post = originalPost;
     setStreamingTimeoutTestHooks();

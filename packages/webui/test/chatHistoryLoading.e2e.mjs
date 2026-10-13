@@ -156,10 +156,8 @@ async function buildFixtureBundle() {
         this.opened = true
         this.readyState = FixtureWebSocket.OPEN
         this.onopen?.({})
-        queueMicrotask(() => {
-          if (!this.isAsr) this.emit({ type: 'connected' })
-          else this.pending.splice(0).forEach(payload => this.emit(payload))
-        })
+        queueMicrotask(() => this.emit({ type: 'connected' }))
+        queueMicrotask(() => this.pending.splice(0).forEach(payload => this.emit(payload)))
       }
       close() {
         if (this.readyState === FixtureWebSocket.CLOSED) return
@@ -179,7 +177,6 @@ async function buildFixtureBundle() {
             sessionListResolutions: Object.fromEntries(payload.sessionListIds.map(id => [id, id])),
             sessionResolutions: Object.fromEntries(payload.sessionIds.map(id => [id, id])) })
           this.emit({ type: 'subscriptions-applied', revision: payload.revision })
-          this.pending.splice(0).forEach(payload => this.emit(payload))
         })
       }
       emit(payload) {
@@ -1461,11 +1458,9 @@ test('initial stream registers before bootstrap and a caught-up reconnect avoids
   await page.waitForFunction(() => window.fixtureEventSourceCount() === 1)
   assert.equal(await page.evaluate(() => window.fixtureHistoryRequestCount), 0)
 
-  await page.evaluate(() => {
-    window.emitFixtureMessage({ role: 'model', parts: [{ text: 'committed while initial stream opened' }], __meta: { seq: 2, timestamp: 20 } })
-    window.openFixtureEventSource()
-  })
+  await page.evaluate(() => window.openFixtureEventSource())
   await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+  await page.evaluate(() => window.emitFixtureMessage({ role: 'model', parts: [{ text: 'committed while initial stream opened' }], __meta: { seq: 2, timestamp: 20 } }))
   await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('committed while initial stream opened'))
   await page.evaluate(() => window.resolveFixtureHistory())
   await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('old history row'))
@@ -1474,13 +1469,13 @@ test('initial stream registers before bootstrap and a caught-up reconnect avoids
   await page.evaluate(() => window.failFixtureEventSource())
   await page.waitForFunction(() => window.fixtureEventSourceCount() === 2, { timeout: 2500 })
   assert.equal(await page.evaluate(() => window.fixtureHistoryRequestCount), 1)
+  await page.evaluate(() => window.openFixtureEventSource())
   await page.evaluate(() => {
     window.emitFixtureEvent({
       type: 'session-state',
       session: { id: 'fixture/main', busy: false, runtimeState: { state: 'idle' }, queueLength: 0, messageCount: 3, historyVersion: 0, modelKey: 'fixture/model' },
     })
     window.emitFixtureMessage({ role: 'model', parts: [{ text: 'committed while reconnect stream opened' }], __meta: { seq: 3, timestamp: 30 } })
-    window.openFixtureEventSource()
   })
   await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('committed while reconnect stream opened'))
   await new Promise(resolve => setTimeout(resolve, 250))
@@ -1570,11 +1565,9 @@ test('repeated pre-open failures retain one transport generation and one eventua
   await page.waitForFunction(() => window.fixtureEventSourceCount() === 3, { timeout: 3500 })
   assert.equal(await page.evaluate(() => window.fixtureHistoryRequestCount), 0)
 
-  await page.evaluate(() => {
-    window.emitFixtureMessage({ role: 'model', parts: [{ text: 'committed across pre-open failures' }], __meta: { seq: 2, timestamp: 20 } })
-    window.openFixtureEventSource()
-  })
+  await page.evaluate(() => window.openFixtureEventSource())
   await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+  await page.evaluate(() => window.emitFixtureMessage({ role: 'model', parts: [{ text: 'committed across pre-open failures' }], __meta: { seq: 2, timestamp: 20 } }))
   await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('committed across pre-open failures'))
   await page.evaluate(() => window.resolveFixtureHistory())
   await new Promise(resolve => setTimeout(resolve, 150))

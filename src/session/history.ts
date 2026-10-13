@@ -110,6 +110,11 @@ export function getEffectiveCompactThresholdTokens(session: Pick<Session, 'model
   return getDefaultCompactThresholdTokens(session);
 }
 
+export function getModelContextLimitTokens(session: Pick<Session, 'model'>): number {
+  const { contextLimit } = resolveModelConfig(session.model);
+  return contextLimit;
+}
+
 export function isAsyncCompactEnabled(session: Pick<Session, 'model'>): boolean {
   const { modelEntry } = resolveModelConfig(session.model);
   return modelEntry?.asyncCompact !== false;
@@ -162,6 +167,17 @@ export type CompactOperationOwner = 'background' | 'standalone' | 'turn' | 'work
 export type CompactCancellationResult = {
   outcome: 'cancelled' | 'completed' | 'none';
   phase?: 'planning' | 'enqueueing' | 'ready' | 'committing';
+};
+
+/**
+ * What a compaction request itself accomplished before returning. `applied`
+ * reports a result this call committed (an awaited layered compaction or an
+ * automatic tool-response prune); `background` reports that asynchronous
+ * planning now owns the result while the caller continues.
+ */
+export type CompactionRequestResult = {
+  applied: boolean;
+  background: boolean;
 };
 
 type CompactJobRequest = CompactionRequest;
@@ -248,6 +264,10 @@ type CompactOperation = {
   committed: boolean;
   completion: Promise<void>;
   resolveCompletion: () => void;
+  // Resolves once planning reaches a ready/failed job result or the operation
+  // finishes without one, so a waiter never depends on the owner's commit.
+  planningSettled: Promise<void>;
+  resolvePlanningSettled: () => void;
 };
 
 const compactJobStates = new Map<string, CompactJobState>();
@@ -260,10 +280,12 @@ const ASYNC_COMPACT_DONE_NOTICE = '🗜️ Background compaction finished';
 function beginCompactOperation(sessionId: string, owner: CompactOperationOwner): CompactOperation | null {
   if (compactOperations.has(sessionId)) return null;
   let resolveCompletion!: () => void;
+  let resolvePlanningSettled!: () => void;
   const operation: CompactOperation = {
     id: nextCompactOperationId++, owner, phase: 'planning', controller: new AbortController(),
     cancelled: false, committed: false,
     completion: new Promise<void>(resolve => { resolveCompletion = resolve; }), resolveCompletion,
+    planningSettled: new Promise<void>(resolve => { resolvePlanningSettled = resolve; }), resolvePlanningSettled,
   };
   compactOperations.set(sessionId, operation);
   return operation;
@@ -271,6 +293,7 @@ function beginCompactOperation(sessionId: string, owner: CompactOperationOwner):
 
 function finishCompactOperation(sessionId: string, operation: CompactOperation): void {
   if (compactOperations.get(sessionId) === operation) compactOperations.delete(sessionId);
+  operation.resolvePlanningSettled();
   operation.resolveCompletion();
 }
 
@@ -288,6 +311,41 @@ export function getCompactOperationOwner(sessionId: string): CompactOperationOwn
 
 export function getCompactOperationPhase(sessionId: string): CompactCancellationResult['phase'] | undefined {
   return compactOperations.get(sessionId)?.phase;
+}
+
+export type CompactPlanningSettleOutcome = 'completed' | 'none' | 'aborted';
+
+/**
+ * Waits until this session's compact planning has settled: a ready/failed job
+ * result is observable for its owner's commit, or no compact operation remains.
+ * It deliberately never waits for that commit, so an owner that must apply the
+ * result itself cannot deadlock here. `aborted` reports the caller's signal and
+ * leaves the operation untouched.
+ */
+export async function waitForCompactPlanningSettle(sessionId: string, signal?: AbortSignal): Promise<CompactPlanningSettleOutcome> {
+  while (true) {
+    if (hasCompletedCompactJob(sessionId)) return 'completed';
+    const operation = compactOperations.get(sessionId);
+    if (!operation) return 'none';
+    if (await waitForSettlement(operation.planningSettled, signal) === 'aborted') return 'aborted';
+    if (compactOperations.get(sessionId) === operation && !hasCompletedCompactJob(sessionId)) {
+      // Planning settled without an observable result while the operation is
+      // still finishing its enqueue/bail window; wait for that window too.
+      if (await waitForSettlement(operation.completion, signal) === 'aborted') return 'aborted';
+    }
+  }
+}
+
+function waitForSettlement(settled: Promise<void>, signal?: AbortSignal): Promise<'settled' | 'aborted'> {
+  if (signal?.aborted) return Promise.resolve('aborted');
+  return new Promise(resolve => {
+    const onAbort = () => resolve('aborted');
+    signal?.addEventListener('abort', onAbort, { once: true });
+    void settled.then(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve('settled');
+    });
+  });
 }
 
 export async function cancelSessionCompaction(deps: SessionHistoryDeps, sessionId: string): Promise<CompactCancellationResult> {
@@ -1638,22 +1696,26 @@ async function startBackgroundCompaction(deps: SessionHistoryDeps, sessionId: st
         result,
         operationId: operation.id,
       });
+      operation.resolvePlanningSettled();
     } catch (error: any) {
       compactPreviewLastTimestamp.delete(sessionId);
       if (error instanceof CompactCancelledError || (isCompactCancelled(operation) && llm.isAbortError(error))) {
         if (compactJobStates.get(sessionId)?.operationId === operation.id) compactJobStates.delete(sessionId);
-      } else compactJobStates.set(sessionId, {
-        status: 'failed',
-        startedAt: Date.now(),
-        request: {
-          keepPercent: options.keepPercent,
-          compactGuidance: options.compactGuidance,
-          completionMarker: options.completionMarker,
-        },
-        snapshotHistoryVersion: snapshot.baseHistoryVersion,
-        error: error instanceof Error ? error : new Error(String(error)),
-        operationId: operation.id,
-      });
+      } else {
+        compactJobStates.set(sessionId, {
+          status: 'failed',
+          startedAt: Date.now(),
+          request: {
+            keepPercent: options.keepPercent,
+            compactGuidance: options.compactGuidance,
+            completionMarker: options.completionMarker,
+          },
+          snapshotHistoryVersion: snapshot.baseHistoryVersion,
+          error: error instanceof Error ? error : new Error(String(error)),
+          operationId: operation.id,
+        });
+        operation.resolvePlanningSettled();
+      }
     }
 
     const liveSession = deps.getSessionById(sessionId);
@@ -1692,28 +1754,32 @@ async function startBackgroundCompaction(deps: SessionHistoryDeps, sessionId: st
   return true;
 }
 
-async function runCompactionWithMode(deps: SessionHistoryDeps, sessionId: string, options: CompactionRunOptions = {}, executionMode: CompactExecutionMode = 'auto', owner: CompactOperationOwner = 'turn'): Promise<boolean> {
+async function runCompactionWithMode(deps: SessionHistoryDeps, sessionId: string, options: CompactionRunOptions = {}, executionMode: CompactExecutionMode = 'auto', owner: CompactOperationOwner = 'turn'): Promise<CompactionRequestResult> {
   const session = deps.getSessionById(sessionId);
   if (!session) {
-    return false;
+    return { applied: false, background: false };
   }
 
   if (compactJobStates.has(sessionId)) {
     logger.info({ sessionId, executionMode }, 'Skipped compaction because another compact job is already pending');
-    return false;
+    return { applied: false, background: false };
   }
 
   const shouldBackground = executionMode === 'background'
     || (executionMode === 'auto' && isAsyncCompactEnabled(session));
 
   if (shouldBackground) {
-    return startBackgroundCompaction(deps, sessionId, {
+    const started = await startBackgroundCompaction(deps, sessionId, {
       ...options,
       completionBroadcastMessage: options.completionBroadcastMessage || ASYNC_COMPACT_DONE_NOTICE,
     });
+    if (!started) return { applied: false, background: false };
+    // Without an enqueue dependency the request fell back to a synchronous run
+    // and `started` already reports whether that run committed.
+    return deps.enqueueSessionItem ? { applied: false, background: true } : { applied: true, background: false };
   }
 
-  return runCompaction(deps, sessionId, options, owner);
+  return { applied: await runCompaction(deps, sessionId, options, owner), background: false };
 }
 
 export async function applyCompletedCompactJob(deps: SessionHistoryDeps, sessionId: string): Promise<boolean> {
@@ -1943,28 +2009,27 @@ export async function processSessionCompactionRequest(
   item: CompactionRequest,
   executionMode: CompactExecutionMode = 'auto',
   owner: CompactOperationOwner = 'turn',
-): Promise<void> {
+): Promise<CompactionRequestResult> {
   if (item.compactGuidance?.trim()) {
-    await runCompactionWithMode(deps, sessionId, {
+    return runCompactionWithMode(deps, sessionId, {
       keepPercent: item.keepPercent,
       completionMarker: item.completionMarker || 'Compaction completed.',
       compactGuidance: `Manual compaction hint from requester: ${item.compactGuidance.trim()}`,
       startLogMessage: 'Manual compaction starting',
     }, executionMode, owner);
-    return;
   }
 
   if (executionMode === 'auto') {
     const session = deps.getSessionById(sessionId);
     const prunePlan = session ? await buildToolResponsePrunePlan(sessionId, session, COMPACT_KEEP_PERCENT) : undefined;
-    if (prunePlan && await tryAutomaticToolResponsePruning(deps, sessionId, prunePlan)) return;
+    if (prunePlan && await tryAutomaticToolResponsePruning(deps, sessionId, prunePlan)) return { applied: true, background: false };
     if (prunePlan && !hasCompatibleHistoryPrefix(session?.history || [], prunePlan.snapshotHistory)) {
       logger.info({ sessionId }, 'Skipping layered compaction because the automatic maintenance snapshot changed incompatibly');
-      return;
+      return { applied: false, background: false };
     }
   }
 
-  await runCompactionWithMode(deps, sessionId, {
+  return runCompactionWithMode(deps, sessionId, {
     keepPercent: item.keepPercent,
     completionMarker: item.completionMarker || 'Compaction completed.',
     startLogMessage: 'Compaction starting',

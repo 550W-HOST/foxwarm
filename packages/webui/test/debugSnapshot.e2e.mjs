@@ -85,7 +85,7 @@ async function buildFixtureBundle() {
         this.readyState = 0
         this.sessionId = ''
         FixtureWebSocket.instances.push(this)
-        queueMicrotask(() => { this.readyState = 1; this.onopen?.({}) })
+        queueMicrotask(() => { this.readyState = 1; this.onopen?.({}); this.emit({ type: 'connected' }) })
       }
       close() { this.readyState = FixtureWebSocket.CLOSED }
       send(raw) { const payload = JSON.parse(raw); if (payload.type !== 'set-subscriptions') return; this.sessionId = payload.sessionIds[0] || this.sessionId; queueMicrotask(() => { this.emit({ type: 'subscriptions-accepted', revision: payload.revision, sessionListResolutions: {}, sessionResolutions: Object.fromEntries(payload.sessionIds.map(id => [id, id])) }); this.emit({ type: 'subscriptions-applied', revision: payload.revision }) }) }
