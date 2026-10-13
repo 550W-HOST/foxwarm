@@ -14,8 +14,10 @@ Canonical end-to-end contract: [context compaction and recall](../threads/contex
 
 - `getDefaultCompactThresholdTokens(session)` — `llm.compactThresholdPercent` (85% by default) of the resolved model context window.
 - `getEffectiveCompactThresholdTokens(session)` — positive session override or default.
+- `getModelContextLimitTokens(session)` — the resolved model context window, used by the strict over-limit continuation guard.
 - `isAsyncCompactEnabled(session)` — true unless the resolved model explicitly sets `asyncCompact:false`.
 - `hasPendingCompactWork`, `hasCompletedCompactJob`, `discardPendingCompactWork`, `applyCompletedCompactJob` — compact-job lifecycle. Completed readiness checks terminal job status and exact uncancelled operation identity, not signal presence or operation phase.
+- `waitForCompactPlanningSettle(sessionId, signal?)` — resolves `completed`/`none`/`aborted` when a ready or failed job result is observable, or when no compact operation remains. It observes planning settlement and operation finish only and never waits for the commit the caller must perform.
 
 ### Candidate and commit helpers
 
@@ -29,7 +31,7 @@ Canonical end-to-end contract: [context compaction and recall](../threads/contex
 ### Operations
 
 - `compactHistory`, `compactHistoryWithSummary` — explicit compaction façades.
-- `checkAndCompactIfNeeded`, `processSessionCompactionRequest` — automatic/explicit orchestration.
+- `checkAndCompactIfNeeded`, `processSessionCompactionRequest` — automatic/explicit orchestration. A request returns `CompactionRequestResult` (`applied`/`background`) so its caller can tell a result this call committed from planning that now owns the result.
 - `buildToolResponsePrunePlan`, `commitToolResponsePrunePlan` — pure dry-run and exact compatible-prefix commit for historical response-only pruning.
 - `compactToolMessages` — manual provider-free façade over the shared response-only pruning primitive.
 - `deleteMessages`, `clearSession` — destructive history operations with archive coordination. Clear retains or recovers the [block ID high-water mark](../threads/archive-and-recall.md#d-context-block-id-high-water) before clearing active history, without reconstructing it from Archive.
@@ -43,7 +45,7 @@ Canonical end-to-end contract: [context compaction and recall](../threads/contex
 - **Planning loop:** calls the model with that detached prefix plus planning instructions and accumulated retry messages, never the force-kept tail. The prompt still describes the real force-kept count/sequence range from the complete snapshot. It accepts one `submit_compact_plan` or a pending-file repair edit/patch, parses/normalizes/resolves each successful plan once, appends transient tool responses and actionable feedback, and stops after `COMPACT_FLOW_MAX_ROUNDS`. Repair-file behavior is canonical in [D-context-compact-runtime-gate](../threads/context-compaction.md#d-context-compact-runtime-gate).
 - **Result construction:** maps validator-resolved candidate ranges to active-history indices, raw ranges, and timestamps, then creates block archive records and replacement history messages without touching the live session. Planner-backed results carry invocation-local diagnostics into the completion message under [D-context-compact-planner-debug](../threads/context-compaction.md#d-context-compact-planner-debug).
 - **Compatible commit:** verifies the consumed snapshot prefix, writes archive/block state, replaces only that prefix while retaining appended suffixes and preserving the prompt-cache key, persists, and emits completion/reminder events.
-- **Background mode:** stores pending job state and wakes the owner with a queue signal; safe-point priority is canonical in [D-context-compact-scheduling-boundary](../threads/compaction-lifecycle.md#d-context-compact-scheduling-boundary). A completed job may be consumed while its enqueue callback still awaits. Identity guards keep that late producer from deleting a newer result, clearing its wake signals, or reviving the consumed operation. Commit shares the awaited compatibility path.
+- **Background mode:** stores pending job state and wakes the owner with a queue signal; safe-point priority is canonical in [D-context-compact-scheduling-boundary](../threads/compaction-lifecycle.md#d-context-compact-scheduling-boundary). Planning settlement (a ready/failed state or the operation's finish) also notifies a waiting owner without depending on the commit it must apply itself. A completed job may be consumed while its enqueue callback still awaits. Identity guards keep that late producer from deleting a newer result, clearing its wake signals, or reviving the consumed operation. Commit shares the awaited compatibility path.
 
 ## Dependencies
 
