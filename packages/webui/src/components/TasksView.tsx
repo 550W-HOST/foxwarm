@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, Check, ClipboardList, Copy, X, Plus, RefreshCw, List, Columns3, SlidersHorizontal, Search, ChevronDown } from 'lucide-react'
 import { makeApiUrl } from '../config'
@@ -380,6 +381,53 @@ export default function TasksView({ onBack, onOpenSession }: { onBack?: () => vo
     }
   }
 
+  const detailPanel = selectedId && (
+    <aside ref={detailRef} data-task-details data-task-narrow={isNarrow || undefined} {...(isNarrow ? { role: 'dialog', 'aria-modal': 'true' } : {})} aria-label="Task details" aria-busy={detailsLoading} className="tasks-detail-panel text-fw-text">
+      <div className="mb-4 flex items-center justify-between gap-2"><h3 className="text-sm font-semibold">Task details</h3><button type="button" className={buttonClass} aria-label="Close task details" onClick={() => setSelectedId(null)}><X className="h-4 w-4" /></button></div>
+      {taskWarning && <p role="alert" data-task-warning="detail" className="mb-4 rounded border border-fw-danger/40 bg-fw-danger/10 p-2 text-xs text-fw-danger lg:hidden">{taskWarning}</p>}
+      {detailsLoading ? <p role="status" className="text-sm text-fw-text-muted">Loading task details…</p>
+        : detailsError ? <p role="alert" className="text-sm text-fw-danger">{detailsError}</p>
+        : details && <>
+          <TaskStatusBadge status={details.task.status} /><h4 className="tasks-detail-title">{details.task.title}</h4>
+          <p className="mb-4 break-all text-xs text-fw-text-muted">{details.task.id}</p>
+          <dl className="space-y-3 text-sm">
+            {[
+
+              ...(details.task.description ? [['Description', details.task.description]] : []),
+              ...(details.task.parentTaskId ? [['Parent', details.task.parentTaskId]] : []),
+              ['Owner', details.task.ownerSessionId ? <SessionReference sessionId={details.task.ownerSessionId} agent={details.task.ownerAgent} compact={false} onOpenSession={onOpenSession} /> : 'Unassigned'],
+              ['Created by', details.task.createdByKind === 'user' ? 'User' : details.task.createdBySessionId ? <SessionReference sessionId={details.task.createdBySessionId} agent={details.task.createdByAgent} compact={false} onOpenSession={onOpenSession} /> : 'Unknown'],
+              ['Updated', formatTime(details.task.updatedAt)],
+              ...(details.task.result ? [['Result', details.task.result]] : []),
+              ].map(([label, value]) => <div key={String(label)}><dt className="mb-1 text-xs text-fw-text-muted">{label}</dt><dd className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{value}</dd></div>)}
+          </dl>
+          <section className="tasks-detail-section">
+            <h4 className="mb-2 text-sm font-semibold">Owner</h4>
+            <SessionSelector value={ownerDraft} onChange={setOwnerDraft} allowUnassigned disabled={ownerSaving || details.task.status === 'completed' || details.task.status === 'cancelled'} placeholder="Choose owner Session" />
+            <label className="mt-3 flex items-center gap-2 text-xs text-fw-text-muted"><input type="checkbox" checked={ownerNotify} onChange={event => setOwnerNotify(event.target.checked)} disabled={ownerSaving || details.task.status === 'completed' || details.task.status === 'cancelled'} /> Notify owner changes</label>
+            {ownerError && <p role="alert" className="mt-2 text-xs text-fw-danger">{ownerError}</p>}
+            <button type="button" data-task-owner-save className={`${buttonClass} mt-3`} onClick={() => void submitOwner()} disabled={ownerSaving || details.task.status === 'completed' || details.task.status === 'cancelled' || ownerDraft === details.task.ownerSessionId}>{ownerSaving ? 'Saving…' : 'Save owner'}</button>
+          </section>
+          <h4 className="mb-2 mt-5 text-sm font-semibold">Children</h4>
+          {details.children.length === 0 ? <p className="text-xs text-fw-text-muted">No child tasks</p> : <ul className="space-y-2">{details.children.map(child => <li key={child.id}><button type="button" onClick={() => setSelectedId(child.id)} className="break-words text-left text-sm text-fw-accent hover:underline">{child.title}</button><span className="ml-2 text-xs text-fw-text-muted">{STATUS_LABELS[child.status]}</span></li>)}</ul>}
+          {details.childrenOmitted > 0 && <p className="mt-2 text-xs text-fw-text-muted">{details.childrenOmitted} more child tasks</p>}
+          <h4 className="mb-2 mt-5 text-sm font-semibold">Notes</h4>
+          {details.notes.length === 0 ? <p className="text-xs text-fw-text-muted">No notes</p> : <ul className="space-y-3">{details.notes.map((note, index) => <li key={index} className="tasks-note">
+            <p className="whitespace-pre-wrap break-words text-sm [overflow-wrap:anywhere]">{note.text}</p>
+            <p className="mt-2 break-all text-xs text-fw-text-muted">{note.authorKind === 'user' ? 'User' : note.sessionId || 'Unknown'} · {formatTime(note.createdAt)}</p>
+          </li>)}</ul>}
+          {details.notesOmitted > 0 && <p className="mt-2 text-xs text-fw-text-muted">{details.notesOmitted} more notes</p>}
+          <form onSubmit={submitComment} className="tasks-detail-section">
+            <h4 className="mb-2 text-sm font-semibold">Comment</h4>
+            <textarea value={comment} onChange={event => setComment(event.target.value)} maxLength={1000} rows={4} placeholder="Add a comment" className="w-full rounded border border-fw-border bg-fw-canvas p-2 text-sm text-fw-text outline-none" disabled={commentSaving} />
+            <label className="mt-2 flex items-center gap-2 text-xs text-fw-text-muted"><input type="checkbox" checked={commentNotify} onChange={event => setCommentNotify(event.target.checked)} disabled={commentSaving} /> Notify current owner</label>
+            {commentError && <p role="alert" className="mt-2 text-xs text-fw-danger">{commentError}</p>}
+            <button type="submit" className={`${buttonClass} mt-3`} disabled={commentSaving || !comment.trim()}>{commentSaving ? 'Saving…' : 'Add comment'}</button>
+          </form>
+        </>}
+    </aside>
+  )
+
   return <SessionNames.Provider value={sessionNames}><section ref={rootRef} onKeyDown={event => {
     if (event.key !== 'Escape') return
     if (createOpen) { if (!createSaving) setCreateOpen(false) }
@@ -457,53 +505,10 @@ export default function TasksView({ onBack, onOpenSession }: { onBack?: () => vo
           </>}
         </div>
       </div>
-      {selectedId && <aside ref={detailRef} data-task-details {...(isNarrow ? { role: 'dialog', 'aria-modal': 'true' } : {})} aria-label="Task details" aria-busy={detailsLoading} className="tasks-detail-panel">
-        <div className="mb-4 flex items-center justify-between gap-2"><h3 className="text-sm font-semibold">Task details</h3><button type="button" className={buttonClass} aria-label="Close task details" onClick={() => setSelectedId(null)}><X className="h-4 w-4" /></button></div>
-        {taskWarning && <p role="alert" data-task-warning="detail" className="mb-4 rounded border border-fw-danger/40 bg-fw-danger/10 p-2 text-xs text-fw-danger lg:hidden">{taskWarning}</p>}
-        {detailsLoading ? <p role="status" className="text-sm text-fw-text-muted">Loading task details…</p>
-          : detailsError ? <p role="alert" className="text-sm text-fw-danger">{detailsError}</p>
-          : details && <>
-            <TaskStatusBadge status={details.task.status} /><h4 className="tasks-detail-title">{details.task.title}</h4>
-            <p className="mb-4 break-all text-xs text-fw-text-muted">{details.task.id}</p>
-            <dl className="space-y-3 text-sm">
-              {[
-
-                ...(details.task.description ? [['Description', details.task.description]] : []),
-                ...(details.task.parentTaskId ? [['Parent', details.task.parentTaskId]] : []),
-                ['Owner', details.task.ownerSessionId ? <SessionReference sessionId={details.task.ownerSessionId} agent={details.task.ownerAgent} compact={false} onOpenSession={onOpenSession} /> : 'Unassigned'],
-                ['Created by', details.task.createdByKind === 'user' ? 'User' : details.task.createdBySessionId ? <SessionReference sessionId={details.task.createdBySessionId} agent={details.task.createdByAgent} compact={false} onOpenSession={onOpenSession} /> : 'Unknown'],
-                ['Updated', formatTime(details.task.updatedAt)],
-                ...(details.task.result ? [['Result', details.task.result]] : []),
-                ].map(([label, value]) => <div key={String(label)}><dt className="mb-1 text-xs text-fw-text-muted">{label}</dt><dd className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{value}</dd></div>)}
-            </dl>
-            <section className="tasks-detail-section">
-              <h4 className="mb-2 text-sm font-semibold">Owner</h4>
-              <SessionSelector value={ownerDraft} onChange={setOwnerDraft} allowUnassigned disabled={ownerSaving || details.task.status === 'completed' || details.task.status === 'cancelled'} placeholder="Choose owner Session" />
-              <label className="mt-3 flex items-center gap-2 text-xs text-fw-text-muted"><input type="checkbox" checked={ownerNotify} onChange={event => setOwnerNotify(event.target.checked)} disabled={ownerSaving || details.task.status === 'completed' || details.task.status === 'cancelled'} /> Notify owner changes</label>
-              {ownerError && <p role="alert" className="mt-2 text-xs text-fw-danger">{ownerError}</p>}
-              <button type="button" data-task-owner-save className={`${buttonClass} mt-3`} onClick={() => void submitOwner()} disabled={ownerSaving || details.task.status === 'completed' || details.task.status === 'cancelled' || ownerDraft === details.task.ownerSessionId}>{ownerSaving ? 'Saving…' : 'Save owner'}</button>
-            </section>
-            <h4 className="mb-2 mt-5 text-sm font-semibold">Children</h4>
-            {details.children.length === 0 ? <p className="text-xs text-fw-text-muted">No child tasks</p> : <ul className="space-y-2">{details.children.map(child => <li key={child.id}><button type="button" onClick={() => setSelectedId(child.id)} className="break-words text-left text-sm text-fw-accent hover:underline">{child.title}</button><span className="ml-2 text-xs text-fw-text-muted">{STATUS_LABELS[child.status]}</span></li>)}</ul>}
-            {details.childrenOmitted > 0 && <p className="mt-2 text-xs text-fw-text-muted">{details.childrenOmitted} more child tasks</p>}
-            <h4 className="mb-2 mt-5 text-sm font-semibold">Notes</h4>
-            {details.notes.length === 0 ? <p className="text-xs text-fw-text-muted">No notes</p> : <ul className="space-y-3">{details.notes.map((note, index) => <li key={index} className="tasks-note">
-              <p className="whitespace-pre-wrap break-words text-sm [overflow-wrap:anywhere]">{note.text}</p>
-              <p className="mt-2 break-all text-xs text-fw-text-muted">{note.authorKind === 'user' ? 'User' : note.sessionId || 'Unknown'} · {formatTime(note.createdAt)}</p>
-            </li>)}</ul>}
-            {details.notesOmitted > 0 && <p className="mt-2 text-xs text-fw-text-muted">{details.notesOmitted} more notes</p>}
-            <form onSubmit={submitComment} className="tasks-detail-section">
-              <h4 className="mb-2 text-sm font-semibold">Comment</h4>
-              <textarea value={comment} onChange={event => setComment(event.target.value)} maxLength={1000} rows={4} placeholder="Add a comment" className="w-full rounded border border-fw-border bg-fw-canvas p-2 text-sm text-fw-text outline-none" disabled={commentSaving} />
-              <label className="mt-2 flex items-center gap-2 text-xs text-fw-text-muted"><input type="checkbox" checked={commentNotify} onChange={event => setCommentNotify(event.target.checked)} disabled={commentSaving} /> Notify current owner</label>
-              {commentError && <p role="alert" className="mt-2 text-xs text-fw-danger">{commentError}</p>}
-              <button type="submit" className={`${buttonClass} mt-3`} disabled={commentSaving || !comment.trim()}>{commentSaving ? 'Saving…' : 'Add comment'}</button>
-            </form>
-          </>}
-      </aside>}
+      {isNarrow ? createPortal(detailPanel, document.body) : detailPanel}
     </div>
-    {createOpen && <div className="fixed inset-0 z-40 flex items-center justify-center bg-fw-overlay/40 p-4" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !createSaving) setCreateOpen(false) }}>
-      <form role="dialog" aria-modal="true" aria-labelledby="new-task-title" onSubmit={submitCreate} className="max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-xl border border-fw-border bg-fw-surface p-5 shadow-xl">
+    {createOpen && createPortal(<div className="fixed inset-0 z-40 flex items-center justify-center bg-fw-overlay/40 p-4" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !createSaving) setCreateOpen(false) }}>
+      <form role="dialog" aria-modal="true" aria-labelledby="new-task-title" onSubmit={submitCreate} className="max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-xl border border-fw-border bg-fw-surface p-5 text-fw-text shadow-xl">
         <div className="mb-4 flex items-center justify-between gap-3"><h3 id="new-task-title" className="text-lg font-semibold">New task</h3><button type="button" className={buttonClass} onClick={() => setCreateOpen(false)} disabled={createSaving} aria-label="Close new task">Close</button></div>
         <label className="block text-sm font-medium">Title<input value={createTitle} onChange={event => setCreateTitle(event.target.value)} maxLength={200} autoFocus className="mt-1 w-full rounded border border-fw-border bg-fw-canvas p-2 text-sm" disabled={createSaving} /></label>
         <label className="mt-3 block text-sm font-medium">Description<textarea value={createDescription} onChange={event => setCreateDescription(event.target.value)} maxLength={20000} rows={5} className="mt-1 w-full rounded border border-fw-border bg-fw-canvas p-2 text-sm" disabled={createSaving} /></label>
@@ -512,6 +517,6 @@ export default function TasksView({ onBack, onOpenSession }: { onBack?: () => vo
         {createError && <p role="alert" className="mt-3 text-sm text-fw-danger">{createError}</p>}
         <div className="mt-5 flex justify-end gap-2"><button type="button" className={buttonClass} onClick={() => setCreateOpen(false)} disabled={createSaving}>Cancel</button><button type="submit" className={`${buttonClass} bg-fw-accent-surface text-fw-accent`} disabled={createSaving}>{createSaving ? 'Creating…' : 'Create task'}</button></div>
       </form>
-    </div>}
+    </div>, document.body)}
   </section></SessionNames.Provider>
 }

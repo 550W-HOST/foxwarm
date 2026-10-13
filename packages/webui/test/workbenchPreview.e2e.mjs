@@ -1872,3 +1872,78 @@ test('the initial Code file request survives lazy frame creation and explicit re
     assert.equal(await page.evaluate(() => window.__codeFrameLoads), 2, 'explicit Close creates a fresh frame only on reopening')
   } finally { await page.close() }
 })
+
+
+test('full-page Tasks and Chat modals block Sidebar navigation without losing their drafts', async () => {
+  const tasks = { id: 'system:tasks', type: 'tasks', title: 'Tasks' }
+  const page = await openFixture({ tabs: [tasks], activeTabId: tasks.id, hash: '#tab/system:tasks' })
+  const sidebarPoint = async () => page.$eval('[data-session-id="e2e-b"]', row => {
+    const box = row.getBoundingClientRect()
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+  })
+  try {
+    await page.waitForSelector('[data-task-new]')
+    const originalTasks = await page.$('[data-tasks-view]')
+    await page.click('[data-task-new]')
+    await page.waitForSelector('[aria-labelledby="new-task-title"]')
+    await page.type('[aria-labelledby="new-task-title"] input:not([type="checkbox"])', 'Unsubmitted task draft')
+    const point = await sidebarPoint()
+    assert.ok(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y) === document.querySelector('[aria-labelledby="new-task-title"]').parentElement, point), 'the modal backdrop intercepts the Sidebar hit')
+    await page.mouse.click(point.x, point.y)
+    await page.waitForFunction(() => !document.querySelector('[aria-labelledby="new-task-title"]'))
+    assert.equal(await page.evaluate(() => decodeURIComponent(location.hash)), '#tab/system:tasks')
+    assert.ok(await originalTasks.evaluate(element => element.isConnected), 'backdrop dismissal never navigates away or unmounts Tasks')
+    await page.click('[data-task-new]')
+    await page.waitForSelector('[aria-labelledby="new-task-title"]')
+    assert.equal(await page.$eval('[aria-labelledby="new-task-title"] input:not([type="checkbox"])', input => input.value), 'Unsubmitted task draft')
+    await page.keyboard.press('Escape')
+    await page.waitForFunction(() => !document.querySelector('[aria-labelledby="new-task-title"]'))
+  } finally { await page.close() }
+
+  const chatPage = await openFixture({ responsiveChat: true, hash: '#tab/chat:e2e-a' })
+  try {
+    await chatPage.waitForSelector('.foxwarm-chat-root input[type="file"]')
+    const originalChat = await chatPage.$('.foxwarm-chat-root')
+    await chatPage.evaluate(() => {
+      const input = document.querySelector('.foxwarm-chat-root input[type="file"]')
+      const files = new DataTransfer()
+      files.items.add(new File(['Attachment draft'], 'draft.txt', { type: 'text/plain' }))
+      input.files = files.files
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await chatPage.waitForSelector('[data-composer-attachment-ref] [data-composer-block-open]')
+    await chatPage.click('[data-composer-attachment-ref] [data-composer-block-open]')
+    await chatPage.waitForSelector('[aria-label="Attachment information"]')
+    const point = await chatPage.$eval('[data-session-id="e2e-b"]', row => {
+      const box = row.getBoundingClientRect()
+      return { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+    })
+    assert.ok(await chatPage.evaluate(({ x, y }) => document.elementFromPoint(x, y) === document.querySelector('[aria-label="Attachment information"]').parentElement, point))
+    await chatPage.mouse.click(point.x, point.y)
+    await chatPage.waitForFunction(() => !document.querySelector('[aria-label="Attachment information"]'))
+    assert.equal(await chatPage.evaluate(() => decodeURIComponent(location.hash)), '#tab/chat:e2e-a')
+    assert.ok(await originalChat.evaluate(element => element.isConnected))
+    assert.equal(await chatPage.$eval('[data-composer-attachment-ref]', chip => chip.textContent.includes('draft.txt')), true, 'backdrop dismissal retains the attachment draft')
+  } finally { await chatPage.close() }
+})
+
+test('clicking a visible Code iframe activates its pane after another pane has focus', async () => {
+  const code = { id: 'vscode-web', type: 'vscode', title: 'Code' }
+  const page = await openFixture({ tabs: [chat('e2e-a', false), code], activeTabId: 'chat:e2e-a', hash: '#tab/chat:e2e-a', responsiveChat: true,
+    layout: { id: 'focus-split', kind: 'split', direction: 'row', sizes: [50, 50], children: [
+      { id: 'pane-main', kind: 'pane', tabIds: ['chat:e2e-a'], activeTabId: 'chat:e2e-a' },
+      { id: 'pane-code', kind: 'pane', tabIds: [code.id], activeTabId: code.id },
+    ] } })
+  try {
+    await page.waitForFunction(() => window.__codeFrameLoads === 1)
+    await page.click('.foxwarm-chat-messages')
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.focusedPaneId === 'pane-main')
+    const frame = await page.$('[data-foxwarm-vscode-web-frame]')
+    const box = await frame.boundingBox()
+    await page.mouse.click(box.x + box.width / 2, box.y + 12)
+    await page.waitForFunction(() => document.activeElement?.tagName === 'IFRAME' && JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.focusedPaneId === 'pane-code')
+    assert.equal(await page.evaluate(() => location.hash), '#tab/vscode-web')
+    await page.mouse.click(box.x + box.width / 2, box.y + 12)
+    assert.equal(await page.evaluate(() => window.__codeFrameLoads), 1)
+  } finally { await page.close() }
+})

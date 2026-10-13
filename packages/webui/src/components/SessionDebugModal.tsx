@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import type { TimelineView } from '../chatPreferences'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Check, Copy, X } from 'lucide-react'
@@ -197,7 +198,7 @@ export default function SessionDebugModal({ source, onClose }: SessionDebugModal
 
   if (sessionChanged) return null
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-fw-overlay/50 p-4" onClick={handleClose}>
       <div
         className="flex max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-2xl dark:border-fw-border dark:bg-fw-canvas"
@@ -251,6 +252,6 @@ export default function SessionDebugModal({ source, onClose }: SessionDebugModal
           <pre data-debug-info-json="true" className="min-h-full whitespace-pre-wrap break-words p-4 font-mono text-xs leading-5 text-fw-text-strong">{snapshotText}</pre>
         </div>
       </div>
-    </div>
+    </div>, document.body,
   )
 }

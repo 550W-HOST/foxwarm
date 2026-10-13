@@ -14,6 +14,7 @@ function createContentPositions() {
   const hosts = new Map<string, PositionedHost>()
   let observer: ResizeObserver | null = null
   let frame = 0
+  let focusCheckFrame = 0
 
   const measure = () => {
     window.cancelAnimationFrame(frame)
@@ -88,12 +89,19 @@ function createContentPositions() {
       window.visualViewport?.addEventListener('scroll', schedule)
       // Focus entering an iframe does not bubble through its outer content host.
       const focusFrame = () => {
-        for (const host of hosts.values()) {
-          if (host.visible && host.element.contains(document.activeElement)) host.onFocus()
-        }
+        window.cancelAnimationFrame(focusCheckFrame)
+        // Firefox updates activeElement after blur dispatch, unlike Chromium.
+        focusCheckFrame = window.requestAnimationFrame(() => {
+          focusCheckFrame = 0
+          for (const host of hosts.values()) {
+            if (host.visible && !host.element.inert && host.element.contains(document.activeElement)) host.onFocus()
+          }
+        })
       }
       window.addEventListener('blur', focusFrame)
       return () => {
+        window.cancelAnimationFrame(focusCheckFrame)
+        focusCheckFrame = 0
         window.cancelAnimationFrame(frame)
         frame = 0
         observer?.disconnect()
@@ -132,7 +140,7 @@ export function WorkbenchContentLayer({ children }: { children: ReactNode }) {
 }
 
 type ContentHostProps = Pick<WorkbenchPaneProps,
-  'paneId' | 'collapseDirection' | 'tabs' | 'dragEnabled' | 'hideTabStrip' | 'canClosePane' |
+  'paneId' | 'focused' | 'collapseDirection' | 'tabs' | 'dragEnabled' | 'hideTabStrip' | 'canClosePane' |
   'onFocusPane' | 'onSetCollapsed' | 'onClosePane' | 'onCloseTab' | 'onKeepTab' | 'onMoveTabToNewWindow' |
   'canMoveTabToNewWindow' | 'onCloseOtherTabs' | 'onCloseAllTabs'> & {
   tab: WorkbenchTab
@@ -163,7 +171,11 @@ export default function WorkbenchContentHost(props: ContentHostProps) {
 
   useLayoutEffect(() => {
     if (elementRef.current) positions.registerHost(tab.id, {
-      element: elementRef.current, paneId, visible, onFocus: () => onFocusPane(paneId), beforeResize: () => beforeResize.current?.(),
+      element: elementRef.current,
+      paneId,
+      visible,
+      onFocus: () => { if (!props.focused) onFocusPane(paneId) },
+      beforeResize: () => beforeResize.current?.(),
     })
   })
   useLayoutEffect(() => () => positions.registerHost(tab.id, null), [positions, tab.id])
