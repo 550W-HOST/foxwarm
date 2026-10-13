@@ -762,7 +762,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   ) : null
 
   const viewButtons = (
-    <div className={`foxwarm-tool-action-buttons ${actionButtonsToneClass} ml-auto flex shrink-0 gap-0.5 opacity-0 transition-opacity`}>
+    <div className={`foxwarm-tool-action-buttons ${actionButtonsToneClass} absolute right-0 top-1/2 -translate-y-1/2 flex gap-0.5 opacity-0 transition-opacity`}>
       <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={displayedViewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
       <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={displayedViewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
     </div>
@@ -778,8 +778,10 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         }}
       >
         <ToolTag name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
-        {includeCallPreview && call && <div ref={headerFade.ref} {...headerFade.overflowFadeProps} className={`foxwarm-tool-call-summary min-w-0 max-w-full flex-1 ${call.name === 'read' ? 'flex text-[13px] leading-[18px]' : THREAD_CARD_HEADER_PREVIEW_CLASS}`}>{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile, resolvedPaths: primaryResponse?.__meta?.resolvedPaths })}</div>}
-        {viewButtons}
+        <div className="foxwarm-tool-call-header relative flex min-w-0 flex-1 items-center self-stretch">
+          {includeCallPreview && call && <div ref={headerFade.ref} {...headerFade.overflowFadeProps} className={`foxwarm-tool-call-summary min-w-0 max-w-full ${call.name === 'read' ? 'flex text-[13px] leading-[18px]' : THREAD_CARD_HEADER_PREVIEW_CLASS}`}>{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile, resolvedPaths: primaryResponse?.__meta?.resolvedPaths })}</div>}
+          {viewButtons}
+        </div>
         {invocationDurationMs !== null && <span data-tool-execution-time className="ml-auto inline-flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums text-fw-text-muted" title="Tool call duration"><Timer aria-hidden="true" size={11} />{formatCompactDuration(invocationDurationMs)}</span>}
       </div>
       {includeExpandedCall && expandedCallContent && (

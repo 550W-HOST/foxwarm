@@ -1,7 +1,7 @@
 import type { TimelineView } from '../chatPreferences'
 import { getMessageStableKey } from '../chatViewportState'
 import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Eye, Code, FileJson, Copy, Check, Cloud, ChevronRight, Wrench, MessageSquare, AlertCircle } from 'lucide-react'
+import { Eye, Code, FileJson, Copy, Check, Cloud, ChevronRight } from 'lucide-react'
 import {
   IconToggleButton,
   copyTextToClipboard,
@@ -62,7 +62,6 @@ import {
   type TimelineRowView,
   type TimelineGroupView,
   type TimelineRowsCache,
-  type ConversationStepView,
   type TimelineUsageBadgeView,
   type UsageAttribution,
 } from './timelineRows'
@@ -1166,24 +1165,6 @@ const ConversationUsage = memo(function ConversationUsage({ badge, pendingReques
   </div>
 })
 
-const ConversationStep = memo(function ConversationStep({ step, rowProps }: { step: ConversationStepView; rowProps: Omit<MessageRowProps, 'row'> }) {
-  const [expanded, setExpanded] = useState(false)
-  const { ref, prepare } = useThreadCardHeightTransition(expanded)
-  const Icon = step.error ? AlertCircle : step.messages.some(message => message.parts.some(part => part.functionCall || part.functionResponse)) ? Wrench : MessageSquare
-  return <li data-conversation-step className="min-w-0"><div ref={ref}>
-    <button type="button" aria-expanded={expanded} className="flex w-full min-w-0 items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-fw-text-muted hover:bg-fw-hover focus-visible:outline focus-visible:outline-fw-focus-ring"
-      onClick={() => { prepare(); setExpanded(value => !value) }}>
-      <ChevronRight size={12} className={`shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
-      <Icon size={13} className={`shrink-0 ${step.error ? 'text-fw-danger' : ''}`} />
-      <span className="min-w-0 break-words">{step.title}</span>
-      {step.durationMs !== undefined && <span className="ml-auto shrink-0 tabular-nums">{formatCompactDuration(step.durationMs)}</span>}
-    </button>
-    {expanded && <div data-conversation-step-details className="min-w-0 py-1 pl-7">
-      {rowProps.renderNestedMessages(step.messages, step.key, rowProps.nestedDepth + 1, 'detailed')}
-    </div>}
-  </div></li>
-})
-
 const TimelineActivity = memo(function TimelineActivity({ row, expanded, onToggle, rowProps }: {
   row: TimelineRowView
   expanded: boolean
@@ -1194,6 +1175,10 @@ const TimelineActivity = memo(function TimelineActivity({ row, expanded, onToggl
   const activity = row.activity!
   const preview = activity.preview
   const showPreview = preview && !expanded
+  const previewIndex = preview ? activity.messages.indexOf(preview.message) : -1
+  const previewKey = previewIndex >= 0 ? getMessageStableKey(preview!.message, previewIndex) : undefined
+  const previewSearch = previewKey && rowProps.searchTarget?.rowKey === row.key
+    ? { ...rowProps.searchTarget, rowKey: previewKey } : null
   return (
     <div ref={ref} data-timeline-activity data-activity-expanded={expanded}
       data-chat-message-anchor-key={row.anchorKey} data-context-scrollbar-anchor-key={row.scrollbarAnchorKey}
@@ -1205,18 +1190,10 @@ const TimelineActivity = memo(function TimelineActivity({ row, expanded, onToggl
           <ChevronRight size={13} aria-hidden="true" className={`shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} /><span>{activity.summary}</span>
         </button>}
       </ConversationUsage>
-      {expanded && !activity.runtimeOnly && <ol className="min-w-0 border-l border-fw-border py-1 pl-2" data-activity-details>
-        {activity.steps?.map(step => {
-          if (!step.nativeContent) return <ConversationStep key={step.key} step={step} rowProps={rowProps} />
-          const previewIndex = preview ? step.messages.indexOf(preview.message) : -1
-          const search = previewIndex >= 0 && rowProps.searchTarget?.rowKey === row.key
-            ? { ...rowProps.searchTarget, rowKey: getMessageStableKey(preview!.message, previewIndex) } : null
-          return <li key={step.key} data-conversation-step data-search-row={previewIndex >= 0 ? row.key : undefined} className="min-w-0 py-1 pl-2">
-            {rowProps.renderNestedMessages(step.messages, step.key, rowProps.nestedDepth + 1, 'detailed', search)}
-          </li>
-        })}
-      </ol>}
-      {showPreview && <div data-conversation-preview data-search-row={row.key} className="min-w-0 px-2 pt-1 text-fw-text-muted">
+      {expanded && !activity.runtimeOnly && <div className="foxwarm-conversation-process min-w-0 border-l border-fw-border py-1 pl-2" data-activity-details data-search-row={previewKey ? row.key : undefined} data-search-message-key={previewKey}>
+        {rowProps.renderNestedMessages(activity.messages, row.key, rowProps.nestedDepth + 1, 'detailed', previewSearch)}
+      </div>}
+      {showPreview && <div data-conversation-preview data-search-row={row.key} className="min-w-0">
         <AssistantTextCard conversation text={preview.message.parts[preview.partIndex].text || ''} message={preview.message} searchPartIndex={preview.partIndex} searchReveal={rowProps.searchTarget?.rowKey === row.key} onOpenCodeCommit={rowProps.onOpenCodeCommit} />
       </div>}
     </div>

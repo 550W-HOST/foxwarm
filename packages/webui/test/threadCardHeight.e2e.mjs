@@ -815,7 +815,7 @@ test('reading a long live Conversation keeps a native multi-tool step in place t
   const target = await page.evaluate(() => {
     const scroll = document.querySelector('.foxwarm-chat-messages')
     const viewport = scroll.getBoundingClientRect()
-    const step = [...document.querySelectorAll('[data-conversation-step]')].find(node => {
+    const step = [...document.querySelectorAll('[data-activity-details] .foxwarm-tool-card')].find(node => {
       const rect = node.getBoundingClientRect()
       return rect.top > viewport.top + 30 && rect.top < viewport.bottom - 110
     })
@@ -835,11 +835,44 @@ test('reading a long live Conversation keeps a native multi-tool step in place t
   let after = await readGeometry()
   assert.ok(Math.abs(after.top - target.top) <= 3, JSON.stringify({ target, after }))
   assert.ok(after.distance > 200)
-  const beforeStreamSteps = await page.$$eval('[data-conversation-step]', nodes => nodes.length)
   await page.evaluate(() => window.emitStream('Still inspecting the remaining files.'))
-  await page.waitForFunction(count => document.querySelectorAll('[data-conversation-step]').length > count, {}, beforeStreamSteps)
+  await page.waitForFunction(() => document.querySelector('[data-activity-details]')?.textContent.includes('Still inspecting the remaining files.'))
   await new Promise(resolve => setTimeout(resolve, 300))
   after = await readGeometry()
+  assert.ok(Math.abs(after.top - target.top) <= 3, JSON.stringify({ target, after }))
+  assert.ok(after.distance > 200)
+})
+
+test('downward reading inside a tall Conversation leaves follow before a tool expansion receives a token', async () => {
+  await mount('conversation-process')
+  await page.click('[aria-label="Expand activity"]')
+  await page.waitForFunction(() => !document.querySelector('[data-timeline-activity]').style.height)
+  await wait(250)
+  const viewport = await page.$eval('.foxwarm-chat-messages', node => node.getBoundingClientRect().toJSON())
+  await page.mouse.move(viewport.left + viewport.width * 0.6, viewport.top + viewport.height * 0.6)
+  await page.mouse.wheel({ deltaY: 120 })
+  await wait(80)
+  const target = await page.evaluate(() => {
+    const scroll = document.querySelector('.foxwarm-chat-messages'), view = scroll.getBoundingClientRect()
+    const card = [...document.querySelectorAll('[data-activity-details] .foxwarm-tool-card')].find(node => {
+      const rect = node.getBoundingClientRect()
+      return rect.top > view.top + 30 && rect.top < view.bottom - 80
+    })
+    if (!card) throw new Error('No native tool visible after downward process reading')
+    window.readingCard = card
+    const rect = card.querySelector('.foxwarm-tool-header-toggle').getBoundingClientRect()
+    return { top: card.getBoundingClientRect().top, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, distance: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight }
+  })
+  assert.ok(target.distance > 200)
+  await page.mouse.click(target.x, target.y)
+  await wait(85)
+  await page.evaluate(() => window.emitStream('Token while reading a downward-navigated process.'))
+  await page.waitForFunction(() => document.querySelector('[data-activity-details]')?.textContent.includes('Token while reading a downward-navigated process.'))
+  await wait(450)
+  const after = await page.evaluate(() => {
+    const scroll = document.querySelector('.foxwarm-chat-messages')
+    return { top: window.readingCard.getBoundingClientRect().top, distance: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight }
+  })
   assert.ok(Math.abs(after.top - target.top) <= 3, JSON.stringify({ target, after }))
   assert.ok(after.distance > 200)
 })

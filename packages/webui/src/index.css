@@ -2352,11 +2352,6 @@ html[data-foxwarm-theme] .collapsed-session-tile {
 html[data-foxwarm-component-treatment="console"] .foxwarm-user-message-bubble.foxwarm-conversation-user {
   font-size: var(--foxwarm-console-font-message) !important;
 }
-[data-conversation-preview] .foxwarm-conversation-reply {
-  color: inherit;
-  opacity: 0.8;
-}
-
 /* Statistics and token totals share one type size, including console button defaults. */
 .foxwarm-conversation-statistics > button {
   font-size: inherit !important;
@@ -2364,6 +2359,25 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-user-message-bubble.fo
 }
 
 /* Header controls stay before the trailing time instead of overlapping it on hover. */
-.foxwarm-tool-header-toggle:is(:hover, :focus-within) > .foxwarm-tool-action-buttons {
+.foxwarm-tool-header-toggle:is(:hover, :focus-within) > .foxwarm-tool-call-header > .foxwarm-tool-action-buttons {
   opacity: 1;
+}
+
+/* Reasoning is supporting context inside a Conversation process, not a second headline. */
+html .foxwarm-conversation-process .foxwarm-reasoning-card[data-model-thread-card],
+html .foxwarm-conversation-process .foxwarm-reasoning-card .foxwarm-reasoning-header {
+  background: transparent !important;
+  color: var(--foxwarm-color-text-muted) !important;
+  box-shadow: none !important;
+}
+html .foxwarm-conversation-process .foxwarm-reasoning-card :is(.foxwarm-reasoning-tag, .foxwarm-reasoning-preview) {
+  color: var(--foxwarm-color-text-muted) !important;
+  font-weight: 400 !important;
+}
+html .foxwarm-conversation-process .foxwarm-reasoning-card .foxwarm-reasoning-tag {
+  background: transparent !important;
+  border-color: var(--foxwarm-color-border) !important;
+}
+html .foxwarm-conversation-process .foxwarm-reasoning-card .foxwarm-reasoning-preview {
+  font-size: inherit !important;
 }

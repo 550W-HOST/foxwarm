@@ -39,8 +39,7 @@ const ProcessingStatus = memo(function ProcessingStatus({
   const visibleRuntimeSummary = timelineView === 'conversation' && (runtimeStateName === 'requesting-model' || runtimeStateName === 'running-tool')
     ? isCompacting ? 'Compacting…' : 'Working…'
     : timelineView === 'conversation' && runtimeStateName === 'waiting'
-    ? runtimeState?.waiting?.reason ? `Waiting · ${runtimeState.waiting.reason}`
-      : runtimeState?.waiting?.waitingFor === 'input' || runtimeState?.waiting?.waitForInput ? 'Waiting for input' : 'Waiting'
+    ? 'Waiting'
     : isCompacting
     ? 'Compacting...'
     : runtimeStateName === 'requesting-model'

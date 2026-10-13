@@ -2,7 +2,6 @@ import type { TimelineView } from '../chatPreferences'
 import {
   formatToolLabel,
   getLlmErrorMessageDetails,
-  getSystemMessagePreviewDescriptor,
   getToolResponseStatus,
   isHeavySystemTextLine,
   isLightweightStructuredSystem,
@@ -73,20 +72,10 @@ export interface TimelineUsageBadgeView {
   readonly attribution: UsageAttribution
 }
 
-export interface ConversationStepView {
-  readonly key: string
-  readonly title: string
-  readonly nativeContent: boolean
-  readonly messages: Message[]
-  readonly durationMs?: number
-  readonly error: boolean
-}
-
 export interface ConversationActivityView {
   readonly messages: Message[]
   readonly closedAt?: Message
   readonly sources?: Message[]
-  readonly steps?: ConversationStepView[]
   readonly preview?: { message: Message; partIndex: number }
   readonly usage?: TimelineUsageBadgeView | null
   readonly missingRequests?: number
@@ -328,36 +317,6 @@ const isClosedCommentaryRequest = (request: ConversationRequest | undefined): bo
     covered = segment.outputEndExclusive
   }
   return true
-}
-
-const buildConversationSteps = (messages: Message[]): ConversationStepView[] => {
-  const steps: ConversationStepView[] = []
-  for (let index = 0; index < messages.length; index++) {
-    const message = messages[index]
-    const calls = message.parts.flatMap(part => part.functionCall ? [part.functionCall] : [])
-    const next = messages[index + 1]
-    const paired = calls.length && next?.role === 'tool' && next.parts.some(part => part.functionResponse && calls.some(call => call.id && call.id === part.functionResponse!.tool_use_id))
-    const members = paired ? [message, messages[++index]] : [message]
-    const responses = members.flatMap(message => message.parts.flatMap(part => part.functionResponse ? [part.functionResponse] : []))
-    const spans = responses.flatMap(response => {
-      const span = readConversationWorkInterval(response.executionTiming)
-      return span ? [span] : []
-    })
-    const descriptor = getSystemMessagePreviewDescriptor(message)
-    const title = calls.length ? calls.map(call => formatToolLabel(call.name, call.args)).join(' · ')
-      : message.role === 'user' || getLlmErrorMessageDetails(message) ? `${descriptor.previewPrefix}${descriptor.kind}`
-      : responses.length ? responses.map(response => response.name).join(' · ')
-      : message.parts.some(hasConversationText) ? 'Commentary'
-      : message.parts.some(isReasoningPart) ? 'Reasoning'
-      : message.parts.some(part => getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem)) ? 'Web search' : 'Activity'
-    steps.push({
-      key: getMessageStableKey(message, index), title, messages: members,
-      nativeContent: !getLlmErrorMessageDetails(message) && message.role !== 'user' && members.some(member => member.parts.some(part => hasConversationText(part) || isReasoningPart(part) || part.functionCall || part.functionResponse || getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem))),
-      error: responses.some(response => getToolResponseStatus(response) === 'error') || !!getLlmErrorMessageDetails(message),
-      ...(spans.length ? { durationMs: Math.max(...spans.map(span => span.end)) - Math.min(...spans.map(span => span.start)) } : {}),
-    })
-  }
-  return steps
 }
 
 /** Ordinary model output breaks a tool run; tool-linked images stay with their tool response. */
@@ -855,7 +814,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       const activity = old && old.summary === summary && old.closedAt === closedAt && old.preview?.message === preview?.message && old.preview?.partIndex === preview?.partIndex
         && old.messages.length === activityMessages.length && old.messages.every((msg, i) => msg === activityMessages[i])
         && old.sources?.length === sources.length && old.sources.every((msg, i) => msg === sources[i])
-        ? old : { messages: activityMessages, sources, steps: buildConversationSteps(activityMessages), preview, summary, closedAt }
+        ? old : { messages: activityMessages, sources, preview, summary, closedAt }
       emitRow(activityStart, null, false, null, { key: activityKey, activity })
       activityStart = -1
       activityMessages = []
@@ -874,7 +833,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       const previousRow = rows.at(-1)
       if (activityStart < 0 && isCompactCompletionMaintenanceMessage(fragment) && previousRow?.activity?.closedAt) {
         const members = [...previousRow.activity.messages, fragment]
-        rows[rows.length - 1] = { ...previousRow, activity: { ...previousRow.activity, messages: members, sources: [...previousRow.activity.sources || [], messages[index]], steps: buildConversationSteps(members) } }
+        rows[rows.length - 1] = { ...previousRow, activity: { ...previousRow.activity, messages: members, sources: [...previousRow.activity.sources || [], messages[index]] } }
         return
       }
       beginActivity(index, partIndex)

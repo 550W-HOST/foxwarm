@@ -809,7 +809,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     const container = messagesContainerRef.current
     if (container) {
       const handleWheel = (event: WheelEvent) => {
-        if (event.deltaY < 0) {
+        const readingAwayFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight > CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX
+        // A tall disclosure can leave follow armed while its reader is far above the tail.
+        // Scrolling down within that revealed content is navigation, not a request to jump to the tail.
+        if (event.deltaY < 0 || (event.deltaY > 0 && readingAwayFromBottom)) {
           leaveBottomFollow()
         } else {
           markUserViewportInteraction()
