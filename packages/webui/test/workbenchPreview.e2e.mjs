@@ -47,11 +47,11 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, codeNewWindow, responsiveChat = false, chatMessages = null, terminal = null, width = 1400 } = {}) {
+async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, codeNewWindow, responsiveChat = false, chatMessages = null, terminal = null, width = 1400, height = 900 } = {}) {
   const page = await browser.newPage()
   const pageErrors = []
   page.on('pageerror', error => pageErrors.push(error.message))
-  await page.setViewport({ width, height: 900 })
+  await page.setViewport({ width, height })
   await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat, splitDirection, initialLayout, themeId, codeNewWindow, responsiveChat, chatMessages, terminal }) => {
     if (window !== window.top) return
     const tabsById = Object.fromEntries(initialTabs.map(tab => [tab.id, tab]))
@@ -155,7 +155,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
   }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, codeNewWindow, responsiveChat, chatMessages, terminal })
   await page.goto(`${baseUrl}${hash}`, { waitUntil: 'domcontentloaded' })
   await page.bringToFront()
-  await page.waitForFunction(() => !!window.foxwarmTest, { timeout: 8_000 }).catch(async error => {
+  await page.waitForFunction(() => !!window.foxwarmTest || !!document.querySelector('[data-foxwarm-popup-root="chat"]'), { timeout: 8_000 }).catch(async error => {
     const body = await page.evaluate(() => document.body.innerText).catch(() => '')
     throw new Error(`${error.message}; page errors: ${pageErrors.join(' | ')}; body: ${body.slice(0, 500)}`)
   })
@@ -1945,5 +1945,162 @@ test('clicking a visible Code iframe activates its pane after another pane has f
     assert.equal(await page.evaluate(() => location.hash), '#tab/vscode-web')
     await page.mouse.click(box.x + box.width / 2, box.y + 12)
     assert.equal(await page.evaluate(() => window.__codeFrameLoads), 1)
+  } finally { await page.close() }
+})
+
+
+const idleViewportMessages = Array.from({ length: 55 }, (_, index) => ({
+  role: index % 2 ? 'model' : 'user',
+  parts: [{ text: `Idle row ${index}\n\n` + 'A stable loaded row without streaming, cards or async images. '.repeat(15) }],
+  __meta: { seq: index + 1, timestamp: 1700000000000 + index },
+}))
+
+async function wheelIdleViewport(page, deltaY) {
+  const container = await page.$('.foxwarm-chat-messages')
+  const box = await container.boundingBox()
+  const top = await container.evaluate(element => element.scrollTop)
+  await page.mouse.move(box.x + 100, box.y + 100)
+  await page.mouse.wheel({ deltaY })
+  await page.waitForFunction(({ top, deltaY }) => Math.abs(document.querySelector('.foxwarm-chat-messages').scrollTop - top - deltaY) < 1, {}, { top, deltaY })
+}
+
+async function waitForIdleBottom(page) {
+  await page.waitForFunction(() => {
+    const container = document.querySelector('.foxwarm-chat-messages')
+    return container.scrollHeight - container.clientHeight - container.scrollTop <= 1
+  })
+}
+
+async function settleIdleViewport(page) {
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))))
+}
+
+async function openIdleViewportChat({ reading = false, popup = false } = {}) {
+  const page = await openFixture({
+    responsiveChat: true, chatMessages: idleViewportMessages, height: 1100,
+    terminal: { id: 'term-panel', nodeId: 'master', cwd: '/', title: 'Panel shell', attached: true },
+    tabs: [system, chat('e2e-a', false)],
+    hash: popup ? '?foxwarmPopup=chat&foxwarmPopupVersion=1&sessionId=e2e-a' : '#tab/chat:e2e-a',
+  })
+  await page.waitForFunction(() => document.querySelectorAll('[data-chat-message-anchor-key]').length === 55)
+  await settleIdleViewport(page)
+  await wheelIdleViewport(page, -700)
+  await clickReadyControl(page, '[aria-label="Scroll to bottom"]')
+  await waitForIdleBottom(page)
+  await settleIdleViewport(page)
+  if (reading) await wheelIdleViewport(page, -500)
+  await page.evaluate(() => { window.__idleChatRoot = document.querySelector('.foxwarm-chat-root') })
+  return page
+}
+
+async function idleViewportSnapshot(page, anchorKey = null) {
+  return page.evaluate(anchorKey => {
+    const container = document.querySelector('.foxwarm-chat-messages')
+    const viewport = container.getBoundingClientRect()
+    const rows = [...document.querySelectorAll('[data-chat-timeline="committed"] [data-chat-message-anchor-key]')]
+    const anchor = anchorKey
+      ? rows.find(row => row.dataset.chatMessageAnchorKey === anchorKey)
+      : rows.find(row => row.getBoundingClientRect().bottom > viewport.top + 1 && row.getBoundingClientRect().top < viewport.bottom)
+    return {
+      rootSame: document.querySelector('.foxwarm-chat-root') === window.__idleChatRoot,
+      height: container.clientHeight, scrollHeight: container.scrollHeight, top: container.scrollTop,
+      distance: container.scrollHeight - container.clientHeight - container.scrollTop,
+      anchor: anchor?.dataset.chatMessageAnchorKey, offset: anchor?.getBoundingClientRect().top - viewport.top,
+      rows: rows.length, historyReads: window.__historyReads.length,
+    }
+  }, anchorKey)
+}
+
+for (const action of ['Terminal', 'window height']) {
+  for (const reading of [false, true]) {
+    test(`idle ${action} resize preserves ${reading ? 'the reading anchor' : 'bottom follow'} without remount`, async () => {
+      const page = await openIdleViewportChat({ reading })
+      try {
+        const before = await idleViewportSnapshot(page)
+        if (action === 'Terminal') {
+          await clickReadyControl(page, '[data-workbench-status-bar] button[aria-label="Toggle terminal"]')
+          await page.waitForSelector('[data-terminal-header]', { visible: true })
+        } else await page.setViewport({ width: 1400, height: 800 })
+        await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages').clientHeight < 750)
+        await settleIdleViewport(page)
+        if (!reading) await waitForIdleBottom(page)
+        const after = await idleViewportSnapshot(page, before.anchor)
+        assert.ok(after.height < before.height - 200)
+        assert.equal(after.scrollHeight, before.scrollHeight, 'idle content did not grow')
+        assert.ok(after.rootSame, 'viewport resizing keeps the same Chat DOM')
+        assert.equal(after.historyReads, before.historyReads)
+        assert.equal(after.rows, before.rows)
+        if (reading) {
+          assert.equal(after.anchor, before.anchor)
+          assert.ok(Math.abs(after.offset - before.offset) <= 2, 'retain message offset, not a scrollTop snapshot')
+          assert.ok(after.distance > 400, 'reading must not rejoin bottom follow')
+        } else assert.ok(after.distance <= 1)
+      } finally { await page.close() }
+    })
+  }
+}
+
+for (const reading of [false, true]) {
+  test(`idle popup width resize preserves ${reading ? 'the reading anchor' : 'bottom follow'}`, async () => {
+    const page = await openIdleViewportChat({ popup: true, reading })
+    try {
+      const before = await idleViewportSnapshot(page)
+      await page.setViewport({ width: 900, height: 1100 })
+      await settleIdleViewport(page)
+      if (!reading) await waitForIdleBottom(page)
+      const after = await idleViewportSnapshot(page, before.anchor)
+      assert.ok(after.rootSame)
+      assert.equal(after.historyReads, before.historyReads)
+      assert.equal(after.rows, before.rows)
+      assert.equal(after.height, before.height)
+      assert.ok(after.scrollHeight > before.scrollHeight + 1000, 'narrower rows genuinely reflowed')
+      if (reading) {
+        assert.ok(Math.abs(after.offset - before.offset) <= 2)
+        assert.ok(after.top > before.top + 1000, 'retention follows the message, not its old scrollTop')
+        assert.ok(after.distance > 400)
+      } else assert.ok(after.distance <= 1)
+    } finally { await page.close() }
+  })
+}
+
+test('idle continuous viewport resize lets upward wheel replace pending bottom restoration', async () => {
+  const page = await openIdleViewportChat()
+  try {
+    const before = await idleViewportSnapshot(page)
+    const box = await (await page.$('.foxwarm-chat-messages')).boundingBox()
+    await page.mouse.move(box.x + 100, box.y + 100)
+    await page.exposeFunction('__idleResizeWheel', () => page.mouse.wheel({ deltaY: -400 }))
+    await page.evaluate(() => {
+      const container = document.querySelector('.foxwarm-chat-messages')
+      let wheelSeen = false
+      container.addEventListener('wheel', event => { if (event.deltaY < 0) wheelSeen = true })
+      container.addEventListener('scroll', () => {
+        if (!wheelSeen || window.__idleUserAnchor || container.scrollHeight - container.clientHeight - container.scrollTop < 399) return
+        const top = container.getBoundingClientRect().top
+        const row = [...document.querySelectorAll('[data-chat-message-anchor-key]')].find(row => row.getBoundingClientRect().bottom > top + 1)
+        if (row) window.__idleUserAnchor = { key: row.dataset.chatMessageAnchorKey, offset: row.getBoundingClientRect().top - top }
+      })
+      window.addEventListener('resize', () => window.__idleResizeWheel().then(() => { window.__idleWheelDone = true }), { once: true })
+    })
+    for (const height of [1050, 1000, 950, 900, 850, 800]) {
+      await page.setViewport({ width: 1400, height })
+      await page.evaluate(() => new Promise(requestAnimationFrame))
+    }
+    await page.waitForFunction(() => window.__idleWheelDone && window.__idleUserAnchor)
+    await settleIdleViewport(page)
+    const userAnchor = await page.evaluate(() => window.__idleUserAnchor)
+    const after = await idleViewportSnapshot(page, userAnchor.key)
+    assert.ok(after.rootSame)
+    assert.equal(after.historyReads, before.historyReads)
+    assert.equal(after.rows, before.rows)
+    assert.ok(after.distance >= 399, `deferred resize correction must not take back user wheel movement: ${JSON.stringify({ after, userAnchor })}`)
+    assert.ok(Math.abs(after.offset - userAnchor.offset) <= 2, 'subsequent resize retains the user-selected reading anchor')
+    await clickReadyControl(page, '[aria-label="Scroll to bottom"]')
+    await waitForIdleBottom(page)
+    await page.setViewport({ width: 1400, height: 900 })
+    await page.setViewport({ width: 1400, height: 800 })
+    await settleIdleViewport(page)
+    await waitForIdleBottom(page)
+    assert.ok((await idleViewportSnapshot(page)).distance <= 1, 'explicit rejoin restores follow for later resizing')
   } finally { await page.close() }
 })

@@ -635,7 +635,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     const bottomThresholdPx = followState.pendingUserLeave
       ? -1
       : followState.following
-        ? undefined
+        // Passive reflow must not turn an active follow intent into an anchor.
+        ? Number.POSITIVE_INFINITY
         : CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX
     const state = readCurrentViewportState(bottomThresholdPx)
     if (!state) return null
@@ -648,6 +649,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   }, [readCurrentViewportState, updateBottomFollowState, viewportSessionId])
 
   useContentBeforeResize(useCallback(() => {
+    // Do not acknowledge detached user input before its native scroll captures position.
+    if (!shouldAutoScrollRef.current && capturedInteractionVersionRef.current !== userInteractionVersionRef.current) return
     const state = captureCurrentViewportState()
     if (state) pendingContentResizeRef.current = { state, interactionVersion: userInteractionVersionRef.current }
   }, [captureCurrentViewportState]))
@@ -1942,6 +1945,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       })
     })
     observer.observe(content)
+    observer.observe(container)
 
     return () => {
       observer.disconnect()
