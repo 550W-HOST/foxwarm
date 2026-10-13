@@ -57,7 +57,9 @@ await writeFile(entryPath, `
     window.modelSelections = []
     window.childModelSelections = []
     window.modelSettingsOpens = 0
-    const activeProps = mode === 'details'
+    const activeProps = mode === 'node'
+      ? { ...props, currentNode: 'a-very-long-remote-node-id-that-must-stay-readable-in-the-tooltip', onChangeNode: noop }
+      : mode === 'details'
       ? { ...props, modelOptions: detailOptions, currentModelKey: 'alpha', sessionModel: 'alpha', defaultModelKey: 'alias', childModelDefault: 'beta', effectiveChildModelKey: 'beta', effectiveEffort: 'high', effectiveChildEffort: 'high' }
       : mode === 'short'
         ? { ...props, modelOptions: [{ key: 'master', label: 'master', isVirtual: true }, { key: 'thinker', label: 'thinker', isVirtual: true }], currentModelKey: 'master', sessionModel: 'master', defaultModelKey: 'master', childModelDefault: 'thinker', effectiveChildModelKey: 'thinker', effectiveEffort: 'high', childEffortDefault: 'high', effectiveChildEffort: 'high' }
@@ -97,6 +99,32 @@ after(async () => {
   await browser?.close()
   await new Promise(resolve => server?.close(resolve))
   await rm(tempDir, { recursive: true, force: true })
+})
+
+test('remote Node and unified model controls fit a narrow composer without displacing Send', async () => {
+  await page.setViewport({ width: 360, height: 700 })
+  await page.evaluate(() => window.renderFixture('node'))
+  await page.waitForSelector('.foxwarm-node-picker-trigger')
+  const geometry = await page.evaluate(() => {
+    const node = document.querySelector('.foxwarm-node-picker-trigger')
+    const label = node.querySelector('span')
+    const model = document.querySelector('.foxwarm-model-selector-trigger')
+    const send = document.querySelector('.foxwarm-composer-send-button')
+    return {
+      node: node.getBoundingClientRect().toJSON(), model: model.getBoundingClientRect().toJSON(), send: send.getBoundingClientRect().toJSON(),
+      labelClipped: label.scrollWidth > label.clientWidth,
+      fullId: node.title,
+      overflow: document.documentElement.scrollWidth - innerWidth,
+    }
+  })
+  assert.ok(geometry.model.right <= geometry.node.left, JSON.stringify(geometry))
+  assert.ok(geometry.node.right <= geometry.send.left && geometry.send.right <= 360, JSON.stringify(geometry))
+  assert.equal(geometry.labelClipped, true)
+  assert.ok(geometry.fullId.includes('a-very-long-remote-node-id'))
+  assert.ok(geometry.overflow <= 0, JSON.stringify(geometry))
+  await page.setViewport({ width: 1000, height: 700 })
+  await page.evaluate(() => window.renderFixture())
+  await page.waitForFunction(() => !document.querySelector('.foxwarm-node-picker-trigger'))
 })
 
 test('model trigger grows to 30rem for long current and child labels', async () => {

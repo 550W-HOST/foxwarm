@@ -1,6 +1,7 @@
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
+import { readFile, readdir } from 'node:fs/promises'
 import { build } from 'esbuild'
 import puppeteer from 'puppeteer-core'
 import { fileURLToPath } from 'node:url'
@@ -26,6 +27,11 @@ async function buildFixtureBundle() {
 
     window.fixtureRequests = []
     window.fixtureMessageBodies = []
+    window.fixtureNodePosts = []
+    const nodeResponseResolvers = []
+    window.resolveFixtureNode = (nodeId, status = 200) => nodeResponseResolvers.shift()?.resolve(new Response(JSON.stringify(status === 200
+      ? { session: { id: 'fixture/main', currentNode: nodeId, cwd: 'fixture://kept-cwd' } }
+      : { error: 'Node went offline.' }), { status, headers: { 'Content-Type': 'application/json' } }))
     const messageResponseResolvers = []
     const historyResponseResolvers = []
     const stateProbeResolvers = []
@@ -78,6 +84,19 @@ async function buildFixtureBundle() {
       const url = String(input)
       window.fixtureRequests.push(url)
       const bootstrapFailure = new URLSearchParams(location.search).has('bootstrapFailure')
+      if (url.endsWith('/nodes')) return new Response(JSON.stringify({ nodes: [
+        { id: 'master', label: 'master', selectable: true, reason: null },
+        { id: 'exec-only-remote', label: 'Shell node', selectable: true, reason: null },
+        { id: 'offline-node', label: 'offline-node', selectable: false, reason: 'Offline' },
+        { id: 'upgrade-node', label: 'upgrade-node', selectable: false, reason: 'Update this node to connect.' },
+      ], lockedReason: null }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      if (url.endsWith('/node')) {
+        window.fixtureNodePosts.push({ url, body: JSON.parse(init.body) })
+        return new Promise((resolve, reject) => {
+          nodeResponseResolvers.push({ resolve })
+          init.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true })
+        })
+      }
       if (url.includes('/state')) {
         window.fixtureStateProbeCount += 1
         return new Promise((resolve, reject) => stateProbeResolvers.push({ resolve, reject }))
@@ -137,7 +156,10 @@ async function buildFixtureBundle() {
         this.opened = true
         this.readyState = FixtureWebSocket.OPEN
         this.onopen?.({})
-        queueMicrotask(() => this.pending.splice(0).forEach(payload => this.emit(payload)))
+        queueMicrotask(() => {
+          if (!this.isAsr) this.emit({ type: 'connected' })
+          else this.pending.splice(0).forEach(payload => this.emit(payload))
+        })
       }
       close() {
         if (this.readyState === FixtureWebSocket.CLOSED) return
@@ -157,6 +179,7 @@ async function buildFixtureBundle() {
             sessionListResolutions: Object.fromEntries(payload.sessionListIds.map(id => [id, id])),
             sessionResolutions: Object.fromEntries(payload.sessionIds.map(id => [id, id])) })
           this.emit({ type: 'subscriptions-applied', revision: payload.revision })
+          this.pending.splice(0).forEach(payload => this.emit(payload))
         })
       }
       emit(payload) {
@@ -176,10 +199,11 @@ async function buildFixtureBundle() {
     window.emitFixtureMessage = message => window.emitFixtureEvent({ type: 'message', message })
 
     const fixtureRoot = createRoot(document.getElementById('root'))
-    window.renderFixtureChats = (count = 1, generation = 0, sessionId = 'fixture/main') => fixtureRoot.render(React.createElement('div', {},
+    window.renderFixtureChats = (count = 1, generation = 0, sessionId = 'fixture/main') => fixtureRoot.render(React.createElement('div', { style: new URLSearchParams(location.search).has('nodePicker') ? { height: '100%' } : undefined },
       ...Array.from({ length: count }, (_, index) => React.createElement(Chat, {
         key: generation + '-' + index,
         sessionId, canonicalSessionId: sessionId, sessionDisplayName: 'Fixture',
+        webUiIdentityMode: new URLSearchParams(location.search).has('identityMode'),
         timelineView: new URLSearchParams(location.search).has('timelineView') ? 'grouped' : 'detailed',
         showUserMessageMetadata: !!window.fixtureShowUserMetadata,
       })),
@@ -216,12 +240,16 @@ async function fixtureStartupStage(name, operation) {
 
 before(async () => {
   const bundle = await fixtureStartupStage('esbuild-bundle', buildFixtureBundle)
+  const assets = new URL('../dist/assets/', import.meta.url)
+  const cssAsset = (await readdir(assets)).find(name => /^index-.*\.css$/.test(name))
+  assert.ok(cssAsset, 'build WebUI before running composer layout cases')
+  const composerCss = await readFile(new URL(cssAsset, assets), 'utf8')
   server = createServer((request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
     const tallTimelineCss = request.url?.includes('restoreOldAnchor')
       ? '.foxwarm-chat-messages{height:300px!important;overflow:auto!important}[data-chat-message-anchor-key]{min-height:32px!important}'
       : ''
-    response.end(`<!doctype html><html><head><style>html,body,#root{width:100%;height:100%;margin:0}.foxwarm-chat-root{height:100%}.foxwarm-chat-composer-form-anchor{position:relative}.foxwarm-chat-composer-form-anchor>[data-slash-command-overlay="true"]{position:absolute;left:0;right:0;bottom:calc(100% + .5rem)}${tallTimelineCss}</style></head><body><div id="root"></div><script>${bundle}</script></body></html>`)
+    response.end(`<!doctype html><html><head>${request.url?.includes('nodePicker') ? `<style>${composerCss}</style>` : ''}<style>html,body,#root{width:100%;height:100%;margin:0}.foxwarm-chat-root{height:100%}.foxwarm-chat-composer-form-anchor{position:relative}.foxwarm-chat-composer-form-anchor>[data-slash-command-overlay="true"]{position:absolute;left:0;right:0;bottom:calc(100% + .5rem)}${tallTimelineCss}</style></head><body><div id="root"></div><script>${bundle}</script></body></html>`)
   })
   await fixtureStartupStage('http-listen', () => new Promise(resolve => server.listen(0, '127.0.0.1', resolve)))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -248,6 +276,99 @@ before(async () => {
 after(async () => {
   await browser?.close()
   await new Promise(resolve => server?.close(resolve))
+})
+
+test('real Chat node picker switches only its Session after confirmation and follows runtime node changes', async () => {
+  const nodePage = await browser.newPage()
+  try {
+    await nodePage.goto(`${fixtureUrl}?nodePicker=1`, { waitUntil: 'load' })
+    await nodePage.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+    await nodePage.evaluate(() => window.resolveFixtureHistory())
+    const trigger = '.foxwarm-node-picker-trigger'
+    const editor = '[role="textbox"][aria-label="Message"]'
+    await nodePage.waitForSelector(trigger)
+    assert.equal(await nodePage.$eval(trigger, node => node.textContent), '')
+    assert.equal(await nodePage.$eval(trigger, node => node.getAttribute('aria-label')), 'Execution node: master')
+    assert.equal(await nodePage.evaluate(() => window.fixtureRequests.filter(url => url.endsWith('/nodes')).length), 0)
+    await nodePage.type(editor, 'Retained draft')
+    await nodePage.click(trigger)
+    await nodePage.waitForSelector('[data-node-option="exec-only-remote"]')
+    assert.equal(await nodePage.$eval('[data-node-option="offline-node"]', node => node.disabled), true)
+    assert.equal(await nodePage.$eval('[data-node-option="upgrade-node"]', node => node.disabled), true)
+    await nodePage.click('[data-node-option="exec-only-remote"]')
+    await nodePage.waitForFunction(() => window.fixtureNodePosts.length === 1)
+    assert.equal(await nodePage.$eval(trigger, node => node.textContent), '', 'no optimistic selection')
+    assert.equal(await nodePage.$eval(trigger, node => node.disabled), true)
+    await nodePage.evaluate(() => window.resolveFixtureNode('exec-only-remote'))
+    await nodePage.waitForFunction(() => document.querySelector('.foxwarm-node-picker-trigger')?.textContent === 'exec-only-remote')
+    assert.equal(await nodePage.$eval(trigger, node => node.classList.contains('text-fw-accent')), true)
+    assert.equal(await nodePage.evaluate(() => document.activeElement?.matches('.foxwarm-node-picker-trigger')), true)
+    assert.equal(await nodePage.$eval(editor, node => node.textContent), 'Retained draft')
+    assert.equal(await nodePage.evaluate(() => window.fixtureMessageBodies.length), 0)
+
+    await nodePage.click(trigger)
+    await nodePage.waitForSelector('[data-node-option="master"]')
+    await nodePage.click('[data-node-option="master"]')
+    await nodePage.waitForFunction(() => window.fixtureNodePosts.length === 2)
+    await nodePage.evaluate(() => window.resolveFixtureNode('master'))
+    await nodePage.waitForFunction(() => document.querySelector('.foxwarm-node-picker-trigger')?.getAttribute('aria-label') === 'Execution node: master')
+    assert.deepEqual(await nodePage.evaluate(() => window.fixtureNodePosts.map(post => post.body)), [{ nodeId: 'exec-only-remote' }, { nodeId: 'master' }])
+    assert.ok((await nodePage.evaluate(() => window.fixtureNodePosts.map(post => post.url))).every(url => url.includes('fixture%2Fmain/node')))
+
+    await nodePage.evaluate(() => window.emitFixtureEvent({ type: 'session-state', session: { id: 'fixture/main', currentNode: 'runtime-selected-node', cwd: 'fixture://kept-cwd', runtimeState: { state: 'idle' }, queueLength: 0, messageCount: 1, historyVersion: 0 } }))
+    await nodePage.waitForFunction(() => document.querySelector('.foxwarm-node-picker-trigger')?.textContent === 'runtime-selected-node')
+    await nodePage.click(trigger)
+    await nodePage.waitForSelector('[data-node-option="runtime-selected-node"]')
+    assert.equal(await nodePage.$eval('[data-node-option="runtime-selected-node"]', node => node.disabled && node.getAttribute('aria-pressed') === 'true'), true, 'stale selection remains visible')
+    await nodePage.keyboard.press('Escape')
+    assert.equal(await nodePage.evaluate(() => document.activeElement?.matches('.foxwarm-node-picker-trigger')), true)
+  } finally {
+    await nodePage.evaluate(() => localStorage.removeItem('composer_draft_v1_fixture/main'))
+    await nodePage.close()
+  }
+})
+
+test('real Chat node picker keeps the confirmed value on failure and ignores a late old-Session response', async () => {
+  const nodePage = await browser.newPage()
+  try {
+    await nodePage.goto(`${fixtureUrl}?nodePicker=1`, { waitUntil: 'load' })
+    await nodePage.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+    await nodePage.evaluate(() => window.resolveFixtureHistory())
+    await nodePage.click('.foxwarm-node-picker-trigger')
+    await nodePage.waitForSelector('[data-node-option="exec-only-remote"]')
+    await nodePage.click('[data-node-option="exec-only-remote"]')
+    await nodePage.waitForFunction(() => window.fixtureNodePosts.length === 1)
+    await nodePage.evaluate(() => window.resolveFixtureNode('exec-only-remote', 400))
+    await nodePage.waitForFunction(() => document.querySelector('[data-node-picker-popup] [role="alert"]')?.textContent.includes('offline'))
+    assert.equal(await nodePage.$eval('.foxwarm-node-picker-trigger', node => node.getAttribute('aria-label')), 'Execution node: master')
+    await nodePage.click('[data-node-option="exec-only-remote"]')
+    await nodePage.waitForFunction(() => window.fixtureNodePosts.length === 2)
+    await nodePage.evaluate(() => window.renderFixtureChats(1, 0, 'fixture/other'))
+    await nodePage.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
+    await nodePage.evaluate(() => {
+      window.resolveFixtureHistory(0, [], 0, { sessionId: 'fixture/other' })
+      window.resolveFixtureNode('exec-only-remote')
+    })
+    await nodePage.waitForFunction(() => document.querySelector('.foxwarm-node-picker-trigger')?.getAttribute('aria-label') === 'Execution node: master')
+    assert.equal(await nodePage.$('[data-node-picker-popup]'), null)
+  } finally {
+    await nodePage.close()
+  }
+})
+
+test('WebUI identity Chat hides node and model controls without fetching their endpoints', async () => {
+  const identityPage = await browser.newPage()
+  try {
+    await identityPage.goto(`${fixtureUrl}?identityMode=1`, { waitUntil: 'load' })
+    await identityPage.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+    await identityPage.evaluate(() => window.resolveFixtureHistory())
+    await identityPage.waitForSelector('[role="textbox"][aria-label="Message"]')
+    assert.equal(await identityPage.$('.foxwarm-node-picker-trigger'), null)
+    assert.equal(await identityPage.$('.foxwarm-model-selector-trigger'), null)
+    assert.deepEqual(await identityPage.evaluate(() => window.fixtureRequests.filter(url => /\/(nodes|node|models|commands)$/.test(url))), [])
+  } finally {
+    await identityPage.close()
+  }
 })
 
 test('real Chat ASR WebSocket close after ready unlocks retained partial; final and cancel do not report an error', async () => {

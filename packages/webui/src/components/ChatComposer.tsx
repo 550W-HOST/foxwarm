@@ -18,6 +18,7 @@ import {
 import { filterModelOptions, formatVirtualModelDetail, groupModelOptionsByProvider, resolveModelDisplayName, resolveModelTriggerDisplayName } from './modelFilter'
 import { buildChildModelComposerState, type ChildPolicyChainEntry } from './childModelState'
 import InlineComposerEditor, { type InlineComposerEditorHandle } from './InlineComposerEditor'
+import NodePicker from './NodePicker'
 import {
   clearComposerDraft,
   getPlainComposerDraftText,
@@ -47,6 +48,8 @@ interface ChatComposerProps {
   compactModelSelector?: boolean
   sessionId: string
   webUiIdentityMode?: boolean
+  currentNode?: string
+  onChangeNode?: (nodeId: string, signal: AbortSignal) => Promise<void>
   sessionMissing: boolean
   loading: boolean
   asrAvailable: boolean
@@ -667,6 +670,8 @@ const ChatComposer = memo(function ChatComposer({
   compactModelSelector,
   sessionId,
   webUiIdentityMode = false,
+  currentNode,
+  onChangeNode,
   sessionMissing,
   loading,
   asrAvailable,
@@ -1501,6 +1506,13 @@ const ChatComposer = memo(function ChatComposer({
               onChangeChildEffort={onChangeChildEffort}
               onRefreshModels={onRefreshModels}
               onOpenModelSettings={onOpenModelSettings}
+            />}
+            {!webUiIdentityMode && onChangeNode && <NodePicker
+              key={sessionId}
+              sessionId={sessionId}
+              currentNode={currentNode}
+              disabled={sessionMissing}
+              onChangeNode={onChangeNode}
             />}
           </div>
           <button

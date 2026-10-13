@@ -43,6 +43,7 @@ import { registerVscodeWebRoutes } from '../vscodeWebRoutes';
 import { externalizeMessages, externalizeQueueItems, getSafeRasterMimeType, resolveImageBlobPath } from '../imageBlobs';
 import { nodesManager } from '../nodes/manager';
 import { listApprovedNodes } from '../nodes/registry';
+import { listNodeTopology, validateNodeSelection } from '../nodeExecution';
 import {
   assertExactDto,
   boundedBodyLimit,
@@ -2011,6 +2012,65 @@ export class WebUIChannel implements Channel {
             res.json({ success: true, sessionId: result.session.id, ...buildWebUiModelStatus(result.session) });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to update session child model');
+            res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/sessions/:sessionId/nodes',
+        method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionId = Array.isArray(req.params.sessionId) ? req.params.sessionId[0] : req.params.sessionId;
+            const session = sessionManager.getSessionCatalog(sessionId);
+            if (!session) return res.status(404).json({ error: 'Session not found' });
+            const boundNode = sessionManager.getAgentIsolationNode(session.agent || 'main');
+            const lockedReason = boundNode ? `This agent is bound to node ${boundNode}.` : null;
+            const topology = await listNodeTopology(session.id);
+            const approved = await listApprovedNodes();
+            const labels = new Map(approved.map(node => [node.nodeId, node.displayName || node.requestedName || node.nodeId]));
+            const nodes = topology.map(node => ({
+              id: node.id,
+              label: labels.get(node.id) || node.id,
+              selectable: !boundNode && node.availability === 'ready',
+              reason: lockedReason || (node.availability === 'ready' ? null
+                : node.protocolCompatibility?.status === 'upgrade-required' ? 'Update this node to connect.'
+                : node.availability === 'offline' ? 'Offline' : 'Unavailable'),
+            }));
+            if (!boundNode) {
+              const listed = new Set(nodes.map(node => node.id));
+              for (const node of approved) {
+                if (!listed.has(node.nodeId)) nodes.push({ id: node.nodeId, label: labels.get(node.nodeId)!, selectable: false, reason: 'Offline' });
+              }
+            }
+            res.json({ nodes, lockedReason });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to list session nodes');
+            res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/sessions/:sessionId/node',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionId = Array.isArray(req.params.sessionId) ? req.params.sessionId[0] : req.params.sessionId;
+            const session = await sessionRuntime.getSession(sessionId);
+            if (!session) return res.status(404).json({ error: 'Session not found' });
+            const nodeId = typeof req.body?.nodeId === 'string' ? req.body.nodeId.trim() : '';
+            if (!nodeId) throw new Error('nodeId is required.');
+            const boundNode = sessionManager.getAgentIsolationNode(session.agent || 'main');
+            if (boundNode) throw new Error(`This agent is bound to node ${boundNode}.`);
+            const validated = await validateNodeSelection(session.id, nodeId);
+            // Like the user /node command, selection retains the Session cwd.
+            const updated = await sessionRuntime.updateSettings(session.id, { currentNode: validated.nodeId });
+            this.broadcastSessionListUpdate();
+            res.json({ session: buildWebUiSessionState(updated.session) });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to update session node');
             res.status(400).json({ error: e.message });
           }
         },
