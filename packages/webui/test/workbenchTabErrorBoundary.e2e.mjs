@@ -125,10 +125,11 @@ test('tab render failures stay inside the tab, retry explicitly, reset by tab id
   await page.evaluate(() => window.switchWorkbenchTab('broken-tab'))
   await page.waitForFunction(() => document.querySelector('[data-workbench-content-pane="main-pane"]')?.textContent?.includes("This tab couldn't be displayed."))
 
+  await page.evaluate(() => window.recoverBrokenTab())
   await page.evaluate(() => window.moveBrokenTab())
   await page.waitForFunction(() => document.querySelector('[data-workbench-content-pane="moved-pane"]')?.textContent?.includes("This tab couldn't be displayed."))
   assert.ok(await page.$('[data-sidebar]'), 'moving the failing content leaves the shell mounted')
-  await page.evaluate(() => window.recoverBrokenTab())
+  assert.equal(await page.$('[data-recovered-content]'), null, 'moving a repaired renderer does not reset the existing tab failure before Retry')
   await page.click('[data-workbench-content-pane="moved-pane"] button[aria-label="Retry tab"]')
   await page.waitForSelector('[data-recovered-content]')
 
