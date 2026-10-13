@@ -877,3 +877,56 @@ test('editor schema exposes the same stream timeout bounds at provider and model
     assert.ok(rule.then.not.anyOf.some((entry: any) => entry.required.includes('streamContentInactivityTimeoutMs')));
   }
 });
+
+
+test('models defaults reject invalid candidates even when a more specific value would mask them', () => {
+  const valid = () => ({
+    defaults: { contextLimit: 200000, maxOutput: 32768, providerImageOutputFormat: 'webp' },
+    providers: { leaf: { models: [{ id: 'model', contextLimit: 1000, maxOutput: 500, providerImageOutputFormat: 'jpeg' }] } },
+  });
+  const cases: Array<[string, (raw: any) => void, RegExp]> = [
+    ['null defaults', raw => { raw.defaults = null; }, /defaults.*object/],
+    ['unknown defaults field', raw => { raw.defaults.apiKey = 'not-supported'; }, /defaults.*unsupported field.*apiKey/],
+    ['zero defaults context', raw => { raw.defaults.contextLimit = 0; }, /defaults.*contextLimit.*positive integer/],
+    ['fractional provider output', raw => { raw.providers.leaf.maxOutput = 1.5; }, /Provider.*maxOutput.*positive integer/],
+    ['boolean provider context', raw => { raw.providers.leaf.contextLimit = false; }, /Provider.*contextLimit.*positive integer/],
+    ['null model output', raw => { raw.providers.leaf.models[0].maxOutput = null; }, /Model.*maxOutput.*positive integer/],
+    ['string model context', raw => { raw.providers.leaf.models[0].contextLimit = '1000'; }, /Model.*contextLimit.*positive integer/],
+    ['invalid image format', raw => { raw.providers.leaf.providerImageOutputFormat = 'png'; }, /providerImageOutputFormat.*webp.*jpeg/],
+  ];
+  for (const [label, mutate, pattern] of cases) {
+    const raw = valid(); mutate(raw);
+    assert.throws(() => loadModelsConfigFromObject(raw), pattern, label);
+  }
+  for (const field of ['maxOutput', 'providerImageOutputFormat']) {
+    const raw: any = valid();
+    raw.providers.route = { providerType: 'session-hash', targets: ['leaf'], [field]: field === 'maxOutput' ? 500 : 'jpeg' };
+    assert.throws(() => loadModelsConfigFromObject(raw), new RegExp(`Virtual.*forbids field.*${field}`));
+  }
+});
+
+test('effective defaults affect virtual safe limits and request fingerprints without becoming virtual overrides', () => {
+  const raw = {
+    defaults: { contextLimit: 120000, maxOutput: 2048, providerImageOutputFormat: 'webp' },
+    providers: {
+      leaf: { models: ['model'] },
+      smaller: { models: [{ id: 'model', contextLimit: 64000 }] },
+      route: { providerType: 'failover', targets: ['leaf', 'smaller'] },
+      alias: 'leaf',
+    },
+  };
+  const parsed = loadModelsConfigFromObject(raw);
+  assert.equal(parsed.models.route.contextLimit, 64000);
+  assert.equal(parsed.models.alias.contextLimit, 120000);
+  for (const key of ['route', 'alias']) {
+    assert.equal(parsed.models[key].maxOutput, undefined);
+    assert.equal(parsed.models[key].providerImageOutputFormat, undefined);
+  }
+  for (const defaults of [
+    { ...raw.defaults, maxOutput: 4096 },
+    { ...raw.defaults, providerImageOutputFormat: 'jpeg' },
+  ]) {
+    const changed = loadModelsConfigFromObject({ ...raw, defaults });
+    assert.notEqual(changed.models.route.virtualRouting?.fingerprint, parsed.models.route.virtualRouting?.fingerprint);
+  }
+});

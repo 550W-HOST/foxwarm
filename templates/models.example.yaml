@@ -10,6 +10,13 @@
 # when a later session turn starts.
 
 default: openai/gpt-5.6-sol
+# Only these three fields are supported in defaults. Concrete provider settings
+# override defaults; individual model object entries override their provider.
+# Unset values fall back to legacy config.yaml llm settings, then built-in values.
+defaults:
+  contextLimit: 200000
+  maxOutput: 32768
+  providerImageOutputFormat: webp # or jpeg; transparent input images use PNG
 providers:
   openai:
     providerType: openai-completions
@@ -24,6 +31,8 @@ providers:
     # disallowEmptyResponse: true
     # Optional provider-level defaults for all models in this entry.
     # contextLimit: 200000
+    # maxOutput: 16384
+    # providerImageOutputFormat: jpeg
     # streamContentInactivityTimeoutMs: 300000 # Optional: default 60000; model entries can override.
     # First-class effort defaults to all six levels with `high` selected when omitted.
     # Model object entries may override this; a model-level `allowed` list replaces

@@ -150,3 +150,38 @@ test('runtime, Setup diagnostics, OOBE, and writes share the data-directory mode
     await fs.remove(dataRoot);
   }
 });
+
+for (const legacy of [undefined, { contextLimit: 150000, maxOutput: 16000, providerImageOutputFormat: 'jpeg' }]) {
+  test(`concrete leaves resolve all five settings layers with ${legacy ? 'legacy app settings' : 'built-in fallbacks'}`, async () => {
+    const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-model-defaults-'));
+    const configPath = path.join(dataRoot, 'state', 'config.yaml');
+    await fs.outputFile(configPath, JSON.stringify({ llm: legacy }));
+    const script = `
+      const config = require('./lib/config.js');
+      const defaults = { contextLimit: 180000, maxOutput: 24000, providerImageOutputFormat: 'webp' };
+      const provider = { contextLimit: 100000, maxOutput: 12000, providerImageOutputFormat: 'jpeg' };
+      const model = { contextLimit: 64000, maxOutput: 8000, providerImageOutputFormat: 'webp' };
+      const pick = entry => ({ contextLimit: entry.contextLimit, maxOutput: entry.maxOutput, providerImageOutputFormat: entry.providerImageOutputFormat });
+      const values = [
+        { defaults, providers: { leaf: { ...provider, models: [{ id: 'm', ...model }] } } },
+        { defaults, providers: { leaf: { ...provider, models: ['m'] } } },
+        { defaults, providers: { leaf: { models: ['m'] } } },
+        { providers: { leaf: { models: ['m'] } } },
+      ].map(raw => pick(config.loadModelsConfigFromObject(raw).models.leaf));
+      process.stdout.write('__FOXWARM_RESULT__' + JSON.stringify(values) + '\\n');
+    `;
+    try {
+      const { stdout } = await execFileAsync(process.execPath, ['-e', script], {
+        cwd: process.cwd(), env: { ...process.env, FOXWARM_DATA_DIR: dataRoot, FOXWARM_CONFIG_PATH: configPath },
+      });
+      const resultLine = stdout.split('\n').find(line => line.startsWith('__FOXWARM_RESULT__'));
+      assert.ok(resultLine, stdout);
+      assert.deepEqual(JSON.parse(resultLine.slice('__FOXWARM_RESULT__'.length)), [
+        { contextLimit: 64000, maxOutput: 8000, providerImageOutputFormat: 'webp' },
+        { contextLimit: 100000, maxOutput: 12000, providerImageOutputFormat: 'jpeg' },
+        { contextLimit: 180000, maxOutput: 24000, providerImageOutputFormat: 'webp' },
+        legacy ?? { contextLimit: 200000, maxOutput: 32768, providerImageOutputFormat: 'webp' },
+      ]);
+    } finally { await fs.remove(dataRoot); }
+  });
+}
