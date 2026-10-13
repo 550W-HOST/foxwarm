@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import axios from 'axios';
 import type { Message, Session } from './types';
+import { makeAnthropicMessageStream } from './testFixtures/anthropicMessageStream';
 
 test('virtual tool-call and final assistant messages retain requested key and successful concrete leaf', async () => {
   const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-virtual-message-meta-'));
@@ -52,16 +53,16 @@ providers:
           status: 200,
           statusText: 'OK',
           headers: {},
-          data: {
+          data: makeAnthropicMessageStream({
             content: [{ type: 'tool_use', id: 'call_1', name: 'read', input: { filePath: 'README.md' } }],
-          },
+          }),
         };
       }
       return {
         status: 200,
         statusText: 'OK',
         headers: {},
-        data: { content: [{ type: 'text', text: 'done' }] },
+        data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'done' }] }),
       };
     };
 

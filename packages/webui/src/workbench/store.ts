@@ -57,8 +57,8 @@ function getDefaultWorkbenchState(): WorkbenchPersistedState {
 export type WorkbenchStoreState = WorkbenchPersistedState & {
   focusPane: (paneId: string) => void
   setPaneCollapsed: (paneId: string, collapsed: boolean) => void
-  activateTab: (tabId: string) => void
-  setPaneActiveTab: (paneId: string, tabId: string | null) => void
+  activateTab: (tabId: string, options?: { expandPane?: boolean }) => void
+  setPaneActiveTab: (paneId: string, tabId: string | null, options?: { expandPane?: boolean }) => void
   upsertTab: (tab: WorkbenchTab, options?: { paneId?: string; activate?: boolean; index?: number }) => void
   updateTab: (tabId: string, updater: (tab: WorkbenchTab) => WorkbenchTab) => void
   removeTab: (tabId: string) => void
@@ -117,6 +117,7 @@ function getInsertedPane(pane: WorkbenchPaneNode, tabId: string, options?: { bef
   return {
     ...pane,
     tabIds,
+    collapsed: options?.activate === false ? pane.collapsed : false,
     activeTabId: options?.activate === false ? (pane.activeTabId && tabIds.includes(pane.activeTabId) ? pane.activeTabId : (tabIds[0] || null)) : tabId,
   }
 }
@@ -149,7 +150,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
     })
   },
 
-  activateTab: (tabId) => {
+  activateTab: (tabId, options) => {
     set((state) => {
       const pane = findPaneContainingTab(state.root, tabId)
       if (!pane) return state
@@ -160,6 +161,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
           return {
             ...node,
             activeTabId: tabId,
+            collapsed: options?.expandPane === false ? node.collapsed : false,
           }
         }),
         focusedPaneId: pane.id,
@@ -167,13 +169,15 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
     })
   },
 
-  setPaneActiveTab: (paneId, tabId) => {
+  setPaneActiveTab: (paneId, tabId, options) => {
     set((state) => ({
       root: mapLayoutTree(state.root, (node) => {
         if (node.kind !== 'pane' || node.id !== paneId) return node
+        const nextActiveTabId = tabId && node.tabIds.includes(tabId) ? tabId : (node.tabIds[0] || null)
         return {
           ...node,
-          activeTabId: tabId && node.tabIds.includes(tabId) ? tabId : (node.tabIds[0] || null),
+          activeTabId: nextActiveTabId,
+          collapsed: options?.expandPane === false || !tabId || !node.tabIds.includes(tabId) ? node.collapsed : false,
         }
       }),
       focusedPaneId: paneId,

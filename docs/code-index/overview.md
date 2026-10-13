@@ -73,7 +73,10 @@ Nodes, providers, and authenticated CLI Node runtime
 | Thread | Flow |
 |---|---|
 | [Code integration](./threads/code-integration.md) | Optional official workbench, WebUI bridge, remote services, terminals, and read-only SCM |
-| [context compaction and recall](./threads/context-compaction-and-recall.md) | Context budgeting, summarization, archival, and retrieval |
+| [context compaction and recall](./threads/context-compaction-and-recall.md) | Context budgeting, summarization, archival, and retrieval; entry and navigation |
+| [context compaction](./threads/context-compaction.md) | Triggers, pruning, candidate policy, planner submission, block metadata, and completion markers |
+| [compaction lifecycle](./threads/compaction-lifecycle.md) | Snapshot jobs, shared engine, ready-first scheduling, commit safety, cancellation, and busy windows |
+| [archive and recall](./threads/archive-and-recall.md) | SQLite archive lineage, Vector indexing, semantic and lexical recall, WebUI expansion, and history search |
 | [image blob lifecycle](./threads/image-blob-lifecycle.md) | Canonical image persistence, provider hydration, tools, and authenticated browser URLs |
 | [canonical LLM request journal](./threads/llm-request-journal.md) | Content-addressed provider-neutral inputs, attempt provenance, reconstruction, and training boundary |
 | [conditional memory snapshots](./threads/conditional-memory-snapshots.md) | Concrete-model memory filtering, snapshot identity, reuse, refresh, and detached ownership |

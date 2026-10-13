@@ -46,6 +46,7 @@ interface SetupViewProps {
   onClose?: () => void
   onSetupChanged?: () => void
   focusModelsRequest?: number
+  onFocusModelsRequestHandled?: (request: number) => void
   webUiSettings?: WebUiBrandingSettingsValue
   onInstanceNameChange?: (name: string) => Promise<void> | void
   onTabIconChange?: (tabIcon: string) => Promise<void> | void
@@ -113,7 +114,7 @@ function normalizeWeixinQrPayload(value: string): { imageSrc: string | null; raw
   return { imageSrc: null, raw: trimmed }
 }
 
-export default function SetupView({ forced = false, onClose, onSetupChanged, focusModelsRequest = 0, webUiSettings, onInstanceNameChange, onTabIconChange }: SetupViewProps) {
+export default function SetupView({ forced = false, onClose, onSetupChanged, focusModelsRequest = 0, onFocusModelsRequestHandled, webUiSettings, onInstanceNameChange, onTabIconChange }: SetupViewProps) {
   const tabHeader = useWorkbenchTabHeader()
   const [activeTab, setActiveTab] = useState<SetupTab>('appearance')
   const setupRootRef = useRef<HTMLDivElement | null>(null)
@@ -155,7 +156,6 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
   const savingModelsRef = useRef(false)
   const savingConfigRef = useRef(false)
   const loadGenerationRef = useRef(0)
-  const handledFocusModelsRequestRef = useRef(0)
 
   rawModelsYamlRef.current = rawModelsYaml
   configYamlRef.current = configYaml
@@ -247,12 +247,11 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
 
   useEffect(() => {
     if (focusModelsRequest <= 0 || activeTab !== 'models') return
-    if (handledFocusModelsRequestRef.current === focusModelsRequest) return
-    handledFocusModelsRequestRef.current = focusModelsRequest
+    // The owner clears this one-shot request after it is consumed, so a later remount or ordinary Setup activation cannot replay it.
+    onFocusModelsRequestHandled?.(focusModelsRequest)
     setModelsEditorFocusRequest((current) => current + 1)
-    const frame = requestAnimationFrame(() => modelsSectionRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }))
-    return () => cancelAnimationFrame(frame)
-  }, [activeTab, focusModelsRequest])
+    requestAnimationFrame(() => modelsSectionRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }))
+  }, [activeTab, focusModelsRequest, onFocusModelsRequestHandled])
 
   const activateTab = (tab: SetupTab, focus = false) => {
     setActiveTab(tab)

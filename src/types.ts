@@ -494,6 +494,11 @@ export interface ChatResult {
   llmRequestId?: string;
   /** Physical provider attempt which produced this successful result. */
   llmAttempt?: number;
+  /**
+   * The provider stopped generating at its output or context limit. Usable
+   * text is kept; the caller shows a notice and never runs incomplete tool calls.
+   */
+  truncatedStop?: { stopReason: 'max_tokens' | 'model_context_window_exceeded' };
 }
 
 export interface AnthropicMessage {

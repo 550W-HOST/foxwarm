@@ -64,6 +64,7 @@ before(async () => {
       window.fixture.setSlice=setSlice
       window.fixture.setDraft=setDraft
       window.fixture.setRuntime=setRuntime
+      window.fixture.runtime=runtime
       window.fixture.original=original
       window.fixture.matches = term => findSessionSearchMatches(projectSessionSearchFields(messages,prefs.timelineView),term)
       return <div className="foxwarm-chat-root">
@@ -237,6 +238,8 @@ test('only the full committed history tail LLM error is external; drafts, clippe
 })
 
 test('Activity counts use direct recorded outcomes, not script code or asynchronous sends', async () => {
+  await mode('conversation')
+  const previousTiming = await page.evaluate(() => ({ runtime: window.fixture.runtime, now: window.fixture.now }))
   const model = (seq, parts, segmented = false) => ({role:'model',parts,__meta:{seq,...segmented?{llmRequestId:'stats-request',llmSegment:{outputStart:seq===13?8:0,outputEndExclusive:seq===13?9:8,complete:true}}:{}}})
   const tool = (id,name,output,error = false) => ({role:'tool',parts:[{functionResponse:{tool_use_id:id,name,response:error?{error:output}:{output}}}]})
   const records = [
@@ -267,6 +270,16 @@ test('Activity counts use direct recorded outcomes, not script code or asynchron
     'Called 1 tool',
   ])
   assert.ok(!(await page.$eval('#timeline', root => root.textContent)).includes('Activity · Error'))
+  await page.$eval('#timeline', root => { root.style.width = '220px' })
+  const wrapped = await page.$$eval('#timeline [data-timeline-activity] > button', buttons => {
+    const summary = buttons[1].lastElementChild
+    const range = document.createRange()
+    range.selectNodeContents(summary)
+    return { align: getComputedStyle(summary).textAlign, lefts: [...range.getClientRects()].map(rect => rect.left) }
+  })
+  assert.equal(wrapped.align, 'left')
+  assert.ok(wrapped.lefts.length > 1, 'the real summary wraps in a narrow container')
+  assert.ok(wrapped.lefts.every(left => Math.abs(left - wrapped.lefts[0]) < 1), 'wrapped lines keep the same left edge')
   await page.$eval('#timeline', root => [...root.querySelectorAll('[aria-label="Expand activity"]')][1].click())
   await page.waitForFunction(() => document.querySelector('[data-activity-details]').textContent.includes('SEND_FAILED'))
   assert.ok((await page.$eval('[data-activity-details]', root => root.textContent)).includes('SEND_FAILED'))
@@ -274,6 +287,25 @@ test('Activity counts use direct recorded outcomes, not script code or asynchron
   await page.evaluate(start => window.fixture.setSlice([start,undefined]), records.length - 2)
   await page.waitForFunction(() => document.querySelector('#timeline').querySelectorAll('[data-timeline-activity]').length === 1)
   assert.equal(await page.$eval('#timeline [data-timeline-activity] > button', button => button.textContent.slice(1)), 'Activity', 'the clipped response does not recount its ordinary invocation already represented before the window')
+  const base = 1700000000000
+  await page.evaluate(base => {
+    window.fixture.setMessages([{ role: 'user', parts: [{ text: 'ALIGNMENT_INPUT' }], __meta: { seq: 1, timestamp: base, clientMessageId: 'alignment-input' } }])
+    window.fixture.setSlice([0, undefined])
+    window.fixture.setNow(base + 90000)
+    window.fixture.setRuntime({ state: 'requesting-model', since: base + 70000, busy: true, queueLength: 0 })
+  }, base)
+  await page.waitForFunction(() => document.querySelector('#timeline [data-timeline-activity]')?.textContent.includes('Worked for'))
+  const live = await page.$eval('#timeline [data-timeline-activity] > div', summary => {
+    const range = document.createRange()
+    range.selectNodeContents(summary)
+    return { align: getComputedStyle(summary).textAlign, lefts: [...range.getClientRects()].map(rect => rect.left) }
+  })
+  assert.equal(live.align, 'left')
+  assert.ok(live.lefts.length > 1)
+  assert.ok(live.lefts.every(left => Math.abs(left - live.lefts[0]) < 1))
+  assert.equal(await page.$eval('#timeline [data-timeline-time-separator]', row => getComputedStyle(row).textAlign), 'center')
+  await page.$eval('#timeline', root => { root.style.width = '' })
+  await page.evaluate(previous => { window.fixture.setRuntime(previous.runtime); window.fixture.setNow(previous.now) }, previousTiming)
 })
 
 test('ingress kinds and retry metadata fold, while human XML/code examples and ordinary warning text remain body', async () => {

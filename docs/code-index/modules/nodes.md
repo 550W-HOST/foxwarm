@@ -25,6 +25,7 @@ Client implementations are separate modules: [CLI node](./cli-node.md) and [brow
 - `buildNodeBootstrapInfo(options)` — current endpoint/examples payload for `node_bootstrap_info`.
 - Pending pairing create/list/approve/reject/claim operations.
 - `/node create <node-id>` directly reserves an approved Node credential and returns its plaintext auth token once; the ordinary pending/approve flow remains available.
+- `node_create_auth_token` reserves an approved Node ID and writes its per-node credential to a new owner-only file on Main, returning only the Node ID and file path; it is a discoverable hidden builtin and does not rotate existing credentials.
 - Approved-node list/authenticate/remove/move operations.
 - `nodesManager` — registration, model-tool dispatch, backend-service dispatch, runtime disconnect, and access checks.
 - `nodeProviderRegistry` — production registry for fixed master/authenticated-remote providers plus normalized startup executable providers.
@@ -48,7 +49,7 @@ The operator-facing deployment/configuration workflow is documented by the singl
 
 ## Invariants
 
-- The master persists only SHA-256 authentication-token hashes. Plaintext is returned once for direct creation or held temporarily in the pending approval/claim handoff.
+- The master persists only SHA-256 authentication-token hashes. Plaintext is returned once for direct creation or held temporarily in the pending approval/claim handoff; the agent-facing `node_create_auth_token` path writes plaintext only to its newly created owner-only file and returns only its Node ID and path.
 - Pending pairings expire after one hour; unclaimed approved handoffs are cleaned with their node record.
 - Node IDs are slugged, validated against reserved IDs, and deduplicated.
 - Master-side WebSocket heartbeat sends protocol ping frames every 30 seconds and requires liveness within 10 seconds.
@@ -88,7 +89,7 @@ The authenticated node ID is mandatory input to master-side session-event author
 
 Bootstrap distributes one minimal dynamic source archive with prebuilt CLI bundles when available, plus an explicit build fallback and separately installed optional PTY runtime.
 
-Generic Node/provider ownership is canonical in [D-dispatch-generic-node-providers](../threads/tool-dispatch.md#d-dispatch-generic-node-providers).
+Generic Node/provider ownership is canonical in [D-dispatch-generic-node-providers](../threads/tool-dispatch-node-execution.md#d-dispatch-generic-node-providers).
 
 ### D-node-isolated-worker-provider-compose
 

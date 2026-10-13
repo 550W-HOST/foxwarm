@@ -97,7 +97,7 @@ System Architecture's Nodes surface shows Node metadata without Session lists, f
 
 Model tools are agent-callable and may pass client approval. Backend services are fixed capability-versioned protocols for trusted master features.
 
-Generic Node/provider ownership is canonical in [D-dispatch-generic-node-providers](./tool-dispatch.md#d-dispatch-generic-node-providers).
+Generic Node/provider ownership is canonical in [D-dispatch-generic-node-providers](./tool-dispatch-node-execution.md#d-dispatch-generic-node-providers).
 
 ### D-node-thread-authenticated-identity
 

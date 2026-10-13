@@ -3,7 +3,7 @@ import { useDraggable } from '@dnd-kit/core'
 import { X } from 'lucide-react'
 import type { WorkbenchTab } from '../workbench/types'
 
-interface WorkbenchTabHeaderValue {
+export interface WorkbenchTabHeaderValue {
   tab: WorkbenchTab
   paneId: string
   dragEnabled: boolean

@@ -207,6 +207,9 @@ export function EmbeddedSetupApp({ target }: { target: Extract<FoxwarmEmbeddedTa
   useTheme()
   const [settings, setSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
   const [focusModelsRequest, setFocusModelsRequest] = useState(0)
+  const handleFocusModelsRequestHandled = useCallback((handled: number) => {
+    setFocusModelsRequest((current) => (current === handled ? 0 : current))
+  }, [])
   const fetchSettings = useCallback(async () => {
     const response = await fetch(`${API_BASE_PATH}/webui/settings`)
     if (!response.ok) return
@@ -248,6 +251,7 @@ export function EmbeddedSetupApp({ target }: { target: Extract<FoxwarmEmbeddedTa
       <Suspense fallback={<EmbeddedLeafFallback label="Setup" />}>
         <SetupView
           focusModelsRequest={focusModelsRequest}
+          onFocusModelsRequestHandled={handleFocusModelsRequestHandled}
           webUiSettings={settings}
           onInstanceNameChange={saveInstanceName}
           onTabIconChange={saveTabIcon}

@@ -570,3 +570,90 @@ test('Actual Chat keeps a runtime-confirmed parallel tool batch Worked while rec
   await show([user,model],{...running,since:base+20000,tool:{...running.tool,startedAt:base+20000}},base+30000)
   assert.match((await compactHeaders()).join(' '),/Elapsed/)
 })
+
+test('a boundary-free new Session times real Task work, not its creation, through live and committed output', async () => {
+  const base = 1700000000000
+  const request = (startedAt, completedAt) => ({ startedAt: base + startedAt, completedAt: base + completedAt, durationMs: completedAt - startedAt })
+  const records = [
+    { role: 'user', parts: [{ system: '<foxwarm-system kind="session-boundary" event="new-child" />' }], __meta: { seq: 1, timestamp: base - 1800000 } },
+    { role: 'user', parts: [{ system: '<foxwarm-message type="task" event="assigned">\nLEADING_TASK_PUBLIC\n</foxwarm-message>' }], __meta: { seq: 2, timestamp: base } },
+    { role: 'model', parts: [{ thinking: 'LEADING_REASONING_PUBLIC' }, { functionCall: { id: 'leading-exec', name: 'exec', args: { command: 'printf example' } } }], __meta: { seq: 3, timestamp: base + 10100, llmRequestId: 'leading-first', llmRequestTiming: request(100, 10100) } },
+    { role: 'tool', parts: [{ functionResponse: { name: 'exec', tool_use_id: 'leading-exec', response: { output: 'EXAMPLE_RESULT' }, executionTiming: request(10100, 20100) } }], __meta: { seq: 4, timestamp: base + 20100 } },
+  ]
+  const runtime = { state: 'requesting-model', since: base + 20100, busy: true, queueLength: 0 }
+  await page.evaluate((records, now, runtime, start) => window.fixture.showCompactTiming(records, now, runtime, start), records, base + 30100, runtime, base + 100)
+  await page.waitForFunction(() => document.querySelector('[data-timeline-activity]')?.textContent.includes('Worked for 30s'))
+  await page.click('[data-timeline-activity] button')
+  await page.waitForFunction(() => document.querySelector('[data-activity-details]')?.textContent.includes('LEADING_TASK_PUBLIC'))
+  await page.click('[data-timeline-activity] button')
+  await page.waitForFunction(() => document.querySelector('[data-timeline-activity]')?.textContent.includes('Worked for 30s'))
+  assert.match(await page.$eval('[data-timeline-activity]', node => node.textContent), /Received 1 message · Called 1 tool/)
+  assert.deepEqual(await page.$$eval('[data-timeline-time-separator] time', nodes => nodes.map(node => node.dateTime)), [new Date(base).toISOString()])
+  await page.evaluate(now => { window.fixture.now = now }, base + 35100)
+  await page.waitForFunction(() => document.querySelector('[data-timeline-activity]')?.textContent.includes('Worked for 35s'))
+  const finished = [...records, { role: 'model', parts: [{ text: 'LEADING_FINAL_PUBLIC' }], __meta: { seq: 5, timestamp: base + 40120, llmRequestId: 'leading-final', llmRequestTiming: request(20100, 40100) } }]
+  await page.evaluate((records, now) => window.fixture.updateCompactTiming(records, now, { state: 'idle', busy: false, queueLength: 0 }), finished, base + 90120)
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-search-surface="model"]')].some(node => node.textContent.includes('LEADING_FINAL_PUBLIC')))
+  assert.match(await page.$eval('[data-timeline-activity]', node => node.textContent), /Worked for 40s/)
+  assert.doesNotMatch(await page.$eval('[data-timeline-activity]', node => node.textContent), /Waited|Elapsed/)
+  assert.deepEqual(await page.$$eval('[data-timeline-time-separator] time', nodes => nodes.map(node => node.dateTime)), [new Date(base).toISOString()])
+})
+
+test('requesting-model counts first-response work before any provider part, without inventing queued or idle work', async () => {
+  const base = 1700000000000
+  const user = { role: 'user', parts: [{ text: 'FIRST_RESPONSE_PUBLIC' }], __meta: { seq: 1, timestamp: base, clientMessageId: 'first-response-public' } }
+  const runtime = { state: 'requesting-model', since: base + 60000, busy: true, queueLength: 0 }
+  await page.evaluate((records, now, runtime, start) => window.fixture.showCompactTiming(records, now, runtime, start), [user], base + 70000, runtime, base + 60000)
+  await page.waitForFunction(() => document.querySelector('[data-search-surface="user"]')?.textContent === 'FIRST_RESPONSE_PUBLIC')
+  await page.waitForFunction(() => document.querySelector('[data-timeline-activity]')?.textContent.includes('Worked for 10s'))
+  assert.match(await page.$eval('[data-timeline-activity]', node => node.textContent), /Waited for 1m/)
+  assert.equal(await page.$('[data-timeline-activity] button'), null)
+  assert.deepEqual(await page.$$eval('[data-timeline-time-separator] time', nodes => nodes.map(node => node.dateTime)), [base, base + 60000].map(date => new Date(date).toISOString()))
+  const anchorCount = await page.$$eval('[data-chat-message-anchor-key]', nodes => nodes.length)
+  await page.evaluate(() => { window.fixture.retainedFirstResponseUser = document.querySelector('[data-search-surface="user"]') })
+  await page.evaluate(now => { window.fixture.now = now }, base + 75000)
+  await page.waitForFunction(() => document.querySelector('[data-timeline-activity]')?.textContent.includes('Worked for 15s'))
+  assert.equal(await page.evaluate(() => window.fixture.retainedFirstResponseUser === document.querySelector('[data-search-surface="user"]')), true)
+  assert.equal(await page.$$eval('[data-chat-message-anchor-key]', nodes => nodes.length), anchorCount)
+  const thinking = { role: 'model', parts: [{ thinking: 'FIRST_RESPONSE_REASONING_PUBLIC' }], __meta: { seq: 2, timestamp: base + 75000, llmRequestId: 'first-response-public', llmSegment: { outputStart: 0, outputEnd: 1, complete: false } } }
+  await page.evaluate((records, now, runtime, start) => window.fixture.updateCompactTiming(records, now, runtime, start), [user, thinking], base + 75000, runtime, base + 60000)
+  await page.waitForFunction(() => document.querySelector('[data-timeline-activity] button'))
+  assert.match(await page.$eval('[data-timeline-activity]', node => node.textContent), /Worked for 15s/)
+  const final = { role: 'model', parts: [{ text: 'FIRST_RESPONSE_FINAL_PUBLIC' }], __meta: { seq: 3, timestamp: base + 80000, llmRequestId: 'first-response-public', llmSegment: { outputStart: 1, outputEnd: 2, complete: true }, llmRequestTiming: { startedAt: base + 60000, completedAt: base + 80000, durationMs: 20000 } } }
+  await page.evaluate((records, now) => window.fixture.updateCompactTiming(records, now, { state: 'idle', busy: false, queueLength: 0 }), [user, thinking, final], base + 100000)
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-search-surface="model"]')].some(node => node.textContent.includes('FIRST_RESPONSE_FINAL_PUBLIC')))
+  assert.equal(await page.$$eval('[data-timeline-activity]', nodes => nodes.length), 1)
+  assert.match(await page.$eval('[data-timeline-activity]', node => node.textContent), /Worked for 20s · Waited for 1m/)
+  for (const state of [
+    { state: 'idle', busy: false, queueLength: 1 },
+    { state: 'waiting', since: base + 60000, busy: false, queueLength: 1, waiting: { waitId: 'public-wait', waitingFor: 'input', waitForInput: true } },
+    { state: 'requesting-model', busy: true, queueLength: 0 },
+  ]) {
+    await page.evaluate((state, now) => window.fixture.showCompactTiming([{ role: 'user', parts: [{ text: 'NO_SPECULATIVE_WORK_PUBLIC_' + state.state + '_' + !!state.since }], __meta: { seq: 1, timestamp: 1700000000000, clientMessageId: 'no-speculative-work' } }], now, state), state, base + 90000)
+    await page.waitForFunction(text => document.querySelector('[data-search-surface="user"]')?.textContent === text, {}, 'NO_SPECULATIVE_WORK_PUBLIC_' + state.state + '_' + !!state.since)
+    assert.equal(await page.$$eval('[data-timeline-activity]', nodes => nodes.length), 0)
+  }
+})
+
+test('a leading execution origin is usable without an input, but unknown earlier work and CTX cuts stay conservative', async () => {
+  const base = 1700000000000
+  const model = { role: 'model', parts: [{ thinking: 'EXECUTION_ORIGIN_PUBLIC' }], __meta: { seq: 2, timestamp: base + 10000, llmRequestId: 'execution-origin', llmRequestTiming: { startedAt: base, completedAt: base + 10000, durationMs: 10000 } } }
+  const creation = { role: 'user', parts: [{ system: '<foxwarm-system kind="session-boundary" event="new-child" />' }], __meta: { seq: 1, timestamp: base - 1800000 } }
+  const requesting = { state: 'requesting-model', since: base + 10000, busy: true, queueLength: 0 }
+  await page.evaluate((records, now, runtime, start) => window.fixture.showCompactTiming(records, now, runtime, start), [creation, model], base + 20000, requesting, base)
+  await page.waitForFunction(date => document.querySelector('[data-timeline-time-separator] time')?.dateTime === date, {}, new Date(base).toISOString())
+  assert.match(await page.$eval('[data-timeline-activity]', node => node.textContent), /Worked for 20s/)
+  const unknown = { ...model, __meta: { seq: 2, timestamp: base + 5000, llmRequestId: 'unknown-origin' } }
+  await page.evaluate((records, now, runtime) => window.fixture.showCompactTiming(records, now, runtime), [creation, unknown], base + 20000, requesting)
+  await page.waitForFunction(() => document.querySelector('[data-timeline-activity]')?.textContent.trim() === '›Activity')
+  assert.equal(await page.$$eval('[data-timeline-time-separator]', nodes => nodes.length), 0)
+  const old = { ...model, __meta: { seq: 1, timestamp: base - 190000, llmRequestId: 'cross-context', llmRequestTiming: { startedAt: base - 400000, completedAt: base - 190000, durationMs: 210000 } } }
+  const block = { role: 'model', parts: [{ text: '[CTX-BLOCK L1 B#5501 raw#1-#1] CONTEXT_PUBLIC' }], __meta: { seq: 2, timestamp: base + 10000, contextBlock: { id: 5501, level: 1, rawStartSeq: 1, rawEndSeq: 1, sourceKind: 'message', rawStartTimestamp: base - 190000 } } }
+  const suffix = { role: 'model', parts: [{ thinking: 'AFTER_CONTEXT_UNKNOWN_PUBLIC' }], __meta: { seq: 3, timestamp: base + 20000, llmRequestId: 'cross-context', llmSegment: { outputStart: 1, outputEnd: 2, complete: false } } }
+  const final = { role: 'model', parts: [{ text: 'AFTER_CONTEXT_FINAL_PUBLIC' }], __meta: { seq: 4, timestamp: base + 40000, llmRequestId: 'after-context-final', llmRequestTiming: { startedAt: base + 30000, completedAt: base + 40000, durationMs: 10000 } } }
+  await page.evaluate((records, now) => window.fixture.showCompactTiming(records, now, { state: 'idle', busy: false, queueLength: 0 }), [old, block, suffix, final], base + 50000)
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-search-surface="model"]')].some(node => node.textContent.includes('AFTER_CONTEXT_FINAL_PUBLIC')))
+  assert.match(await page.$$eval('[data-timeline-activity]', nodes => nodes.at(-1).textContent), /Elapsed 30s/)
+  assert.doesNotMatch(await page.$$eval('[data-timeline-activity]', nodes => nodes.at(-1).textContent), /Worked|Waited/)
+  assert.deepEqual(await page.$$eval('[data-timeline-time-separator] time', nodes => nodes.map(node => node.dateTime)), [new Date(base - 400000).toISOString()])
+})

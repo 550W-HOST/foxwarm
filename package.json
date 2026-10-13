@@ -19,6 +19,7 @@
     "test:windows-service": "node --test scripts/windowsService.test.js",
     "test:webui-realtime": "node --test lib/channels/webuiRealtime.test.js",
     "test:code-index-generator": "python3 skills/code-index/tests/test_generate_code_index.py",
+    "test:code-index-audit": "python3 docs/code-index/scripts/tests/test_audit_index.py",
     "test:inventory": "node scripts/test/run-tests.mjs inventory",
     "test:unit": "node scripts/test/run-tests.mjs unit",
     "test:webui:e2e": "node scripts/test/run-tests.mjs browser",

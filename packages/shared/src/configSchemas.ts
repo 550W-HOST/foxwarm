@@ -1,19 +1,33 @@
-export const KNOWN_PROVIDER_TYPES = [
+export const CONCRETE_PROVIDER_TYPES = [
   'openai-completions',
   'openai-responses',
   'openai-ws',
   'openai',
   'anthropic',
+] as const
+
+export const VIRTUAL_PROVIDER_TYPES = [
   'session-hash',
   'failover',
 ] as const
 
+export const KNOWN_PROVIDER_TYPES = [
+  ...CONCRETE_PROVIDER_TYPES,
+  ...VIRTUAL_PROVIDER_TYPES,
+] as const
+
+export type ConcreteProviderType = typeof CONCRETE_PROVIDER_TYPES[number]
+
+export function isConcreteProviderType(value: unknown): value is ConcreteProviderType {
+  return typeof value === 'string' && (CONCRETE_PROVIDER_TYPES as readonly string[]).includes(value)
+}
+
 const knownProviderType = {
   anyOf: [
     { enum: KNOWN_PROVIDER_TYPES },
-    { type: 'string' },
+    { const: '' },
   ],
-  description: 'Provider protocol or virtual routing strategy. Known Foxwarm values are suggested; custom provider types remain valid.',
+  description: 'Provider protocol or virtual routing strategy. Omit or leave empty to use the OpenAI protocol.',
 }
 
 const effectiveProviderTypeIs = (providerType: string) => ({

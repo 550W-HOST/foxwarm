@@ -13,6 +13,7 @@ Cross-module contract: [Code integration](../threads/code-integration.md).
 
 - `npm run build:code` builds the pinned MIT Code - OSS source in the dedicated Node 24 Docker builder and publishes required ignored assets.
 - `build:code:local` is the explicit host-native alternative for an environment with matching Node/native prerequisites.
+- The current Code - OSS pin is stable `1.141.0` at commit `2a59476c9bfcb90b3ddc372c36762471b7dfad1c`; the version file remains the source of truth for the builder.
 - `npm run download:code` fetches the pinned Microsoft `web-standalone` product build for licensed/internal use; its product license is distinct from Code - OSS MIT.
 - Asset regression coverage distinguishes the root server's pinned Node 24 trixie build/runtime stages, required by its native runtime dependencies, from the Code OSS builder, node runtime, and unrelated test images that remain on bookworm.
 - Package-local `prepare:assets` remains an alias of pinned download.

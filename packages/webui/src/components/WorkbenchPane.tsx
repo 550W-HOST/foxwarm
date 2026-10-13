@@ -77,6 +77,46 @@ function PaneDragHandle({ paneId }: { paneId: string }) {
   )
 }
 
+export function WorkbenchPaneToolbar({
+  paneId,
+  collapsed,
+  verticalRail,
+  canClosePane,
+  dragEnabled,
+  onSetCollapsed,
+  onClosePane,
+}: {
+  paneId: string
+  collapsed: boolean
+  verticalRail: boolean
+  canClosePane: boolean
+  dragEnabled: boolean
+  onSetCollapsed: (paneId: string, collapsed: boolean) => void
+  onClosePane: () => void
+}) {
+  return (
+    <>
+      {canClosePane && dragEnabled && <PaneDragHandle paneId={paneId} />}
+      {(canClosePane || collapsed) && (
+        <ToolbarButton
+          title={collapsed ? 'Expand pane' : 'Collapse pane'}
+          collapseMarker={paneId}
+          onClick={() => onSetCollapsed(paneId, !collapsed)}
+        >
+          {verticalRail
+            ? collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />
+            : collapsed ? <PanelTopOpen className="h-4 w-4" /> : <PanelTopClose className="h-4 w-4" />}
+        </ToolbarButton>
+      )}
+      {canClosePane && (
+        <ToolbarButton title="Close pane" onClick={onClosePane}>
+          <X className="h-4 w-4" />
+        </ToolbarButton>
+      )}
+    </>
+  )
+}
+
 function PaneDropZone({ paneId, edge, className }: { paneId: string; edge?: 'left' | 'right' | 'top' | 'bottom'; className: string }) {
   const { setNodeRef, isOver } = useDroppable({
     id: edge ? `pane-edge:${paneId}:${edge}` : `pane-center:${paneId}`,
@@ -144,25 +184,15 @@ export default function WorkbenchPane({
     ? (focused ? 'border-fw-accent-border ring-1 ring-fw-accent/25 dark:border-fw-accent-border/60' : 'border-fw-border')
     : 'border-transparent shadow-none'
   const paneControls = (
-    <>
-      {canClosePane && dragEnabled && <PaneDragHandle paneId={paneId} />}
-      {(canClosePane || collapsed) && (
-        <ToolbarButton
-          title={collapsed ? 'Expand pane' : 'Collapse pane'}
-          collapseMarker={paneId}
-          onClick={() => onSetCollapsed(paneId, !collapsed)}
-        >
-          {verticalRail
-            ? collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />
-            : collapsed ? <PanelTopOpen className="h-4 w-4" /> : <PanelTopClose className="h-4 w-4" />}
-        </ToolbarButton>
-      )}
-      {canClosePane && (
-        <ToolbarButton title="Close pane" onClick={onClosePane}>
-          <X className="h-4 w-4" />
-        </ToolbarButton>
-      )}
-    </>
+    <WorkbenchPaneToolbar
+      paneId={paneId}
+      collapsed={collapsed}
+      verticalRail={verticalRail}
+      canClosePane={canClosePane}
+      dragEnabled={dragEnabled}
+      onSetCollapsed={onSetCollapsed}
+      onClosePane={onClosePane}
+    />
   )
   const header = hideTabStrip && tabs.length === 1
     ? { tab: tabs[0], paneId, dragEnabled, paneControls, onCloseTab, onKeepTab, openContextMenu, openMenuAtElement }

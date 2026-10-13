@@ -49,6 +49,7 @@ export const MAIN_MANAGEMENT_TOOL_OPERATIONS = [
   'create_session',
   'delete_session',
   'node_bootstrap_info',
+  'node_create_auth_token',
   'node_pair_list',
   'node_pair_approve',
   'set_config',
@@ -76,7 +77,7 @@ export type MigrateLegacyGoalRequest = { sourceSessionId: string; goal: string; 
 export type TaskContextRequest = { sourceSessionId: string; sequences: number[]; consume: boolean; retainedTaskIds?: string[] };
 export type TaskContextResponse = { tasks: { id: string; title: string; status: string }[]; omitted: number };
 
-export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 15, {
+export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 16, {
   migrateLegacyGoal: rpcMethod<MigrateLegacyGoalRequest, { taskId: string }>(),
   taskContext: rpcMethod<TaskContextRequest, TaskContextResponse>(),
   execute: rpcMethod<MainManagementToolRequest, MainManagementToolResponse>(),
@@ -143,6 +144,7 @@ async function invokeAllowedOperation(
     case 'create_agent': return agentTools.tool_create_agent(args, ctx);
     case 'create_session': return agentTools.tool_create_session(args, ctx);
     case 'node_bootstrap_info': return nodeTools.tool_node_bootstrap_info(args, ctx);
+    case 'node_create_auth_token': return nodeTools.tool_node_create_auth_token(args, ctx);
     case 'node_pair_list': return nodeTools.tool_node_pair_list(args, ctx);
     case 'node_pair_approve': return nodeTools.tool_node_pair_approve(args, ctx);
     case 'set_config': return tool_set_config(args, ctx);
@@ -316,7 +318,7 @@ export function createMainManagementToolServiceHandler(options: {
           throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'session_update_parent requires action="update-parent" and an explicit parentSessionId.');
         }
       }
-      const needsExactSource = ['get_archived_messages', 'get_archived_blocks', 'recall', 'create_agent', 'create_session', 'set_config'].includes(operation);
+      const needsExactSource = ['get_archived_messages', 'get_archived_blocks', 'recall', 'create_agent', 'create_session', 'set_config', 'node_create_auth_token'].includes(operation);
       return { result: await invokeAllowedOperation(
         operation as MainManagementToolOperation,
         args,

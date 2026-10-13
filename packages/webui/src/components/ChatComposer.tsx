@@ -18,6 +18,7 @@ import {
 import { filterModelOptions, formatVirtualModelDetail, groupModelOptionsByProvider, resolveModelDisplayName, resolveModelTriggerDisplayName } from './modelFilter'
 import { buildChildModelComposerState, type ChildPolicyChainEntry } from './childModelState'
 import InlineComposerEditor, { type InlineComposerEditorHandle } from './InlineComposerEditor'
+import NodePicker from './NodePicker'
 import {
   clearComposerDraft,
   getPlainComposerDraftText,
@@ -47,6 +48,8 @@ interface ChatComposerProps {
   compactModelSelector?: boolean
   sessionId: string
   webUiIdentityMode?: boolean
+  currentNode?: string
+  onChangeNode?: (nodeId: string, signal: AbortSignal) => Promise<void>
   sessionMissing: boolean
   loading: boolean
   asrAvailable: boolean
@@ -538,7 +541,7 @@ function ModelSelector({
   }
 
   return (
-    <div ref={rootRef} data-chat-layout={compact === undefined ? undefined : "true"} className="foxwarm-model-selector-root relative flex min-w-0 max-w-[30rem] flex-1" title={error || undefined}>
+    <div ref={rootRef} data-chat-layout={compact === undefined ? undefined : "true"} className="foxwarm-model-selector-root relative flex min-w-0 max-w-[30rem] shrink" title={error || undefined}>
       <button
         ref={buttonRef}
         type="button"
@@ -667,6 +670,8 @@ const ChatComposer = memo(function ChatComposer({
   compactModelSelector,
   sessionId,
   webUiIdentityMode = false,
+  currentNode,
+  onChangeNode,
   sessionMissing,
   loading,
   asrAvailable,
@@ -1451,7 +1456,7 @@ const ChatComposer = memo(function ChatComposer({
         {draftPersistenceError && <div className="px-3 pb-1 text-xs text-fw-danger" role="alert">{draftPersistenceError}</div>}
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 flex-1 items-center gap-1">
-            <div className="flex min-w-0 items-center gap-1 overflow-x-auto pb-0.5">
+            <div className="flex min-w-0 shrink-0 items-center gap-1 overflow-x-auto pb-0.5">
               <label
                 htmlFor="file-upload"
                 onClick={(event) => { if (recordingLockRef.current) event.preventDefault() }}
@@ -1501,6 +1506,13 @@ const ChatComposer = memo(function ChatComposer({
               onChangeChildEffort={onChangeChildEffort}
               onRefreshModels={onRefreshModels}
               onOpenModelSettings={onOpenModelSettings}
+            />}
+            {!webUiIdentityMode && onChangeNode && <NodePicker
+              key={sessionId}
+              sessionId={sessionId}
+              currentNode={currentNode}
+              disabled={sessionMissing}
+              onChangeNode={onChangeNode}
             />}
           </div>
           <button

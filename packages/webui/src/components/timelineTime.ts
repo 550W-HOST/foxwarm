@@ -13,6 +13,13 @@ const sameLocalDay = (left: number, right: number): boolean => {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
 }
 
+/** Existing minute/date comparison, also used by a presentation-only live request surface. */
+export const selectTimelineTimeMarker = (current: number, previous: number | null): TimelineTimeMarker | null => {
+  if (previous === null) return { timestamp: current }
+  const gap = current - previous
+  return Math.abs(gap) >= 60_000 || gap !== 0 && !sameLocalDay(current, previous) ? { timestamp: current } : null
+}
+
 /** Compare the next request start with the preceding persisted end; grouped rows have no separate time line. */
 export const deriveTimelineTimeMarkers = (
   messages: readonly Message[], isGroupedEvent: (message: Message) => boolean,
@@ -35,10 +42,7 @@ export const deriveTimelineTimeMarkers = (
       if (!showedClock || previous === null) {
         marker = { timestamp: current }
       } else {
-        const gap = current - previous
-        if (Math.abs(gap) >= 60_000 || (gap !== 0 && !sameLocalDay(current, previous))) {
-          marker = { timestamp: current }
-        }
+        marker = selectTimelineTimeMarker(current, previous)
       }
       showedClock = true
     }

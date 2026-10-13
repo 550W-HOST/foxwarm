@@ -95,6 +95,7 @@ export const BUILTIN_TOOL_PLACEMENTS = {
     },
   },
   node_bootstrap_info: { owner: 'main-management' },
+  node_create_auth_token: { owner: 'main-management' },
   node_pair_approve: { owner: 'main-management' },
   node_pair_list: { owner: 'main-management' },
   create_agent: { owner: 'main-management' },

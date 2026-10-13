@@ -524,8 +524,8 @@ test('validateCompactPlanArgs rejects preserveMessages not covered by created me
   }, messageCandidates), /not covered by any created message-source block/i);
 });
 
-test('validateCompactPlanArgs rejects preserving part of an atomic tool exchange candidate', () => {
-  assert.throws(() => validateCompactPlanArgs({
+test('validateCompactPlanArgs expands preserving part of an atomic tool exchange candidate to the whole exchange', () => {
+  const plan = validateCompactPlanArgs({
     replaceAsBlocks: [{
       level: 1,
       sourceKind: 'message',
@@ -534,7 +534,9 @@ test('validateCompactPlanArgs rejects preserving part of an atomic tool exchange
       summary: 'summary for atomic tool exchange',
     }],
     preserveMessages: [11],
-  }, [buildMessageCandidateItem(10, 11, 'tool call and response')]), /inside atomic candidate M#10-#11/i);
+  }, [buildMessageCandidateItem(10, 11, 'tool call and response')]);
+
+  assert.deepStrictEqual(plan.preserveMessages, [10, 11]);
 });
 
 test('validateCompactPlanArgs accepts removePreservedMessages only for listed preserved messages', () => {

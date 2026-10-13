@@ -1,7 +1,7 @@
 # Unit: webui-chat-composer
 
 Files: packages/webui/src/components/ChatComposer.tsx, packages/webui/src/components/InlineComposerEditor.tsx, packages/webui/src/composerDraft.ts, packages/webui/src/components/modelFilter.ts, packages/webui/src/messageAttachmentDrafts.ts, packages/webui/test/composerDraft.test.mjs, packages/webui/test/composerPastedText.e2e.mjs, packages/webui/test/modelFilter.test.mjs, packages/webui/test/modelSelectorTrigger.e2e.mjs, packages/webui/test/messageAttachmentDrafts.test.mjs, packages/webui/test/messageAttachmentDrafts.e2e.mjs
-Secondary files: packages/webui/src/attachmentRefs.ts, packages/webui/src/attachmentSend.ts, packages/webui/test/attachmentRefs.test.mjs, packages/webui/test/attachmentSend.test.mjs
+Secondary files: packages/webui/src/attachmentRefs.ts, packages/webui/src/attachmentSend.ts, packages/webui/src/components/NodePicker.tsx, packages/webui/test/attachmentRefs.test.mjs, packages/webui/test/attachmentSend.test.mjs
 Integration files: packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/src/index.css, packages/webui/test/setupModels.e2e.mjs, packages/webui/test/systemTabs.e2e.mjs
 
 ## Purpose
@@ -30,6 +30,7 @@ A rich chat composer component for the web UI that handles ordered ordinary text
 | `formatVirtualModelDetail(option)` | modelFilter.ts | Formats ordered alias, session-hash, or failover targets for option-row secondary text |
 | `filterModelOptions(options, query, defaultModelKey?)` | modelFilter.ts | Case-insensitive visible-label/id substring filter that preserves server order |
 | `ModelSelector(props)` | ~85–430 | Popup component for filtering/selecting current and child models, selecting their effort overrides, or opening model settings |
+| `NodePicker(props)` | NodePicker.tsx | Session execution-node trigger with an on-open directory and confirmed selection popup |
 | `updatePopupPosition()` | ~97–120 | Calculates fixed positioning for the model selector popup |
 | `applyCurrentModel(model)` | ~140 | Calls onChangeModel unless busy |
 | `applyChildModel(model)` | ~145 | Calls onChangeChildModel unless busy |
@@ -91,7 +92,7 @@ A rich chat composer component for the web UI that handles ordered ordinary text
 - The trigger shows the effective current effort and shows the future-child pair when either a child model or child effort override exists. It can use up to 30rem for long current/child labels, but its flex owner remains shrinkable and the labels ellipsize in narrow composers without creating horizontal overflow or hiding the Send control. Attachment/audio chips retain their own inner horizontal-scroll area instead of forcing the model trigger wider. Each popup column keeps its own filter, scrollable model rows, and effort footer. The selected effort labels remain compact while titles and accessibility descriptions retain complete effective-default/stale semantics. Each control is limited to the freshly loaded selected/effective model capability (falling back to the session projection); a virtual unset is per-leaf and a stale override stays visibly selected with the authoritative fallback until recovery. Canonical semantics: [D-model-routing-effort](../threads/model-routing.md#d-model-routing-effort).
 - Adds semantic CSS hooks (`foxwarm-chat-composer-inner`, `foxwarm-chat-composer-form`, `foxwarm-chat-composer-textarea`, `foxwarm-composer-attachment-chip`) used by optional UI style layers; these hooks should not change composer behavior or draft/attachment data flow. The inner wrapper keeps the ordinary centered 64rem composer geometry in wide panes; Chat-owned container CSS can reserve a desktop context-overview clearance in constrained per-pane layouts without altering mobile behavior.
 
-WebUI identity mode does not fetch command metadata, offer slash completions, or render the model selector; the server independently rejects WebUI identity commands and model changes.
+WebUI identity mode does not fetch command metadata, offer slash completions, or render model or Node pickers; the server independently rejects these administrator operations.
 
 ## Integration
 
@@ -103,6 +104,12 @@ WebUI identity mode does not fetch command metadata, offer slash completions, or
 - The generated browser fixture resolves the WebUI's React runtime through `test/reactRendererAliases.mjs`. Controlled pasted-text modal edits simulate a native textarea value change before dispatching `input`; its cut/undo check uses the browser's keyboard path rather than a synthetic `beforeinput`, so these checks exercise the same React event handlers as user input.
 
 ## Design decisions
+
+### D-composer-session-node-picker
+
+[2026-10-13] The unified current/child model and Node triggers use their content width and share a 4px gap at the left of the toolbar; remaining space belongs after Node, before Send. The model owner does not grow but retains its 30rem cap and shrinkable labels. Both pickers are 32px high with the same rounded rectangular hover treatment and 13px text. The Node icon matches the Session-list Server icon at 14px with a 2px stroke. Master is a fixed 32px muted icon-only trigger; non-master uses only the theme accent icon, with its actual ID in normal muted toolbar text, truncated under width pressure with a complete tooltip and accessible label. Attachment and recording controls retain their fixed width, and Send retains its fixed space in narrow panes. An on-open, Session-scoped directory includes generic ready Nodes without requiring Code or PTY services; offline/incompatible options are disabled, and a missing current ID remains visible rather than silently switching to master. The fixed portaled dialog uses outside/Escape dismissal, prevent-scroll focus, and pane/viewport anchor repositioning without changing the editor draft or selection. Pending selection disables mutations; failures keep the confirmed value and expose the server error. Chat applies only the successful exact-owner response, and normal Session-state events continue updating the trigger. Switching Sessions aborts old picker consumers. There is no global Node cache or polling. WebUI identity Chat never mounts the picker or requests its directory.
+
+The administrator routes reuse generic topology and Node validation plus exact-owner SessionRuntime settings. Like the existing user `/node` command, this UI selection retains the Session cwd; it does not adopt the model-tool `node select` cwd-clear behavior. Agent-bound isolation prevents selection changes. This is execution routing, not Agent isolation or Node lifecycle management.
 
 ### D-composer-inline-streaming-transcription
 

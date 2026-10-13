@@ -6,6 +6,7 @@ import zlib from 'node:zlib';
 import { loadModelsConfigFromObject } from './config';
 import { LlmRequestError, classifyHttpFailure, requestLlmOnce } from './llm';
 import { resetVirtualRoutingStateForTests } from './modelRouting';
+import { makeAnthropicMessageStream } from './testFixtures/anthropicMessageStream';
 
 function makeSseStream(events: Array<any | '[DONE]'>): PassThrough {
   const stream = new PassThrough();
@@ -189,7 +190,7 @@ test('failover uses outer attempts A x5 then rebuilds a clean Anthropic request 
       status: 200,
       statusText: 'OK',
       headers: {},
-      data: { content: [{ type: 'text', text: 'anthropic fallback ok' }] },
+      data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'anthropic fallback ok' }] }),
     };
   };
 
@@ -204,7 +205,7 @@ test('failover uses outer attempts A x5 then rebuilds a clean Anthropic request 
     assert.equal(calls[5].headers['Content-Encoding'], 'gzip');
     const fallbackBody = JSON.parse(zlib.gunzipSync(calls[5].body).toString('utf8'));
     assert.equal(fallbackBody.model, 'claude-model');
-    assert.equal(fallbackBody.stream, undefined);
+    assert.equal(fallbackBody.stream, true);
     assert.equal(fallbackBody.prompt_cache_key, undefined);
     assert.equal(result.text, 'anthropic fallback ok');
     assert.equal(result.modelId, 'anthropicLeaf/claude-model');
@@ -224,7 +225,7 @@ test('virtual physical attempts make independent inline image dedup decisions', 
       status: 200,
       statusText: 'OK',
       headers: {},
-      data: { content: [{ type: 'text', text: 'ok' }] },
+      data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }] }),
     };
   };
 
@@ -287,7 +288,7 @@ test('virtual attempts with unset effort use each concrete leaf default independ
   (axios as any).post = async (url: string, body: any) => {
     calls.push({ url, body });
     if (calls.length === 1) throw new Error('force cross-provider retry');
-    return { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'ok' }] } };
+    return { status: 200, statusText: 'OK', headers: {}, data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }] }) };
   };
 
   try {
@@ -313,7 +314,7 @@ test('virtual failover re-filters historical reasoning for each concrete attempt
       status: 200,
       statusText: 'OK',
       headers: {},
-      data: { content: [{ type: 'text', text: 'fallback ok' }] },
+      data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'fallback ok' }] }),
     };
   };
 
@@ -504,7 +505,7 @@ test('disallowEmptyResponse empty 2xx response counts toward failover health', a
   (axios as any).post = async () => {
     calls += 1;
     if (calls === 1) return { status: 200, statusText: 'OK', headers: {}, data: makeChatStream('   ') };
-    return { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'B after empty A' }] } };
+    return { status: 200, statusText: 'OK', headers: {}, data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'B after empty A' }] }) };
   };
   try {
     const result = await withImmediateRetryTimers(() => requestLlmOnce(baseRequest('fastFallback')));
@@ -637,7 +638,7 @@ test('HTTP classification keeps request-specific 400/413/422 final and counts mo
         (axios as any).post = async (url: string) => {
           urls.push(url);
           if (urls.length === 1) return { status, statusText: 'Error', headers: {}, data: makeRawStream(body) };
-          return { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'B ok' }] } };
+          return { status: 200, statusText: 'OK', headers: {}, data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'B ok' }] }) };
         };
         const result = await withImmediateRetryTimers(() => requestLlmOnce(baseRequest('fastFallback')));
         assert.equal(result.modelId, 'anthropicLeaf/claude-model');
@@ -718,8 +719,8 @@ test('disallowEmptyResponse leaves retry empty, whitespace-only, and reasoning-o
           statusText: 'OK',
           headers: {},
           data: calls === 1
-            ? { content: [{ type: 'thinking', thinking: 'thinking only' }] }
-            : { content: [{ type: 'text', text: 'anthropic ok' }] },
+            ? makeAnthropicMessageStream({ content: [{ type: 'thinking', thinking: 'thinking only' }] })
+            : makeAnthropicMessageStream({ content: [{ type: 'text', text: 'anthropic ok' }] }),
         };
       };
       const result = await withImmediateRetryTimers(() => requestLlmOnce(baseRequest('anthropicLeaf/claude-model', 2)));
@@ -731,7 +732,7 @@ test('disallowEmptyResponse leaves retry empty, whitespace-only, and reasoning-o
     for (const [model, response] of [
       ['openaiLeaf/chat-model', () => makeChatStream('')],
       ['responsesLeaf/responses-model', () => makeResponsesStream('empty')],
-      ['anthropicLeaf/claude-model', () => ({ content: [] as any[] })],
+      ['anthropicLeaf/claude-model', () => makeAnthropicMessageStream({ content: [] })],
     ] as const) {
       await t.test(`${model} rejects a fully empty response`, async () => {
         (axios as any).post = async () => ({ status: 200, statusText: 'OK', headers: {}, data: response() });
@@ -745,7 +746,7 @@ test('disallowEmptyResponse leaves retry empty, whitespace-only, and reasoning-o
     for (const [model, response] of [
       ['openaiLeaf/chat-model', () => makeChatStream('', { toolCall: true })],
       ['responsesLeaf/responses-model', () => makeResponsesStream('tool')],
-      ['anthropicLeaf/claude-model', () => ({ content: [{ type: 'tool_use', id: 'call_1', name: 'read', input: { filePath: 'x' } }] })],
+      ['anthropicLeaf/claude-model', () => makeAnthropicMessageStream({ content: [{ type: 'tool_use', id: 'call_1', name: 'read', input: { filePath: 'x' } }] })],
     ] as const) {
       await t.test(`${model} accepts tool-call-only output`, async () => {
         let calls = 0;

@@ -6,7 +6,7 @@ This thread owns the cross-module contract for concrete and virtual model select
 
 ## Configuration and resolved graph
 
-Concrete provider entries continue to use `providerType` plus provider connection fields and `models`. The preferred field remains `providerType`; persisted legacy `provider` is only a reader when `providerType` is absent.
+Concrete provider entries continue to use `providerType` plus provider connection fields and `models`. The preferred field remains `providerType`; persisted legacy `provider` is only a reader when `providerType` is absent. An unset or empty type uses the OpenAI protocol. Any other non-empty value must be one of the concrete or virtual types; unknown values are rejected during validation and never fall back to Anthropic.
 
 The concrete `openai-ws` type uses OpenAI Responses request/event semantics over
 a provider WebSocket. It remains a concrete leaf for virtual routing; completed

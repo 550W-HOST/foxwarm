@@ -1127,12 +1127,12 @@ const TimelineActivity = memo(function TimelineActivity({ row, expanded, onToggl
   return (
     <div ref={ref} data-timeline-activity data-activity-expanded={expanded}
       data-chat-message-anchor-key={row.anchorKey} className={`min-w-0 ${row.widthClass} ${row.marginClass}`}>
-      <button type="button" aria-expanded={expanded} aria-label={expanded ? 'Collapse activity' : 'Expand activity'}
-        className="flex items-center gap-2 rounded px-2 py-1 text-xs text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong"
+      {row.activity!.runtimeOnly ? <div className="px-2 py-1 text-left text-xs text-fw-text-muted">{row.activity!.summary}</div> : <button type="button" aria-expanded={expanded} aria-label={expanded ? 'Collapse activity' : 'Expand activity'}
+        className="flex items-center gap-2 rounded px-2 py-1 text-left text-xs text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong"
         onClick={() => { prepare(); onToggle(row.key, !expanded) }}>
         <span aria-hidden="true">{expanded ? '⌄' : '›'}</span><span>{row.activity!.summary}</span>
-      </button>
-      {expanded && <div className="min-w-0 pl-3" data-activity-details>
+      </button>}
+      {expanded && !row.activity!.runtimeOnly && <div className="min-w-0 pl-3" data-activity-details>
         {rowProps.renderNestedMessages(row.activity!.messages, row.key, rowProps.nestedDepth + 1, 'detailed')}
       </div>}
     </div>

@@ -9,7 +9,7 @@ import type { CurrentSessionTurnEffects } from './llm';
 import { RpcError } from './rpc';
 import { initArchiveStore } from './session/archiveStore';
 import { refreshSessionSnapshotForSession } from './session/agentMetadata';
-import { cancelSessionCompaction, clearSession, compactToolMessages as compactSessionToolMessages, deleteMessages, forceIndexSession, getEffectiveCompactThresholdTokens, getUsageTotalTokens, processSessionCompactionRequest, tryAutomaticToolResponsePruning, type CompactCancellationResult, type SessionHistoryDeps } from './session/history';
+import { cancelSessionCompaction, clearSession, compactToolMessages as compactSessionToolMessages, deleteMessages, forceIndexSession, getEffectiveCompactThresholdTokens, getUsageTotalTokens, processSessionCompactionRequest, tryAutomaticToolResponsePruning, waitForCompactPlanningSettle, type CompactCancellationResult, type SessionHistoryDeps } from './session/history';
 import { getManagedSessionState } from './session/managedState';
 import { captureSessionSemanticState, restoreSessionSemanticState } from './session/metadataStore';
 import {
@@ -765,7 +765,15 @@ export class SessionWorkerHost {
         hasCompletedCompactJob: sessionId => { this.assertId(sessionId); return false; },
         applyCompletedCompactJob: async sessionId => { this.assertId(sessionId); throw this.compactionUnsupported(); },
         processSessionCompactionRequest: async (sessionId, request) => {
-          this.assertId(sessionId); await this.runAutomaticCompaction(request, 'pre-final');
+          this.assertId(sessionId);
+          return { applied: await this.runAutomaticCompaction(request, 'pre-final'), background: false };
+        },
+        waitForCompactPlanningSettle: async sessionId => {
+          this.assertId(sessionId);
+          // Worker compaction stays inside this serialized owner lane, so its
+          // registry is observably settled here; never fabricate background work.
+          const outcome = await waitForCompactPlanningSettle(this.identity.sessionId);
+          return outcome === 'aborted' ? 'released' : outcome;
         },
         checkAndCompactIfNeeded: async (sessionId, usage) => {
           this.assertId(sessionId);

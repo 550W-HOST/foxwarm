@@ -105,7 +105,10 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       if (pathname.endsWith('/api/commands')) return json({ commands: [] })
       if (pathname.endsWith('/api/session-list/sidebar')) return json({ version: 1, revision: 'r1', sessions: [sessionFixture('e2e-a'), sessionFixture('e2e-b'), sessionFixture('e2e-c')], nextCursor: null, children: [], focus: [], pathContext: [], forcedChildren: {} })
       if (pathname.endsWith('/api/session-list/by-id')) return json({ results: JSON.parse(options.body).ids.filter(id => id === 'history-outside/main').map(requestedId => ({ requestedId, resolution: { kind: 'exact', sessionId: requestedId }, session: { ...sessionFixture(requestedId), displayName: 'Outside the sidebar' } })) })
-      if (pathname.endsWith('/api/history/search')) return json({ results: ['history-outside/main', 'e2e-a'].map(sessionId => ({ key: sessionId, sessionId, kind: 'messages', firstSeq: 7, lastSeq: 7, hasEarlier: false, hasLater: false, messages: [{ role: 'user', parts: [{ text: 'Archived navigation fixture' }], __meta: { seq: 7, timestamp: 1700000000000 } }] })) })
+      if (pathname.endsWith('/api/history/search')) {
+        if (url.searchParams.get('query') === 'empty') return json({ results: [] })
+        return json({ results: ['history-outside/main', 'e2e-a'].map(sessionId => ({ key: sessionId, sessionId, kind: 'messages', firstSeq: 7, lastSeq: 7, hasEarlier: false, hasLater: false, messages: [{ role: 'user', parts: [{ text: ('Archived navigation fixture\n').repeat(40) }], __meta: { seq: 7, timestamp: 1700000000000 } }] })) })
+      }
       if (pathname.endsWith('/api/session-list/descendant-activity')) return json({ results: [] })
       if (pathname.endsWith('/api/session-list/architecture')) return json({ version: 1, revision: 'r1', sessions: [], nextCursor: null, children: [], focus: [], pathContext: [], forcedChildren: {}, summary: { total: 3, busy: 0, queued: 0, managed: 0, cachedTokens: 3000000000, inputTokens: 200000000, outputTokens: 30000000 } })
       if (pathname.includes('/api/session-list/')) return json({ sessions: [], results: [] })
@@ -289,10 +292,8 @@ test('vertical split collapse remains a horizontal tab bar after reload and expo
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.kind === 'pane')
     assert.equal(await page.$('[data-workbench-pane-drag-handle]'), null, 'closing the other pane removes the whole-pane drag control')
     assert.equal(await page.$('button[title="Collapse pane"]'), null)
-    assert.equal(await page.$('[role="textbox"][aria-label="Message"]'), null)
-    await page.click('button[title="Expand pane"]')
+    assert.equal((await state(page)).root.collapsed, false, 'moving the closed pane tab into the remaining pane activates and expands it')
     await page.waitForSelector('[data-tab-id="system:agents"]')
-    assert.equal((await state(page)).root.collapsed, false)
     await page.click('[data-tab-id="chat:e2e-a"]')
     await page.waitForSelector('[role="textbox"][aria-label="Message"]')
     assert.equal(await page.$('[data-workbench-pane-collapse]'), null, 'the restored lone pane has no collapse control')
@@ -315,7 +316,27 @@ test('a persisted lone collapsed pane keeps its tab expansion entry without pane
   } finally { await page.close() }
 })
 
-test('collapsing Terminal and kept Code unmounts the view without closing resources', async () => {
+test('explicit hash navigation activates and expands an existing collapsed-pane tab', async () => {
+  const layout = {
+    id: 'split-main',
+    kind: 'split',
+    direction: 'row',
+    sizes: [50, 50],
+    children: [
+      { id: 'pane-main', kind: 'pane', tabIds: ['chat:e2e-a'], activeTabId: 'chat:e2e-a', collapsed: true },
+      { id: 'pane-other', kind: 'pane', tabIds: ['system:agents'], activeTabId: 'system:agents' },
+    ],
+  }
+  const page = await openFixture({ tabs: [chat('e2e-a', false), system], activeTabId: 'system:agents', hash: '#tab/system:agents', layout })
+  try {
+    await page.waitForSelector('[data-workbench-collapsed-tab="chat:e2e-a"]')
+    await page.evaluate(() => { window.location.hash = '#tab/chat%3Ae2e-a' })
+    await page.waitForSelector('[data-workbench-tab-handle="chat:e2e-a"]')
+    assert.equal((await state(page)).root.children.find(pane => pane.id === 'pane-main').collapsed, false, 'explicit hash navigation expands the activated pane')
+  } finally { await page.close() }
+})
+
+test('collapsing Terminal detaches without closing resources and kept Code stays mounted', async () => {
   const terminal = { id: 'term-collapse', nodeId: 'master', cwd: '/workspace', pid: 42, cols: 80, rows: 24 }
   const terminalTab = { id: 'terminal:term-collapse', type: 'terminal', terminalId: terminal.id, nodeId: terminal.nodeId, cwd: terminal.cwd, title: 'Terminal' }
   const terminalPage = await openFixture({ tabs: [terminalTab, chat('e2e-a', false), system], activeTabId: terminalTab.id, hash: `#tab/${encodeURIComponent(terminalTab.id)}`, split: true, terminal })
@@ -341,16 +362,26 @@ test('collapsing Terminal and kept Code unmounts the view without closing resour
   const codePage = await openFixture({ tabs: [codeTab, chat('e2e-a', false), system], activeTabId: codeTab.id, hash: '#tab/vscode-web', split: true })
   try {
     await codePage.waitForSelector('[data-foxwarm-vscode-web-frame="true"]')
+    const codeFrameIdentity = await codePage.$eval('[data-foxwarm-vscode-web-frame="true"]', frame => {
+      const token = `frame-${Math.random()}`
+      frame.dataset.testFrameIdentity = token
+      return token
+    })
     assert.ok(await codePage.$('[data-pane-id="pane-main"] button[title="Close pane"]'))
     await codePage.click('[data-tab-id="chat:e2e-a"]')
     await codePage.waitForSelector('[role="textbox"][aria-label="Message"]')
     assert.ok(await codePage.$('[data-foxwarm-vscode-web-frame="true"]'), 'ordinary switching keeps the inactive Code iframe')
     await codePage.click('[data-workbench-pane-collapse="pane-main"]')
     await codePage.waitForSelector('[data-workbench-collapsed-tab="vscode-web"]')
-    await codePage.waitForFunction(() => !document.querySelector('[data-foxwarm-vscode-web-frame="true"]'))
-    assert.ok((await state(codePage)).tabsById['vscode-web'], 'Code tab record stays available while its iframe is unmounted')
+    await codePage.waitForFunction(() => {
+      const frame = document.querySelector('[data-foxwarm-vscode-web-frame="true"]')
+      return frame && getComputedStyle(frame).visibility === 'hidden' && getComputedStyle(frame).pointerEvents === 'none'
+    })
+    assert.ok((await state(codePage)).tabsById['vscode-web'], 'Code tab record stays available while its pane is collapsed')
+    assert.equal(await codePage.$eval('[data-foxwarm-vscode-web-frame="true"]', frame => frame.dataset.testFrameIdentity), codeFrameIdentity, 'collapse keeps the same iframe object')
     await codePage.click('[data-workbench-collapsed-tab="vscode-web"]')
     await codePage.waitForSelector('[data-foxwarm-vscode-web-frame="true"]')
+    assert.equal(await codePage.$eval('[data-foxwarm-vscode-web-frame="true"]', frame => frame.dataset.testFrameIdentity), codeFrameIdentity, 'expansion reuses the same iframe object')
   } finally { await codePage.close() }
 })
 
@@ -711,16 +742,83 @@ test('global history entry opens a persistent workbench tab without a chat compo
     if (process.env.FOXWARM_HISTORY_SCREENSHOT_DIR) await (await page.$(footer))?.screenshot({ path: `${process.env.FOXWARM_HISTORY_SCREENSHOT_DIR}/sidebar-footer-search.png` })
     if (process.env.FOXWARM_HISTORY_SCREENSHOT_DIR) await (await page.$('.foxwarm-chat-root .sticky'))?.screenshot({ path: `${process.env.FOXWARM_HISTORY_SCREENSHOT_DIR}/chat-find-header.png` })
     await page.click(`${footer} button[aria-label="Search history"]`)
-    await page.waitForSelector('[data-tab-id="system:search"]')
+    await page.waitForSelector('[data-tab-id^="history:"]')
     await page.waitForSelector('[data-history-search-view]')
     assert.equal(await page.$('[data-history-search-view] [aria-label="Message"]'), null)
-    assert.equal((await state(page)).root.activeTabId, 'system:search')
-    assert.equal((await state(page)).tabsById['system:search'].type, 'search')
-    assert.equal((await state(page)).tabsById['system:search'].title, 'History')
-    assert.equal(await page.$eval('[data-tab-id="system:search"]', tab => tab.title), 'History')
-    assert.ok(await page.$('[data-tab-id="system:search"] svg.lucide-history'))
-    if (process.env.FOXWARM_HISTORY_SCREENSHOT_DIR) await (await page.$('[data-tab-id="system:search"]'))?.screenshot({ path: `${process.env.FOXWARM_HISTORY_SCREENSHOT_DIR}/history-workbench-tab.png` })
-    assert.equal((await state(page)).hash, '#tab/system:search')
+    const historyTabId = await page.$eval('[data-tab-id^="history:"]', tab => tab.getAttribute('data-tab-id'))
+    const snapshot = await state(page)
+    assert.equal(snapshot.root.activeTabId, historyTabId)
+    assert.equal(snapshot.tabsById[historyTabId].type, 'search')
+    assert.equal(snapshot.tabsById[historyTabId].title, 'History')
+    assert.equal(await page.$eval(`[data-tab-id="${historyTabId}"]`, tab => tab.title), 'History')
+    assert.ok(await page.$(`[data-tab-id="${historyTabId}"] svg.lucide-history`))
+    if (process.env.FOXWARM_HISTORY_SCREENSHOT_DIR) await (await page.$(`[data-tab-id="${historyTabId}"]`))?.screenshot({ path: `${process.env.FOXWARM_HISTORY_SCREENSHOT_DIR}/history-workbench-tab.png` })
+    assert.equal((await state(page)).hash, `#tab/${historyTabId}`)
+  } finally { await page.close() }
+})
+
+test('History tabs keep independent drafts/results across entries, pane collapse, and mobile list hiding', async () => {
+  const page = await openFixture({ split: true })
+  try {
+    const footer = '[data-sidebar-footer] button[aria-label="Search history"]'
+    await page.click(footer)
+    await page.waitForSelector('[data-history-search-view]')
+    const firstTabId = await page.$eval('[data-tab-id^="history:"]', tab => tab.getAttribute('data-tab-id'))
+    await page.type('[data-history-query-input]', 'alpha')
+    await page.click('[data-history-search-view] button[type="submit"]')
+    await page.waitForSelector('[data-history-result="history-outside/main"]')
+    assert.equal(await page.$eval(`[data-tab-id="${firstTabId}"]`, tab => tab.textContent.includes('alpha')), true)
+
+    await page.click(footer)
+    await page.waitForFunction(id => document.querySelectorAll('[data-tab-id^="history:"]').length === 2 && !document.querySelector(`[data-tab-id="${id}"]`)?.classList.contains('hidden'), firstTabId)
+    const tabIds = await page.$$eval('[data-tab-id^="history:"]', tabs => tabs.map(tab => tab.getAttribute('data-tab-id')))
+    const secondTabId = tabIds.find(id => id !== firstTabId)
+    assert.ok(secondTabId)
+    const associations = await page.evaluate(({ firstId, secondId }) => {
+      const read = id => {
+        const view = document.querySelector(`[data-history-tab-id="${id}"]`)
+        const input = view.querySelector('[data-history-query-input]')
+        const label = view.querySelector('label[for]')
+        const sessionInput = view.querySelector('[data-history-session-input]')
+        const list = sessionInput?.getAttribute('list')
+        const datalist = list ? view.querySelector(`#${CSS.escape(list)}`) : null
+        return { inputId: input.id, labelFor: label?.htmlFor, sessionList: list, datalistId: datalist?.id }
+      }
+      return { first: read(firstId), second: read(secondId) }
+    }, { firstId: firstTabId, secondId: secondTabId })
+    assert.notEqual(associations.first.inputId, associations.second.inputId)
+    assert.deepEqual(associations.first, { inputId: associations.first.inputId, labelFor: associations.first.inputId, sessionList: associations.first.sessionList, datalistId: associations.first.sessionList })
+    assert.deepEqual(associations.second, { inputId: associations.second.inputId, labelFor: associations.second.inputId, sessionList: associations.second.sessionList, datalistId: associations.second.sessionList })
+    const focusedAfterLabel = await page.$eval(`[data-history-tab-id="${secondTabId}"] label[for="${associations.second.inputId}"]`, label => {
+      label.click()
+      return { htmlFor: label.htmlFor, activeId: document.activeElement?.id }
+    })
+    assert.equal(focusedAfterLabel.htmlFor, associations.second.inputId)
+    assert.equal(focusedAfterLabel.activeId, associations.second.inputId)
+    await page.click(footer)
+    await page.waitForFunction(() => document.querySelectorAll('[data-tab-id^="history:"]').length === 2)
+
+    await page.click(`[data-tab-id="${firstTabId}"]`)
+    await page.waitForSelector(`[data-history-tab-id="${firstTabId}"] [data-history-result="history-outside/main"]`)
+    assert.equal(await page.$eval(`[data-history-tab-id="${firstTabId}"] [data-history-query-input]`, input => input.value), 'alpha')
+    await page.$eval(`[data-history-tab-id="${firstTabId}"]`, element => { element.scrollTop = 20; element.dispatchEvent(new Event('scroll', { bubbles: true })) })
+    await page.click(`[data-tab-id="${secondTabId}"]`)
+    await page.waitForSelector(`[data-history-tab-id="${secondTabId}"]`)
+    await page.click(`[data-tab-id="${firstTabId}"]`)
+    await page.waitForSelector(`[data-history-tab-id="${firstTabId}"] [data-history-result="history-outside/main"]`)
+    assert.ok(await page.$eval(`[data-history-tab-id="${firstTabId}"]`, element => element.scrollTop >= 10), 'History restores its tab-owned scroll position')
+    const firstPaneId = await page.$eval(`[data-tab-id="${firstTabId}"]`, tab => tab.closest('[data-pane-id]').dataset.paneId)
+    await page.click(`[data-workbench-pane-collapse="${firstPaneId}"]`)
+    await page.waitForSelector(`[data-workbench-collapsed-tab="${firstTabId}"]`)
+    await page.click(`[data-workbench-collapsed-tab="${firstTabId}"]`)
+    await page.waitForSelector(`[data-history-tab-id="${firstTabId}"] [data-history-result="history-outside/main"]`)
+    assert.equal(await page.$eval(`[data-history-tab-id="${firstTabId}"] [data-history-query-input]`, input => input.value), 'alpha')
+
+    await page.setViewport({ width: 390, height: 800 })
+    await page.waitForSelector('[data-sidebar-footer] button[aria-label="Search history"]')
+    await page.click('[data-sidebar-footer] button[aria-label="Search history"]')
+    await page.waitForSelector('[data-history-search-view]')
+    assert.deepEqual((await page.$$eval('[data-history-search-view] [data-history-query-input]', inputs => inputs.map(input => input.value).sort())), ['', 'alpha'], 'mobile hiding keeps both History tab drafts')
   } finally { await page.close() }
 })
 
@@ -759,12 +857,37 @@ test('persisted search tabs keep their identity while showing the current Histor
   } finally { await page.close() }
 })
 
+test('opening an existing History tab from the footer expands its collapsed pane', async () => {
+  const historyTab = { id: 'history:existing', type: 'search', title: 'History' }
+  const page = await openFixture({
+    tabs: [system, chat('e2e-a'), historyTab],
+    activeTabId: 'chat:e2e-a',
+    layout: {
+      id: 'split-main',
+      kind: 'split',
+      direction: 'row',
+      sizes: [50, 50],
+      children: [
+        { id: 'pane-main', kind: 'pane', tabIds: ['system:agents', 'chat:e2e-a'], activeTabId: 'chat:e2e-a' },
+        { id: 'pane-history', kind: 'pane', tabIds: ['history:existing'], activeTabId: 'history:existing', collapsed: true },
+      ],
+    },
+  })
+  try {
+    await page.waitForSelector('[data-workbench-collapsed-tab="history:existing"]')
+    await page.click('[data-sidebar-footer] button[aria-label="Search history"]')
+    await page.waitForSelector('[data-history-tab-id="history:existing"]')
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.children.find(pane => pane.id === 'pane-history').collapsed === false)
+    assert.equal((await state(page)).tabsById['history:existing'].id, 'history:existing', 'the existing tab instance is activated rather than replaced')
+  } finally { await page.close() }
+})
+
 test('history result Open session reuses kept Chats or opens a preview while retaining the History tab', async () => {
   const history = { id: 'system:search', type: 'search', title: 'History' }
   const page = await openFixture({ tabs: [history, chat('e2e-a', false)], activeTabId: history.id })
   try {
-    await page.waitForSelector('#history-search-query')
-    await page.type('#history-search-query', 'entry')
+    await page.waitForSelector('[data-history-query-input]')
+    await page.type('[data-history-query-input]', 'entry')
     await page.click('button[type=submit]')
     await page.waitForFunction(() => document.querySelector('[data-history-result="history-outside/main"] header')?.textContent.includes('Outside the sidebar'))
     assert.equal(await page.$('[data-session-id="history-outside/main"]'), null)
@@ -773,8 +896,8 @@ test('history result Open session reuses kept Chats or opens a preview while ret
     assert.equal((await state(page)).tabsById['chat:e2e-a'].preview, false)
     assert.equal((await state(page)).tabsById['system:search'].type, 'search')
     await page.click('[data-tab-id="system:search"]')
-    await page.waitForSelector('#history-search-query')
-    await page.type('#history-search-query', 'entry')
+    await page.waitForSelector('[data-history-query-input]')
+    await page.type('[data-history-query-input]', 'entry')
     await page.click('button[type=submit]')
     await page.waitForSelector('[data-history-result="history-outside/main"]')
     await page.click('[data-history-result="history-outside/main"] a[aria-label="Open session"]')

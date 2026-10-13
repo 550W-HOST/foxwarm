@@ -183,6 +183,50 @@ test('workbench pane collapse survives normalization and older panes default to 
   assert.deepEqual(normalized.root.children.map(pane => pane.tabIds), [['system:agents'], ['system:setup']])
 })
 
+test('user tab activation expands its pane while restore and inactive insertion preserve collapse', async () => {
+  const { useWorkbenchStore } = await loadTypeScriptModule('../src/workbench/store.ts')
+  const state = {
+    version: 4,
+    tabsById: {
+      'tab:collapsed': { id: 'tab:collapsed', type: 'search', title: 'Collapsed' },
+      'tab:other': { id: 'tab:other', type: 'chat', sessionId: 'other', title: 'Other' },
+      'tab:open': { id: 'tab:open', type: 'chat', sessionId: 'open', title: 'Open' },
+    },
+    root: {
+      id: 'split-main',
+      kind: 'split',
+      direction: 'row',
+      sizes: [50, 50],
+      children: [
+        { id: 'pane-collapsed', kind: 'pane', tabIds: ['tab:collapsed', 'tab:other'], activeTabId: 'tab:collapsed', collapsed: true },
+        { id: 'pane-open', kind: 'pane', tabIds: ['tab:open'], activeTabId: 'tab:open', collapsed: false },
+      ],
+    },
+    focusedPaneId: 'pane-open',
+  }
+  useWorkbenchStore.setState(state)
+
+  useWorkbenchStore.getState().activateTab('tab:collapsed')
+  assert.equal(useWorkbenchStore.getState().root.children[0].collapsed, false, 'activating the already-selected tab expands its pane')
+
+  useWorkbenchStore.setState(state)
+  useWorkbenchStore.getState().setPaneCollapsed('pane-collapsed', true)
+  useWorkbenchStore.getState().activateTab('tab:other')
+  assert.equal(useWorkbenchStore.getState().root.children[0].collapsed, false, 'activating another tab expands its pane')
+
+  useWorkbenchStore.setState(state)
+  useWorkbenchStore.getState().upsertTab({ id: 'tab:inserted', type: 'logs', title: 'Inserted' }, { paneId: 'pane-collapsed', activate: true })
+  assert.equal(useWorkbenchStore.getState().root.children[0].collapsed, false, 'an activating insert expands its target pane')
+
+  useWorkbenchStore.setState(state)
+  useWorkbenchStore.getState().upsertTab({ id: 'tab:background', type: 'logs', title: 'Background' }, { paneId: 'pane-collapsed', activate: false })
+  assert.equal(useWorkbenchStore.getState().root.children[0].collapsed, true, 'background insertion preserves a collapsed target pane')
+
+  useWorkbenchStore.setState(state)
+  useWorkbenchStore.getState().setPaneActiveTab('pane-collapsed', 'tab:collapsed', { expandPane: false })
+  assert.equal(useWorkbenchStore.getState().root.children[0].collapsed, true, 'route/restore activation can preserve collapse')
+})
+
 test('Code workspace URLs preserve paths and reverse-proxy base paths', async () => {
   const { getVscodeWebPath, makeCodeWorkspaceUri, makeVscodeWebUrl, normalizeCodePath } = await loadTypeScriptModule('../src/vscodeWeb.ts')
   assert.equal(getVscodeWebPath('/api'), '/vscode-web/')

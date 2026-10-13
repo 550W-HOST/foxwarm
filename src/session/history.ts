@@ -49,6 +49,7 @@ import { appendBlocksToArchiveWithCommitInfo, renderBlockMessage, resolveNextSes
 import { isModelVisibleMessage } from './messageVisibility';
 import { captureSessionSemanticState, restoreSessionSemanticState } from './metadataStore';
 import { isSessionAuthorityPostCommitError } from './stateFile';
+import { parseUnifiedToolCall } from '../tools/resolvedTools';
 
 const TOOL_RESPONSE_RETAIN_HEAD_CHARS = 500;
 const TOOL_RESPONSE_RETAIN_TAIL_CHARS = 500;
@@ -109,6 +110,11 @@ export function getEffectiveCompactThresholdTokens(session: Pick<Session, 'model
   return getDefaultCompactThresholdTokens(session);
 }
 
+export function getModelContextLimitTokens(session: Pick<Session, 'model'>): number {
+  const { contextLimit } = resolveModelConfig(session.model);
+  return contextLimit;
+}
+
 export function isAsyncCompactEnabled(session: Pick<Session, 'model'>): boolean {
   const { modelEntry } = resolveModelConfig(session.model);
   return modelEntry?.asyncCompact !== false;
@@ -161,6 +167,17 @@ export type CompactOperationOwner = 'background' | 'standalone' | 'turn' | 'work
 export type CompactCancellationResult = {
   outcome: 'cancelled' | 'completed' | 'none';
   phase?: 'planning' | 'enqueueing' | 'ready' | 'committing';
+};
+
+/**
+ * What a compaction request itself accomplished before returning. `applied`
+ * reports a result this call committed (an awaited layered compaction or an
+ * automatic tool-response prune); `background` reports that asynchronous
+ * planning now owns the result while the caller continues.
+ */
+export type CompactionRequestResult = {
+  applied: boolean;
+  background: boolean;
 };
 
 type CompactJobRequest = CompactionRequest;
@@ -247,6 +264,10 @@ type CompactOperation = {
   committed: boolean;
   completion: Promise<void>;
   resolveCompletion: () => void;
+  // Resolves once planning reaches a ready/failed job result or the operation
+  // finishes without one, so a waiter never depends on the owner's commit.
+  planningSettled: Promise<void>;
+  resolvePlanningSettled: () => void;
 };
 
 const compactJobStates = new Map<string, CompactJobState>();
@@ -259,10 +280,12 @@ const ASYNC_COMPACT_DONE_NOTICE = '🗜️ Background compaction finished';
 function beginCompactOperation(sessionId: string, owner: CompactOperationOwner): CompactOperation | null {
   if (compactOperations.has(sessionId)) return null;
   let resolveCompletion!: () => void;
+  let resolvePlanningSettled!: () => void;
   const operation: CompactOperation = {
     id: nextCompactOperationId++, owner, phase: 'planning', controller: new AbortController(),
     cancelled: false, committed: false,
     completion: new Promise<void>(resolve => { resolveCompletion = resolve; }), resolveCompletion,
+    planningSettled: new Promise<void>(resolve => { resolvePlanningSettled = resolve; }), resolvePlanningSettled,
   };
   compactOperations.set(sessionId, operation);
   return operation;
@@ -270,6 +293,7 @@ function beginCompactOperation(sessionId: string, owner: CompactOperationOwner):
 
 function finishCompactOperation(sessionId: string, operation: CompactOperation): void {
   if (compactOperations.get(sessionId) === operation) compactOperations.delete(sessionId);
+  operation.resolvePlanningSettled();
   operation.resolveCompletion();
 }
 
@@ -287,6 +311,41 @@ export function getCompactOperationOwner(sessionId: string): CompactOperationOwn
 
 export function getCompactOperationPhase(sessionId: string): CompactCancellationResult['phase'] | undefined {
   return compactOperations.get(sessionId)?.phase;
+}
+
+export type CompactPlanningSettleOutcome = 'completed' | 'none' | 'aborted';
+
+/**
+ * Waits until this session's compact planning has settled: a ready/failed job
+ * result is observable for its owner's commit, or no compact operation remains.
+ * It deliberately never waits for that commit, so an owner that must apply the
+ * result itself cannot deadlock here. `aborted` reports the caller's signal and
+ * leaves the operation untouched.
+ */
+export async function waitForCompactPlanningSettle(sessionId: string, signal?: AbortSignal): Promise<CompactPlanningSettleOutcome> {
+  while (true) {
+    if (hasCompletedCompactJob(sessionId)) return 'completed';
+    const operation = compactOperations.get(sessionId);
+    if (!operation) return 'none';
+    if (await waitForSettlement(operation.planningSettled, signal) === 'aborted') return 'aborted';
+    if (compactOperations.get(sessionId) === operation && !hasCompletedCompactJob(sessionId)) {
+      // Planning settled without an observable result while the operation is
+      // still finishing its enqueue/bail window; wait for that window too.
+      if (await waitForSettlement(operation.completion, signal) === 'aborted') return 'aborted';
+    }
+  }
+}
+
+function waitForSettlement(settled: Promise<void>, signal?: AbortSignal): Promise<'settled' | 'aborted'> {
+  if (signal?.aborted) return Promise.resolve('aborted');
+  return new Promise(resolve => {
+    const onAbort = () => resolve('aborted');
+    signal?.addEventListener('abort', onAbort, { once: true });
+    void settled.then(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve('settled');
+    });
+  });
 }
 
 export async function cancelSessionCompaction(deps: SessionHistoryDeps, sessionId: string): Promise<CompactCancellationResult> {
@@ -413,10 +472,12 @@ function isSmallPayloadValue(value: unknown): boolean {
 function buildPrunedFunctionResponse(
   message: Message,
   part: MessagePart,
+  preservedToolUseIds: ReadonlySet<string>,
 ): { part: MessagePart; originalChars: number; prunedChars: number } | null {
   const functionResponse = part.functionResponse;
   const seq = message.__meta?.seq;
   if (!functionResponse || !Number.isSafeInteger(seq) || (seq || 0) < 1 || !isPlainRecord(functionResponse.response)) return null;
+  if (preservedToolUseIds.has(functionResponse.tool_use_id)) return null;
 
   const response = functionResponse.response;
   let originalText: string;
@@ -460,6 +521,43 @@ function buildPrunedFunctionResponse(
   };
 }
 
+/** Return IDs whose response is paired with a real builtin skill load call. */
+function collectSkillLoadToolUseIds(history: Message[]): Set<string> {
+  const counts = new Map<string, { total: number; skillLoads: number }>();
+  for (const message of history) {
+    for (const part of message.parts || []) {
+      const call = part.functionCall;
+      if (!call || typeof call.id !== 'string' || !call.id) continue;
+
+      let isSkillLoad = call.name === 'skill'
+        && call.args?.action === 'load'
+        && typeof call.args?.skillName === 'string'
+        && call.args.skillName.trim().length > 0;
+      if (call.name === 'call_tool') {
+        try {
+          const resolved = parseUnifiedToolCall(call.args || {});
+          isSkillLoad = resolved.source === 'builtin'
+            && resolved.name === 'skill'
+            && resolved.args?.action === 'load'
+            && typeof resolved.args?.skillName === 'string'
+            && resolved.args.skillName.trim().length > 0;
+        } catch {
+          isSkillLoad = false;
+        }
+      } else if (call.name === 'load_skill') {
+        isSkillLoad = typeof call.args?.skillName === 'string' && call.args.skillName.trim().length > 0;
+      }
+
+      const entry = counts.get(call.id) || { total: 0, skillLoads: 0 };
+      entry.total += 1;
+      if (isSkillLoad) entry.skillLoads += 1;
+      counts.set(call.id, entry);
+    }
+  }
+
+  return new Set([...counts].filter(([, entry]) => entry.total === 1 && entry.skillLoads === 1).map(([id]) => id));
+}
+
 export type ToolResponsePrunePlan = ToolNoiseCompactionResult & {
   snapshotHistory: Message[];
   rewrittenHistory: Message[];
@@ -478,6 +576,7 @@ export async function buildToolResponsePrunePlan(
 ): Promise<ToolResponsePrunePlan> {
   const snapshotHistory = structuredClone(session.history);
   const splitIndex = resolveCompactionSplitIndex(snapshotHistory, keepPercent);
+  const preservedToolUseIds = collectSkillLoadToolUseIds(snapshotHistory);
   let replacedFunctionResponses = 0;
   let touchedMessages = 0;
   const validatedArchiveSeqs: number[] = [];
@@ -504,7 +603,7 @@ export async function buildToolResponsePrunePlan(
     );
     const parts = message.parts.map(part => {
       if (!validArchive) return structuredClone(part);
-      const pruned = buildPrunedFunctionResponse(message, part);
+      const pruned = buildPrunedFunctionResponse(message, part, preservedToolUseIds);
       if (!pruned) return structuredClone(part);
       replacedFunctionResponses += 1;
       if (isPositiveSafeInteger(seq) && !validatedArchiveSeqs.includes(seq)) validatedArchiveSeqs.push(seq);
@@ -840,6 +939,8 @@ export async function buildLayeredCompactCandidateEntries(olderHistory: Message[
 
   const entries: LayeredCompactCandidateEntry[] = [];
   const preservedMessageCandidates: PreservedMessageCandidateItem[] = [];
+  // Preserved messages that form one tool exchange: a model call plus the responses whose tool_use_id it issued.
+  const preservedExchanges: Array<{ callIds: Set<string>; items: PreservedMessageCandidateItem[] }> = [];
   let compactSegmentId = 1;
   let priorCandidateKind: 'message' | 'block' | undefined;
   let previousRawSeq: number | undefined;
@@ -849,12 +950,24 @@ export async function buildLayeredCompactCandidateEntries(olderHistory: Message[
     if (isPreservedMessage(message)) {
       if (hasValidRawStructure(message) && !shouldIgnoreMessageInCompactCandidates(message)) {
         const seq = message.__meta!.seq!;
-        preservedMessageCandidates.push({
+        const item: PreservedMessageCandidateItem = {
           seq, key: `M#${seq}`, preservedFromBlockId: message.__meta!.preservedFromBlockId!,
           preview: formatMessagePreviewText(message, 300, {
             skipEphemeralSystem: true, skipRagMemorySnippets: true, skipThinking: true,
           }).trim() || '[empty message]',
-        });
+        };
+        preservedMessageCandidates.push(item);
+        const responseIds = (message.parts || []).flatMap(part => part.functionResponse?.tool_use_id ? [part.functionResponse.tool_use_id] : []);
+        const openExchange = preservedExchanges[preservedExchanges.length - 1];
+        const answersOpenExchange = !!openExchange && message.role === 'tool'
+          && openExchange.items[openExchange.items.length - 1].seq + 1 === seq
+          && responseIds.some(id => openExchange.callIds.has(id));
+        if (answersOpenExchange) {
+          openExchange.items.push(item);
+        } else {
+          const callIds = new Set((message.parts || []).flatMap(part => part.functionCall?.id ? [part.functionCall.id] : []));
+          preservedExchanges.push({ callIds, items: [item] });
+        }
       }
       compactSegmentId += 1; priorCandidateKind = undefined; previousRawSeq = undefined; previousBlockRawEndSeq = undefined;
       continue;
@@ -890,14 +1003,27 @@ export async function buildLayeredCompactCandidateEntries(olderHistory: Message[
       if (message.role === 'tool') previousRawSeq = undefined;
       continue;
     }
-    if (!hasValidRawStructure(message) || (previousRawSeq !== undefined && seq !== previousRawSeq + 1)) {
+    if (!hasValidRawStructure(message)) {
       compactSegmentId += 1; priorCandidateKind = undefined; previousRawSeq = message.role === 'tool' ? undefined : seq; continue;
+    }
+    if (previousRawSeq !== undefined && seq !== previousRawSeq + 1) {
+      compactSegmentId += 1; priorCandidateKind = undefined;
+      // A forward gap is a range boundary, not a malformed current row: admit the
+      // first valid message after it so a complete call/response run stays intact.
+      // Duplicate and reversed rows remain local barriers and are not admitted.
+      if (seq <= previousRawSeq) {
+        previousRawSeq = message.role === 'tool' ? undefined : seq;
+        continue;
+      }
     }
     if (!isModelVisibleMessage(message) || shouldRemoveOldCompactCompletionMessage(message)) {
       previousRawSeq = seq;
       continue;
     }
-    if (shouldIgnoreMessageInCompactCandidates(message)) { compactSegmentId += 1; priorCandidateKind = undefined; continue; }
+    if (shouldIgnoreMessageInCompactCandidates(message)) {
+      // The ignored message still occupies its seq: the next raw message continues the sequence from it.
+      compactSegmentId += 1; priorCandidateKind = undefined; previousRawSeq = seq; continue;
+    }
     if (priorCandidateKind && priorCandidateKind !== 'message') compactSegmentId += 1;
 
     let groupedEndHistoryIndex = historyIndex;
@@ -961,6 +1087,14 @@ export async function buildLayeredCompactCandidateEntries(olderHistory: Message[
     return { ...policy, feasibleMaxBlocks, effectiveMinBlocks,
       ...(policy.requestedMinBlocks > 0 && feasibleMaxBlocks === 0 ? { skippedReason: 'no legal contiguous multi-block candidate segment is available' } : {}) };
   }).sort((a, b) => a.sourceLevel - b.sourceLevel);
+  for (const exchange of preservedExchanges) {
+    const exchangeStartSeq = exchange.items[0].seq;
+    const exchangeEndSeq = exchange.items[exchange.items.length - 1].seq;
+    for (const item of exchange.items) {
+      item.exchangeStartSeq = exchangeStartSeq;
+      item.exchangeEndSeq = exchangeEndSeq;
+    }
+  }
   return { candidateEntries, preservedMessageCandidates, messagePolicy, blockPolicies };
 }
 
@@ -1562,22 +1696,26 @@ async function startBackgroundCompaction(deps: SessionHistoryDeps, sessionId: st
         result,
         operationId: operation.id,
       });
+      operation.resolvePlanningSettled();
     } catch (error: any) {
       compactPreviewLastTimestamp.delete(sessionId);
       if (error instanceof CompactCancelledError || (isCompactCancelled(operation) && llm.isAbortError(error))) {
         if (compactJobStates.get(sessionId)?.operationId === operation.id) compactJobStates.delete(sessionId);
-      } else compactJobStates.set(sessionId, {
-        status: 'failed',
-        startedAt: Date.now(),
-        request: {
-          keepPercent: options.keepPercent,
-          compactGuidance: options.compactGuidance,
-          completionMarker: options.completionMarker,
-        },
-        snapshotHistoryVersion: snapshot.baseHistoryVersion,
-        error: error instanceof Error ? error : new Error(String(error)),
-        operationId: operation.id,
-      });
+      } else {
+        compactJobStates.set(sessionId, {
+          status: 'failed',
+          startedAt: Date.now(),
+          request: {
+            keepPercent: options.keepPercent,
+            compactGuidance: options.compactGuidance,
+            completionMarker: options.completionMarker,
+          },
+          snapshotHistoryVersion: snapshot.baseHistoryVersion,
+          error: error instanceof Error ? error : new Error(String(error)),
+          operationId: operation.id,
+        });
+        operation.resolvePlanningSettled();
+      }
     }
 
     const liveSession = deps.getSessionById(sessionId);
@@ -1616,28 +1754,32 @@ async function startBackgroundCompaction(deps: SessionHistoryDeps, sessionId: st
   return true;
 }
 
-async function runCompactionWithMode(deps: SessionHistoryDeps, sessionId: string, options: CompactionRunOptions = {}, executionMode: CompactExecutionMode = 'auto', owner: CompactOperationOwner = 'turn'): Promise<boolean> {
+async function runCompactionWithMode(deps: SessionHistoryDeps, sessionId: string, options: CompactionRunOptions = {}, executionMode: CompactExecutionMode = 'auto', owner: CompactOperationOwner = 'turn'): Promise<CompactionRequestResult> {
   const session = deps.getSessionById(sessionId);
   if (!session) {
-    return false;
+    return { applied: false, background: false };
   }
 
   if (compactJobStates.has(sessionId)) {
     logger.info({ sessionId, executionMode }, 'Skipped compaction because another compact job is already pending');
-    return false;
+    return { applied: false, background: false };
   }
 
   const shouldBackground = executionMode === 'background'
     || (executionMode === 'auto' && isAsyncCompactEnabled(session));
 
   if (shouldBackground) {
-    return startBackgroundCompaction(deps, sessionId, {
+    const started = await startBackgroundCompaction(deps, sessionId, {
       ...options,
       completionBroadcastMessage: options.completionBroadcastMessage || ASYNC_COMPACT_DONE_NOTICE,
     });
+    if (!started) return { applied: false, background: false };
+    // Without an enqueue dependency the request fell back to a synchronous run
+    // and `started` already reports whether that run committed.
+    return deps.enqueueSessionItem ? { applied: false, background: true } : { applied: true, background: false };
   }
 
-  return runCompaction(deps, sessionId, options, owner);
+  return { applied: await runCompaction(deps, sessionId, options, owner), background: false };
 }
 
 export async function applyCompletedCompactJob(deps: SessionHistoryDeps, sessionId: string): Promise<boolean> {
@@ -1867,28 +2009,27 @@ export async function processSessionCompactionRequest(
   item: CompactionRequest,
   executionMode: CompactExecutionMode = 'auto',
   owner: CompactOperationOwner = 'turn',
-): Promise<void> {
+): Promise<CompactionRequestResult> {
   if (item.compactGuidance?.trim()) {
-    await runCompactionWithMode(deps, sessionId, {
+    return runCompactionWithMode(deps, sessionId, {
       keepPercent: item.keepPercent,
       completionMarker: item.completionMarker || 'Compaction completed.',
       compactGuidance: `Manual compaction hint from requester: ${item.compactGuidance.trim()}`,
       startLogMessage: 'Manual compaction starting',
     }, executionMode, owner);
-    return;
   }
 
   if (executionMode === 'auto') {
     const session = deps.getSessionById(sessionId);
     const prunePlan = session ? await buildToolResponsePrunePlan(sessionId, session, COMPACT_KEEP_PERCENT) : undefined;
-    if (prunePlan && await tryAutomaticToolResponsePruning(deps, sessionId, prunePlan)) return;
+    if (prunePlan && await tryAutomaticToolResponsePruning(deps, sessionId, prunePlan)) return { applied: true, background: false };
     if (prunePlan && !hasCompatibleHistoryPrefix(session?.history || [], prunePlan.snapshotHistory)) {
       logger.info({ sessionId }, 'Skipping layered compaction because the automatic maintenance snapshot changed incompatibly');
-      return;
+      return { applied: false, background: false };
     }
   }
 
-  await runCompactionWithMode(deps, sessionId, {
+  return runCompactionWithMode(deps, sessionId, {
     keepPercent: item.keepPercent,
     completionMarker: item.completionMarker || 'Compaction completed.',
     startLogMessage: 'Compaction starting',

@@ -1519,6 +1519,23 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     }
   }, [sessionId])
 
+  const updateSessionNode = useCallback(async (nodeId: string, signal: AbortSignal) => {
+    const response = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/node`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nodeId }),
+      signal,
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data?.error || 'Could not switch node.')
+    signal.throwIfAborted()
+    setSessionRecord(previous => ({
+      ...(previous || { id: sessionId }),
+      currentNode: data.session.currentNode,
+      cwd: data.session.cwd,
+    }))
+  }, [sessionId])
+
   const updateChildModel = useCallback(async (model: string | null) => {
     setModelBusy(true)
     setModelError(null)
@@ -2382,6 +2399,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         compactModelSelector={compactModelSelector}
         sessionId={sessionId}
         webUiIdentityMode={webUiIdentityMode}
+        currentNode={sessionRecord?.currentNode}
+        onChangeNode={updateSessionNode}
         sessionMissing={sessionMissing}
         loading={loading}
         asrAvailable={asrAvailable}

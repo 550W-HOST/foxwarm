@@ -785,6 +785,59 @@ test('pre-final automatic compact poison stops before a second provider call and
   } finally { (llm as any).chat = originalChat; (sessionHistory as any).processSessionCompactionRequest = originalCompact; }
 });
 
+test('over-limit Worker continuation commits awaited maintenance before the next request and stops when it cannot commit', async () => {
+  const initial = baseSession('worker-over-limit-continuation'); initial.compactThresholdTokens = 1;
+  const originalChat = llm.chat; const originalCompact = sessionHistory.processSessionCompactionRequest;
+  const originalContextLimit = sessionHistory.getModelContextLimitTokens;
+  let chatCalls = 0; let compactCalls = 0; let maintenanceCommits = true;
+  const finals: Array<{ text: string; outcome: string }> = [];
+  (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
+    chatCalls += 1;
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    if (chatCalls === 1 || chatCalls === 3) {
+      const toolCall = { id: `worker-limit-tool-${chatCalls}`, name: 'session', args: { action: 'status' } };
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }], usage: { inputTokens: 2, outputTokens: 0, cachedTokens: 0 } };
+    }
+    await options.appendMessage({ role: 'model', parts: [{ text: `worker answer ${chatCalls}` }] });
+    return { text: `worker answer ${chatCalls}` };
+  };
+  // The fixture pins the model context window below the reported usage so the
+  // continuation guard treats the previous measurement as strictly over-limit.
+  (sessionHistory as any).getModelContextLimitTokens = () => 1;
+  (sessionHistory as any).processSessionCompactionRequest = async (deps: any, id: string) => {
+    compactCalls += 1;
+    if (!maintenanceCommits) throw new Error('awaited worker maintenance unavailable');
+    const owner = deps.getSessionById(id);
+    owner.historyVersion = (owner.historyVersion || 0) + 1;
+  };
+  try {
+    await withLocalHost(initial, async ({ host, store, readDurable, turnHost }) => {
+      turnHost.deliverCommittedFinal = async (_session: Session, text: string, outcome: any) => { finals.push({ text, outcome }); };
+      store.enqueueIntent(initial.id, 'worker-limit-commit', 'enqueue', { type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'first worker input' }] });
+      await host.runPending(8);
+      assert.equal(chatCalls, 2, 'a committed awaited result lets the continuation proceed');
+      assert.equal(compactCalls, 1);
+      assert.deepEqual(finals, [{ text: 'worker answer 2', outcome: 'response' }]);
+      assert.equal(readDurable().busy, false);
+
+      maintenanceCommits = false;
+      store.enqueueIntent(initial.id, 'worker-limit-fail', 'enqueue', { type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'second worker input' }] });
+      await host.runPending(8);
+      assert.equal(chatCalls, 3, 'no provider request follows an uncommitted required maintenance');
+      assert.equal(compactCalls, 2);
+      assert.equal(finals.length, 2);
+      assert.equal(finals[1].outcome, 'error');
+      assert.match(finals[1].text, /Context compaction did not complete/);
+      assert.equal(readDurable().busy, false);
+    }, true);
+  } finally {
+    (llm as any).chat = originalChat;
+    (sessionHistory as any).processSessionCompactionRequest = originalCompact;
+    (sessionHistory as any).getModelContextLimitTokens = originalContextLimit;
+  }
+});
+
 test('source-less pre-final compact fatal skips history reminder and makes one attachment final attempt', async () => {
   const initial = baseSession('worker-source-less-compact-fatal'); initial.compactThresholdTokens = 1; initial.parentSessionId = 'parent';
   const originalChat = llm.chat; const originalCompact = sessionHistory.processSessionCompactionRequest;

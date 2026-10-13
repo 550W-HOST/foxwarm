@@ -180,6 +180,7 @@ export const tool_create_agent = (args: ToolArgs, ctx?: ToolContext) => {
 export const tool_create_session = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('create_session', args, ctx);
 export const tool_delete_session = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('delete_session', args, ctx);
 export const tool_node_bootstrap_info = (args: ToolArgs = {}, ctx?: ToolContext) => executeMainManagementTool('node_bootstrap_info', args, ctx);
+export const tool_node_create_auth_token = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('node_create_auth_token', args, ctx);
 export const tool_node_pair_list = (args: ToolArgs = {}, ctx?: ToolContext) => executeMainManagementTool('node_pair_list', args, ctx);
 export const tool_node_pair_approve = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('node_pair_approve', args, ctx);
 export const tool_set_config = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('set_config', args, ctx);
