@@ -1182,7 +1182,8 @@ test('ordinary Terminal close selects another still-open tab rather than restori
     await page.click('[data-tab-id="terminal:term-fallback"] button[title="Close tab"]')
     await page.waitForFunction(() => !JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById['terminal:term-fallback'] && decodeURIComponent(location.hash) === '#tab/system:agents')
     assert.deepEqual((await state(page)).root.tabIds, ['system:agents'])
-    assert.ok(await page.$('h1::-p-text(System Architecture)'))
+    // The remaining tab mounts lazily; wait for its content before checking the route result.
+    await page.waitForSelector('h1::-p-text(System Architecture)')
     assert.deepEqual(await page.evaluate(() => window.__terminalDeletes), ['/prefix/ui/api/terminals/term-fallback'])
   } finally { await page.close() }
 })
