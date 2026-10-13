@@ -430,8 +430,12 @@ export class SessionTurnRunner {
     session: Session,
     pendingParts: MessagePart[] | null,
     assertCanConsume?: () => void,
+    // An over-limit continuation must not continue without its required
+    // compaction, so its safe point propagates a failed completed-job apply
+    // instead of reporting the swallow as "nothing was compacted here".
+    propagateCompactionFailure = false,
   ): Promise<{ parts: MessagePart[] | null; consumedInput: boolean; compacted: boolean }> {
-    const compacted = await this.runPendingCompactionIfNeeded(session.id, session, false, !!assertCanConsume);
+    const compacted = await this.runPendingCompactionIfNeeded(session.id, session, false, propagateCompactionFailure || !!assertCanConsume);
     assertCanConsume?.();
     let parts = pendingParts;
     let consumedInput = false;
@@ -643,6 +647,16 @@ export class SessionTurnRunner {
     return selected.compacted || selected.consumedInput;
   }
 
+  /**
+   * Resolves the model context limit and whether a previous provider
+   * measurement strictly exceeds it. The continuation guard and its safe-point
+   * failure handling share this rule.
+   */
+  private resolveContextLimitExceeded(session: Session, usage: TokenUsage | undefined): { contextLimit: number; exceeded: boolean } {
+    const contextLimit = sessionManager.getModelContextLimitTokens(session);
+    return { contextLimit, exceeded: !!usage && sessionManager.getUsageTotalTokens(usage) > contextLimit };
+  }
+
   private async maybeRequestAutoCompactionBeforeContinuation(
     session: Session,
     usage: TokenUsage | undefined,
@@ -653,8 +667,7 @@ export class SessionTurnRunner {
     const currentSize = sessionManager.getUsageTotalTokens(usage);
     const compactThreshold = sessionManager.getEffectiveCompactThresholdTokens(session);
     if (currentSize <= compactThreshold) return 'continue';
-    const contextLimit = sessionManager.getModelContextLimitTokens(session);
-    const exceedsContextLimit = currentSize > contextLimit;
+    const { contextLimit, exceeded: exceedsContextLimit } = this.resolveContextLimitExceeded(session, usage);
     if (compactAppliedAtSafePoint) {
       // This safe point committed a compact result for an earlier request; the
       // provider measurement in hand predates that commit, so it must not
@@ -676,6 +689,14 @@ export class SessionTurnRunner {
     if (result.applied) {
       logger.info({ iteration }, 'Compact applied before turn continuation');
       return 'continue';
+    }
+    if (session.stopping || session.meta?.runQueuedAfterStop) {
+      // A Stop that arrived while this request was in flight aborted the
+      // controllers registered at that moment, and this wait registers its own
+      // only now. Re-checking the synchronous stop state closes that window:
+      // the turn ends instead of waiting for the planner.
+      logger.info({ sessionId: session.id, iteration }, 'Stopping session ends the continuation before the compaction wait');
+      return 'stopped';
     }
     // The previous provider usage is already over this model's context limit,
     // so the next request must wait for a compact result the safe point can
@@ -1018,7 +1039,9 @@ export class SessionTurnRunner {
 
         if (!hasTools) {
           if (providerTimeQueue) {
-            const queuedAfterLlm = await this.consumeLeadingQueuedTurnInputs(session, null);
+            const queuedAfterLlm = await this.consumeLeadingQueuedTurnInputs(
+              session, null, undefined, this.resolveContextLimitExceeded(session, result.usage).exceeded,
+            );
             if (!queuedAfterLlm.consumedInput) {
               await this.finishTurnAfterIntermediate(session, broadcast, turnId);
               break;
@@ -1177,7 +1200,9 @@ export class SessionTurnRunner {
           }
           break;
         }
-        const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null);
+        const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(
+          session, null, undefined, this.resolveContextLimitExceeded(session, result.usage).exceeded,
+        );
         parts = queuedAfterTools.parts;
 
         if (await this.maybeRequestAutoCompactionBeforeContinuation(session, result.usage, iteration, queuedAfterTools.compacted) === 'stopped') {

@@ -29,8 +29,12 @@ type Harness = {
   effects: llm.CurrentSessionTurnEffects;
   abortControllers: Map<string, AbortController>;
   deliveries: string[];
+  /** Broadcasts flagged as turn-final, the terminal deliveries of a turn. */
+  finalDeliveries: string[];
   /** Continuation-trigger requests that reached the real compaction engine. */
   compactionRequests: { count: number };
+  /** Optional gate the harness awaits inside the compaction-request window. */
+  compactionRequestGate: { current: null | (() => Promise<void>) };
   runner: SessionTurnRunner;
 };
 
@@ -69,7 +73,12 @@ async function createHarness(sessionId: string): Promise<Harness> {
   const session = makeSession(sessionId);
   const abortControllers = new Map<string, AbortController>();
   const deliveries: string[] = [];
-  session.broadcast = text => { if (text) deliveries.push(text); };
+  const finalDeliveries: string[] = [];
+  session.broadcast = (text, options) => {
+    if (!text) return;
+    deliveries.push(text);
+    if (options?.turnFinal) finalDeliveries.push(text);
+  };
 
   const persistSession = async (owner: Session) => { await writeAuthoritativeSessionState(owner); };
   const notifyHistoryUpdate = (_sessionId: string, _message: Message) => {};
@@ -103,15 +112,17 @@ async function createHarness(sessionId: string): Promise<Harness> {
     notifyHistoryUpdate,
   };
   const compactionRequests = { count: 0 };
+  const compactionRequestGate: Harness['compactionRequestGate'] = { current: null };
   const host = new LocalSessionTurnHost(effects, session, {
     hasCompletedCompactJob: sessionHistory.hasCompletedCompactJob,
     applyCompletedCompactJob: id => sessionHistory.applyCompletedCompactJob(deps, id),
-    processSessionCompactionRequest: (id, request, mode, owner) => {
+    processSessionCompactionRequest: async (id, request, mode, owner) => {
       compactionRequests.count += 1;
+      if (compactionRequestGate.current) await compactionRequestGate.current();
       return sessionHistory.processSessionCompactionRequest(deps, id, request, mode, owner);
     },
   });
-  return { session, deps, effects, abortControllers, deliveries, compactionRequests, runner: new SessionTurnRunner(host) };
+  return { session, deps, effects, abortControllers, deliveries, finalDeliveries, compactionRequests, compactionRequestGate, runner: new SessionTurnRunner(host) };
 }
 
 /** Two large older exchanges plus two recent rows, the canonical compactable shape. */
@@ -398,6 +409,148 @@ test('Stop releases the continuation wait without cancelling the running compact
     assert.equal(sessionHistory.hasCompletedCompactJob(harness.session.id), true);
   } finally {
     releasePlanning();
+    restoreProvider();
+    sessionHistory.discardPendingCompactWork(harness.session.id);
+  }
+});
+
+test('an ordinary Stop that arrives before the wait registration ends the turn while the planner keeps running', async () => {
+  const harness = await createHarness(`limit_stop_window_${Date.now()}`);
+  const restoreProvider = stubProviderSurface();
+  await appendOlderHistory(harness);
+  let normalCalls = 0;
+  let planShouldFail = false;
+  let releasePlanning = () => {};
+  const planningReleased = new Promise<void>(resolve => { releasePlanning = resolve; });
+  (llm as any).chat = async (_parts: any, _owner: Session, _iteration: number, options: any) => {
+    if (options?.purpose === 'compact-plan') {
+      await planningReleased;
+      if (planShouldFail) throw new Error('stop-window plan provider failure');
+      return appendPlanSubmission(options, submittedPlanToolCall('stop-window-plan'));
+    }
+    normalCalls += 1;
+    if (normalCalls === 1) {
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: TURN_TOOL_CALL }] });
+      return { text: '', toolCalls: [TURN_TOOL_CALL], allParts: [{ functionCall: TURN_TOOL_CALL }], usage: OVER_LIMIT_USAGE };
+    }
+    throw new Error('a stopped turn must not send another provider request');
+  };
+
+  // The supported Stop path sets the stopping flag and aborts the controllers
+  // registered at that moment. This hook lands it inside the compaction-request
+  // window, before the continuation wait registers its own controller.
+  let requestEntered = false;
+  let releaseRequest = () => {};
+  harness.compactionRequestGate.current = async () => {
+    requestEntered = true;
+    await new Promise<void>(resolve => { releaseRequest = resolve; });
+    harness.session.stopping = true;
+    for (const controller of harness.abortControllers.values()) controller.abort();
+  };
+
+  try {
+    const running = harness.runner.processSessionQueue(harness.session.id);
+    await waitFor(() => requestEntered, 'the compaction request window opens');
+    releaseRequest();
+    await waitFor(() => harness.session.busy === false, 'the stopped turn ends without waiting for the planner');
+    await running;
+
+    assert.equal(normalCalls, 1, 'the stopped turn must not send another provider request');
+    assert.equal(harness.compactionRequests.count, 1);
+    assert.equal(sessionHistory.getCompactOperationPhase(harness.session.id), 'planning', 'the compaction keeps running');
+    assert.equal(sessionHistory.hasCompletedCompactJob(harness.session.id), false);
+    assert.equal(harness.finalDeliveries.some(text => text.includes('Execution stopped by user')), true);
+    assert.equal(harness.session.busy, false);
+    assert.equal(harness.abortControllers.size, 0);
+
+    planShouldFail = true;
+    releasePlanning();
+    await waitFor(() => sessionHistory.hasCompletedCompactJob(harness.session.id), 'the released planner becomes terminal');
+    assert.equal(harness.finalDeliveries.some(text => text.includes('stop-window plan provider failure')), false,
+      'a planning failure after the Stop must not replace its terminal state');
+    assert.equal(harness.finalDeliveries.length, 1, 'the stop annotation stays the only terminal delivery');
+  } finally {
+    releasePlanning();
+    restoreProvider();
+    sessionHistory.discardPendingCompactWork(harness.session.id);
+  }
+});
+
+test('an over-limit continuation propagates a failed safe-point apply instead of opening a new compact round', async () => {
+  const harness = await createHarness(`limit_failed_apply_${Date.now()}`);
+  const restoreProvider = stubProviderSurface();
+  await appendOlderHistory(harness);
+  let normalCalls = 0;
+  let planCalls = 0;
+  (llm as any).chat = async (_parts: any, _owner: Session, _iteration: number, options: any) => {
+    if (options?.purpose === 'compact-plan') {
+      planCalls += 1;
+      throw new Error('safe-point planning failure');
+    }
+    normalCalls += 1;
+    if (normalCalls === 1) {
+      // A compact job from an earlier safe point fails while this request is in flight.
+      await sessionHistory.processSessionCompactionRequest(harness.deps, harness.session.id, { keepPercent: 0.5 }, 'background');
+      await waitFor(() => sessionHistory.hasCompletedCompactJob(harness.session.id), 'the failed job becomes terminal');
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: TURN_TOOL_CALL }] });
+      return { text: '', toolCalls: [TURN_TOOL_CALL], allParts: [{ functionCall: TURN_TOOL_CALL }], usage: OVER_LIMIT_USAGE };
+    }
+    throw new Error('no provider request may follow an uncommitted required compaction');
+  };
+
+  try {
+    await harness.runner.processSessionQueue(harness.session.id);
+
+    assert.equal(normalCalls, 1, 'the turn must end before the next request');
+    assert.equal(planCalls, 1, 'a terminal failure must not open another planning round');
+    assert.equal(harness.compactionRequests.count, 0, 'the continuation must not request a replacement job');
+    assert.equal(harness.deliveries.some(text => text.includes('safe-point planning failure')), true,
+      'the failed safe-point apply is the reported failure');
+    assert.equal(harness.finalDeliveries.length, 1, 'the failed turn makes one terminal delivery');
+    assert.equal(harness.deliveries.some(text => text.includes('no provider request may follow')), false);
+    assert.equal(sessionHistory.hasCompletedCompactJob(harness.session.id), false);
+    assert.equal(sessionHistory.hasPendingCompactWork(harness.session.id), false);
+    assert.equal(harness.session.busy, false);
+  } finally {
+    restoreProvider();
+    sessionHistory.discardPendingCompactWork(harness.session.id);
+  }
+});
+
+test('a below-limit continuation keeps the existing swallowed safe-point failure and recovery round', async () => {
+  const harness = await createHarness(`below_limit_failed_apply_${Date.now()}`);
+  const restoreProvider = stubProviderSurface();
+  await appendOlderHistory(harness);
+  let normalCalls = 0;
+  let planCalls = 0;
+  (llm as any).chat = async (_parts: any, _owner: Session, _iteration: number, options: any) => {
+    if (options?.purpose === 'compact-plan') {
+      planCalls += 1;
+      if (planCalls === 1) throw new Error('below-limit planning failure');
+      return appendPlanSubmission(options, submittedPlanToolCall('below-limit-recovery-plan'));
+    }
+    normalCalls += 1;
+    if (normalCalls === 1) {
+      harness.session.queue.push({ type: 'user', parts: [{ text: 'queued follow-up before the below-limit continuation' }] });
+      await sessionHistory.processSessionCompactionRequest(harness.deps, harness.session.id, { keepPercent: 0.5 }, 'background');
+      await waitFor(() => sessionHistory.hasCompletedCompactJob(harness.session.id), 'the failed job becomes terminal');
+      await options.appendMessage({ role: 'model', parts: [{ text: 'below-limit answer' }] });
+      return { text: 'below-limit answer', allParts: [{ text: 'below-limit answer' }], usage: BELOW_LIMIT_USAGE };
+    }
+    await options.appendMessage({ role: 'model', parts: [{ text: 'final below-limit answer' }] });
+    return { text: 'final below-limit answer', allParts: [{ text: 'final below-limit answer' }] };
+  };
+
+  try {
+    await harness.runner.processSessionQueue(harness.session.id);
+
+    assert.equal(normalCalls, 2, 'a below-limit continuation still proceeds');
+    assert.equal(harness.compactionRequests.count, 1, 'the below-limit trigger still asks once');
+    assert.equal(planCalls, 2, 'the below-limit safe point keeps its existing recovery round');
+    assert.equal(harness.deliveries.some(text => text.includes('below-limit planning failure')), true,
+      'the swallowed failure is still surfaced');
+    assert.equal(harness.session.busy, false);
+  } finally {
     restoreProvider();
     sessionHistory.discardPendingCompactWork(harness.session.id);
   }
