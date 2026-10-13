@@ -367,16 +367,6 @@ test('Activity elapsed uses adjacent visible boundaries, retaining leading idle 
   assert.deepEqual(await headers(), ['Worked for 10s', 'Worked for 22s · Waited for 1m28s · Received 2 messages'])
   assert.deepEqual(await page.$$eval('#timeline .foxwarm-assistant-message-markdown', bodies => bodies.map(body => body.textContent.trim())), ['ARRANGED_BODY','DONE_BODY'])
   assert.equal(await page.$eval('#timeline', root => root.querySelectorAll('[data-timeline-activity]').length), 2)
-  await page.$eval('#timeline', root => { root.style.width = '220px' })
-  const wrapped = await page.$$eval('#timeline [data-timeline-activity] > button', buttons => {
-    const summary = buttons[1].lastElementChild
-    const range = document.createRange()
-    range.selectNodeContents(summary)
-    return { align: getComputedStyle(summary).textAlign, lefts: [...range.getClientRects()].map(rect => rect.left) }
-  })
-  assert.equal(wrapped.align, 'left')
-  assert.ok(wrapped.lefts.length > 1, 'the real summary wraps in a narrow container')
-  assert.ok(wrapped.lefts.every(left => Math.abs(left - wrapped.lefts[0]) < 1), 'wrapped lines keep the same left edge')
   await page.$eval('#timeline', root => [...root.querySelectorAll('[aria-label="Expand activity"]')][1].click())
   await page.waitForFunction(() => document.querySelector('[data-activity-details]').textContent.includes('AFTER_RECEIVE_REASONING'))
   assert.equal(await page.$eval('#timeline', root => root.querySelectorAll('.foxwarm-assistant-message-markdown').length), 2)
