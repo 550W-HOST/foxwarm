@@ -3,12 +3,13 @@ import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSe
 import Chat from './components/Chat'
 import SessionList from './components/SessionList'
 import Sidebar from './components/Sidebar'
-import HistorySearchTabHost from './components/HistorySearchTabHost'
+import HistorySearchView from './components/HistorySearchView'
+import WorkbenchContentHost, { WorkbenchContentLayer, WorkbenchContentProvider, WorkbenchContentSlot } from './components/WorkbenchContentHost'
 import CollapsedSidebarContainer from './components/CollapsedSidebarContainer'
 import WorkbenchLayout from './components/WorkbenchLayout'
 import WorkbenchStatusBar from './components/WorkbenchStatusBar'
-import WorkbenchPane from './components/WorkbenchPane'
-import VscodeWebFrameHost, { type VscodeWebFrameHostHandle } from './components/VscodeWebFrameHost'
+import WorkbenchPane, { type WorkbenchPaneProps } from './components/WorkbenchPane'
+import VscodeWebFrameHost, { useVscodeWebFrameBridge, type VscodeWebFrameHostHandle } from './components/VscodeWebFrameHost'
 import type { SessionMoveRequest } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
 import { isSessionRuntimeActive } from './sessionRuntimeState'
@@ -437,11 +438,6 @@ function isRestorableRouteTabId(tabId: string): boolean {
   return tabId.startsWith('chat:') || tabId === AGENTS_TAB_ID || tabId === SETUP_TAB_ID || tabId === SEARCH_TAB_ID || tabId.startsWith(HISTORY_TAB_PREFIX) || tabId === LOGS_TAB_ID || tabId === TASKS_TAB_ID
 }
 
-function HistorySearchSlot({ tabId, onRegister }: { tabId: string; onRegister: (tabId: string, element: HTMLElement | null) => void }) {
-  const setRef = useCallback((element: HTMLElement | null) => onRegister(tabId, element), [onRegister, tabId])
-  return <div ref={setRef} className="h-full min-h-0 w-full" data-history-search-slot={tabId} />
-}
-
 function App() {
   const initialRoute = getHashState()
 
@@ -460,12 +456,12 @@ function App() {
   const { sendKeyMode, setSendKeyMode, timelineView, setTimelineView, showUsageBadge, setShowUsageBadge, showUserMessageMetadata, setShowUserMessageMetadata, fullWidth, setFullWidth } = useChatPreferences()
   const [webUiSettings, setWebUiSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
   const [vscodeFrameStarted, setVscodeFrameStarted] = useState(false)
-  const [vscodeFrameSlot, setVscodeFrameSlot] = useState<HTMLElement | null>(null)
   const vscodeFrameRef = useRef<VscodeWebFrameHostHandle | null>(null)
   const [codePath, setCodePath] = useState(loadStoredCodePath)
   const [codeNodeId, setCodeNodeId] = useState(loadStoredCodeNodeId)
   const [codeOpenInNewWindow, setCodeOpenInNewWindow] = useState(loadStoredCodeOpenInNewWindow)
   const [codeFrameUrl, setCodeFrameUrl] = useState(() => makeVscodeWebUrl(API_BASE_PATH, window.location.origin, { nodeId: loadStoredCodeNodeId(), path: loadStoredCodePath() }, { embedded: true }).toString())
+  const vscodeFrameBridge = useVscodeWebFrameBridge({ started: vscodeFrameStarted, src: codeFrameUrl }, vscodeFrameRef)
   const [nodeTargets, setNodeTargets] = useState<WebUiNodeTarget[]>([MASTER_NODE_TARGET])
   const [nodeTargetsError, setNodeTargetsError] = useState('')
 
@@ -495,8 +491,6 @@ function App() {
   const currentRouteTabIdRef = useRef<string | null>(route.tabId)
   const closingRouteTabIdsRef = useRef<Set<string>>(new Set())
   const movedOutTerminalIdsRef = useRef<Set<string>>(new Set())
-  const historySlotsRef = useRef(new Map<string, HTMLElement | null>())
-  const [, forceHistorySlotUpdate] = useState(0)
   const didInitializeEmptyWorkbenchRef = useRef(false)
   const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
@@ -508,20 +502,9 @@ function App() {
   const focusedActiveTabId = focusedPane?.activeTabId || paneNodes[0]?.activeTabId || null
   const focusedActiveTab = focusedActiveTabId ? (tabsById[focusedActiveTabId] || null) : null
   const activePaneTabTypes = useMemo(
-    () => paneNodes.filter((pane) => !pane.collapsed).map((pane) => pane.activeTabId ? tabsById[pane.activeTabId]?.type : null),
-    [paneNodes, tabsById],
+    () => paneNodes.filter((pane) => !pane.collapsed && (!isMobile || pane.id === (focusedPaneId || paneNodes[0]?.id))).map((pane) => pane.activeTabId ? tabsById[pane.activeTabId]?.type : null),
+    [paneNodes, tabsById, isMobile, focusedPaneId],
   )
-  const registerHistorySlot = useCallback((tabId: string, element: HTMLElement | null) => {
-    if (element === null) {
-      if (!historySlotsRef.current.has(tabId)) return
-      historySlotsRef.current.delete(tabId)
-    } else {
-      if (historySlotsRef.current.get(tabId) === element) return
-      historySlotsRef.current.set(tabId, element)
-    }
-    forceHistorySlotUpdate(value => value + 1)
-  }, [])
-  const handleVscodeFrameSlot = useCallback((element: HTMLElement | null) => setVscodeFrameSlot(element), [])
   const handleFocusModelsRequestHandled = useCallback((handled: number) => {
     setFocusModelsRequest((current) => (current === handled ? 0 : current))
   }, [])
@@ -1590,7 +1573,17 @@ function App() {
 
     if (tab.type === 'logs') return <Suspense fallback={<LazyViewFallback label="Loading logs…" />}><LogsView onBack={onBack} /></Suspense>
 
-    if (tab.type === 'search') return <HistorySearchSlot tabId={tab.id} onRegister={registerHistorySlot} />
+    if (tab.type === 'search') return <HistorySearchView
+      tabId={tab.id} isMobile={isMobile} timelineView={timelineView}
+      showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata}
+      knownSessions={sidebarSessions.map(session => session.id)} onBack={onBack} onOpenSession={openChatTab}
+      initialDraft={{ query: tab.searchQuery || '', agentName: tab.searchAgentName || '', sessionId: tab.searchSessionId || '' }}
+      onDraftChange={(draft) => updateTab(tab.id, current => current.type === 'search' ? {
+        ...current, searchQuery: draft.query, searchAgentName: draft.agentName, searchSessionId: draft.sessionId,
+        title: draft.query.trim() || 'History',
+      } : current)}
+      onSearchStarted={() => updateTab(tab.id, current => current.type === 'search' ? { ...current, searchStarted: true } : current)}
+    />
 
     if (tab.type === 'agents') {
       return (
@@ -1630,7 +1623,7 @@ function App() {
     }
 
     if (tab.type === 'vscode') {
-      return <div ref={handleVscodeFrameSlot} className="h-full min-h-0 w-full bg-fw-canvas-edge" data-foxwarm-vscode-web-slot="true" />
+      return <VscodeWebFrameHost bridge={vscodeFrameBridge} src={codeFrameUrl} />
     }
 
     return (
@@ -1650,7 +1643,7 @@ function App() {
     )
   }
 
-  const renderPane = (paneId: string, onBack?: () => void, collapseDirection: 'row' | 'column' = 'column') => {
+  const getPaneProps = (paneId: string, collapseDirection: 'row' | 'column' = 'column'): WorkbenchPaneProps | null => {
     const pane = findPaneNode(root, paneId)
     if (!pane) {
       return null
@@ -1692,58 +1685,58 @@ function App() {
       }
     }
 
-    const renderContent = () => activeTab
-      ? renderTabContent(activeTab, onBack)
-      : (
-        <div className="flex h-full items-center justify-center bg-fw-surface-sunken text-center text-sm text-fw-text-muted dark:bg-fw-canvas-edge dark:text-fw-text-muted">
-          <div className="max-w-sm space-y-2 px-6">
-            <div className="text-base font-medium text-fw-text-strong">Empty pane</div>
-            <div>Focus this pane and open a chat or terminal from the sidebar/session list.</div>
+    return {
+      paneId,
+      collapseDirection,
+      tabs: paneTabs,
+      activeTabId: pane.activeTabId,
+      collapsed: pane.collapsed,
+      focused: focusedPaneId === paneId,
+      emphasizeFocus: paneIds.length > 1,
+      dragEnabled: !isMobile,
+      showPaneControls: !isMobile,
+      hideTabStrip: paneTabs.length === 1 && paneTabs[0].type !== 'vscode',
+      canClosePane: paneIds.length > 1,
+      onFocusPane: handleFocus,
+      onSetCollapsed: (targetPaneId, collapsed) => {
+        setPaneCollapsed(targetPaneId, collapsed)
+        if (collapsed && paneTabs.every(tab => tab.type === 'terminal')) {
+          const returnPane = paneNodes.find(candidate => candidate.id !== targetPaneId && !candidate.collapsed)
+          if (returnPane?.activeTabId) navigateToTab(returnPane.activeTabId)
+          else if (returnPane) focusPane(returnPane.id)
+        }
+      },
+      onSelectTab: navigateToTab,
+      onCloseTab: (tabId) => { void closeWorkbenchTab(tabId) },
+      onKeepTab: keepWorkbenchTab,
+      onMoveTabToNewWindow: moveWorkbenchTabToNewWindow,
+      canMoveTabToNewWindow: (tabId) => {
+        const tab = tabsById[tabId]
+        return !!tab && (tab.type !== 'terminal' || !!tab.terminalId)
+      },
+      onCloseOtherTabs: (tabId) => { void closePaneTabsByPredicate(paneId, (tab) => tab.id !== tabId) },
+      onCloseAllTabs: () => { void closePaneTabsByPredicate(paneId, () => true) },
+      onSplitRight: () => handleSplit('right'),
+      onSplitDown: () => handleSplit('bottom'),
+      onClosePane: paneTabs.length > 0 && paneTabs.every(tab => tab.type === 'terminal')
+        ? () => { setPaneCollapsed(paneId, true); void closePaneTabsByPredicate(paneId, () => true) }
+        : handleClosePane,
+      contentSlot: activeTab
+        ? <WorkbenchContentSlot paneId={paneId} soleTab={paneTabs.length === 1 && activeTab.type !== 'vscode'} tabType={activeTab.type} />
+        : (
+          <div className="flex h-full items-center justify-center bg-fw-surface-sunken text-center text-sm text-fw-text-muted dark:bg-fw-canvas-edge">
+            <div className="max-w-sm space-y-2 px-6">
+              <div className="text-base font-medium text-fw-text-strong">Empty pane</div>
+              <div>Focus this pane and open a chat or terminal from the sidebar/session list.</div>
+            </div>
           </div>
-        </div>
-      )
+        ),
+    }
+  }
 
-    return (
-      <WorkbenchPane
-        paneId={paneId}
-        collapseDirection={collapseDirection}
-        tabs={paneTabs}
-        activeTabId={pane.activeTabId}
-        collapsed={pane.collapsed}
-        focused={focusedPaneId === paneId}
-        emphasizeFocus={paneIds.length > 1}
-        dragEnabled={!isMobile}
-        showPaneControls={!isMobile}
-        hideTabStrip={paneTabs.length === 1 && paneTabs[0].type !== 'vscode'}
-        canClosePane={paneIds.length > 1}
-        canCloseActiveTab={!!activeTab && !(activeTab.type === 'setup' && setupOobe)}
-        renderContent={renderContent}
-        onFocusPane={handleFocus}
-        onSetCollapsed={(targetPaneId, collapsed) => {
-          setPaneCollapsed(targetPaneId, collapsed)
-          if (collapsed && paneTabs.every(tab => tab.type === 'terminal')) {
-            const returnPane = paneNodes.find(candidate => candidate.id !== targetPaneId && !candidate.collapsed)
-            if (returnPane?.activeTabId) navigateToTab(returnPane.activeTabId)
-            else if (returnPane) focusPane(returnPane.id)
-          }
-        }}
-        onSelectTab={navigateToTab}
-        onCloseTab={(tabId) => { void closeWorkbenchTab(tabId) }}
-        onKeepTab={keepWorkbenchTab}
-        onMoveTabToNewWindow={moveWorkbenchTabToNewWindow}
-        canMoveTabToNewWindow={(tabId) => {
-          const tab = tabsById[tabId]
-          return !!tab && (tab.type !== 'terminal' || !!tab.terminalId)
-        }}
-        onCloseOtherTabs={(tabId) => { void closePaneTabsByPredicate(paneId, (tab) => tab.id !== tabId) }}
-        onCloseAllTabs={() => { void closePaneTabsByPredicate(paneId, () => true) }}
-        onSplitRight={() => handleSplit('right')}
-        onSplitDown={() => handleSplit('bottom')}
-        onClosePane={paneTabs.length > 0 && paneTabs.every(tab => tab.type === 'terminal')
-          ? () => { setPaneCollapsed(paneId, true); void closePaneTabsByPredicate(paneId, () => true) }
-          : handleClosePane}
-      />
-    )
+  const renderPane = (paneId: string, collapseDirection: 'row' | 'column' = 'column') => {
+    const props = getPaneProps(paneId, collapseDirection)
+    return props ? <WorkbenchPane {...props} /> : null
   }
 
   const draggingTab = draggingItem?.type === 'tab' && draggingItem.id ? (tabsById[draggingItem.id] || null) : null
@@ -1922,54 +1915,21 @@ function App() {
     return 'column'
   }
 
-  const renderHistoryKeepAlive = () => allTabs
-    .filter((tab): tab is Extract<WorkbenchTab, { type: 'search' }> => tab.type === 'search')
-    .map((tab) => {
-      const pane = findPaneContainingTab(root, tab.id)
-      const paneId = pane?.id || null
-      const closePaneForHistory = () => {
-        if (!paneId || paneIds.length <= 1) return
-        const currentPane = findPaneNode(useWorkbenchStore.getState().root, paneId)
-        const otherPaneId = getPaneIds(useWorkbenchStore.getState().root).find(id => id !== paneId)
-        if (!currentPane || !otherPaneId) return
-        currentPane.tabIds.forEach((tabId, index) => moveTabToPane(tabId, otherPaneId, { activate: index === currentPane.tabIds.length - 1 }))
-        closePane(paneId)
-        const nextActive = findPaneNode(useWorkbenchStore.getState().root, otherPaneId)?.activeTabId
-        if (nextActive) navigateToTab(nextActive)
-      }
-      return <HistorySearchTabHost
-        key={tab.id}
-        tab={tab}
-        pane={pane}
-        paneId={paneId}
-        collapseDirection={getPaneCollapseDirection(root, paneId || '')}
-        slot={historySlotsRef.current.get(tab.id) || null}
-        isMobile={isMobile}
-        timelineView={timelineView}
-        showUsageBadge={showUsageBadge}
-        showUserMessageMetadata={showUserMessageMetadata}
-        knownSessions={sidebarSessions.map(session => session.id)}
-        onBack={isMobile ? handleBackToList : undefined}
-        onOpenSession={openChatTab}
-        onDraftChange={(draft) => updateTab(tab.id, current => current.type === 'search' ? {
-          ...current,
-          searchQuery: draft.query,
-          searchAgentName: draft.agentName,
-          searchSessionId: draft.sessionId,
-          title: draft.query.trim() || 'History',
-        } : current)}
-        onSearchStarted={() => updateTab(tab.id, current => current.type === 'search' ? { ...current, searchStarted: true } : current)}
-        onSetCollapsed={setPaneCollapsed}
-        canClosePane={paneIds.length > 1}
-        onClosePane={closePaneForHistory}
-        onCloseTab={(tabId) => { void closeWorkbenchTab(tabId) }}
-        onKeepTab={keepWorkbenchTab}
-        onMoveTabToNewWindow={moveWorkbenchTabToNewWindow}
-        canMoveTabToNewWindow={() => true}
-        onCloseOtherTabs={(tabId) => { if (paneId) void closePaneTabsByPredicate(paneId, tab => tab.id !== tabId) }}
-        onCloseAllTabs={() => { if (paneId) void closePaneTabsByPredicate(paneId, () => true) }}
-      />
-    })
+  const mobilePaneId = focusedPaneId || paneIds[0]
+  const renderStableContent = () => <WorkbenchContentLayer>{allTabs.map(tab => {
+    const pane = findPaneContainingTab(root, tab.id)
+    if (!pane) return null
+    const visible = !pane.collapsed && pane.activeTabId === tab.id
+      && (!isMobile || (!showSessionList && pane.id === mobilePaneId))
+    // History already retains hidden views; Code starts lazily then keeps its frame.
+    // Ordinary tabs retain their existing semantic hide/unmount policy.
+    if (!visible && tab.type !== 'search' && !(tab.type === 'vscode' && vscodeFrameStarted)) return null
+    if (tab.type === 'vscode' && !vscodeFrameStarted) return null
+    const props = getPaneProps(pane.id, getPaneCollapseDirection(root, pane.id))!
+    return <WorkbenchContentHost key={tab.id} {...props} tab={tab} visible={visible}
+      canClose={!(tab.type === 'setup' && setupOobe)}
+      renderContent={() => renderTabContent(tab, isMobile ? handleBackToList : undefined)} />
+  })}</WorkbenchContentLayer>
 
   const renderWorkbenchSurface = (content: ReactNode) => (
     <DndContext
@@ -2003,42 +1963,31 @@ function App() {
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      {content}
-      {renderHistoryKeepAlive()}
-      <DragOverlay>
-        {draggingTab ? (
-          <div className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong">
-            <span className="truncate">{draggingTab.title}</span>
-          </div>
-        ) : draggingItem?.type === 'pane' ? (
-          <div data-pane-drag-overlay className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg">
-            <span className="truncate">Pane: {draggingItem.title}</span>
-          </div>
-        ) : draggingItem?.type === 'session' ? (
-          <div data-session-drag-overlay className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong">
-            <span className="truncate">{draggingItem.title}</span>
-          </div>
-        ) : null}
-      </DragOverlay>
+      <WorkbenchContentProvider>
+        {content}
+        {renderStableContent()}
+        <DragOverlay>
+          {draggingTab ? (
+            <div className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong">
+              <span className="truncate">{draggingTab.title}</span>
+            </div>
+          ) : draggingItem?.type === 'pane' ? (
+            <div data-pane-drag-overlay className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg">
+              <span className="truncate">Pane: {draggingItem.title}</span>
+            </div>
+          ) : draggingItem?.type === 'session' ? (
+            <div data-session-drag-overlay className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong">
+              <span className="truncate">{draggingItem.title}</span>
+            </div>
+          ) : null}
+        </DragOverlay>
+      </WorkbenchContentProvider>
     </DndContext>
-  )
-
-  const renderWithVscodeFrame = (content: ReactNode) => (
-    <>
-      {content}
-      <VscodeWebFrameHost
-        key="foxwarm-vscode-web-frame-host"
-        ref={vscodeFrameRef}
-        started={vscodeFrameStarted}
-        src={codeFrameUrl}
-        slot={vscodeFrameSlot}
-      />
-    </>
   )
 
   if (isMobile) {
     if (showSessionList) {
-      return renderWithVscodeFrame(renderWorkbenchSurface(
+      return renderWorkbenchSurface(
         <SessionList
           sessions={sidebarSessions}
           agents={agents}
@@ -2071,21 +2020,19 @@ function App() {
           onToggleIdleNotificationMode={toggleIdleNotificationMode}
           bounded={boundedPresentation}
         />,
-      ))
+      )
     }
 
-    const mobilePaneId = focusedPaneId || paneIds[0]
-
-    return renderWithVscodeFrame(
+    return renderWorkbenchSurface(
       <div className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell fixed inset-x-0 bg-fw-canvas overflow-hidden">
         <div className="h-full min-h-0 overflow-hidden p-0">
-          {renderWorkbenchSurface(mobilePaneId ? renderPane(mobilePaneId, handleBackToList) : null)}
+          {mobilePaneId ? renderPane(mobilePaneId) : null}
         </div>
       </div>,
     )
   }
 
-  return renderWithVscodeFrame(renderWorkbenchSurface(
+  return renderWorkbenchSurface(
     <div className="foxwarm-desktop-workbench-shell foxwarm-safe-area-shell foxwarm-viewport-shell relative flex overflow-hidden bg-fw-canvas">
       {!sidebarCollapsed ? (
         <div className="foxwarm-sidebar-frame relative h-full shrink-0" style={{ width: sidebarWidth }}>
@@ -2145,7 +2092,7 @@ function App() {
         <div className="min-h-0 flex-1 overflow-hidden">
           <WorkbenchLayout
             node={root}
-            renderPane={(paneId, collapseDirection) => renderPane(paneId, undefined, collapseDirection)}
+            renderPane={(paneId, collapseDirection) => renderPane(paneId, collapseDirection)}
             onLayoutResize={updateSplitSizes}
           />
         </div>
@@ -2157,7 +2104,7 @@ function App() {
         />
       </div>
     </div>,
-  ))
+  )
 }
 
 export default App

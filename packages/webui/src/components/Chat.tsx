@@ -1,3 +1,4 @@
+import { useContentBeforeResize } from '../contentResize'
 import type { TimelineView } from '../chatPreferences'
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp, Code2, MessageSquareText, Search, SquareTerminal, X } from 'lucide-react'
@@ -327,6 +328,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   const currentViewportGeometryRef = useRef<{ scrollTop: number; scrollHeight: number } | null>(null)
   const userInteractionVersionRef = useRef(0)
   const capturedInteractionVersionRef = useRef(0)
+  const pendingContentResizeRef = useRef<{ state: ChatViewportState; interactionVersion: number } | null>(null)
   const resizeRestoreFrameRef = useRef<number | null>(null)
   const heightFollowHoldsRef = useRef(new Set<object>())
   const heightFollowAnimatingRef = useRef(new Set<object>())
@@ -627,6 +629,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   }, [])
 
   const captureCurrentViewportState = useCallback((): ChatViewportState | null => {
+    if (pendingContentResizeRef.current) return pendingContentResizeRef.current.state
     if (heightFollowHoldsRef.current.size && shouldAutoScrollRef.current && !pendingUserLeaveBottomRef.current) return currentViewportStateRef.current
     const followState = updateBottomFollowState()
     const bottomThresholdPx = followState.pendingUserLeave
@@ -643,6 +646,11 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     storeChatViewportState(viewportSessionId, state)
     return state
   }, [readCurrentViewportState, updateBottomFollowState, viewportSessionId])
+
+  useContentBeforeResize(useCallback(() => {
+    const state = captureCurrentViewportState()
+    if (state) pendingContentResizeRef.current = { state, interactionVersion: userInteractionVersionRef.current }
+  }, [captureCurrentViewportState]))
 
   const applyViewportState = useCallback((state: ChatViewportState): boolean => {
     const container = messagesContainerRef.current
@@ -697,6 +705,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   }, [applyViewportState])
 
   const markUserViewportInteraction = useCallback(() => {
+    pendingContentResizeRef.current = null
     userInteractionVersionRef.current += 1
     pendingViewportRestoreRef.current = null
     currentViewportGeometryRef.current = null
@@ -1889,6 +1898,20 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       }
       resizeRestoreFrameRef.current = window.requestAnimationFrame(() => {
         resizeRestoreFrameRef.current = null
+        const contentResize = pendingContentResizeRef.current
+        if (contentResize) {
+          if (contentResize.interactionVersion === userInteractionVersionRef.current) applyViewportState(contentResize.state)
+          // A width-band React commit can resize the Timeline again after this
+          // delivery. Keep the pre-resize anchor until a frame has settled;
+          // another observer delivery cancels this release and restores again.
+          resizeRestoreFrameRef.current = window.requestAnimationFrame(() => {
+            resizeRestoreFrameRef.current = null
+            if (pendingContentResizeRef.current === contentResize) {
+              if (contentResize.interactionVersion === userInteractionVersionRef.current) applyViewportState(contentResize.state)
+              pendingContentResizeRef.current = null
+            }
+          })
+        }
         if (capturedInteractionVersionRef.current !== userInteractionVersionRef.current) return
 
         const pending = pendingViewportRestoreRef.current

@@ -19,7 +19,7 @@ async function serve(request, response) {
   const pathname = new URL(request.url, 'http://fixture').pathname
   if (pathname === '/prefix/ui/vscode-web/') {
     response.writeHead(200, { 'Content-Type': 'text/html' })
-    response.end('<!doctype html><html><body>Code fixture</body></html>')
+    response.end('<!doctype html><html><body>Code fixture<script>parent.__codeFrameLoads = (parent.__codeFrameLoads || 0) + 1; addEventListener("message", event => { if (event.data.type !== "request") return; (parent.__codeRequests ||= []).push(event.data.request); parent.postMessage({ channel: "foxwarm-code-bridge", version: 1, type: "response", requestId: event.data.requestId, ok: true, result: {} }, location.origin) }); addEventListener("load", () => parent.postMessage({ channel: "foxwarm-code-bridge", version: 1, type: "ready" }, location.origin))</script></body></html>')
     return
   }
   const relative = pathname.startsWith('/prefix/ui/') ? pathname.slice('/prefix/ui/'.length) : ''
@@ -47,12 +47,12 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, codeNewWindow, responsiveChat = false, terminal = null, width = 1400 } = {}) {
+async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, codeNewWindow, responsiveChat = false, chatMessages = null, terminal = null, width = 1400 } = {}) {
   const page = await browser.newPage()
   const pageErrors = []
   page.on('pageerror', error => pageErrors.push(error.message))
   await page.setViewport({ width, height: 900 })
-  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat, splitDirection, initialLayout, themeId, codeNewWindow, responsiveChat, terminal }) => {
+  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat, splitDirection, initialLayout, themeId, codeNewWindow, responsiveChat, chatMessages, terminal }) => {
     if (window !== window.top) return
     const tabsById = Object.fromEntries(initialTabs.map(tab => [tab.id, tab]))
     const root = initialLayout || (splitPanes
@@ -67,10 +67,15 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       localStorage.setItem('foxwarm_last_active_tab_v1', activeId)
       localStorage.setItem('foxwarm_sidebar_collapsed_v1', 'false')
     }
+    if (chatMessages) localStorage.setItem('foxwarm_timeline_view_v1', 'grouped')
     if (themeId) localStorage.setItem('foxwarm_theme_selection_v2', JSON.stringify({ version: 2, themeId, colorMode: 'light' }))
     if (codeNewWindow !== undefined) localStorage.setItem('foxwarm_code_open_new_window_v1', String(codeNewWindow))
     const json = body => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     window.__sent = []
+    window.__historyReads = []
+    window.__historySearchReads = []
+    window.__subscriptions = []
+    window.__terminalConnections = []
     window.__terminalDeletes = []
     window.__terminalCreates = []
     const terminalTemplate = terminal
@@ -106,6 +111,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       if (pathname.endsWith('/api/session-list/sidebar')) return json({ version: 1, revision: 'r1', sessions: [sessionFixture('e2e-a'), sessionFixture('e2e-b'), sessionFixture('e2e-c')], nextCursor: null, children: [], focus: [], pathContext: [], forcedChildren: {} })
       if (pathname.endsWith('/api/session-list/by-id')) return json({ results: JSON.parse(options.body).ids.filter(id => id === 'history-outside/main').map(requestedId => ({ requestedId, resolution: { kind: 'exact', sessionId: requestedId }, session: { ...sessionFixture(requestedId), displayName: 'Outside the sidebar' } })) })
       if (pathname.endsWith('/api/history/search')) {
+        window.__historySearchReads.push(url.search)
         if (url.searchParams.get('query') === 'empty') return json({ results: [] })
         return json({ results: ['history-outside/main', 'e2e-a'].map(sessionId => ({ key: sessionId, sessionId, kind: 'messages', firstSeq: 7, lastSeq: 7, hasEarlier: false, hasLater: false, messages: [{ role: 'user', parts: [{ text: ('Archived navigation fixture\n').repeat(40) }], __meta: { seq: 7, timestamp: 1700000000000 } }] })) })
       }
@@ -117,7 +123,8 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
         return json({ ok: true })
       }
       if (pathname.includes('/api/sessions/') && pathname.endsWith('/history')) {
-        const messages = responsiveChat ? Array.from({ length: 35 }, (_, index) => ({ role: index % 2 ? 'model' : 'user', parts: [{ text: 'Responsive message ' + index + '\n\n' + 'Pane-local content wraps normally. '.repeat(8) }], __meta: { seq: index + 1, timestamp: 1700000000000 + index } })) : []
+        window.__historyReads.push(pathname + url.search)
+        const messages = chatMessages || (responsiveChat ? Array.from({ length: 35 }, (_, index) => ({ role: index % 2 ? 'model' : 'user', parts: [{ text: 'Responsive message ' + index + '\n\n' + 'Pane-local content wraps normally. '.repeat(8) }], __meta: { seq: index + 1, timestamp: 1700000000000 + index } })) : [])
         return json({ messages, queuedMessages: [], session: { id: decodeURIComponent(pathname.split('/').at(-2)), messageCount: messages.length, historyVersion: 1, ...(responsiveChat ? { modelKey: 'fixture/model', childModelDefault: 'fixture/model', childModelPolicySource: 'explicit' } : {}) }, latestSeq: messages.length, historyVersion: 1, historyComplete: true })
       }
       return json({})
@@ -127,13 +134,16 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       static OPEN = 1
       readyState = 1
       onopen = null; onmessage = null; onclose = null; onerror = null
-      constructor(url) { queueMicrotask(() => {
+      constructor(url) {
+        if (new URL(url).pathname.endsWith('/terminals/stream')) window.__terminalConnections.push(url)
+        queueMicrotask(() => {
         this.onopen?.({})
         if (new URL(url).pathname.endsWith('/terminals/stream') && terminal) this.onmessage?.({ data: JSON.stringify({ type: 'ready', terminal, backlog: '' }) })
       }) }
       send(raw) {
         if (!responsiveChat) return
         const data = JSON.parse(raw)
+        if (data.type === 'set-subscriptions') window.__subscriptions.push(data.sessionIds)
         if (data.type === 'set-subscriptions') queueMicrotask(() => {
           this.onmessage?.({ data: JSON.stringify({ type: 'subscriptions-accepted', revision: data.revision, sessionListResolutions: {}, sessionResolutions: Object.fromEntries(data.sessionIds.map(id => [id, id])) }) })
           this.onmessage?.({ data: JSON.stringify({ type: 'subscriptions-applied', revision: data.revision }) })
@@ -142,7 +152,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       close() { this.readyState = 3; this.onclose?.({}) }
     }
     window.WebSocket = FixtureWebSocket
-  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, codeNewWindow, responsiveChat, terminal })
+  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, codeNewWindow, responsiveChat, chatMessages, terminal })
   await page.goto(`${baseUrl}${hash}`, { waitUntil: 'domcontentloaded' })
   await page.bringToFront()
   await page.waitForFunction(() => !!window.foxwarmTest, { timeout: 8_000 }).catch(async error => {
@@ -182,7 +192,7 @@ async function drag(page, from, to) {
   await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2)
   await page.mouse.down()
   await page.mouse.move(a.x + a.width / 2 + 12, a.y + a.height / 2, { steps: 4 })
-  await page.waitForSelector('[data-pane-id] > .pointer-events-none')
+  await page.waitForSelector(':is([data-pane-id], [data-workbench-content-pane]) > .pointer-events-none')
   await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 12 })
   await page.mouse.up()
 }
@@ -215,7 +225,7 @@ test('pane collapse follows the direct split direction, releases space, and rest
     const neighborBefore = await page.$eval('[data-pane-id="pane-inner-top"]', el => el.getBoundingClientRect().width)
     await page.click('[data-workbench-pane-collapse="pane-main"]')
     await page.waitForSelector('[data-workbench-collapsed-pane="true"] [data-workbench-collapsed-tab="chat:e2e-a"]')
-    await page.waitForFunction(() => !document.querySelector('[data-pane-id="pane-main"] [role="textbox"][aria-label="Message"]'))
+    await page.waitForFunction(() => !document.querySelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [role="textbox"][aria-label="Message"]'))
     const collapsed = await page.$eval('[data-pane-id="pane-main"]', el => ({ width: el.getBoundingClientRect().width, height: el.getBoundingClientRect().height }))
     const neighborCollapsed = await page.$eval('[data-pane-id="pane-inner-top"]', el => el.getBoundingClientRect().width)
     assert.ok(collapsed.width < 100, `left/right split collapses to a vertical rail: ${collapsed.width}px`)
@@ -223,7 +233,7 @@ test('pane collapse follows the direct split direction, releases space, and rest
     assert.equal(collapsed.height, before.height)
     assert.equal((await state(page)).root.children[0].collapsed, true)
     assert.deepEqual((await state(page)).root.children[0].tabIds, ['system:agents', 'chat:e2e-a'])
-    assert.equal(await page.$('[data-pane-id="pane-main"] [data-workbench-tab-close="chat:e2e-a"]'), null, 'collapsed tabs do not mount their content header')
+    assert.equal(await page.$(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-workbench-tab-close="chat:e2e-a"]'), null, 'collapsed tabs do not mount their content header')
 
     await page.click('[data-workbench-collapsed-tab="system:agents"]')
     await page.waitForSelector('[data-tab-id="system:agents"]')
@@ -233,7 +243,7 @@ test('pane collapse follows the direct split direction, releases space, and rest
     assert.ok(Math.abs(expanded - before.width) < 40, `pane returns close to its prior width: ${expanded}px vs ${before.width}px`)
     assert.equal((await state(page)).root.children[0].activeTabId, 'system:agents')
     assert.ok(await page.$('[data-tab-id="chat:e2e-a"] button[title="Close tab"]'), 'ordinary tab Close remains available')
-    assert.ok(await page.$('[data-pane-id="pane-main"] button[title="Close pane"]'), 'a multi-pane workbench exposes Close pane')
+    assert.ok(await page.$(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) button[title="Close pane"]'), 'a multi-pane workbench exposes Close pane')
 
     const nestedBefore = await page.$eval('[data-pane-id="pane-inner-top"]', el => el.getBoundingClientRect().height)
     await page.click('[data-workbench-pane-collapse="pane-inner-top"]')
@@ -242,7 +252,7 @@ test('pane collapse follows the direct split direction, releases space, and rest
     assert.ok(nestedCollapsed < 70, `nested up/down split uses a horizontal tab strip: ${nestedCollapsed}px`)
     assert.ok(nestedBefore - nestedCollapsed > 100, 'nested lower sibling receives the released height')
     await page.click('[data-workbench-collapsed-tab="chat:e2e-b"]')
-    await page.waitForSelector('[data-pane-id="pane-inner-top"] [role="textbox"][aria-label="Message"]')
+    await page.waitForSelector(':is([data-pane-id="pane-inner-top"], [data-workbench-content-pane="pane-inner-top"]) [role="textbox"][aria-label="Message"]')
   } finally { await page.close() }
 })
 
@@ -256,7 +266,7 @@ test('vertical split collapse remains a horizontal tab bar after reload and expo
   const page = await openFixture({ tabs: [system, chat('e2e-a', false)], layout })
   try {
     await page.waitForSelector('[data-workbench-tab-handle="chat:e2e-a"]')
-    assert.ok(await page.$('[data-pane-id="pane-main"] button[title="Close pane"]'), 'each of two panes exposes Close pane even when it has only one tab')
+    assert.ok(await page.$(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) button[title="Close pane"]'), 'each of two panes exposes Close pane even when it has only one tab')
     const beforeHeight = await page.$eval('[data-pane-id="pane-main"]', el => el.getBoundingClientRect().height)
     await page.click('[data-workbench-pane-collapse="pane-main"]')
     await page.waitForSelector('[data-workbench-collapsed-pane="true"] [data-workbench-collapsed-tab="chat:e2e-a"]')
@@ -288,7 +298,7 @@ test('vertical split collapse remains a horizontal tab bar after reload and expo
 
     await page.click('[data-workbench-pane-collapse="pane-main"]')
     await page.waitForSelector('[data-workbench-collapsed-tab="chat:e2e-a"]')
-    await page.click('[data-pane-id="pane-other"] button[title="Close pane"]')
+    await page.click(':is([data-pane-id="pane-other"], [data-workbench-content-pane="pane-other"]) button[title="Close pane"]')
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.kind === 'pane')
     assert.equal(await page.$('[data-workbench-pane-drag-handle]'), null, 'closing the other pane removes the whole-pane drag control')
     assert.equal(await page.$('button[title="Collapse pane"]'), null)
@@ -367,7 +377,7 @@ test('collapsing Terminal detaches without closing resources and kept Code stays
       frame.dataset.testFrameIdentity = token
       return token
     })
-    assert.ok(await codePage.$('[data-pane-id="pane-main"] button[title="Close pane"]'))
+    assert.ok(await codePage.$(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) button[title="Close pane"]'))
     await codePage.click('[data-tab-id="chat:e2e-a"]')
     await codePage.waitForSelector('[role="textbox"][aria-label="Message"]')
     assert.ok(await codePage.$('[data-foxwarm-vscode-web-frame="true"]'), 'ordinary switching keeps the inactive Code iframe')
@@ -390,7 +400,7 @@ function findFixturePane(root, paneId) {
   return root.children.map(child => findFixturePane(child, paneId)).find(Boolean) || null
 }
 
-async function dragPane(page, sourcePaneId, targetPaneId, edge, { cancel = false } = {}) {
+async function dragPane(page, sourcePaneId, targetPaneId, edge, { cancel = false, duringDrag } = {}) {
   const source = await page.$(`[data-workbench-pane-drag-handle="${sourcePaneId}"]`)
   const sourceBox = await source.boundingBox()
   assert.ok(sourceBox)
@@ -398,10 +408,14 @@ async function dragPane(page, sourcePaneId, targetPaneId, edge, { cancel = false
   await page.mouse.down()
   await page.mouse.move(sourceBox.x + sourceBox.width / 2 + 12, sourceBox.y + sourceBox.height / 2, { steps: 4 })
   await page.waitForSelector('[data-pane-drag-overlay]')
-  const target = await page.$(`[data-pane-id="${targetPaneId}"] [data-workbench-pane-drop="${edge}"]`)
+  if (duringDrag) await duringDrag()
+  const target = await page.$(`:is([data-pane-id="${targetPaneId}"], [data-workbench-content-pane="${targetPaneId}"]) [data-workbench-pane-drop="${edge}"]`)
   const targetBox = await target.boundingBox()
   assert.ok(targetBox)
   await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, { steps: 12 })
+  if (!cancel) {
+    await page.waitForFunction((paneId, edge) => [...document.querySelectorAll('[data-workbench-content-pane="' + paneId + '"] [data-workbench-pane-drop="' + edge + '"], [data-pane-id="' + paneId + '"] [data-workbench-pane-drop="' + edge + '"]')].some(element => element.className.includes('bg-fw-accent/10')), {}, targetPaneId, edge)
+  }
   if (cancel) await page.keyboard.press('Escape')
   await page.mouse.up()
   await page.waitForFunction(() => !document.querySelector('[data-pane-drag-overlay]'))
@@ -417,15 +431,22 @@ test('whole-pane dragging preserves its tabs and selection across splits, includ
       ] },
     ],
   }
-  const page = await openFixture({ tabs: [system, chat('e2e-a'), chat('e2e-b', false), { id: 'system:setup', type: 'setup', title: 'Setup' }], layout })
+  const page = await openFixture({ tabs: [system, chat('e2e-a'), chat('e2e-b', false), { id: 'system:setup', type: 'setup', title: 'Setup' }], layout, responsiveChat: true })
   try {
     await page.waitForSelector('[data-workbench-pane-drag-handle="pane-main"]')
+    await page.waitForSelector('[data-workbench-content-tab="chat:e2e-b"] [data-chat-message-anchor-key]')
+    await page.evaluate(() => {
+      window.__paneMoveChats = [...document.querySelectorAll('.foxwarm-chat-root')]
+      window.__paneMoveHistory = window.__historyReads.length
+    })
     const initial = await state(page)
     await dragPane(page, 'pane-main', 'pane-inner-top', 'right', { cancel: true })
     assert.deepEqual((await state(page)).root, initial.root, 'Escape leaves the entire layout unchanged')
 
     await dragPane(page, 'pane-main', 'pane-inner-bottom', 'right')
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.id === 'split-inner')
+    assert.ok(await page.evaluate(() => window.__paneMoveChats.every(root => root.isConnected)), 'whole-pane movement keeps both existing Chat roots')
+    assert.equal(await page.evaluate(() => window.__historyReads.length), await page.evaluate(() => window.__paneMoveHistory), 'whole-pane movement does not initialize history again')
     const moved = await state(page)
     assert.deepEqual(findFixturePane(moved.root, 'pane-main'), { ...layout.children[0], collapsed: false })
     assert.deepEqual(moved.tabsById, initial.tabsById, 'moving a pane does not replace, promote, close, or duplicate its tabs')
@@ -442,10 +463,10 @@ test('whole-pane dragging preserves its tabs and selection across splits, includ
     assert.equal(collapsedPane.collapsed, true)
     assert.equal(collapsedMoved.root.children[0].direction, 'column')
     assert.deepEqual(collapsedMoved.root.children[0].children.map(pane => pane.id), ['pane-main', 'pane-inner-top'])
-    assert.equal(await page.$eval('[data-pane-id="pane-main"] [role="tablist"]', el => el.getAttribute('aria-orientation')), 'horizontal', 'moving to a new parent split updates the collapsed direction')
-    assert.equal(await page.$('[data-pane-id="pane-main"] [role="textbox"]'), null, 'collapsed dragging never mounts tab content')
+    assert.equal(await page.$eval(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [role="tablist"]', el => el.getAttribute('aria-orientation')), 'horizontal', 'moving to a new parent split updates the collapsed direction')
+    assert.equal(await page.$(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [role="textbox"]'), null, 'collapsed dragging never mounts tab content')
     await page.click('[data-workbench-collapsed-tab="chat:e2e-a"]')
-    await page.waitForSelector('[data-pane-id="pane-main"] [role="textbox"][aria-label="Message"]')
+    await page.waitForSelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [role="textbox"][aria-label="Message"]')
   } finally { await page.close() }
 })
 
@@ -529,7 +550,7 @@ test('cancel and no-op drag preserve preview; real reorder and cross-pane drop K
     await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
     await page.mouse.down()
     await page.mouse.move(bounds.x + bounds.width / 2 + 12, bounds.y + bounds.height / 2, { steps: 5 })
-    await page.waitForSelector('[data-pane-id="pane-main"] .pointer-events-none')
+    await page.waitForSelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) .pointer-events-none')
     await page.keyboard.press('Escape')
     await page.mouse.up()
     assert.equal((await state(page)).tabsById['chat:e2e-a'].preview, true, 'canceled active drag does not Keep')
@@ -542,13 +563,17 @@ test('cancel and no-op drag preserve preview; real reorder and cross-pane drop K
     assert.deepEqual((await state(page)).root.tabIds, ['system:agents', 'system:setup', 'chat:e2e-a'], 'dropping on the immediate right neighbor uses existing reorderTabs semantics')
   } finally { await page.close() }
 
-  const otherPage = await openFixture({ split: true })
+  const otherPage = await openFixture({ split: true, responsiveChat: true })
   try {
     await otherPage.waitForSelector('[data-workbench-tab-handle="chat:e2e-a"]')
+    await otherPage.waitForSelector('.foxwarm-chat-root [data-chat-message-anchor-key]')
+    await otherPage.evaluate(() => { window.__movingChat = document.querySelector('.foxwarm-chat-root'); window.__moveHistory = window.__historyReads.length })
     await drag(otherPage, '[data-workbench-tab-handle="chat:e2e-a"]', '[data-pane-id="pane-other"]')
     await otherPage.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById['chat:e2e-a']?.preview === false)
     assert.equal((await state(otherPage)).hash, '#tab/chat:e2e-a')
-    assert.ok(await otherPage.$('[data-pane-id="pane-other"] [data-tab-id="chat:e2e-a"]'))
+    assert.ok(await otherPage.evaluate(() => window.__movingChat.isConnected), 'cross-pane tab movement retains the original Chat')
+    assert.equal(await otherPage.evaluate(() => window.__historyReads.length), await otherPage.evaluate(() => window.__moveHistory))
+    assert.ok(await otherPage.$(':is([data-pane-id="pane-other"], [data-workbench-content-pane="pane-other"]) [data-tab-id="chat:e2e-a"]'))
   } finally { await otherPage.close() }
 })
 
@@ -614,8 +639,8 @@ const paneButtons = '[title="Split right with active tab"], [title="Split down w
 test('single pane with one tab omits its strip without leaving header height; Sidebar drag restores tabs and controls', async () => {
   const page = await openFixture({ tabs: [chat('e2e-a')] })
   try {
-    await page.waitForSelector('[data-pane-id="pane-main"] [role="textbox"][aria-label="Message"]')
-    assert.equal(await page.$('[data-pane-id="pane-main"] [data-tab-id]'), null)
+    await page.waitForSelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [role="textbox"][aria-label="Message"]')
+    assert.equal(await page.$(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-tab-id]'), null)
     assert.equal(await page.$(paneButtons), null)
     assert.equal(await page.$('[data-workbench-pane-drag-handle], [data-workbench-pane-collapse]'), null, 'a lone single-tab pane omits whole-pane drag and collapse controls')
     assert.ok(await page.$('[data-workbench-tab-handle="chat:e2e-a"]'), 'ordinary tab drag remains available')
@@ -635,8 +660,8 @@ test('single pane with one tab omits its strip without leaving header height; Si
     await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, { steps: 20 })
     await new Promise(resolve => setTimeout(resolve, 120))
     await page.mouse.up()
-    await page.waitForSelector('[data-pane-id="pane-main"] [data-tab-id="chat:e2e-b"]')
-    assert.equal(await page.$$eval('[data-pane-id="pane-main"] [data-tab-id]', nodes => nodes.length), 2)
+    await page.waitForSelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-tab-id="chat:e2e-b"]')
+    assert.equal(await page.$$eval(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-tab-id]', nodes => nodes.length), 2)
     assert.equal(await page.$$eval(paneButtons, nodes => nodes.length), 2, 'a single-pane workbench omits Close pane rather than disabling it')
     assert.equal(await page.$('[data-workbench-pane-drag-handle], [data-workbench-pane-collapse]'), null, 'adding another tab does not enable pane drag or collapse')
     assert.equal((await state(page)).tabsById['chat:e2e-b'].preview, false)
@@ -654,7 +679,7 @@ test('single pane with one tab omits its strip without leaving header height; Si
       const state = JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state
       return state.root.tabIds.length === 1 && state.root.activeTabId === 'chat:e2e-a'
         && !document.querySelector('[data-tab-id]')
-        && !!document.querySelector('[data-pane-id="pane-main"] [role="textbox"][aria-label="Message"]')
+        && !!document.querySelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [role="textbox"][aria-label="Message"]')
     })
     assert.equal((await state(page)).hash, '#tab/chat:e2e-a')
     assert.equal(await page.$(paneButtons), null)
@@ -675,7 +700,7 @@ test('Close tab owns a small pointer move inside its button instead of starting 
     await page.mouse.move(startX, y)
     await page.mouse.down()
     await page.mouse.move(endX, y, { steps: 4 })
-    const dragBeforeRelease = await page.$('[data-pane-id="pane-main"] > .pointer-events-none')
+    const dragBeforeRelease = await page.$(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) > .pointer-events-none')
     await page.mouse.up()
     assert.equal(dragBeforeRelease, null, 'moving within Close must not activate the tab drag overlay')
     await page.waitForFunction(() => {
@@ -701,12 +726,12 @@ test('each single-tab pane uses its header while multi-tab panes retain their st
     assert.equal(await page.$$eval('button[title="Close pane"]', nodes => nodes.length), 2, 'replacing the preview keeps both panes and their Close actions')
     await page.click('[data-workbench-tab-handle="chat:e2e-b"]', { clickCount: 2 })
     await page.evaluate(() => window.foxwarmTest.switchToSession('e2e-c'))
-    await page.waitForSelector('[data-pane-id="pane-main"] [data-tab-id="chat:e2e-c"]')
-    assert.equal(await page.$$eval('[data-pane-id="pane-main"] [data-tab-id]', nodes => nodes.length), 2)
-    assert.equal(await page.$$eval('[data-pane-id="pane-main"] button[title="Split right with active tab"], [data-pane-id="pane-main"] button[title="Split down with active tab"], [data-pane-id="pane-main"] button[title="Close pane"]', nodes => nodes.length), 3)
-    assert.ok(await page.$('[data-pane-id="pane-other"] button[title="Close pane"]'))
-    assert.equal(await page.$('[data-pane-id="pane-other"] button[title="Split right with active tab"], [data-pane-id="pane-other"] button[title="Split down with active tab"]'), null)
-    await page.click('[data-pane-id="pane-main"] [data-tab-id="chat:e2e-c"] button[title="Close tab"]')
+    await page.waitForSelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-tab-id="chat:e2e-c"]')
+    assert.equal(await page.$$eval(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-tab-id]', nodes => nodes.length), 2)
+    assert.equal(await page.$$eval(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) button[title="Split right with active tab"], :is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) button[title="Split down with active tab"], :is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) button[title="Close pane"]', nodes => nodes.length), 3)
+    assert.ok(await page.$(':is([data-pane-id="pane-other"], [data-workbench-content-pane="pane-other"]) button[title="Close pane"]'))
+    assert.equal(await page.$(':is([data-pane-id="pane-other"], [data-workbench-content-pane="pane-other"]) button[title="Split right with active tab"], :is([data-pane-id="pane-other"], [data-workbench-content-pane="pane-other"]) button[title="Split down with active tab"]'), null)
+    await page.click(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-tab-id="chat:e2e-c"] button[title="Close tab"]')
     await page.waitForFunction(() => !document.querySelector('[data-tab-id="chat:e2e-c"]'))
     assert.ok(await page.$('[data-workbench-tab-handle="chat:e2e-b"]'))
     assert.equal(await page.$$eval('button[title="Close pane"]', nodes => nodes.length), 2)
@@ -807,8 +832,14 @@ test('History tabs keep independent drafts/results across entries, pane collapse
     await page.click(`[data-tab-id="${firstTabId}"]`)
     await page.waitForSelector(`[data-history-tab-id="${firstTabId}"] [data-history-result="history-outside/main"]`)
     assert.ok(await page.$eval(`[data-history-tab-id="${firstTabId}"]`, element => element.scrollTop >= 10), 'History restores its tab-owned scroll position')
+    await page.evaluate(id => { window.__originalHistoryView = document.querySelector('[data-history-tab-id="' + id + '"]'); window.__historySearchCount = window.__historySearchReads.length }, firstTabId)
+    await clickReadyControl(page, 'button[title="Split right with active tab"]')
+    assert.ok(await page.evaluate(() => window.__originalHistoryView.isConnected), 'split keeps the same History instance')
+    await drag(page, `[data-workbench-tab-handle="${firstTabId}"]`, '[data-pane-id="pane-other"]')
+    assert.ok(await page.evaluate(() => window.__originalHistoryView.isConnected), 'moving History and removing its old empty pane keeps its instance')
+    assert.equal(await page.evaluate(() => window.__historySearchReads.length), await page.evaluate(() => window.__historySearchCount), 'layout operations do not restart Archive search')
     const firstPaneId = await page.$eval(`[data-tab-id="${firstTabId}"]`, tab => tab.closest('[data-pane-id]').dataset.paneId)
-    await page.click(`[data-workbench-pane-collapse="${firstPaneId}"]`)
+    await clickReadyControl(page, `[data-workbench-pane-collapse="${firstPaneId}"]`)
     await page.waitForSelector(`[data-workbench-collapsed-tab="${firstTabId}"]`)
     await page.click(`[data-workbench-collapsed-tab="${firstTabId}"]`)
     await page.waitForSelector(`[data-history-tab-id="${firstTabId}"] [data-history-result="history-outside/main"]`)
@@ -912,34 +943,34 @@ test('history result Open session reuses kept Chats or opens a preview while ret
 test('Ctrl/Cmd+F targets the focused Chat pane and not inactive Chat or non-Chat workbench tabs', async () => {
   const page = await openFixture({ tabs: [chat('e2e-a', false), chat('e2e-b', false), system], activeTabId: 'chat:e2e-a', split: true, splitSecondChat: true })
   try {
-    await page.waitForSelector('[data-pane-id="pane-main"] [role="textbox"][aria-label="Message"]')
-    await page.waitForSelector('[data-pane-id="pane-other"] [role="textbox"][aria-label="Message"]')
-    await page.click('[data-pane-id="pane-main"] [role="textbox"][aria-label="Message"]')
+    await page.waitForSelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [role="textbox"][aria-label="Message"]')
+    await page.waitForSelector(':is([data-pane-id="pane-other"], [data-workbench-content-pane="pane-other"]) [role="textbox"][aria-label="Message"]')
+    await page.click(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [role="textbox"][aria-label="Message"]')
     await page.keyboard.down('Control'); await page.keyboard.press('f'); await page.keyboard.up('Control')
-    await page.waitForSelector('[data-pane-id="pane-main"] [data-chat-search] input')
-    assert.equal(await page.$('[data-pane-id="pane-other"] [data-chat-search]'), null)
-    await page.type('[data-pane-id="pane-main"] [data-chat-search] input', 'repeat query')
+    await page.waitForSelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-chat-search] input')
+    assert.equal(await page.$(':is([data-pane-id="pane-other"], [data-workbench-content-pane="pane-other"]) [data-chat-search]'), null)
+    await page.type(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-chat-search] input', 'repeat query')
     await page.click('[data-sidebar-footer] button[aria-label="Open UI settings"]')
     await page.keyboard.down('Control'); await page.keyboard.press('f'); await page.keyboard.up('Control')
     assert.deepEqual(await page.evaluate(() => ({
-      value: document.querySelector('[data-pane-id="pane-main"] [data-chat-search] input').value,
-      selected: document.activeElement === document.querySelector('[data-pane-id="pane-main"] [data-chat-search] input')
+      value: document.querySelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-chat-search] input').value,
+      selected: document.activeElement === document.querySelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-chat-search] input')
         && document.activeElement.selectionStart === 0 && document.activeElement.selectionEnd === 'repeat query'.length,
       count: document.querySelectorAll('[data-chat-search]').length,
     })), { value: 'repeat query', selected: true, count: 1 })
-    await page.click('[data-pane-id="pane-main"] button[aria-label="Close search"]')
-    await page.click('[data-pane-id="pane-other"] [role="textbox"][aria-label="Message"]')
+    await page.click(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) button[aria-label="Close search"]')
+    await page.click(':is([data-pane-id="pane-other"], [data-workbench-content-pane="pane-other"]) [role="textbox"][aria-label="Message"]')
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.focusedPaneId === 'pane-other')
     await page.keyboard.down('Meta'); await page.keyboard.press('f'); await page.keyboard.up('Meta')
-    await page.waitForSelector('[data-pane-id="pane-other"] [data-chat-search] input')
-    assert.equal(await page.$('[data-pane-id="pane-main"] [data-chat-search]'), null)
+    await page.waitForSelector(':is([data-pane-id="pane-other"], [data-workbench-content-pane="pane-other"]) [data-chat-search] input')
+    assert.equal(await page.$(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-chat-search]'), null)
     const ignored = await page.evaluate(() => {
       const dispatch = init => { const event = new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true, cancelable: true, ...init }); window.dispatchEvent(event); return event.defaultPrevented }
       return [dispatch({ shiftKey: true }), dispatch({ altKey: true }), dispatch({ isComposing: true })]
     })
     assert.deepEqual(ignored, [false, false, false])
-    await page.click('[data-pane-id="pane-other"] button[aria-label="Close search"]')
-    await page.click('[data-pane-id="pane-main"] [data-tab-id="system:agents"]')
+    await page.click(':is([data-pane-id="pane-other"], [data-workbench-content-pane="pane-other"]) button[aria-label="Close search"]')
+    await page.click(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-tab-id="system:agents"]')
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.focusedPaneId === 'pane-main')
     const blocked = await page.evaluate(() => { const event = new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true, cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented })
     assert.equal(blocked, false)
@@ -1060,8 +1091,8 @@ test('Application menu icons precede their labels and retain Setup, Logs, and re
 
 test('Chat follows each pane through real divider dragging without changing desktop navigation or drafts', async () => {
   const page = await openFixture({ tabs: [chat('e2e-a', false), chat('e2e-b', false)], split: true, splitSecondChat: true, responsiveChat: true, width: 1800 })
-  const main = '[data-pane-id="pane-main"]'
-  const other = '[data-pane-id="pane-other"]'
+  const main = ':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"])'
+  const other = ':is([data-pane-id="pane-other"], [data-workbench-content-pane="pane-other"])'
   const editor = ' [role="textbox"][aria-label="Message"]'
   const paneLayout = selector => page.$eval(selector + ' .foxwarm-chat-root', root => {
     const visible = selector => { const el = root.querySelector(selector); return !!el && getComputedStyle(el).display !== 'none' }
@@ -1079,6 +1110,11 @@ test('Chat follows each pane through real divider dragging without changing desk
     }
   })
   const resizeMain = async target => {
+    await page.waitForFunction(() => {
+      const slot = document.querySelector('[data-workbench-content-slot="pane-main"]')?.getBoundingClientRect()
+      const host = document.querySelector('[data-workbench-content-pane="pane-main"]')?.getBoundingClientRect()
+      return slot && host && Math.abs(slot.width - host.width) < 1 && Math.abs(slot.left - host.left) < 1
+    })
     const box = await (await page.$('[role="separator"]')).boundingBox()
     const width = (await paneLayout(main)).width
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
@@ -1086,7 +1122,7 @@ test('Chat follows each pane through real divider dragging without changing desk
     await page.mouse.move(box.x + box.width / 2 + target - width, box.y + box.height / 2, { steps: 8 })
     // The content must react while the pointer is still held, not only on release.
     await page.waitForFunction((target) => {
-      const root = document.querySelector('[data-pane-id="pane-main"] .foxwarm-chat-root')
+      const root = document.querySelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) .foxwarm-chat-root')
       const width = root?.getBoundingClientRect().width
       return Math.abs(width - target) < 2 && !!root.querySelector('.foxwarm-context-scrollbar-shell') === (width >= 768)
     }, {}, target)
@@ -1107,7 +1143,7 @@ test('Chat follows each pane through real divider dragging without changing desk
     await page.mouse.move(scrollBox.x + scrollBox.width / 2, scrollBox.y + scrollBox.height / 2)
     await page.mouse.wheel({ deltaY: -650 })
     await page.waitForFunction(() => {
-      const el = document.querySelector('[data-pane-id="pane-main"] .foxwarm-chat-messages')
+      const el = document.querySelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) .foxwarm-chat-messages')
       return el.scrollHeight - el.scrollTop - el.clientHeight > 500
     })
     await page.click(other + ' .foxwarm-model-selector-trigger')
@@ -1143,7 +1179,7 @@ test('Chat follows each pane through real divider dragging without changing desk
     const previousLeft = await page.$eval('[data-model-selector-popup]', el => el.getBoundingClientRect().left)
     await page.$eval('button[title="Collapse sidebar"]', button => button.click())
     await page.waitForFunction(left => document.querySelector('[data-model-selector-popup]')?.getBoundingClientRect().left < left - 100, {}, previousLeft)
-    await page.waitForFunction(() => document.querySelector('[data-pane-id="pane-main"] .foxwarm-chat-root').getBoundingClientRect().width > 420)
+    await page.waitForFunction(() => document.querySelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) .foxwarm-chat-root').getBoundingClientRect().width > 420)
     assert.equal((await paneLayout(main)).childLabel, true)
     await page.keyboard.press('Escape')
     for (const [selector, text] of [[main, 'main draft remains'], [other, 'other draft remains']]) {
@@ -1155,9 +1191,9 @@ test('Chat follows each pane through real divider dragging without changing desk
     if (process.env.FOXWARM_CONTAINER_SCREENSHOT_PATH) await page.screenshot({ path: process.env.FOXWARM_CONTAINER_SCREENSHOT_PATH })
     // A hidden mounted Chat retains its band and recomputes when revealed.
     await page.$eval(main + ' .foxwarm-chat-root', root => { root.style.display = 'none' })
-    await page.waitForFunction(() => document.querySelector('[data-pane-id="pane-main"] .foxwarm-chat-root').getBoundingClientRect().width === 0)
+    await page.waitForFunction(() => document.querySelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) .foxwarm-chat-root').getBoundingClientRect().width === 0)
     await page.$eval(main + ' .foxwarm-chat-root', root => { root.style.display = ''; root.style.width = '768px' })
-    await page.waitForFunction(() => !!document.querySelector('[data-pane-id="pane-main"] .foxwarm-context-scrollbar-shell'))
+    await page.waitForFunction(() => !!document.querySelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) .foxwarm-context-scrollbar-shell'))
     assert.equal((await paneLayout(main)).gutter, '32px')
     await page.$eval(main + ' .foxwarm-chat-root', root => { root.style.width = '' })
     // The production embedded and popup routes use the same container boundary.
@@ -1208,7 +1244,7 @@ test('single Chat icon owns drag and its existing menu; cancel and Close pointer
     await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
     await page.mouse.down()
     await page.mouse.move(bounds.x + bounds.width / 2 + 12, bounds.y + bounds.height / 2, { steps: 4 })
-    await page.waitForSelector('[data-pane-id] > .pointer-events-none')
+    await page.waitForSelector(':is([data-pane-id], [data-workbench-content-pane]) > .pointer-events-none')
     await page.keyboard.press('Escape')
     await page.mouse.up()
     assert.equal((await state(page)).tabsById['chat:e2e-a'].preview, true)
@@ -1235,7 +1271,7 @@ test('single Chat icon owns drag and its existing menu; cancel and Close pointer
     await page.mouse.move(x, y)
     await page.mouse.down()
     await page.mouse.move(x + 8, y, { steps: 4 })
-    assert.equal(await page.$('[data-pane-id] > .pointer-events-none'), null)
+    assert.equal(await page.$(':is([data-pane-id], [data-workbench-content-pane]) > .pointer-events-none'), null)
     assert.equal((await state(page)).tabsById['chat:e2e-a'].preview, true)
     await page.mouse.up()
     await page.waitForFunction(() => !JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById['chat:e2e-a'])
@@ -1316,7 +1352,7 @@ test('Chat composer uses a smaller empty editor below 600px content height in De
   for (const themeId of ['foxwarm.default', 'foxwarm.550a']) {
     const sessionId = 'compact-' + themeId
     const page = await openFixture({ tabs: [chat(sessionId, false), chat('e2e-b', false)], activeTabId: 'chat:' + sessionId, split: true, splitSecondChat: true, width: 1800, themeId })
-    const root = '[data-pane-id="pane-main"] .foxwarm-chat-root'
+    const root = ':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) .foxwarm-chat-root'
     const editor = root + ' [role="textbox"][aria-label="Message"]'
     const geometry = () => page.$eval(editor, el => ({
       height: el.getBoundingClientRect().height,
@@ -1621,13 +1657,16 @@ test('Footer Terminal is a reusable bottom pane that collapses without PTY delet
     const box = await page.$eval(`[data-pane-id="${terminalPane.id}"]`, element => ({ y: element.getBoundingClientRect().y, height: element.getBoundingClientRect().height }))
     assert.ok(box.height > 180 && box.height < 360, `panel has a bounded initial height: ${box.height}`)
     assert.equal(await page.$eval(control, element => element.getAttribute('aria-expanded')), 'true')
+    await page.evaluate(() => { window.__terminalRoot = document.querySelector('[data-terminal-header]'); window.__terminalConnectionsBefore = window.__terminalConnections.length })
     const beforeResize = box.height
     const divider = await page.$('[role="separator"]')
     const dividerBox = await divider.boundingBox()
     await page.mouse.move(dividerBox.x + dividerBox.width / 2, dividerBox.y + dividerBox.height / 2)
     await page.mouse.down(); await page.mouse.move(dividerBox.x + dividerBox.width / 2, dividerBox.y - 60, { steps: 8 }); await page.mouse.up()
     assert.ok(await page.$eval(`[data-pane-id="${terminalPane.id}"]`, element => element.getBoundingClientRect().height) > beforeResize + 30)
-    await page.click(`[data-pane-id="${terminalPane.id}"] button[aria-label="Collapse pane"]`)
+    assert.ok(await page.evaluate(() => window.__terminalRoot.isConnected), 'divider dragging retains the Terminal content')
+    assert.equal(await page.evaluate(() => window.__terminalConnections.length), await page.evaluate(() => window.__terminalConnectionsBefore))
+    await page.click(`:is([data-pane-id="${terminalPane.id}"], [data-workbench-content-pane="${terminalPane.id}"]) button[aria-label="Collapse pane"]`)
     await page.waitForSelector(`[data-pane-id="${terminalPane.id}"][data-workbench-collapsed-pane="true"]`)
     assert.deepEqual((await state(page)).root.children.map(pane => pane.id), [sourcePane.id, terminalPane.id], 'Collapse keeps both panes and never merges Terminal into the editor')
     assert.ok((await state(page)).tabsById[terminalTab.id], 'Collapse retains the tab')
@@ -1637,7 +1676,10 @@ test('Footer Terminal is a reusable bottom pane that collapses without PTY delet
     await page.waitForSelector('[data-terminal-header]', { visible: true })
     assert.equal(Object.values((await state(page)).tabsById).filter(tab => tab.type === 'terminal').length, 1)
     assert.deepEqual(await page.evaluate(() => window.__terminalCreates), [], 'the exact existing PTY is reused')
+    await page.evaluate(() => { window.__terminalRoot = document.querySelector('[data-terminal-header]'); window.__terminalConnectionsBefore = window.__terminalConnections.length })
     await dragPane(page, terminalPane.id, sourcePane.id, 'right')
+    assert.ok(await page.evaluate(() => window.__terminalRoot.isConnected), 'whole-pane docking retains Terminal DOM')
+    assert.equal(await page.evaluate(() => window.__terminalConnections.length), await page.evaluate(() => window.__terminalConnectionsBefore), 'layout movement does not reconnect the PTY')
     assert.equal((await state(page)).root.direction, 'row')
     assert.ok(await page.$(`[data-workbench-pane-drag-handle="${terminalPane.id}"]`))
     await clickReadyControl(page, control)
@@ -1645,7 +1687,7 @@ test('Footer Terminal is a reusable bottom pane that collapses without PTY delet
     await clickReadyControl(page, control)
     await page.waitForSelector('[data-terminal-header]', { visible: true })
     assert.equal(Object.values((await state(page)).tabsById).filter(tab => tab.type === 'terminal').length, 1)
-    await page.click(`[data-pane-id="${terminalPane.id}"] button[aria-label="Close pane"]`)
+    await page.click(`:is([data-pane-id="${terminalPane.id}"], [data-workbench-content-pane="${terminalPane.id}"]) button[aria-label="Close pane"]`)
     await page.waitForFunction(id => !JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById[id], {}, terminalTab.id)
     assert.deepEqual(await page.evaluate(() => window.__terminalDeletes), ['/prefix/ui/api/terminals/term-panel'])
     assert.equal((await state(page)).root.kind, 'pane', 'closing the terminal panel leaves only the editor')
@@ -1661,5 +1703,172 @@ test('Footer Terminal is a reusable bottom pane that collapses without PTY delet
     await page.evaluate(() => window.foxwarmTest.switchToSession('e2e-a'))
     await page.waitForSelector('.foxwarm-chat-root button[title="Terminal"]', { visible: true })
     assert.equal(await page.$('[data-workbench-status-bar]'), null)
+  } finally { await page.close() }
+})
+
+
+test('visible Chat keeps its DOM and initialization across split and normalization', async () => {
+  const chatMessages = Array.from({ length: 35 }, (_, index) => ({ role: index % 2 ? 'model' : 'user', parts: [{ text: 'Lifecycle message ' + index + '\n\n' + 'Retained timeline content. '.repeat(10) }], __meta: { seq: index + 1, timestamp: 1700000000000 + index } }))
+  chatMessages[24] = { role: 'model', parts: [{ functionCall: { id: 'retained-call', name: 'read', args: { filePath: 'fixture.txt' } } }], __meta: { seq: 25, timestamp: 1700000000024 } }
+  chatMessages[25] = { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'retained-call', name: 'read', response: { output: 'Retained tool response' } } }], __meta: { seq: 26, timestamp: 1700000000025 } }
+  const page = await openFixture({ responsiveChat: true, chatMessages, hash: '#tab/chat:e2e-a' })
+  const waitForAnchor = () => page.waitForFunction(() => {
+    const viewport = document.querySelector('.foxwarm-chat-messages').getBoundingClientRect()
+    const anchor = document.querySelector('[data-chat-message-anchor-key="' + window.__originalScrollAnchor + '"]')
+    return Math.abs(anchor.getBoundingClientRect().top - viewport.top - window.__originalScrollOffset) <= 2
+  })
+  try {
+    await page.waitForSelector('.foxwarm-chat-root [data-chat-message-anchor-key]')
+    await page.click('[role="textbox"][aria-label="Message"]')
+    await page.keyboard.down('Control'); await page.keyboard.press('A'); await page.keyboard.up('Control'); await page.keyboard.press('Backspace')
+    await page.keyboard.type('retained draft')
+    await page.$eval('.foxwarm-chat-messages', element => { element.scrollTop = 0; element.dispatchEvent(new Event('scroll')) })
+    await page.waitForFunction(() => !document.body.textContent.includes('Scroll upward to load'))
+    await page.waitForSelector('button[aria-label="Expand tool group"]')
+    await page.$eval('button[aria-label="Expand tool group"]', button => button.scrollIntoView({ block: 'center' }))
+    await page.click('button[aria-label="Expand tool group"]')
+    await page.waitForSelector('[data-tool-group-expanded="true"]')
+    await page.waitForFunction(() => !document.querySelector('[data-tool-group-expanded="true"]').style.height)
+    const scrollBox = await (await page.$('.foxwarm-chat-messages')).boundingBox()
+    await page.mouse.move(scrollBox.x + scrollBox.width / 2, scrollBox.y + scrollBox.height / 2)
+    const beforeWheel = await page.$eval('.foxwarm-chat-messages', element => element.scrollTop)
+    await page.mouse.wheel({ deltaY: -300 })
+    await page.waitForFunction(top => Math.abs(document.querySelector('.foxwarm-chat-messages').scrollTop - top + 300) < 1, {}, beforeWheel)
+    await page.evaluate(() => {
+      window.__originalChat = document.querySelector('.foxwarm-chat-root')
+      window.__originalTimeline = document.querySelector('[data-chat-timeline="committed"]')
+      window.__originalHistoryCount = window.__historyReads.length
+      window.__originalSubscriptions = window.__subscriptions.length
+      window.__loadedRange = [...document.querySelectorAll('[data-chat-timeline="committed"] [data-chat-message-anchor-key]')].map(row => row.dataset.chatMessageAnchorKey)
+      const viewport = document.querySelector('.foxwarm-chat-messages').getBoundingClientRect()
+      const scrollAnchor = [...document.querySelectorAll('[data-chat-timeline="committed"] [data-chat-message-anchor-key]')].find(row => row.getBoundingClientRect().bottom > viewport.top + 1)
+      window.__originalScrollAnchor = scrollAnchor.dataset.chatMessageAnchorKey
+      window.__originalScrollOffset = scrollAnchor.getBoundingClientRect().top - viewport.top
+    })
+    await clickReadyControl(page, 'button[title="Split right with active tab"]')
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.kind === 'split')
+    await page.waitForSelector('.foxwarm-chat-root [data-chat-message-anchor-key]')
+    console.info('split lifecycle', await page.evaluate(() => ({ sameRoot: document.querySelector('.foxwarm-chat-root') === window.__originalChat, historyBefore: window.__originalHistoryCount, historyAfter: window.__historyReads.length, subscriptionsBefore: window.__originalSubscriptions, subscriptionsAfter: window.__subscriptions.length })))
+    assert.equal(await page.evaluate(() => document.querySelector('.foxwarm-chat-root') === window.__originalChat), true, 'split retains the same Chat root')
+    assert.equal(await page.evaluate(() => document.querySelector('[data-chat-timeline="committed"]') === window.__originalTimeline), true)
+    assert.equal(await page.evaluate(() => window.__historyReads.length), await page.evaluate(() => window.__originalHistoryCount), 'split issues no initialization history read')
+    assert.ok(await page.evaluate(() => window.__subscriptions.slice(window.__originalSubscriptions).every(ids => ids.includes('e2e-a'))), 'split never removes the Chat logical session subscription')
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    await waitForAnchor()
+    assert.ok(await page.$('[data-tool-group-expanded="true"]'), 'tool disclosure remains expanded')
+    assert.equal(await page.$eval('[role="textbox"][aria-label="Message"]', element => element.textContent), 'retained draft')
+    assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('[data-chat-timeline="committed"] [data-chat-message-anchor-key]')].map(row => row.dataset.chatMessageAnchorKey)), await page.evaluate(() => window.__loadedRange), 'the loaded timeline range is unchanged')
+    assert.ok(await page.$eval('.foxwarm-chat-messages', element => element.scrollHeight - element.scrollTop - element.clientHeight > 200), 'layout does not discard upward scroll intent')
+    await page.click('[data-workbench-tab-close="system:agents"]')
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.kind === 'pane')
+    assert.equal(await page.evaluate(() => document.querySelector('.foxwarm-chat-root') === window.__originalChat), true, 'normalizing the last sibling retains Chat')
+    assert.equal(await page.evaluate(() => window.__historyReads.length), await page.evaluate(() => window.__originalHistoryCount))
+    await waitForAnchor()
+    await page.setViewport({ width: 390, height: 844 })
+    await page.waitForSelector('.foxwarm-fixed-viewport-shell', { visible: true })
+    assert.ok(await page.evaluate(() => window.__originalChat.isConnected), 'desktop/mobile shell changes retain the visible Chat')
+    assert.equal(await page.$eval('[role="textbox"][aria-label="Message"]', element => element.textContent), 'retained draft')
+  } finally { await page.close() }
+})
+
+
+test('Code retains its iframe/window across split, docking, collapse and desktop/mobile shells', async () => {
+  const code = { id: 'vscode-web', type: 'vscode', title: 'Code' }
+  const page = await openFixture({ tabs: [code, system, chat('e2e-a', false)], activeTabId: code.id, hash: '#tab/vscode-web', themeId: '550a', responsiveChat: true })
+  const assertFrame = async () => {
+    assert.ok(await page.evaluate(() => document.querySelector('[data-foxwarm-vscode-web-frame]') === window.__originalCode && window.__originalCode.contentWindow === window.__originalCodeWindow), 'the frame element and browsing context stay identical')
+    assert.equal(await page.evaluate(() => window.__codeFrameLoads), 1, 'layout operations never reload Code')
+  }
+  try {
+    await page.waitForFunction(() => window.__codeFrameLoads === 1)
+    await page.evaluate(() => { window.__originalCode = document.querySelector('[data-foxwarm-vscode-web-frame]'); window.__originalCodeWindow = window.__originalCode.contentWindow })
+    assert.equal(await page.$eval('[data-foxwarm-vscode-web-frame]', frame => Number(getComputedStyle(frame).zIndex)), 35)
+    assert.equal(await page.evaluate(() => getComputedStyle(document.body, '::after').content), 'none', 'console treatment has no page-wide overlay above Code')
+    await clickReadyControl(page, 'button[title="Split right with active tab"]')
+    const split = await state(page)
+    const codePane = findFixturePane(split.root, split.root.children[1].id)
+    assert.ok(codePane.tabIds.includes(code.id))
+    await assertFrame()
+    await dragPane(page, codePane.id, 'pane-main', 'top', { duringDrag: async () => {
+      assert.equal(await page.$eval('[data-foxwarm-vscode-web-frame]', frame => getComputedStyle(frame).pointerEvents), 'none', 'the visible iframe cannot intercept pane dragging')
+      assert.ok(await page.$('[data-pane-drag-overlay]'))
+      assert.ok(await page.evaluate(() => {
+        const target = document.querySelector('[data-workbench-content-pane="pane-main"] [data-workbench-pane-drop="top"]').getBoundingClientRect()
+        const strip = document.querySelector('[data-pane-id="pane-main"] .foxwarm-workbench-tab-row').getBoundingClientRect()
+        const pointerY = target.top + target.height / 2
+        return pointerY >= strip.top && pointerY <= strip.bottom
+      }), 'the top drop target still covers the pane tab strip')
+    } })
+    await assertFrame()
+    await page.click('[data-workbench-pane-collapse="pane-main"]')
+    await page.waitForSelector('[data-pane-id="pane-main"][data-workbench-collapsed-pane="true"]')
+    await page.waitForFunction(() => {
+      const slot = document.querySelector('[data-workbench-content-slot]')?.getBoundingClientRect()
+      const host = document.querySelector('[data-workbench-content-tab="vscode-web"]')?.getBoundingClientRect()
+      return slot && host && Math.abs(slot.height - host.height) < 1
+    })
+    await assertFrame()
+    // Clicking the iframe activates its pane without relying on pane DOM bubbling.
+    await page.click('[data-workbench-collapsed-tab="chat:e2e-a"]')
+    await page.waitForSelector('.foxwarm-chat-root [role="textbox"]')
+    await page.click('.foxwarm-chat-root [role="textbox"]')
+    const frame = await page.$('[data-foxwarm-vscode-web-frame]')
+    const box = await frame.boundingBox()
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+    await page.waitForFunction(id => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.focusedPaneId === id, {}, codePane.id)
+    await page.setViewport({ width: 390, height: 844 })
+    await page.waitForSelector('.foxwarm-fixed-viewport-shell')
+    await assertFrame()
+    await page.setViewport({ width: 1400, height: 900 })
+    await page.waitForSelector('.foxwarm-desktop-workbench-shell')
+    await assertFrame()
+    await page.click(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) button[title="Close pane"]')
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.kind === 'pane')
+    // Close pane migrates tabs and selects its last tab, hiding but retaining Code.
+    await assertFrame()
+    await page.click('[data-tab-id="vscode-web"]')
+    await page.setViewport({ width: 390, height: 844 })
+    await page.click('[data-tab-id="chat:e2e-a"]')
+    await page.waitForSelector('.foxwarm-chat-root button[title="Back"]')
+    await page.evaluate(() => { window.__ordinaryChat = document.querySelector('.foxwarm-chat-root') })
+    await page.click('.foxwarm-chat-root button[title="Back"]')
+    await page.waitForFunction(() => !document.querySelector('[data-pane-id]'))
+    assert.equal(await page.evaluate(() => window.__ordinaryChat.isConnected), false, 'mobile list hiding still unmounts ordinary Chat')
+    await assertFrame()
+    assert.equal(await page.$eval('[data-foxwarm-vscode-web-frame]', frame => getComputedStyle(frame).visibility), 'hidden')
+    assert.equal(await page.$eval('[data-foxwarm-vscode-web-frame]', frame => getComputedStyle(frame).pointerEvents), 'none')
+  } finally { await page.close() }
+})
+
+test('restored Code starts only on its first actual visible surface', async () => {
+  const code = { id: 'vscode-web', type: 'vscode', title: 'Code' }
+  const page = await openFixture({ tabs: [code, chat('e2e-a', false)], activeTabId: code.id, width: 390 })
+  try {
+    assert.equal(await page.$('[data-foxwarm-vscode-web-frame]'), null, 'mobile list does not start the logically active Code tab')
+    await page.setViewport({ width: 1400, height: 900 })
+    await page.waitForFunction(() => window.__codeFrameLoads === 1)
+    await page.click('[data-tab-id="vscode-web"] button[title="Close tab"]')
+    await page.waitForFunction(() => !document.querySelector('[data-foxwarm-vscode-web-frame]'))
+    assert.equal(await page.evaluate(() => window.__codeFrameLoads), 1)
+  } finally { await page.close() }
+})
+
+
+test('the initial Code file request survives lazy frame creation and explicit reopen', async () => {
+  const chatMessages = [
+    { role: 'model', parts: [{ functionCall: { id: 'open-file', name: 'read', args: { filePath: '/fixture.txt', startLine: 3, endLine: 8 } } }], __meta: { seq: 1 } },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'open-file', name: 'read', response: { output: 'File content' } } }], __meta: { seq: 2 } },
+  ]
+  const page = await openFixture({ tabs: [system, chat('e2e-a', false)], responsiveChat: true, chatMessages, codeNewWindow: false })
+  try {
+    const openFile = 'button[aria-label="Open /fixture.txt in Code"]'
+    await clickReadyControl(page, openFile)
+    await page.waitForFunction(() => window.__codeRequests?.some(request => request.kind === 'openFile'))
+    assert.deepEqual(await page.evaluate(() => window.__codeRequests.find(request => request.kind === 'openFile')), { kind: 'openFile', nodeId: 'master', path: '/fixture.txt', startLine: 3, endLine: 8 })
+    await page.click('[data-tab-id="vscode-web"] button[title="Close tab"]')
+    await page.waitForSelector('[data-foxwarm-vscode-web-frame]', { hidden: true })
+    await clickReadyControl(page, openFile)
+    await page.waitForFunction(() => window.__codeRequests?.filter(request => request.kind === 'openFile').length === 2)
+    assert.equal(await page.evaluate(() => window.__codeFrameLoads), 2, 'explicit Close creates a fresh frame only on reopening')
   } finally { await page.close() }
 })

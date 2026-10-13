@@ -1,6 +1,6 @@
 # Unit: webui-history-search
 
-Files: packages/webui/src/components/HistorySearchView.tsx, packages/webui/src/components/HistorySearchTabHost.tsx, packages/webui/test/historySearchViewer.e2e.mjs
+Files: packages/webui/src/components/HistorySearchView.tsx, packages/webui/test/historySearchViewer.e2e.mjs
 Secondary files: packages/webui/src/App.tsx, packages/webui/src/PopupWebUiApp.tsx, packages/webui/src/popupWebUi.ts, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/CollapsedSidebar.tsx, packages/webui/src/components/SessionList.tsx, packages/webui/src/workbench/types.ts, packages/webui/src/workbench/utils.ts
 
 ## Purpose
@@ -9,7 +9,7 @@ The independent workbench Search tab shows authenticated Archive search groups a
 
 ## Functions and behavior
 
-- `HistorySearchTabHost` keeps one HistorySearchView instance per workbench search tab, portals it into a stable pane-positioned host, and retains it while tab/pane/mobile surfaces are hidden. It supplies tab-specific headers and draft metadata callbacks; the retained DOM owns its scroll position, and unmounting the host on tab close aborts that instance's requests. The existing WorkbenchTabErrorBoundary wraps the portaled History view so failures stay in that tab's positioned region.
+- The shared [Workbench content host](./webui-workbench-content.md#d-workbench-stable-content) retains one HistorySearchView per open search tab while tab/pane/mobile surfaces are hidden, including temporary slot replacement during layout changes. App supplies draft metadata callbacks and the host supplies current-pane headers and tab error isolation. The retained DOM owns scroll position; closing the tab unmounts the view and aborts only that instance's requests.
 - `HistorySearchView` owns the query form and one result list; every result contains independent earlier/later loading state, errors, sequence anchors and one Timeline. Its header shows the current first message's valid local time, using a structured CTX block's raw range start instead of its creation time; unavailable or invalid timestamps show no time. Full-width context rows above/below the timeline load earlier/later messages with a directional arrow and the visible message range on that row; when neither direction can load, a static range row remains. A copied range retains its requested and currently shown bounds while its first 20-row page continues within the requested range, then returns to ordinary later browsing. Block/fact hits display an actual expandable CTX-BLOCK; a missing source shows a labeled cached excerpt rather than a fabricated message or fake range.
 - `readHistory` calls deployment-relative authenticated GET routes. `mergeMessages` deduplicates sequence IDs when appending/prepending archive pages.
 - Result headers append a nonblank Session display name in parentheses, using deduplicated `/session-list/by-id` batches of at most 100 IDs rather than the current Sidebar page. Lookup failures leave the archived messages visible; query changes and unmount abort and invalidate stale name lookups. `Open session` delegates to normal App Chat navigation without keeping previews or removing History; standalone viewers use the existing deployment-relative Chat popup URL in a new page, with native modified-click behavior.

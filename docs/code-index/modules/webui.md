@@ -16,6 +16,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 - [webui-chat-composer](../units/webui-chat-composer.md) — draft/input, autocomplete, attachments, and model controls.
 - [webui-chat-shared](../units/webui-chat-shared.md), [timeline](../units/webui-chat-timeline.md) with [timeline rows](../units/webui-timeline-rows.md), [usage and timing](../units/webui-timeline-usage-timing.md), and [thread cards](../units/webui-timeline-thread-cards.md), [pasted text](../units/webui-pasted-text.md), [tool timeline](../units/webui-tool-timeline.md) — sanitized rendering, user pasted-text previews, and progress/tool cards.
 - [webui-workbench](../units/webui-workbench.md) — persisted tab/pane layout and compatibility normalization.
+- [webui-workbench-content](../units/webui-workbench-content.md) — stable tab instances, shared slot geometry, current-pane headers/focus, and content error isolation.
 - [webui-setup-view](../units/webui-setup-view.md), [webui-settings](../units/webui-settings.md), [settings menu](../units/webui-settings-menu.md).
 - [webui-theme-system](../units/webui-theme-system.md) — versioned portable manifests, built-ins, browser-local registry/selection, semantic runtime, Setup management, and renderer adapters.
 - [webui-terminal](../units/webui-terminal.md) — xterm browser client.
@@ -39,7 +40,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 
 - Mounted Chat owns one session's history and logical runtime subscription; the page realtime transport owns the physical connection.
 - App/Sidebar/Architecture own their list data and logical subscriptions on the shared transport. Stream-triggered refreshes use fixed-delay, non-overlapping coalescing, while the session-list request gate remains latest-wins; the canonical contract is [D-webui-app-global-list-gate](../units/webui-app.md#d-webui-app-global-list-gate).
-- Workbench store owns tab/pane/split layout. Chat viewport state is ephemeral in-memory state keyed by canonical session ID.
+- Workbench store owns tab/pane/split layout; the shared [stable content host](../units/webui-workbench-content.md#d-workbench-stable-content) owns tab instances independently of that changing layout tree. Chat viewport state is ephemeral in-memory state keyed by canonical session ID.
 - Browser-only theme packages/selection, chat/input display preferences, layout, draft, and Code preferences remain local; instance name/icon are server settings.
 
 ## Invariants
