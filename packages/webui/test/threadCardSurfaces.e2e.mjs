@@ -103,6 +103,32 @@ async function buildFixtureBundle() {
     const errorCall = { role: 'model', parts: [{ functionCall: { id: 'error', name: 'exec', args: { command: 'false' } } }] }
     const errorResponse = { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'error', name: 'exec', response: { error: 'failed' } } }] }
 
+    if (params.has('preview')) {
+      const call = (id, name, args = {}) => ({ functionCall: { id, name, args } })
+      const response = (id, name, value, extra = {}) => ({ functionResponse: { tool_use_id: id, name, response: value, ...extra } })
+      const messages = [
+        { role: 'user', parts: [{ text: 'Inspect the implementation, then report the result.' }] },
+        { role: 'model', parts: [{ thinking: 'Check the supported path.' }, call('read', 'read', { filePath: '/workspace/src/example.ts' }), call('scan', 'RepoScan', { scope: 'src' }), call('bad', 'exec', { command: 'false' }), call('script', 'run_script', { code: 'return call_tool("read", {"filePath":"src/example.ts"})' })] },
+        { role: 'tool', parts: [response('read', 'read', { content: 'export const value = 1' }), response('scan', 'RepoScan', { output: 'Scan completed' }), response('bad', 'exec', { error: 'Command failed' }), response('script', 'run_script', { output: 'Script completed' }, { __meta: { toolScriptSubCalls: [{ id: 'sub-ok', name: 'ReadFile', status: 'completed', durationMs: 20 }, { id: 'sub-bad', name: 'ExecTask', status: 'failed', error: 'Command failed' }, { id: 'sub-live', name: 'StillRunning', status: 'running' }] } })] },
+        { role: 'user', parts: [{ system: '<foxwarm-system kind="event" type="inspection">\\nInspection event recorded.\\n</foxwarm-system>' }] },
+        { role: 'model', parts: [call('verified', 'exec', { command: 'git diff --check' })] },
+        { role: 'tool', parts: [response('verified', 'exec', { output: 'No whitespace errors' })] },
+        { role: 'model', parts: [{ text: 'Inspection complete. One command failed; the other checks returned normally.', phase: 'final_answer' }] },
+        { role: 'user', parts: [{ system: '<foxwarm-message type="task" event="assigned">\\nCollect one follow-up result.\\n</foxwarm-message>' }] },
+        { role: 'model', parts: [call('tail-ok', 'read', { filePath: '/workspace/src/follow-up.ts' })] },
+        { role: 'tool', parts: [response('tail-ok', 'read', { content: 'Follow-up result' })] },
+        { role: 'model', parts: [call('tail-running', 'exec', { command: 'long-running-check' })] },
+      ].map((message, index) => ({ ...message, __meta: { seq: index + 1, timestamp: 1700000000000 + index * 1000 } }))
+      document.querySelector('main').innerHTML = '<div class="text-xs text-fw-text-muted mb-4">Mock preview · Grouped tool colors and original-case tags</div><div id="preview-timeline" class="foxwarm-chat-root"></div>'
+      function Preview() {
+        const [view, setView] = React.useState('grouped')
+        const [visibleMessages, setMessages] = React.useState(messages)
+        window.showCompletedTail = () => setMessages(messages.slice(0, -1))
+        window.selectTimelineView = setView
+        return React.createElement(ChatTimeline, { sessionId: 'fixture/preview', messages: visibleMessages, isRunningTool: true, isMobile: false, timelineView: view, showUsageBadge: false })
+      }
+      createRoot(document.getElementById('preview-timeline')).render(React.createElement(Preview))
+    } else {
     createRoot(document.getElementById('tool-neutral')).render(React.createElement(ToolCallsBlock, { msg: neutralCall }))
     createRoot(document.getElementById('tool-success')).render(React.createElement(InterleavedToolGroup, { msg: successCall, nextMsg: successResponse, messageKeyPrefix: 'success' }))
     createRoot(document.getElementById('tool-error')).render(React.createElement(InterleavedToolGroup, { msg: errorCall, nextMsg: errorResponse, messageKeyPrefix: 'error' }))
@@ -118,6 +144,7 @@ async function buildFixtureBundle() {
     createRoot(document.getElementById('system')).render(React.createElement(ChatTimeline, { sessionId: 'fixture/main', messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="event" type="wait-timeout">\\nsystem body\\n</foxwarm-system>' }] }], isMobile: false, timelineView: 'detailed', showUsageBadge: false }))
     createRoot(document.getElementById('assistant')).render(React.createElement(ChatTimeline, { sessionId: 'fixture/main', messages: [{ role: 'model', parts: [{ text: 'assistant body' }] }], isMobile: false, timelineView: 'detailed', showUsageBadge: false }))
     createRoot(document.getElementById('context')).render(React.createElement(ContextBlockCard, { sessionId: 'fixture/main', messageKey: 'context', block: { id: 1, level: 1, rawStartSeq: 1, rawEndSeq: 2 }, text: 'context summary', nestedDepth: 0, renderNestedMessages: () => null }))
+    }
   `
   const result = await build({
     stdin: { contents: source, resolveDir: new URL('..', import.meta.url).pathname, sourcefile: 'thread-card-surfaces-fixture.tsx' },
@@ -464,5 +491,64 @@ test('an imported standard theme derives System tag chrome from its own semantic
       tags.expected.neutral,
       `imported standard ${mode} Reasoning remains neutral`,
     )
+  }
+})
+
+test('Grouped tool preview uses neutral successes and original-case calls without changing non-tool tags', async () => {
+  const snapshot = async name => {
+    if (!process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR) return
+    await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-tool-card, [data-timeline-activity]')].every(element => !element.style.height))
+    await page.mouse.move(1050, 780)
+    await page.screenshot({ path: `${process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR}/${name}.png`, fullPage: true })
+  }
+  const tags = selector => page.$$eval(selector, elements => elements.map(element => ({ text: element.textContent.trim(), tone: element.dataset.toolTagTone, transform: getComputedStyle(element).textTransform })))
+  for (const [theme, mode] of [['foxwarm.default', 'light'], ['foxwarm.550a', 'dark']]) {
+    await page.setViewport({ width: 1120, height: 820 })
+    await page.goto(`${fixtureUrl}?theme=${theme}&mode=${mode}&preview=grouped`, { waitUntil: 'load' })
+    await page.waitForSelector('[data-tool-group-card]')
+    await page.evaluate(() => document.fonts.ready)
+    const summary = await tags('[data-tool-group-card] .foxwarm-tool-group-header [data-tool-tag-tone]')
+    assert.ok(summary.some(tag => tag.text === 'RepoScan ×1' && tag.tone === 'neutral' && tag.transform === 'none'))
+    assert.ok(summary.some(tag => tag.text === 'exec ×1' && tag.tone === 'error' && tag.transform === 'none'))
+    assert.ok(summary.some(tag => tag.text === 'reasoning ×1' && tag.transform === 'uppercase'))
+    assert.ok(summary.some(tag => tag.text === 'Event ×1' && tag.tone === 'system' && tag.transform === 'uppercase'))
+    assert.equal(await page.$$eval('.foxwarm-tool-tone-success', elements => elements.length), 0, 'Grouped tail successes are also neutral')
+    assert.ok((await page.$eval('main', element => element.textContent)).includes('Running...'))
+    await snapshot(`${mode}-grouped-collapsed`)
+    await page.click('[aria-label="Expand tool group"]')
+    await page.waitForSelector('.foxwarm-tool-group-body .foxwarm-tool-card')
+    await page.waitForFunction(() => [...document.querySelectorAll('[data-tool-group]')].every(element => !element.style.height))
+    const members = await tags('.foxwarm-tool-group-body .foxwarm-tool-tag')
+    assert.ok(members.some(tag => tag.text === 'RepoScan' && tag.tone === 'neutral' && tag.transform === 'none'))
+    assert.ok(members.some(tag => tag.text === 'exec' && tag.tone === 'error'))
+    assert.equal(await page.$$eval('.foxwarm-tool-tone-success', elements => elements.length), 0)
+    const subTags = await tags('.foxwarm-tool-group-body [data-tool-tag-tone]')
+    assert.ok(subTags.some(tag => tag.text === 'ReadFile' && tag.tone === 'neutral' && tag.transform === 'none'))
+    assert.ok(subTags.some(tag => tag.text === 'ExecTask' && tag.tone === 'error' && tag.transform === 'none'))
+    assert.ok(await page.$('.foxwarm-tool-group-body .animate-pulse'), 'Running subcall indicator remains present')
+    assert.ok((await tags('.foxwarm-system-message-tag')).every(tag => tag.tone === 'system' && tag.transform === 'uppercase'))
+    assert.ok((await tags('.foxwarm-reasoning-tag')).every(tag => tag.transform === 'uppercase'))
+    await page.click('[aria-label="Expand RepoScan tool"]')
+    await page.waitForSelector('.foxwarm-tool-group-body .foxwarm-tool-expanded-content')
+    assert.ok((await page.$eval('.foxwarm-tool-expanded-content', element => element.textContent)).includes('Scan completed'), 'One native expansion opens the complete result')
+    await page.click('[aria-label="Expand run_script tool"]')
+    await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-tool-expanded-content')].some(element => element.textContent.includes('ReadFile')))
+    const expandedSubTags = await tags('.foxwarm-tool-expanded-content [data-tool-tag-tone]')
+    assert.ok(expandedSubTags.some(tag => tag.text === 'ReadFile' && tag.tone === 'neutral' && tag.transform === 'none'))
+    assert.ok(expandedSubTags.some(tag => tag.text === 'ExecTask' && tag.tone === 'error' && tag.transform === 'none'))
+    await snapshot(`${mode}-grouped-expanded`)
+    await page.evaluate(() => window.showCompletedTail())
+    await page.waitForFunction(() => !document.querySelector('main').textContent.includes('Running...'))
+    const tail = await page.$$eval('.foxwarm-tool-card:not(.foxwarm-tool-group-card)', cards => { const card = cards.at(-1); return { tone: card.querySelector('[data-tool-header-tone]').dataset.toolHeaderTone, tag: card.querySelector('.foxwarm-tool-tag').textContent.trim() } })
+    assert.deepEqual(tail, { tone: 'neutral', tag: 'read' }, 'A completed direct tail uses the same neutral tool presentation')
+    await page.evaluate(() => window.selectTimelineView('detailed'))
+    await page.waitForSelector('.foxwarm-tool-tone-success')
+    assert.ok((await tags('.foxwarm-tool-tag')).some(tag => tag.text === 'RepoScan' && tag.tone === 'success' && tag.transform === 'none'), 'Detailed keeps its success palette, but real calls keep their case')
+    await page.evaluate(() => window.selectTimelineView('conversation'))
+    await page.waitForSelector('[data-timeline-activity]')
+    await page.click('[aria-label="Expand activity"]')
+    await page.waitForSelector('[data-activity-details] .foxwarm-tool-card')
+    assert.equal(await page.$$eval('[data-activity-details] .foxwarm-tool-tone-success', elements => elements.length), 0, 'Conversation remains neutral, including ToolScript subcalls')
+    assert.ok((await tags('[data-activity-details] .foxwarm-tool-tag')).some(tag => tag.text === 'RepoScan' && tag.tone === 'neutral'))
   }
 })

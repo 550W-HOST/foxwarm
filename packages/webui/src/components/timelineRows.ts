@@ -469,6 +469,7 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
         const status = part.functionCall.id ? toolStatusById.get(part.functionCall.id) : undefined
         items.push({
           name: part.functionCall.name,
+          toolCall: true,
           label: formatToolLabel(part.functionCall.name, part.functionCall.args),
           tone: status === 'error' ? 'error' : status === 'success' ? 'success' : 'neutral',
         })
@@ -525,7 +526,7 @@ const sameTokenUsage = (a: NormalizedTokenUsage | null, b: NormalizedTokenUsage 
 
 const sameTagItems = (a: ToolTagItem[], b: ToolTagItem[]): boolean => (
   a === b || (a.length === b.length && a.every((item, index) => (
-    item.name === b[index].name && item.label === b[index].label && item.tone === b[index].tone
+    item.name === b[index].name && item.label === b[index].label && item.tone === b[index].tone && item.toolCall === b[index].toolCall
   )))
 )
 

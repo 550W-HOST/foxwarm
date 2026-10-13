@@ -154,7 +154,7 @@ export const ToolGroupSummaryCard = memo(function ToolGroupSummaryCard({ items, 
   expanded?: boolean
   children?: ReactNode
 }) {
-  const countedItems = useMemo(() => summarizeToolTagCounts(items), [items])
+  const countedItems = useMemo(() => summarizeToolTagCounts(items).map(item => item.toolCall && item.tone === 'success' ? { ...item, tone: 'neutral' as const } : item), [items])
   return (
     <div
       data-tool-group-card
@@ -566,37 +566,38 @@ const isToolScriptCall = (call: FunctionCall): boolean => {
   return args.source === 'builtin' && TOOLSCRIPT_TOOL_NAMES.has(args.name)
 }
 
-const ToolScriptSubCallTag = ({ subCall }: { subCall: ToolScriptSubCall }) => (
+const ToolScriptSubCallTag = ({ subCall, neutralSuccess }: { subCall: ToolScriptSubCall; neutralSuccess?: boolean }) => (
   <>
     {subCall.status === 'running' && (
       <span className="animate-pulse w-1.5 h-1.5 rounded-full bg-fw-accent shrink-0" />
     )}
     <ToolTag
+      toolCall
       name={subCall.name}
       label={subCall.name}
-      tone={subCall.status === 'failed' ? 'error' : subCall.status === 'completed' ? 'success' : 'neutral'}
+      tone={subCall.status === 'failed' ? 'error' : subCall.status === 'completed' && !neutralSuccess ? 'success' : 'neutral'}
     />
   </>
 )
 
-const ToolScriptSubCallsTags = memo(function ToolScriptSubCallsTags({ subCalls }: { subCalls: ToolScriptSubCall[] }) {
+const ToolScriptSubCallsTags = memo(function ToolScriptSubCallsTags({ subCalls, neutralSuccess }: { subCalls: ToolScriptSubCall[]; neutralSuccess?: boolean }) {
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1 py-0.5">
       {subCalls.map((sc) => (
         <span key={sc.id} className="inline-flex items-center gap-0.5">
-          <ToolScriptSubCallTag subCall={sc} />
+          <ToolScriptSubCallTag subCall={sc} neutralSuccess={neutralSuccess} />
         </span>
       ))}
     </div>
   )
 })
 
-const ToolScriptSubCallsList = memo(function ToolScriptSubCallsList({ subCalls }: { subCalls: ToolScriptSubCall[] }) {
+const ToolScriptSubCallsList = memo(function ToolScriptSubCallsList({ subCalls, neutralSuccess }: { subCalls: ToolScriptSubCall[]; neutralSuccess?: boolean }) {
   return (
     <div className="ml-3 border-l-2 border-fw-accent-border dark:border-fw-accent-border pl-2 space-y-0.5 py-1">
       {subCalls.map((sc) => (
         <div key={sc.id} className="flex items-center gap-2 text-xs">
-          <ToolScriptSubCallTag subCall={sc} />
+          <ToolScriptSubCallTag subCall={sc} neutralSuccess={neutralSuccess} />
           {sc.argsSummary && (
             <span className="min-w-0 flex-1 text-fw-text-muted truncate">{sc.argsSummary}</span>
           )}
@@ -777,7 +778,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
           toggle()
         }}
       >
-        <ToolTag name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
+        <ToolTag toolCall={!!call || !!primaryResponse} name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
         <div className="foxwarm-tool-call-header relative flex min-w-0 flex-1 items-center self-stretch">
           {includeCallPreview && call && <div ref={headerFade.ref} {...headerFade.overflowFadeProps} className={`foxwarm-tool-call-summary min-w-0 max-w-full ${call.name === 'read' ? 'flex text-[13px] leading-[18px]' : THREAD_CARD_HEADER_PREVIEW_CLASS}`}>{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile, resolvedPaths: primaryResponse?.__meta?.resolvedPaths })}</div>}
           {viewButtons}
@@ -815,7 +816,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
           <div className="space-y-1">
             {header(true)}
             {!hideCollapsedContent && ((responsePreview && !hasToolScriptProgress) || showRunning) && <div ref={resultFade.ref} {...resultFade.overflowFadeProps} className="foxwarm-tool-result-preview pr-2 text-fw-text" style={{ ...clampContentStyle(3), ...resultFade.overflowFadeProps.style }}>{showRunning ? 'Running...' : responsePreview}</div>}
-            {!hideCollapsedContent && hasToolScriptProgress && <ToolScriptSubCallsTags subCalls={toolScriptSubCalls!} />}
+            {!hideCollapsedContent && hasToolScriptProgress && <ToolScriptSubCallsTags subCalls={toolScriptSubCalls!} neutralSuccess={neutralSuccess} />}
           </div>
         </div>
       ) : (
@@ -841,7 +842,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
                 </div>
               )}
 
-              {hasToolScriptProgress && <ToolScriptSubCallsList subCalls={toolScriptSubCalls!} />}
+              {hasToolScriptProgress && <ToolScriptSubCallsList subCalls={toolScriptSubCalls!} neutralSuccess={neutralSuccess} />}
 
               {hasToolScriptProgress && hasResponseContent && (
                 <div className="text-fw-text">

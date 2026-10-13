@@ -889,6 +889,7 @@ interface MessageRowProps {
   onOpenCodeCommit?: OpenCodeCommitHandler
   renderNestedMessages: (messages: Message[], keyPrefix: string, nestedDepth: number, timelineView?: TimelineView, searchTarget?: SessionSearchMatch | null) => ReactNode
   conversationDetails?: boolean
+  neutralToolSuccess?: boolean
   groupFirst?: boolean
   surface?: 'all' | 'ordinary' | 'grouped'
   searchTarget?: SessionSearchMatch | null
@@ -904,6 +905,7 @@ const MessageRow = memo(function MessageRow({
   onOpenCodeCommit,
   renderNestedMessages,
   conversationDetails = false,
+  neutralToolSuccess = false,
   groupFirst = false,
   surface = 'all',
   searchTarget,
@@ -930,7 +932,7 @@ const MessageRow = memo(function MessageRow({
   const llmError = useMemo(() => getLlmErrorMessageDetails(msg), [msg])
   const toolDisclosure = {
     hideCollapsedContent: conversationDetails,
-    neutralSuccess: conversationDetails,
+    neutralSuccess: conversationDetails || neutralToolSuccess,
     expandedToolKeys: expandedTools.get(messageKey) || EMPTY_TOOL_KEYS,
     onToolToggle: useCallback((toolKey: string, expanded: boolean) => {
       onToolToggle(messageKey, toolKey, expanded, row.group?.key)
@@ -1067,6 +1069,7 @@ const MessageRow = memo(function MessageRow({
   prev.isMobile === next.isMobile &&
   (prev.row.msg.role !== 'user' || prev.row.systemLikeMessage || prev.showUserMessageMetadata === next.showUserMessageMetadata) &&
   prev.conversationDetails === next.conversationDetails &&
+  prev.neutralToolSuccess === next.neutralToolSuccess &&
   prev.groupFirst === next.groupFirst &&
   prev.surface === next.surface &&
   (prev.searchTarget?.rowKey === prev.row.key ? prev.searchTarget.id : null) === (next.searchTarget?.rowKey === next.row.key ? next.searchTarget.id : null) &&
@@ -1297,7 +1300,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, isR
     if (expanded && groupKey) handleGroupToggle(groupKey, true)
   }, [handleGroupToggle])
 
-  const rowProps = { conversationDetails: activityDetails, expandedTools, onToolToggle: handleToolToggle, isMobile, showUserMessageMetadata, sessionId, nestedDepth, onOpenCodeFile, onOpenCodeCommit, renderNestedMessages, searchTarget }
+  const rowProps = { conversationDetails: activityDetails, neutralToolSuccess: timelineView === 'grouped', expandedTools, onToolToggle: handleToolToggle, isMobile, showUserMessageMetadata, sessionId, nestedDepth, onOpenCodeFile, onOpenCodeCommit, renderNestedMessages, searchTarget }
 
   return (
     <div className="foxwarm-chat-timeline min-w-0 max-w-full">

@@ -1818,6 +1818,10 @@ html[data-foxwarm-label-treatment="uppercase"] [data-tool-tag-tone] {
   text-transform: uppercase;
 }
 
+html [data-tool-tag-tone][data-tool-call-tag] {
+  text-transform: none;
+}
+
 html[data-foxwarm-icon-treatment="compact"] .lucide {
   stroke-width: 2.25;
 }
