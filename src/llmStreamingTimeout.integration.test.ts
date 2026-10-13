@@ -11,7 +11,6 @@ import {
   SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS,
   setStreamingTimeoutTestHooks,
 } from './llmStreamingTimeout';
-import { makeAnthropicMessageStream } from './testFixtures/anthropicMessageStream';
 
 const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-stream-timeout-'));
 fs.ensureDirSync(path.join(dataRoot, 'state'));
