@@ -298,7 +298,7 @@ test('real Chat node picker switches only its Session after confirmation and fol
     assert.equal(await nodePage.$eval(trigger, node => node.disabled), true)
     await nodePage.evaluate(() => window.resolveFixtureNode('exec-only-remote'))
     await nodePage.waitForFunction(() => document.querySelector('.foxwarm-node-picker-trigger')?.textContent === 'exec-only-remote')
-    assert.equal(await nodePage.$eval(trigger, node => node.classList.contains('text-fw-accent')), true)
+    assert.equal(await nodePage.$eval(`${trigger} svg`, node => node.classList.contains('text-fw-accent')), true)
     assert.equal(await nodePage.evaluate(() => document.activeElement?.matches('.foxwarm-node-picker-trigger')), true)
     assert.equal(await nodePage.$eval(editor, node => node.textContent), 'Retained draft')
     assert.equal(await nodePage.evaluate(() => window.fixtureMessageBodies.length), 0)

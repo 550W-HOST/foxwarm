@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, Network } from 'lucide-react'
+import { Check, Server } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 
 type NodeOption = { id: string; label: string; selectable: boolean; reason: string | null }
@@ -118,11 +118,11 @@ export default function NodePicker({ sessionId, currentNode = 'master', disabled
   ]
 
   return (
-    <div className={`foxwarm-node-picker-root flex min-w-8 ${remote ? 'max-w-[10rem] shrink' : 'shrink-0'}`}>
+    <div className={`foxwarm-node-picker-root flex ${remote ? 'min-w-10 max-w-[10rem] shrink' : 'w-8 shrink-0'}`}>
       <button
         ref={buttonRef}
         type="button"
-        className={`foxwarm-node-picker-trigger inline-flex h-8 min-w-0 items-center gap-1.5 rounded-full px-2 text-xs transition hover:bg-fw-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring disabled:opacity-50 ${remote ? 'text-fw-accent' : 'text-fw-text-muted'}`}
+        className={`foxwarm-node-picker-trigger inline-flex h-8 min-w-0 items-center rounded-lg text-[13px] text-fw-text-muted transition hover:bg-fw-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring disabled:opacity-50 dark:hover:bg-fw-hover ${remote ? 'gap-1.5 px-2.5' : 'w-8 justify-center'}`}
         disabled={disabled || saving}
         aria-label={`Execution node: ${currentNode}`}
         title={`Execution node: ${currentNode}`}
@@ -139,7 +139,7 @@ export default function NodePicker({ sessionId, currentNode = 'master', disabled
           setOpen(value => !value)
         }}
       >
-        <Network size={14} className="shrink-0" aria-hidden="true" />
+        <Server size={14} strokeWidth={2} className={`shrink-0 ${remote ? 'text-fw-accent' : ''}`} aria-hidden="true" />
         {remote && <span className="truncate">{currentNode}</span>}
       </button>
       {open && createPortal(

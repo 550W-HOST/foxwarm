@@ -23,7 +23,7 @@ let fixtureUrl
 await writeFile(entryPath, `
   import { createRoot } from 'react-dom/client'
   import ChatComposer from ${JSON.stringify(path.join(webuiRoot, 'src/components/ChatComposer.tsx'))}
-  window.fetch = async () => ({ ok: true, json: async () => ({ commands: [] }) })
+  window.fetch = async () => ({ ok: true, json: async () => ({ commands: [], nodes: [{ id: 'master', label: 'master', selectable: true, reason: null }, { id: 'build-node', label: 'build-node', selectable: true, reason: null }], lockedReason: null }) })
   const noop = async () => {}
   window.modelSelections = []
   window.childModelSelections = []
@@ -57,8 +57,10 @@ await writeFile(entryPath, `
     window.modelSelections = []
     window.childModelSelections = []
     window.modelSettingsOpens = 0
-    const activeProps = mode === 'node'
-      ? { ...props, currentNode: 'a-very-long-remote-node-id-that-must-stay-readable-in-the-tooltip', onChangeNode: noop }
+    const activeProps = mode.startsWith('short-node-')
+      ? { ...props, asrAvailable: true, modelOptions: [{ key: 'openai/gpt-6.1', label: 'gpt-6.1' }], currentModelKey: 'openai/gpt-6.1', sessionModel: 'openai/gpt-6.1', effectiveEffort: 'high', childModelDefault: null, currentNode: mode === 'short-node-master' ? 'master' : 'build-node', onChangeNode: noop }
+      : mode === 'node'
+      ? { ...props, asrAvailable: true, currentNode: 'a-very-long-remote-node-id-that-must-stay-readable-in-the-tooltip', onChangeNode: noop }
       : mode === 'details'
       ? { ...props, modelOptions: detailOptions, currentModelKey: 'alpha', sessionModel: 'alpha', defaultModelKey: 'alias', childModelDefault: 'beta', effectiveChildModelKey: 'beta', effectiveEffort: 'high', effectiveChildEffort: 'high' }
       : mode === 'short'
@@ -66,7 +68,7 @@ await writeFile(entryPath, `
       : mode === 'no-child'
         ? { ...props, childModelDefault: null, effectiveChildModelKey: null }
         : props
-    root.render(<div id="host" style={{ width: '900px', maxWidth: '100%' }}><ChatComposer {...activeProps} /></div>)
+    root.render(<div id="host" style={{ width: '900px', maxWidth: '100%', position: 'relative', height: '100vh' }}><ChatComposer {...activeProps} /></div>)
   }
   window.renderFixture()
   window.setHostWidth = width => { document.getElementById('host').style.width = width + 'px' }
@@ -84,7 +86,7 @@ before(async () => {
   server = createServer(async (request, response) => {
     if (request.url === '/fixture.js') { response.writeHead(200, { 'Content-Type': 'text/javascript' }); response.end(await readFile(path.join(outputDirectory, 'fixture.js'))); return }
     response.writeHead(200, { 'Content-Type': 'text/html' })
-    response.end(`<!doctype html><html><head><style>:root { --foxwarm-color-hover: rgb(230 232 236); }</style><style>${css}</style></head><body><div id="root"></div><script type="module" src="/fixture.js"></script></body></html>`)
+    response.end(`<!doctype html><html><head><style>:root { --foxwarm-color-hover: rgb(230 232 236); --foxwarm-color-accent: rgb(0 125 180); --foxwarm-color-text-muted: rgb(94 104 120); --foxwarm-color-text-strong: rgb(25 31 42); --foxwarm-color-surface: white; --foxwarm-color-surface-sunken: rgb(246 248 251); --foxwarm-color-border: rgb(217 224 232); --foxwarm-color-border-strong: rgb(204 212 223); }</style><style>${css}</style></head><body><div id="root"></div><script type="module" src="/fixture.js"></script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -101,29 +103,76 @@ after(async () => {
   await rm(tempDir, { recursive: true, force: true })
 })
 
-test('remote Node and unified model controls fit a narrow composer without displacing Send', async () => {
-  await page.setViewport({ width: 360, height: 700 })
-  await page.evaluate(() => window.renderFixture('node'))
+test('short model and Node triggers share a small gap with free space after Node', async () => {
+  await page.setViewport({ width: 1000, height: 700 })
+  for (const nodeId of ['master', 'build-node']) {
+    await page.evaluate(id => window.renderFixture(id === 'master' ? 'short-node-master' : 'short-node-remote'), nodeId)
+    await page.waitForFunction(id => document.querySelector('.foxwarm-node-picker-trigger')?.title === `Execution node: ${id}`, {}, nodeId)
+    const geometry = await page.evaluate(() => {
+      const model = document.querySelector('.foxwarm-model-selector-trigger').getBoundingClientRect()
+      const root = document.querySelector('.foxwarm-model-selector-root').getBoundingClientRect()
+      const node = document.querySelector('.foxwarm-node-picker-trigger').getBoundingClientRect()
+      const send = document.querySelector('.foxwarm-composer-send-button').getBoundingClientRect()
+      return { gap: node.left - model.right, rootBlank: root.right - model.right, freeAfterNode: send.left - node.right, nodeWidth: node.width, modelHeight: model.height, nodeHeight: node.height, centerDelta: node.top + node.height / 2 - model.top - model.height / 2 }
+    })
+    assert.ok(Math.abs(geometry.gap - 4) <= 0.5, JSON.stringify(geometry))
+    assert.ok(Math.abs(geometry.rootBlank) <= 0.5, JSON.stringify(geometry))
+    assert.ok(geometry.freeAfterNode > 100, JSON.stringify(geometry))
+    assert.equal(geometry.modelHeight, 32)
+    assert.equal(geometry.nodeHeight, 32)
+    assert.equal(geometry.centerDelta, 0)
+    if (nodeId === 'master') assert.equal(geometry.nodeWidth, 32)
+    else assert.notEqual(await page.$eval('.foxwarm-node-picker-trigger svg', node => getComputedStyle(node).color), await page.$eval('.foxwarm-node-picker-trigger span', node => getComputedStyle(node).color))
+    if (process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR) await (await page.$('.foxwarm-chat-composer-form')).screenshot({ path: path.join(process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR, `composer-wide-${nodeId}.png`) })
+    await page.click('.foxwarm-model-selector-trigger')
+    await page.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+    await page.keyboard.press('Escape')
+    await page.click('.foxwarm-node-picker-trigger')
+    await page.waitForSelector('[data-node-option="master"]')
+    await page.keyboard.press('Escape')
+    assert.equal(await page.evaluate(() => document.activeElement?.matches('.foxwarm-node-picker-trigger')), true)
+    await page.evaluate(() => document.activeElement?.blur())
+    await page.mouse.move(0, 0)
+  }
+  await page.evaluate(() => window.renderFixture())
+  await page.waitForFunction(() => !document.querySelector('.foxwarm-node-picker-trigger'))
+})
+
+test('long model, child, and Node labels fit a narrow pane without displacing Send or attachment controls', async () => {
+  await page.setViewport({ width: 1000, height: 700 })
+  await page.evaluate(() => { window.renderFixture('node') })
   await page.waitForSelector('.foxwarm-node-picker-trigger')
+  await page.evaluate(() => window.setHostWidth(360))
   const geometry = await page.evaluate(() => {
     const node = document.querySelector('.foxwarm-node-picker-trigger')
     const label = node.querySelector('span')
     const model = document.querySelector('.foxwarm-model-selector-trigger')
     const send = document.querySelector('.foxwarm-composer-send-button')
     return {
+      pane: document.getElementById('host').getBoundingClientRect().toJSON(),
       node: node.getBoundingClientRect().toJSON(), model: model.getBoundingClientRect().toJSON(), send: send.getBoundingClientRect().toJSON(),
       labelClipped: label.scrollWidth > label.clientWidth,
+      modelClipped: [...model.querySelectorAll('.truncate')].some(label => label.scrollWidth > label.clientWidth),
+      attachmentWidth: document.querySelector('[aria-label="Attach files"]').getBoundingClientRect().width,
+      micWidth: document.querySelector('[aria-label="Start recording"]').getBoundingClientRect().width,
+      icon: node.querySelector('svg').getBoundingClientRect().toJSON(),
       fullId: node.title,
       overflow: document.documentElement.scrollWidth - innerWidth,
     }
   })
-  assert.ok(geometry.model.right <= geometry.node.left, JSON.stringify(geometry))
-  assert.ok(geometry.node.right <= geometry.send.left && geometry.send.right <= 360, JSON.stringify(geometry))
+  assert.ok(Math.abs(geometry.node.left - geometry.model.right - 4) <= 0.5, JSON.stringify(geometry))
+  assert.ok(geometry.node.right <= geometry.send.left && geometry.send.right <= geometry.pane.right, JSON.stringify(geometry))
   assert.equal(geometry.labelClipped, true)
+  assert.equal(geometry.modelClipped, true)
+  assert.equal(geometry.attachmentWidth, 32)
+  assert.equal(geometry.micWidth, 32)
+  assert.equal(geometry.send.width, 40)
+  assert.equal(geometry.icon.width, 14)
   assert.ok(geometry.fullId.includes('a-very-long-remote-node-id'))
   assert.ok(geometry.overflow <= 0, JSON.stringify(geometry))
+  if (process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR) await (await page.$('.foxwarm-chat-composer-form')).screenshot({ path: path.join(process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR, 'composer-narrow-long-id.png') })
   await page.setViewport({ width: 1000, height: 700 })
-  await page.evaluate(() => window.renderFixture())
+  await page.evaluate(() => { window.renderFixture(); window.setHostWidth(900) })
   await page.waitForFunction(() => !document.querySelector('.foxwarm-node-picker-trigger'))
 })
 
@@ -158,7 +207,7 @@ test('short current and child model names with child effort fit when composer ha
   })
   assert.equal(geometry.currentName.width > 0, true, JSON.stringify(geometry))
   assert.equal(geometry.childText, 'thinker · High')
-  assert.ok(geometry.root.right - geometry.button.right > 0, JSON.stringify(geometry))
+  assert.ok(Math.abs(geometry.root.right - geometry.button.right) <= 0.5, JSON.stringify(geometry))
   assert.ok(geometry.childTextScrollWidth <= geometry.childTextClientWidth + 1, JSON.stringify(geometry))
   assert.ok(geometry.send.right <= 1000 && geometry.documentOverflow <= 0, JSON.stringify(geometry))
 })
