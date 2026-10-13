@@ -1,4 +1,3 @@
-import RuntimeBusySpinner from './RuntimeBusySpinner'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
 import { PanelLeftOpen, Plus, History, ClipboardList } from 'lucide-react'
 import type { Session } from './SessionListCore'
@@ -41,7 +40,7 @@ export default function CollapsedSidebar({
     .filter((s) => (s.pinned || !s.parentSessionId) && !s.archived)
 
   return (
-    <div className="h-full w-12 flex flex-col items-center bg-fw-surface border-r border-fw-border">
+    <div className="foxwarm-sidebar-panel h-full w-12 flex flex-col items-center bg-fw-surface border-r border-fw-border">
       {/* Header */}
       <div className="flex flex-col items-center gap-2 py-3 border-b border-fw-border w-full">
         <button
@@ -83,7 +82,7 @@ export default function CollapsedSidebar({
               onClick={() => onSelectSession(session.id)}
               title={`${session.displayName || session.id}${isUnread ? ' — Unread idle completion' : ''}`}
               aria-label={`${session.displayName || session.id}${isUnread ? ', Unread idle completion' : ''}`}
-              className={`relative flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold transition shrink-0 ${
+              className={`collapsed-session-tile relative flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold transition shrink-0 ${
                 isActive
                   ? 'bg-fw-accent-surface text-fw-accent ring-1 ring-fw-focus-ring dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent dark:ring-fw-focus-ring'
                   : 'bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised/60 dark:text-fw-text dark:hover:bg-fw-hover'
@@ -92,10 +91,12 @@ export default function CollapsedSidebar({
               {initial}
               {showRuntimeIndicator && (
                 activeRuntime
-                  ? <RuntimeBusySpinner className={`absolute -top-0.5 -right-0.5 h-3 w-3 ${runtimeState === 'running-tool' ? 'text-fw-special' : 'text-fw-accent'}`} />
-                  : <span aria-hidden="true" className={`absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-fw-focus-ring dark:ring-fw-focus-ring ${indicatorColor}`} />
+                  ? <svg aria-hidden="true" data-runtime-perimeter viewBox="0 0 32 32" className={`collapsed-runtime-perimeter pointer-events-none absolute inset-0 h-full w-full ${runtimeState === 'running-tool' ? 'text-fw-special' : 'text-fw-accent'}`}>
+                      <rect className="collapsed-runtime-perimeter-segment" x="1" y="1" width="30" height="30" rx="7" pathLength="100" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+                    </svg>
+                  : <span aria-hidden="true" className={`absolute top-0.5 right-0.5 h-2 w-2 rounded-full ring-1 ring-fw-focus-ring dark:ring-fw-focus-ring ${indicatorColor}`} />
               )}
-              {isUnread && <span aria-hidden="true" className="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-fw-accent ring-1 ring-fw-focus-ring dark:ring-fw-focus-ring" />}
+              {isUnread && <span aria-hidden="true" className="absolute bottom-0.5 right-0.5 h-2 w-2 rounded-full bg-fw-accent ring-1 ring-fw-focus-ring dark:ring-fw-focus-ring" />}
             </button>
           )
         })}

@@ -1,6 +1,6 @@
 # Unit: webui-workbench
 
-Files: packages/webui/src/components/WorkbenchLayout.tsx, packages/webui/src/components/WorkbenchPane.tsx, packages/webui/src/components/WorkbenchTabs.tsx, packages/webui/src/components/WorkbenchTabHeader.tsx, packages/webui/src/components/WorkbenchTabErrorBoundary.tsx, packages/webui/src/components/useWorkbenchTabMenu.tsx, packages/webui/src/workbench/store.ts, packages/webui/src/workbench/types.ts, packages/webui/src/workbench/utils.ts, packages/webui/test/sessionListAndWorkbenchState.test.mjs, packages/webui/test/systemTabs.e2e.mjs, packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/test/workbenchTabErrorBoundary.e2e.mjs
+Files: packages/webui/src/components/WorkbenchStatusBar.tsx, packages/webui/src/components/WorkbenchLayout.tsx, packages/webui/src/components/WorkbenchPane.tsx, packages/webui/src/components/WorkbenchTabs.tsx, packages/webui/src/components/WorkbenchTabHeader.tsx, packages/webui/src/components/WorkbenchTabErrorBoundary.tsx, packages/webui/src/components/useWorkbenchTabMenu.tsx, packages/webui/src/workbench/store.ts, packages/webui/src/workbench/types.ts, packages/webui/src/workbench/utils.ts, packages/webui/test/sessionListAndWorkbenchState.test.mjs, packages/webui/test/systemTabs.e2e.mjs, packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/test/workbenchTabErrorBoundary.e2e.mjs
 
 ## Purpose
 
@@ -11,7 +11,8 @@ Manages a multi-pane workbench UI with tabbed panels, tab and whole-pane drag-an
 - `WorkbenchLayout` — recursive component rendering split/pane layout tree with resizable panels
 - `WorkbenchPane` — single pane component with tab bar, drop zones, toolbar controls, and tab-content error isolation
 - `WorkbenchTabErrorBoundary` — leaf boundary that contains one tab's render failure and offers explicit Retry/Close actions
-- `WorkbenchTabs` — single-row sortable tab strip with the shared tab menu
+- `WorkbenchTabs` — single-row sortable inset editor tabs with the shared tab menu
+- `WorkbenchStatusBar` — desktop icon/count footer for running Sessions, loaded waiting Sessions, active/unfinished tasks, ready Nodes, global token usage, focused-Chat cumulative usage, and the Terminal panel toggle
 - `WorkbenchTabHeaderProvider`, `WorkbenchTabClose`, `WorkbenchTabIcon`, `WorkbenchPaneControls` — pane-owned sole-tab controls, tab drag handle, and pane toolbar for content headers
 - `useWorkbenchTabMenu` — existing Keep/copy/popout/close actions shared by strips and header icons
 - `useWorkbenchStore` — Zustand store with all workbench state and actions
@@ -83,6 +84,10 @@ Manages a multi-pane workbench UI with tabbed panels, tab and whole-pane drag-an
 
 ## Behavior
 
+- Desktop App encloses Sidebar and pane surfaces in rounded, theme-token-based inset panels with small functional resize gutters. Corner styling never clips Sidebar dropdowns; split widths, DND targets, and Code iframe lifecycle remain owned by their existing mechanisms. Mobile and embedded leaf views remain edge-to-edge.
+- The current editor tab joins the content-header surface without an intervening border or scrollbar gutter; inactive tabs sit on the quieter strip. Close slots keep their width but show on current/hover/focus tabs (always on coarse pointers). Tab overflow retains wheel scrolling; an idle-hidden, keyboard-operable overlay range controls the horizontal scroll position without reserving a stripe between the current tab and content.
+- The 24px desktop status bar occupies only the right workbench column; Sidebar remains full height and mobile has no status footer. Short icon/label/count controls use visibly stronger hover/selected surfaces and open viewport-clamped upward popovers, never direct tab navigation. Running uses the existing bounded global summary, waiting explicitly refers to loaded Sessions, and ready Nodes reuse App's Node targets. Task counts read exact API totals with `limit=1` per open/active status, refresh once per minute only while visible and on visibility return, and synchronize immediately with same-page Tasks reads. Failed/unavailable counts are hidden rather than shown as zero; pending reads, timer, and event listeners are released on unmount. Global token usage reuses the catalog totals already fetched by App's bounded summary controller; focused-Chat usage uses the exact current Session row and disappears on non-Chat focus. Both share [TokenUsageDetails](./webui-token-usage-details.md), including Cached/Input/Output percentages, and add no global Session hydration or independent usage polling. They describe cumulative usage, not current request context size. Narrow desktop columns collapse short labels while keeping accessible names and counts. Session/Node popovers reuse bounded loaded rows. Opening Tasks reads at most three rows per active/open status; closing or switching cancels the read. Escape/outside pointer dismisses, and Escape restores trigger focus.
+
 - The store persists to localStorage under `foxwarm_workbench_state_v4` using Zustand's persist middleware, with legacy migration from v3 keys.
 - Tab operations (upsert, remove, reorder, move) immutably transform the layout tree and tab registry, maintaining active tab fallback logic when tabs are removed.
 - Splitting a pane creates a new split node wrapping the original pane and a new sibling pane; empty panes are automatically removed from the tree after tab moves.
@@ -125,9 +130,15 @@ A dedicated four-way move handle drags the entire pane, including its ID, ordere
 
 Pane movement does not Keep previews, duplicate tabs, or close resources. Ordinary tab and Sidebar dragging retain their existing reorder, Keep, center, and edge behavior.
 
+### D-workbench-terminal-panel
+
+[2026-10-12] Desktop Terminal launch belongs to the leftmost status-bar control. It opens a lower ordinary workbench pane, initially around 260px (bounded to 25–50% of its source pane), or reuses an exact normalized node/cwd target. Restored terminal tabs sharing the focused editor are docked below it; a terminal already dragged into another pane is reused there rather than moved back. New panel sizing is optional in `splitPaneWithNewTab`/`dockTabToPaneEdge`; ordinary splits retain 50/50 defaults.
+
+The panel uses the existing pane/tab DND, divider resize, persisted layout, and terminal resource lifecycle. Status-button toggle and Collapse retain the PTY; Close on a terminal-only pane closes its terminal tabs through the ordinary backend DELETE path and removes the pane. Close must not migrate terminal tabs into another pane. Collapse and Close remain distinct actions. A mixed pane retains its ordinary close/migration behavior and its other content is not hidden by the Terminal toggle. Terminal-only Close unmounts its content before deletion; disposed connection starts must not create replacement PTYs after an awaited lookup. Mobile retains its header launcher because it has no desktop status bar.
+
 ## Tests
 
-- `workbenchPreview.e2e.mjs` covers preview identity, route/close behavior, drag promotion, focused Chat search, and actual App header launches. The header probes verify the 550A console's single Code control, preference-selected new-tab versus embedded opening, and Terminal target dispatch. Application-menu probes cover leading icon geometry, Setup active state, Logs activation, and real reload navigation. Single-tab probes cover all normal leaf headers, Code strip retention, multi-pane hidden strips, actual icon drag/cancel/docking, Close pointer isolation, and Terminal status-row height plus backend DELETE, completed empty-root/empty-hash close, explicit reopen, and fallback to a still-open tab.
+- `workbenchPreview.e2e.mjs` covers preview identity, route/close behavior, drag promotion, focused Chat search, and actual App header launches. The header probes verify the 550A console's single Code control, preference-selected new-tab versus embedded opening, and footer Terminal target dispatch. Footer panel probes cover exact reuse, initial height, live resizing, collapse without deletion, intact pane dragging, Close with deletion and no automatic recreation, explicit reopening, and the mobile header fallback. Application-menu probes cover leading icon geometry, Setup active state, Logs activation, and real reload navigation. Single-tab probes cover all normal leaf headers, Code strip retention, multi-pane hidden strips, actual icon drag/cancel/docking, Close pointer isolation, and Terminal status-row height plus backend DELETE, completed empty-root/empty-hash close, explicit reopen, and fallback to a still-open tab.
 - Pane browser probes cover row/column/nested collapse geometry, space release and size restoration, selected-tab expansion, reload, simultaneous collapsed panes, recovery of a persisted or remaining lone collapsed pane, single-pane control visibility independent of tab count, real Terminal/kept Code unmounting without resource Close, whole-pane movement across nested splits, collapsed direction after movement, and Escape cancellation. `sessionListAndWorkbenchState.test.mjs` covers collapse persistence and older v4 pane compatibility.
 
 ## Integration
@@ -137,3 +148,7 @@ Pane movement does not Keep previews, duplicate tabs, or close resources. Ordina
 - The `reconcileTabs` action allows external systems (e.g., session managers) to bulk-update tabs and layout atomically.
 - `getWorkbenchTabById` provides non-reactive access for imperative code outside React components.
 - Drop target types (`WorkbenchDropTarget`) define the contract between drag-end handlers and store actions.
+
+### D-workbench-text-controls
+
+[2026-10-12] Text-entry controls use a small bounded corner radius, normal weight, semantic text/placeholder colors, and the manifest's dedicated control typography. The 16px focus-zoom floor is touch-only, not a desktop-wide override. Built-in composer radii and typography are reduced through their manifests; body and code typography remain independent. Monaco inputs and its controlled fallback are excluded from form-control overrides. This common rendering path applies to imported themes without theme-ID CSS branches.

@@ -52,6 +52,18 @@ async function processOwnedTurn(router: MessageRouter, sessionId: string, text: 
   await router.processSessionQueue(sessionId);
 }
 
+async function waitForCompletedCompactJob(sessionId: string): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (hasCompletedCompactJob(sessionId)) return;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  const session = await sessionManager.getSession(sessionId);
+  const phase = getCompactOperationPhase(sessionId) || 'none';
+  const queueTypes = session.queue.map(item => typeof item === 'object' && item ? (item as any).type || 'unknown' : 'legacy').join(',') || 'empty';
+  throw new Error(`compact job did not become ready for ${sessionId} before deadline (phase=${phase}, queue=${queueTypes}, busy=${session.busy})`);
+}
+
 async function cleanupSessions(sessionIds: string[]): Promise<void> {
   for (const sessionId of sessionIds) {
     try {
@@ -357,7 +369,13 @@ async function main(): Promise<void> {
       });
 
       let llmCallCount = 0;
+      let mainCallCount = 0;
+      let compactCallCount = 0;
       let compactMessageRange: { sourceStart: number; sourceEnd: number } | null = null;
+      let plannerEntered!: () => void;
+      let releasePlanner!: () => void;
+      const plannerStarted = new Promise<void>(resolve => { plannerEntered = resolve; });
+      const release = new Promise<void>(resolve => { releasePlanner = resolve; });
 
       (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session, _iteration?: number, options?: { toolDefinitions?: Array<{ name: string }> }) => {
         const isCompactJob = Boolean((activeSession as any).__compactJob);
@@ -369,8 +387,14 @@ async function main(): Promise<void> {
           }
         }
         llmCallCount += 1;
+        const callIndex = isCompactJob ? ++compactCallCount : ++mainCallCount;
 
-        if (llmCallCount === 1) {
+        if (isCompactJob && callIndex === 1) {
+          plannerEntered();
+          await release;
+        }
+
+        if (!isCompactJob && callIndex === 1) {
           const toolCall = {
             id: 'compact-now',
             name: 'compact_session',
@@ -384,7 +408,7 @@ async function main(): Promise<void> {
           return { text: '', toolCalls: [toolCall] };
         }
 
-        if (llmCallCount === 2) {
+        if (isCompactJob && callIndex === 1) {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACTION STARTED/);
           assert.doesNotMatch(systemText, /Current session goal\/context/);
@@ -407,7 +431,7 @@ async function main(): Promise<void> {
           return { text: '', toolCalls: [toolCall] };
         }
 
-        if (llmCallCount === 3) {
+        if (isCompactJob && callIndex === 2) {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACT TOOL CALL INVALID/);
           assert.match(systemText, /Do not call `read_memory`/);
@@ -425,7 +449,7 @@ async function main(): Promise<void> {
           return { text: '', toolCalls: [toolCall] };
         }
 
-        if (llmCallCount === 4) {
+        if (isCompactJob && callIndex === 3) {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACT PLAN INVALID/);
           assert.match(systemText, /replaceAsBlocks must contain at least one block/);
@@ -448,7 +472,14 @@ async function main(): Promise<void> {
           return { text: '', toolCalls: [toolCall] };
         }
 
-        if (llmCallCount === 5) {
+        if (!isCompactJob && callIndex === 2) {
+          assert.strictEqual(parts, null);
+          assert(!activeSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
+          await appendStubModelMessage(activeSession, [{ text: 'continued before compact commit' }]);
+          return { text: 'continued before compact commit' };
+        }
+
+        if (!isCompactJob && callIndex === 3) {
           assert.strictEqual(parts, null);
           assert(activeSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
           await appendStubModelMessage(activeSession, [{ text: 'continued after compact' }]);
@@ -458,10 +489,29 @@ async function main(): Promise<void> {
         throw new Error(`compact_session self-request should resume after the dedicated compaction flow, got LLM call ${llmCallCount}`);
       };
 
-      await processOwnedTurn(router, sessionId, 'compact this session now');
+      try {
+        await processOwnedTurn(router, sessionId, 'compact this session now');
+        await plannerStarted;
+        assert.strictEqual(mainCallCount, 2);
+        assert.strictEqual(compactCallCount, 1);
+        assert.strictEqual(getCompactOperationPhase(sessionId), 'planning');
+        assert.strictEqual(hasCompletedCompactJob(sessionId), false);
+        releasePlanner();
+        await waitForCompletedCompactJob(sessionId);
+        assert.strictEqual(llmCallCount, 5);
+        await router.processSessionQueue(sessionId);
+
+        const resumedSession = await sessionManager.getSession(sessionId);
+        assert(resumedSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
+        resumedSession.queue.push({ type: 'user', parts: [{ text: 'resume after compact commit' }] });
+        await sessionManager.saveSession(sessionId);
+        await router.processSessionQueue(sessionId);
+      } finally {
+        releasePlanner();
+      }
 
       const finalSession = await sessionManager.getSession(sessionId);
-      assert.strictEqual(llmCallCount, 5);
+      assert.strictEqual(llmCallCount, 6);
       assert.strictEqual(finalSession.busy, false);
       assert.strictEqual(finalSession.goalState, undefined);
       const compactCompletion = finalSession.history.find(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('event="compact-completed"')));

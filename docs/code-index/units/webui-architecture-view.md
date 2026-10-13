@@ -1,7 +1,7 @@
 # Unit: webui-architecture-view
 
 Files: packages/webui/src/components/ArchitectureView.tsx, packages/webui/src/architectureOperations.ts, packages/webui/test/architectureOperations.test.mjs
-Secondary files: packages/webui/src/components/NodeOnboardingModal.tsx, packages/webui/test/nodeOnboarding.e2e.mjs, packages/webui/test/boundedSessionList.test.mjs, packages/webui/test/boundedSessionReplay.test.mjs
+Secondary files: packages/webui/src/components/TokenUsageDetails.tsx, packages/webui/src/components/NodeOnboardingModal.tsx, packages/webui/test/nodeOnboarding.e2e.mjs, packages/webui/test/boundedSessionList.test.mjs, packages/webui/test/boundedSessionReplay.test.mjs
 
 ## Purpose
 
@@ -16,6 +16,8 @@ Renders a bounded system-operations dashboard and persistent Agent registry for 
 - `getArchitectureNodePreview(sessions, preferredIds, limit)` — produces a bounded lane preview that keeps current/selected and active sessions visible before ordinary server-ordered rows.
 
 ## Behavior
+
+- Cached/Input/Output rows and percentages use the shared [TokenUsageDetails](./webui-token-usage-details.md) renderer, also consumed by status-bar popovers. Architecture's own bounded catalog, global/loaded distinction, and popup behavior remain unchanged.
 
 ### Bounded catalog ownership
 

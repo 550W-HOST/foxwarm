@@ -6,6 +6,7 @@ import Sidebar from './components/Sidebar'
 import HistorySearchView from './components/HistorySearchView'
 import CollapsedSidebarContainer from './components/CollapsedSidebarContainer'
 import WorkbenchLayout from './components/WorkbenchLayout'
+import WorkbenchStatusBar from './components/WorkbenchStatusBar'
 import WorkbenchPane from './components/WorkbenchPane'
 import VscodeWebFrameHost, { type VscodeWebFrameHostHandle } from './components/VscodeWebFrameHost'
 import type { SessionMoveRequest } from './components/SessionListCore'
@@ -434,7 +435,7 @@ function App() {
   const [route, setRoute] = useState<RouteState>(initialRoute)
   const [setupOobe, setSetupOobe] = useState(false)
   const [focusModelsRequest, setFocusModelsRequest] = useState(0)
-  const [activeTerminals, setActiveTerminals] = useState<TerminalRegistryRecord[]>([])
+  const [activeTerminals, setActiveTerminals] = useState<TerminalRegistryRecord[] | null>(null)
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768)
   const [showSessionList, setShowSessionList] = useState<boolean>(() => !window.location.hash)
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -442,7 +443,7 @@ function App() {
     return Number.isFinite(saved) ? Math.min(420, Math.max(180, saved)) : 256
   })
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true')
-  const { sendKeyMode, setSendKeyMode, timelineView, setTimelineView, showUsageBadge, setShowUsageBadge, showUserMessageMetadata, setShowUserMessageMetadata } = useChatPreferences()
+  const { sendKeyMode, setSendKeyMode, timelineView, setTimelineView, showUsageBadge, setShowUsageBadge, showUserMessageMetadata, setShowUserMessageMetadata, fullWidth, setFullWidth } = useChatPreferences()
   const [webUiSettings, setWebUiSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
   const [vscodeFrameStarted, setVscodeFrameStarted] = useState(false)
   const [vscodeFrameSlot, setVscodeFrameSlot] = useState<HTMLElement | null>(null)
@@ -698,6 +699,8 @@ function App() {
   }, [allTabs, sessions])
 
   useEffect(() => {
+    if (!activeTerminals) return
+
     const activeTerminalMap = new Map(activeTerminals.map((terminal) => [terminal.id, terminal]))
     const terminalTabs = allTabs.filter((tab): tab is Extract<WorkbenchTab, { type: 'terminal' }> => tab.type === 'terminal')
     const terminalDraftTabs = terminalTabs.filter((tab) => !tab.terminalId)
@@ -749,7 +752,7 @@ function App() {
       upsertTab(makeTerminalTabFromRecord(terminal), { activate: false })
     })
 
-  }, [activeTerminals, allTabs, upsertTab])
+  }, [activeTerminals, allTabs, removeTab, upsertTab, updateTab])
 
   useEffect(() => {
     const trimmedInstanceName = webUiSettings.instanceName.trim()
@@ -1012,10 +1015,10 @@ function App() {
     return paneTabs[0]
   }
 
-  const openTerminalTab = (options?: { nodeId?: string; path?: string; terminalId?: string; sourcePaneId?: string }) => {
+  const openTerminalTab = (options?: { nodeId?: string; path?: string; terminalId?: string; sourcePaneId?: string; preferPanel?: boolean }) => {
     if (options?.terminalId) {
       const existing = allTabs.find((tab) => tab.type === 'terminal' && tab.terminalId === options.terminalId)
-      const terminal = activeTerminals.find((item) => item.id === options.terminalId)
+      const terminal = activeTerminals?.find((item) => item.id === options.terminalId)
       const tab = existing || (terminal ? makeTerminalTabFromRecord(terminal) : null)
       if (tab) {
         upsertTab(tab, { activate: true })
@@ -1044,9 +1047,10 @@ function App() {
         return
       }
 
-      if (getPaneHeight(sourcePaneId) > 700) {
+      if (options?.preferPanel || getPaneHeight(sourcePaneId) > 700) {
         const draftTab = makeTerminalDraftTab(nodeId, path)
-        const createdPaneId = splitPaneWithNewTab(sourcePaneId, draftTab, 'bottom')
+        const panelShare = Math.min(50, Math.max(25, 260 / Math.max(1, getPaneHeight(sourcePaneId)) * 100))
+        const createdPaneId = splitPaneWithNewTab(sourcePaneId, draftTab, 'bottom', options?.preferPanel ? [100 - panelShare, panelShare] : undefined)
         if (createdPaneId) {
           navigateToTab(draftTab.id)
           return
@@ -1057,6 +1061,44 @@ function App() {
     const tab = makeTerminalDraftTab(nodeId, path)
     upsertTab(tab, { paneId: sourcePaneId || undefined, activate: true })
     navigateToTab(tab.id)
+  }
+
+  const statusTerminalTarget = normalizeTerminalTarget(focusedActiveTab?.type === 'terminal'
+    ? focusedActiveTab
+    : focusedActiveTab?.type === 'vscode'
+      ? { nodeId: codeNodeId, cwd: codePath }
+      : { nodeId: currentContextSessionRecord?.currentNode, cwd: currentContextSessionRecord?.cwd || '/' })
+  const statusTerminalBelow = focusedPaneId ? findPaneBelow(root, focusedPaneId) : null
+  const statusTerminalTab = focusedActiveTab?.type === 'terminal' ? focusedActiveTab
+    : (statusTerminalBelow ? getTerminalTabInPane(statusTerminalBelow.id, { nodeId: statusTerminalTarget.nodeId, path: statusTerminalTarget.cwd }) : null)
+      || findTerminalForTarget(allTabs.filter((tab): tab is Extract<WorkbenchTab, { type: 'terminal' }> => tab.type === 'terminal'), statusTerminalTarget)
+  const statusTerminalPane = statusTerminalTab ? findPaneContainingTab(root, statusTerminalTab.id) : null
+  const statusTerminalVisible = !!statusTerminalPane && !statusTerminalPane.collapsed && statusTerminalPane.activeTabId === statusTerminalTab?.id
+  const toggleTerminalPanel = () => {
+    if (statusTerminalPane && statusTerminalTab) {
+      const otherTab = statusTerminalPane.tabIds.find(id => tabsById[id]?.type !== 'terminal')
+      const returnPane = paneNodes.find(pane => pane.id !== statusTerminalPane.id && !pane.collapsed)
+      if (!statusTerminalVisible && otherTab && statusTerminalPane.id === focusedPaneId) {
+        // Restored Terminal tabs sharing the source editor open as a bottom panel.
+        const panelShare = Math.min(50, Math.max(25, 260 / Math.max(1, getPaneHeight(statusTerminalPane.id)) * 100))
+        const panelId = dockTabToPaneEdge(statusTerminalTab.id, statusTerminalPane.id, 'bottom', [100 - panelShare, panelShare])
+        if (panelId) navigateToTab(statusTerminalTab.id)
+      } else if (statusTerminalVisible && otherTab) {
+        // A user-docked mixed pane keeps its other content visible.
+        navigateToTab(otherTab)
+      } else if (statusTerminalVisible && returnPane) {
+        setPaneCollapsed(statusTerminalPane.id, true)
+        if (focusedPaneId === statusTerminalPane.id) {
+          if (returnPane.activeTabId) navigateToTab(returnPane.activeTabId)
+          else focusPane(returnPane.id)
+        }
+      } else {
+        setPaneCollapsed(statusTerminalPane.id, false)
+        navigateToTab(statusTerminalTab.id)
+      }
+      return
+    }
+    openTerminalTab({ nodeId: statusTerminalTarget.nodeId, path: statusTerminalTarget.cwd, sourcePaneId: focusedPaneId || undefined, preferPanel: true })
   }
 
   const closeWorkbenchTab = async (tabId: string, options?: { deferRoute?: boolean }) => {
@@ -1470,7 +1512,7 @@ function App() {
           canonicalSessionId={sessionRecord?.id || tab.sessionId}
           sessionDisplayName={sessionRecord?.displayName}
           onBack={onBack}
-          onOpenTerminal={() => openTerminalTab({ nodeId: sessionRecord?.currentNode || 'master', path: sessionRecord?.cwd || '/', sourcePaneId })}
+          onOpenTerminal={isMobile ? () => openTerminalTab({ nodeId: sessionRecord?.currentNode || 'master', path: sessionRecord?.cwd || '/', sourcePaneId }) : undefined}
           onOpenCode={() => openCode(resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd))}
           onOpenCodeFile={(filePath, lines, target) => {
             const request = target
@@ -1490,6 +1532,8 @@ function App() {
           sendKeyMode={sendKeyMode}
           timelineView={timelineView}
           showUsageBadge={showUsageBadge}
+          fullWidth={fullWidth}
+          onFullWidthChange={setFullWidth}
           showUserMessageMetadata={showUserMessageMetadata}
           onSendKeyModeChange={setSendKeyMode}
           onTimelineViewChange={setTimelineView}
@@ -1639,7 +1683,14 @@ function App() {
         canCloseActiveTab={!!activeTab && !(activeTab.type === 'setup' && setupOobe)}
         renderContent={renderContent}
         onFocusPane={handleFocus}
-        onSetCollapsed={setPaneCollapsed}
+        onSetCollapsed={(targetPaneId, collapsed) => {
+          setPaneCollapsed(targetPaneId, collapsed)
+          if (collapsed && paneTabs.every(tab => tab.type === 'terminal')) {
+            const returnPane = paneNodes.find(candidate => candidate.id !== targetPaneId && !candidate.collapsed)
+            if (returnPane?.activeTabId) navigateToTab(returnPane.activeTabId)
+            else if (returnPane) focusPane(returnPane.id)
+          }
+        }}
         onSelectTab={navigateToTab}
         onCloseTab={(tabId) => { void closeWorkbenchTab(tabId) }}
         onKeepTab={keepWorkbenchTab}
@@ -1652,7 +1703,9 @@ function App() {
         onCloseAllTabs={() => { void closePaneTabsByPredicate(paneId, () => true) }}
         onSplitRight={() => handleSplit('right')}
         onSplitDown={() => handleSplit('bottom')}
-        onClosePane={handleClosePane}
+        onClosePane={paneTabs.length > 0 && paneTabs.every(tab => tab.type === 'terminal')
+          ? () => { setPaneCollapsed(paneId, true); void closePaneTabsByPredicate(paneId, () => true) }
+          : handleClosePane}
       />
     )
   }
@@ -1935,9 +1988,9 @@ function App() {
   }
 
   return renderWithVscodeFrame(renderWorkbenchSurface(
-    <div className="foxwarm-safe-area-shell foxwarm-viewport-shell relative flex overflow-hidden bg-fw-canvas">
+    <div className="foxwarm-desktop-workbench-shell foxwarm-safe-area-shell foxwarm-viewport-shell relative flex overflow-hidden bg-fw-canvas">
       {!sidebarCollapsed ? (
-        <div className="relative h-full shrink-0" style={{ width: sidebarWidth }}>
+        <div className="foxwarm-sidebar-frame relative h-full shrink-0" style={{ width: sidebarWidth }}>
           <Sidebar
             sessions={sidebarSessions}
             agents={agents}
@@ -1973,7 +2026,7 @@ function App() {
             bounded={boundedPresentation}
           />
           <div
-            className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-col-resize bg-transparent transition hover:bg-fw-accent/40"
+            className="foxwarm-sidebar-resize absolute inset-y-0 right-0 z-20 w-1.5 cursor-col-resize bg-transparent transition hover:bg-fw-accent/40"
             onMouseDown={startSidebarResize}
           />
         </div>
@@ -1990,14 +2043,20 @@ function App() {
           unreadSessionIds={unreadSessionIds}
         />
       )}
-      <div className="flex-1 h-full min-h-0 overflow-hidden">
-        <div className="h-full min-h-0 overflow-hidden">
+      <div className="foxwarm-workbench-frame flex h-full min-h-0 min-w-0 flex-1 flex-col gap-1.5 overflow-hidden">
+        <div className="min-h-0 flex-1 overflow-hidden">
           <WorkbenchLayout
             node={root}
             renderPane={(paneId, collapseDirection) => renderPane(paneId, undefined, collapseDirection)}
             onLayoutResize={updateSplitSizes}
           />
         </div>
+        <WorkbenchStatusBar running={busyCount} sessions={sessions} nodes={nodeTargets}
+          onToggleTerminal={toggleTerminalPanel} terminalVisible={statusTerminalVisible}
+          totalUsage={boundedSessions.globalSummary?.tokenUsage}
+          currentSessionId={focusedActiveTab?.type === 'chat' ? focusedActiveTab.sessionId : undefined}
+          currentSession={focusedActiveTab?.type === 'chat' ? currentContextSessionRecord : undefined}
+        />
       </div>
     </div>,
   ))

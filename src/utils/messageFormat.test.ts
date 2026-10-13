@@ -34,7 +34,7 @@ test('formatMessagePreviewLine does not duplicate continuation prefixes', () => 
   const message = makeMessage([{ text: 'line 1\nline 2\nline 3' }]);
   const line = formatMessagePreviewLine(message, 7, 200);
 
-  assert.match(line, /\[7\] 🤖 model: line 1\n> line 2\n> line 3\n$/);
+  assert.match(line, /\[7(?: time [^\]]+)?\] 🤖 model: line 1\n> line 2\n> line 3\n$/);
   assert.doesNotMatch(line, /> > /);
 });
 

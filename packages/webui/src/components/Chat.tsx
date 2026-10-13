@@ -190,6 +190,8 @@ interface ChatProps {
   timelineView?: TimelineView
   showUsageBadge?: boolean
   showUserMessageMetadata?: boolean
+  fullWidth?: boolean
+  onFullWidthChange?: (enabled: boolean) => void
   onSendKeyModeChange?: (mode: 'modEnter' | 'enter') => void
   onTimelineViewChange?: (mode: TimelineView) => void
   onShowUsageBadgeChange?: (enabled: boolean) => void
@@ -237,7 +239,7 @@ type SessionListRecord = {
   isolated?: boolean
 }
 
-const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', timelineView = 'detailed', showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onTimelineViewChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', timelineView = 'detailed', showUsageBadge = true, showUserMessageMetadata = false, fullWidth = true, onFullWidthChange = () => {}, onSendKeyModeChange = () => {}, onTimelineViewChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
   const [timelineState, dispatchTimeline] = useReducer(timelineReducer, { messages: [], queuedMessages: [] })
   const messages = timelineState.messages
   const queuedMessages = timelineState.queuedMessages
@@ -2263,6 +2265,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
               onTimelineViewChange={onTimelineViewChange}
               showUsageBadge={showUsageBadge}
               onShowUsageBadgeChange={onShowUsageBadgeChange}
+              fullWidth={fullWidth}
+              onFullWidthChange={onFullWidthChange}
               showUserMessageMetadata={showUserMessageMetadata}
               onShowUserMessageMetadataChange={onShowUserMessageMetadataChange}
               onOpenDebugInfo={handleOpenDebugInfo}
@@ -2299,7 +2303,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
               />
             </div>
           )}
-          <div ref={messagesContentRef} className="foxwarm-chat-messages-content min-w-0 max-w-full">
+          <div ref={messagesContentRef} data-full-width={fullWidth} className="foxwarm-chat-messages-content min-w-0 max-w-full">
             {hiddenMessageCount > 0 && !showFullTimeline && (
               <div className="mb-3 rounded-lg border border-fw-border bg-fw-surface/80 px-3 py-2 text-xs text-fw-text-muted shadow-sm dark:border-fw-border dark:bg-fw-surface/80 dark:text-fw-text">
                 Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.
@@ -2453,6 +2457,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   && prev.timelineView === next.timelineView
   && prev.showUsageBadge === next.showUsageBadge
   && prev.webUiIdentityMode === next.webUiIdentityMode
+  && prev.fullWidth === next.fullWidth
+  && prev.onFullWidthChange === next.onFullWidthChange
   && prev.showUserMessageMetadata === next.showUserMessageMetadata
   && prev.onSendKeyModeChange === next.onSendKeyModeChange
   && prev.onTimelineViewChange === next.onTimelineViewChange

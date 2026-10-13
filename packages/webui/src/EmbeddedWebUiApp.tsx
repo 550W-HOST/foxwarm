@@ -281,6 +281,8 @@ export function EmbeddedChatApp({ target }: { target: Extract<FoxwarmEmbeddedTar
         sendKeyMode={preferences.sendKeyMode}
         timelineView={preferences.timelineView}
         showUsageBadge={preferences.showUsageBadge}
+        fullWidth={preferences.fullWidth}
+        onFullWidthChange={preferences.setFullWidth}
         showUserMessageMetadata={preferences.showUserMessageMetadata}
         onSendKeyModeChange={preferences.setSendKeyMode}
         onTimelineViewChange={preferences.setTimelineView}

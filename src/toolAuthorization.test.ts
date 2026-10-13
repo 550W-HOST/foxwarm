@@ -561,6 +561,8 @@ test('policy unavailability preserves paired tool responses and requests a fatal
       clearRuntimeState: () => {},
       startWait: async () => ({ id: 'unused' }),
       clearWaitById: async () => {},
+      registerAbortController: () => {},
+      clearAbortController: () => {},
     } as any,
   });
   assert.equal(starts, 0);

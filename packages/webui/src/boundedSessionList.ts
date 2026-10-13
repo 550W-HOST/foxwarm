@@ -37,11 +37,17 @@ function clearBranchOwnership(current: CacheState): CacheState {
   return { ...current, childPages: new Map(), previewParents: new Set(), ownedBranches: new Map(), forcedChildren: {}, descendantBusy: new Map() }
 }
 
+export type BoundedGlobalSummary = {
+  total: number
+  busy: number
+  tokenUsage?: { cachedTokens: number; inputTokens: number; outputTokens: number }
+}
+
 export interface BoundedSessionListController { sessions: Session[]; knownSessions: Session[]; mode: SessionListOrderMode; query: string
   hasMoreRoots: boolean; childPages: Map<string, BoundedChildPage>; branchLoadStates: Map<string, BoundedBranchLoadState>; descendantBusy: Map<string, number>; invalidationVersion: number
   setMode: (mode: SessionListOrderMode) => void; setQuery: (query: string) => void; loadMoreRoots: () => Promise<void>
   loadMoreChildren: (id: string) => Promise<void>; expandBranch: (id: string) => Promise<void>; expandBranches: (ids: string[]) => Promise<void>; retryBranch: (id: string) => Promise<void>; collapseBranch: (id: string) => void
-  refresh: () => Promise<void>; invalidate: () => void; globalSummary: { total: number; busy: number } | null }
+  refresh: () => Promise<void>; invalidate: () => void; globalSummary: BoundedGlobalSummary | null }
 
 export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: string[]; rootLimit?: number; childLimit?: number; connectStream?: boolean; includeGlobalSummary?: boolean; includeIdleWatches?: boolean }): BoundedSessionListController {
   const rootLimit = options.rootLimit || 50; const childLimit = options.childLimit || 5
@@ -49,7 +55,7 @@ export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: 
   const [unreadIds, setUnreadIds] = useState<string[]>(currentUnreadIds)
   const [watchIds, setWatchIds] = useState<string[]>(() => currentAttentionIds(options.includeIdleWatches !== false, unreadIds)); const [state, setState] = useState(() => emptyState(rootLimit))
   const [branchLoadStates, setBranchLoadStates] = useState<Map<string, BoundedBranchLoadState>>(new Map())
-  const [globalSummary, setGlobalSummary] = useState<{ total: number; busy: number } | null>(null)
+  const [globalSummary, setGlobalSummary] = useState<BoundedGlobalSummary | null>(null)
   const stateRef = useRef(state); stateRef.current = state; const queryRef = useRef(query); queryRef.current = query
   const rowStoreRef = useRef(createEpochRows<Session>()); const windowGenerationRef = useRef(0); const exactGenerationRef = useRef(0)
   const searchGenerationRef = useRef(0); const badgeGenerationRef = useRef(0); const summaryGenerationRef = useRef(0)
@@ -162,7 +168,7 @@ export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: 
     const payload = await fetchJson(`/session-list/search?${new URLSearchParams({ q: value, limit: '100' })}`); if (!isCurrentOwner(ownerEpoch) || generation !== searchGenerationRef.current) return false
     const next = { ...stateRef.current, searchIds: (payload.sessions || []).map((row: Session) => row.id), rows: new Map() }; publish(next, payload.sessions || [], startEpoch); return true
   }), [publish, isCurrentOwner])
-  const loadSummary = useCallback(async () => { if (!options.includeGlobalSummary) return true; if (!mountedRef.current) return false; const ownerEpoch = ownerEpochRef.current; const generation = ++summaryGenerationRef.current; const payload = await fetchJson('/session-list/architecture?limit=1&childLimit=1'); if (!isCurrentOwner(ownerEpoch) || generation !== summaryGenerationRef.current) return false; setGlobalSummary({ total: Number(payload.summary?.total || 0), busy: Number(payload.summary?.busy || 0) }); return true }, [options.includeGlobalSummary, isCurrentOwner])
+  const loadSummary = useCallback(async () => { if (!options.includeGlobalSummary) return true; if (!mountedRef.current) return false; const ownerEpoch = ownerEpochRef.current; const generation = ++summaryGenerationRef.current; const payload = await fetchJson('/session-list/architecture?limit=1&childLimit=1'); if (!isCurrentOwner(ownerEpoch) || generation !== summaryGenerationRef.current) return false; const summary = payload.summary || {}; const counts = [summary.cachedTokens, summary.inputTokens, summary.outputTokens]; const tokenUsage = counts.every(value => typeof value === 'number' && Number.isFinite(value) && value >= 0) ? { cachedTokens: counts[0], inputTokens: counts[1], outputTokens: counts[2] } : undefined; setGlobalSummary({ total: Number(summary.total || 0), busy: Number(summary.busy || 0), ...(tokenUsage ? { tokenUsage } : {}) }); return true }, [options.includeGlobalSummary, isCurrentOwner])
 
   const refresh = useCallback(async () => {
     const ownerEpoch = ownerEpochRef.current; const current = stateRef.current
