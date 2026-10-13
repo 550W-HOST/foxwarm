@@ -1836,7 +1836,14 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     const container = messagesContainerRef.current
     if (!content || !container) return
 
+    const syncScrollbarGutter = () => {
+      if (container.clientWidth > 0) {
+        chatRootRef.current?.style.setProperty('--foxwarm-chat-scrollbar-gutter', `${container.offsetWidth - container.clientWidth}px`)
+      }
+    }
+    syncScrollbarGutter()
     const observer = new ResizeObserver(() => {
+      syncScrollbarGutter()
       if (resizeRestoreFrameRef.current !== null) {
         window.cancelAnimationFrame(resizeRestoreFrameRef.current)
       }
@@ -2270,7 +2277,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       )}
 
       <div className="foxwarm-chat-message-region relative min-h-0 flex-1">
-        <div id={chatMessageContainerId} ref={messagesContainerRef} className="foxwarm-chat-messages h-full overflow-x-hidden overflow-y-auto p-4">
+        <div id={chatMessageContainerId} ref={messagesContainerRef} className="foxwarm-chat-messages foxwarm-content-gutter h-full overflow-x-hidden overflow-y-auto py-4">
           {!isMobile && (
             <div className="foxwarm-context-scrollbar-overlay">
               <ContextScrollbar
@@ -2285,7 +2292,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
               />
             </div>
           )}
-          <div ref={messagesContentRef} data-full-width={fullWidth} className="foxwarm-chat-messages-content min-w-0 max-w-full">
+          <div ref={messagesContentRef} data-full-width={fullWidth} className="foxwarm-chat-messages-content foxwarm-content-column">
             {hiddenMessageCount > 0 && !showFullTimeline && (
               <div className="mb-3 rounded-lg border border-fw-border bg-fw-surface/80 px-3 py-2 text-xs text-fw-text-muted shadow-sm dark:border-fw-border dark:bg-fw-surface/80 dark:text-fw-text">
                 Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.

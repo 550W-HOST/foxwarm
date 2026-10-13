@@ -76,6 +76,14 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 
 ## Design decisions
 
+### D-webui-shared-content-width
+
+[2026-10-13] `index.css` owns the shared reading-column geometry: `--foxwarm-content-width` is 1100px, `.foxwarm-content-column` bounds and centers a padding-free column, and `--foxwarm-content-gutter` supplies 16px outer horizontal spacing. Non-full-width Chat Timeline, Composer, History's search/results column, and Tasks' Table/Board column use that contract; individual cards and modal dialogs retain their own padding and sizing. Composer always keeps the reading cap, even when Full width removes only Timeline's cap.
+
+Desktop Chat reserves `--foxwarm-context-minimap-width` (32px) outside both columns before centering them, based on the existing minimap setting and the owning Chat's 768px layout band. Disabling the minimap removes both reservations; History and Tasks have no minimap reservation. Chat's existing content/scroller ResizeObserver publishes only the real native scrollbar gutter to `--foxwarm-chat-scrollbar-gutter`, so Composer also centers inside the scroller's usable width when a native scrollbar occupies space. Column sizing stays CSS-owned without another observer, React width state, or scroll owner. Tasks' filter row follows its main column, including the existing desktop inspector clearance; narrow details and New task remain independent modal layouts.
+
+The focused `workbenchPreview.e2e.mjs` geometry case uses visible native scrollbars to check actual left/right edges through pane/window resizing and minimap changes, shared maximum widths, and narrow overflow containment. `tasksView.e2e.mjs` checks Table/Board widths and filter alignment beside the retained desktop inspector.
+
 ### D-webui-react18-runtime
 
 [2026-09-19] The WebUI uses its locked React and ReactDOM 18.3.1 packages directly for JSX, hooks, and `createRoot`; Vite does not alias React to Preact. Browser component fixtures also resolve the WebUI's React 18 packages, including when their generated entry files live outside the package directory. Vite deduplicates `react` and `react-dom` so shared imports do not bring a second React runtime into the page. Server-side/CLI renderers retain their own dependency boundaries. This keeps production and browser tests on the same rendering semantics without changing application state, message, or tool contracts.

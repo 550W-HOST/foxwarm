@@ -1,7 +1,7 @@
-.tasks-workbench { container: tasks / inline-size; }
-.tasks-header { flex: none; padding: 20px 28px 0; border-bottom: 1px solid var(--foxwarm-color-border-muted); background: var(--foxwarm-color-surface); }
+.tasks-workbench { container: tasks / inline-size; --tasks-detail-width: 420px; }
+.tasks-header { flex: none; padding-top: 20px; border-bottom: 1px solid var(--foxwarm-color-border-muted); background: var(--foxwarm-color-surface); }
 .tasks-heading-row, .tasks-heading, .tasks-heading-actions, .tasks-toolbar, .tasks-toolbar-actions { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.tasks-heading-row { margin-bottom: 18px; }
+.tasks-heading-row { margin-bottom: 18px; padding-inline: var(--foxwarm-content-gutter); }
 .tasks-heading h2 { font-size: 18px; font-weight: 650; letter-spacing: -.025em; }
 .tasks-heading-icon { color: var(--foxwarm-color-text-muted); display: inline-flex; }
 .tasks-heading-actions { margin-left: auto; }
@@ -12,7 +12,8 @@
 .task-icon-button { width: 32px; height: 32px; padding: 0; }
 .task-primary { border-color: transparent; background: var(--foxwarm-color-accent); color: var(--foxwarm-color-text-inverse); font-weight: 550; }
 .task-primary:hover { background: var(--foxwarm-color-accent); filter: brightness(.96); }
-.tasks-toolbar { justify-content: space-between; gap: 16px; }
+.tasks-toolbar { justify-content: space-between; flex-wrap: wrap; gap: 16px; }
+.tasks-workbench:has(.tasks-detail-panel:not([data-task-narrow="true"])) .tasks-toolbar-region { padding-right: calc(var(--foxwarm-content-gutter) + var(--tasks-detail-width)); }
 .tasks-scope-tabs { display: flex; align-self: stretch; gap: 22px; flex: none; }
 .tasks-scope-tabs button { padding: 10px 0 14px; font-size: 13px; color: var(--foxwarm-color-text-muted); border-bottom: 2px solid transparent; }
 .tasks-scope-tabs button[aria-pressed="true"] { border-bottom-color: var(--foxwarm-color-accent); color: var(--foxwarm-color-text); font-weight: 600; }
@@ -34,7 +35,7 @@
 .tasks-header-warning { font-size: 12px; color: var(--foxwarm-color-danger); padding: 4px 0 10px; }
 .tasks-body { display: flex; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 .tasks-main { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
-.tasks-content { max-width: 1280px; margin: 0 auto; padding: 24px 28px 40px; }
+.tasks-content { padding-block: 24px 40px; }
 .tasks-list-summary { display: flex; align-items: center; gap: 20px; font-size: 12px; margin-bottom: 8px; }
 .tasks-list-summary strong { font-weight: 550; }
 .tasks-status-counts { display: flex; flex-wrap: wrap; gap: 12px; color: var(--foxwarm-color-text-muted); font-size: 11px; }
@@ -82,15 +83,15 @@
 .tasks-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 220px; gap: 12px; color: var(--foxwarm-color-text-muted); font-size: 13px; }
 .tasks-empty svg { opacity: .55; }
 .tasks-error { border: 1px solid var(--foxwarm-color-danger); padding: 14px; border-radius: 8px; font-size: 13px; color: var(--foxwarm-color-danger); }
-.tasks-detail-panel { position: relative; width: 420px; flex: none; min-width: 0; overflow: auto; border-left: 1px solid var(--foxwarm-color-border-muted); background: var(--foxwarm-color-surface); padding: 22px; }
+.tasks-detail-panel { position: relative; width: var(--tasks-detail-width); flex: none; min-width: 0; overflow: auto; border-left: 1px solid var(--foxwarm-color-border-muted); background: var(--foxwarm-color-surface); padding: 22px; }
 .tasks-detail-title { font-weight: 600; font-size: 17px; line-height: 26px; margin: 12px 0 8px; overflow-wrap: anywhere; }
 .tasks-detail-section { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--foxwarm-color-border-muted); }
 .tasks-note { padding: 12px 0; border-bottom: 1px solid var(--foxwarm-color-border-muted); }
 .tasks-detail-panel[data-task-narrow="true"] { position: fixed; inset: 0; width: auto; z-index: 40; padding: 20px; }
 @container tasks (max-width: 950px) {
-  .tasks-header { padding: 16px 18px 0; }
-  .tasks-content { padding: 20px 18px; }
-  .tasks-toolbar { flex-wrap: wrap; gap: 6px; }
+  .tasks-header { padding-top: 16px; }
+  .tasks-content { padding-block: 20px; }
+  .tasks-toolbar { gap: 6px; }
   .tasks-toolbar-actions { flex: 1; }
   .tasks-search { width: 140px; }
   .tasks-table th:first-child { width: auto; }

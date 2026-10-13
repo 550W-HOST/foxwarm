@@ -259,8 +259,8 @@ export default function HistorySearchView({ tabId, isMobile, timelineView, showU
   }
 
   const view = (
-    <div className="h-full min-h-0 overflow-y-auto bg-fw-canvas px-3 py-5 text-fw-text" data-history-search-view data-history-tab-id={tabId}>
-      <div className="mx-auto max-w-4xl space-y-5">
+    <div className="foxwarm-content-gutter h-full min-h-0 overflow-y-auto bg-fw-canvas py-5 text-fw-text" data-history-search-view data-history-tab-id={tabId}>
+      <div className="foxwarm-content-column space-y-5">
         <div className="flex items-center gap-3">
           {tabHeader ? <>
             <WorkbenchTabClose className="rounded p-1 text-fw-text-muted hover:bg-fw-hover" iconClassName="h-5 w-5" />

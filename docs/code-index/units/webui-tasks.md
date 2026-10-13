@@ -34,6 +34,8 @@ Provides a Tasks singleton workbench tab with Table and Board views, manual Refr
 - Detail width responds to the actual Tasks pane through ResizeObserver: wide panes use a side inspector and narrow panes use a focused modal with Tab containment. Escape/outside pointer dismiss transient controls and restores list focus. Obsolete reads and mutations cannot replace another task's draft or details.
 - Completed bounded status reads publish exact `open`/`active` API totals to the desktop status bar through a same-page count event; this does not add task realtime subscriptions.
 
+Table/Board and the filter row use the shared centered reading column and outer gutter without reserving minimap space. Desktop filters retain the same main-column clearance as the side inspector, and can wrap when its remaining width is narrow. The pane-wide heading/actions and independently sized modal dialogs keep their existing roles. Geometry is canonical in [D-webui-shared-content-width](../modules/webui.md#d-webui-shared-content-width).
+
 ## Workbench integration
 
 `system:tasks` uses the existing singleton activation, hash restoration, storage normalization, close fallback, split panes, tab menus and top-level popup flow. Navigation placement is defined by [D-webui-tasks-navigation](#d-webui-tasks-navigation). Code's embedded Sidebar opens the same-origin Tasks popup without adding a host bridge or embedded target kind. The sole-tab header uses the ordinary workbench icon/Close controls; popup leaves have no workbench controls.

@@ -18,6 +18,8 @@ The independent workbench Search tab shows authenticated Archive search groups a
 - Result timelines consume the shared `timelineView` preference without changing archive queries, result scope, or permissions. Conversation changes only the presentation of the messages already returned; CTX expansion remains explicit. See [D-webui-timeline-view](../modules/webui.md#d-webui-timeline-view).
 - Browser fixtures verify Timeline grouping, independent paging, tool/CTX/image behavior, reference paste and deployment subpath. Backend HTTP fixtures and the shared source contract are described in [context compaction and recall](../threads/archive-and-recall.md#d-context-history-search-viewer).
 
+The search form and result sections share the centered reading-column cap and outer gutter with non-full-width Chat and Tasks, without reserving minimap space. Individual result cards retain their internal padding. Geometry is canonical in [D-webui-shared-content-width](../modules/webui.md#d-webui-shared-content-width).
+
 ## Workbench header integration
 
 The normal sole-tab header close/icon controls use [Single-tab headers](./webui-workbench.md#single-tab-headers). Standalone and embedded leaf roots retain their existing navigation and do not own Workbench tabs.
