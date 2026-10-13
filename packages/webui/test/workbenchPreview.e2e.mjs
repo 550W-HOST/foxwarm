@@ -793,6 +793,14 @@ test('History tabs keep independent drafts/results across entries, pane collapse
     await page.click('[data-history-search-view] button[type="submit"]')
     await page.waitForSelector('[data-history-result="history-outside/main"]')
     assert.equal(await page.$eval(`[data-tab-id="${firstTabId}"]`, tab => tab.textContent.includes('alpha')), true)
+    assert.equal(await page.$eval(`[data-tab-id="${firstTabId}"]`, tab => tab.title), 'alpha')
+    await page.click(`[data-history-tab-id="${firstTabId}"] [data-history-query-input]`, { clickCount: 3 })
+    await page.keyboard.type('draft')
+    assert.equal(await page.$eval(`[data-tab-id="${firstTabId}"]`, tab => tab.title), 'alpha')
+    assert.ok(await page.$(`[data-history-tab-id="${firstTabId}"] [data-history-result="history-outside/main"]`), 'draft edits do not clear submitted results')
+    await page.click(`[data-history-tab-id="${firstTabId}"] button[type="submit"]`)
+    await page.waitForSelector(`[data-history-tab-id="${firstTabId}"] [data-history-result="history-outside/main"]`)
+    assert.equal(await page.$eval(`[data-tab-id="${firstTabId}"]`, tab => tab.title), 'draft')
 
     await page.click(footer)
     await page.waitForFunction(id => document.querySelectorAll('[data-tab-id^="history:"]').length === 2 && !document.querySelector(`[data-tab-id="${id}"]`)?.classList.contains('hidden'), firstTabId)
@@ -825,7 +833,7 @@ test('History tabs keep independent drafts/results across entries, pane collapse
 
     await page.click(`[data-tab-id="${firstTabId}"]`)
     await page.waitForSelector(`[data-history-tab-id="${firstTabId}"] [data-history-result="history-outside/main"]`)
-    assert.equal(await page.$eval(`[data-history-tab-id="${firstTabId}"] [data-history-query-input]`, input => input.value), 'alpha')
+    assert.equal(await page.$eval(`[data-history-tab-id="${firstTabId}"] [data-history-query-input]`, input => input.value), 'draft')
     await page.$eval(`[data-history-tab-id="${firstTabId}"]`, element => { element.scrollTop = 20; element.dispatchEvent(new Event('scroll', { bubbles: true })) })
     await page.click(`[data-tab-id="${secondTabId}"]`)
     await page.waitForSelector(`[data-history-tab-id="${secondTabId}"]`)
@@ -843,13 +851,13 @@ test('History tabs keep independent drafts/results across entries, pane collapse
     await page.waitForSelector(`[data-workbench-collapsed-tab="${firstTabId}"]`)
     await page.click(`[data-workbench-collapsed-tab="${firstTabId}"]`)
     await page.waitForSelector(`[data-history-tab-id="${firstTabId}"] [data-history-result="history-outside/main"]`)
-    assert.equal(await page.$eval(`[data-history-tab-id="${firstTabId}"] [data-history-query-input]`, input => input.value), 'alpha')
+    assert.equal(await page.$eval(`[data-history-tab-id="${firstTabId}"] [data-history-query-input]`, input => input.value), 'draft')
 
     await page.setViewport({ width: 390, height: 800 })
     await page.waitForSelector('[data-sidebar-footer] button[aria-label="Search history"]')
     await page.click('[data-sidebar-footer] button[aria-label="Search history"]')
     await page.waitForSelector('[data-history-search-view]')
-    assert.deepEqual((await page.$$eval('[data-history-search-view] [data-history-query-input]', inputs => inputs.map(input => input.value).sort())), ['', 'alpha'], 'mobile hiding keeps both History tab drafts')
+    assert.deepEqual((await page.$$eval('[data-history-search-view] [data-history-query-input]', inputs => inputs.map(input => input.value).sort())), ['', 'draft'], 'mobile hiding keeps both History tab drafts')
   } finally { await page.close() }
 })
 

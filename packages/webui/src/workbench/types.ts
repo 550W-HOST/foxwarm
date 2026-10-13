@@ -15,6 +15,7 @@ export type WorkbenchTab =
       searchAgentName?: string
       searchSessionId?: string
       searchStarted?: boolean
+      searchSubmittedQuery?: string
     })
   | (WorkbenchTabBase & { type: 'logs' })
   | (WorkbenchTabBase & { type: 'tasks' })
