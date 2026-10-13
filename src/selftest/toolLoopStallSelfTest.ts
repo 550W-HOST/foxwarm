@@ -53,11 +53,15 @@ async function processOwnedTurn(router: MessageRouter, sessionId: string, text: 
 }
 
 async function waitForCompletedCompactJob(sessionId: string): Promise<void> {
-  for (let attempt = 0; attempt < 10_000; attempt += 1) {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
     if (hasCompletedCompactJob(sessionId)) return;
-    await new Promise<void>(resolve => setImmediate(resolve));
+    await new Promise(resolve => setTimeout(resolve, 10));
   }
-  throw new Error(`compact job did not become ready for ${sessionId}`);
+  const session = await sessionManager.getSession(sessionId);
+  const phase = getCompactOperationPhase(sessionId) || 'none';
+  const queueTypes = session.queue.map(item => typeof item === 'object' && item ? (item as any).type || 'unknown' : 'legacy').join(',') || 'empty';
+  throw new Error(`compact job did not become ready for ${sessionId} before deadline (phase=${phase}, queue=${queueTypes}, busy=${session.busy})`);
 }
 
 async function cleanupSessions(sessionIds: string[]): Promise<void> {
