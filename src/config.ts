@@ -856,7 +856,7 @@ export const TRIGGER_PORT = HTTP_PORT; // For backward compatibility
 export const WEBUI_PORT = HTTP_PORT; // For backward compatibility
 
 // Context and compaction settings
-export const CONTEXT_LIMIT = APP_CONFIG.llm?.contextLimit || 122880; // 120K tokens
+export const CONTEXT_LIMIT = APP_CONFIG.llm?.contextLimit || 200000; // Framework fallback in tokens
 export const COMPACT_KEEP_PERCENT = COMPACTION_CONFIG.compactKeepPercent;
 export const COMPACT_THRESHOLD_PERCENT = COMPACTION_CONFIG.compactThresholdPercent;
 export const COMPACT_BLOCK_LEVEL_MIN_TOKENS = APP_CONFIG.llm?.compactBlockLevelMinTokens ?? 3000;

@@ -14,6 +14,51 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+for (const appContextLimit of [undefined, 175000]) {
+  test(`model resolution preserves context overrides with ${appContextLimit === undefined ? 'the framework fallback' : 'an app context limit'}`, async () => {
+    const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-context-limit-'));
+    const configPath = path.join(dataRoot, 'state', 'config.yaml');
+    await fs.ensureDir(path.dirname(configPath));
+    await fs.writeFile(configPath, JSON.stringify({ llm: { contextLimit: appContextLimit } }));
+    await fs.writeFile(path.join(dataRoot, 'state', 'models.yaml'), JSON.stringify({
+      default: 'unbounded',
+      providers: {
+        unbounded: { providerType: 'openai-completions', models: ['model-a'] },
+        explicit: {
+          providerType: 'openai-completions',
+          contextLimit: 300000,
+          models: ['inherited', { id: 'overridden', contextLimit: 96000 }],
+        },
+        single: { providerType: 'session-hash', targets: ['unbounded'] },
+        mixed: { providerType: 'failover', targets: ['unbounded', 'explicit/inherited'] },
+        smaller: { providerType: 'failover', targets: ['unbounded', 'explicit/overridden'] },
+      },
+    }));
+    const script = `
+      const config = require('./lib/config.js');
+      const keys = ['explicit/inherited', 'explicit/overridden', 'single', 'mixed', 'smaller'];
+      const limits = [config.resolveModelConfig().contextLimit,
+        ...keys.map(key => config.resolveModelConfig(key).contextLimit)];
+      process.stdout.write('__FOXWARM_RESULT__' + JSON.stringify(limits) + '\\n');
+    `;
+
+    try {
+      const { stdout } = await execFileAsync(process.execPath, ['-e', script], {
+        cwd: process.cwd(),
+        env: { ...process.env, FOXWARM_DATA_DIR: dataRoot, FOXWARM_CONFIG_PATH: configPath },
+      });
+      const resultLine = stdout.split('\n').find(line => line.startsWith('__FOXWARM_RESULT__'));
+      assert.ok(resultLine, `child process did not return a result: ${stdout}`);
+      const fallback = appContextLimit ?? 200000;
+      assert.deepEqual(JSON.parse(resultLine.slice('__FOXWARM_RESULT__'.length)), [
+        fallback, 300000, 96000, fallback, fallback, 96000,
+      ]);
+    } finally {
+      await fs.remove(dataRoot);
+    }
+  });
+}
+
 test('models config path follows the Foxwarm data directory only', () => {
   assert.equal(resolveDataModelsConfigPath('/srv/foxwarm-a'), path.join('/srv/foxwarm-a', 'state', 'models.yaml'));
   assert.equal(resolveDataModelsConfigPath('/srv/foxwarm-b'), path.join('/srv/foxwarm-b', 'state', 'models.yaml'));

@@ -73,7 +73,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 | HTTP port | `3001` |
 | WebUI / trigger | enabled unless explicitly `false` |
 | TUI | disabled unless configured or `--tui` is present |
-| context limit | `122880` |
+| context limit | `200000` |
 | recent compact keep fraction (`compactKeepPercent`) | `0.3` |
 | automatic compact threshold fraction (`compactThresholdPercent`) | `0.85` |
 | block eligibility / force tokens | `3000` / `5000` |
@@ -97,6 +97,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 - `providerType` is current; `provider` is a legacy reader.
 - A single-model provider gets both provider-key and provider/model lookup entries; multi-model providers use provider/model keys.
 - Provider defaults are applied before model-level overrides. Header overrides merge one level by key. Nested plain objects under `extraFields` merge recursively. `contextLimit` overrides directly, `webSearch` and `imageGeneration` settings merge from provider to concrete model override, and Chat Completions `historyReasoningField` inherits or overrides as one normalized enum. Each `imageGeneration` side is normalized before merging, and the merged configuration is checked again for field combinations that only become contradictory through inheritance, so a provider background and a model output format cannot combine into an unsupported request.
+- A concrete model without a provider/model `contextLimit` uses app `llm.contextLimit`, or the framework fallback of `200000` tokens when omitted. Virtual safe-context resolution uses the same fallback for unspecified leaves before taking the minimum. This fallback does not declare a model's supported context capacity.
 - Provider-scoped `disallowEmptyResponse` inherits from the provider entry to each concrete model entry, is rejected on virtual entries, participates in the route fingerprint, and controls whether empty/reasoning-only completions are retryable failures.
 - `keepReasoningOnError` is a strict provider/concrete-model boolean with model override and effective default `false`. It is rejected on virtual providers, preserved through concrete Setup forms and raw YAML/schema editing, and included in virtual leaf fingerprints. Only normal Responses streams consume it; see [D-streaming-keep-reasoning-on-error](../threads/streaming-pipeline.md#d-streaming-keep-reasoning-on-error).
 - First-class `effort` uses `{ allowed, default }`. Omission allows `none`, `low`, `medium`, `high`, `xhigh`, and `max` with `high` as the default. A model-level `allowed` list replaces the provider list; omitted model fields inherit provider values, and the resulting default must be allowed. Virtual entries cannot configure effort directly and expose the canonical union of reachable concrete levels.
