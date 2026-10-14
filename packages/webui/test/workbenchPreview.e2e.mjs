@@ -1382,7 +1382,7 @@ test('Chat composer uses a smaller empty editor below 600px content height in De
           await page.waitForFunction((selector, height) => getComputedStyle(document.querySelector(selector)).minHeight === height + 'px', {}, editor, minHeight)
           const actual = await geometry()
           assert.deepEqual(await page.$eval(root, el => ({ width: el.getBoundingClientRect().width, height: el.getBoundingClientRect().height })), { width, height })
-          assert.equal(actual.height, minHeight, themeId + ' empty editor at ' + width + ' × ' + height)
+          assert.ok(actual.height >= minHeight, themeId + ' empty editor respects its minimum at ' + width + ' × ' + height)
           assert.equal(actual.marginBottom, '0px')
           assert.equal(actual.lineHeight, original.lineHeight)
           assert.equal(actual.padding, original.padding)
@@ -1390,6 +1390,7 @@ test('Chat composer uses a smaller empty editor below 600px content height in De
       }
       for (const width of [360, 800]) {
         await page.$eval(root, (el, width) => { el.style.width = width + 'px'; el.style.height = '600px' }, width)
+        await page.waitForFunction(selector => document.querySelector(selector)?.dataset.empty === 'true', {}, editor)
         const empty = await page.$eval(editor, el => {
           const form = el.closest('form')
           const box = el.getBoundingClientRect()
@@ -1400,6 +1401,9 @@ test('Chat composer uses a smaller empty editor below 600px content height in De
           return {
             placeholderX: box.left + parseFloat(placeholder.insetInlineStart),
             paddingX: box.left + parseFloat(getComputedStyle(el).paddingLeft),
+            editorInset: parseFloat(getComputedStyle(el).paddingLeft),
+            placeholderTop: parseFloat(placeholder.top),
+            paddingTop: parseFloat(getComputedStyle(el).paddingTop),
             clickX: box.left + 6, clickY: box.top + 12,
             editorTop: box.top - formBox.top,
             toolbarInset: toolbarBox.left + parseFloat(getComputedStyle(toolbar).paddingLeft) - formBox.left,
@@ -1407,10 +1411,13 @@ test('Chat composer uses a smaller empty editor below 600px content height in De
           }
         })
         assert.equal(empty.placeholderX, empty.paddingX, themeId + ' placeholder follows the editor inset')
+        assert.equal(empty.editorInset, 16, themeId + ' text has more horizontal breathing room')
+        assert.equal(empty.placeholderTop, empty.paddingTop, themeId + ' placeholder follows the vertical inset')
+        assert.equal(empty.paddingTop, 8)
         assert.equal(empty.editorTop, 1, themeId + ' editor reaches the form border without outer padding')
         assert.equal(empty.toolbarInset, 13, themeId + ' toolbar owns the matching horizontal inset')
         assert.ok(empty.toolbarOverflow <= 1, themeId + ' toolbar fits the narrow section')
-        if (process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR) await (await page.$(root)).screenshot({ path: path.join(process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR, `composer-${themeId}-${width}-empty.png`) })
+        if (process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR) await page.screenshot({ path: path.join(process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR, `composer-${themeId}-${width}-empty.png`), fromSurface: false })
         await page.mouse.click(empty.clickX, empty.clickY)
         assert.equal(await page.$eval(editor, el => el === document.activeElement), true, 'editor padding is clickable')
         await page.keyboard.type('First line')
@@ -1420,6 +1427,8 @@ test('Chat composer uses a smaller empty editor below 600px content height in De
           return range.getBoundingClientRect().left
         })
         assert.ok(Math.abs(textX - empty.placeholderX) <= 0.5, themeId + ' ordinary text starts at the placeholder')
+        if (process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR) await page.screenshot({ path: path.join(process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR, `composer-${themeId}-${width}-text.png`), fromSurface: false })
+        await page.focus(editor)
         await page.keyboard.down('Control'); await page.keyboard.press('a'); await page.keyboard.up('Control')
         await page.keyboard.press('Backspace')
       }

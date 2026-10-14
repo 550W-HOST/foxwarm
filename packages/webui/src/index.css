@@ -1345,8 +1345,8 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-textarea
   content: attr(data-placeholder);
   pointer-events: none;
   position: absolute;
-  inset-inline-start: 0.75rem;
-  top: 0.25rem;
+  inset-inline-start: 1rem;
+  top: 0.5rem;
 }
 
 .foxwarm-composer-caret-anchor {
