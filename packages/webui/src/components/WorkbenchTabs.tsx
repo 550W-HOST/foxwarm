@@ -5,6 +5,7 @@ import { SortableContext, horizontalListSortingStrategy, useSortable } from '@dn
 import { ClipboardList, Code2, FileText, MessageSquareText, History, Settings, SquareTerminal, Users, X } from 'lucide-react'
 import { useWorkbenchTabMenu, type WorkbenchTabMenuOptions } from './useWorkbenchTabMenu'
 import type { WorkbenchTab } from '../workbench/types'
+import WorkbenchPaneDragArea from './WorkbenchPaneDragArea'
 
 export interface WorkbenchTabRevealRequest {
   tabId: string
@@ -17,6 +18,7 @@ interface WorkbenchTabsProps extends WorkbenchTabMenuOptions {
   focused?: boolean
   toolbar?: ReactNode
   dragEnabled?: boolean
+  paneDragEnabled?: boolean
   onSelectTab: (tabId: string) => void
 }
 
@@ -160,11 +162,13 @@ function TabStripRow({
   return (
     <div
       ref={setNodeRef}
+      data-workbench-pane-drag-blank
       className={`foxwarm-workbench-tab-drop-row relative pb-px ${isOver ? 'rounded-lg bg-fw-accent/5 dark:bg-fw-accent/10' : ''}`}
     >
       <SortableContext items={tabs.map((tab) => tab.id)} strategy={horizontalListSortingStrategy}>
         <div
           ref={containerRef}
+          data-workbench-pane-drag-blank
           onWheel={handleWheel}
           onScroll={updateScrollMetrics}
           onMouseDownCapture={(event) => {
@@ -320,6 +324,7 @@ export default function WorkbenchTabs({
   focused: _focused = false,
   toolbar,
   dragEnabled = true,
+  paneDragEnabled = false,
   onSelectTab,
   onCloseTab,
   onKeepTab,
@@ -331,9 +336,9 @@ export default function WorkbenchTabs({
   const { openContextMenu, menu } = useWorkbenchTabMenu({ tabs, onCloseTab, onKeepTab, onMoveTabToNewWindow, canMoveTabToNewWindow, onCloseOtherTabs, onCloseAllTabs })
 
   return (
-    <div className="foxwarm-workbench-tab-strip overflow-hidden border-b border-fw-border bg-fw-neutral-surface px-3 pt-2 dark:border-fw-border dark:bg-fw-canvas">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
+    <WorkbenchPaneDragArea paneId={paneId} enabled={paneDragEnabled} className="foxwarm-workbench-tab-strip overflow-hidden border-b border-fw-border bg-fw-neutral-surface px-3 pt-2 dark:border-fw-border dark:bg-fw-canvas">
+      <div data-workbench-pane-drag-blank className="flex items-start justify-between gap-3">
+        <div data-workbench-pane-drag-blank className="min-w-0 flex-1">
           <TabStripRow
             paneId={paneId}
             dragEnabled={dragEnabled}
@@ -347,13 +352,13 @@ export default function WorkbenchTabs({
           />
         </div>
         {toolbar && (
-          <div className="foxwarm-workbench-tab-toolbar flex shrink-0 items-center gap-1">
+          <div data-workbench-pane-drag-blank className="foxwarm-workbench-tab-toolbar flex shrink-0 items-center gap-1">
             {toolbar}
           </div>
         )}
       </div>
       {menu}
-    </div>
+    </WorkbenchPaneDragArea>
   )
 }
 

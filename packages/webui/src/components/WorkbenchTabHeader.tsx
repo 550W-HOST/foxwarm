@@ -1,12 +1,14 @@
-import { createContext, useContext, type MouseEvent, type ReactNode } from 'react'
+import { createContext, useContext, type HTMLAttributes, type MouseEvent, type ReactNode } from 'react'
 import { useDraggable } from '@dnd-kit/core'
 import { X } from 'lucide-react'
 import type { WorkbenchTab } from '../workbench/types'
+import WorkbenchPaneDragArea from './WorkbenchPaneDragArea'
 
 export interface WorkbenchTabHeaderValue {
   tab: WorkbenchTab
   paneId: string
   dragEnabled: boolean
+  canMovePane: boolean
   paneControls: ReactNode
   onCloseTab: (tabId: string) => void
   onKeepTab: (tabId: string) => void
@@ -17,6 +19,11 @@ export interface WorkbenchTabHeaderValue {
 const WorkbenchTabHeaderContext = createContext<WorkbenchTabHeaderValue | null>(null)
 export const WorkbenchTabHeaderProvider = WorkbenchTabHeaderContext.Provider
 export const useWorkbenchTabHeader = () => useContext(WorkbenchTabHeaderContext)
+
+export function WorkbenchHeaderDragArea(props: HTMLAttributes<HTMLDivElement>) {
+  const header = useWorkbenchTabHeader()
+  return <WorkbenchPaneDragArea {...props} paneId={header?.paneId || null} enabled={!!header?.canMovePane && header.dragEnabled} />
+}
 
 export function WorkbenchPaneControls() {
   const header = useWorkbenchTabHeader()

@@ -304,7 +304,7 @@ test('vertical split collapse remains a horizontal tab bar after reload and expo
     await page.waitForSelector('[data-workbench-collapsed-tab="chat:e2e-a"]')
     await page.click(':is([data-pane-id="pane-other"], [data-workbench-content-pane="pane-other"]) button[title="Close pane"]')
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.kind === 'pane')
-    assert.equal(await page.$('[data-workbench-pane-drag-handle]'), null, 'closing the other pane removes the whole-pane drag control')
+    assert.equal(await page.$('[data-workbench-pane-drag-area]'), null, 'closing the other pane removes the whole-pane drag control')
     assert.equal(await page.$('button[title="Collapse pane"]'), null)
     assert.equal((await state(page)).root.collapsed, false, 'moving the closed pane tab into the remaining pane activates and expands it')
     await page.waitForSelector('[data-tab-id="system:agents"]')
@@ -319,7 +319,7 @@ test('a persisted lone collapsed pane keeps its tab expansion entry without pane
   const page = await openFixture({ tabs: [chat('e2e-a', false)], layout })
   try {
     await page.waitForSelector('[data-workbench-collapsed-tab="chat:e2e-a"]')
-    assert.equal(await page.$('[data-workbench-pane-drag-handle]'), null)
+    assert.equal(await page.$('[data-workbench-pane-drag-area]'), null)
     assert.equal(await page.$('button[title="Collapse pane"]'), null)
     assert.ok(await page.$('button[title="Expand pane"]'))
     assert.equal(await page.$('[role="textbox"][aria-label="Message"]'), null)
@@ -404,13 +404,27 @@ function findFixturePane(root, paneId) {
   return root.children.map(child => findFixturePane(child, paneId)).find(Boolean) || null
 }
 
+async function paneDragPoint(page, paneId) {
+  return page.evaluate(paneId => {
+    const area = document.querySelector(`[data-workbench-pane-drag-area="${paneId}"]`)
+    if (!area) throw new Error(`Expected a pane header drag area: ${paneId}`)
+    const rect = area.getBoundingClientRect()
+    for (const y of [rect.top + rect.height / 2, rect.top + 8, rect.bottom - 8]) {
+      for (const x of [rect.left + rect.width / 2, rect.left + 8, rect.right - 8, rect.left + rect.width / 4]) {
+        const hit = document.elementFromPoint(x, y)
+        if (hit?.matches('[data-workbench-pane-drag-area], [data-workbench-pane-drag-blank]') && hit.closest('[data-workbench-pane-drag-area]') === area) return { x, y }
+      }
+    }
+    throw new Error(`Expected actual empty space in the pane header: ${paneId}`)
+  }, paneId)
+}
+
 async function dragPane(page, sourcePaneId, targetPaneId, edge, { cancel = false, duringDrag } = {}) {
-  const source = await page.$(`[data-workbench-pane-drag-handle="${sourcePaneId}"]`)
-  const sourceBox = await source.boundingBox()
-  assert.ok(sourceBox)
-  await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2)
+  await waitForTabPaint(page)
+  const start = await paneDragPoint(page, sourcePaneId)
+  await page.mouse.move(start.x, start.y)
   await page.mouse.down()
-  await page.mouse.move(sourceBox.x + sourceBox.width / 2 + 12, sourceBox.y + sourceBox.height / 2, { steps: 4 })
+  await page.mouse.move(start.x + 12, start.y, { steps: 4 })
   await page.waitForSelector('[data-pane-drag-overlay]')
   if (duringDrag) await duringDrag()
   const target = await page.$(`:is([data-pane-id="${targetPaneId}"], [data-workbench-content-pane="${targetPaneId}"]) [data-workbench-pane-drop="${edge}"]`)
@@ -437,7 +451,7 @@ test('whole-pane dragging preserves its tabs and selection across splits, includ
   }
   const page = await openFixture({ tabs: [system, chat('e2e-a'), chat('e2e-b', false), { id: 'system:setup', type: 'setup', title: 'Setup' }], layout, responsiveChat: true })
   try {
-    await page.waitForSelector('[data-workbench-pane-drag-handle="pane-main"]')
+    await page.waitForSelector('[data-workbench-pane-drag-area="pane-main"]')
     await page.waitForSelector('[data-workbench-content-tab="chat:e2e-b"] [data-chat-message-anchor-key]')
     await page.evaluate(() => {
       window.__paneMoveChats = [...document.querySelectorAll('.foxwarm-chat-root')]
@@ -646,7 +660,7 @@ test('single pane with one tab omits its strip without leaving header height; Si
     await page.waitForSelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [role="textbox"][aria-label="Message"]')
     assert.equal(await page.$(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-tab-id]'), null)
     assert.equal(await page.$(paneButtons), null)
-    assert.equal(await page.$('[data-workbench-pane-drag-handle], [data-workbench-pane-collapse]'), null, 'a lone single-tab pane omits whole-pane drag and collapse controls')
+    assert.equal(await page.$('[data-workbench-pane-drag-area], [data-workbench-pane-collapse]'), null, 'a lone single-tab pane omits whole-pane drag and collapse controls')
     assert.ok(await page.$('[data-workbench-tab-handle="chat:e2e-a"]'), 'ordinary tab drag remains available')
     assert.ok(await page.$('[data-workbench-tab-close="chat:e2e-a"]'), 'ordinary tab Close remains available')
     const geometry = await page.$eval('[data-pane-id="pane-main"]', pane => {
@@ -667,7 +681,7 @@ test('single pane with one tab omits its strip without leaving header height; Si
     await page.waitForSelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-tab-id="chat:e2e-b"]')
     assert.equal(await page.$$eval(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-tab-id]', nodes => nodes.length), 2)
     assert.equal(await page.$$eval(paneButtons, nodes => nodes.length), 2, 'a single-pane workbench omits Close pane rather than disabling it')
-    assert.equal(await page.$('[data-workbench-pane-drag-handle], [data-workbench-pane-collapse]'), null, 'adding another tab does not enable pane drag or collapse')
+    assert.equal(await page.$('[data-workbench-pane-drag-area], [data-workbench-pane-collapse]'), null, 'adding another tab does not enable pane drag or collapse')
     assert.equal((await state(page)).tabsById['chat:e2e-b'].preview, false)
     // Wait for the drag's document-level click guard to clear before a real Close click.
     await page.waitForFunction(() => {
@@ -905,7 +919,7 @@ test('each single-tab pane uses its header while multi-tab panes retain their st
     await page.evaluate(() => window.foxwarmTest.switchToSession('e2e-b'))
     await page.waitForSelector('[data-workbench-tab-handle="chat:e2e-b"]')
     assert.equal(await page.$$eval('button[title="Close pane"]', nodes => nodes.length), 2, 'replacing the preview keeps both panes and their Close actions')
-    await page.click('[data-workbench-tab-handle="chat:e2e-b"]', { clickCount: 2 })
+    await page.click('[data-workbench-tab-handle="chat:e2e-b"]', { count: 2 })
     await page.evaluate(() => window.foxwarmTest.switchToSession('e2e-c'))
     await page.waitForSelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-tab-id="chat:e2e-c"]')
     assert.equal(await page.$$eval(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-tab-id]', nodes => nodes.length), 2)
@@ -917,6 +931,69 @@ test('each single-tab pane uses its header while multi-tab panes retain their st
     assert.ok(await page.$('[data-workbench-tab-handle="chat:e2e-b"]'))
     assert.equal(await page.$$eval('button[title="Close pane"]', nodes => nodes.length), 2)
   } finally { await page.close() }
+})
+
+test('sole-tab header whitespace moves its pane without a Move control or dragging header content', async () => {
+  const terminal = { id: 'term-blank-header', nodeId: 'master', cwd: '/workspace', pid: 42, cols: 80, rows: 24 }
+  const tabs = [chat('e2e-a', false), system,
+    { id: 'system:search', type: 'search', title: 'History' },
+    { id: 'system:logs', type: 'logs', title: 'Logs' },
+    { id: 'system:tasks', type: 'tasks', title: 'Tasks' },
+    { id: 'terminal:term-blank-header', type: 'terminal', title: 'Terminal', terminalId: terminal.id, cwd: terminal.cwd, nodeId: terminal.nodeId }]
+  for (const tab of tabs) {
+    const layout = { id: 'split-main', kind: 'split', direction: 'row', sizes: [50, 50], children: [
+      { id: 'pane-main', kind: 'pane', tabIds: [tab.id], activeTabId: tab.id },
+      { id: 'pane-other', kind: 'pane', tabIds: ['chat:e2e-b'], activeTabId: 'chat:e2e-b' },
+    ] }
+    const page = await openFixture({ tabs: [tab, chat('e2e-b', false)], activeTabId: tab.id, layout, responsiveChat: true, terminal: tab.type === 'terminal' ? terminal : null })
+    try {
+      await page.waitForSelector('[data-workbench-pane-drag-area="pane-main"]')
+      assert.equal(await page.$('[data-workbench-pane-drag-handle], button[title="Drag pane"]'), null)
+      assert.equal(await page.$$eval('[data-workbench-content-pane="pane-main"] [data-workbench-pane-controls] button', buttons => buttons.length), 2, 'only Collapse and Close occupy the pane toolbar')
+      const before = await state(page)
+      await dragPane(page, 'pane-main', 'pane-other', 'right', { cancel: true })
+      assert.deepEqual((await state(page)).root, before.root)
+      assert.deepEqual((await state(page)).tabsById, before.tabsById)
+
+      if (tab.type === 'logs') {
+        const input = await (await page.$('[data-workbench-content-pane="pane-main"] input[aria-label="Log date and time"]')).boundingBox()
+        await page.mouse.move(input.x + input.width / 2, input.y + input.height / 2)
+        await page.mouse.down()
+        await page.mouse.move(input.x + input.width / 2 + 12, input.y + input.height / 2, { steps: 4 })
+        assert.equal(await page.$('[data-pane-drag-overlay]'), null, 'header input remains an input rather than a pane drag activator')
+        await page.mouse.up()
+      }
+      if (tab.type === 'chat') {
+        const title = await page.evaluate(() => {
+          const area = document.querySelector('[data-workbench-pane-drag-area="pane-main"]')
+          const text = area.querySelector('.truncate.text-lg')
+          const rect = text.getBoundingClientRect()
+          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+        })
+        await page.mouse.move(title.x, title.y)
+        await page.mouse.down()
+        await page.mouse.move(title.x + 12, title.y, { steps: 4 })
+        assert.equal(await page.$('[data-pane-drag-overlay]'), null, 'header title text is not blank drag space')
+        await page.mouse.up()
+        const body = await (await page.$('[data-workbench-content-pane="pane-main"] .foxwarm-chat-messages')).boundingBox()
+        await page.mouse.move(body.x + body.width / 2, body.y + body.height / 2)
+        await page.mouse.down()
+        await page.mouse.move(body.x + body.width / 2 + 12, body.y + body.height / 2, { steps: 4 })
+        assert.equal(await page.$('[data-pane-drag-overlay]'), null, 'body content does not start whole-pane dragging')
+        await page.mouse.up()
+        const collapse = await page.$('[data-workbench-pane-collapse="pane-main"]')
+        assert.ok(await collapse.$('svg.lucide-minus'))
+        const box = await collapse.boundingBox()
+        await page.mouse.move(box.x + box.width / 2 - 4, box.y + box.height / 2)
+        await page.mouse.down()
+        await page.mouse.move(box.x + box.width / 2 + 4, box.y + box.height / 2, { steps: 4 })
+        assert.equal(await page.$('[data-pane-drag-overlay]'), null, 'Collapse remains an ordinary button across the drag threshold')
+        await page.mouse.up()
+        await page.waitForSelector('[data-workbench-collapsed-pane="true"]')
+        assert.equal(await page.$('[data-workbench-pane-collapse="pane-main"] svg.lucide-minus'), null, 'Expand keeps its distinct icon')
+      }
+    } finally { await page.close() }
+  }
 })
 
 test('old preview records disappear without removing kept or system tabs; canonical previews survive reload', async () => {
@@ -2003,7 +2080,7 @@ test('Footer Terminal is a reusable bottom pane that collapses without PTY delet
     assert.ok(await page.evaluate(() => window.__terminalRoot.isConnected), 'whole-pane docking retains Terminal DOM')
     assert.equal(await page.evaluate(() => window.__terminalConnections.length), await page.evaluate(() => window.__terminalConnectionsBefore), 'layout movement does not reconnect the PTY')
     assert.equal((await state(page)).root.direction, 'row')
-    assert.ok(await page.$(`[data-workbench-pane-drag-handle="${terminalPane.id}"]`))
+    assert.ok(await page.$(`[data-workbench-pane-drag-area="${terminalPane.id}"]`))
     await clickReadyControl(page, control)
     await page.waitForSelector(`[data-pane-id="${terminalPane.id}"][data-workbench-collapsed-pane="true"]`)
     await clickReadyControl(page, control)

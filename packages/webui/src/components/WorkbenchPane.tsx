@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react'
-import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
-import { Columns2, Move, PanelLeftClose, PanelLeftOpen, PanelTopClose, PanelTopOpen, Rows2, X } from 'lucide-react'
+import { useDndContext, useDroppable } from '@dnd-kit/core'
+import { Columns2, Minus, PanelLeftOpen, PanelTopOpen, Rows2, X } from 'lucide-react'
 import WorkbenchTabs, { type WorkbenchTabRevealRequest } from './WorkbenchTabs'
+import WorkbenchPaneDragArea from './WorkbenchPaneDragArea'
 import type { WorkbenchTab } from '../workbench/types'
 
 export interface WorkbenchPaneProps {
@@ -52,34 +53,11 @@ function ToolbarButton({ title, disabled, onClick, children, collapseMarker }: {
   )
 }
 
-function PaneDragHandle({ paneId }: { paneId: string }) {
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: `pane-drag:${paneId}`,
-    data: { type: 'pane', paneId },
-  })
-  return (
-    <button
-      ref={setNodeRef}
-      type="button"
-      {...attributes}
-      {...listeners}
-      onMouseDown={(event) => event.stopPropagation()}
-      data-workbench-pane-drag-handle={paneId}
-      className={`${toolbarButtonClass} touch-none select-none cursor-grab active:cursor-grabbing ${isDragging ? 'opacity-50' : ''}`}
-      title="Drag pane"
-      aria-label="Drag pane"
-    >
-      <Move className="h-4 w-4" />
-    </button>
-  )
-}
-
 export function WorkbenchPaneToolbar({
   paneId,
   collapsed,
   verticalRail,
   canClosePane,
-  dragEnabled,
   onSetCollapsed,
   onClosePane,
 }: {
@@ -87,22 +65,20 @@ export function WorkbenchPaneToolbar({
   collapsed: boolean
   verticalRail: boolean
   canClosePane: boolean
-  dragEnabled: boolean
   onSetCollapsed: (paneId: string, collapsed: boolean) => void
   onClosePane: () => void
 }) {
   return (
     <>
-      {canClosePane && dragEnabled && <PaneDragHandle paneId={paneId} />}
       {(canClosePane || collapsed) && (
         <ToolbarButton
           title={collapsed ? 'Expand pane' : 'Collapse pane'}
           collapseMarker={paneId}
           onClick={() => onSetCollapsed(paneId, !collapsed)}
         >
-          {verticalRail
-            ? collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />
-            : collapsed ? <PanelTopOpen className="h-4 w-4" /> : <PanelTopClose className="h-4 w-4" />}
+          {collapsed
+            ? verticalRail ? <PanelLeftOpen className="h-4 w-4" /> : <PanelTopOpen className="h-4 w-4" />
+            : <Minus className="h-4 w-4" />}
         </ToolbarButton>
       )}
       {canClosePane && (
@@ -181,14 +157,15 @@ export default function WorkbenchPane({
       collapsed={collapsed}
       verticalRail={verticalRail}
       canClosePane={canClosePane}
-      dragEnabled={dragEnabled}
       onSetCollapsed={onSetCollapsed}
       onClosePane={onClosePane}
     />
   )
 
   return (
-    <div
+    <WorkbenchPaneDragArea
+      paneId={paneId}
+      enabled={collapsed && canClosePane && dragEnabled}
       data-pane-id={paneId}
       data-workbench-collapsed-pane={collapsed ? 'true' : undefined}
       className={`foxwarm-workbench-panel relative flex min-h-0 min-w-0 overflow-hidden border ${containerChromeClass} ${collapsed ? verticalRail ? 'h-full w-12 flex-col' : 'h-10 w-full flex-row items-center' : 'h-full flex-col'}`}
@@ -200,6 +177,7 @@ export default function WorkbenchPane({
             role="tablist"
             aria-label="Pane tabs"
             aria-orientation={verticalRail ? 'vertical' : 'horizontal'}
+            data-workbench-pane-drag-blank
             className={`flex min-h-0 min-w-0 flex-1 gap-1 bg-fw-neutral-surface dark:bg-fw-canvas ${verticalRail ? 'flex-col items-center overflow-y-auto px-1 py-2' : 'items-center overflow-x-auto px-2'}`}
           >
             {tabs.map((tab) => (
@@ -221,7 +199,7 @@ export default function WorkbenchPane({
               </button>
             ))}
           </div>
-          <div className={`flex shrink-0 items-center gap-1 p-1 ${verticalRail ? 'flex-col' : ''}`}>
+          <div data-workbench-pane-drag-blank className={`flex shrink-0 items-center gap-1 p-1 ${verticalRail ? 'flex-col' : ''}`}>
             {paneControls}
           </div>
         </>
@@ -235,6 +213,7 @@ export default function WorkbenchPane({
               revealRequest={revealRequest}
               focused={focused}
               dragEnabled={dragEnabled}
+              paneDragEnabled={canClosePane && dragEnabled}
               toolbar={(
                 <>
                   {showPaneControls && tabs.length !== 1 && (
@@ -265,6 +244,6 @@ export default function WorkbenchPane({
         </>
       )}
       {(collapsed || !activeTabId) && <PaneDropTargets paneId={paneId} />}
-    </div>
+    </WorkbenchPaneDragArea>
   )
 }

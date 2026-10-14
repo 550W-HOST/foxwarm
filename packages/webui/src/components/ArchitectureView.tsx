@@ -1,4 +1,4 @@
-import { WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
+import { WorkbenchHeaderDragArea, WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Activity, ArrowLeft, Bot, ChevronRight, CircleDot, Clock3, ExternalLink, FileText, FolderOpen, GitFork, Layers3, ListFilter, MemoryStick, MessageSquare, Network, Save, Search, Server, Shield, Trash2 } from 'lucide-react'
@@ -961,7 +961,7 @@ export default function ArchitectureView({
     <div className="h-full overflow-y-auto bg-fw-canvas">
       <div className="mx-auto max-w-[1500px] p-4 md:p-5 lg:p-6">
         <header className="mb-4">
-          <div className="flex flex-wrap items-start justify-between gap-4">
+          <WorkbenchHeaderDragArea className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-3">
                 {tabHeader ? <WorkbenchTabClose className="inline-flex items-center justify-center rounded-lg p-2 text-fw-text hover:bg-fw-hover" /> : onBack ? (
@@ -986,7 +986,7 @@ export default function ArchitectureView({
               {nodeTargetsError ? renderMetaBadge('node status unavailable', 'warning') : null}
               <WorkbenchPaneControls />
             </div>
-          </div>
+          </WorkbenchHeaderDragArea>
 
           {surface !== 'nodes' ? <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
             <SummaryMetric label="Agents" value={agentRegistry.length || summary.agentCount} detail="persistent workspaces" icon={<Bot className="h-4 w-4" />} onClick={() => setSurface('agents')} active={surface === 'agents'} />

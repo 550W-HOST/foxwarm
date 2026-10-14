@@ -38,7 +38,7 @@ Table/Board and the filter row use the shared centered reading column and outer 
 
 ## Workbench integration
 
-`system:tasks` uses the existing singleton activation, hash restoration, storage normalization, close fallback, split panes, tab menus and top-level popup flow. Navigation placement is defined by [D-webui-tasks-navigation](#d-webui-tasks-navigation). Code's embedded Sidebar opens the same-origin Tasks popup without adding a host bridge or embedded target kind. The sole-tab header uses the ordinary workbench icon/Close controls; popup leaves have no workbench controls.
+`system:tasks` uses the existing singleton activation, hash restoration, storage normalization, close fallback, split panes, tab menus and top-level popup flow. Navigation placement is defined by [D-webui-tasks-navigation](#d-webui-tasks-navigation). Code's embedded Sidebar opens the same-origin Tasks popup without adding a host bridge or embedded target kind. The sole-tab heading uses the ordinary Workbench icon/Close controls and [empty-header pane movement](./webui-workbench.md#d-workbench-pane-drag); popup leaves have no Workbench controls.
 
 ## Design decisions
 

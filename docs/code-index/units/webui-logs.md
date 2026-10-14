@@ -60,4 +60,4 @@ History begins at the file tail and stays bounded by bytes. Live output follows 
 
 ## Workbench header integration
 
-The normal sole-tab header close/icon controls use [Single-tab headers](./webui-workbench.md#single-tab-headers). Standalone and embedded leaf roots retain their existing navigation and do not own Workbench tabs.
+The normal sole-tab header controls and empty-header pane movement use [Single-tab headers](./webui-workbench.md#single-tab-headers). Standalone and embedded leaf roots retain their existing navigation and do not own Workbench tabs.
