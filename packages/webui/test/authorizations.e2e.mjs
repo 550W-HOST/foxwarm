@@ -49,8 +49,7 @@ async function login(page, url, token) {
   await page.waitForSelector('#token')
   await page.type('#token', token)
   await Promise.all([page.waitForNavigation({ waitUntil: 'networkidle0' }), page.click('#loginForm button')])
-  await page.waitForSelector('[data-setup-tab="authorizations"]')
-  await page.click('[data-setup-tab="authorizations"]')
+  await page.waitForSelector('[data-authorizations-fixture]')
 }
 async function configure(page, mode, credentials) {
   await articleButton(page, 'Configure')
@@ -96,7 +95,7 @@ for (const browserName of ['chromium', 'firefox']) {
       await login(page, env.url, 'fixture-admin')
       await page.waitForSelector('article')
       assert((await page.$eval('article', element => element.textContent)).includes('Static authentication'))
-      assert((await page.$eval('[data-setup-section="authorizations"]', element => element.textContent)).includes('/preview/api/mcp/oauth/callback'))
+      assert((await page.$eval('[data-authorizations-fixture]', element => element.textContent)).includes('/preview/api/mcp/oauth/callback'))
       await configure(page, 'oauth')
       await authorize(page)
       const dcr = (await api(page, 'test/state')).data
@@ -146,7 +145,7 @@ for (const browserName of ['chromium', 'firefox']) {
       const scopedContext = await browser.createBrowserContext()
       const scopedPage = await scopedContext.newPage()
       await login(scopedPage, env.url, 'fixture-scoped')
-      await scopedPage.waitForFunction(() => document.querySelector('[data-setup-section="authorizations"]')?.textContent.includes('Forbidden'))
+      await scopedPage.waitForFunction(() => document.querySelector('[data-authorizations-fixture]')?.textContent.includes('Forbidden'))
       assert.equal((await api(scopedPage, 'setup/authorizations')).status, 403)
       assert.equal((await api(scopedPage, 'setup/authorizations/Fixture%20MCP/authorize', {})).status, 403)
       assert.equal((await api(scopedPage, 'mcp/oauth/complete', { state: 'cannot-create-authority', code: 'not-a-code' })).status, 403)
@@ -154,7 +153,7 @@ for (const browserName of ['chromium', 'firefox']) {
 
       await api(page, 'test/missing-url', {})
       await page.click('button[aria-label="Refresh authorizations"]')
-      await page.waitForFunction(() => document.querySelector('[data-setup-section="authorizations"]')?.textContent.includes('Set url in Config'))
+      await page.waitForFunction(() => document.querySelector('[data-authorizations-fixture]')?.textContent.includes('Set url in Config'))
       assert.equal(await page.$eval('article', element => [...element.querySelectorAll('button')].find(button => /^(Authorize|Reauthorize)$/.test(button.textContent.trim())).disabled), true)
     } finally { await browser.close(); await env.close() }
   })

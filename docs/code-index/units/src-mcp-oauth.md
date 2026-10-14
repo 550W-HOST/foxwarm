@@ -1,11 +1,15 @@
 # Unit: outbound MCP OAuth
 
 Files: `src/mcpOAuth.ts`, `src/mcpOAuthHttp.ts`, `src/mcpOAuthRoutes.ts`, `src/mcpOAuth.test.ts`, `src/mcpOAuthTestFixture.ts`, `src/mcpOAuthUiTestMain.ts`
-Secondary files: `src/mcpClient.ts`, `src/mcpCallerConnections.ts`, `src/mcpExternalService.ts`, `src/index.ts`, `src/configFile.ts`, `packages/webui/src/components/AuthorizationsPanel.tsx`
+Secondary files: `src/mcpClient.ts`, `src/mcpCallerConnections.ts`, `src/mcpExternalService.ts`, `src/index.ts`, `src/configFile.ts`, `packages/webui/src/components/AuthorizationsPanel.tsx`, `packages/webui/test/authorizationsHarness.html`, `packages/webui/test/authorizations.e2e.mjs`
 
 ## Purpose
 
 Main-owned OAuth client authorization for configured outbound HTTP MCP servers. One administrator-approved third-party account is shared by the instance for a named server; existing caller/tool permission checks remain authoritative. The service is not an inbound authorization server, a general credential vault or an internal Session owner.
+
+## Current management surface
+
+[2026-10-14] Setup no longer exposes the Authorizations tab or mounts its component. The retained MCP-only `AuthorizationsPanel` is exercised directly by its dedicated test harness, not by a hidden production route. Existing MCP configuration, persisted grants, administrator APIs and callback capability remain intact. No replacement MCP management page or inbound authorization service is exposed by this change.
 
 ## Stable symbols
 
@@ -64,10 +68,10 @@ Backend paths remain deployment-relative behind the existing prefix proxy; gener
 
 ## Validation
 
-Real loopback AS/SDK resource fixtures cover pre-registration, CIMD and DCR, state/issuer/configuration rejection, S256/resource validation, persisted grant use by a fresh process, two distinct caller contexts sharing rotating credentials, scope errors, notifications, in-flight grant replacement, disconnect, secret-bearing output rejection, and static/SSE/auto regressions. Browser fixtures exercise actual login cookies and Setup in Chromium and Firefox, with a committed cross-site consent document, TLS path prefix, all three registration paths, fixed completion without an opener, missing public URL and scoped-identity denial. They use only owned local services and a fixture-specific Vite cache.
+Real loopback AS/SDK resource fixtures cover pre-registration, CIMD and DCR, state/issuer/configuration rejection, S256/resource validation, persisted grant use by a fresh process, two distinct caller contexts sharing rotating credentials, scope errors, notifications, in-flight grant replacement, disconnect, secret-bearing output rejection, and static/SSE/auto regressions. Browser fixtures exercise actual login cookies and the retained authorization component directly in Chromium and Firefox, with a committed cross-site consent document, TLS path prefix, all three registration paths, fixed completion without an opener, missing public URL and scoped-identity denial. They use only owned local services and a fixture-specific Vite cache.
 
 ## Design decisions
 
 ### D-mcp-outbound-instance-oauth
 
-[2026-10-14] Administrators configure OAuth through Setup Authorizations and explicitly share the selected named server's third-party account with the instance. Existing callers use it only through their original tool permissions; they keep independent remote MCP contexts. Use startup `config.url` for public callback and client metadata URLs. Provide outbound OAuth before any inbound consent/scopes service, keep current 2025 MCP transports, and do not add generic users, roles or a credential-vault interface.
+[2026-10-14, initial implementation; Setup entry later withdrawn as noted above] Administrators originally configured OAuth through Setup Authorizations and explicitly share the selected named server's third-party account with the instance. Existing callers use it only through their original tool permissions; they keep independent remote MCP contexts. Use startup `config.url` for public callback and client metadata URLs. Provide outbound OAuth before any inbound consent/scopes service, keep current 2025 MCP transports, and do not add generic users, roles or a credential-vault interface.

@@ -5,9 +5,11 @@
 <script type="module">
 import React from 'react'
 import { createRoot } from 'react-dom/client'
-import SetupView from '/src/components/SetupView.tsx'
+import AuthorizationsPanel from '/src/components/AuthorizationsPanel.tsx'
 import '/src/index.css'
-createRoot(document.getElementById('root')).render(React.createElement(SetupView))
+createRoot(document.getElementById('root')).render(React.createElement('main', {
+  'data-authorizations-fixture': true, className: 'mx-auto max-w-5xl p-5',
+}, React.createElement(AuthorizationsPanel)))
 </script>
 </body>
 </html>
