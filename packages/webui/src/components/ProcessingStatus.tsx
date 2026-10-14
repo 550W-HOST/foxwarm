@@ -80,51 +80,48 @@ const ProcessingStatus = memo(function ProcessingStatus({
   const statusLabel = interrupted ? 'Turn interrupted' : visibleRuntimeSummary
   const queueLabel = runtimeStateName === 'idle' ? `${queuedLabel} pending` : queuedContinuation
 
+  const hasQueue = sessionQueueLength > 0
+  const showStatusLabel = showRuntimeStatus || interrupted
+  const label = showStatusLabel
+    ? `${statusLabel}${hasQueue ? ` • ${queueLabel}` : ''}`
+    : hasQueue ? queueLabel : ''
+
   return (
-    <>
-      <div data-processing-status-slot className="h-10 pt-2">
-        {(loading || showRuntimeStatus || interrupted) && (
-          <div className={`min-w-0 ${rowWidthClass}`}>
-            <div
-              className={`inline-flex h-8 max-w-full items-center gap-2 rounded-lg border px-3 ${loading ? 'bg-fw-surface border-fw-border' : tone.surface}`}
-              data-processing-runtime-state={loading ? undefined : interrupted ? 'interrupted' : runtimeStateName}
-              role="status"
-            >
+    <div data-processing-status-slot className={hasQueue ? 'mt-4' : 'flex h-14 items-end'}>
+      {(loading || showRuntimeStatus || interrupted || hasQueue) && (
+        <div className={`flex min-w-0 ${rowWidthClass}`}>
+          <div
+            className={`inline-flex min-w-0 max-w-full items-center gap-2 rounded-lg border px-4 py-2 ${hasQueue ? 'flex-wrap' : ''} ${loading ? 'bg-fw-surface border-fw-border' : tone.surface}`}
+            data-processing-runtime-state={loading ? undefined : interrupted ? 'interrupted' : showRuntimeStatus ? runtimeStateName : undefined}
+            role="status"
+          >
+            <div className="flex min-w-0 max-w-full items-center gap-2">
               {loading ? (
-                <span className="flex items-center gap-2" aria-label="Loading">
+                <span className="flex shrink-0 items-center gap-2" aria-label="Loading">
                   <span className="h-2 w-2 rounded-full bg-fw-text-subtle dark:bg-fw-text-muted animate-bounce" />
                   <span className="h-2 w-2 rounded-full bg-fw-text-subtle dark:bg-fw-text-muted animate-bounce" style={{ animationDelay: '0.1s' }} />
                   <span className="h-2 w-2 rounded-full bg-fw-text-subtle dark:bg-fw-text-muted animate-bounce" style={{ animationDelay: '0.2s' }} />
                 </span>
-              ) : (
-                <>
-                  {runtimeStateName === 'waiting' || interrupted ? (
-                    <span className={`h-2 w-2 shrink-0 rounded-full ${tone.dot}`} data-processing-status-dot="static" />
-                  ) : (
-                    <RuntimeBusySpinner className={`h-4 w-4 shrink-0 ${tone.text}`} />
-                  )}
-                  <span className={`min-w-0 truncate text-sm leading-5 ${tone.text}`} title={statusLabel}>{statusLabel}</span>
-                  {(isActive || interrupted) && (
-                    <div className={`ml-auto flex shrink-0 items-center gap-1 ${tone.controls}`}>
-                      {isActive && onStop && <button type="button" onClick={onStop} className={controlButtonClass}>Stop</button>}
-                      {interrupted && onContinue && <button type="button" onClick={onContinue} className={controlButtonClass}>Continue</button>}
-                    </div>
-                  )}
-                </>
+              ) : showStatusLabel && (
+                runtimeStateName === 'waiting' || interrupted ? (
+                  <span className={`h-2 w-2 shrink-0 rounded-full ${tone.dot}`} data-processing-status-dot="static" />
+                ) : (
+                  <RuntimeBusySpinner className={`h-4 w-4 shrink-0 ${tone.text}`} />
+                )
               )}
+              {label && <span className={`min-w-0 text-sm leading-5 ${hasQueue ? 'break-words' : 'truncate'} ${tone.text}`} title={label}>{label}</span>}
             </div>
-          </div>
-        )}
-      </div>
-      {sessionQueueLength > 0 && (
-        <div data-processing-queue-status role="status" className={`mt-2 min-w-0 ${rowWidthClass}`}>
-          <div className={`inline-flex max-w-full flex-wrap items-center gap-2 rounded-lg border px-3 py-1 text-sm ${tone.surface} ${tone.text}`}>
-            <span className="min-w-0 break-words">{queueLabel}</span>
-            {onRunQueued && <button type="button" onClick={onRunQueued} className={`shrink-0 ${controlButtonClass}`}>Run queued</button>}
+            {(!loading && (isActive || interrupted) || hasQueue) && (
+              <div className={`ml-auto flex shrink-0 items-center gap-1 ${tone.controls}`}>
+                {!loading && isActive && onStop && <button type="button" onClick={onStop} className={controlButtonClass}>Stop</button>}
+                {interrupted && onContinue && <button type="button" onClick={onContinue} className={controlButtonClass}>Continue</button>}
+                {hasQueue && onRunQueued && <button type="button" onClick={onRunQueued} className={controlButtonClass}>Run queued</button>}
+              </div>
+            )}
           </div>
         </div>
       )}
-    </>
+    </div>
   )
 })
 
