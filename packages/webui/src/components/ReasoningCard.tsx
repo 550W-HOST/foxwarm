@@ -75,7 +75,7 @@ const ReasoningCard = memo(function ReasoningCard({
     <ModelThreadCard
       kind="reasoning"
       label={`Reasoning${parts && parts.length > 1 ? ` ×${parts.length}` : ''}`}
-      headerInfo={reasoningTokens !== undefined ? <span data-reasoning-tokens className="inline-flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums text-fw-text-muted" title="Message reasoning tokens">{reasoningTokens} tokens</span> : undefined}
+      headerInfo={reasoningTokens !== undefined ? <span data-reasoning-tokens className="ml-auto inline-flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums text-fw-text-muted" title="Message reasoning tokens">{reasoningTokens} tokens</span> : undefined}
       preview={collapsedPreview.text}
       previewClassName={collapsedPreview.isOpenAISummary ? 'font-semibold' : 'font-normal'}
       tone={tone}

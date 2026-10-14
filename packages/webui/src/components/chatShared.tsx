@@ -853,14 +853,15 @@ const toolTagToneClasses: Record<ToolTagTone, string> = {
 }
 
 export const ToolTag = ({ name, label = name, tone = 'neutral', className = '', iconName, toolCall = false }: { name: string; label?: string; tone?: ToolTagTone; className?: string; iconName?: string; toolCall?: boolean }) => {
-  const iconOnly = name === 'reasoning' && !toolCall
+  const reasoningTag = name === 'reasoning' && !toolCall
+  const visibleLabel = reasoningTag ? label.match(/×\d+$/)?.[0] : label
   const resolvedIconName = iconName || name
   const Icon = getToolIcon(resolvedIconName, iconName?.startsWith('system-') ? Bell : Wrench)
 
   return (
-    <span role={iconOnly ? 'img' : undefined} title={iconOnly ? label : undefined} aria-label={iconOnly ? label : undefined} data-tool-tag-tone={tone} data-tool-call-tag={toolCall || undefined} className={`inline-flex h-[18px] items-center gap-1 rounded-md border px-1.5 text-[10px] font-semibold ${toolCall ? '' : 'uppercase'} tracking-wide leading-none align-middle ${toolTagToneClasses[tone]} ${className}`.trim()}>
-      <Icon size={12} aria-hidden={iconOnly || undefined} />
-      {!iconOnly && <span>{label}</span>}
+    <span role={reasoningTag ? 'img' : undefined} title={reasoningTag ? label : undefined} aria-label={reasoningTag ? label : undefined} data-tool-tag-tone={tone} data-tool-call-tag={toolCall || undefined} className={`inline-flex h-[18px] items-center gap-1 rounded-md border px-1.5 text-[10px] font-semibold ${toolCall ? '' : 'uppercase'} tracking-wide leading-none align-middle ${toolTagToneClasses[tone]} ${className}`.trim()}>
+      <Icon size={12} aria-hidden={reasoningTag || undefined} />
+      {visibleLabel && <span>{visibleLabel}</span>}
     </span>
   )
 }

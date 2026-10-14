@@ -88,12 +88,12 @@ const ModelThreadCard = ({
         onClick={expanded ? (event) => { event.stopPropagation(); toggle() } : undefined}
       >
         <ToolTag name={kind} iconName={iconName} label={label} tone="neutral" className={`${semanticPrefix}-tag`} />
-        {headerInfo}
         {!expanded && (
           <span ref={previewFade.ref} {...previewFade.overflowFadeProps} className={`${semanticPrefix}-preview ${THREAD_CARD_HEADER_PREVIEW_CLASS} ${previewClassName}`} title={preview}>
             {preview}
           </span>
         )}
+        {headerInfo}
       </div>
       {expanded && children}
     </div>
