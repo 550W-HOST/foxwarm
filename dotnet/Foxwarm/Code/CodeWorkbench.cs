@@ -263,42 +263,53 @@ internal sealed partial class CodeWorkbench
 
     private static string PatchWorkbench(string source)
     {
-        var start = source.IndexOf("async function hvt(", StringComparison.Ordinal);
-        var end =
-            start < 0 ? -1 : source.IndexOf("}function r2o(", start, StringComparison.Ordinal);
-        if (start < 0 || end < 0)
+        // Upstream minification changes names; retain the supported helper shape instead.
+        var functionMatch = Regex.Match(
+            source,
+            """async function [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,[A-Za-z_$][\w$]*\)\{if\(!crypto\.subtle\)throw new Error\("'crypto\.subtle' is not available[^;]+;[\s\S]*?return [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)\}""",
+            RegexOptions.ECMAScript
+        );
+        if (!functionMatch.Success)
             throw new CodeServiceException(
                 "Unavailable",
                 "Code webview assets do not match the supported workbench."
             );
-        var original = source[start..(end + 1)];
-        var patched = Regex.Replace(
+        var original = functionMatch.Value;
+        var patched = new Regex("""if\(!crypto\.subtle\)throw new Error\("[^\"]+"\);""").Replace(
             original,
-            "if\\(!crypto\\.subtle\\)throw new Error\\(\"'crypto\\.subtle' is not available[^;]+;",
-            ""
+            "",
+            1
         );
-        patched = Regex.Replace(
+        patched = new Regex(
+            """crypto\.subtle\.digest\("sha-256",([A-Za-z_$][\w$]*)\)""",
+            RegexOptions.ECMAScript
+        ).Replace(
             patched,
-            "crypto\\.subtle\\.digest\\(\"sha-256\",([A-Za-z_$][\\w$]*)\\)",
-            "(crypto.subtle ? crypto.subtle.digest(\"sha-256\",$1) : globalThis.__foxwarmSha256Digest(\"sha-256\",$1))"
+            "(crypto.subtle ? crypto.subtle.digest(\"sha-256\",$1) : globalThis.__foxwarmSha256Digest(\"sha-256\",$1))",
+            1
         );
         if (patched == original || !patched.Contains("__foxwarmSha256Digest"))
             throw new CodeServiceException(
                 "Unavailable",
                 "Code webview hash fallback is incompatible with these assets."
             );
-        source = source[..start] + patched + source[(end + 1)..];
-        const string probe =
-            "async hasResources(){try{let e=await ao().navigator.clipboard.read();";
-        if (!source.Contains(probe))
+        source = source[..functionMatch.Index] + patched + source[(functionMatch.Index + original.Length)..];
+        var clipboardMatch = Regex.Match(
+            source,
+            """async hasResources\(\)\{try\{let ([A-Za-z_$][\w$]*)=await ([A-Za-z_$][\w$]*)\(\)\.navigator\.clipboard\.read\(\);""",
+            RegexOptions.ECMAScript
+        );
+        if (!clipboardMatch.Success)
             throw new CodeServiceException(
                 "Unavailable",
                 "Code Explorer clipboard assets are incompatible."
             );
-        return source.Replace(
-            probe,
-            "async hasResources(){if(/Firefox\\//.test(navigator.userAgent))return this.resources.length>0;try{let e=await ao().navigator.clipboard.read();"
-        );
+        var clipboard = "async hasResources(){if(/Firefox\\//.test(navigator.userAgent))return this.resources.length>0;try{let "
+            + clipboardMatch.Groups[1].Value
+            + "=await "
+            + clipboardMatch.Groups[2].Value
+            + "().navigator.clipboard.read();";
+        return source[..clipboardMatch.Index] + clipboard + source[(clipboardMatch.Index + clipboardMatch.Length)..];
     }
 
     private static string PatchPre(string source)

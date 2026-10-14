@@ -410,21 +410,27 @@ var FoxwarmFileSystemProvider = class _FoxwarmFileSystemProvider {
 var vscode2 = __toESM(require("vscode"));
 
 // ../../shared/src/configSchemas.ts
-var KNOWN_PROVIDER_TYPES = [
+var CONCRETE_PROVIDER_TYPES = [
   "openai-completions",
   "openai-responses",
   "openai-ws",
   "openai",
-  "anthropic",
+  "anthropic"
+];
+var VIRTUAL_PROVIDER_TYPES = [
   "session-hash",
   "failover"
+];
+var KNOWN_PROVIDER_TYPES = [
+  ...CONCRETE_PROVIDER_TYPES,
+  ...VIRTUAL_PROVIDER_TYPES
 ];
 var knownProviderType = {
   anyOf: [
     { enum: KNOWN_PROVIDER_TYPES },
-    { type: "string" }
+    { const: "" }
   ],
-  description: "Provider protocol or virtual routing strategy. Known Foxwarm values are suggested; custom provider types remain valid."
+  description: "Provider protocol or virtual routing strategy. Omit or leave empty to use the OpenAI protocol."
 };
 var effectiveProviderTypeIs = (providerType) => ({
   anyOf: [
@@ -515,14 +521,20 @@ var modelEffortConfig = {
     }
   }
 };
+var modelDefaultProperties = {
+  contextLimit: { ...positiveInteger, description: "Context limit in tokens." },
+  maxOutput: { ...positiveInteger, description: "Maximum output tokens requested from the provider. Provider-specific extraFields may override this value." },
+  providerImageOutputFormat: { enum: ["webp", "jpeg"], description: "Format used for optimized input images: webp, or jpeg with PNG for transparent images." }
+};
 var modelOverrideProperties = {
+  ...modelDefaultProperties,
   streamContentInactivityTimeoutMs: { type: "integer", minimum: 1, maximum: 2147483647, default: 6e4, description: "Streaming output inactivity timeout in milliseconds. Model overrides provider; default 60000. First-output timeout and explicit caller deadline remain independent. Safety buffering uses at least 600000." },
-  contextLimit: { type: "integer", minimum: 1, description: "Context window size in tokens." },
   effort: modelEffortConfig,
   historyReasoningField: {
     enum: ["reasoning_content", "reasoning"],
     description: "Assistant-history reasoning field used by this Chat Completions provider/model. Defaults to reasoning_content."
   },
+  keepReasoningOnError: { type: "boolean", description: "Override the provider default for retaining completed encrypted reasoning after a failed normal Responses stream. False disables retention; this does not resume provider execution." },
   extraFields: { type: "object", additionalProperties: true, description: "Provider-specific request fields." },
   extraHeaders: { type: "object", additionalProperties: true, description: "Provider-specific HTTP headers. Values are passed through to the canonical backend loader." },
   webSearch: openaiWebSearchConfig,
@@ -566,13 +578,14 @@ var providerObjectEntry = {
         { type: "array", items: modelItem }
       ]
     },
-    contextLimit: modelOverrideProperties.contextLimit,
+    ...modelDefaultProperties,
     streamContentInactivityTimeoutMs: modelOverrideProperties.streamContentInactivityTimeoutMs,
     effort: modelEffortConfig,
     historyReasoningField: modelOverrideProperties.historyReasoningField,
     asyncCompact: { type: "boolean", description: "Whether background compaction may use this provider." },
     requestCompression: { enum: ["gzip", "br"], description: "Optional request-body compression." },
     disallowEmptyResponse: { type: "boolean", description: "Treat a completed response with no content and no tool calls as a retryable failure. Default false accepts it as a normal turn end." },
+    keepReasoningOnError: { type: "boolean", default: false, description: "Provider default for retaining completed encrypted reasoning after a failed normal Responses stream. Model entries may override it; this does not resume provider execution." },
     extraFields: modelOverrideProperties.extraFields,
     extraHeaders: modelOverrideProperties.extraHeaders,
     webSearch: modelOverrideProperties.webSearch,
@@ -587,7 +600,7 @@ var providerObjectEntry = {
       then: {
         required: ["targets"],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "failureThreshold", "cooldownMs"].map((field) => ({ required: [field] })) }
+        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "keepReasoningOnError", "failureThreshold", "cooldownMs"].map((field) => ({ required: [field] })) }
       }
     },
     {
@@ -595,7 +608,7 @@ var providerObjectEntry = {
       then: {
         required: ["targets"],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse"].map((field) => ({ required: [field] })) }
+        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "keepReasoningOnError"].map((field) => ({ required: [field] })) }
       }
     },
     {
@@ -636,6 +649,12 @@ var MODELS_CONFIG_SCHEMA = {
   additionalProperties: true,
   properties: {
     default: { type: "string", minLength: 1, description: "Default concrete or virtual model key." },
+    defaults: {
+      type: "object",
+      additionalProperties: false,
+      description: "Default model settings. Concrete providers and model entries may override these values.",
+      properties: modelDefaultProperties
+    },
     providers: {
       type: "object",
       minProperties: 1,
@@ -797,6 +816,43 @@ var APP_CONFIG_SCHEMA = {
   type: "object",
   additionalProperties: true,
   properties: {
+    url: { type: "string", pattern: "^https?://", description: "Public HTTP(S) base URL used in Node setup instructions. May include a deployment path; requires restart." },
+    access: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        identities: {
+          type: "object",
+          maxProperties: 64,
+          propertyNames: { pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+          additionalProperties: {
+            type: "object",
+            additionalProperties: false,
+            required: ["token", "surfaces"],
+            properties: {
+              token: { type: "string", minLength: 1, maxLength: 4096, pattern: "^[A-Za-z0-9._~+/-]+={0,2}$" },
+              surfaces: {
+                type: "object",
+                additionalProperties: false,
+                minProperties: 1,
+                properties: {
+                  webui: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["sessions"],
+                    properties: {
+                      sessions: { type: "array", minItems: 1, maxItems: 256, uniqueItems: true, items: { type: "string", minLength: 1, maxLength: 512 } }
+                    }
+                  },
+                  mcp: { type: "object", additionalProperties: false, maxProperties: 0 }
+                }
+              }
+            }
+          }
+        }
+      },
+      description: "Startup-only shared WebUI and inbound MCP identities. Declare each surface explicitly and restart after changes."
+    },
     nodeProviders: {
       type: "object",
       propertyNames: { pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
@@ -872,7 +928,7 @@ var APP_CONFIG_SCHEMA = {
     handoffConfirmation: {
       type: "boolean",
       default: false,
-      description: "Require structured confirmation for send_to_session and create_child_session. Defaults to false and requires restart."
+      description: "Require structured handoff recall and confirmation for send_to_session and create_child_session. Defaults to false and requires restart."
     },
     vectorMaintenance: {
       oneOf: [
@@ -904,7 +960,7 @@ var APP_CONFIG_SCHEMA = {
       additionalProperties: true,
       properties: {
         ollamaBaseUrl: { type: "string", description: "Legacy vector endpoint root. Prefer top-level vector.baseUrl." },
-        contextLimit: { type: "integer", minimum: 1 },
+        contextLimit: { ...modelDefaultProperties.contextLimit, deprecated: true, description: "Legacy fallback. Prefer defaults in models.yaml." },
         compactKeepPercent: { type: "number", exclusiveMinimum: 0, maximum: 1, default: 0.3 },
         compactThresholdPercent: { type: "number", exclusiveMinimum: 0, maximum: 1, default: 0.85 },
         compactBlockLevelMinTokens: { type: "integer", minimum: 1 },
@@ -912,8 +968,8 @@ var APP_CONFIG_SCHEMA = {
         compactBlockCandidateFraction: { type: "number", minimum: 0, maximum: 1 },
         compactBlockForceCompactFraction: { type: "number", minimum: 0, maximum: 1 },
         compactMessageForceCompactFraction: { type: "number", minimum: 0, maximum: 1 },
-        maxOutput: { type: "integer", minimum: 1, default: 32768, description: "Maximum provider output tokens. Defaults to 32768." },
-        providerImageOutputFormat: { enum: ["webp", "jpeg"], default: "webp", description: "Format for optimized provider-bound images. Transparent pixels use PNG when JPEG is selected." },
+        maxOutput: { ...modelDefaultProperties.maxOutput, default: 32768, deprecated: true, description: "Legacy fallback. Prefer defaults in models.yaml." },
+        providerImageOutputFormat: { ...modelDefaultProperties.providerImageOutputFormat, default: "webp", deprecated: true, description: "Legacy fallback. Prefer defaults in models.yaml." },
         openaiBaseUrl: { type: "string" },
         openaiApiKey: { type: "string" },
         anthropicBaseUrl: { type: "string" },

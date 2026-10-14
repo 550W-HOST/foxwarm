@@ -515,6 +515,59 @@ public sealed class CodeRoutesTests
         Assert.Equal("{broken workspace", await File.ReadAllTextAsync(workspace));
     }
 
+    [Theory]
+    [InlineData("hvt", "r2o", "e", "ao", "sha-256", true)]
+    [InlineData("$origin9", "encode_2", "$items", "browser_7", "sha-256", true)]
+    [InlineData("changed", "encode", "items", "browser", "SHA-512", false)]
+    public async Task Served_workbench_matches_helper_shapes_not_generated_names(
+        string helper,
+        string encoder,
+        string items,
+        string browser,
+        string algorithm,
+        bool supported
+    )
+    {
+        await using var f = await Fixture.Create();
+        var assets = Path.Combine(f.Temp.Path, "missing-assets");
+        var main = Path.Combine(assets, "out/vs/workbench/workbench.web.main.internal.js");
+        Directory.CreateDirectory(Path.GetDirectoryName(main)!);
+        await File.WriteAllTextAsync(Path.Combine(assets, "out/nls.messages.js"), "// fixture");
+        await File.WriteAllTextAsync(Path.ChangeExtension(main, "css"), "/* fixture */");
+        var original = "async function " + helper
+            + "(a,o){if(!crypto.subtle)throw new Error(\"'crypto.subtle' is not available so webviews will not work.\");"
+            + "let bytes=new TextEncoder().encode(JSON.stringify({parentOrigin:a,salt:o})),hash=await crypto.subtle.digest(\""
+            + algorithm + "\",bytes);return " + encoder + "(hash)}function " + encoder + "(value){return value}";
+        var probe = "async hasResources(){try{let " + items + "=await " + browser + "().navigator.clipboard.read();";
+        const string unrelated = "const other=()=>crypto.subtle.digest(\"sha-256\",otherBytes);";
+        await File.WriteAllTextAsync(main, unrelated + original + "class Clipboard{" + probe + "return true}catch{}return false}}");
+        var result = await f.Client.GetAsync("/vscode-web/static/out/vs/workbench/workbench.web.main.internal.js");
+        if (!supported)
+        {
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, result.StatusCode);
+            return;
+        }
+        Assert.Equal(HttpStatusCode.OK, result.StatusCode);
+        Assert.Contains("no-store", result.Headers.CacheControl!.ToString());
+        var served = await result.Content.ReadAsStringAsync();
+        Assert.StartsWith(unrelated, served);
+        Assert.Contains("async function " + helper + "(a,o){let bytes=", served);
+        Assert.Contains("globalThis.__foxwarmSha256Digest(\"sha-256\",bytes)", served);
+        Assert.Contains("if(/Firefox\\//.test(navigator.userAgent))return this.resources.length>0;try{let " + items + "=await " + browser, served);
+        Assert.Equal(unrelated + original + "class Clipboard{" + probe + "return true}catch{}return false}}", await File.ReadAllTextAsync(main));
+        using var anonymous = new HttpClient { BaseAddress = f.Client.BaseAddress };
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync("/vscode-web/static/out/vs/workbench/workbench.web.main.internal.js")).StatusCode);
+        // Neither an arbitrary async function nor a changed clipboard body is patched.
+        foreach (var changed in new[] {
+            original.Replace("if(!crypto.subtle)", "if(!globalThis.crypto)" ) + "class Clipboard{" + probe + "}}",
+            original + "class Clipboard{" + probe.Replace("clipboard.read()", "clipboard.readText()") + "}}"
+        })
+        {
+            await File.WriteAllTextAsync(main, changed);
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, (await f.Client.GetAsync("/vscode-web/static/out/vs/workbench/workbench.web.main.internal.js")).StatusCode);
+        }
+    }
+
     [Fact]
     public async Task Active_relative_config_and_foreign_origin_error_leave_ordinary_host_running()
     {

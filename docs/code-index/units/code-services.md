@@ -8,7 +8,7 @@ Serves source files and Git metadata through the Code workbench boundary, includ
 
 ## Stable symbols and callers
 
-`CodeWorkbench.Register`; `CodeFileService`; `CodeGitService`.
+`CodeWorkbench.Register`, `PatchWorkbench`, `PatchPre`; `CodeFileService`; `CodeGitService`.
 
 Callers and adjacent boundaries: HttpServer; WebUI workbench components; TerminalRegistry.
 
@@ -20,6 +20,12 @@ Status/content select local `CodeGitService` or `vscode-git`; commit details req
 
 The fixed workspace-root response remains Master-only and authoritative for app/data/config commands, independent of Session-selected Node/cwd. Normal instance-token authentication remains distinct from capability and exact browser bridge checks; there is no generic Origin URL gate or fabricated model caller. [Code integration](../threads/code-integration.md) owns these shared contracts.
 
+## Asset adaptation and version evidence
+
+The authenticated static route adapts only `out/vs/workbench/workbench.web.main.internal.js` from the configured optional asset directory. `PatchWorkbench` matches the Source-supported webview-origin hash helper and clipboard-probe bodies, capturing current generated identifiers rather than pinning minifier names. Only the first supported helper/probe is rewritten; changed shapes fail with an explicit unavailable response. The original asset file is not modified. Capability bootstrap/CSP rewriting, normal auth and deployment-relative URLs keep their existing owners.
+
+The source preparation pin is Code-OSS 1.141.0; route-shape tests do not prove a prepared or running asset version. The owned original-App browser fixture has qualified the existing separately prepared Code-OSS 1.128.0 payload. Newer Code-OSS assets require their own preparation and browser/extension qualification. Optional YAML assistance requires its separately prepared vendor payload and is not inferred from route registration.
+
 ## Tests
 
-`dotnet/Foxwarm.Tests/Channels/CodeRoutesTests.cs`; `NodeServiceTransportTests.cs`; `packages/webui/test/experimentHostNodeCode.e2e.mjs` (owned hosts, unchanged official CLI, original WebUI and optional official workbench/browser extensions).
+`dotnet/Foxwarm.Tests/Channels/CodeRoutesTests.cs` (real served route, renamed identifiers, incompatible shapes, unchanged source bytes and auth); `packages/webui/test/experimentHostWorkbenchParity.e2e.mjs` (normal host/original App, optional official Code-OSS FS/SCM/PTY extensions); `NodeServiceTransportTests.cs`; `packages/webui/test/experimentHostNodeCode.e2e.mjs` (owned hosts, unchanged official CLI, original WebUI and optional official workbench/browser extensions).
