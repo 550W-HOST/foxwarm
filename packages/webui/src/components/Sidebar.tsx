@@ -85,7 +85,7 @@ export default function Sidebar({
     ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent'
     : 'bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised/60 dark:text-fw-text-strong dark:hover:bg-fw-hover'
   return (
-    <div className="foxwarm-sidebar-panel h-full bg-fw-surface border-r border-fw-border flex flex-col">
+    <div className="foxwarm-sidebar-panel h-full bg-fw-sidebar-surface border-r border-fw-border flex flex-col">
       <div className="shrink-0 p-4 border-b border-fw-border space-y-3">
         <div className="flex items-center justify-between gap-2">
           <h1 className="text-xl font-bold text-fw-text-strong">🦊 Foxwarm</h1>
@@ -105,7 +105,7 @@ export default function Sidebar({
           <div className="flex items-stretch gap-1">
             <button
               onClick={onSelectArchitecture}
-              className={`inline-flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${agentsBtnClass}`}
+              className={`inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-fw-border-strong px-3 py-2 text-sm font-medium transition-colors ${agentsBtnClass}`}
               title="Open agents overview"
             >
               <Workflow className="w-4 h-4" />
@@ -159,7 +159,7 @@ export default function Sidebar({
       </div>
       <div data-sidebar-footer className="flex shrink-0 justify-end gap-1 border-t border-fw-border bg-fw-surface p-2">
         {onSelectTasks && (
-          <button type="button" onClick={onSelectTasks} title="Open tasks" aria-label="Open tasks" className="mr-auto inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-fw-border px-3 text-sm text-fw-text transition hover:bg-fw-hover hover:text-fw-text-strong dark:border-fw-border dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse">
+          <button type="button" onClick={onSelectTasks} title="Open tasks" aria-label="Open tasks" className="mr-auto inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-fw-border-strong px-3 text-sm text-fw-text transition hover:bg-fw-hover hover:text-fw-text-strong dark:border-fw-border dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse">
             <ClipboardList className="h-4 w-4" aria-hidden="true" />
             <span>Tasks</span>
           </button>

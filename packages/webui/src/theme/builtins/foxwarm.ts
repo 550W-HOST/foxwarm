@@ -1,0 +1,86 @@
+import { DEFAULT_THEME } from './default'
+import { checkedBuiltin, derivedVariant } from './shared'
+
+export const THEME_FOXWARM_ID = 'foxwarm.foxwarm'
+
+// The Default visual grammar with warm neutral surfaces and a fox-orange accent.
+const foxwarmLight = derivedVariant(DEFAULT_THEME.variants.light, {
+  colors: {
+    canvas: '#f6f3ef', canvasEdge: '#ede6df', surface: '#fffefd',
+    surfaceRaised: '#ffffff', surfaceSunken: '#f9f7f3', input: '#ffffff',
+    overlay: '#23170f80', hover: '#f1ede7', selected: '#fce2ce',
+    borderMuted: '#f3eee8', border: '#e3dad0', borderStrong: '#cbbdb0',
+    text: '#4e4137', textMuted: '#756253', textSubtle: '#8a7869',
+    textStrong: '#2f251f', textInverse: '#ffffff', accentText: '#ffffff',
+    accent: '#b85324', accentMuted: '#9e431b', accentSurface: '#fff5ec',
+    accentSurfaceStrong: '#fce2ce', accentBorder: '#e7b38c', focusRing: '#b85324',
+    neutral: '#756253', neutralSurface: '#f1ede7', neutralBorder: '#cbbdb0',
+    info: '#9e4d23', infoSurface: '#fff5ec', infoSurfaceStrong: '#fce2ce',
+    infoBorder: '#e7b38c', success: '#337447', successSurface: '#eef5ec',
+    successSurfaceStrong: '#dcebd8', successBorder: '#bbd4b7', tool: '#9e5c27',
+    toolSurface: '#faf1e7', toolSurfaceStrong: '#f1dfcc', toolBorder: '#dfbe9a',
+    warning: '#996019', warningSurface: '#fff6e6', warningSurfaceStrong: '#fcebd0',
+    warningBorder: '#e4c28a', danger: '#ba4541', dangerSurface: '#fbefed',
+    dangerSurfaceStrong: '#f5d9d6', dangerBorder: '#e2aba5', special: '#875a96',
+    specialSurface: '#f4eef6', specialBorder: '#cfbada', userSurface: '#b85324',
+    userText: '#ffffff', assistantSurface: '#fffefd', assistantText: '#2f251f',
+    threadText: '#4e4137', reasoningSurface: '#f2ede6', reasoningSurfaceStrong: '#e7ddd2',
+    systemSurface: '#fbf2e9', systemSurfaceStrong: '#f4e3d3', systemText: '#6b513e',
+    systemAccent: '#ba7544', systemBorder: '#e4c6ad', codeSurface: '#f6f1eb',
+    codeText: '#3d3128', assistantCodeSurface: '#f6f1eb', assistantCodeText: '#3d3128',
+    inlineCodeSurface: '#eee6dd', inlineCodeText: '#5d3f29', diffAddedSurface: '#e5efdf',
+    diffAddedSurfaceStrong: '#cfdfc7', diffAddedText: '#337447', diffRemovedSurface: '#f5dfdb',
+    diffRemovedSurfaceStrong: '#ecc5bf', diffRemovedText: '#ba4541', syntaxComment: '#877568',
+    syntaxString: '#39754c', syntaxNumber: '#a75423', syntaxKeyword: '#875095',
+    syntaxLiteral: '#27678e', syntaxHeading: '#2f251f', syntaxTag: '#9b442b',
+    syntaxAttribute: '#94601f', syntaxProperty: '#27678e', scrollbarTrack: '#f6f3ef',
+    scrollbarThumb: '#d2c5b9', scrollbarThumbHover: '#ad9987', contextViewport: '#5f4938',
+    terminalBackground: '#211c18', terminalForeground: '#e6dace', terminalCursor: '#efa76d',
+    terminalSelection: '#b8532455',
+  },
+})
+
+const foxwarmDark = derivedVariant(DEFAULT_THEME.variants.dark, {
+  colors: {
+    canvas: '#24262a', canvasEdge: '#17181b', surface: '#2e3035',
+    surfaceRaised: '#3a3d43', surfaceSunken: '#24262a', input: '#25272b',
+    overlay: '#000000b3', hover: '#3b3e44', selected: '#45372c',
+    borderMuted: '#2e3035', border: '#41444b', borderStrong: '#565a63',
+    text: '#d4d5d9', textMuted: '#aaadb5', textSubtle: '#8d919b',
+    textStrong: '#f0f1f3', textInverse: '#ffffff', accentText: '#252321',
+    accent: '#e9a56d', accentMuted: '#de985d', accentSurface: '#302d2b',
+    accentSurfaceStrong: '#45372c', accentBorder: '#8d684b', focusRing: '#e9a56d',
+    neutral: '#aaadb5', neutralSurface: '#3a3d43', neutralBorder: '#565a63',
+    info: '#ddb08a', infoSurface: '#302d2b', infoSurfaceStrong: '#40362e',
+    infoBorder: '#80634d', success: '#9ebbab', successSurface: '#29312d',
+    successSurfaceStrong: '#323e36', successBorder: '#4e6055', tool: '#d7b394',
+    toolSurface: '#2f2e2d', toolSurfaceStrong: '#3c3631', toolBorder: '#68594d',
+    warning: '#d4b578', warningSurface: '#312e27', warningSurfaceStrong: '#41382b',
+    warningBorder: '#706048', danger: '#d99593', dangerSurface: '#342c2e',
+    dangerSurfaceStrong: '#443338', dangerBorder: '#735253', special: '#bba4c8',
+    specialSurface: '#302d36', specialBorder: '#61576f', userSurface: '#443830',
+    userText: '#f2e8df', assistantSurface: '#2e3035', assistantText: '#f0f1f3',
+    threadText: '#d4d5d9', reasoningSurface: '#2b2e33', reasoningSurfaceStrong: '#383c43',
+    systemSurface: '#303033', systemSurfaceStrong: '#3e3732', systemText: '#d4c7bc',
+    systemAccent: '#c29570', systemBorder: '#64574d', codeSurface: '#202226',
+    codeText: '#d9dce1', assistantCodeSurface: '#202226', assistantCodeText: '#d9dce1',
+    inlineCodeSurface: '#27272a', inlineCodeText: '#dbc2ad', diffAddedSurface: '#29352e',
+    diffAddedSurfaceStrong: '#35443a', diffAddedText: '#9ebbab', diffRemovedSurface: '#372b2d',
+    diffRemovedSurfaceStrong: '#473236', diffRemovedText: '#d99593', syntaxComment: '#8d929c',
+    syntaxString: '#a3bca3', syntaxNumber: '#d7b394', syntaxKeyword: '#bba4c8',
+    syntaxLiteral: '#9bbacb', syntaxHeading: '#f0f1f3', syntaxTag: '#d99593',
+    syntaxAttribute: '#d4b578', syntaxProperty: '#9bbacb', scrollbarTrack: '#24262a',
+    scrollbarThumb: '#494d55', scrollbarThumbHover: '#686e79', contextViewport: '#d6c1b0',
+    terminalBackground: '#202226', terminalForeground: '#d4d5d9', terminalCursor: '#e9a56d',
+    terminalSelection: '#e9a56d44',
+  },
+})
+
+export const THEME_FOXWARM = checkedBuiltin({
+  schemaVersion: 3,
+  id: THEME_FOXWARM_ID,
+  name: 'Foxwarm',
+  description: 'Default-style clarity with warm neutrals and a fox-orange accent.',
+  author: 'Foxwarm',
+  variants: { light: foxwarmLight, dark: foxwarmDark },
+})

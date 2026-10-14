@@ -36,16 +36,18 @@ test('built-in themes validate and canonical serialization is stable', () => {
   assert.ok(theme.BUILTIN_THEMES.includes(theme.DEFAULT_THEME))
   assert.ok(theme.BUILTIN_THEMES.includes(theme.THEME_550A))
   assert.ok(theme.BUILTIN_THEMES.includes(theme.THEME_550A_MONO))
-  assert.equal(theme.BUILTIN_THEMES.length, 6)
+  assert.equal(theme.BUILTIN_THEMES.length, 8)
   assert.deepEqual(
     theme.BUILTIN_THEMES.map(item => [item.id, item.name]),
     [
       ['foxwarm.default', 'Default'],
+      ['foxwarm.foxwarm', 'Foxwarm'],
       ['foxwarm.550a', '550A'],
       ['foxwarm.550a-mono', '550A Mono'],
       ['foxwarm.paper', 'Paper'],
       ['foxwarm.seaglass', 'Sea Glass'],
       ['foxwarm.vector', 'Vector'],
+      ['foxwarm.catppuccin', 'Catppuccin'],
     ],
   )
   assert.equal(new Set(theme.BUILTIN_THEMES.map(item => item.id)).size, theme.BUILTIN_THEMES.length)
@@ -83,7 +85,7 @@ test('550A keeps its colored console grammar while 550A Mono preserves the machi
   assert.equal(theme.THEME_550A_MONO.variants.dark.displayEffect.kind, 'crt')
 })
 
-test('schema V2 gives tools one coherent family while Default preserves its historical colors', async () => {
+test('semantic tool colors give tools one coherent family while Default preserves its historical colors', async () => {
   for (const mode of ['light', 'dark']) {
     const colors = theme.DEFAULT_THEME.variants[mode].colors
     assert.deepEqual(
@@ -182,7 +184,7 @@ test('version-1 manifests are rejected instead of receiving implicit visual sema
   }
   const result = theme.validateThemeManifest(legacy)
   assert.equal(result.ok, false)
-  assert.ok(result.errors.some(error => error.includes('schemaVersion must be 2')))
+  assert.ok(result.errors.some(error => error.includes('schemaVersion must be 3')))
   assert.ok(result.errors.some(error => error.includes('colors.tool')))
 })
 
@@ -200,13 +202,15 @@ test('legacy selection migrates to a versioned theme family selection', () => {
   storage.setItem('themeMode', 'dark')
   storage.setItem('foxwarm_ui_theme_style_v1', '550a')
   assert.deepEqual(theme.readThemeSelection(storage), {
-    version: 2,
+    version: 3,
     themeId: 'foxwarm.550a',
+    lightThemeId: 'foxwarm.550a', darkThemeId: 'foxwarm.550a',
     colorMode: 'dark',
   })
-  assert.deepEqual(JSON.parse(storage.getItem('foxwarm_theme_selection_v2')), {
-    version: 2,
+  assert.deepEqual(JSON.parse(storage.getItem('foxwarm_theme_selection_v3')), {
+    version: 3,
     themeId: 'foxwarm.550a',
+    lightThemeId: 'foxwarm.550a', darkThemeId: 'foxwarm.550a',
     colorMode: 'dark',
   })
 })
@@ -214,26 +218,26 @@ test('legacy selection migrates to a versioned theme family selection', () => {
 test('current selections retain both stable 550A family IDs', () => {
   for (const themeId of ['foxwarm.550a', 'foxwarm.550a-mono']) {
     const storage = new MemoryStorage()
-    storage.setItem('foxwarm_theme_selection_v2', JSON.stringify({ version: 2, themeId, colorMode: 'dark' }))
-    assert.deepEqual(theme.readThemeSelection(storage), { version: 2, themeId, colorMode: 'dark' })
+    storage.setItem('foxwarm_theme_selection_v3', JSON.stringify({ version: 3, themeId, lightThemeId: themeId, darkThemeId: themeId, colorMode: 'dark' }))
+    assert.deepEqual(theme.readThemeSelection(storage), { version: 3, themeId, lightThemeId: themeId, darkThemeId: themeId, colorMode: 'dark' })
     assert.equal(theme.readThemeRegistry(storage).themes.some(item => item.id === themeId), true)
   }
 })
 
-test('V2 selection is insulated from rewrites by an older live WebUI bundle', () => {
+test('V3 selection is insulated from rewrites by an older live WebUI bundle', () => {
   const storage = new MemoryStorage()
   storage.setItem('foxwarm_theme_selection_v1', JSON.stringify({ version: 1, themeId: 'foxwarm.new-built-in', colorMode: 'dark' }))
-  assert.deepEqual(theme.readThemeSelection(storage), { version: 2, themeId: 'foxwarm.new-built-in', colorMode: 'dark' })
+  assert.deepEqual(theme.readThemeSelection(storage), { version: 3, themeId: 'foxwarm.new-built-in', lightThemeId: 'foxwarm.new-built-in', darkThemeId: 'foxwarm.new-built-in', colorMode: 'dark' })
   storage.setItem('foxwarm_theme_selection_v1', JSON.stringify({ version: 1, themeId: 'foxwarm.default', colorMode: 'light' }))
-  assert.deepEqual(theme.readThemeSelection(storage), { version: 2, themeId: 'foxwarm.new-built-in', colorMode: 'dark' })
+  assert.deepEqual(theme.readThemeSelection(storage), { version: 3, themeId: 'foxwarm.new-built-in', lightThemeId: 'foxwarm.new-built-in', darkThemeId: 'foxwarm.new-built-in', colorMode: 'dark' })
 })
 
 test('runtime fallback does not overwrite a theme unknown to an older WebUI bundle', async () => {
   const runtimeSource = await readFile(path.join(webuiRoot, 'src/theme/runtime.ts'), 'utf8')
   const fallbackBody = runtimeSource.match(/if \(!activeTheme\) \{([\s\S]*?)\n  \}/)?.[1] || ''
-  assert.match(fallbackBody, /themeId: DEFAULT_THEME_ID/)
+  assert.match(fallbackBody, /theme.id === DEFAULT_THEME_ID/)
   assert.doesNotMatch(fallbackBody, /writeThemeSelection/)
-  assert.match(fallbackBody, /older WebUI bundle/)
+  assert.match(fallbackBody, /stale bundle/)
 })
 
 test('custom themes install, conflict, export, replace, and delete atomically', () => {
@@ -284,7 +288,7 @@ test('custom themes cannot claim built-in namespace and exported console clones 
 
 test('terminal, Monaco, and Mermaid adapters consume the same resolved manifest variant', () => {
   const snapshot = {
-    selection: { version: 2, themeId: 'foxwarm.550a', colorMode: 'light' },
+    selection: { version: 3, themeId: 'foxwarm.550a', colorMode: 'light' },
     effectiveMode: 'light',
     activeTheme: theme.THEME_550A,
     registry: theme.readThemeRegistry(new MemoryStorage()),
@@ -333,4 +337,35 @@ test('Architecture inverse icon and active-tab treatments use a readable semanti
   assert.match(source, /bg-fw-text-strong text-fw-surface"><Network/)
   assert.equal((source.match(/bg-fw-text-strong text-fw-surface/g) || []).length >= 3, true)
   assert.doesNotMatch(source, /bg-fw-canvas text-fw-text-inverse/)
+})
+
+
+test('V2 manifests are rejected and V3 chrome/foreground roles are required and portable', () => {
+  const candidate = structuredClone(theme.DEFAULT_THEME)
+  candidate.schemaVersion = 2
+  assert.equal(theme.validateThemeManifest(candidate).ok, false)
+  candidate.schemaVersion = 3
+  for (const key of ['sidebarSurface', 'tabBarSurface', 'workbenchHeaderSurface', 'statusBarSurface', 'accentText']) {
+    const incomplete = structuredClone(candidate)
+    delete incomplete.variants.dark.colors[key]
+    assert.equal(theme.validateThemeManifest(incomplete).ok, false)
+    candidate.variants.light.colors[key] = '#123456'
+    const parsed = theme.parseThemeManifestJson(theme.serializeThemeManifest(candidate))
+    assert.equal(parsed.value.variants.light.colors[key], '#123456')
+    assert.equal(theme.themeVariantCssVariables(parsed.value.variants.light)['--foxwarm-color-' + key.replace(/[A-Z]/g, letter => '-' + letter.toLowerCase())], '#123456')
+  }
+})
+
+test('V2 preferences seed both V3 choices without migrating or erasing V2 custom files', () => {
+  const storage = new MemoryStorage()
+  const oldSelection = JSON.stringify({ version: 2, themeId: 'foxwarm.vector', colorMode: 'auto' })
+  const oldCustom = JSON.stringify({ version: 2, themes: [{ schemaVersion: 2, id: 'example.old', name: 'Old theme' }] })
+  storage.setItem('foxwarm_theme_selection_v2', oldSelection)
+  storage.setItem('foxwarm_custom_themes_v2', oldCustom)
+  assert.deepEqual(theme.readThemeSelection(storage), { version: 3, themeId: 'foxwarm.vector', lightThemeId: 'foxwarm.vector', darkThemeId: 'foxwarm.vector', colorMode: 'auto' })
+  assert.equal(theme.readThemeRegistry(storage).customThemes.length, 0)
+  assert.ok(theme.readThemeRegistry(storage).errors.some(error => error.includes('V2')))
+  assert.equal(storage.getItem('foxwarm_custom_themes_v2'), oldCustom)
+  storage.setItem('foxwarm_theme_selection_v2', JSON.stringify({ version: 2, themeId: 'foxwarm.default', colorMode: 'light' }))
+  assert.equal(theme.readThemeSelection(storage).darkThemeId, 'foxwarm.vector')
 })

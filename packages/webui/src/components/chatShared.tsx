@@ -349,7 +349,7 @@ export const IconToggleButton = ({ active, title, onClick, children }: { active:
     onClick={onClick}
     title={title}
     data-active={active}
-    className={`p-0.5 rounded ${active ? 'bg-fw-accent text-fw-text-inverse' : 'bg-fw-neutral-border dark:bg-fw-surface-raised text-fw-text-muted hover:bg-fw-border-strong dark:hover:bg-fw-hover'}`}
+    className={`p-0.5 rounded ${active ? 'bg-fw-accent text-fw-accent-text' : 'bg-fw-neutral-border dark:bg-fw-surface-raised text-fw-text-muted hover:bg-fw-border-strong dark:hover:bg-fw-hover'}`}
   >
     {children}
   </button>
@@ -360,7 +360,7 @@ export const MiniToggleButton = ({ active, title, onClick, children }: { active:
     onClick={onClick}
     title={title}
     data-active={active}
-    className={`px-1.5 py-0.5 text-[10px] rounded ${active ? 'bg-fw-accent text-fw-text-inverse' : 'bg-fw-neutral-border dark:bg-fw-surface-raised text-fw-text-muted hover:bg-fw-border-strong dark:hover:bg-fw-hover'}`}
+    className={`px-1.5 py-0.5 text-[10px] rounded ${active ? 'bg-fw-accent text-fw-accent-text' : 'bg-fw-neutral-border dark:bg-fw-surface-raised text-fw-text-muted hover:bg-fw-border-strong dark:hover:bg-fw-hover'}`}
   >
     {children}
   </button>

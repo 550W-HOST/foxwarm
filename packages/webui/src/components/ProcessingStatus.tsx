@@ -1,5 +1,6 @@
 import { memo } from 'react'
 import RuntimeBusySpinner from './RuntimeBusySpinner'
+import { FoxThinking } from './FoxLoaders'
 import type { TimelineView } from '../chatPreferences'
 import { getRuntimeStateSummary, type SessionRuntimeState } from '../sessionRuntimeState'
 
@@ -46,6 +47,8 @@ const ProcessingStatus = memo(function ProcessingStatus({
     : runtimeStateName === 'requesting-model'
     ? runtimeSummary.replace(/^thinking\b/, 'Thinking...')
     : runtimeSummary
+  // Plain model thinking gets the fox spinner in place of the generic one.
+  const showFoxSpinner = runtimeStateName === 'requesting-model' && !isCompacting
   const isActive = runtimeStateName === 'requesting-model' || runtimeStateName === 'running-tool'
   const tone = runtimeStateName === 'running-tool'
     ? {
@@ -90,6 +93,8 @@ const ProcessingStatus = memo(function ProcessingStatus({
               <div className="flex flex-wrap items-center gap-2">
                 {runtimeStateName === 'waiting' ? (
                   <span className={`w-2 h-2 ${tone.dot} rounded-full`} data-processing-status-dot="static" />
+                ) : showFoxSpinner ? (
+                  <FoxThinking />
                 ) : (
                   <RuntimeBusySpinner className={`h-4 w-4 ${tone.text}`} />
                 )}
@@ -132,12 +137,8 @@ const ProcessingStatus = memo(function ProcessingStatus({
       {loading && (
         <div className="flex justify-start mt-4">
           <div className={`${rowWidthClass} overflow-x-hidden`}>
-            <div className="inline-block max-w-full bg-fw-surface border border-fw-border px-4 py-2 rounded-lg">
-              <div className="flex space-x-2">
-                <div className="w-2 h-2 bg-fw-text-subtle dark:bg-fw-text-muted rounded-full animate-bounce"></div>
-                <div className="w-2 h-2 bg-fw-text-subtle dark:bg-fw-text-muted rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                <div className="w-2 h-2 bg-fw-text-subtle dark:bg-fw-text-muted rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
-              </div>
+            <div className="inline-flex max-w-full items-center bg-fw-surface border border-fw-border px-4 py-2 rounded-lg" role="status">
+              <FoxThinking label="Waiting for response" />
             </div>
           </div>
         </div>

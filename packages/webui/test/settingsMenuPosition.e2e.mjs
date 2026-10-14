@@ -230,7 +230,7 @@ test('Escape, outside click, and menu-item selection retain their dismissal beha
   const lightButton = await page.evaluateHandle(() => Array.from(document.querySelectorAll('button')).find(button => button.textContent?.trim() === 'light'))
   await lightButton.click()
   await page.waitForSelector('[data-global-ui-settings-menu]', { hidden: true })
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_theme_selection_v2')).colorMode), 'light')
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_theme_selection_v3')).colorMode), 'light')
 })
 
 test('global UI settings keeps only the Auto, Light, and Dark color-mode controls', async () => {

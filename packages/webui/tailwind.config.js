@@ -9,6 +9,7 @@ const foxwarmColor = (name) => ({ opacityValue }) => {
 }
 
 const foxwarmColors = Object.fromEntries([
+  'sidebar-surface', 'tab-bar-surface', 'workbench-header-surface', 'status-bar-surface', 'accent-text',
   'canvas', 'canvas-edge', 'surface', 'surface-raised', 'surface-sunken', 'input', 'overlay',
   'hover', 'selected', 'border-muted', 'border', 'border-strong', 'text', 'text-muted',
   'text-subtle', 'text-strong', 'text-inverse', 'accent', 'accent-muted', 'accent-surface',

@@ -110,7 +110,7 @@ const consoleDark = variant({
 })
 
 export const THEME_550A_MONO = checkedBuiltin({
-  schemaVersion: 2,
+  schemaVersion: 3,
   id: THEME_550A_MONO_ID,
   name: '550A Mono',
   description: 'A restrained machine-console theme inspired by pale industrial housings, modular panels, and a single red sensor beacon.',

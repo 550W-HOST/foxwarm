@@ -123,7 +123,7 @@ export function PastedTextModal({ text, onClose, onSave, onRestoreToText }: Past
                 type="button"
                 disabled={delimiterCollision}
                 onClick={() => onSave?.(draftText)}
-                className="h-9 rounded-lg bg-fw-accent px-3 text-sm font-medium text-fw-text-inverse disabled:cursor-not-allowed disabled:opacity-50"
+                className="h-9 rounded-lg bg-fw-accent px-3 text-sm font-medium text-fw-accent-text disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Save
               </button>

@@ -143,7 +143,8 @@ test('idle queue keeps its pending action and canonical idle overrides legacy bu
   const legacyBusyHtml = render({ sessionBusy: true })
   assert.match(legacyBusyHtml, /data-processing-runtime-state="requesting-model"/)
   assert.match(legacyBusyHtml, /Thinking\.\.\./)
-  assert.match(legacyBusyHtml, /runtime-busy-spinner/)
+  assert.match(legacyBusyHtml, /data-fox-loader="thinking"/)
+  assert.doesNotMatch(legacyBusyHtml, /runtime-busy-spinner/)
   assert.match(legacyBusyHtml, />Stop<\/button>/)
 })
 
@@ -156,6 +157,6 @@ test('loading indicator still takes precedence over runtime status', () => {
 
   assert.doesNotMatch(html, /data-processing-runtime-state/)
   assert.doesNotMatch(html, /tool: exec|runtime-busy-spinner/)
-  assert.equal((html.match(/animate-bounce/g) || []).length, 3)
-  assert.match(html, /bg-fw-text-subtle/)
+  assert.equal((html.match(/data-fox-loader="thinking"/g) || []).length, 1)
+  assert.match(html, /aria-label="Waiting for response"/)
 })

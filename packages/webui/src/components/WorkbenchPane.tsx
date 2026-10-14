@@ -171,7 +171,7 @@ export default function WorkbenchPane({
 }: WorkbenchPaneProps) {
   const verticalRail = collapseDirection === 'row'
   const containerChromeClass = emphasizeFocus
-    ? (focused ? 'border-fw-accent-border ring-1 ring-fw-accent/25 dark:border-fw-accent-border/60' : 'border-fw-border')
+    ? 'border-fw-border'
     : 'border-transparent shadow-none'
   const paneControls = (
     <WorkbenchPaneToolbar
@@ -188,6 +188,7 @@ export default function WorkbenchPane({
   return (
     <div
       data-pane-id={paneId}
+      data-workbench-focused={focused || undefined}
       data-workbench-collapsed-pane={collapsed ? 'true' : undefined}
       className={`foxwarm-workbench-panel relative flex min-h-0 min-w-0 overflow-hidden border ${containerChromeClass} ${collapsed ? verticalRail ? 'h-full w-12 flex-col' : 'h-10 w-full flex-row items-center' : 'h-full flex-col'}`}
       onMouseDown={() => onFocusPane(paneId)}

@@ -595,7 +595,7 @@ test('Setup uses accessible Models, Config, and Appearance tabs with status icon
     await setupPage.focus('[data-setup-tab="config"]')
     await setupPage.keyboard.press('ArrowRight')
     await setupPage.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]')
-    assert.equal(await setupPage.$eval('[data-theme-manager]', element => element.textContent?.includes('WebUI theme')), true)
+    assert.equal(await setupPage.$eval('[data-theme-manager]', element => element.textContent?.includes('Appearance')), true)
     assert.equal(await setupPage.$$eval('[data-theme-color-mode]', buttons => buttons.length), 3)
     await setupPage.click('[data-theme-color-mode="dark"]')
     await setupPage.waitForFunction(() => document.documentElement.getAttribute('data-foxwarm-theme-mode') === 'dark')
@@ -606,19 +606,31 @@ test('Setup uses accessible Models, Config, and Appearance tabs with status icon
     await setupPage.click('button[data-theme-option="foxwarm.550a"]')
     await setupPage.waitForFunction(() => document.documentElement.getAttribute('data-foxwarm-component-treatment') === 'console')
     const builtinConsoleTokens = await setupPage.evaluate(() => ['--foxwarm-color-canvas', '--foxwarm-color-accent', '--foxwarm-ui-font-family'].map(name => getComputedStyle(document.documentElement).getPropertyValue(name).trim()))
-    await setupPage.$eval('[data-theme-manager]', manager => Array.from(manager.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Clone')?.click())
-    await setupPage.click('input[aria-label="Cloned theme ID"]', { clickCount: 3 })
-    await setupPage.type('input[aria-label="Cloned theme ID"]', 'custom.setup-e2e')
-    await setupPage.$eval('[data-theme-manager]', manager => Array.from(manager.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Create theme')?.click())
+    await setupPage.click('button[data-theme-preview="foxwarm.550a"]')
+    await setupPage.evaluate(() => {
+      URL.createObjectURL = blob => { window.__themePackage = blob.text(); return 'blob:theme-fixture' }
+      HTMLAnchorElement.prototype.click = function () {}
+    })
+    await setupPage.click('[aria-label="Export theme"]')
+    const manifest = await setupPage.evaluate(async () => JSON.parse(await window.__themePackage))
+    manifest.id = 'custom.setup-e2e'; manifest.name = 'Imported console'
+    await setupPage.keyboard.press('Escape')
+    await setupPage.$eval('[data-theme-manager] input[type="file"]', (input, text) => {
+      const files = new DataTransfer(); files.items.add(new File([text], 'console.foxwarm-theme.json', { type: 'application/json' }))
+      input.files = files.files; input.dispatchEvent(new Event('change', { bubbles: true }))
+    }, JSON.stringify(manifest))
+    await setupPage.waitForSelector('[data-theme-preview-dialog]')
+    await setupPage.click('[aria-label="Use for light"]')
     await setupPage.waitForSelector('button[data-theme-option="custom.setup-e2e"][aria-pressed="true"]')
-    assert.equal(await setupPage.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_custom_themes_v2')).themes[0].id), 'custom.setup-e2e')
+    assert.equal(await setupPage.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_custom_themes_v3')).themes[0].id), 'custom.setup-e2e')
     assert.equal(await setupPage.evaluate(() => document.documentElement.getAttribute('data-foxwarm-component-treatment')), 'console')
     assert.deepEqual(await setupPage.evaluate(() => ['--foxwarm-color-canvas', '--foxwarm-color-accent', '--foxwarm-ui-font-family'].map(name => getComputedStyle(document.documentElement).getPropertyValue(name).trim())), builtinConsoleTokens)
     const deleteDialog = new Promise(resolve => setupPage.once('dialog', async dialog => { await dialog.accept(); resolve() }))
-    await setupPage.$eval('[data-theme-manager]', manager => Array.from(manager.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Delete')?.click())
+    await setupPage.click('button[data-theme-preview="custom.setup-e2e"]')
+    await setupPage.click('[aria-label="Delete theme"]')
     await deleteDialog
     await setupPage.waitForFunction(() => !document.querySelector('button[data-theme-option="custom.setup-e2e"]'))
-    assert.equal(await setupPage.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_theme_selection_v2')).themeId), 'foxwarm.default')
+    assert.equal(await setupPage.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_theme_selection_v3')).themeId), 'foxwarm.default')
     await setupPage.waitForFunction(() => document.documentElement.getAttribute('data-foxwarm-component-treatment') === 'standard')
 
     await setupPage.focus('[data-setup-tab="appearance"]')
@@ -1941,7 +1953,7 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
 
     await normalPage.evaluateOnNewDocument(() => {
       try {
-        localStorage.setItem('foxwarm_theme_selection_v2', JSON.stringify({ version: 2, themeId: 'foxwarm.550a', colorMode: 'auto' }))
+        localStorage.setItem('foxwarm_theme_selection_v3', JSON.stringify({ version: 3, themeId: 'foxwarm.550a', lightThemeId: 'foxwarm.550a', darkThemeId: 'foxwarm.550a', colorMode: 'auto' }))
       } catch {}
     })
     await normalPage.goto(`${baseUrl}/normal/#session/model-filter-normal`, { waitUntil: 'networkidle2' })
@@ -2020,7 +2032,7 @@ test('model picker Models focus is one-shot per request; later ordinary Setup op
 
     await normalPage.evaluateOnNewDocument(() => {
       try {
-        localStorage.setItem('foxwarm_theme_selection_v2', JSON.stringify({ version: 2, themeId: 'foxwarm.550a', colorMode: 'auto' }))
+        localStorage.setItem('foxwarm_theme_selection_v3', JSON.stringify({ version: 3, themeId: 'foxwarm.550a', lightThemeId: 'foxwarm.550a', darkThemeId: 'foxwarm.550a', colorMode: 'auto' }))
       } catch {}
     })
     await normalPage.goto(`${baseUrl}/normal/#session/model-filter-normal`, { waitUntil: 'networkidle2' })
