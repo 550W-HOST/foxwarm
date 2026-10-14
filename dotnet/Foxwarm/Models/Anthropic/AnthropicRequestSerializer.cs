@@ -71,15 +71,18 @@ internal static class AnthropicRequestSerializer
                             ["type"] = "tool_use",
                             ["id"] = id,
                             ["name"] = call["name"]?.DeepClone(),
-                            ["input"] = SessionWait.Text(call["argsParseError"]) is { Length: > 0 }
-                                ? JsonNode.Parse(FunctionCallArguments.Stringify(
-                                    call["args"] as JsonObject,
-                                    SessionWait.Text(call["rawArgsText"]),
-                                    SessionWait.Text(call["argsParseError"])
-                                ))
+                            ["input"] =
+                                SessionWait.Text(call["argsParseError"]) is { Length: > 0 }
+                                    ? JsonNode.Parse(
+                                        FunctionCallArguments.Stringify(
+                                            call["args"] as JsonObject,
+                                            SessionWait.Text(call["rawArgsText"]),
+                                            SessionWait.Text(call["argsParseError"])
+                                        )
+                                    )
                                 : CompletionsRequestSerializer.Truthy(call["args"])
                                     ? call["args"]!.DeepClone()
-                                    : new JsonObject(),
+                                : new JsonObject(),
                         }
                     );
                 }

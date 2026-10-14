@@ -39,14 +39,20 @@ internal sealed class AnthropicMessagesService(
         var streaming = body["stream"]!.GetValue<bool>();
         var reasoning = false;
         await using var timer = (clock ?? TimeProvider.System).CreateTimer(
-            _ => activity.Cancel(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan
-        );
-        void ScheduleInactivity() => timer.Change(
-            TimeSpan.FromMilliseconds(reasoning
-                ? Math.Max(options.StreamInactivityTimeoutMs ?? 60000, 600000)
-                : options.StreamInactivityTimeoutMs ?? 60000),
+            _ => activity.Cancel(),
+            null,
+            Timeout.InfiniteTimeSpan,
             Timeout.InfiniteTimeSpan
         );
+        void ScheduleInactivity() =>
+            timer.Change(
+                TimeSpan.FromMilliseconds(
+                    reasoning
+                        ? Math.Max(options.StreamInactivityTimeoutMs ?? 60000, 600000)
+                        : options.StreamInactivityTimeoutMs ?? 60000
+                ),
+                Timeout.InfiniteTimeSpan
+            );
         if (streaming)
             timer.Change(TimeSpan.FromMilliseconds(180000), Timeout.InfiniteTimeSpan);
         else
@@ -74,26 +80,38 @@ internal sealed class AnthropicMessagesService(
             var success = response.StatusCode == HttpStatusCode.OK;
             if (streaming && success)
             {
-                await using var decoded = Decode(stream, response.Content.Headers.ContentEncoding.LastOrDefault());
-                payload = await AnthropicSseCollector.CollectAsync(
-                    decoded, activity.Token,
-                    new ResponsesStreamCallbacks
-                    {
-                        OnProgress = update => progress?.Invoke(sessionId, update),
-                        OnMeaningfulProgress = ScheduleInactivity,
-                    },
-                    active =>
-                    {
-                        reasoning = active;
-                        ScheduleInactivity();
-                    }
-                ).ConfigureAwait(false);
+                await using var decoded = Decode(
+                    stream,
+                    response.Content.Headers.ContentEncoding.LastOrDefault()
+                );
+                payload = await AnthropicSseCollector
+                    .CollectAsync(
+                        decoded,
+                        activity.Token,
+                        new ResponsesStreamCallbacks
+                        {
+                            OnProgress = update => progress?.Invoke(sessionId, update),
+                            OnMeaningfulProgress = ScheduleInactivity,
+                        },
+                        active =>
+                        {
+                            reasoning = active;
+                            ScheduleInactivity();
+                        }
+                    )
+                    .ConfigureAwait(false);
             }
             else
             {
-                payload = await ReadJsonAsync(stream, success,
-                    response.Content.Headers.ContentEncoding.LastOrDefault(),
-                    (int)response.StatusCode, activity, cancellationToken).ConfigureAwait(false);
+                payload = await ReadJsonAsync(
+                        stream,
+                        success,
+                        response.Content.Headers.ContentEncoding.LastOrDefault(),
+                        (int)response.StatusCode,
+                        activity,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
             }
             cancellationToken.ThrowIfCancellationRequested();
             activity.Token.ThrowIfCancellationRequested();
@@ -138,17 +156,34 @@ internal sealed class AnthropicMessagesService(
         }
     }
 
-    private static Stream Decode(Stream stream, string? encoding) => encoding switch
-    {
-        "gzip" => new System.IO.Compression.GZipStream(stream, System.IO.Compression.CompressionMode.Decompress, leaveOpen: true),
-        "br" => new System.IO.Compression.BrotliStream(stream, System.IO.Compression.CompressionMode.Decompress, leaveOpen: true),
-        "deflate" => new System.IO.Compression.ZLibStream(stream, System.IO.Compression.CompressionMode.Decompress, leaveOpen: true),
-        _ => stream,
-    };
+    private static Stream Decode(Stream stream, string? encoding) =>
+        encoding switch
+        {
+            "gzip" => new System.IO.Compression.GZipStream(
+                stream,
+                System.IO.Compression.CompressionMode.Decompress,
+                leaveOpen: true
+            ),
+            "br" => new System.IO.Compression.BrotliStream(
+                stream,
+                System.IO.Compression.CompressionMode.Decompress,
+                leaveOpen: true
+            ),
+            "deflate" => new System.IO.Compression.ZLibStream(
+                stream,
+                System.IO.Compression.CompressionMode.Decompress,
+                leaveOpen: true
+            ),
+            _ => stream,
+        };
 
     private async Task<JsonNode?> ReadJsonAsync(
-        Stream stream, bool success, string? encoding, int statusCode,
-        CancellationTokenSource activity, CancellationToken cancellationToken
+        Stream stream,
+        bool success,
+        string? encoding,
+        int statusCode,
+        CancellationTokenSource activity,
+        CancellationToken cancellationToken
     )
     {
         using var buffer = new MemoryStream();
@@ -171,8 +206,7 @@ internal sealed class AnthropicMessagesService(
         cancellationToken.ThrowIfCancellationRequested();
         activity.Token.ThrowIfCancellationRequested();
         var raw = buffer.ToArray();
-        if (success && encoding is not null
-            && encoding is "gzip" or "br" or "deflate")
+        if (success && encoding is not null && encoding is "gzip" or "br" or "deflate")
         {
             using var compressed = new MemoryStream(raw);
             using var decoder = Decode(compressed, encoding);
@@ -194,5 +228,4 @@ internal sealed class AnthropicMessagesService(
             return JsonValue.Create(text);
         } // Fixed Axios silently retains non-JSON response text.
     }
-
 }

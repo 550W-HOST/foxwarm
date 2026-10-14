@@ -24,10 +24,15 @@ internal static class AnthropicCanonicalConverter
             if (raw is not JsonObject block)
                 continue;
             var type = SessionWait.Text(block["type"]) ?? "";
-            if (type is "server_tool_use" or "mcp_tool_use" || type.EndsWith("_tool_result", StringComparison.Ordinal))
+            if (
+                type is "server_tool_use" or "mcp_tool_use"
+                || type.EndsWith("_tool_result", StringComparison.Ordinal)
+            )
                 throw new ModelAttemptFailure(
                     $"Anthropic server tool block \"{type}\" is not supported by Foxwarm.",
-                    "response-error", false, false
+                    "response-error",
+                    false,
+                    false
                 );
             switch (type)
             {
@@ -121,15 +126,21 @@ internal static class AnthropicCanonicalConverter
             var category = SessionWait.Text(details?["category"]);
             var explanation = SessionWait.Text(details?["explanation"])?.Trim();
             throw new ModelAttemptFailure(
-                "The model declined this request" + (string.IsNullOrEmpty(category) ? "" : $" ({category})")
-                    + "." + (string.IsNullOrEmpty(explanation) ? "" : " " + explanation),
-                "response-error", false, false
+                "The model declined this request"
+                    + (string.IsNullOrEmpty(category) ? "" : $" ({category})")
+                    + "."
+                    + (string.IsNullOrEmpty(explanation) ? "" : " " + explanation),
+                "response-error",
+                false,
+                false
             );
         }
         if (reason == "pause_turn")
             throw new ModelAttemptFailure(
                 "Anthropic paused a server-tool turn, which Foxwarm does not continue automatically.",
-                "response-error", false, false
+                "response-error",
+                false,
+                false
             );
         return reason is "max_tokens" or "model_context_window_exceeded" ? reason : null;
     }
@@ -142,10 +153,15 @@ internal static class AnthropicCanonicalConverter
         {
             ["inputTokens"] = Reported(usage["input_tokens"]) is double input
                 ? System.Text.Json.JsonSerializer.SerializeToNode(
-                    input + (Reported(usage["cache_creation_input_tokens"]) ?? 0))
+                    input + (Reported(usage["cache_creation_input_tokens"]) ?? 0)
+                )
                 : null,
-            ["outputTokens"] = Reported(usage["output_tokens"]) is not null ? usage["output_tokens"]?.DeepClone() : null,
-            ["cachedTokens"] = Reported(usage["cache_read_input_tokens"]) is not null ? usage["cache_read_input_tokens"]!.DeepClone() : JsonValue.Create(0),
+            ["outputTokens"] = Reported(usage["output_tokens"]) is not null
+                ? usage["output_tokens"]?.DeepClone()
+                : null,
+            ["cachedTokens"] = Reported(usage["cache_read_input_tokens"]) is not null
+                ? usage["cache_read_input_tokens"]!.DeepClone()
+                : JsonValue.Create(0),
         };
         if (Reported(usage["output_tokens_details"]?["thinking_tokens"]) is double reasoning)
             result["reasoningTokens"] = reasoning;

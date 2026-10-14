@@ -160,7 +160,8 @@ internal static class ConfiguredModelRequests
                 )
             : model.ProviderType is "openai" or "openai-responses"
                 ? new ResponsesChatService(http, options, progress)
-            : model.ProviderType == "anthropic" ? new AnthropicMessagesService(http, options, progress: progress)
+            : model.ProviderType == "anthropic"
+                ? new AnthropicMessagesService(http, options, progress: progress)
             : throw new InvalidDataException(
                 "Unsupported providerType: " + model.ProviderType + "."
             );

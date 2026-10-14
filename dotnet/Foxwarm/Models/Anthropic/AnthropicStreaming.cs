@@ -27,7 +27,12 @@ internal sealed class AnthropicEventAccumulator(
     private static int Index(JsonObject item)
     {
         var number = SessionWait.Number(item["index"]);
-        if (number is null || number < 0 || number > int.MaxValue || Math.Floor(number.Value) != number)
+        if (
+            number is null
+            || number < 0
+            || number > int.MaxValue
+            || Math.Floor(number.Value) != number
+        )
             throw new InvalidDataException("Anthropic stream has an invalid content block index.");
         return (int)number.Value;
     }
@@ -36,9 +41,13 @@ internal sealed class AnthropicEventAccumulator(
     {
         var index = Index(item);
         if (!blocks.TryGetValue(index, out var block))
-            throw new InvalidDataException($"Anthropic stream referenced unknown content block {index}.");
+            throw new InvalidDataException(
+                $"Anthropic stream referenced unknown content block {index}."
+            );
         if (block.Closed)
-            throw new InvalidDataException($"Anthropic stream sent content for closed content block {index}.");
+            throw new InvalidDataException(
+                $"Anthropic stream sent content for closed content block {index}."
+            );
         return block;
     }
 
@@ -48,14 +57,20 @@ internal sealed class AnthropicEventAccumulator(
         {
             case "message_start":
                 message = (JsonObject?)item["message"]?.DeepClone() ?? new JsonObject();
-                usage = message["usage"] is JsonObject initial ? (JsonObject)initial.DeepClone() : null;
+                usage = message["usage"] is JsonObject initial
+                    ? (JsonObject)initial.DeepClone()
+                    : null;
                 break;
             case "content_block_start":
                 var index = Index(item);
-                var content = item["content_block"] is JsonObject raw ? (JsonObject)raw.DeepClone() : new JsonObject();
+                var content = item["content_block"] is JsonObject raw
+                    ? (JsonObject)raw.DeepClone()
+                    : new JsonObject();
                 var block = new Block(index, content);
                 if (!blocks.TryAdd(index, block))
-                    throw new InvalidDataException($"Anthropic stream started duplicate content block {index}.");
+                    throw new InvalidDataException(
+                        $"Anthropic stream started duplicate content block {index}."
+                    );
                 switch (block.Kind)
                 {
                     case "text":
@@ -84,7 +99,11 @@ internal sealed class AnthropicEventAccumulator(
                 var type = SessionWait.Text(update["type"]);
                 if (type == "signature_delta" && active.Kind == "thinking")
                 {
-                    Append(active.Content, "signature", SessionWait.Text(update["signature"]) ?? "");
+                    Append(
+                        active.Content,
+                        "signature",
+                        SessionWait.Text(update["signature"]) ?? ""
+                    );
                     break;
                 }
                 string fragment;
@@ -103,10 +122,16 @@ internal sealed class AnthropicEventAccumulator(
                     fragment = SessionWait.Text(update["partial_json"]) ?? "";
                     active.PartialJson += fragment;
                 }
-                else if (type is null || active.Kind is not ("text" or "thinking" or "redacted_thinking" or "tool_use"))
+                else if (
+                    type is null
+                    || active.Kind
+                        is not ("text" or "thinking" or "redacted_thinking" or "tool_use")
+                )
                     break;
                 else
-                    throw new InvalidDataException($"Anthropic stream sent {type} for a {active.Kind} content block.");
+                    throw new InvalidDataException(
+                        $"Anthropic stream sent {type} for a {active.Kind} content block."
+                    );
                 if (fragment.Length > 0)
                     callbacks?.OnMeaningfulProgress?.Invoke();
                 EmitProgress();
@@ -162,17 +187,32 @@ internal sealed class AnthropicEventAccumulator(
         return JsonValue.Create(partial)!;
     }
 
-    private void EmitProgress() => callbacks?.OnProgress?.Invoke(
-        new ResponsesStreamProgress(
-            string.Join("\n", blocks.Values.Where(block => block.Kind == "thinking")
-                .Select(block => SessionWait.Text(block.Content["thinking"]) ?? "").Where(value => value.Length > 0)),
-            string.Concat(blocks.Values.Where(block => block.Kind == "text")
-                .Select(block => SessionWait.Text(block.Content["text"]) ?? "")),
-            blocks.Values.Where(block => block.Kind == "tool_use").Select(block =>
-                new ResponsesToolCallProgress(block.Index, SessionWait.Text(block.Content["id"]),
-                    SessionWait.Text(block.Content["name"]), block.PartialJson)).ToArray()
-        )
-    );
+    private void EmitProgress() =>
+        callbacks?.OnProgress?.Invoke(
+            new ResponsesStreamProgress(
+                string.Join(
+                    "\n",
+                    blocks
+                        .Values.Where(block => block.Kind == "thinking")
+                        .Select(block => SessionWait.Text(block.Content["thinking"]) ?? "")
+                        .Where(value => value.Length > 0)
+                ),
+                string.Concat(
+                    blocks
+                        .Values.Where(block => block.Kind == "text")
+                        .Select(block => SessionWait.Text(block.Content["text"]) ?? "")
+                ),
+                blocks
+                    .Values.Where(block => block.Kind == "tool_use")
+                    .Select(block => new ResponsesToolCallProgress(
+                        block.Index,
+                        SessionWait.Text(block.Content["id"]),
+                        SessionWait.Text(block.Content["name"]),
+                        block.PartialJson
+                    ))
+                    .ToArray()
+            )
+        );
 
     internal JsonObject Complete()
     {
@@ -181,14 +221,20 @@ internal sealed class AnthropicEventAccumulator(
         if (message is null)
             throw new InvalidDataException("Anthropic message stream ended before message_start.");
         if (!delta.ContainsKey("stop_reason"))
-            throw new InvalidDataException("Anthropic message stream ended without a message_delta stop_reason.");
+            throw new InvalidDataException(
+                "Anthropic message stream ended without a message_delta stop_reason."
+            );
         foreach (var block in blocks.Values)
             if (!block.Closed)
-                throw new InvalidDataException($"Anthropic message stream ended with content block {block.Index} still open.");
+                throw new InvalidDataException(
+                    $"Anthropic message stream ended with content block {block.Index} still open."
+                );
         var result = (JsonObject)message.DeepClone();
         result["type"] = "message";
         result["role"] = "assistant";
-        result["content"] = new JsonArray(blocks.Values.Select(block => block.Content.DeepClone()).ToArray());
+        result["content"] = new JsonArray(
+            blocks.Values.Select(block => block.Content.DeepClone()).ToArray()
+        );
         foreach (var (key, value) in delta)
             result[key] = value?.DeepClone();
         if (usage is not null)
@@ -207,8 +253,17 @@ internal static class AnthropicSseCollector
     )
     {
         var accumulator = new AnthropicEventAccumulator(callbacks, reasoningPhase);
-        await OpenAISseReader.ReadAsync(stream, token, accumulator.Consume, callbacks,
-            StreamOwnership.Dispose, () => accumulator.Stopped, flushFinalEvent: true).ConfigureAwait(false);
+        await OpenAISseReader
+            .ReadAsync(
+                stream,
+                token,
+                accumulator.Consume,
+                callbacks,
+                StreamOwnership.Dispose,
+                () => accumulator.Stopped,
+                flushFinalEvent: true
+            )
+            .ConfigureAwait(false);
         return accumulator.Complete();
     }
 }
