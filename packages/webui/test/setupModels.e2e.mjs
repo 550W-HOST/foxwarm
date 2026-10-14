@@ -199,6 +199,10 @@ async function attachRequestMocks(targetPage, options = {}) {
       })
       return
     }
+    if (url.pathname.endsWith('/api/setup/authorizations')) {
+      void respondJson(request, { servers: [] })
+      return
+    }
     if (url.pathname.endsWith('/api/models')) {
       options.modelOptionsRequests?.push(url.pathname)
       const respondModels = () => respondJson(request, {
@@ -536,7 +540,7 @@ after(async () => {
   preview?.kill('SIGTERM')
 })
 
-test('Setup uses accessible Models, Config, and Appearance tabs with status icons and product copy', async () => {
+test('Setup uses accessible Appearance, Models, Config and Authorizations tabs with status icons and product copy', async () => {
   const setupPage = await browser.newPage()
   await setupPage.setBypassServiceWorker(true)
   await attachRequestMocks(setupPage)
@@ -563,6 +567,7 @@ test('Setup uses accessible Models, Config, and Appearance tabs with status icon
       { tab: 'appearance', selected: 'true', status: null },
       { tab: 'models', selected: 'false', status: 'complete' },
       { tab: 'config', selected: 'false', status: null },
+      { tab: 'authorizations', selected: 'false', status: null },
     ])
     assert.deepEqual(await setupPage.$$eval('[data-monaco-model-uri]', (elements) => elements.map((element) => element.getAttribute('data-monaco-model-uri'))), [
       'inmemory://foxwarm/setup/foxwarm-models.yaml',
@@ -593,6 +598,9 @@ test('Setup uses accessible Models, Config, and Appearance tabs with status icon
     await setupPage.waitForFunction(() => document.body.textContent?.includes('Connected as weixin-e2e-user. Channel config saved and reloaded.'))
 
     await setupPage.focus('[data-setup-tab="config"]')
+    await setupPage.keyboard.press('ArrowRight')
+    await setupPage.waitForSelector('[data-setup-tab="authorizations"][aria-selected="true"]')
+    await setupPage.waitForFunction(() => document.querySelector('[data-setup-section="authorizations"]')?.textContent.includes('No HTTP MCP servers'))
     await setupPage.keyboard.press('ArrowRight')
     await setupPage.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]')
     assert.equal(await setupPage.$eval('[data-theme-manager]', element => element.textContent?.includes('WebUI theme')), true)

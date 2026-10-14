@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Bot, CheckCircle2, Palette, RefreshCw, Settings, SlidersHorizontal, XCircle } from 'lucide-react'
+import { Bot, CheckCircle2, KeyRound, Palette, RefreshCw, Settings, SlidersHorizontal, XCircle } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import { buildModelsYaml, makeDefaultProvider } from '../setupModels'
 import { refreshModelOptions } from '../modelOptionsLoader'
@@ -9,6 +9,7 @@ import { useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import SimpleCodeEditor from './SimpleCodeEditor'
 import ThemeManager from './ThemeManager'
 import WebUiBrandingSettings, { type WebUiBrandingSettingsValue } from './WebUiBrandingSettings'
+import AuthorizationsPanel from './AuthorizationsPanel'
 
 type SetupStatus = {
   oobe: boolean
@@ -86,8 +87,8 @@ function StatusPill({ ok, label }: { ok: boolean; label: string }) {
 }
 
 type SaveResult = { kind: 'success' | 'error'; message: string }
-type SetupTab = 'appearance' | 'models' | 'config'
-const SETUP_TABS: SetupTab[] = ['appearance', 'models', 'config']
+type SetupTab = 'appearance' | 'models' | 'config' | 'authorizations'
+const SETUP_TABS: SetupTab[] = ['appearance', 'models', 'config', 'authorizations']
 
 function SaveFeedback({ section, result }: { section: 'models' | 'config'; result: SaveResult | null }) {
   if (!result) return null
@@ -147,6 +148,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
   const modelsTabRef = useRef<HTMLButtonElement | null>(null)
   const configTabRef = useRef<HTMLButtonElement | null>(null)
   const appearanceTabRef = useRef<HTMLButtonElement | null>(null)
+  const authorizationsTabRef = useRef<HTMLButtonElement | null>(null)
   const rawModelsYamlRef = useRef(rawModelsYaml)
   const configYamlRef = useRef(configYaml)
   const modelsRevisionRef = useRef(0)
@@ -255,7 +257,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
 
   const activateTab = (tab: SetupTab, focus = false) => {
     setActiveTab(tab)
-    if (focus) requestAnimationFrame(() => ({ models: modelsTabRef, config: configTabRef, appearance: appearanceTabRef })[tab].current?.focus())
+    if (focus) requestAnimationFrame(() => ({ models: modelsTabRef, config: configTabRef, appearance: appearanceTabRef, authorizations: authorizationsTabRef })[tab].current?.focus())
   }
 
   const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
@@ -513,6 +515,13 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
                   {configTabStatus === 'attention' && <XCircle data-setup-tab-status="attention" className="h-4 w-4 shrink-0 text-fw-warning dark:text-fw-warning" aria-hidden="true" />}
                   {configTabStatus && <span className="sr-only">{configTabStatus === 'complete' ? 'Channels ready' : 'Channels need attention'}</span>}
                 </button>
+                <button ref={authorizationsTabRef} id="setup-tab-authorizations" type="button" role="tab"
+                  aria-selected={activeTab === 'authorizations'} aria-controls="setup-panel-authorizations"
+                  tabIndex={activeTab === 'authorizations' ? 0 : -1} data-setup-tab="authorizations"
+                  onClick={() => activateTab('authorizations')} onKeyDown={handleTabKeyDown}
+                  className={`inline-flex min-w-0 items-center gap-2 rounded-t-lg border-b-2 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'authorizations' ? 'border-fw-accent-border text-fw-accent' : 'border-transparent text-fw-text hover:bg-fw-hover'}`}>
+                  <KeyRound className="h-4 w-4 shrink-0" aria-hidden="true" /><span>Authorizations</span>
+                </button>
               </div>
             </div>
 
@@ -523,6 +532,11 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
                   <WebUiBrandingSettings value={webUiSettings} onInstanceNameChange={onInstanceNameChange} onTabIconChange={onTabIconChange} />
                 )}
               </div>
+            </section>
+
+            <section id="setup-panel-authorizations" role="tabpanel" aria-labelledby="setup-tab-authorizations" data-setup-section="authorizations"
+              hidden={activeTab !== 'authorizations'} className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
+              {activeTab === 'authorizations' && <AuthorizationsPanel />}
             </section>
 
             <section ref={modelsSectionRef} id="setup-panel-models" role="tabpanel" aria-labelledby="setup-tab-models" data-setup-section="models" hidden={activeTab !== 'models'} className={`${activeTab === 'models' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto scroll-mt-4 p-4 md:p-5`}>

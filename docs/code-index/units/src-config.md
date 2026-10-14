@@ -15,7 +15,7 @@ Owns application/model configuration types, path resolution, YAML readers/writer
   QQ generic-file media limits), guest-agent,
   ASR, and `AppConfig` types.
 - `readAppConfigFile`, `writeAppConfigFile`.
-- `normalizePublicUrl`, `PUBLIC_BASE_URL` — optional top-level public HTTP(S) URL for Node bootstrap examples; no effect on HTTP bind or internal API origin.
+- `normalizePublicUrl`, `PUBLIC_BASE_URL` — optional startup public HTTP(S) URL for Node bootstrap examples and outbound MCP OAuth callback/client metadata links; preserves deployment pathname and does not change HTTP bind or internal API origin. OAuth public URL requirements belong to [outbound MCP OAuth](./src-mcp-oauth.md).
 - `safeAppConfigYamlError()` — converts an app-config YAML parse failure to a non-secret error with its 1-based line/column when available; Setup uses the same formatter.
 - `ACCESS_CONFIG`, `ACCESS_RUNTIME`, `normalizeAccessConfig`, and `authenticateAccessBearer` / `authenticateAccessToken` — validated shared WebUI and inbound MCP identities with a Main-owned live snapshot, explicit surface declarations, and verified principal creation; the validator is shared with Setup. The implementation is owned by [src-access-config](./src-access-config.md).
 - `ExecutableNodeProviderConfig`, `DockerWorktreeNodeProviderConfig`, normalized provider unions, `normalizeNodeProvidersConfig`, and `NODE_PROVIDERS_CONFIG` — strict startup definitions for trusted one-shot executable providers and resident Docker worktree providers.

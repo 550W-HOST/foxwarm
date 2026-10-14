@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Authorization fixture</title></head>
+<body style="margin:0"><div id="root" style="height:100vh"></div>
+<script type="module">
+import React from 'react'
+import { createRoot } from 'react-dom/client'
+import SetupView from '/src/components/SetupView.tsx'
+import '/src/index.css'
+createRoot(document.getElementById('root')).render(React.createElement(SetupView))
+</script>
+</body>
+</html>

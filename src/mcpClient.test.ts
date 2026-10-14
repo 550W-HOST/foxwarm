@@ -55,6 +55,7 @@ test('summarizeServerConfig redacts sensitive MCP config values', () => {
     envKeys: ['API_KEY', 'MODE'],
     headerKeys: ['Authorization', 'X-Api-Key'],
     hasToken: true,
+    authentication: 'static',
     timeoutSeconds: null,
   });
 
