@@ -38,10 +38,18 @@ internal sealed partial class SessionManager
         {
             await CloseTokenFileAsync(file);
             if (!CleanTokenFile(path))
-                throw new IOException($"Node `{id}` registry reservation failed, and its newly created credential file may remain at {path}. Inspect both before retrying.");
+                throw new IOException(
+                    $"Node `{id}` registry reservation failed, and its newly created credential file may remain at {path}. Inspect both before retrying."
+                );
             if (error is AuthorityCommittedException)
-                throw new IOException($"Node `{id}` remains reserved after a committed registry write failure, but its credential file was cleaned. Inspect the registry before retrying.", error);
-            throw new IOException($"Node `{id}` registry reservation failed after its newly created credential file was cleaned: {error.Message}", error);
+                throw new IOException(
+                    $"Node `{id}` remains reserved after a committed registry write failure, but its credential file was cleaned. Inspect the registry before retrying.",
+                    error
+                );
+            throw new IOException(
+                $"Node `{id}` registry reservation failed after its newly created credential file was cleaned: {error.Message}",
+                error
+            );
         }
         try
         {
@@ -54,21 +62,39 @@ internal sealed partial class SessionManager
         {
             await CloseTokenFileAsync(file);
             if (!CleanTokenFile(path))
-                throw new IOException($"Node `{id}` remains reserved, and its credential file may remain at {path} after the write failed. Inspect the registry and file before retrying.");
-            throw new IOException($"Node `{id}` remains reserved, but its credential file could not be written and was cleaned: {error.Message}", error);
+                throw new IOException(
+                    $"Node `{id}` remains reserved, and its credential file may remain at {path} after the write failed. Inspect the registry and file before retrying."
+                );
+            throw new IOException(
+                $"Node `{id}` remains reserved, but its credential file could not be written and was cleaned: {error.Message}",
+                error
+            );
         }
     }
 
     private static async Task CloseTokenFileAsync(FileStream file)
     {
-        try { await file.DisposeAsync(); }
+        try
+        {
+            await file.DisposeAsync();
+        }
         catch (IOException) { }
     }
 
     private static bool CleanTokenFile(string path)
     {
-        try { File.Delete(path); return true; }
-        catch (IOException) { return false; }
-        catch (UnauthorizedAccessException) { return false; }
+        try
+        {
+            File.Delete(path);
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 }

@@ -14,7 +14,10 @@ public sealed partial class ShellHttpTests
     [InlineData("0", "<1s")]
     [InlineData("1", "~1s")]
     [InlineData("62", "~1m 2s")]
-    public async Task Duration_comes_only_from_client_metadata_not_dispatch_or_report_latency(string elapsed, string expected)
+    public async Task Duration_comes_only_from_client_metadata_not_dispatch_or_report_latency(
+        string elapsed,
+        string expected
+    )
     {
         await using var fixture = new Fixture();
         await fixture.Start();
@@ -39,12 +42,23 @@ public sealed partial class ShellHttpTests
         await fixture.Manager.SelectNodeAsync(fixture.Owner, "master");
         using var completed = await fixture.Report(task.Task, finished: true, elapsed: "2");
         Assert.Equal(HttpStatusCode.NoContent, completed.StatusCode);
-        var persisted = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(fixture.Data, "state", "sessions", fixture.Owner.Id + ".json")))!;
+        var persisted = JsonNode.Parse(
+            await File.ReadAllTextAsync(
+                Path.Combine(fixture.Data, "state", "sessions", fixture.Owner.Id + ".json")
+            )
+        )!;
         Assert.Contains("Duration: ~2s", persisted.ToJsonString());
         var wakes = fixture.Wakes;
         using var repeat = await fixture.Report(task.Task, finished: true, elapsed: "999");
         Assert.Equal(HttpStatusCode.NoContent, repeat.StatusCode);
         Assert.Equal(wakes, fixture.Wakes);
-        Assert.DoesNotContain("Duration: ~16m", (await File.ReadAllTextAsync(Path.Combine(fixture.Data, "state", "sessions", fixture.Owner.Id + ".json"))));
+        Assert.DoesNotContain(
+            "Duration: ~16m",
+            (
+                await File.ReadAllTextAsync(
+                    Path.Combine(fixture.Data, "state", "sessions", fixture.Owner.Id + ".json")
+                )
+            )
+        );
     }
 }

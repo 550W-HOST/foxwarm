@@ -501,7 +501,9 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         var record = allocated with
         {
             Pid = process.Id,
-            StartedAt = new DateTimeOffset(process.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds(),
+            StartedAt = new DateTimeOffset(
+                process.StartTime.ToUniversalTime()
+            ).ToUnixTimeMilliseconds(),
             ProcessStartTicks = ReadProcessIdentity(process.Id).Ticks,
         };
         await AtomicWriteAsync(
@@ -623,10 +625,17 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
 
     private static string CompletedDuration(ExecRecord record, JsonObject status)
     {
-        if (status["finishedAtIsEstimated"]?.GetValue<bool>() == true
-            || SessionWait.Text(status["error"]) == "Process exited but no status file was written.")
+        if (
+            status["finishedAtIsEstimated"]?.GetValue<bool>() == true
+            || SessionWait.Text(status["error"]) == "Process exited but no status file was written."
+        )
             return "unknown";
-        return DateTimeOffset.TryParse(SessionWait.Text(status["finishedAt"]), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var end)
+        return DateTimeOffset.TryParse(
+            SessionWait.Text(status["finishedAt"]),
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal,
+            out var end
+        )
             ? ExecDuration.Format(end.ToUnixTimeMilliseconds() - record.StartedAt) ?? "unknown"
             : "unknown";
     }

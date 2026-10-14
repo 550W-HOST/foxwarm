@@ -83,7 +83,9 @@ internal sealed partial class NodeConnectionHub
             )
         )
             throw new InvalidDataException("Invalid result metadata.");
-        var duration = Foxwarm.Tools.ExecDuration.Shell(ShellHeader(context.Request, "X-Foxwarm-Elapsed-Seconds"));
+        var duration = Foxwarm.Tools.ExecDuration.Shell(
+            ShellHeader(context.Request, "X-Foxwarm-Elapsed-Seconds")
+        );
         await task.Serial.WaitAsync(context.RequestAborted);
         try
         {
