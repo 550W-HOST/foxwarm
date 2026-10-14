@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
 
@@ -5,6 +6,65 @@ namespace Foxwarm.Tests;
 
 public sealed partial class CompactLifecycleTests
 {
+    [Theory]
+    [InlineData(false, 21000)]
+    [InlineData(false, 29999)]
+    [InlineData(true, 21000)]
+    [InlineData(true, 29999)]
+    public async Task Above_context_threshold_override_continues_tools_and_queued_input_without_planning(
+        bool queued,
+        int inputTokens
+    )
+    {
+        await using var fixture = await CompactFixture.CreateAsync();
+        await fixture.SeedAsync();
+        await fixture.Owner.Entry.SaveLane.CommitSettingsAsync(
+            new JsonObject { ["compactThresholdTokens"] = 30000 },
+            fixture.AuthorizationManager.Models
+        );
+        fixture.Peer.NextUsage = inputTokens;
+        fixture.Peer.NextTool = !queued;
+        if (queued)
+        {
+            await fixture.Owner.Registry.Ingress.EnqueueAsync(
+                "s",
+                QueueItem.UserText("hold foreground")
+            );
+            await fixture.Peer.ForegroundReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await fixture.Owner.Registry.Ingress.EnqueueAsync(
+                "s",
+                QueueItem.UserText("provider-time input")
+            );
+            fixture.Peer.ReleaseForeground();
+        }
+        else
+            await fixture.Owner.Registry.Ingress.EnqueueAsync(
+                "s",
+                QueueItem.UserText("tool continuation")
+            );
+        await fixture.Owner.DrainForegroundAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(9, fixture.Peer.NormalRequests);
+        Assert.Equal(0, fixture.Peer.PlannerRequests);
+        Assert.Equal(0, fixture.Owner.Entry.Snapshot().HistoryVersion);
+        Assert.Null(fixture.Owner.Entry.LastBackgroundProcessorFailure);
+        if (queued)
+            Assert.Contains("provider-time input", fixture.Peer.NormalBodies[^1]);
+        else
+        {
+            Assert.Equal(1, fixture.ToolExecutor.Invocations);
+            var input = JsonNode.Parse(fixture.Peer.NormalBodies[^1])!["input"]!.AsArray();
+            var callIndex = input.IndexOf(
+                input.Single(row =>
+                    row?["call_id"]?.GetValue<string>() == "actual-tool"
+                    && row?["type"]?.GetValue<string>() == "function_call"
+                )
+            );
+            Assert.Equal("function_call_output", input[callIndex + 1]!["type"]!.GetValue<string>());
+            Assert.Equal("actual-tool", input[callIndex + 1]!["call_id"]!.GetValue<string>());
+            Assert.Contains("completed tool", input[callIndex + 1]!["output"]!.ToString());
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -134,11 +194,20 @@ public sealed partial class CompactLifecycleTests
         Assert.Equal(1, fixture.Owner.Entry.Snapshot().HistoryVersion);
     }
 
-    [Fact]
-    public async Task Ready_safe_point_commit_consumes_old_usage_without_another_planner_round()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Ready_safe_point_commit_consumes_old_usage_without_another_planner_round(
+        bool aboveContextThreshold
+    )
     {
         await using var fixture = await CompactFixture.CreateAsync();
         await fixture.SeedAsync();
+        if (aboveContextThreshold)
+            await fixture.Owner.Entry.SaveLane.CommitSettingsAsync(
+                new JsonObject { ["compactThresholdTokens"] = 30000 },
+                fixture.AuthorizationManager.Models
+            );
         await fixture.Owner.Compactor.StartManualAsync();
         await fixture.Peer.PlanReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
         fixture.HoldBeforeContinuation = true;
@@ -161,11 +230,25 @@ public sealed partial class CompactLifecycleTests
         Assert.Contains("Prior context.", fixture.Peer.NormalBodies[^1]);
     }
 
-    [Fact]
-    public async Task Failed_ready_authority_apply_ends_over_limit_turn_before_another_provider_request()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Failed_ready_authority_apply_ends_over_limit_turn_before_another_provider_request(
+        bool aboveContextThreshold
+    )
     {
         await using var fixture = await CompactFixture.CreateAsync();
         await fixture.SeedAsync();
+        if (aboveContextThreshold)
+        {
+            await fixture.Owner.Entry.SaveLane.CommitSettingsAsync(
+                new JsonObject { ["compactThresholdTokens"] = 30000 },
+                fixture.AuthorizationManager.Models
+            );
+            await fixture.Owner.Compactor.StartManualAsync();
+            await fixture.Peer.PlanReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            fixture.HoldBeforeContinuation = true;
+        }
         fixture.Peer.NextUsage = 21000;
         fixture.Peer.NextTool = true;
         await fixture.Owner.Registry.Ingress.EnqueueAsync(
@@ -173,10 +256,22 @@ public sealed partial class CompactLifecycleTests
             QueueItem.UserText("tool continuation")
         );
         await fixture.Peer.PlanReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        if (aboveContextThreshold)
+        {
+            await fixture.ContinuationReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            fixture.HoldSignal = true;
+            fixture.Peer.ReleasePlan();
+            await fixture.StageReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            fixture.StageRelease.Set();
+            await fixture.Owner.Entry.SaveLane.SaveStrictAsync();
+        }
         fixture.HoldStage = AtomicJsonWriteStage.BeforeRename;
         fixture.FailHeldStage = true;
         fixture.Peer.ReleasePlan();
-        await fixture.StageReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        if (aboveContextThreshold)
+            fixture.ContinuationRelease.TrySetResult();
+        else
+            await fixture.StageReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
         fixture.StageRelease.Set();
         await fixture.Owner.DrainForegroundAsync().WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(8, fixture.Peer.NormalRequests);
@@ -194,14 +289,21 @@ public sealed partial class CompactLifecycleTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
     public async Task Failed_pending_or_already_ready_over_limit_plan_ends_turn_and_retains_admitted_input(
-        bool alreadyReady
+        bool alreadyReady,
+        bool aboveContextThreshold
     )
     {
         await using var fixture = await CompactFixture.CreateAsync();
         await fixture.SeedAsync();
+        if (aboveContextThreshold)
+            await fixture.Owner.Entry.SaveLane.CommitSettingsAsync(
+                new JsonObject { ["compactThresholdTokens"] = 30000 },
+                fixture.AuthorizationManager.Models
+            );
         fixture.Peer.FailPlan = true;
         fixture.Peer.NextUsage = 21000;
         if (alreadyReady)

@@ -39,7 +39,7 @@ const provider = createServer(async (req, res) => {
     requests.push(body)
     assert.equal(body.max_output_tokens, body.model === 'a-wire' ? 137 : 222)
     const texts = (body.input || []).flatMap(row => row.content || []).map(part => part.text || '')
-    const latest = texts.filter(text => /^(image|skill|large|seed|continue|leaf)/.test(text)).at(-1) || ''
+    const latest = texts.filter(text => /^(image|skill|large|seed|continue|leaf|threshold)/.test(text)).at(-1) || ''
     const planner = texts.some(text => text.includes('COMPACTION STARTED:'))
     let items, usage
     const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
@@ -53,9 +53,10 @@ const provider = createServer(async (req, res) => {
       }
       items = [call('planner-' + planMode, 'submit_compact_plan', { replaceAsBlocks: blocks,
         ...(planMode === 'preserve' ? { preserveMessages: [preservedIds[1]] } : { removePreservedMessages: preservedIds }) })]
-    } else if (!seenCommands.has(latest) && /^(image|skill|large|continue)/.test(latest)) {
+    } else if (!seenCommands.has(latest) && /^(image|skill|large|continue|threshold)/.test(latest)) {
       seenCommands.add(latest)
-      if (latest.startsWith('skill')) items = [call('genuine-skill', 'skill', { action: 'load', skillName: 'fixture' })]
+      if (latest.startsWith('threshold')) items = [call('threshold-setting', 'set_session_compact_threshold', { thresholdTokens: 30000 })]
+      else if (latest.startsWith('skill')) items = [call('genuine-skill', 'skill', { action: 'load', skillName: 'fixture' })]
       else items = [call(latest.startsWith('large') ? 'ordinary-read' : latest.startsWith('continue') ? 'continued-read-' + seenCommands.size : 'image-' + body.model,
         'read', { filePath: latest.startsWith('large') ? join(work, 'large.txt') : latest.startsWith('continue') ? join(work, 'small.txt') : join(work, 'image.png') })]
       if (latest.startsWith('continue')) usage = { input_tokens: 21000, output_tokens: 1 }
@@ -154,9 +155,26 @@ try {
   await idle()
   const archived = await api('GET', `/api/sessions/${sessionId}/archive/messages/${preservedIds[1]}`)
   assert.equal(archived.status, 200); assert.deepEqual(archived.body.message, skillResponse)
+  const beforeOverride = requests.length
+  const beforeOverridePlanners = requests.filter(body => JSON.stringify(body.input).includes('COMPACTION STARTED:')).length
+  await send('threshold override above model window')
+  const setting = (await history()).find(row => row.parts.some(part => part.functionResponse?.tool_use_id === 'threshold-setting'))
+  assert(setting.parts[0].functionResponse.response.output.includes('override: 30000 tokens'))
+  assert(setting.parts[0].functionResponse.response.output.includes('effective: 30000 tokens'))
+  await send('continue over limit below configured threshold')
+  assert.equal(requests.length, beforeOverride + 4, 'Accepted threshold override permits one follow-up for each complete tool batch')
+  assert.equal(requests.filter(body => JSON.stringify(body.input).includes('COMPACTION STARTED:')).length, beforeOverridePlanners, 'Below-threshold usage must not start a planner even above the model context limit')
+  const followedCall = requests.at(-1).input.findLastIndex(row => row.type === 'function_call' && row.call_id.startsWith('continued-read-'))
+  assert(followedCall >= 0)
+  assert.equal(requests.at(-1).input[followedCall + 1].type, 'function_call_output')
+  assert.equal(requests.at(-1).input[followedCall + 1].call_id, requests.at(-1).input[followedCall].call_id)
+  assert(requests.at(-1).input[followedCall + 1].output.some(part => part.type === 'input_text' && part.text.includes('completed real tool')))
+  const overrideHistory = await history()
+  assert.equal(overrideHistory.at(-1).role, 'model')
+  assert.equal((await api('GET', `/api/sessions/${sessionId}/state`)).body.session.failureCount, 0)
   assert.equal((await api('POST', '/admin/shutdown')).status, 202)
   const [exit] = await once(host, 'exit'); assert.equal(exit, 0, output)
-  console.log(JSON.stringify({ requests: requests.length, maskedInvalidSavePreserved: true, physicalLeafOutputAndImage: true, virtualSelection: true, genuineSkillRetained: true, materialPrune: true, overLimitHeldPlannerAndOwnerContinuation: true, pairedPreserveAndRemove: true, immutableArchive: true }))
+  console.log(JSON.stringify({ requests: requests.length, maskedInvalidSavePreserved: true, physicalLeafOutputAndImage: true, virtualSelection: true, genuineSkillRetained: true, materialPrune: true, overLimitHeldPlannerAndOwnerContinuation: true, pairedPreserveAndRemove: true, immutableArchive: true, aboveContextThresholdToolOverrideAndFollowUp: true }))
 } finally {
   releasePlan?.()
   if (host && host.exitCode == null) { host.kill('SIGKILL'); await once(host, 'exit') }

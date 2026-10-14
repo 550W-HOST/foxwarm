@@ -389,6 +389,14 @@ internal sealed partial class SessionCompactor
             });
             if (committed)
                 return;
+            if (
+                UsageTotal(result)
+                <= SessionModelSettings.EffectiveThreshold(
+                    hosted.Entry.Snapshot().AuthorityEnvelope,
+                    models
+                )
+            )
+                return;
             var applied = await AutoAfterTurnAsync(result);
             if (!overLimit)
                 return;
