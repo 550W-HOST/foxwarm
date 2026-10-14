@@ -61,7 +61,14 @@ public sealed class SessionExecutionNodeProjectionTests
             Path.Combine(data, "state", "sessions.json"),
             new JsonObject { ["sessions"] = rows }.ToJsonString()
         );
-        var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
+        var options = new ResponsesClientOptions(
+            new Uri("http://127.0.0.1:1"),
+            "wire",
+            "a",
+            "",
+            "",
+            713
+        );
         var models = HostModels.ForTest(options);
         await using var manager = new SessionManager(data, work, options, models);
         await manager.LoadAsync();
@@ -82,11 +89,19 @@ public sealed class SessionExecutionNodeProjectionTests
         Assert.Null(manager.RecordedIsolationNode("main"));
         Assert.Equal(storedNode ?? "master", announcedNode);
         AssertPlacement(storedNode ?? "master");
-        Assert.True(JsonNode.DeepEquals(originalAuthority, owner.Entry.Snapshot().AuthorityEnvelope));
+        Assert.True(
+            JsonNode.DeepEquals(originalAuthority, owner.Entry.Snapshot().AuthorityEnvelope)
+        );
         Assert.True(JsonNode.DeepEquals(unrelatedProjection, runtime.Projection(unrelated.Id)));
-        Assert.Equal(new[] { "other/live", "retained" }, manager.Owners().Select(value => value.Id).Order().ToArray());
+        Assert.Equal(
+            new[] { "other/live", "retained" },
+            manager.Owners().Select(value => value.Id).Order().ToArray()
+        );
         foreach (var (id, bytes) in originals)
-            Assert.Equal(bytes, await File.ReadAllTextAsync(Path.Combine(data, "state", "sessions", id + ".json")));
+            Assert.Equal(
+                bytes,
+                await File.ReadAllTextAsync(Path.Combine(data, "state", "sessions", id + ".json"))
+            );
 
         void AssertPlacement(string expected)
         {
@@ -94,12 +109,19 @@ public sealed class SessionExecutionNodeProjectionTests
             Assert.Equal((expected, work), manager.ExecutionPlacement(owner));
             Assert.Equal(expected, owner.BuildDto()["currentNode"]!.GetValue<string>());
             var history = WebUiContract.History(
-                snapshot, models, owner.ToolActive, owner.Compacting,
-                null, null, null, owner.ExecutionNode(snapshot.AuthorityEnvelope)
+                snapshot,
+                models,
+                owner.ToolActive,
+                owner.Compacting,
+                null,
+                null,
+                null,
+                owner.ExecutionNode(snapshot.AuthorityEnvelope)
             );
             Assert.Equal(expected, history["session"]!["currentNode"]!.GetValue<string>());
             var stateEvent = WebUiContract.Event(
-                new SessionRuntimeEvent(owner.Id, SessionEventKind.StateChanged, null), runtime
+                new SessionRuntimeEvent(owner.Id, SessionEventKind.StateChanged, null),
+                runtime
             );
             Assert.Equal(expected, stateEvent["session"]!["currentNode"]!.GetValue<string>());
             var listed = runtime.Projection(owner.Id)!;
