@@ -31,6 +31,7 @@ import MarkdownHtmlSegment from './MarkdownHtmlSegment'
 import WebSearchCard from './WebSearchCard'
 import { getWebSearchAction, type WebSearchAction } from '../webSearchAction'
 import ContextBlockCard, { getContextBlockMetaFromMessage } from './ContextBlockCard'
+import JsonInspectorDialog from './JsonInspectorDialog'
 import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
 import { useThreadCardHeightTransition } from './useThreadCardHeightTransition'
 import CommitMarkerCard, { type OpenCodeCommitHandler } from './CommitMarkerCard'
@@ -801,7 +802,7 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
   const displayedViewMode = searchReveal ? 'rendered' : viewMode
   const [copied, setCopied] = useState(false)
   const copyResetTimeoutRef = useRef<number | null>(null)
-  const jsonText = useMemo(() => viewMode === 'json' ? JSON.stringify(message, null, 2) : '', [message, viewMode])
+  const [jsonSnapshot, setJsonSnapshot] = useState<string | null>(null)
   const renderedSegments = useMemo(() => splitCommitMarkers(text), [text])
 
   useEffect(() => {
@@ -840,7 +841,7 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
         <IconToggleButton onClick={() => setViewMode('raw')} active={displayedViewMode === 'raw'} title="Raw Text">
           <Code size={12} />
         </IconToggleButton>
-        <IconToggleButton onClick={() => setViewMode('json')} active={displayedViewMode === 'json'} title="JSON">
+        <IconToggleButton onClick={() => setJsonSnapshot(JSON.stringify(message, null, 2))} active={jsonSnapshot !== null} title="JSON">
           <FileJson size={14} />
         </IconToggleButton>
         <IconToggleButton onClick={handleCopy} active={copied} title={copied ? 'Copied' : 'Copy Raw Text'}>
@@ -865,11 +866,10 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
           ))}
           <div data-search-exclude className="contents"><WebSearchCitationLinks annotations={annotations} /></div>
         </div>
-      ) : displayedViewMode === 'raw' ? (
-        <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-fw-text-strong">{text}</pre>
       ) : (
-        <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-fw-text-strong">{jsonText}</pre>
+        <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-fw-text-strong">{text}</pre>
       )}
+      {jsonSnapshot !== null && <JsonInspectorDialog text={jsonSnapshot} onClose={() => setJsonSnapshot(null)} />}
     </div>
   )
 })

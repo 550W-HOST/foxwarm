@@ -13,6 +13,7 @@ interface SimpleCodeEditorProps {
   modelUri?: string
   focusRequest?: number
   ariaLabel?: string
+  initialFoldLevel?: number
 }
 
 const MONACO_THEME_ID = 'foxwarm-active'
@@ -32,6 +33,7 @@ export default function SimpleCodeEditor({
   modelUri,
   focusRequest = 0,
   ariaLabel = 'Code editor',
+  initialFoldLevel,
 }: SimpleCodeEditorProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const wrapperRef = useRef<HTMLDivElement | null>(null)
@@ -134,6 +136,10 @@ export default function SimpleCodeEditor({
       monacoRef.current = monaco
       editorRef.current = editor
       modelRef.current = model
+      if (initialFoldLevel !== undefined) {
+        await editor.getAction(`editor.foldLevel${initialFoldLevel}`)?.run()
+        if (disposed) return
+      }
       if (focusRequestRef.current > 0) editor.focus()
       if (wrapperRef.current) wrapperRef.current.dataset.editorReady = 'true'
     }
@@ -206,7 +212,7 @@ export default function SimpleCodeEditor({
       >
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="border-b border-fw-warning-border bg-fw-warning-surface px-3 py-1.5 text-xs text-fw-warning dark:border-fw-warning-border dark:bg-fw-warning-surface-strong/40 dark:text-fw-warning">
-            Advanced editor features are unavailable. You can still edit and save this YAML.
+            {readOnly ? 'Advanced editor features are unavailable.' : 'Advanced editor features are unavailable. You can still edit and save this YAML.'}
           </div>
           <textarea
             ref={fallbackRef}

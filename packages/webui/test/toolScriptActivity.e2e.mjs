@@ -1,7 +1,7 @@
 import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { build } from 'esbuild'
+import { build } from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
 
 const componentPath = new URL('../src/components/ToolTimelineItems.tsx', import.meta.url).pathname

@@ -82,9 +82,8 @@ export interface SlashCommandCompletion {
   trailingSpace: boolean
 }
 
-export type ViewMode = 'rendered' | 'raw' | 'json'
+export type ViewMode = 'rendered' | 'raw'
 
-export type ToolViewMode = 'default' | 'json'
 
 export interface FunctionCall {
   id?: string

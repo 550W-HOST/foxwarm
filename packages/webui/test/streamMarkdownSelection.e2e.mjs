@@ -6,7 +6,7 @@ import path from 'node:path'
 import test, { after, before } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import * as esbuild from 'esbuild'
+import * as esbuild from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
 import { webuiReactAliases } from './reactRendererAliases.mjs'
 

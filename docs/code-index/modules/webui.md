@@ -20,7 +20,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 - [webui-setup-view](../units/webui-setup-view.md), [webui-settings](../units/webui-settings.md), [settings menu](../units/webui-settings-menu.md).
 - [webui-theme-system](../units/webui-theme-system.md) — versioned portable manifests, built-ins, browser-local registry/selection, semantic runtime, Setup management, and renderer adapters.
 - [webui-terminal](../units/webui-terminal.md) — xterm browser client.
-- [webui-editor](../units/webui-editor.md), [small components](../units/webui-small-components.md).
+- [webui-editor](../units/webui-editor.md) (including the [shared Debug/Timeline JSON inspector](../units/webui-editor.md#d-editor-json-inspection)), [small components](../units/webui-small-components.md).
 - [src-channels-webui](../units/src-channels-webui.md) — authenticated HTTP/WS/SSE/upload/setup/terminal routes.
 - WebUI identity access is defined by `access.identities.<identityId>.surfaces.webui`; there is no persisted WebUI identity-token storage layer.
 - Session list/state/history/settings routes and session update streams consume immutable SessionRuntime DTOs; destructive lifecycle and channel-attachment routes retain their explicit manager-owned coordination boundary.

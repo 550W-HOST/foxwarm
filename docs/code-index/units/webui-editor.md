@@ -1,16 +1,17 @@
 # Unit: WebUI editor
 
-Files: packages/webui/src/components/SimpleCodeEditor.tsx, packages/webui/src/components/DiffPreview.tsx, packages/webui/src/yamlMonacoSupport.ts, packages/webui/src/yamlConfigSchemas.ts, packages/webui/src/modelsYamlCompletions.ts, packages/webui/src/workers/yaml.worker.ts, packages/webui/test/configEditor.test.mjs
+Files: packages/webui/src/components/JsonInspectorDialog.tsx, packages/webui/src/components/SimpleCodeEditor.tsx, packages/webui/src/components/DiffPreview.tsx, packages/webui/src/yamlMonacoSupport.ts, packages/webui/src/yamlConfigSchemas.ts, packages/webui/src/modelsYamlCompletions.ts, packages/webui/src/workers/yaml.worker.ts, packages/webui/test/configEditor.test.mjs, packages/webui/test/jsonInspector.e2e.mjs, packages/webui/test/editorFixtureServer.mjs, packages/webui/test/browserFixtureBundle.mjs
 Secondary files: packages/shared/src/configSchemas.ts, packages/webui/test/setupModels.e2e.mjs
 
 ## Purpose
 
-Provides reusable code editing and diff visualization components for the WebUI. `SimpleCodeEditor` lazy-loads a Monaco/YAML support singleton for configuration editing, while `DiffPreview` renders side-by-side or unified diffs with syntax highlighting.
+Provides reusable code editing, JSON inspection dialogs, and diff visualization components for the WebUI. `SimpleCodeEditor` lazy-loads a Monaco/YAML support singleton for configuration editing, while `DiffPreview` renders side-by-side or unified diffs with syntax highlighting.
 
 ## Key exports
 
+- `JsonInspectorDialog` — body-portaled read-only JSON inspector with full-text Copy, optional Refresh/status, Escape, focus restoration, and a bounded editor surface.
 - `SimpleCodeEditor` — Monaco wrapper with explicit model URIs, focus requests, read-only/language/value synchronization, and advisory marker state.
-- `loadYamlMonacoSupport` — lazy singleton that installs Monaco editor/YAML workers, registers static schemas, and owns current-document model completions.
+- `loadYamlMonacoSupport` — lazy singleton that installs Monaco editor/YAML/JSON workers, registers static schemas, and owns current-document model completions.
 - Shared `MODELS_CONFIG_SCHEMA` / `APP_CONFIG_SCHEMA` objects plus WebUI-local distinct in-memory model URIs and file-match wrappers.
 - `parseModelsYamlSuggestions`, `getProviderModelCompletionContext`, and `createModelsYamlCompletionProvider` — derive local routing completions and exact provider-model completion context from unsaved YAML, then own the editor-lifetime provider-list cache.
 - `DiffPreview` — memoized unified/split diff visualization.
@@ -32,6 +33,10 @@ Provides reusable code editing and diff visualization components for the WebUI. 
 
 ## Integration
 
+- Debug info and assistant/tool JSON controls share `JsonInspectorDialog`; snapshot data/lifecycle stays with the caller. [Chat diagnostic captures](./webui-chat.md) remain explicit and cancelable. Timeline entry points serialize only on user open and retain their rendered/raw choice, card disclosure, and scroll state. Ordinary structured tool output, code fences, and per-block Raw controls are unchanged.
+- `SimpleCodeEditor.initialFoldLevel` runs Monaco's public fold-level action once after model creation. Inspector snapshots use level 2; an explicit Debug refresh gives the editor a new snapshot key, while ordinary rerenders, streaming, and theme changes preserve manual folding. Anonymous Monaco model URIs keep concurrent inspectors distinct, and closing disposes each editor/model/listener.
+- `jsonInspector.e2e.mjs` uses the real Vite worker/asset pipeline to exercise readonly behavior, initial folding/manual unfolding, full-copy snapshots, stream/theme stability, local Find, portal layering, Raw/tool disclosure/scroll retention, two-model disposal, and a Firefox entry/Escape path. The existing standalone rendering fixtures use `browserFixtureBundle.mjs` to select the supported plain-text fallback instead of attempting to bundle Vite-only Monaco assets through esbuild.
+
 - Setup owns the two stable YAML models and supplies a transient focus request when Chat opens model settings.
 - `configEditor.test.mjs` validates shared-import parity, current/legacy/custom/backend-tolerant fixtures with Ajv, exact executable and Docker-worktree Node-provider schema variants, schema boundaries, local and provider-list completion context/cache/cancellation, last-valid retention, the Setup flex-height contract, and the worker-compatible Monaco pin. Setup browser tests exercise production schema completion, on-demand provider network timing/replacement/isolation/failure/cancellation, forward and reverse selection replacement in both editors (including parent-driven value reset), section-scoped Ctrl/Meta+S saving without duplicate requests, and the savable controlled-textarea fallback.
 - The former full-page WebUI file editor was removed with the custom workspace feature; Code remains the general browser editing integration.
@@ -47,3 +52,7 @@ Completion acceptance replaces the current YAML scalar token, including punctuat
 ### D-editor-controlled-selection
 
 Controlled parent value updates must preserve Monaco's complete selection state, including reverse anchor/active direction, and update text plus selection atomically. Monaco's textarea input path can still expose a collapsed native selection behind a non-empty visible RTL selection; detect that concrete mismatch at text input and route the insertion through Monaco's normal type command rather than consuming the first key. Do not reduce a selection to its active cursor during synchronization: the first subsequent typed key must replace forward, right-to-left, and bottom-to-top selections consistently in both Models and Config. The plain-text fallback retains native controlled-textarea behavior.
+
+### D-editor-json-inspection
+
+[2026-10-14] Debug info and Timeline JSON inspection use one shared, read-only Monaco dialog rather than inline JSON modes. Opening or explicitly refreshing captures the complete JSON without truncation; level-2 initial folding keeps the outer object and first-layer fields readable while deeper content remains available through Monaco folding, Find, and full-text Copy. Ordinary stream/theme updates do not recapture or reset manual folding. Assistant Rendered/Raw choices remain meaningful; Tool cards have one formatted body with a JSON action and no Default mode toggle. Opening and closing the inspector do not alter Timeline disclosure, card identity, or viewport state. The dialog portals to the page overlay boundary and owns only presentation/copy/editor resources, not Session fetching or authorization.
