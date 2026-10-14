@@ -2,7 +2,7 @@ import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { readFile, readdir } from 'node:fs/promises'
-import { build } from 'esbuild'
+import { build } from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
 
 const chatEntry = new URL('../src/components/Chat.tsx', import.meta.url).pathname
@@ -234,7 +234,7 @@ test('finds already-loaded older unmounted rows, read results, reasoning, render
         const range=entry?.[1].values().next().value
         const body=range?.startContainer.parentElement.closest('[data-search-surface="reasoning"]')
         const card=body?.closest('[data-model-thread-card="reasoning"]')
-        return {index:body?.dataset.searchPartIndex,tag:card?.querySelector('.foxwarm-reasoning-tag')?.textContent,tokens:card?.querySelector('[data-reasoning-tokens]')?.textContent}
+        return {index:body?.dataset.searchPartIndex,tag:card?.querySelector('.foxwarm-reasoning-tag')?.getAttribute('aria-label'),tokens:card?.querySelector('[data-reasoning-tokens]')?.textContent}
       }),{index:'1',tag:'Reasoning ×3',tokens:'31 tokens'})
     }
   }

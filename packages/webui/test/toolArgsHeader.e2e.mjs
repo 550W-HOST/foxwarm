@@ -2,7 +2,7 @@ import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { readdir, readFile } from 'node:fs/promises'
-import { build } from 'esbuild'
+import { build } from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
 
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
@@ -124,7 +124,7 @@ async function readVisualState(id) {
     }
     const card = root.querySelector('.foxwarm-tool-card')
     const header = root.querySelector('.foxwarm-tool-header')
-    const actions = root.querySelector('.foxwarm-tool-card > .foxwarm-tool-action-buttons')
+    const actions = root.querySelector('.foxwarm-tool-header-toggle .foxwarm-tool-action-buttons')
     const args = root.querySelector('.foxwarm-tool-call-args')
     const result = root.querySelector('.foxwarm-tool-result-content, .foxwarm-tool-result-preview') || header?.nextElementSibling
     const summary = root.querySelector('.foxwarm-tool-call-summary')

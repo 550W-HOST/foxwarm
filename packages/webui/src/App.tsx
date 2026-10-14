@@ -710,7 +710,7 @@ function App() {
         return
       }
       if (tab.type !== 'search') return
-      const nextTitle = tab.searchQuery?.trim() || 'History'
+      const nextTitle = tab.searchSubmittedQuery?.trim() || 'History'
       if (tab.title !== nextTitle) {
         updateTab(tab.id, (current) => current.type === 'search' ? { ...current, title: nextTitle } : current)
       }
@@ -1581,9 +1581,13 @@ function App() {
       initialDraft={{ query: tab.searchQuery || '', agentName: tab.searchAgentName || '', sessionId: tab.searchSessionId || '' }}
       onDraftChange={(draft) => updateTab(tab.id, current => current.type === 'search' ? {
         ...current, searchQuery: draft.query, searchAgentName: draft.agentName, searchSessionId: draft.sessionId,
+      } : current)}
+      onSearchStarted={(draft) => updateTab(tab.id, current => current.type === 'search' ? {
+        ...current,
+        searchStarted: true,
+        searchSubmittedQuery: draft.query,
         title: draft.query.trim() || 'History',
       } : current)}
-      onSearchStarted={() => updateTab(tab.id, current => current.type === 'search' ? { ...current, searchStarted: true } : current)}
     />
 
     if (tab.type === 'agents') {

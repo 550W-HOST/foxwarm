@@ -72,6 +72,11 @@ export function projectSessionSearchFields(messages: Message[], timelineView: Ti
   })
   const fields: SearchField[] = []
   for (const row of rows) {
+    if (row.activity?.preview) {
+      const preview = row.activity.preview
+      const source = row.activity.sources?.find(message => message.__meta === preview.message.__meta)
+      fields.push({ rowKey: row.key, sourceIndex: sourceIndices.get(source || preview.message) ?? sourceIndices.get(row.msg)!, surface: 'model', partIndex: preview.partIndex, text: assistantText(preview.message.parts[preview.partIndex].text || '') })
+    }
     if (row.activity || timelineView === 'conversation' && getLlmErrorMessageDetails(row.msg)) continue
     const { msg, key: rowKey } = row
     const groupKey = row.group?.key
@@ -109,7 +114,7 @@ export function projectSessionSearchFields(messages: Message[], timelineView: Ti
     msg.parts.forEach((part, index) => {
       if (row.conversationPartIndex !== undefined && index !== row.conversationPartIndex) return
       if (timelineView !== 'conversation' && isReasoningPart(part)) add('reasoning', index, markdownText(getReasoningText(part), false))
-      if (msg.role === 'model' && part.text && (timelineView !== 'conversation' || (!part.toolUseId && !part.functionResponse))) {
+      if (!row.conversationImageOnly && msg.role === 'model' && part.text && (timelineView !== 'conversation' || (!part.toolUseId && !part.functionResponse))) {
         add(index === ctxIndex ? 'ctx' : 'model', index,
           index === ctxIndex ? markdownText(getContextBlockSummaryText(part.text), false) : assistantText(part.text))
       }
@@ -179,8 +184,13 @@ export function findRenderedMatchRange(surface: Element, query: string, ordinal:
 
 export function findSearchSurface(timeline: Element, match: SessionSearchMatch): Element | null {
   const rows = timeline.querySelectorAll<HTMLElement>('[data-search-row]')
-  for (const row of rows) {
-    if (row.dataset.searchRow !== match.rowKey) continue
+  for (const candidate of rows) {
+    if (candidate.dataset.searchRow !== match.rowKey) continue
+    // A readable Conversation preview moves into its native message surface when the process opens.
+    const row = candidate.dataset.searchMessageKey
+      ? [...candidate.querySelectorAll<HTMLElement>('[data-search-row]')].find(element => element.dataset.searchRow === candidate.dataset.searchMessageKey)
+      : candidate
+    if (!row) continue
     const cards = match.toolIndex === undefined
       ? [row]
       : [...row.querySelectorAll<HTMLElement>('[data-search-tool-index]')].filter(card => card.dataset.searchToolIndex === String(match.toolIndex))

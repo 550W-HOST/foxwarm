@@ -425,6 +425,8 @@ test('structured setup conversion between concrete and virtual removes incompati
         baseUrl: 'https://old.test/v1',
         apiKey: 'old-secret',
         contextLimit: 1234,
+        maxOutput: 500,
+        providerImageOutputFormat: 'jpeg',
         effort: { allowed: ['low', 'high'], default: 'high' },
         asyncCompact: false,
         models: ['old-model'],

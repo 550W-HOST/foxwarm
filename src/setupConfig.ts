@@ -16,6 +16,7 @@ import {
   normalizeChannelProgressInterval,
   normalizeNodeProvidersConfig,
   normalizeProviderImageOutputFormat,
+  normalizePositiveIntegerSetting,
   normalizeSessionWorkersConfig,
   normalizeVectorConfig,
   normalizeVectorMaintenanceConfig,
@@ -113,6 +114,8 @@ export function validateAppConfigYaml(rawYaml: string): AppConfig {
   normalizeDbWorkersEnabled(config.dbWorkers);
   normalizeCompactionConfig(config.llm);
   normalizeProviderImageOutputFormat(config.llm?.providerImageOutputFormat);
+  normalizePositiveIntegerSetting(config.llm?.contextLimit, 'app config `llm.contextLimit`');
+  normalizePositiveIntegerSetting(config.llm?.maxOutput, 'app config `llm.maxOutput`');
   normalizeVectorConfig(config.vector, config.llm?.ollamaBaseUrl);
   normalizeVectorMaintenanceConfig(config.vectorMaintenance);
   normalizeHandoffConfirmationEnabled(config.handoffConfirmation);
@@ -278,7 +281,7 @@ export function buildModelsConfigFromSetupForm(body: any, existingConfig: any = 
     if (isVirtual) {
       const targets = splitModelIds(hasOwn(draft, 'targets') ? draft.targets : existingProvider.targets);
       nextProvider.targets = targets;
-      for (const field of ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError'] as const) {
+      for (const field of ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError'] as const) {
         delete nextProvider[field];
       }
       if (providerType === 'session-hash') {

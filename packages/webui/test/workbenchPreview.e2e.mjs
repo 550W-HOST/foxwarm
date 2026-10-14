@@ -37,7 +37,7 @@ async function serve(request, response) {
 }
 
 before(async () => {
-  browser = await puppeteer.launch({ browser: firefox ? 'firefox' : 'chrome', executablePath: browserPath, headless: true, args: firefox ? [] : ['--no-sandbox', '--disable-setuid-sandbox'] })
+  browser = await puppeteer.launch({ browser: firefox ? 'firefox' : 'chrome', executablePath: browserPath, headless: true, ignoreDefaultArgs: ['--hide-scrollbars'], args: firefox ? [] : ['--no-sandbox', '--disable-setuid-sandbox'] })
   server = createServer(serve)
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   baseUrl = `http://127.0.0.1:${server.address().port}/prefix/ui/`
@@ -47,12 +47,12 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, codeNewWindow, responsiveChat = false, chatMessages = null, terminal = null, width = 1400, height = 900 } = {}) {
+async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, codeNewWindow, responsiveChat = false, chatMessages = null, timelineView = 'grouped', showScrollbar, terminal = null, width = 1400, height = 900 } = {}) {
   const page = await browser.newPage()
   const pageErrors = []
   page.on('pageerror', error => pageErrors.push(error.message))
   await page.setViewport({ width, height })
-  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat, splitDirection, initialLayout, themeId, codeNewWindow, responsiveChat, chatMessages, terminal }) => {
+  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat, splitDirection, initialLayout, themeId, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal }) => {
     if (window !== window.top) return
     const tabsById = Object.fromEntries(initialTabs.map(tab => [tab.id, tab]))
     const root = initialLayout || (splitPanes
@@ -67,7 +67,8 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       localStorage.setItem('foxwarm_last_active_tab_v1', activeId)
       localStorage.setItem('foxwarm_sidebar_collapsed_v1', 'false')
     }
-    if (chatMessages) localStorage.setItem('foxwarm_timeline_view_v1', 'grouped')
+    if (chatMessages) localStorage.setItem('foxwarm_timeline_view_v1', timelineView)
+    if (showScrollbar !== undefined) localStorage.setItem('foxwarm.contextScrollbar.showScrollbar', String(showScrollbar))
     if (themeId) localStorage.setItem('foxwarm_theme_selection_v3', JSON.stringify({ version: 3, themeId, lightThemeId: themeId, darkThemeId: themeId, colorMode: 'light' }))
     if (codeNewWindow !== undefined) localStorage.setItem('foxwarm_code_open_new_window_v1', String(codeNewWindow))
     const json = body => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }))
@@ -131,10 +132,12 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
     }
     function sessionFixture(id) { return { tokenUsage: id === 'e2e-a' ? { cachedTokens: 12000, inputTokens: 1000, outputTokens: 200 } : { cachedTokens: 2000, inputTokens: 400, outputTokens: 100 }, id, aliases: [], archived: false, parentSessionId: null, childTotal: 0, messageCount: 0, lastMessageTime: 1, busy: false } }
     class FixtureWebSocket {
+      static instances = []
       static OPEN = 1
       readyState = 1
       onopen = null; onmessage = null; onclose = null; onerror = null
       constructor(url) {
+        FixtureWebSocket.instances.push(this)
         if (new URL(url).pathname.endsWith('/terminals/stream')) window.__terminalConnections.push(url)
         queueMicrotask(() => {
         this.onopen?.({})
@@ -152,7 +155,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       close() { this.readyState = 3; this.onclose?.({}) }
     }
     window.WebSocket = FixtureWebSocket
-  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, codeNewWindow, responsiveChat, chatMessages, terminal })
+  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal })
   await page.goto(`${baseUrl}${hash}`, { waitUntil: 'domcontentloaded' })
   await page.bringToFront()
   await page.waitForFunction(() => !!window.foxwarmTest || !!document.querySelector('[data-foxwarm-popup-root="chat"]'), { timeout: 8_000 }).catch(async error => {
@@ -794,6 +797,14 @@ test('History tabs keep independent drafts/results across entries, pane collapse
     await page.click('[data-history-search-view] button[type="submit"]')
     await page.waitForSelector('[data-history-result="history-outside/main"]')
     assert.equal(await page.$eval(`[data-tab-id="${firstTabId}"]`, tab => tab.textContent.includes('alpha')), true)
+    assert.equal(await page.$eval(`[data-tab-id="${firstTabId}"]`, tab => tab.title), 'alpha')
+    await page.click(`[data-history-tab-id="${firstTabId}"] [data-history-query-input]`, { clickCount: 3 })
+    await page.keyboard.type('draft')
+    assert.equal(await page.$eval(`[data-tab-id="${firstTabId}"]`, tab => tab.title), 'alpha')
+    assert.ok(await page.$(`[data-history-tab-id="${firstTabId}"] [data-history-result="history-outside/main"]`), 'draft edits do not clear submitted results')
+    await page.click(`[data-history-tab-id="${firstTabId}"] button[type="submit"]`)
+    await page.waitForSelector(`[data-history-tab-id="${firstTabId}"] [data-history-result="history-outside/main"]`)
+    assert.equal(await page.$eval(`[data-tab-id="${firstTabId}"]`, tab => tab.title), 'draft')
 
     await page.click(footer)
     await page.waitForFunction(id => document.querySelectorAll('[data-tab-id^="history:"]').length === 2 && !document.querySelector(`[data-tab-id="${id}"]`)?.classList.contains('hidden'), firstTabId)
@@ -826,7 +837,7 @@ test('History tabs keep independent drafts/results across entries, pane collapse
 
     await page.click(`[data-tab-id="${firstTabId}"]`)
     await page.waitForSelector(`[data-history-tab-id="${firstTabId}"] [data-history-result="history-outside/main"]`)
-    assert.equal(await page.$eval(`[data-history-tab-id="${firstTabId}"] [data-history-query-input]`, input => input.value), 'alpha')
+    assert.equal(await page.$eval(`[data-history-tab-id="${firstTabId}"] [data-history-query-input]`, input => input.value), 'draft')
     await page.$eval(`[data-history-tab-id="${firstTabId}"]`, element => { element.scrollTop = 20; element.dispatchEvent(new Event('scroll', { bubbles: true })) })
     await page.click(`[data-tab-id="${secondTabId}"]`)
     await page.waitForSelector(`[data-history-tab-id="${secondTabId}"]`)
@@ -844,13 +855,13 @@ test('History tabs keep independent drafts/results across entries, pane collapse
     await page.waitForSelector(`[data-workbench-collapsed-tab="${firstTabId}"]`)
     await page.click(`[data-workbench-collapsed-tab="${firstTabId}"]`)
     await page.waitForSelector(`[data-history-tab-id="${firstTabId}"] [data-history-result="history-outside/main"]`)
-    assert.equal(await page.$eval(`[data-history-tab-id="${firstTabId}"] [data-history-query-input]`, input => input.value), 'alpha')
+    assert.equal(await page.$eval(`[data-history-tab-id="${firstTabId}"] [data-history-query-input]`, input => input.value), 'draft')
 
     await page.setViewport({ width: 390, height: 800 })
     await page.waitForSelector('[data-sidebar-footer] button[aria-label="Search history"]')
     await page.click('[data-sidebar-footer] button[aria-label="Search history"]')
     await page.waitForSelector('[data-history-search-view]')
-    assert.deepEqual((await page.$$eval('[data-history-search-view] [data-history-query-input]', inputs => inputs.map(input => input.value).sort())), ['', 'alpha'], 'mobile hiding keeps both History tab drafts')
+    assert.deepEqual((await page.$$eval('[data-history-search-view] [data-history-query-input]', inputs => inputs.map(input => input.value).sort())), ['', 'draft'], 'mobile hiding keeps both History tab drafts')
   } finally { await page.close() }
 })
 
@@ -1102,7 +1113,7 @@ test('Chat follows each pane through real divider dragging without changing desk
       width: root.getBoundingClientRect().width,
       sm: visible('.foxwarm-chat-sm-label'), md: visible('.foxwarm-chat-md-label'),
       minimap: visible('.foxwarm-context-scrollbar-shell'),
-      gutter: getComputedStyle(root.querySelector('.foxwarm-chat-messages-content')).paddingRight,
+      gutter: `${parseFloat(getComputedStyle(messages).paddingRight) - parseFloat(getComputedStyle(messages).paddingLeft)}px`,
       nativeScrollbar: getComputedStyle(messages).scrollbarWidth,
       compact: root.querySelector('.foxwarm-model-selector-root').dataset.chatLayout,
       childLabel: visible('.foxwarm-model-child-trigger > span'),
@@ -1522,6 +1533,102 @@ test('Full width defaults on, remembers its toggle, and bounds only the message 
     await clickReadyControl(page, toggle)
     await page.setViewport({ width: 1800, height: 900 })
     await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages-content').getBoundingClientRect().width > 1100)
+  } finally { await page.close() }
+})
+
+test('Timeline, Composer, History and Tasks share the reading column and pane-local minimap clearance', async () => {
+  const history = { id: 'system:search', type: 'search', title: 'History' }
+  const tasks = { id: 'system:tasks', type: 'tasks', title: 'Tasks' }
+  const page = await openFixture({ tabs: [chat('e2e-a', false), history, tasks], responsiveChat: true, width: 1800 })
+  const geometry = () => page.evaluate(() => {
+    const rect = selector => {
+      const element = document.querySelector(selector)
+      const box = element.getBoundingClientRect()
+      return { left: box.left, right: box.right, width: box.width }
+    }
+    const scroller = document.querySelector('.foxwarm-chat-messages')
+    return {
+      timeline: rect('.foxwarm-chat-messages-content'), composer: rect('.foxwarm-chat-composer-inner'),
+      root: rect('.foxwarm-chat-root'),
+      scrollbar: scroller.offsetWidth - scroller.clientWidth,
+      overflow: document.documentElement.scrollWidth > innerWidth,
+    }
+  })
+  const aligned = async () => {
+    await page.waitForFunction(() => {
+      const timeline = document.querySelector('.foxwarm-chat-messages-content').getBoundingClientRect()
+      const composer = document.querySelector('.foxwarm-chat-composer-inner').getBoundingClientRect()
+      return timeline.width > 0 && Math.abs(timeline.left - composer.left) < 1 && Math.abs(timeline.right - composer.right) < 1
+    })
+    const boxes = await geometry()
+    for (const edge of ['left', 'right']) assert.ok(Math.abs(boxes.timeline[edge] - boxes.composer[edge]) < 1, `${edge} edge differs: ${JSON.stringify(boxes)}`)
+    assert.ok(boxes.composer.width <= 1100)
+    assert.equal(boxes.overflow, false)
+    return boxes
+  }
+  try {
+    await page.waitForSelector('.foxwarm-chat-messages-content')
+    await page.click('button[aria-label="Open session options"]')
+    await clickReadyControl(page, '[data-session-ui-settings-menu] button[role="switch"]')
+    await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages-content').dataset.fullWidth === 'false')
+    await page.click('button[aria-label="Open session options"]')
+    assert.equal((await aligned()).timeline.width, 1100)
+    if (process.env.FOXWARM_CONTENT_WIDTH_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.FOXWARM_CONTENT_WIDTH_SCREENSHOT_DIR}/chat-reading-column.png` })
+    for (const width of [1200, 900, 390]) {
+      await page.setViewport({ width, height: 900 })
+      if (width < 768) {
+        await page.waitForFunction(() => !document.querySelector('.foxwarm-desktop-workbench-shell'))
+        await clickReadyControl(page, '[data-session-id="e2e-a"]')
+      }
+      await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root').getBoundingClientRect().width > 0)
+      await aligned()
+    }
+    await page.setViewport({ width: 1800, height: 900 })
+    await page.evaluate(() => {
+      localStorage.setItem('foxwarm.contextScrollbar.showScrollbar', 'true')
+      localStorage.setItem('foxwarm.contextScrollbar.showMinimap', 'false')
+      window.dispatchEvent(new Event('foxwarm-context-scrollbar-settings'))
+    })
+    await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages').dataset.showContextMinimap === 'false')
+    assert.equal((await aligned()).timeline.width, 1100)
+    await page.setViewport({ width: 1200, height: 900 })
+    await aligned()
+    if (process.env.FOXWARM_CONTENT_WIDTH_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.FOXWARM_CONTENT_WIDTH_SCREENSHOT_DIR}/chat-without-minimap.png` })
+    await page.evaluate(() => {
+      localStorage.setItem('foxwarm.contextScrollbar.showMinimap', 'true')
+      window.dispatchEvent(new Event('foxwarm-context-scrollbar-settings'))
+    })
+    await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages').dataset.showContextMinimap === 'true')
+    await aligned()
+    await page.setViewport({ width: 1800, height: 900 })
+    for (const [id, selector] of [['system:search', '[data-history-search-view] > .foxwarm-content-column'], ['system:tasks', '.tasks-content']]) {
+      await page.waitForSelector('.foxwarm-desktop-workbench-shell', { visible: true })
+      await clickReadyControl(page, `[data-tab-id="${id}"]`)
+      await page.waitForSelector(selector, { visible: true })
+      assert.equal(await page.$eval(selector, element => element.getBoundingClientRect().width), 1100)
+      if (id === 'system:search') {
+        await page.type('[data-history-query-input]', 'shared width')
+        await page.$eval('[data-history-search-view] form button[type="submit"]', element => element.click())
+        await page.waitForSelector('[data-history-result]')
+      }
+      if (process.env.FOXWARM_CONTENT_WIDTH_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.FOXWARM_CONTENT_WIDTH_SCREENSHOT_DIR}/${id === 'system:search' ? 'history' : 'tasks'}-reading-column.png` })
+      if (id === 'system:tasks') {
+        const edges = await page.evaluate(() => ['.tasks-toolbar', '.tasks-content'].map(selector => {
+          const rect = document.querySelector(selector).getBoundingClientRect()
+          return [rect.left, rect.right]
+        }))
+        assert.deepEqual(edges[0], edges[1])
+      }
+      await page.setViewport({ width: 390, height: 900 })
+      await page.waitForFunction(() => !document.querySelector('.foxwarm-desktop-workbench-shell'))
+      await page.waitForFunction(selector => {
+        const width = document.querySelector(selector)?.getBoundingClientRect().width
+        return width > 0 && width <= innerWidth - 32
+      }, {}, selector)
+      assert.ok(await page.$eval(selector, element => element.getBoundingClientRect().width <= 390 - 32))
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
+      await page.setViewport({ width: 1800, height: 900 })
+    }
   } finally { await page.close() }
 })
 
@@ -2247,3 +2354,160 @@ test('Imported V3 theme independently binds workbench chrome and accent foregrou
     assert.equal(await page.$eval('.foxwarm-chat-root .sticky', element => getComputedStyle(element).backgroundColor), 'rgb(232, 251, 233)')
   } finally { await page.close() }
 })
+
+async function openConversationScrollFixture(phase) {
+  const page = await openFixture({ responsiveChat: true, chatMessages: idleViewportMessages,
+    timelineView: 'conversation', height: 1100, hash: '#tab/chat:e2e-a', tabs: [chat('e2e-a', false)] })
+  await page.waitForFunction(() => document.querySelectorAll('[data-chat-message-anchor-key]').length === 55)
+  await page.evaluate(phase => {
+    let sequence = 0
+    let paragraphs = 160
+    const container = document.querySelector('.foxwarm-chat-messages')
+    window.__conversationScrollFrames = []
+    window.__conversationStreamTicks = 0
+    window.__conversationWheelSeen = false
+    window.__conversationLeftBottom = false
+    container.addEventListener('wheel', () => { window.__conversationWheelSeen = true }, { passive: true })
+    container.addEventListener('scroll', () => {
+      if (window.__conversationWheelSeen && container.scrollHeight - container.scrollTop - container.clientHeight > 4) window.__conversationLeftBottom = true
+    }, { passive: true })
+    const frame = () => {
+      window.__conversationScrollFrames.push({ top: container.scrollTop, height: container.scrollHeight, reading: window.__conversationLeftBottom })
+      if (window.__conversationRecording) requestAnimationFrame(frame)
+    }
+    window.__conversationRecording = true
+    requestAnimationFrame(frame)
+    window.__growConversationText = () => {
+      window.__conversationStreamTicks++
+      const text = 'CONVERSATION_SCROLL ordinary reply. ' + ('Visible answer text grows while the reader uses the native wheel. '.repeat(4) + '\n\n').repeat(paragraphs++)
+      window.WebSocket.instances.at(-1).onmessage({ data: JSON.stringify({ type: 'session-event', sessionId: 'e2e-a', event: {
+        type: 'model-stream-update', streamVersion: 2, sequence: ++sequence, streamId: 'conversation-scroll',
+        llmRequestId: 'conversation-scroll-request', startedAt: 1700000005000,
+        partDeltas: [{ outputIndex: 0, contentIndex: 0, kind: 'text', ...(phase ? { phase } : {}), textDelta: { offset: 0, text } }],
+      } }) })
+    }
+    window.__growConversationText()
+  }, phase)
+  await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-assistant-message-card')].some(card => card.textContent.includes('CONVERSATION_SCROLL')))
+  await waitForIdleBottom(page)
+  await settleIdleViewport(page)
+  return page
+}
+
+async function conversationScrollPosition(page) {
+  return page.evaluate(() => {
+    const container = document.querySelector('.foxwarm-chat-messages')
+    const card = [...document.querySelectorAll('.foxwarm-assistant-message-card')].find(card => card.textContent.includes('CONVERSATION_SCROLL'))
+    return { top: container.scrollTop, height: container.scrollHeight, distance: container.scrollHeight - container.scrollTop - container.clientHeight,
+      preview: !!card.closest('[data-conversation-preview]'), expanded: !!document.querySelector('[data-activity-expanded="true"]'),
+      sameCard: !window.__conversationOriginalCard || card === window.__conversationOriginalCard }
+  })
+}
+
+for (const phase of ['final_answer', undefined]) {
+  test(`Conversation ${phase || 'unknown-phase preview'} text does not pull an upward wheel reader forward during continued streaming`, async () => {
+    const page = await openConversationScrollFixture(phase)
+    try {
+      const attached = await conversationScrollPosition(page)
+      assert.equal(attached.preview, !phase)
+      assert.equal(attached.expanded, false)
+      await page.evaluate(() => {
+        window.__conversationOriginalCard = [...document.querySelectorAll('.foxwarm-assistant-message-card')].find(card => card.textContent.includes('CONVERSATION_SCROLL'))
+        window.__growConversationText()
+      })
+      await waitForIdleBottom(page)
+      assert.ok((await conversationScrollPosition(page)).height > attached.height, 'attached streaming genuinely added visible content')
+      const box = await (await page.$('.foxwarm-chat-messages')).boundingBox()
+      await page.mouse.move(box.x + 100, box.y + 120)
+      await page.evaluate(() => { window.__conversationStreamTimer = setInterval(window.__growConversationText, 20) })
+      await page.mouse.wheel({ deltaY: -160 })
+      await page.waitForFunction(() => window.__conversationLeftBottom)
+      const startTick = await page.evaluate(() => window.__conversationStreamTicks)
+      await page.waitForFunction(tick => window.__conversationStreamTicks >= tick + 6, {}, startTick)
+      await page.mouse.wheel({ deltaY: -160 })
+      await page.waitForFunction(tick => window.__conversationStreamTicks >= tick + 9, {}, startTick)
+      await page.evaluate(() => clearInterval(window.__conversationStreamTimer))
+      await settleIdleViewport(page)
+      await page.evaluate(() => { window.__conversationRecording = false })
+      const frames = await page.evaluate(() => window.__conversationScrollFrames)
+      const reverse = frames.flatMap((frame, index) => {
+        const previous = frames[index - 1]
+        return previous?.reading && frame.top > previous.top + 1 ? [{ before: previous, after: frame }] : []
+      })
+      assert.deepEqual(reverse, [], 'no token-only frame may reverse native upward reader movement')
+      const reader = await conversationScrollPosition(page)
+      assert.ok(reader.distance > 4)
+      assert.ok(reader.sameCard)
+      assert.equal(reader.preview, !phase)
+      assert.equal(reader.expanded, false)
+      // Explicit rejoin restores attached follow, including subsequent streaming.
+      await clickReadyControl(page, '[aria-label="Scroll to bottom"]')
+      await page.evaluate(() => window.__growConversationText())
+      await waitForIdleBottom(page)
+    } finally { await page.close() }
+  })
+}
+
+test('Conversation live text preserves a detached downward reader during continued growth', async () => {
+  const page = await openConversationScrollFixture('final_answer')
+  try {
+    await page.evaluate(() => { window.__conversationOriginalCard = [...document.querySelectorAll('.foxwarm-assistant-message-card')].find(card => card.textContent.includes('CONVERSATION_SCROLL')) })
+    const box = await (await page.$('.foxwarm-chat-messages')).boundingBox()
+    await page.mouse.move(box.x + 100, box.y + 120)
+    await page.mouse.wheel({ deltaY: -600 })
+    await page.waitForFunction(() => window.__conversationLeftBottom)
+    await settleIdleViewport(page)
+    const before = await conversationScrollPosition(page)
+    await page.evaluate(() => { window.__conversationStreamTimer = setInterval(window.__growConversationText, 20) })
+    await page.mouse.wheel({ deltaY: 100 })
+    await page.waitForFunction(top => document.querySelector('.foxwarm-chat-messages').scrollTop >= top + 99, {}, before.top)
+    const startTick = await page.evaluate(() => window.__conversationStreamTicks)
+    await page.waitForFunction(tick => window.__conversationStreamTicks >= tick + 6, {}, startTick)
+    await page.evaluate(() => clearInterval(window.__conversationStreamTimer))
+    await settleIdleViewport(page)
+    const after = await conversationScrollPosition(page)
+    assert.ok(Math.abs(after.top - before.top - 100) <= 2, 'only the requested downward wheel changes reader position')
+    assert.ok(after.distance > 4)
+    assert.ok(after.sameCard)
+  } finally { await page.close() }
+})
+
+
+for (const deltaY of [-160, -3]) {
+  test(`natural scrollbar bottom rejoin ${deltaY < -4 ? 'survives fractional Workbench pane dimensions' : 'finishes a small pending upward leave'}`, async () => {
+    const page = await openFixture({ responsiveChat: true, chatMessages: idleViewportMessages, showScrollbar: true,
+      tabs: [chat('e2e-a', false), system], hash: '#tab/chat:e2e-a', width: 1401, height: 901,
+      layout: { id: 'fractional-split', kind: 'split', direction: 'row', sizes: [47.37, 52.63], children: [
+        { id: 'pane-main', kind: 'pane', tabIds: ['chat:e2e-a'], activeTabId: 'chat:e2e-a' },
+        { id: 'pane-other', kind: 'pane', tabIds: [system.id], activeTabId: system.id },
+      ] } })
+    try {
+      await page.waitForFunction(() => document.querySelectorAll('[data-chat-message-anchor-key]').length === 55)
+      await waitForIdleBottom(page)
+      const bounds = await (await page.$('.foxwarm-chat-messages')).boundingBox()
+      await page.mouse.move(bounds.x + 100, bounds.y + 120)
+      await page.mouse.wheel({ deltaY })
+      await page.waitForFunction(deltaY => {
+        const scroll = document.querySelector('.foxwarm-chat-messages')
+        return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight > (deltaY < -4 ? 100 : 0)
+      }, {}, deltaY)
+      const thumb = await page.$eval('.foxwarm-chat-messages', scroll => {
+        const rect = scroll.getBoundingClientRect()
+        const track = scroll.clientHeight
+        const size = track * track / scroll.scrollHeight
+        const gutter = scroll.offsetWidth - scroll.clientWidth
+        return { x: rect.right - gutter / 2, y: rect.top + scroll.scrollTop / (scroll.scrollHeight - track) * (track - size) + size / 2, bottom: rect.bottom - 1, gutter }
+      })
+      assert.ok(thumb.gutter > 0, 'the real native scrollbar is enabled')
+      await page.mouse.move(thumb.x, thumb.y)
+      await page.mouse.down()
+      await page.mouse.move(thumb.x, thumb.bottom, { steps: 8 })
+      await page.mouse.up()
+      await page.waitForFunction(() => {
+        const scroll = document.querySelector('.foxwarm-chat-messages')
+        return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 1
+      })
+      await page.waitForFunction(() => !document.querySelector('[aria-label="Scroll to bottom"]'))
+    } finally { await page.close() }
+  })
+}

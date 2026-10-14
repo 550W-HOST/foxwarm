@@ -25,24 +25,23 @@ fi
 START_CMD+="$(printf '%q' "$NODE_BIN") lib/index.js"
 
 # Check if session exists
-if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+if ! tmux has-session -t "=$SESSION" 2>/dev/null; then
     # Try to create new session
-    if ! tmux new-session -d -s "$SESSION" -n "$WINDOW_NAME" -c "$FOXWARM_DIR" 2>/dev/null; then
+    if ! PANE=$(tmux new-session -d -s "$SESSION" -n "$WINDOW_NAME" -c "$FOXWARM_DIR" -P -F '#{pane_id}' 2>/dev/null); then
         echo "Error: Failed to create tmux session. Are you inside a tmux session?"
         echo "If you're in tmux, you can create the session from outside tmux first."
         exit 1
     fi
     echo "Created new tmux session: $SESSION"
-fi
-
-# Check if the window exists
-if ! tmux list-windows -t "$SESSION" 2>/dev/null | grep -q "$WINDOW_NAME"; then
-    tmux new-window -t "$SESSION" -n "$WINDOW_NAME" -c "$FOXWARM_DIR"
+else
+    # list-panes fails for a missing exact window; display-message may fall back
+    # to another window. Select only the active pane in the dedicated window.
+    if ! PANE=$(tmux list-panes -t "=$SESSION:=$WINDOW_NAME" -F '#{?pane_active,#{pane_id},}' 2>/dev/null | grep -v '^$'); then
+        PANE=$(tmux new-window -t "=$SESSION:" -n "$WINDOW_NAME" -c "$FOXWARM_DIR" -P -F '#{pane_id}') || exit 1
+    fi
 fi
 
 # Keep the same pane even if tmux renames its window after the process exits.
-PANE=$(tmux display-message -p -t "$SESSION:$WINDOW_NAME" '#{pane_id}') || exit 1
-
 # Give the terminal time to handle Ctrl+C before entering the restart command.
 tmux send-keys -t "$PANE" C-c || exit 1
 sleep 1

@@ -2,7 +2,7 @@ import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { readFile, readdir } from 'node:fs/promises'
-import { build } from 'esbuild'
+import { build } from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
 
 const entry = new URL('../src/components/HistorySearchView.tsx', import.meta.url).pathname
@@ -228,7 +228,7 @@ test('metadata failure or stale lookup completion never replaces or blocks the c
   } finally { await page.close() }
 })
 
-test('changing a query prevents a late earlier search from replacing its results', async () => {
+test('draft edits keep the submitted search alive until a new submission replaces it', async () => {
   const page = await browser.newPage()
   try {
     await page.goto(baseUrl)
@@ -236,11 +236,13 @@ test('changing a query prevents a late earlier search from replacing its results
     await page.click('button[type=submit]')
     await page.waitForFunction(() => typeof window.__resolveSlow === 'function')
     await page.click('[data-history-query-input]', { clickCount: 3 })
-    await page.keyboard.press('Backspace')
     await page.keyboard.type('fresh')
+    assert.equal(await page.evaluate(() => window.__requests.filter(url => url.includes('/history/search')).length), 1)
+    await page.evaluate(() => window.__resolveSlow())
+    await page.waitForSelector('[data-history-result="hit-a"]')
+    assert.equal(await page.$eval('[data-history-query-input]', input => input.value), 'fresh')
     await page.click('button[type=submit]')
     await page.waitForSelector('[data-history-result="hit-b"]')
-    await page.evaluate(() => window.__resolveSlow())
     assert.equal(await page.$$eval('[data-history-result]', items => items.map(item => item.getAttribute('data-history-result')).join(',')), 'hit-b')
   } finally { await page.close() }
 })

@@ -13,6 +13,7 @@ type YamlMonacoSupport = {
 
 let supportPromise: Promise<YamlMonacoSupport> | null = null
 let editorWorkerConstructor: (new () => Worker) | null = null
+let jsonWorkerConstructor: (new () => Worker) | null = null
 let yamlWorkerConstructor: (new () => Worker) | null = null
 let completionSupport: ModelsCompletionSupport | null = null
 
@@ -34,6 +35,7 @@ async function listProviderModels(
 function installWorkerDispatcher() {
   window.MonacoEnvironment = {
     getWorker(_workerId: string, label: string) {
+      if (label === 'json' && jsonWorkerConstructor) return new jsonWorkerConstructor()
       if (label === 'yaml' && yamlWorkerConstructor) return new yamlWorkerConstructor()
       if (!editorWorkerConstructor) throw new Error('Monaco editor worker is not loaded')
       return new editorWorkerConstructor()
@@ -45,13 +47,15 @@ export function loadYamlMonacoSupport(): Promise<YamlMonacoSupport> {
   if (supportPromise) return supportPromise
 
   supportPromise = (async () => {
-    const [editorWorkerModule, yamlWorkerModule] = await Promise.all([
+    const [editorWorkerModule, yamlWorkerModule, jsonWorkerModule] = await Promise.all([
       import('monaco-editor/esm/vs/editor/editor.worker.js?worker'),
       import('./workers/yaml.worker.ts?worker'),
+      import('monaco-editor/esm/vs/language/json/json.worker.js?worker'),
     ])
 
     editorWorkerConstructor = editorWorkerModule.default
     yamlWorkerConstructor = yamlWorkerModule.default
+    jsonWorkerConstructor = jsonWorkerModule.default
     installWorkerDispatcher()
 
     const [monaco, monacoYaml] = await Promise.all([
@@ -88,6 +92,7 @@ export function loadYamlMonacoSupport(): Promise<YamlMonacoSupport> {
     completionSupport = null
     editorWorkerConstructor = null
     yamlWorkerConstructor = null
+    jsonWorkerConstructor = null
     throw error
   })
 

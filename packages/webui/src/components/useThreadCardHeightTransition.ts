@@ -3,7 +3,7 @@ import { createContext, useCallback, useContext, useLayoutEffect, useRef, type R
 /** Chat owns viewport follow; cards only report the measured height change. */
 export const ThreadCardHeightContext = createContext<{
   before: () => () => void
-  begin: (card: HTMLElement, startHeight: number, targetHeight: number) => () => void
+  begin: (card: HTMLElement, startHeight: number, targetHeight: number) => void
 } | null>(null)
 
 const DURATION_MS = 240
@@ -61,14 +61,13 @@ export function useThreadCardHeightTransition(expanded: boolean): {
     element.style.removeProperty('height')
     const target = element.getBoundingClientRect().height
     cancelRef.current = null
-    const releaseFollow = notifyChat?.begin(element, start, target)
+    notifyChat?.begin(element, start, target)
     if (Math.abs(target - start) < 1 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       element.style.removeProperty('height')
       element.style.removeProperty('transition')
       element.style.removeProperty('box-sizing')
       releaseSlot?.()
       releaseBefore?.()
-      releaseFollow?.()
       return
     }
     let frame = 0
@@ -87,7 +86,7 @@ export function useThreadCardHeightTransition(expanded: boolean): {
       element.style.removeProperty('overflow')
       element.style.removeProperty('overflow-clip-margin')
       element.style.removeProperty('box-sizing')
-      releaseFollow?.()
+      releaseBefore?.()
       cancelRef.current = null
     }
     const onEnd = (event: TransitionEvent) => {
@@ -105,7 +104,6 @@ export function useThreadCardHeightTransition(expanded: boolean): {
     element.style.overflowClipMargin = '24px'
     void element.offsetHeight
     releaseSlot?.()
-    releaseBefore?.()
     element.addEventListener('transitionend', onEnd)
     element.addEventListener('transitioncancel', onEnd)
     frame = window.requestAnimationFrame(() => {

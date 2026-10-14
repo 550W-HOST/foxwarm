@@ -12,6 +12,7 @@ type PositionedHost = { element: HTMLElement; paneId: string; visible: boolean; 
 function createContentPositions() {
   const slots = new Map<string, HTMLElement>()
   const hosts = new Map<string, PositionedHost>()
+  let layer: HTMLElement | null = null
   let observer: ResizeObserver | null = null
   let frame = 0
   let focusCheckFrame = 0
@@ -19,22 +20,27 @@ function createContentPositions() {
   const measure = () => {
     window.cancelAnimationFrame(frame)
     frame = 0
+    // Fixed-layer and slot rectangles share the browser's current viewport coordinates.
+    // Their origins can differ while a mobile visual viewport pans above a keyboard.
+    const layerRect = layer?.getBoundingClientRect()
     // Read every slot before writing any host, including during continuous resizing.
     const positions = [...hosts.values()].map(host => {
       const slot = slots.get(host.paneId)
-      const rect = host.visible && slot?.isConnected ? slot.getBoundingClientRect() : null
+      const rect = layerRect && host.visible && slot?.isConnected ? slot.getBoundingClientRect() : null
       const paneRect = rect && slot ? slot.closest('[data-pane-id]')?.getBoundingClientRect() : null
-      return { host, rect, paneRect, radius: rect && slot ? getComputedStyle(slot).borderRadius : '' }
+      const hostRect = host.element.getBoundingClientRect()
+      return { host, rect, hostRect, paneRect, radius: rect && slot ? getComputedStyle(slot).borderRadius : '' }
     })
-    for (const { host, rect } of positions) {
-      if (rect && (host.element.style.width !== `${rect.width}px` || host.element.style.height !== `${rect.height}px`)) host.beforeResize()
+    for (const { host, rect, hostRect } of positions) {
+      // CSSOM serializes fractional sizes; compare actual layout, not decimal strings.
+      if (rect && (hostRect.width !== rect.width || hostRect.height !== rect.height)) host.beforeResize()
     }
     for (const { host, rect, paneRect, radius } of positions) {
       const visible = !!rect && rect.width > 0 && rect.height > 0
       const style = host.element.style
       if (rect) {
-        style.left = `${rect.left}px`
-        style.top = `${rect.top}px`
+        style.left = `${rect.left - layerRect!.left}px`
+        style.top = `${rect.top - layerRect!.top}px`
         style.width = `${rect.width}px`
         style.height = `${rect.height}px`
         style.borderRadius = radius
@@ -66,6 +72,10 @@ function createContentPositions() {
 
   return {
     measure,
+    registerLayer(element: HTMLElement | null) {
+      layer = element
+      schedule()
+    },
     registerSlot(paneId: string, element: HTMLElement | null) {
       const previous = slots.get(paneId)
       if (previous) observer?.unobserve(previous)
@@ -136,7 +146,9 @@ export function WorkbenchContentSlot({ paneId, soleTab, tabType }: { paneId: str
 }
 
 export function WorkbenchContentLayer({ children }: { children: ReactNode }) {
-  return createPortal(<div className="pointer-events-none fixed inset-0 z-30" data-workbench-content-layer>{children}</div>, document.body)
+  const positions = useContext(ContentPositions)!
+  const setRef = useCallback((element: HTMLDivElement | null) => positions.registerLayer(element), [positions])
+  return createPortal(<div ref={setRef} className="pointer-events-none fixed inset-0 z-30" data-workbench-content-layer>{children}</div>, document.body)
 }
 
 type ContentHostProps = Pick<WorkbenchPaneProps,

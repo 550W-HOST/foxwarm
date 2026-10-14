@@ -103,7 +103,7 @@ export default function HistorySearchView({ tabId, isMobile, timelineView, showU
   onOpenSession?: (sessionId: string) => void
   initialDraft?: HistorySearchDraft
   onDraftChange?: (draft: HistorySearchDraft) => void
-  onSearchStarted?: () => void
+  onSearchStarted?: (draft: HistorySearchDraft) => void
   header?: WorkbenchTabHeaderValue | null
 }) {
   const inheritedHeader = useWorkbenchTabHeader()
@@ -173,16 +173,17 @@ export default function HistorySearchView({ tabId, isMobile, timelineView, showU
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
-    onSearchStarted?.()
+    const submittedDraft = { query, agentName, sessionId }
+    onSearchStarted?.(submittedDraft)
     invalidate()
     const turn = generation.current
     const controller = new AbortController()
     requests.current.add(controller)
     setLoading(true)
-    const value = query.trim()
+    const value = submittedDraft.query.trim()
     const copied = value.match(COPY_REFERENCE)
     const locator = copied?.[2] || (LOCATOR.test(value) ? value : '')
-    const selectedSession = copied?.[1] || sessionId.trim()
+    const selectedSession = copied?.[1] || submittedDraft.sessionId.trim()
     try {
       if (!value) throw new Error('Enter a search or message reference.')
       if (locator && !selectedSession) throw new Error('Choose a session to open a message reference.')
@@ -194,7 +195,7 @@ export default function HistorySearchView({ tabId, isMobile, timelineView, showU
         path = `/history/window?${params}`
       } else {
         params.set('query', value)
-        if (agentName.trim()) params.set('agentName', agentName.trim())
+        if (submittedDraft.agentName.trim()) params.set('agentName', submittedDraft.agentName.trim())
         if (selectedSession) params.set('sessionId', selectedSession)
         path = `/history/search?${params}`
       }
@@ -258,8 +259,8 @@ export default function HistorySearchView({ tabId, isMobile, timelineView, showU
   }
 
   const view = (
-    <div className="h-full min-h-0 overflow-y-auto bg-fw-canvas px-3 py-5 text-fw-text" data-history-search-view data-history-tab-id={tabId}>
-      <div className="mx-auto max-w-4xl space-y-5">
+    <div className="foxwarm-content-gutter h-full min-h-0 overflow-y-auto bg-fw-canvas py-5 text-fw-text" data-history-search-view data-history-tab-id={tabId}>
+      <div className="foxwarm-content-column space-y-5">
         <div className="flex items-center gap-3">
           {tabHeader ? <>
             <WorkbenchTabClose className="rounded p-1 text-fw-text-muted hover:bg-fw-hover" iconClassName="h-5 w-5" />
@@ -271,15 +272,15 @@ export default function HistorySearchView({ tabId, isMobile, timelineView, showU
         <form onSubmit={submit} className="space-y-3 rounded-lg border border-fw-border bg-fw-surface p-4">
           <label className="block text-sm font-medium" htmlFor={queryInputId}>Search or message reference</label>
           <div className="flex gap-2">
-            <input id={queryInputId} data-history-query-input value={query} onChange={event => { invalidate(); const value = event.target.value; setQuery(value); onDraftChange?.({ query: value, agentName, sessionId }) }} placeholder="Search conversations or paste sessionId=… msg#123" className="min-w-0 flex-1 rounded border border-fw-border bg-fw-canvas px-3 py-2 text-fw-text-strong" />
+            <input id={queryInputId} data-history-query-input value={query} onChange={event => { const value = event.target.value; setQuery(value); onDraftChange?.({ query: value, agentName, sessionId }) }} placeholder="Search conversations or paste sessionId=… msg#123" className="min-w-0 flex-1 rounded border border-fw-border bg-fw-canvas px-3 py-2 text-fw-text-strong" />
             <button type="submit" disabled={loading} className="inline-flex items-center gap-1 rounded bg-fw-accent px-3 py-2 text-fw-accent-text disabled:opacity-50"><Search size={16} /> Search</button>
           </div>
           <div className="flex flex-wrap gap-2">
             <label className="min-w-36 flex-1 text-xs">Agent (optional)
-              <input value={agentName} onChange={event => { invalidate(); const value = event.target.value; setAgentName(value); onDraftChange?.({ query, agentName: value, sessionId }) }} placeholder="All agents" className="mt-1 w-full rounded border border-fw-border bg-fw-canvas px-2 py-1.5 text-sm text-fw-text-strong" />
+              <input value={agentName} onChange={event => { const value = event.target.value; setAgentName(value); onDraftChange?.({ query, agentName: value, sessionId }) }} placeholder="All agents" className="mt-1 w-full rounded border border-fw-border bg-fw-canvas px-2 py-1.5 text-sm text-fw-text-strong" />
             </label>
             <label className="min-w-40 flex-[2] text-xs">Session (optional)
-              <input list={sessionDatalistId} data-history-session-input value={sessionId} onChange={event => { invalidate(); const value = event.target.value; setSessionId(value); onDraftChange?.({ query, agentName, sessionId: value }) }} placeholder="All sessions" className="mt-1 w-full rounded border border-fw-border bg-fw-canvas px-2 py-1.5 text-sm text-fw-text-strong" />
+              <input list={sessionDatalistId} data-history-session-input value={sessionId} onChange={event => { const value = event.target.value; setSessionId(value); onDraftChange?.({ query, agentName, sessionId: value }) }} placeholder="All sessions" className="mt-1 w-full rounded border border-fw-border bg-fw-canvas px-2 py-1.5 text-sm text-fw-text-strong" />
               <datalist id={sessionDatalistId} data-history-session-list>{knownSessions.map(id => <option key={id} value={id} />)}</datalist>
             </label>
           </div>

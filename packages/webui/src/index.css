@@ -16,6 +16,10 @@
    */
   --foxwarm-app-height: 100dvh;
 
+  --foxwarm-content-width: 1100px;
+  --foxwarm-content-gutter: 1rem;
+  --foxwarm-context-minimap-width: 32px;
+
   /*
    * Runtime visual-viewport top offset. On iOS the visual viewport can shift
    * downward when browser UI / keyboard changes; fixed fullscreen shells use
@@ -123,6 +127,22 @@ html.dark {
 .foxwarm-chat-root {
   container-name: foxwarm-chat;
   container-type: inline-size;
+  --foxwarm-chat-scrollbar-gutter: 0px;
+}
+
+.foxwarm-content-column {
+  width: 100%;
+  max-width: var(--foxwarm-content-width);
+  min-width: 0;
+  margin-inline: auto;
+}
+
+.foxwarm-content-gutter {
+  padding-inline: var(--foxwarm-content-gutter);
+}
+
+.foxwarm-chat-composer {
+  padding-right: calc(var(--foxwarm-content-gutter) + var(--foxwarm-chat-scrollbar-gutter, 0px));
 }
 
 .foxwarm-chat-sm-label,
@@ -297,8 +317,8 @@ html[data-foxwarm-display-effect="crt"] .foxwarm-display-effect-overlay::after {
   .foxwarm-context-scrollbar-shell {
     display: block;
     position: relative;
-    width: 32px;
-    flex: 0 0 32px;
+    width: var(--foxwarm-context-minimap-width);
+    flex: 0 0 var(--foxwarm-context-minimap-width);
     padding: 0;
     background: transparent;
     z-index: 30;
@@ -326,25 +346,25 @@ html[data-foxwarm-display-effect="crt"] .foxwarm-display-effect-overlay::after {
   .foxwarm-context-scrollbar-overlay .foxwarm-context-scrollbar-shell {
     position: absolute;
     top: 0;
-    right: -16px;
+    right: calc(-1 * (var(--foxwarm-content-gutter) + var(--foxwarm-context-minimap-width)));
     height: 100cqh;
     pointer-events: auto;
   }
 
-  .foxwarm-chat-messages-content {
-    padding-right: 32px;
+  .foxwarm-chat-messages {
+    padding-right: calc(var(--foxwarm-content-gutter) + var(--foxwarm-context-minimap-width));
   }
 
-  .foxwarm-chat-messages[data-show-context-minimap="false"] .foxwarm-chat-messages-content {
-    padding-right: 0;
+  .foxwarm-chat-composer {
+    padding-right: calc(var(--foxwarm-content-gutter) + var(--foxwarm-context-minimap-width) + var(--foxwarm-chat-scrollbar-gutter));
   }
 
-  @container foxwarm-chat (max-width: 1151px) {
-    .foxwarm-chat-root .foxwarm-chat-composer-inner {
-      max-width: calc(100% - 48px);
-      margin-left: 0;
-      margin-right: 48px;
-    }
+  .foxwarm-chat-messages[data-show-context-minimap="false"] {
+    padding-right: var(--foxwarm-content-gutter);
+  }
+
+  .foxwarm-chat-root:has(.foxwarm-chat-messages[data-show-context-minimap="false"]) .foxwarm-chat-composer {
+    padding-right: calc(var(--foxwarm-content-gutter) + var(--foxwarm-chat-scrollbar-gutter));
   }
 
   .foxwarm-context-scrollbar {
@@ -1798,6 +1818,10 @@ html[data-foxwarm-label-treatment="uppercase"] [data-tool-tag-tone] {
   text-transform: uppercase;
 }
 
+html [data-tool-tag-tone][data-tool-call-tag] {
+  text-transform: none;
+}
+
 html[data-foxwarm-icon-treatment="compact"] .lucide {
   stroke-width: 2.25;
 }
@@ -2171,12 +2195,9 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
 .foxwarm-workbench-tab-toolbar button:hover { background: var(--foxwarm-color-hover); }
 @media (pointer: coarse) { .foxwarm-workbench-tab-close { opacity: 1; } }
 
-/* Bound the shared message column, not the viewport or individual cards. */
-.foxwarm-chat-messages-content[data-full-width="false"] {
-  width: 100%;
-  max-width: 1100px;
-  margin-left: auto;
-  margin-right: auto;
+/* Full width only removes the Timeline cap, not the shared outer gutters. */
+.foxwarm-chat-messages-content[data-full-width="true"] {
+  max-width: none;
 }
 
 /* Keep the native scrollbar gutter stable and reveal only its thumb. */
@@ -2406,3 +2427,47 @@ html[data-foxwarm-theme] .collapsed-session-tile {
 .theme-thumb-status { display: flex; align-items: center; justify-content: space-between; padding-inline: 8%; background: transparent; }
 .theme-thumb-status i { width: 18%; height: 2px; border-radius: 1px; background: var(--foxwarm-color-text-muted); opacity: .25; }
 .theme-thumb-status i:last-child { width: 9%; }
+
+/* Conversation replies are prose, not another thread card. Other timeline modes keep their chrome. */
+.foxwarm-assistant-message-card.foxwarm-conversation-reply {
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  padding: 0.25rem 0.5rem !important;
+}
+.foxwarm-user-message-bubble.foxwarm-conversation-user {
+  font-size: 0.875rem !important;
+}
+html[data-foxwarm-component-treatment="console"] .foxwarm-user-message-bubble.foxwarm-conversation-user {
+  font-size: var(--foxwarm-console-font-message) !important;
+}
+/* Statistics and token totals share one type size, including console button defaults. */
+.foxwarm-conversation-statistics > button {
+  font-size: inherit !important;
+  line-height: inherit !important;
+}
+
+/* Header controls stay before the trailing time instead of overlapping it on hover. */
+.foxwarm-tool-header-toggle:is(:hover, :focus-within) > .foxwarm-tool-call-header > .foxwarm-tool-action-buttons {
+  opacity: 1;
+}
+
+/* Reasoning is supporting context inside a Conversation process, not a second headline. */
+html .foxwarm-conversation-process .foxwarm-reasoning-card[data-model-thread-card],
+html .foxwarm-conversation-process .foxwarm-reasoning-card .foxwarm-reasoning-header {
+  background: transparent !important;
+  color: var(--foxwarm-color-text-muted) !important;
+  box-shadow: none !important;
+}
+html .foxwarm-conversation-process .foxwarm-reasoning-card :is(.foxwarm-reasoning-tag, .foxwarm-reasoning-preview) {
+  color: var(--foxwarm-color-text-muted) !important;
+  font-weight: 400 !important;
+}
+html .foxwarm-conversation-process .foxwarm-reasoning-card .foxwarm-reasoning-tag {
+  background: transparent !important;
+  border-color: var(--foxwarm-color-border) !important;
+}
+html .foxwarm-conversation-process .foxwarm-reasoning-card .foxwarm-reasoning-preview {
+  font-size: inherit !important;
+}

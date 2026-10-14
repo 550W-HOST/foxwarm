@@ -449,27 +449,29 @@ export default function TasksView({ onBack, onOpenSession }: { onBack?: () => vo
           <WorkbenchPaneControls />
         </div>
       </div>
-      <div className="tasks-toolbar">
-        <div role="group" aria-label="Task scope" className="tasks-scope-tabs" data-task-scopes>
-          {TASK_SCOPES.map(nextScope => <button key={nextScope} type="button" data-task-scope={nextScope} aria-pressed={scope === nextScope} onClick={() => setScope(nextScope)}>{TASK_SCOPE_LABELS[nextScope]}</button>)}
-        </div>
-        <div className="tasks-toolbar-actions" data-task-filters>
-          <label className="tasks-search"><Search size={14} aria-hidden="true" /><input aria-label="Search tasks" placeholder="Search tasks" value={search} onChange={event => setSearch(event.target.value)} /></label>
-          <label className="tasks-agent-select" htmlFor="task-agent-filter"><span className="sr-only">Agent</span><select id="task-agent-filter" data-task-agent-filter value={agentFilter} onChange={event => setAgentFilter(event.target.value)}><option value="">All agents</option>{agentOptions.map(agent => <option key={agent} value={agent}>{agent}</option>)}</select><ChevronDown size={13} aria-hidden="true" /></label>
-          <div ref={filterRef} className="tasks-filter-control">
-            <button type="button" className="task-button task-icon-button" aria-label="Relationship filter" title="Relationship filter" aria-expanded={filtersOpen} onClick={() => setFiltersOpen(value => !value)}><SlidersHorizontal size={15} /></button>
-            {filtersOpen && <div className="tasks-filter-popover"><label htmlFor="task-agent-relation">Relationship</label><select id="task-agent-relation" data-task-agent-relation value={agentRelation} onChange={event => setAgentRelation(event.target.value as typeof AGENT_RELATIONS[number])}>{AGENT_RELATIONS.map(relation => <option key={relation} value={relation}>{AGENT_RELATION_LABELS[relation]}</option>)}</select></div>}
+      <div className="tasks-toolbar-region foxwarm-content-gutter">
+        <div className="tasks-toolbar foxwarm-content-column">
+          <div role="group" aria-label="Task scope" className="tasks-scope-tabs" data-task-scopes>
+            {TASK_SCOPES.map(nextScope => <button key={nextScope} type="button" data-task-scope={nextScope} aria-pressed={scope === nextScope} onClick={() => setScope(nextScope)}>{TASK_SCOPE_LABELS[nextScope]}</button>)}
           </div>
-          <div role="group" aria-label="Task view" className="tasks-view-toggle">
-            {(['table', 'board'] as const).map(mode => <button key={mode} type="button" aria-label={mode === 'table' ? 'Table' : 'Board'} title={mode === 'table' ? 'Table' : 'Board'} aria-pressed={view === mode} onClick={() => setView(mode)}>{mode === 'table' ? <List size={16} /> : <Columns3 size={16} />}</button>)}
+          <div className="tasks-toolbar-actions" data-task-filters>
+            <label className="tasks-search"><Search size={14} aria-hidden="true" /><input aria-label="Search tasks" placeholder="Search tasks" value={search} onChange={event => setSearch(event.target.value)} /></label>
+            <label className="tasks-agent-select" htmlFor="task-agent-filter"><span className="sr-only">Agent</span><select id="task-agent-filter" data-task-agent-filter value={agentFilter} onChange={event => setAgentFilter(event.target.value)}><option value="">All agents</option>{agentOptions.map(agent => <option key={agent} value={agent}>{agent}</option>)}</select><ChevronDown size={13} aria-hidden="true" /></label>
+            <div ref={filterRef} className="tasks-filter-control">
+              <button type="button" className="task-button task-icon-button" aria-label="Relationship filter" title="Relationship filter" aria-expanded={filtersOpen} onClick={() => setFiltersOpen(value => !value)}><SlidersHorizontal size={15} /></button>
+              {filtersOpen && <div className="tasks-filter-popover"><label htmlFor="task-agent-relation">Relationship</label><select id="task-agent-relation" data-task-agent-relation value={agentRelation} onChange={event => setAgentRelation(event.target.value as typeof AGENT_RELATIONS[number])}>{AGENT_RELATIONS.map(relation => <option key={relation} value={relation}>{AGENT_RELATION_LABELS[relation]}</option>)}</select></div>}
+            </div>
+            <div role="group" aria-label="Task view" className="tasks-view-toggle">
+              {(['table', 'board'] as const).map(mode => <button key={mode} type="button" aria-label={mode === 'table' ? 'Table' : 'Board'} title={mode === 'table' ? 'Table' : 'Board'} aria-pressed={view === mode} onClick={() => setView(mode)}>{mode === 'table' ? <List size={16} /> : <Columns3 size={16} />}</button>)}
+            </div>
           </div>
         </div>
+        {taskWarning && <p role="alert" data-task-warning="header" className="tasks-header-warning">{taskWarning}</p>}
       </div>
-      {taskWarning && <p role="alert" data-task-warning="header" className="tasks-header-warning">{taskWarning}</p>}
     </header>
     <div className="tasks-body">
-      <div className="tasks-main">
-        <div className="tasks-content">
+      <div className="tasks-main foxwarm-content-gutter">
+        <div className="tasks-content foxwarm-content-column">
         {loading ? <div role="status" className="tasks-empty"><RefreshCw size={22} className="animate-spin" /><p>Loading tasks…</p></div>
           : error ? <p role="alert" className="tasks-error">{error}</p>
           : <>

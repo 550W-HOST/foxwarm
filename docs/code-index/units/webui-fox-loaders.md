@@ -20,7 +20,7 @@ Theme-aware inline SVG loaders for full-app startup, lazy workbench views, and o
 - Startup waits for both content readiness and the 1500ms minimum draw-in interval, then leaves for 480ms and unmounts. One effect enters `leaving`; a separate effect owns the fade-completion timer. Changing phase must not cancel the timer before it can enter `gone`.
 - Effects clear pending timers on teardown; React StrictMode setup/cleanup does not leave stale subscriptions or timers. The readiness store is monotonic during one application load.
 - Reduced motion skips the minimum draw-in wait and disables SVG motion. The leaving screen becomes transparent, hidden, and pointer-inert before removal.
-- The full-app splash is not mounted for popup/embedded roots . Authentication failure also signals readiness so loading cannot obscure the sign-in recovery link.
+- The full-app splash is not mounted for popup/embedded roots. Authentication failure also signals readiness so loading cannot obscure the sign-in recovery link.
 - Ordinary requesting-model status uses the fox thinking spinner. Compaction/tool indicators and static waiting behavior retain their previous runtime semantics. Timeline loading uses an accessible waiting label; lazy view fallback uses a centered status loader.
 - Appearance previews have no live Session operations. They consume the active theme accent; the presentational full-screen preview can be dismissed without driving the application boot store.
 

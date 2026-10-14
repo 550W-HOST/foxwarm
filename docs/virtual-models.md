@@ -70,8 +70,9 @@ least one target; `failover` requires at least two.
 
 Virtual entries contain routing fields only. They do not accept credentials,
 endpoints, model lists, request compression, extra request fields or headers,
-context limits, effort overrides, or async-compaction overrides. Their exposed
-effort capabilities are the ordered union of their concrete leaves. A physical
+context limits, output-token limits, input-image formats, effort overrides, or
+async-compaction overrides. Root `defaults` applies only through resolved concrete
+leaves, not as virtual overrides. Their exposed effort capabilities are the ordered union of their concrete leaves. A physical
 attempt uses the requested effort when its selected leaf allows it and otherwise
 falls back to that leaf's configured default. `session-hash` does not accept
 failover thresholds or cooldowns. Concrete entries do not accept virtual

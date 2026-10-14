@@ -1321,7 +1321,7 @@ const ChatComposer = memo(function ChatComposer({
   return (
     <div
       ref={rootRef}
-      className="pointer-events-none absolute inset-x-0 bottom-0 z-20 p-4 pt-10"
+      className="foxwarm-chat-composer foxwarm-content-gutter pointer-events-none absolute inset-x-0 bottom-0 z-20 pb-4 pt-10"
     >
       {isDragging && (
         <div className="absolute inset-0 flex items-center justify-center bg-fw-accent-surface/80 dark:bg-fw-accent-surface-strong/40 pointer-events-none">
@@ -1333,7 +1333,7 @@ const ChatComposer = memo(function ChatComposer({
       )}
 
       <div
-        className="foxwarm-chat-composer-inner pointer-events-auto mx-auto max-w-5xl"
+        className="foxwarm-chat-composer-inner foxwarm-content-column pointer-events-auto"
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
