@@ -183,7 +183,7 @@ public sealed class NodePrivateCredentialTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Registry_failure_cleans_file_and_reports_committed_reservation_truth(
+    public async Task Registry_failure_cleans_file_and_preserves_actual_reservation_effects(
         bool committed
     )
     {
@@ -208,7 +208,68 @@ public sealed class NodePrivateCredentialTests
         Assert.False(File.Exists(path));
         Assert.Equal(committed ? 1 : 0, fixture.Manager.Nodes.Registry.ListApproved().Count);
         if (committed)
-            Assert.Contains("remains reserved", result.ToJsonString());
+        {
+            Assert.Contains("committed", result.ToJsonString());
+            Assert.Contains("Inspect", result.ToJsonString());
+        }
+        var registryPath = fixture.PathFor("data/state/nodes.json");
+        var persisted = File.Exists(registryPath)
+            ? JsonNode.Parse(await File.ReadAllTextAsync(registryPath))
+            : null;
+        Assert.Equal(committed, persisted?["approvedNodes"]?["reserved"] is not null);
+    }
+
+    [Fact]
+    public async Task Committed_expired_pairing_cleanup_does_not_claim_requested_reservation()
+    {
+        await using var fixture = new Fixture();
+        var registry = new ApprovedNodeRegistry(fixture.PathFor("data"));
+        var pending = registry.Request(
+            new JsonObject
+            {
+                ["nodeType"] = "cli-node",
+                ["capabilities"] = new JsonObject { ["tools"] = new JsonArray() },
+            },
+            NodeConnectionHub.Protocol(new())
+        );
+        var registryPath = fixture.PathFor("data/state/nodes.json");
+        var document = JsonNode.Parse(await File.ReadAllTextAsync(registryPath))!.AsObject();
+        // Restore a Request-generated record shortly before real expiry, rather than wait an hour.
+        // Start reads this persisted age while still valid; Create later performs the expiry cleanup.
+        var expiresAt = ApprovedNodeRegistry.Now + 5000;
+        document["pendingPairings"]![pending["id"]!.GetValue<string>()]!["requestedAt"] =
+            expiresAt - ApprovedNodeRegistry.PairingTtl;
+        await File.WriteAllTextAsync(registryPath, document.ToJsonString());
+        await fixture.Start();
+        Assert.Single(fixture.Manager.Nodes.Registry.ListPending());
+        var remaining = expiresAt - ApprovedNodeRegistry.Now;
+        if (remaining >= 0)
+            await Task.Delay(TimeSpan.FromMilliseconds(remaining + 30));
+
+        var committedWrites = 0;
+        fixture.RegistryWrite(stage =>
+        {
+            if (stage == AtomicJsonWriteStage.AfterDirectorySync)
+            {
+                committedWrites++;
+                throw new IOException("owned expired pairing cleanup failure");
+            }
+        });
+        var path = fixture.PathFor("credential");
+        var result = await fixture.Call("brand-new", path);
+        Assert.NotNull(result["error"]);
+        Assert.DoesNotContain("remains reserved", result.ToJsonString());
+        Assert.Contains("committed", result.ToJsonString());
+        Assert.Contains("Inspect", result.ToJsonString());
+        Assert.Contains("cleaned", result.ToJsonString());
+        Assert.False(File.Exists(path));
+        var persisted = JsonNode.Parse(await File.ReadAllTextAsync(registryPath))!.AsObject();
+        Assert.Empty(persisted["approvedNodes"]!.AsObject());
+        Assert.Empty(persisted["pendingPairings"]!.AsObject());
+        Assert.Empty(fixture.Manager.Nodes.Registry.ListApproved());
+        Assert.Empty(fixture.Manager.Nodes.Registry.ListPending());
+        Assert.Equal(1, committedWrites);
+        fixture.RegistryWrite(null);
     }
 
     [Fact]

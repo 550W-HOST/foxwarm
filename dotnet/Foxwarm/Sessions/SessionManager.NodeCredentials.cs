@@ -43,7 +43,7 @@ internal sealed partial class SessionManager
                 );
             if (error is AuthorityCommittedException)
                 throw new IOException(
-                    $"Node `{id}` remains reserved after a committed registry write failure, but its credential file was cleaned. Inspect the registry before retrying.",
+                    $"Node `{id}` credential creation failed after a committed registry update. Its reservation is unconfirmed, and its credential file was cleaned. Inspect the registry before retrying.",
                     error
                 );
             throw new IOException(
