@@ -22,6 +22,8 @@ The separate test container documented in `test/README.md` publishes this execut
 
 Protected `GET /api/auth/session` returns the ordinary administrator role used by the merged WebUI when WebUI is enabled. It uses the same token/cookie middleware as other protected routes; it does not introduce restricted identities or an access-management runtime.
 
+[Outbound MCP OAuth routes](./dotnet-mcp-oauth.md) use the same administrator boundary. Only exact GET `/api/mcp/oauth/client.json` and `/api/mcp/oauth/callback` bypass it. The fixed callback GET reflects no parameters and exchanges no code; its first-party authenticated JSON completion preserves Strict-cookie behavior after cross-site consent. OAuth callbacks derive from captured startup app `url`, not Host or the ordinary address fallback/override; deployment prefixes remain intact.
+
 ## Tests
 
 `dotnet/Foxwarm.Tests/Channels/WebUiStartupTests.cs`; `AppConfigurationRulesTests.cs`; `WebUiStartupTests.cs` auth/startup coverage.

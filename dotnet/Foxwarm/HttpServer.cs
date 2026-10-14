@@ -105,6 +105,7 @@ internal sealed class HttpServer
                     context.Request.Path == "/node_ws"
                     || Foxwarm.Nodes.NodeConnectionHub.IsShellPath(context.Request.Path)
                     || Foxwarm.Nodes.NodeBootstrap.IsPublicPath(context.Request.Path)
+                    || McpOAuthRoutes.IsPublic(context.Request)
                     || code?.IsCapabilityRequest(context) == true
                 )
                 {
@@ -238,6 +239,7 @@ internal sealed class HttpServer
             }
         );
         Foxwarm.Nodes.NodeRoutes.Register(app, sessions, address);
+        McpOAuthRoutes.Register(app, sessions.OutboundMcp);
         App = app;
     }
 
