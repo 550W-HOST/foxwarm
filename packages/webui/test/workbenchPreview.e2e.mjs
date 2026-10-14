@@ -1,7 +1,7 @@
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { readFile, stat } from 'node:fs/promises'
+import { mkdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import puppeteer from 'puppeteer-core'
 
@@ -13,6 +13,7 @@ let server
 let baseUrl
 
 const chat = (id, preview = true) => ({ id: `chat:${id}`, type: 'chat', sessionId: id, title: id, preview })
+const nodesTab = { id: 'system:nodes', type: 'nodes', title: 'Nodes' }
 const system = { id: 'system:agents', type: 'agents', title: 'Agents' }
 
 async function serve(request, response) {
@@ -72,6 +73,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
     if (themeId) localStorage.setItem('foxwarm_theme_selection_v2', JSON.stringify({ version: 2, themeId, colorMode: 'light' }))
     if (codeNewWindow !== undefined) localStorage.setItem('foxwarm_code_open_new_window_v1', String(codeNewWindow))
     const json = body => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    window.__fetches = []
     window.__sent = []
     window.__historyReads = []
     window.__historySearchReads = []
@@ -83,6 +85,9 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
     window.fetch = (input, options = {}) => {
       const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.href)
       const pathname = url.pathname
+      window.__fetches.push({ path: pathname, search: url.search })
+      if (pathname.endsWith('/api/nodes/onboarding/pending')) return json({ items: [], total: 0, offset: 0, limit: 50 })
+      if (pathname.endsWith('/api/tasks') && window.__failTaskPreview && url.searchParams.get('limit') === '3') return Promise.resolve(new Response('{}', { status: 503 }))
       if (pathname.endsWith('/api/auth/session')) return json({ role: 'admin' })
       if (pathname.endsWith('/api/tasks')) {
         const status = url.searchParams.get('status')
@@ -940,6 +945,7 @@ test('sole-tab header whitespace moves its pane without a Move control or draggi
     { id: 'system:logs', type: 'logs', title: 'Logs' },
     { id: 'system:tasks', type: 'tasks', title: 'Tasks' },
     { id: 'terminal:term-blank-header', type: 'terminal', title: 'Terminal', terminalId: terminal.id, cwd: terminal.cwd, nodeId: terminal.nodeId }]
+  tabs.push(nodesTab)
   for (const tab of tabs) {
     const layout = { id: 'split-main', kind: 'split', direction: 'row', sizes: [50, 50], children: [
       { id: 'pane-main', kind: 'pane', tabIds: [tab.id], activeTabId: tab.id },
@@ -1950,6 +1956,108 @@ test('Sidebar and tab scrollbars reveal without changing usable width or tab-con
       return Math.abs(tab.bottom - strip.bottom)
     })
     assert.ok(seam <= 1, 'overlay scrolling does not reserve a stripe below the current tab')
+  } finally { await page.close() }
+})
+
+async function workbenchScreenshot(page, name) {
+  if (!process.env.FOXWARM_E2E_SCREENSHOT_DIR) return
+  await mkdir(process.env.FOXWARM_E2E_SCREENSHOT_DIR, { recursive: true })
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  await page.screenshot({ path: path.join(process.env.FOXWARM_E2E_SCREENSHOT_DIR, name), fullPage: true })
+}
+
+async function clickStatusPageEntry(page, section) {
+  const popup = '[data-workbench-status-popup]'
+  await page.click(`[data-workbench-status-bar] button[aria-label^="${section === 'Tasks' ? 'Tasks:' : 'Ready nodes:'}"]`)
+  await page.waitForSelector(popup, { visible: true })
+  const entry = await page.evaluateHandle(label => [...document.querySelectorAll('[data-workbench-status-popup] button')].find(button => button.textContent === label), `Open ${section}`)
+  await entry.asElement().click()
+  await entry.dispose()
+  await page.waitForSelector(popup, { hidden: true })
+}
+
+test('Tasks and Nodes popup entries close the preview and activate singleton pages, including collapsed panes', async () => {
+  const page = await openFixture({ tabs: [system, chat('e2e-a', false)] })
+  try {
+    await page.waitForSelector('[data-workbench-status-bar] button[aria-label^="Tasks:"]')
+    await page.click('[data-workbench-status-bar] button[aria-label^="Tasks:"]')
+    await page.waitForSelector('[data-workbench-status-popup]', { visible: true })
+    await workbenchScreenshot(page, 'status-tasks-popup.png')
+    await page.keyboard.press('Escape')
+    await clickStatusPageEntry(page, 'Tasks')
+    await page.waitForFunction(() => location.hash.includes('system%3Atasks'))
+    await page.waitForSelector('[data-tab-id="system:tasks"]')
+    assert.equal((await state(page)).tabsById['system:tasks'].type, 'tasks')
+    await page.evaluate(() => { window.__failTaskPreview = true })
+    await page.click('[data-workbench-status-bar] button[aria-label^="Tasks:"]')
+    await page.waitForFunction(() => document.querySelector('[data-workbench-status-popup]')?.textContent.includes('Unable to load tasks'))
+    await page.evaluate(() => [...document.querySelectorAll('[data-workbench-status-popup] button')].find(button => button.textContent === 'Open Tasks').click())
+    await page.waitForSelector('[data-workbench-status-popup]', { hidden: true })
+    assert.equal(Object.keys((await state(page)).tabsById).filter(id => id === 'system:tasks').length, 1)
+    await page.click('[data-workbench-status-bar] button[aria-label^="Ready nodes:"]')
+    await page.waitForSelector('[data-workbench-status-popup]', { visible: true })
+    await page.waitForFunction(() => document.querySelector('[data-workbench-status-popup]')?.textContent.includes('Open Nodes'))
+    await workbenchScreenshot(page, 'status-nodes-popup.png')
+    await page.keyboard.press('Escape')
+    await clickStatusPageEntry(page, 'Nodes')
+    await page.waitForSelector('[data-node-surface]')
+    await workbenchScreenshot(page, 'nodes-workbench-wide.png')
+    assert.equal((await state(page)).tabsById['system:nodes'].type, 'nodes')
+    assert.equal((await state(page)).hash, '#tab/system:nodes')
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('[data-node-surface]')
+    assert.equal((await state(page)).tabsById['system:nodes'].title, 'Nodes')
+    await page.click('[data-tab-id="system:nodes"] button[title="Close tab"]')
+    await page.waitForFunction(() => !JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById['system:nodes'])
+    assert.notEqual((await state(page)).hash, '#tab/system:nodes')
+    await page.click('[data-tab-id="system:agents"]')
+    await page.waitForSelector('.foxwarm-architecture-surface-tab')
+    assert.deepEqual(await page.$$eval('.foxwarm-architecture-surface-tab', buttons => buttons.map(button => button.textContent)), ['Topology', 'Agents'])
+    await workbenchScreenshot(page, 'architecture-two-modes.png')
+    await page.evaluate(() => [...document.querySelectorAll('header button')].find(button => button.textContent.includes('protocol-compatible execution')).click())
+    await page.waitForSelector('[data-node-surface]')
+    await page.setViewport({ width: 390, height: 844 })
+    await workbenchScreenshot(page, 'nodes-workbench-narrow.png')
+    assert.equal(await page.$('[data-workbench-status-bar]'), null)
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false)
+    assert.ok(await page.$('[data-node-surface]'))
+    await page.evaluate(() => document.querySelector('[data-tab-id="system:agents"]').click())
+    await page.waitForSelector('.foxwarm-architecture-surface-tab')
+    await page.evaluate(() => [...document.querySelectorAll('header button')].find(button => button.textContent.includes('protocol-compatible execution')).click())
+    await page.waitForSelector('[data-node-surface]')
+    assert.equal((await state(page)).hash, '#tab/system:nodes')
+  } finally { await page.close() }
+
+  const tasksTab = { id: 'system:tasks', type: 'tasks', title: 'Tasks' }
+  for (const tab of [nodesTab, tasksTab]) {
+    const layout = { id: 'split-main', kind: 'split', direction: 'row', sizes: [50, 50], children: [
+      { id: 'pane-main', kind: 'pane', tabIds: ['chat:e2e-a'], activeTabId: 'chat:e2e-a' },
+      { id: 'pane-other', kind: 'pane', tabIds: [tab.id], activeTabId: tab.id, collapsed: true },
+    ] }
+    const collapsed = await openFixture({ tabs: [chat('e2e-a', false), tab], layout })
+    try {
+      await clickStatusPageEntry(collapsed, tab.title)
+      await collapsed.waitForFunction(id => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.focusedPaneId === 'pane-other' && location.hash === `#tab/${encodeURIComponent(id)}`, {}, tab.id)
+      const snapshot = await state(collapsed)
+      assert.equal(snapshot.root.children[1].collapsed, false)
+      assert.equal(snapshot.root.children[1].activeTabId, tab.id)
+      assert.equal(Object.keys(snapshot.tabsById).filter(id => id === tab.id).length, 1)
+    } finally { await collapsed.close() }
+  }
+})
+
+test('Nodes route creates a sole-tab header without Architecture data or setup credentials', async () => {
+  const page = await openFixture({ tabs: [], activeTabId: 'system:nodes', hash: '#tab/system%3Anodes' })
+  try {
+    await page.waitForSelector('[data-node-surface]')
+    await page.waitForSelector('[data-workbench-tab-handle="system:nodes"]')
+    assert.equal(await page.$('[data-tab-id]'), null)
+    const reads = await page.evaluate(() => window.__fetches)
+    assert.ok(reads.some(request => request.path.endsWith('/nodes/onboarding/pending')))
+    assert.ok(!reads.some(request => request.path.endsWith('/session-list/architecture') && new URLSearchParams(request.search).get('limit') !== '1' || request.path.endsWith('/nodes/onboarding/commands')), 'App keeps its global summary read, but Nodes never mounts the Architecture tree or credentials')
+    await page.click('[data-workbench-tab-close="system:nodes"]')
+    await page.waitForFunction(() => location.hash === '')
+    assert.deepEqual((await state(page)).tabsById, {})
   } finally { await page.close() }
 })
 

@@ -26,7 +26,7 @@ import { findTerminalForTarget, normalizeTerminalTarget } from './terminalTarget
 import { useChatPreferences } from './chatPreferences'
 import { makeFoxwarmPopupUrl, type FoxwarmPopupTarget } from './popupWebUi'
 
-type AppView = 'session' | 'agents' | 'setup' | 'logs' | 'tasks'
+type AppView = 'session' | 'agents' | 'setup' | 'logs' | 'tasks' | 'nodes'
 
 type RouteState = { view: 'tab'; tabId: string | null }
 
@@ -68,6 +68,7 @@ const SEARCH_TAB_ID = 'system:search'
 const HISTORY_TAB_PREFIX = 'history:'
 const LOGS_TAB_ID = 'system:logs'
 const TASKS_TAB_ID = 'system:tasks'
+const NODES_TAB_ID = 'system:nodes'
 const LAST_VISITED_SESSION_STORAGE_KEY = 'foxwarm_last_visited_session_v1'
 const LAST_ACTIVE_TAB_STORAGE_KEY = 'foxwarm_last_active_tab_v1'
 const SIDEBAR_WIDTH_STORAGE_KEY = 'foxwarm_sidebar_width_v1'
@@ -85,6 +86,7 @@ type OriginalFaviconLink = {
 
 let originalFaviconLinks: OriginalFaviconLink[] | null = null
 
+const NodesView = lazy(() => import('./components/NodesView'))
 const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
 const LogsView = lazy(() => import('./components/LogsView'))
 const TasksView = lazy(() => import('./components/TasksView'))
@@ -435,7 +437,7 @@ function makeHistoryTab(): Extract<WorkbenchTab, { type: 'search' }> {
 }
 
 function isRestorableRouteTabId(tabId: string): boolean {
-  return tabId.startsWith('chat:') || tabId === AGENTS_TAB_ID || tabId === SETUP_TAB_ID || tabId === SEARCH_TAB_ID || tabId.startsWith(HISTORY_TAB_PREFIX) || tabId === LOGS_TAB_ID || tabId === TASKS_TAB_ID
+  return tabId.startsWith('chat:') || tabId === AGENTS_TAB_ID || tabId === SETUP_TAB_ID || tabId === SEARCH_TAB_ID || tabId.startsWith(HISTORY_TAB_PREFIX) || tabId === LOGS_TAB_ID || tabId === TASKS_TAB_ID || tabId === NODES_TAB_ID
 }
 
 function App() {
@@ -553,7 +555,9 @@ function App() {
         ? 'logs'
         : focusedActiveTab?.type === 'tasks'
           ? 'tasks'
-          : 'session'
+          : focusedActiveTab?.type === 'nodes'
+            ? 'nodes'
+            : 'session'
   const busyCount = boundedSessions.globalSummary?.busy ?? sessions.filter((session) => isSessionRuntimeActive(session)).length
 
   const fetchWebUiSettings = async () => {
@@ -992,6 +996,11 @@ function App() {
     navigateToTab(tab.id, origin)
   }
 
+  const openNodesTab = () => {
+    upsertTab({ id: NODES_TAB_ID, type: 'nodes', title: 'Nodes' }, { activate: true })
+    navigateToTab(NODES_TAB_ID)
+  }
+
   const openTasksTab = () => {
     upsertTab({ id: TASKS_TAB_ID, type: 'tasks', title: 'Tasks' }, { activate: true })
     navigateToTab(TASKS_TAB_ID)
@@ -1201,6 +1210,8 @@ function App() {
           ? { kind: 'terminal', terminalId: targetTab.terminalId!, title: targetTab.title }
           : targetTab.type === 'tasks'
             ? { kind: 'tasks' }
+          : targetTab.type === 'nodes'
+            ? { kind: 'nodes' }
           : targetTab.type === 'logs'
             ? { kind: 'logs' }
           : targetTab.type === 'search'
@@ -1476,6 +1487,11 @@ function App() {
       return
     }
 
+    if (route.tabId === NODES_TAB_ID) {
+      upsertTab({ id: NODES_TAB_ID, type: 'nodes', title: 'Nodes' }, { activate: true })
+      return
+    }
+
     if (route.tabId === TASKS_TAB_ID) {
       upsertTab({ id: TASKS_TAB_ID, type: 'tasks', title: 'Tasks' }, { activate: true })
       return
@@ -1572,6 +1588,8 @@ function App() {
       )
     }
 
+    if (tab.type === 'nodes') return <Suspense fallback={<LazyViewFallback label="Loading nodes…" />}><NodesView onBack={onBack} /></Suspense>
+
     if (tab.type === 'tasks') return <Suspense fallback={<LazyViewFallback label="Loading tasks…" />}><TasksView onBack={onBack} onOpenSession={openChatTab} /></Suspense>
 
     if (tab.type === 'logs') return <Suspense fallback={<LazyViewFallback label="Loading logs…" />}><LogsView onBack={onBack} /></Suspense>
@@ -1598,6 +1616,7 @@ function App() {
           <ArchitectureView
             currentSession={currentContextSessionId}
             onSelectSession={openChatTab}
+            onOpenNodes={openNodesTab}
             onBack={onBack}
             onCreateAgent={handleCreateAgent}
             onCreateSession={handleCreateSession}
@@ -2105,6 +2124,7 @@ function App() {
           />
         </div>
         <WorkbenchStatusBar running={busyCount} sessions={sessions} nodes={nodeTargets}
+          onOpenTasks={openTasksTab} onOpenNodes={openNodesTab}
           onToggleTerminal={toggleTerminalPanel} terminalVisible={statusTerminalVisible}
           totalUsage={boundedSessions.globalSummary?.tokenUsage}
           currentSessionId={focusedActiveTab?.type === 'chat' ? focusedActiveTab.sessionId : undefined}

@@ -130,7 +130,7 @@ test('workbench normalization ignores and removes legacy tab pinned state', asyn
   assert.equal(normalized.tabsById['vscode-web'].title, 'Code')
 })
 
-test('workbench normalization persists Agents, Setup, Logs and Tasks tabs', async () => {
+test('workbench normalization persists Agents, Setup, Logs, Tasks and Nodes tabs', async () => {
   const { normalizePersistedWorkbenchState } = await loadTypeScriptModule('../src/workbench/utils.ts')
   const normalized = normalizePersistedWorkbenchState({
     version: 4,
@@ -138,18 +138,19 @@ test('workbench normalization persists Agents, Setup, Logs and Tasks tabs', asyn
       'system:agents': { id: 'system:agents', type: 'agents', title: 'Agents' },
       'system:setup': { id: 'system:setup', type: 'setup', title: 'Setup' },
       'system:logs': { id: 'system:logs', type: 'logs', title: 'Logs' },
+      'system:nodes': { id: 'system:nodes', type: 'nodes', title: 'Nodes' },
       'system:tasks': { id: 'system:tasks', type: 'tasks', title: 'Tasks' },
     },
     root: {
       id: 'pane-system',
       kind: 'pane',
-      tabIds: ['system:agents', 'system:setup', 'system:logs', 'system:tasks'],
+      tabIds: ['system:agents', 'system:setup', 'system:logs', 'system:tasks', 'system:nodes'],
       activeTabId: 'system:setup',
     },
     focusedPaneId: 'pane-system',
   })
 
-  assert.deepEqual(normalized.root.tabIds, ['system:agents', 'system:setup', 'system:logs', 'system:tasks'])
+  assert.deepEqual(normalized.root.tabIds, ['system:agents', 'system:setup', 'system:logs', 'system:tasks', 'system:nodes'])
   assert.equal(normalized.root.activeTabId, 'system:setup')
   assert.equal(normalized.tabsById['system:agents'].type, 'agents')
   assert.equal(normalized.tabsById['system:setup'].type, 'setup')

@@ -15,9 +15,10 @@ function validCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 
-export default function WorkbenchStatusBar({ running, sessions, nodes, totalUsage, currentSession, currentSessionId, onToggleTerminal, terminalVisible = false }: {
+export default function WorkbenchStatusBar({ running, sessions, nodes, totalUsage, currentSession, currentSessionId, onOpenTasks, onOpenNodes, onToggleTerminal, terminalVisible = false }: {
   running: number; sessions: readonly Session[]; nodes: readonly WebUiNodeTarget[]
   totalUsage?: TokenUsage; currentSession?: Session; currentSessionId?: string
+  onOpenTasks: () => void; onOpenNodes: () => void
   onToggleTerminal?: () => void; terminalVisible?: boolean
 }) {
   const [tasks, setTasks] = useState<TaskCounts | null>(null)
@@ -161,6 +162,13 @@ export default function WorkbenchStatusBar({ running, sessions, nodes, totalUsag
       {(open === 'running' || open === 'waiting') && <div className="mt-2 border-t border-fw-border-muted pt-2">{(open === 'running' ? active : waiting).slice(0, 4).map(session => <div key={session.id} className="flex min-w-0 items-center justify-between gap-3 py-1"><span className="truncate" title={session.id}>{session.displayName || session.id}</span><span className="shrink-0 text-[11px] text-fw-text-muted">{getSessionRuntimeStateName(session)}</span></div>)}{!(open === 'running' ? active : waiting).length && <div className="py-1 text-fw-text-muted">No matching loaded sessions</div>}</div>}
       {open === 'tasks' && <>{tasks && <>{row('Active', tasks.active)}{row('Open', tasks.open)}</>}<div className="mt-2 border-t border-fw-border-muted pt-2">{taskPreviewState === 'loading' ? <span className="text-fw-text-muted">Loading…</span> : taskPreviewState === 'error' ? <span className="text-fw-text-muted">Unable to load tasks</span> : taskPreview.map(task => <div key={task.id} className="flex min-w-0 items-center justify-between gap-3 py-1"><span className="truncate" title={task.title}>{task.title}</span><span className="shrink-0 text-[11px] text-fw-text-muted">{task.status}</span></div>)}</div></>}
       {open === 'nodes' && <>{row('Ready', readyNodes.length)}{row('Offline', nodes.filter(node => !node.online).length)}<div className="mt-2 border-t border-fw-border-muted pt-2">{nodes.slice(0, 6).map(node => <div key={node.id} className="flex min-w-0 items-center justify-between gap-3 py-1"><span className="truncate" title={node.id}>{node.displayName}</span><span className="shrink-0 text-[11px] text-fw-text-muted">{!node.online ? 'Offline' : node.protocolStatus === 'upgrade-required' ? 'Upgrade required' : 'Ready'}</span></div>)}</div></>}
+      {(open === 'tasks' || open === 'nodes') && <div className="mt-3 border-t border-fw-border-muted pt-2">
+        <button type="button" className="w-full rounded-md px-2 py-1.5 text-left text-xs font-medium text-fw-accent hover:bg-fw-hover" onClick={() => {
+          const navigate = open === 'tasks' ? onOpenTasks : onOpenNodes
+          setOpen(null)
+          navigate()
+        }}>{open === 'tasks' ? 'Open Tasks' : 'Open Nodes'}</button>
+      </div>}
     </div>, document.body)}
   </>
 }
