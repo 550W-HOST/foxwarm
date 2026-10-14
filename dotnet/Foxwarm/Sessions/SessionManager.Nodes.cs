@@ -10,15 +10,17 @@ internal sealed partial class SessionManager
 
     internal (string Node, string? Cwd) ExecutionPlacement(SessionOwner owner) =>
         owner.Entry.WithState(state =>
-        {
-            var node = SessionGoal.Trim(
-                SessionWait.Text(state.AuthorityEnvelope["currentNode"]) ?? ""
-            );
-            return (
-                node.Length > 0 ? node : BoundNode(owner.Agent) ?? "master",
+            (
+                ResolveExecutionNode(state.AuthorityEnvelope, BoundNode(owner.Agent)),
                 SessionWait.Text(state.AuthorityEnvelope["cwd"])
-            );
-        });
+            )
+        );
+
+    internal static string ResolveExecutionNode(JsonObject authority, string? boundNode = null)
+    {
+        var node = SessionGoal.Trim(SessionWait.Text(authority["currentNode"]) ?? "");
+        return node.Length > 0 ? node : boundNode ?? "master";
+    }
 
     internal string CurrentNode(SessionOwner owner) => ExecutionPlacement(owner).Node;
 

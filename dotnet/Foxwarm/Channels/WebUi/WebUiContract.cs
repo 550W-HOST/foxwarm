@@ -10,7 +10,8 @@ internal static class WebUiContract
         SessionSnapshot snapshot,
         HostModels models,
         bool toolActive,
-        bool compacting
+        bool compacting,
+        string? executionNode = null
     )
     {
         models = models.Capture();
@@ -43,7 +44,7 @@ internal static class WebUiContract
                 snapshot.AuthorityEnvelope["agent"]?.DeepClone() ?? JsonValue.Create("main"),
             ["parentSessionId"] = snapshot.AuthorityEnvelope["parentSessionId"]?.DeepClone(),
             ["displayName"] = snapshot.AuthorityEnvelope["displayName"]?.DeepClone(),
-            ["currentNode"] = snapshot.AuthorityEnvelope["currentNode"]?.DeepClone(),
+            ["currentNode"] = executionNode ?? SessionManager.ResolveExecutionNode(snapshot.AuthorityEnvelope),
             ["cwd"] = snapshot.AuthorityEnvelope["cwd"]?.DeepClone(),
             ["busy"] = snapshot.Busy,
             ["busyStartedAt"] = snapshot.BusyStartedAt,
@@ -80,7 +81,8 @@ internal static class WebUiContract
         bool compacting,
         int? tail,
         int? prefixLength,
-        long? afterSeq
+        long? afterSeq,
+        string? executionNode = null
     )
     {
         IReadOnlyList<JsonObject> selected = snapshot.History;
@@ -165,7 +167,7 @@ internal static class WebUiContract
         }
         var result = new JsonObject
         {
-            ["session"] = Session(snapshot, models, toolActive, compacting),
+            ["session"] = Session(snapshot, models, toolActive, compacting, executionNode),
             ["messages"] = new JsonArray(
                 selected.Select(message => (JsonNode?)message.DeepClone()).ToArray()
             ),

@@ -180,6 +180,10 @@ internal sealed class SessionRuntime(SessionManager manager)
 internal sealed partial class SessionOwner
 {
     internal Func<SessionMetadata, SessionMetadata>? MainMetadata { get; init; }
+    internal Func<string, string?>? ResolveBoundNode { get; init; }
+
+    internal string ExecutionNode(JsonObject authority) =>
+        SessionManager.ResolveExecutionNode(authority, ResolveBoundNode?.Invoke(Agent));
 
     public SessionMetadata Metadata()
     {
@@ -231,7 +235,7 @@ internal sealed partial class SessionOwner
         var dto = SessionPresentation.Build(meta, models, ResolveAncestry, ToolActive, Compacting);
         Entry.WithState(state =>
         {
-            dto["currentNode"] = state.AuthorityEnvelope["currentNode"]?.DeepClone();
+            dto["currentNode"] = ExecutionNode(state.AuthorityEnvelope);
             dto["cwd"] = state.AuthorityEnvelope["cwd"]?.DeepClone();
         });
         return dto;

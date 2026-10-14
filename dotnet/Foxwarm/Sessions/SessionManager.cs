@@ -494,6 +494,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         {
             ResolveAncestry = CatalogMetadata,
             MainMetadata = OverlayMainMetadata,
+            ResolveBoundNode = BoundNode,
         };
         hosted.Archive = store.Archive;
         hosted.AuthorityStore = store;

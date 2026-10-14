@@ -145,12 +145,7 @@ internal sealed partial class SessionManager
         if (!IsCurrentOwner(owner))
             return;
         var meta = owner.Metadata();
-        var context = owner.Entry.WithState(state =>
-            (
-                Node: SessionWait.Text(state.AuthorityEnvelope["currentNode"]),
-                Cwd: SessionWait.Text(state.AuthorityEnvelope["cwd"])
-            )
-        );
+        var context = ExecutionPlacement(owner);
         var active =
             meta.Busy
             || meta.Stopping
