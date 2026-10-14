@@ -2314,6 +2314,7 @@ html[data-foxwarm-theme] .foxwarm-chat-composer-textarea {
   box-shadow: var(--foxwarm-panel-shadow); font-size: 12px;
 }
 .foxwarm-status-popup:focus { outline: none; }
+.foxwarm-status-popup .status-badge { padding: 1px 5px; line-height: 16px; }
 .foxwarm-status-popup-section {
   margin-top: 6px; padding-top: 6px;
   border-top: 1px solid var(--foxwarm-color-border);
