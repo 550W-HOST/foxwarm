@@ -4818,3 +4818,94 @@ test('normal task request context reaches provider/retry but never canonical his
     assert.deepEqual(session.history.map(message => message.role), ['user', 'model']);
   } finally { (axios as any).post = originalPost; }
 });
+
+
+test('provider payloads use resolved leaf output limits and retain later extraFields overrides', async () => {
+  const originalPost = axios.post;
+  const parsed = loadModelsConfigFromObject({
+    defaults: { maxOutput: 2048 },
+    providers: {
+      responses: { providerType: 'openai-responses', models: ['model'] },
+      chat: { providerType: 'openai-completions', maxOutput: 4096, models: ['model'] },
+      anthropic: { providerType: 'anthropic', maxOutput: 4096, models: [{ id: 'model', maxOutput: 8192 }] },
+      extra: { providerType: 'openai-responses', models: ['model'], extraFields: { max_output_tokens: 777 } },
+    },
+  });
+  const captured: any[] = [];
+  try {
+    (axios as any).post = async (url: string, body: any) => {
+      captured.push(body);
+      return { status: 200, statusText: 'OK', headers: {}, data: url.endsWith('/responses') ? makeResponsesStream()
+        : url.endsWith('/chat/completions') ? makeChatCompletionStream()
+        : makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } }) };
+    };
+    for (const model of ['responses', 'chat', 'anthropic', 'extra']) {
+      await requestLlmOnce({ contents: [{ role: 'user', parts: [{ text: 'ok' }] }], systemPrompt: '',
+        model, modelsConfigOverride: parsed, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
+    }
+    assert.deepEqual(captured.map(body => body.max_output_tokens ?? body.max_tokens), [2048, 4096, 8192, 777]);
+  } finally { (axios as any).post = originalPost; }
+});
+
+test('failover consumes each leaf image format and output limit while retaining one request snapshot', async () => {
+  const originalPost = axios.post;
+  const previousResolver = configModule.resolveModelConfig;
+  const originalImage = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#123456' } }).webp().toBuffer();
+  const ref = await putImageBlob({ buffer: originalImage, mimeType: 'image/webp', imageId: makeId('leaf_format') });
+  const canonical: Message[] = [{ role: 'user', parts: [{ text: 'image' }, { inlineDataRef: ref }] }];
+  const before = structuredClone(canonical);
+  const raw: any = {
+    default: 'route',
+    defaults: { maxOutput: 3333, providerImageOutputFormat: 'webp' },
+    providers: {
+      first: { providerType: 'openai-responses', maxOutput: 1000, models: ['model'] },
+      second: { providerType: 'openai-completions', maxOutput: 2000, providerImageOutputFormat: 'jpeg', models: ['model'] },
+      route: { providerType: 'failover', targets: ['first', 'second'], failureThreshold: 1 },
+    },
+  };
+  let active = loadModelsConfigFromObject(raw);
+  let resolutions = 0;
+  const bodies: any[] = [];
+  const request = () => requestLlmOnce({ contents: canonical, systemPrompt: '', model: 'route', maxRetries: 2,
+    toolDefinitions: [], notifySessionEvents: false, registerAbortController: false,
+    onRetry: async () => {
+      const changed = structuredClone(raw);
+      delete changed.providers.first.maxOutput;
+      changed.defaults.providerImageOutputFormat = 'jpeg';
+      active = loadModelsConfigFromObject(changed);
+    },
+  });
+  try {
+    (configModule as any).resolveModelConfig = () => {
+      resolutions += 1;
+      return { modelsConfig: active, defaultKey: 'route', currentKey: 'route', modelEntry: active.models.route,
+        contextLimit: active.models.route.contextLimit };
+    };
+    (axios as any).post = async (url: string, body: any) => {
+      bodies.push(body);
+      if (bodies.length === 1) {
+        const error: any = new Error('retryable fixture');
+        error.response = { status: 503, data: 'unavailable' }; throw error;
+      }
+      return { status: 200, statusText: 'OK', headers: {}, data: url.endsWith('/responses') ? makeResponsesStream() : makeChatCompletionStream() };
+    };
+    const result = await request();
+    assert.equal(result.modelId, 'second/model');
+    assert.equal(resolutions, 1);
+    assert.equal(bodies[0].max_output_tokens, 1000);
+    assert.equal(bodies[1].max_tokens, 2000);
+    assert.match(JSON.stringify(bodies[0]), /image\/webp/);
+    assert.match(JSON.stringify(bodies[1]), /image\/jpeg/);
+    assert.equal(JSON.stringify(bodies[1]).includes(originalImage.toString('base64')), false);
+    await request();
+    assert.equal(resolutions, 2);
+    assert.equal(bodies[2].max_output_tokens, 3333);
+    assert.match(JSON.stringify(bodies[2]), /image\/jpeg/);
+    assert.deepEqual(canonical, before);
+    assert.deepEqual(await fs.readFile(resolveImageBlobPath(ref.blobId!)), originalImage);
+  } finally {
+    (axios as any).post = originalPost;
+    (configModule as any).resolveModelConfig = previousResolver;
+    if (ref.blobId) await fs.remove(resolveImageBlobPath(ref.blobId));
+  }
+});

@@ -31,6 +31,7 @@ import MarkdownHtmlSegment from './MarkdownHtmlSegment'
 import WebSearchCard from './WebSearchCard'
 import { getWebSearchAction, type WebSearchAction } from '../webSearchAction'
 import ContextBlockCard, { getContextBlockMetaFromMessage } from './ContextBlockCard'
+import JsonInspectorDialog from './JsonInspectorDialog'
 import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
 import { useThreadCardHeightTransition } from './useThreadCardHeightTransition'
 import CommitMarkerCard, { type OpenCodeCommitHandler } from './CommitMarkerCard'
@@ -801,7 +802,7 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
   const displayedViewMode = searchReveal ? 'rendered' : viewMode
   const [copied, setCopied] = useState(false)
   const copyResetTimeoutRef = useRef<number | null>(null)
-  const jsonText = useMemo(() => viewMode === 'json' ? JSON.stringify(message, null, 2) : '', [message, viewMode])
+  const [jsonSnapshot, setJsonSnapshot] = useState<string | null>(null)
   const renderedSegments = useMemo(() => splitCommitMarkers(text), [text])
 
   useEffect(() => {
@@ -831,7 +832,8 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
   }, [text])
 
   return (
-    <div className={`foxwarm-assistant-message-card ${conversation ? 'foxwarm-conversation-reply flex flex-col' : ''} min-w-0 max-w-full bg-fw-assistant-surface text-fw-assistant-text border border-fw-border px-2 py-2 rounded-lg cursor-text relative group`}>
+    <div className={`foxwarm-assistant-message-card ${conversation ? 'foxwarm-conversation-reply flex flex-col' : ''} min-w-0 max-w-full bg-fw-assistant-surface text-fw-assistant-text border border-fw-border px-2 py-2 rounded-lg cursor-text relative group`}
+      style={message.__meta?.streaming ? { overflowAnchor: 'none' } : undefined}>
       <div className={`foxwarm-assistant-action-buttons ${conversation ? 'order-last mt-1 self-start' : 'absolute right-1 top-1'} flex gap-0.5 opacity-0 transition-opacity`}>
         <IconToggleButton onClick={() => setViewMode('rendered')} active={displayedViewMode === 'rendered'} title="Rendered (Markdown)">
           <Eye size={12} />
@@ -839,7 +841,7 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
         <IconToggleButton onClick={() => setViewMode('raw')} active={displayedViewMode === 'raw'} title="Raw Text">
           <Code size={12} />
         </IconToggleButton>
-        <IconToggleButton onClick={() => setViewMode('json')} active={displayedViewMode === 'json'} title="JSON">
+        <IconToggleButton onClick={() => setJsonSnapshot(JSON.stringify(message, null, 2))} active={jsonSnapshot !== null} title="JSON">
           <FileJson size={14} />
         </IconToggleButton>
         <IconToggleButton onClick={handleCopy} active={copied} title={copied ? 'Copied' : 'Copy Raw Text'}>
@@ -864,11 +866,10 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
           ))}
           <div data-search-exclude className="contents"><WebSearchCitationLinks annotations={annotations} /></div>
         </div>
-      ) : displayedViewMode === 'raw' ? (
-        <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-fw-text-strong">{text}</pre>
       ) : (
-        <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-fw-text-strong">{jsonText}</pre>
+        <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-fw-text-strong">{text}</pre>
       )}
+      {jsonSnapshot !== null && <JsonInspectorDialog text={jsonSnapshot} onClose={() => setJsonSnapshot(null)} />}
     </div>
   )
 })
@@ -889,6 +890,7 @@ interface MessageRowProps {
   onOpenCodeCommit?: OpenCodeCommitHandler
   renderNestedMessages: (messages: Message[], keyPrefix: string, nestedDepth: number, timelineView?: TimelineView, searchTarget?: SessionSearchMatch | null) => ReactNode
   conversationDetails?: boolean
+  neutralToolSuccess?: boolean
   groupFirst?: boolean
   surface?: 'all' | 'ordinary' | 'grouped'
   searchTarget?: SessionSearchMatch | null
@@ -904,6 +906,7 @@ const MessageRow = memo(function MessageRow({
   onOpenCodeCommit,
   renderNestedMessages,
   conversationDetails = false,
+  neutralToolSuccess = false,
   groupFirst = false,
   surface = 'all',
   searchTarget,
@@ -930,7 +933,7 @@ const MessageRow = memo(function MessageRow({
   const llmError = useMemo(() => getLlmErrorMessageDetails(msg), [msg])
   const toolDisclosure = {
     hideCollapsedContent: conversationDetails,
-    neutralSuccess: conversationDetails,
+    neutralSuccess: conversationDetails || neutralToolSuccess,
     expandedToolKeys: expandedTools.get(messageKey) || EMPTY_TOOL_KEYS,
     onToolToggle: useCallback((toolKey: string, expanded: boolean) => {
       onToolToggle(messageKey, toolKey, expanded, row.group?.key)
@@ -1067,6 +1070,7 @@ const MessageRow = memo(function MessageRow({
   prev.isMobile === next.isMobile &&
   (prev.row.msg.role !== 'user' || prev.row.systemLikeMessage || prev.showUserMessageMetadata === next.showUserMessageMetadata) &&
   prev.conversationDetails === next.conversationDetails &&
+  prev.neutralToolSuccess === next.neutralToolSuccess &&
   prev.groupFirst === next.groupFirst &&
   prev.surface === next.surface &&
   (prev.searchTarget?.rowKey === prev.row.key ? prev.searchTarget.id : null) === (next.searchTarget?.rowKey === next.row.key ? next.searchTarget.id : null) &&
@@ -1297,7 +1301,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, isR
     if (expanded && groupKey) handleGroupToggle(groupKey, true)
   }, [handleGroupToggle])
 
-  const rowProps = { conversationDetails: activityDetails, expandedTools, onToolToggle: handleToolToggle, isMobile, showUserMessageMetadata, sessionId, nestedDepth, onOpenCodeFile, onOpenCodeCommit, renderNestedMessages, searchTarget }
+  const rowProps = { conversationDetails: activityDetails, neutralToolSuccess: timelineView === 'grouped', expandedTools, onToolToggle: handleToolToggle, isMobile, showUserMessageMetadata, sessionId, nestedDepth, onOpenCodeFile, onOpenCodeCommit, renderNestedMessages, searchTarget }
 
   return (
     <div className="foxwarm-chat-timeline min-w-0 max-w-full">

@@ -3,7 +3,7 @@ import test from 'node:test';
 import http from 'node:http';
 import { once } from 'node:events';
 import fs from 'fs-extra';
-import { APP_CONFIG_PATH, getActiveModelsConfigPath } from './config';
+import { APP_CONFIG_PATH, getActiveModelsConfigPath, resolveModelConfig } from './config';
 import { AccessConfigRuntime, normalizeAccessConfig } from './accessConfig';
 import { ConfigInstaller } from './configInstaller';
 import { HttpServer, setHttpServer } from './httpServer';
@@ -157,7 +157,7 @@ test('queued structured Models save reads latest overrides while replacing the s
   try {
     const { pending: first } = await fixture.beginHeldSave();
     const secondAdmitted = fixture.expectAdmission(2);
-    const second = fixture.save('models', { yaml: 'customSetting: latest\nproviders: { fresh: { providerType: openai, models: [new-model] }, seed: { providerType: openai, models: [{ id: structured-model, contextLimit: 8192 }], customField: latest } }\ndefault: fresh/new-model\n' });
+    const second = fixture.save('models', { yaml: 'customSetting: latest\ndefaults: { contextLimit: 120000, maxOutput: 24000, providerImageOutputFormat: webp }\nproviders: { fresh: { providerType: openai, models: [new-model] }, seed: { providerType: openai, maxOutput: 16000, providerImageOutputFormat: jpeg, models: [{ id: structured-model, contextLimit: 8192, maxOutput: 8000, providerImageOutputFormat: webp }], customField: latest } }\ndefault: fresh/new-model\n' });
     await secondAdmitted;
     const thirdAdmitted = fixture.expectAdmission(3);
     const third = fixture.save('models', { providerKey: 'seed', providerType: 'openai', models: 'structured-model', defaultModel: 'seed/structured-model' });
@@ -167,8 +167,21 @@ test('queued structured Models save reads latest overrides while replacing the s
     assert.deepEqual(Object.keys(config.providers), ['seed']);
     assert.equal(config.providers.seed.customField, 'latest');
     assert.equal(config.customSetting, 'latest');
-    assert.deepEqual(config.providers.seed.models, [{ id: 'structured-model', contextLimit: 8192 }]);
+    assert.deepEqual(config.defaults, { contextLimit: 120000, maxOutput: 24000, providerImageOutputFormat: 'webp' });
+    assert.equal(config.providers.seed.maxOutput, 16000);
+    assert.equal(config.providers.seed.providerImageOutputFormat, 'jpeg');
+    assert.deepEqual(config.providers.seed.models, [{ id: 'structured-model', contextLimit: 8192, maxOutput: 8000, providerImageOutputFormat: 'webp' }]);
     assert.equal(config.default, 'seed/structured-model');
+    const snapshot = resolveModelConfig();
+    assert.equal(snapshot.modelEntry.maxOutput, 8000);
+    const updated = '# Keep raw formatting\ndefaults: {contextLimit: 96000, maxOutput: 4096, providerImageOutputFormat: jpeg}\nproviders: {seed: {models: [structured-model]}}\ndefault: seed/structured-model\n';
+    await fixture.save('models', { yaml: updated });
+    assert.equal(await fs.readFile(getActiveModelsConfigPath(), 'utf8'), updated);
+    const next = resolveModelConfig();
+    assert.equal(next.contextLimit, 96000);
+    assert.equal(next.modelEntry.maxOutput, 4096);
+    assert.equal(next.modelEntry.providerImageOutputFormat, 'jpeg');
+    assert.equal(snapshot.modelEntry.maxOutput, 8000, 'existing parsed snapshots stay unchanged');
   } finally { await fixture.close(); }
 });
 

@@ -25,7 +25,7 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 - `buildPatchHunkSnippets` — extracts old/new text from a patch hunk
 - `computeUnifiedDiffLines` — generates unified diff output from two strings
 - `formatCompactObjectPreview` — compact object serialization
-- Interfaces: `Message`, `MessagePart`, `OpenAIResponsesAnnotation`, `FunctionCall`, `FunctionResponse`, `SlashCommandOption`, `SlashCommandCompletion`, `PatchPreviewOperation`, `SessionStreamEvent`, `ViewMode`, `ToolViewMode`
+- Interfaces: `Message`, `MessagePart`, `OpenAIResponsesAnnotation`, `FunctionCall`, `FunctionResponse`, `SlashCommandOption`, `SlashCommandCompletion`, `PatchPreviewOperation`, `SessionStreamEvent`, `ViewMode` (Rendered/Raw)
 - The browser-facing `FunctionCall` interface includes optional `rawArgsText` and `argsParseError` from the WebUI message transport; canonical Session types and parser behavior live in the backend.
 - `SessionStreamEvent` mirrors legacy cumulative stream fields and version-2 offset delta/tool-argument fields, including optional provider-output-indexed Responses `partDeltas` and structural committed-prefix trims for summary/content/tool/image-status slices (canonical wire contract: [D-streaming-delta-and-bootstrap](../threads/streaming-pipeline.md#d-streaming-delta-and-bootstrap)).
 - `ContextBlockMessageMeta` — frontend mirror of rendered CTX-BLOCK metadata placed on `message.__meta.contextBlock`
@@ -74,6 +74,9 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 - `FunctionResponse.__meta.resolvedPaths` is WebUI-only per-call data; Code icons use it without changing the displayed tool response or labels. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch-node-execution.md#d-dispatch-native-agent-paths-and-code-targets).
 ## Behavior
 
+- `ToolTag` defaults to the existing non-tool label treatment. Call/result and ToolScript tags explicitly set `toolCall`, exposed as `data-tool-call-tag`; counted `ToolTagItem` entries preserve that identity through summarization. These real-tool labels keep their original case even under an uppercase theme recipe. System/Event/Task, CTX-BLOCK and hosted Web Search labels keep their existing colors and label treatments. Reasoning uses the icon-only presentation below.
+
+- Non-tool `reasoning` tags use the shared icon-only presentation with their complete label/count in `title` and an accessible `img` name; the Brain SVG itself is hidden from duplicate accessibility output. Real-tool tags are excluded. Counted summaries keep tool and thread identities separate even when their labels match. The visible Reasoning contract belongs to [D-webui-contiguous-reasoning-cards](../modules/webui.md#d-webui-contiguous-reasoning-cards).
 - Markdown rendering uses `marked` with GFM/breaks, then sanitizes ordinary HTML via DOMPurify with a strict allowlist (no images, scripts, iframes). Links get `target="_blank"` injected.
 - GFM tables stay semantic through rendering and sanitization. Assistant/model Markdown uses the existing Marked parse to wrap generated table tokens in a safe `.foxwarm-markdown-table-scroll` surface before sanitization; ordinary `renderMarkdown` consumers retain direct table markup. Layout behavior belongs to [D-webui-assistant-markdown-tables](./webui-chat-timeline.md#d-webui-assistant-markdown-tables). The renderer unit test guards semantic table markup and the distinct assistant/ordinary paths.
 - Ordinary fenced code in `.foxwarm-markdown` uses a compact `0.5rem` vertical margin while retaining wrapped, contained overflow behavior. Special-block descendants remain excluded from this ordinary prose rule.

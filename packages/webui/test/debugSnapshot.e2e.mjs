@@ -1,24 +1,22 @@
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
-import { readdir, readFile } from 'node:fs/promises'
-import { build } from 'esbuild'
+import { mkdir } from 'node:fs/promises'
+import { createEditorFixtureServer } from './editorFixtureServer.mjs'
 import puppeteer from 'puppeteer-core'
 import { fileURLToPath } from 'node:url'
 
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
 const chatEntry = fileURLToPath(new URL('../src/components/Chat.tsx', import.meta.url))
-const packageDir = fileURLToPath(new URL('..', import.meta.url))
-const assetsDirectory = new URL('../dist/assets/', import.meta.url)
 let browser
 let server
 let fixtureUrl
 
-async function buildFixtureBundle() {
+function fixtureSource() {
   const source = `
     import React from 'react'
     import { createRoot } from 'react-dom/client'
     import Chat from ${JSON.stringify(chatEntry)}
+
 
     const originalStringify = JSON.stringify
     window.fixtureDebugCaptures = []
@@ -104,18 +102,22 @@ async function buildFixtureBundle() {
     window.renderFixture('fixture/main')
   `
 
-  const result = await build({
-    stdin: { contents: source, resolveDir: packageDir, sourcefile: 'debug-snapshot-fixture.tsx' },
-    bundle: true,
-    minify: true,
-    format: 'iife',
-    platform: 'browser',
-    target: 'chrome120',
-    write: false,
-    define: { 'process.env.NODE_ENV': JSON.stringify('production') },
-    logLevel: 'silent',
+  return source
+}
+
+async function readSnapshot(page) {
+  return page.evaluate(async () => {
+    const { loadYamlMonacoSupport } = await import('/src/yamlMonacoSupport.ts')
+    const { monaco } = await loadYamlMonacoSupport()
+    return monaco.editor.getModels()[0]?.getValue() || ''
   })
-  return result.outputFiles[0].text
+}
+
+async function waitForSnapshot(page, version) {
+  await page.waitForFunction(version => {
+    const editor = document.querySelector('[data-json-inspector-dialog] [data-editor-ready="true"]')
+    return !!editor && window.fixtureDebugCaptures.at(-1)?.includes('"fixturePayloadVersion": ' + version)
+  }, {}, version)
 }
 
 async function openDebug(page) {
@@ -126,27 +128,18 @@ async function openDebug(page) {
 
 async function closeDebug(page) {
   await page.click('button[title="Close"]')
-  await page.waitForFunction(() => !document.querySelector('[data-debug-info-json]'))
+  await page.waitForFunction(() => !document.querySelector('[data-json-inspector-dialog]'))
 }
 
 before(async () => {
-  const bundle = await buildFixtureBundle()
-  const assetNames = await readdir(assetsDirectory)
-  const cssAsset = assetNames.find(name => /^index-.*\.css$/.test(name))
-  assert.ok(cssAsset, 'build packages/webui before running the mounted Chat fixture')
-  const css = await readFile(new URL(cssAsset, assetsDirectory), 'utf8')
-  server = createServer((_request, response) => {
-    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><style>${css}</style><style>html,body,#root{width:100%;height:100%;margin:0}.foxwarm-chat-root{height:100%}</style></head><body><div id="root"></div><script>${bundle}</script></body></html>`)
-  })
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
-  fixtureUrl = `http://127.0.0.1:${server.address().port}`
+  server = await createEditorFixtureServer(fixtureSource(), 'debug-snapshot')
+  fixtureUrl = server.resolvedUrls.local[0]
   browser = await puppeteer.launch({ executablePath: chromiumPath, headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
 })
 
 after(async () => {
   await browser?.close()
-  await new Promise(resolve => server?.close(resolve))
+  await server?.close()
 })
 
 test('mounted Chat session menu remains above the overlapping context minimap', async () => {
@@ -196,8 +189,16 @@ test('debug JSON is captured only on explicit open or refresh and remains immuta
   await openDebug(page)
   await page.waitForFunction(() => window.fixtureDebugRequests.length === 1)
   await page.evaluate(() => window.resolveNextFixtureDebug(1))
-  await page.waitForFunction(() => document.querySelector('[data-debug-info-json]')?.textContent.includes('"fixturePayloadVersion": 1'))
-  const firstSnapshot = await page.$eval('[data-debug-info-json]', element => element.textContent)
+  await waitForSnapshot(page, 1)
+  const firstSnapshot = await readSnapshot(page)
+  if (process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR) {
+    await mkdir(process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR, { recursive: true })
+    await page.screenshot({ path: `${process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR}/debug-wide.png` })
+  }
+  await page.click('[data-json-inspector-dialog] .view-lines')
+  await page.keyboard.down('Control'); await page.keyboard.press('f'); await page.keyboard.up('Control')
+  await page.waitForSelector('[data-json-inspector-dialog] .find-widget.visible')
+  assert.equal(await page.$('[data-chat-search]'), null, 'Monaco Find must not open Chat Search')
   assert.equal(await page.evaluate(() => window.fixtureDebugCaptures.length), 1)
   assert.match(firstSnapshot, /history-fixture\/main/)
   assert.match(firstSnapshot, /stream-before-open/)
@@ -209,18 +210,18 @@ test('debug JSON is captured only on explicit open or refresh and remains immuta
     window.emitFixtureEvent({ type: 'session-state', session: { id: 'fixture/main', displayName: 'state-after-open', busy: true, runtimeState: { state: 'requesting-model' }, queueLength: 0, modelKey: 'fixture/model' } })
   })
   await page.waitForFunction(() => document.body.textContent.includes('message-after-open'))
-  assert.equal(await page.$eval('[data-debug-info-json]', element => element.textContent), firstSnapshot)
+  assert.equal(await readSnapshot(page), firstSnapshot)
   assert.equal(await page.evaluate(() => window.fixtureDebugCaptures.length), 1)
 
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'copy')?.click())
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Copy')?.click())
   await page.waitForFunction(() => window.fixtureCopiedText !== null)
   assert.equal(await page.evaluate(() => window.fixtureCopiedText), firstSnapshot)
 
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'refresh')?.click())
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Refresh')?.click())
   await page.waitForFunction(() => window.fixtureDebugRequests.length === 2)
   await page.evaluate(() => window.resolveNextFixtureDebug(2))
-  await page.waitForFunction(() => document.querySelector('[data-debug-info-json]')?.textContent.includes('"fixturePayloadVersion": 2'))
-  const refreshedSnapshot = await page.$eval('[data-debug-info-json]', element => element.textContent)
+  await waitForSnapshot(page, 2)
+  const refreshedSnapshot = await readSnapshot(page)
   assert.notEqual(refreshedSnapshot, firstSnapshot)
   assert.match(refreshedSnapshot, /message-after-open/)
   assert.match(refreshedSnapshot, /stream-after-open/)
@@ -234,9 +235,9 @@ test('debug JSON is captured only on explicit open or refresh and remains immuta
   await openDebug(page)
   await page.waitForFunction(() => window.fixtureDebugRequests.length === 3)
   await page.evaluate(() => window.resolveNextFixtureDebug(3))
-  await page.waitForFunction(() => document.querySelector('[data-debug-info-json]')?.textContent.includes('"fixturePayloadVersion": 3'))
+  await waitForSnapshot(page, 3)
   assert.equal(await page.evaluate(() => window.fixtureDebugCaptures.length), 3)
-  assert.match(await page.$eval('[data-debug-info-json]', element => element.textContent), /stream-after-close/)
+  assert.match(await readSnapshot(page), /stream-after-close/)
   await page.close()
 })
 
@@ -267,13 +268,13 @@ test('close, session change, and unmount abort and invalidate delayed debug capt
   await page.evaluate(() => window.resolveNextFixtureDebug(3))
   await new Promise(resolve => setTimeout(resolve, 50))
   assert.equal(await page.evaluate(() => window.fixtureDebugCaptures.length), 1)
-  assert.equal(await page.$('[data-debug-info-json]'), null)
+  assert.equal(await page.$('[data-json-inspector-dialog]'), null)
 
   await openDebug(page)
   await page.waitForFunction(() => window.fixtureDebugRequests.length === 4)
   await page.evaluate(() => window.resolveNextFixtureDebug(4))
   await page.waitForFunction(() => window.fixtureDebugCaptures.length === 2)
-  assert.match(await page.$eval('[data-debug-info-json]', element => element.textContent), /"sessionId": "fixture\/other"/)
+  assert.match(await readSnapshot(page), /"sessionId": "fixture\/other"/)
   await closeDebug(page)
 
   await openDebug(page)
@@ -284,5 +285,46 @@ test('close, session change, and unmount abort and invalidate delayed debug capt
   await new Promise(resolve => setTimeout(resolve, 50))
   assert.equal(await page.evaluate(() => window.fixtureDebugCaptures.length), 2)
   assert.equal(await page.$('.foxwarm-chat-root'), null)
+  await page.close()
+})
+
+test('Refresh invalidates older pending captures and folds only the new successful snapshot', async () => {
+  const page = await browser.newPage()
+  await page.goto(fixtureUrl)
+  await page.waitForFunction(() => document.body.textContent.includes('history-fixture/main'))
+  await openDebug(page)
+  await page.waitForFunction(() => window.fixtureDebugRequests.length === 1)
+  await page.$$eval('[data-json-inspector-dialog] button', buttons => buttons.find(button => button.textContent.trim() === 'Refresh').click())
+  await page.waitForFunction(() => window.fixtureDebugRequests.length === 2 && window.fixtureDebugAbortCount === 1)
+  await page.evaluate(() => {
+    window.emitFixtureEvent({ type:'message', message:{role:'model',parts:[{text:'message-while-pending'}],__meta:{seq:2,timestamp:2}} })
+    window.resolveNextFixtureDebug(1)
+  })
+  await page.waitForFunction(() => document.body.textContent.includes('message-while-pending'))
+  assert.equal(await page.evaluate(() => window.fixtureDebugCaptures.length), 0)
+  await page.evaluate(() => window.resolveNextFixtureDebug(2))
+  await waitForSnapshot(page, 2)
+  assert.doesNotMatch(await readSnapshot(page), /message-while-pending/, 'capture uses its source at request start')
+  const expanded = await page.evaluate(async () => {
+    const { loadYamlMonacoSupport } = await import('/src/yamlMonacoSupport.ts')
+    const { monaco } = await loadYamlMonacoSupport()
+    const editor = monaco.editor.getEditors()[0]
+    await editor.getAction('editor.unfoldAll').run()
+    return editor.getVisibleRanges().map(range => [range.startLineNumber, range.endLineNumber])
+  })
+  assert.equal(expanded.length, 1)
+  await page.$$eval('[data-json-inspector-dialog] button', buttons => buttons.find(button => button.textContent.trim() === 'Refresh').click())
+  await page.waitForFunction(() => window.fixtureDebugRequests.length === 3)
+  await page.evaluate(() => window.resolveNextFixtureDebug(3))
+  await waitForSnapshot(page, 3)
+  assert.match(await readSnapshot(page), /message-while-pending/)
+  const refreshed = await page.evaluate(async () => {
+    const { loadYamlMonacoSupport } = await import('/src/yamlMonacoSupport.ts')
+    const { monaco } = await loadYamlMonacoSupport()
+    return { models:monaco.editor.getModels().length, visible:monaco.editor.getEditors()[0].getVisibleRanges().length }
+  })
+  assert.equal(refreshed.models, 1)
+  assert.ok(refreshed.visible > 1, 'new snapshot reapplies initial folding')
+  await closeDebug(page)
   await page.close()
 })

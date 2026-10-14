@@ -2968,7 +2968,7 @@ function buildConcreteRequestPlan(options: {
             tool_choice: webSearchToolChoice,
             parallel_tool_calls: true,
             reasoning: effectiveEffort === 'none' ? undefined : { summary: 'auto' },
-            max_output_tokens: MAX_OUTPUT,
+            max_output_tokens: modelEntry.maxOutput ?? MAX_OUTPUT,
             store: false,
             include: effectiveEffort === 'none' ? undefined : ['reasoning.encrypted_content'],
             prompt_cache_key: providerPromptCacheKey,
@@ -2988,7 +2988,7 @@ function buildConcreteRequestPlan(options: {
         };
         data = {
             model: modelName,
-            max_tokens: MAX_OUTPUT,
+            max_tokens: modelEntry.maxOutput ?? MAX_OUTPUT,
             prompt_cache_key: promptCacheKey,
             stream: true,
             stream_options: { include_usage: true },
@@ -3018,7 +3018,7 @@ function buildConcreteRequestPlan(options: {
         };
         data = {
             model: modelName,
-            max_tokens: MAX_OUTPUT,
+            max_tokens: modelEntry.maxOutput ?? MAX_OUTPUT,
             // Messages streaming is the default transport. extraFields.stream:false
             // selects the JSON response path; the parser choice follows this flag.
             stream: true,
@@ -3684,7 +3684,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
                 protocol: requestApi === 'responses' ? 'openai-responses'
                     : requestApi === 'chat-completions' ? 'openai-chat-completions' : 'anthropic',
                 concreteModelId,
-                outputFormat: PROVIDER_IMAGE_OUTPUT_FORMAT,
+                outputFormat: modelEntry.providerImageOutputFormat ?? PROVIDER_IMAGE_OUTPUT_FORMAT,
             });
             const effectiveSystemPrompt = options.resolveSystemPromptForModel
                 ? await options.resolveSystemPromptForModel(concreteModelId)

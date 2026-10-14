@@ -1,6 +1,6 @@
 import { memo, useCallback, useContext, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Code2, Eye, FileJson, Download, Timer } from 'lucide-react'
+import { Code2, FileJson, Download, Timer } from 'lucide-react'
 import {
   IconToggleButton,
   MiniToggleButton,
@@ -23,9 +23,9 @@ import {
   type MessagePart,
   type ToolScriptSubCall,
   type ToolTagItem,
-  type ToolViewMode,
 } from './chatShared'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
+import JsonInspectorDialog from './JsonInspectorDialog'
 import { shouldUseStreamingToolPlaceholder } from '../../../shared/src/webuiToolRendering'
 import ImageParts from './ImageParts'
 import { SyntaxHighlightedText } from './SyntaxHighlightedText'
@@ -154,7 +154,7 @@ export const ToolGroupSummaryCard = memo(function ToolGroupSummaryCard({ items, 
   expanded?: boolean
   children?: ReactNode
 }) {
-  const countedItems = useMemo(() => summarizeToolTagCounts(items), [items])
+  const countedItems = useMemo(() => summarizeToolTagCounts(items).map(item => item.toolCall && item.tone === 'success' ? { ...item, tone: 'neutral' as const } : item), [items])
   return (
     <div
       data-tool-group-card
@@ -566,37 +566,38 @@ const isToolScriptCall = (call: FunctionCall): boolean => {
   return args.source === 'builtin' && TOOLSCRIPT_TOOL_NAMES.has(args.name)
 }
 
-const ToolScriptSubCallTag = ({ subCall }: { subCall: ToolScriptSubCall }) => (
+const ToolScriptSubCallTag = ({ subCall, neutralSuccess }: { subCall: ToolScriptSubCall; neutralSuccess?: boolean }) => (
   <>
     {subCall.status === 'running' && (
       <span className="animate-pulse w-1.5 h-1.5 rounded-full bg-fw-accent shrink-0" />
     )}
     <ToolTag
+      toolCall
       name={subCall.name}
       label={subCall.name}
-      tone={subCall.status === 'failed' ? 'error' : subCall.status === 'completed' ? 'success' : 'neutral'}
+      tone={subCall.status === 'failed' ? 'error' : subCall.status === 'completed' && !neutralSuccess ? 'success' : 'neutral'}
     />
   </>
 )
 
-const ToolScriptSubCallsTags = memo(function ToolScriptSubCallsTags({ subCalls }: { subCalls: ToolScriptSubCall[] }) {
+const ToolScriptSubCallsTags = memo(function ToolScriptSubCallsTags({ subCalls, neutralSuccess }: { subCalls: ToolScriptSubCall[]; neutralSuccess?: boolean }) {
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1 py-0.5">
       {subCalls.map((sc) => (
         <span key={sc.id} className="inline-flex items-center gap-0.5">
-          <ToolScriptSubCallTag subCall={sc} />
+          <ToolScriptSubCallTag subCall={sc} neutralSuccess={neutralSuccess} />
         </span>
       ))}
     </div>
   )
 })
 
-const ToolScriptSubCallsList = memo(function ToolScriptSubCallsList({ subCalls }: { subCalls: ToolScriptSubCall[] }) {
+const ToolScriptSubCallsList = memo(function ToolScriptSubCallsList({ subCalls, neutralSuccess }: { subCalls: ToolScriptSubCall[]; neutralSuccess?: boolean }) {
   return (
     <div className="ml-3 border-l-2 border-fw-accent-border dark:border-fw-accent-border pl-2 space-y-0.5 py-1">
       {subCalls.map((sc) => (
         <div key={sc.id} className="flex items-center gap-2 text-xs">
-          <ToolScriptSubCallTag subCall={sc} />
+          <ToolScriptSubCallTag subCall={sc} neutralSuccess={neutralSuccess} />
           {sc.argsSummary && (
             <span className="min-w-0 flex-1 text-fw-text-muted truncate">{sc.argsSummary}</span>
           )}
@@ -669,22 +670,13 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const expanded = manualExpanded || searchReveal
   const { ref: heightRef, prepare } = useThreadCardHeightTransition(expanded)
   const toggle = () => { prepare(); setExpanded(!manualExpanded) }
-  const [viewMode, setViewMode] = useState<ToolViewMode>('default')
-  const displayedViewMode = searchReveal ? 'default' : viewMode
-  const headerFade = useThreadCardOverflowFade<HTMLDivElement>('right', !expanded && displayedViewMode === 'default' && call?.name !== 'read' && call?.name !== 'write' && call?.name !== 'edit' && call?.name !== 'apply_patch')
-  const resultFade = useThreadCardOverflowFade<HTMLDivElement>('bottom', !expanded && displayedViewMode === 'default')
-  const jsonFade = useThreadCardOverflowFade<HTMLPreElement>('bottom', !expanded && displayedViewMode === 'json')
+  const [jsonSnapshot, setJsonSnapshot] = useState<string | null>(null)
+  const headerFade = useThreadCardOverflowFade<HTMLDivElement>('right', !expanded && call?.name !== 'read' && call?.name !== 'write' && call?.name !== 'edit' && call?.name !== 'apply_patch')
+  const resultFade = useThreadCardOverflowFade<HTMLDivElement>('bottom', !expanded)
   const [diffViewMode, setDiffViewMode] = useState<'unified' | 'split'>(() => {
     return (localStorage.getItem('diffViewMode') as 'unified' | 'split') || 'unified'
   })
   const displayedDiffViewMode = searchReveal ? 'unified' : diffViewMode
-
-  const setToolViewMode = useCallback((mode: ToolViewMode) => {
-    if (mode === 'json') {
-      if (!expanded) { prepare(); setExpanded(true) }
-    }
-    setViewMode(mode)
-  }, [expanded, prepare, setExpanded])
 
   const setDiffMode = useCallback((mode: 'unified' | 'split') => {
     setDiffViewMode(mode)
@@ -742,7 +734,6 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
     return null
   }, [call, hideCollapsedContent, imageParts.length, responses])
 
-  const jsonText = useMemo(() => JSON.stringify({ modelMessage, call, responses, imageParts }, null, 2), [call, imageParts, modelMessage, responses])
   const baseTextClass = 'font-mono text-fw-text'
   const hasBody = expanded || !hideCollapsedContent && (!!responsePreview || hasToolScriptProgress || showRunning)
 
@@ -763,8 +754,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
 
   const viewButtons = (
     <div className={`foxwarm-tool-action-buttons ${actionButtonsToneClass} absolute right-0 top-1/2 -translate-y-1/2 flex gap-0.5 opacity-0 transition-opacity`}>
-      <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={displayedViewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
-      <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={displayedViewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
+      <IconToggleButton onClick={(e) => { e.stopPropagation(); setJsonSnapshot(JSON.stringify({ modelMessage, call, responses, imageParts }, null, 2)) }} active={jsonSnapshot !== null} title="JSON"><FileJson size={14} /></IconToggleButton>
     </div>
   )
 
@@ -777,7 +767,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
           toggle()
         }}
       >
-        <ToolTag name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
+        <ToolTag toolCall={!!call || !!primaryResponse} name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
         <div className="foxwarm-tool-call-header relative flex min-w-0 flex-1 items-center self-stretch">
           {includeCallPreview && call && <div ref={headerFade.ref} {...headerFade.overflowFadeProps} className={`foxwarm-tool-call-summary min-w-0 max-w-full ${call.name === 'read' ? 'flex text-[13px] leading-[18px]' : THREAD_CARD_HEADER_PREVIEW_CLASS}`}>{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile, resolvedPaths: primaryResponse?.__meta?.resolvedPaths })}</div>}
           {viewButtons}
@@ -805,17 +795,12 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         className={`foxwarm-tool-thread-line ${toolThreadLineToneClasses[tagTone]}`}
       />
 
-      {displayedViewMode === 'json' ? (
-        <div className={baseTextClass}>
-          {header()}
-          <pre ref={jsonFade.ref} {...jsonFade.overflowFadeProps} className="mt-2 whitespace-pre-wrap break-all cursor-text" onClick={(e) => e.stopPropagation()} style={expanded ? undefined : { ...clampContentStyle(6), ...jsonFade.overflowFadeProps.style }}>{jsonText}</pre>
-        </div>
-      ) : !expanded ? (
+      {!expanded ? (
         <div className={baseTextClass}>
           <div className="space-y-1">
             {header(true)}
             {!hideCollapsedContent && ((responsePreview && !hasToolScriptProgress) || showRunning) && <div ref={resultFade.ref} {...resultFade.overflowFadeProps} className="foxwarm-tool-result-preview pr-2 text-fw-text" style={{ ...clampContentStyle(3), ...resultFade.overflowFadeProps.style }}>{showRunning ? 'Running...' : responsePreview}</div>}
-            {!hideCollapsedContent && hasToolScriptProgress && <ToolScriptSubCallsTags subCalls={toolScriptSubCalls!} />}
+            {!hideCollapsedContent && hasToolScriptProgress && <ToolScriptSubCallsTags subCalls={toolScriptSubCalls!} neutralSuccess={neutralSuccess} />}
           </div>
         </div>
       ) : (
@@ -841,7 +826,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
                 </div>
               )}
 
-              {hasToolScriptProgress && <ToolScriptSubCallsList subCalls={toolScriptSubCalls!} />}
+              {hasToolScriptProgress && <ToolScriptSubCallsList subCalls={toolScriptSubCalls!} neutralSuccess={neutralSuccess} />}
 
               {hasToolScriptProgress && hasResponseContent && (
                 <div className="text-fw-text">
@@ -859,6 +844,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
           )}
         </div>
       )}
+      {jsonSnapshot !== null && <JsonInspectorDialog text={jsonSnapshot} onClose={() => setJsonSnapshot(null)} />}
     </div>
   )
 })

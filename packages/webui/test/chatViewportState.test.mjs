@@ -127,3 +127,13 @@ test('streaming bottom follow latches explicit leave intent until a strict botto
     distanceFromBottom: 3,
   }), { following: true, pendingUserLeave: false }, 'the actual bottom resumes follow')
 })
+
+
+test('a new toward-bottom gesture can finish a small pending leave without weakening passive protection', async () => {
+  const { updateChatBottomFollow } = await loadTypeScriptModule('../src/chatViewportState.ts')
+  const pending = updateChatBottomFollow({ following: true, pendingUserLeave: false, distanceFromBottom: 0.4, userIntent: 'leave' })
+  assert.deepEqual(updateChatBottomFollow({ ...pending, distanceFromBottom: 2.4 }), { following: false, pendingUserLeave: true })
+  assert.deepEqual(updateChatBottomFollow({ ...pending, distanceFromBottom: 0.4 }), { following: false, pendingUserLeave: true }, 'passive scroll/reflow cannot erase unfinished upward intent')
+  assert.deepEqual(updateChatBottomFollow({ ...pending, distanceFromBottom: 0.4, userIntent: 'toward-bottom' }), { following: true, pendingUserLeave: false })
+  assert.deepEqual(updateChatBottomFollow({ ...pending, distanceFromBottom: 80, userIntent: 'toward-bottom' }), { following: false, pendingUserLeave: false }, 'a deliberate return still must reach actual bottom tolerance')
+})

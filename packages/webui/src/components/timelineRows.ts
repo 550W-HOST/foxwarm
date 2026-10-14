@@ -463,12 +463,13 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
       // Thinking folds into the summary whenever the group holds tool calls, including messages
       // that also carry text.
       if (isReasoningPart(part) && groupHasToolCalls) {
-        items.push({ name: 'reasoning', tone: 'neutral' })
+        items.push({ name: 'reasoning', label: 'Reasoning', tone: 'neutral' })
       }
       if (part.functionCall) {
         const status = part.functionCall.id ? toolStatusById.get(part.functionCall.id) : undefined
         items.push({
           name: part.functionCall.name,
+          toolCall: true,
           label: formatToolLabel(part.functionCall.name, part.functionCall.args),
           tone: status === 'error' ? 'error' : status === 'success' ? 'success' : 'neutral',
         })
@@ -502,7 +503,7 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
       : trailing.parts.slice(0, trailingFirstContentIdx).filter(isReasoningPart)
     if (foldedThoughts.length > 0) {
       foldedThinkingIdx = contentBreakIdx
-      foldedThoughts.forEach(() => items.push({ name: 'reasoning', tone: 'neutral' }))
+      foldedThoughts.forEach(() => items.push({ name: 'reasoning', label: 'Reasoning', tone: 'neutral' }))
     }
   }
 
@@ -525,7 +526,7 @@ const sameTokenUsage = (a: NormalizedTokenUsage | null, b: NormalizedTokenUsage 
 
 const sameTagItems = (a: ToolTagItem[], b: ToolTagItem[]): boolean => (
   a === b || (a.length === b.length && a.every((item, index) => (
-    item.name === b[index].name && item.label === b[index].label && item.tone === b[index].tone
+    item.name === b[index].name && item.label === b[index].label && item.tone === b[index].tone && item.toolCall === b[index].toolCall
   )))
 )
 

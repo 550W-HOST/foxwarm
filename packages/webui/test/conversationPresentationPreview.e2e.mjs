@@ -2,7 +2,7 @@ import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { readFile, readdir } from 'node:fs/promises'
-import { build } from 'esbuild'
+import { build } from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
 
 // Two visual smoke examples, not the complete Conversation boundary matrix.
@@ -74,7 +74,7 @@ test('a completed coordination sequence has one process, aggregate usage and ori
   assert.equal(await page.$eval('.foxwarm-conversation-reply', element => getComputedStyle(element).borderTopWidth), '0px')
   await screenshot('completed-collapsed')
   for (const theme of ['default', 'console']) {
-    await page.evaluate(async theme => { window.selectFixtureTheme(theme); await document.fonts.ready; await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame) }, theme)
+    await page.evaluate(async theme => { window.selectFixtureTheme(theme); await document.fonts.ready; await new Promise(requestAnimationFrame); await Promise.all(document.getAnimations().filter(animation => Number.isFinite(animation.effect.getComputedTiming().endTime)).map(animation => animation.finished.catch(() => {}))) }, theme)
     const geometry = () => page.$eval('[data-conversation-statistics]', row => {
       const left = row.querySelector('[aria-label="Expand activity"]')
       const tokens = row.querySelector('[aria-label$="process usage"]')
@@ -118,8 +118,10 @@ test('a completed coordination sequence has one process, aggregate usage and ori
   })
   assert.ok(toolGeometry.trailing && toolGeometry.controlsRight <= toolGeometry.timeLeft)
   await page.$eval('.foxwarm-tool-expanded-content', body => body.closest('.foxwarm-tool-card').querySelector('[title="JSON"]').click())
-  await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-tool-card pre')].some(element => element.textContent.includes('TOOL_OUTPUT_VISIBLE_ONLY_AFTER_OPEN')))
-  await page.$$eval('.foxwarm-tool-card', cards => cards.find(card => card.textContent.includes('TOOL_OUTPUT_VISIBLE_ONLY_AFTER_OPEN')).querySelector('[title="Default"]').click())
+  await page.waitForSelector('[data-json-inspector-dialog] textarea[readonly]')
+  assert.match(await page.$eval('[data-json-inspector-dialog] textarea', element => element.value), /TOOL_OUTPUT_VISIBLE_ONLY_AFTER_OPEN/)
+  await page.click('[data-json-inspector-dialog] [aria-label="Close"]')
+  await page.waitForFunction(() => !document.querySelector('[data-json-inspector-dialog]'))
   await page.mouse.move(1100, 750)
   await screenshot('console-process-single-tool')
 

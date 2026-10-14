@@ -2,7 +2,7 @@ import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { readdir, readFile } from 'node:fs/promises'
-import { build } from 'esbuild'
+import { build } from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
 
 const browserKind = process.env.FOXWARM_E2E_BROWSER === 'firefox' ? 'firefox' : 'chrome'
