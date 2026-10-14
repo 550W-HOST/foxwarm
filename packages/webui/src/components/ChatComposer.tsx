@@ -1413,7 +1413,7 @@ const ChatComposer = memo(function ChatComposer({
 
           <form
             onSubmit={handleSubmit}
-            className={`foxwarm-chat-composer-form rounded-[30px] border border-fw-border/90 bg-fw-surface-sunken/75 px-3.5 py-2 shadow-[var(--foxwarm-panel-shadow)] backdrop-blur-[5px] transition focus-within:border-fw-border-strong focus-within:bg-fw-surface/92 dark:border-fw-border/90 dark:bg-fw-surface/70 dark:focus-within:border-fw-border-strong dark:focus-within:bg-fw-surface/92 ${
+            className={`foxwarm-chat-composer-form rounded-[30px] border border-fw-border/90 bg-fw-surface-sunken/75 shadow-[var(--foxwarm-panel-shadow)] backdrop-blur-[5px] transition focus-within:border-fw-border-strong focus-within:bg-fw-surface/92 dark:border-fw-border/90 dark:bg-fw-surface/70 dark:focus-within:border-fw-border-strong dark:focus-within:bg-fw-surface/92 ${
               isDragging ? 'border-fw-accent-border dark:border-fw-accent-border' : ''
             }`}
           >
@@ -1454,7 +1454,7 @@ const ChatComposer = memo(function ChatComposer({
           onCommandKeyDown={handleCommandKeyDownBridge}
         />
         {draftPersistenceError && <div className="px-3 pb-1 text-xs text-fw-danger" role="alert">{draftPersistenceError}</div>}
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center justify-between gap-2 px-3 pb-2">
           <div className="flex min-w-0 flex-1 items-center gap-1">
             <div className="flex min-w-0 shrink-0 items-center gap-1 overflow-x-auto pb-0.5">
               <label

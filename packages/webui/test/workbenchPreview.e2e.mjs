@@ -1388,6 +1388,41 @@ test('Chat composer uses a smaller empty editor below 600px content height in De
           assert.equal(actual.padding, original.padding)
         }
       }
+      for (const width of [360, 800]) {
+        await page.$eval(root, (el, width) => { el.style.width = width + 'px'; el.style.height = '600px' }, width)
+        const empty = await page.$eval(editor, el => {
+          const form = el.closest('form')
+          const box = el.getBoundingClientRect()
+          const placeholder = getComputedStyle(el, '::before')
+          const toolbar = form.querySelector('button[type="submit"]').parentElement
+          const toolbarBox = toolbar.getBoundingClientRect()
+          const formBox = form.getBoundingClientRect()
+          return {
+            placeholderX: box.left + parseFloat(placeholder.insetInlineStart),
+            paddingX: box.left + parseFloat(getComputedStyle(el).paddingLeft),
+            clickX: box.left + 6, clickY: box.top + 12,
+            editorTop: box.top - formBox.top,
+            toolbarInset: toolbarBox.left + parseFloat(getComputedStyle(toolbar).paddingLeft) - formBox.left,
+            toolbarOverflow: toolbar.scrollWidth - toolbar.clientWidth,
+          }
+        })
+        assert.equal(empty.placeholderX, empty.paddingX, themeId + ' placeholder follows the editor inset')
+        assert.equal(empty.editorTop, 1, themeId + ' editor reaches the form border without outer padding')
+        assert.equal(empty.toolbarInset, 13, themeId + ' toolbar owns the matching horizontal inset')
+        assert.ok(empty.toolbarOverflow <= 1, themeId + ' toolbar fits the narrow section')
+        if (process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR) await (await page.$(root)).screenshot({ path: path.join(process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR, `composer-${themeId}-${width}-empty.png`) })
+        await page.mouse.click(empty.clickX, empty.clickY)
+        assert.equal(await page.$eval(editor, el => el === document.activeElement), true, 'editor padding is clickable')
+        await page.keyboard.type('First line')
+        const textX = await page.$eval(editor, el => {
+          const range = document.createRange()
+          range.setStart(el.firstChild, 0); range.setEnd(el.firstChild, 1)
+          return range.getBoundingClientRect().left
+        })
+        assert.ok(Math.abs(textX - empty.placeholderX) <= 0.5, themeId + ' ordinary text starts at the placeholder')
+        await page.keyboard.down('Control'); await page.keyboard.press('a'); await page.keyboard.up('Control')
+        await page.keyboard.press('Backspace')
+      }
       await page.click(editor)
       await page.keyboard.type('First line')
       for (let index = 0; index < 3; index++) {

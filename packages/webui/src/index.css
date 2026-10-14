@@ -1333,8 +1333,6 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-textarea
   font-variant-ligatures: none;
   letter-spacing: 0;
   line-height: var(--foxwarm-console-line-ui) !important;
-  padding-left: 0 !important;
-  padding-right: 0 !important;
 }
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-textarea::placeholder {
@@ -1362,7 +1360,6 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-textarea
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-inline-composer-editor[data-empty="true"]:not([data-composition-visible="true"])::before {
   color: var(--foxwarm-console-text-dim) !important;
-  inset-inline-start: 0;
   opacity: 0.8;
 }
 
