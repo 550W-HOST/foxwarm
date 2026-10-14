@@ -1,6 +1,6 @@
 # Unit: webui-chat-composer
 
-Files: packages/webui/src/components/ChatComposer.tsx, packages/webui/src/components/InlineComposerEditor.tsx, packages/webui/src/composerDraft.ts, packages/webui/src/components/modelFilter.ts, packages/webui/src/messageAttachmentDrafts.ts, packages/webui/test/composerDraft.test.mjs, packages/webui/test/composerPastedText.e2e.mjs, packages/webui/test/modelFilter.test.mjs, packages/webui/test/modelSelectorTrigger.e2e.mjs, packages/webui/test/messageAttachmentDrafts.test.mjs, packages/webui/test/messageAttachmentDrafts.e2e.mjs
+Files: packages/webui/src/components/ChatComposer.tsx, packages/webui/src/components/InlineComposerEditor.tsx, packages/webui/src/composerDraft.ts, packages/webui/src/components/modelFilter.ts, packages/webui/src/messageAttachmentDrafts.ts, packages/webui/test/composerDraft.test.mjs, packages/webui/test/composerPastedText.e2e.mjs, packages/webui/test/modelFilter.test.mjs, packages/webui/test/modelSelectorTrigger.e2e.mjs, packages/webui/test/pickerOpenCentering.e2e.mjs, packages/webui/test/messageAttachmentDrafts.test.mjs, packages/webui/test/messageAttachmentDrafts.e2e.mjs
 Secondary files: packages/webui/src/attachmentRefs.ts, packages/webui/src/attachmentSend.ts, packages/webui/src/components/NodePicker.tsx, packages/webui/test/attachmentRefs.test.mjs, packages/webui/test/attachmentSend.test.mjs
 Integration files: packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/src/index.css, packages/webui/test/setupModels.e2e.mjs, packages/webui/test/systemTabs.e2e.mjs
 
@@ -106,6 +106,10 @@ WebUI identity mode does not fetch command metadata, offer slash completions, or
 - The generated browser fixture resolves the WebUI's React runtime through `test/reactRendererAliases.mjs`. Controlled pasted-text modal edits simulate a native textarea value change before dispatching `input`; its cut/undo check uses the browser's keyboard path rather than a synthetic `beforeinput`, so these checks exercise the same React event handlers as user input.
 
 ## Design decisions
+
+### D-composer-picker-opening-scroll
+
+[2026-10-14] Each model-picker column centers its selected policy/model row once per appearance, waiting for initial options when needed. A child column that appears inside an already-open popup initializes independently without repositioning the existing current column. The Node picker waits for its on-open directory to finish before centering the selected row, including unavailable current IDs. Both pickers change only their own list's scrollTop, without smooth animation; list edges use native clamping. Selection, filtering, refresh, saving, manual scrolling, and ordinary state updates do not repeat this automatic positioning. Closing and reopening starts a new appearance. Default/follow and model identity semantics stay unchanged, and normal keyboard focus may still scroll an option into view. `pickerOpenCentering.e2e.mjs` exercises physical pointer/keyboard input, delayed directories, independent columns, reopen boundaries, and preserved scroll through same-popup updates.
 
 ### D-composer-session-node-picker
 

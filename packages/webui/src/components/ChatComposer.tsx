@@ -292,6 +292,7 @@ function ModelSelector({
   const popupRef = useRef<HTMLDivElement | null>(null)
   const filterInputRef = useRef<HTMLInputElement | null>(null)
   const childFilterInputRef = useRef<HTMLInputElement | null>(null)
+  const centeredListsRef = useRef<Partial<Record<ModelSelectorScope, HTMLElement>>>({})
   const effortDescriptionId = useId()
   const filterComposingRef = useRef(false)
   const wasOpenRef = useRef(false)
@@ -385,6 +386,30 @@ function ModelSelector({
   useLayoutEffect(() => {
     if (open) updatePopupPosition()
   }, [open, updatePopupPosition])
+
+  useLayoutEffect(() => {
+    if (!open) {
+      centeredListsRef.current = {}
+      return
+    }
+    for (const scope of ['current', 'child'] as const) {
+      const list = popupRef.current?.querySelector<HTMLElement>(`[data-model-column="${scope}"] [data-model-selector-scroll]`)
+      if (!list) {
+        delete centeredListsRef.current[scope]
+        continue
+      }
+      if (centeredListsRef.current[scope] === list) continue
+      const selected = list.querySelector<HTMLElement>('[data-model-option-selected="true"]')
+      // Wait for the initial options, but do not retry a missing selection on later refreshes.
+      if (!selected && options.length === 0) continue
+      centeredListsRef.current[scope] = list
+      if (selected) {
+        const rowRect = selected.getBoundingClientRect()
+        const listRect = list.getBoundingClientRect()
+        list.scrollTop += rowRect.top + rowRect.height / 2 - (listRect.top + list.clientTop + list.clientHeight / 2)
+      }
+    }
+  })
 
   useEffect(() => {
     if (!open) return
