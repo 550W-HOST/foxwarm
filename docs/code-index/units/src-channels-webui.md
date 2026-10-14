@@ -26,6 +26,7 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 - Authenticated fixed-file `/api/webui/logs` history and approximate time lookup; the channel also owns the optional file-tail subscription dependency and disposes it on stop. Canonical contract: [WebUI Logs](./webui-logs.md).
 - Authenticated task list/detail and explicit Session-targeted task management routes reuse [TaskService](./src-tasks.md), with no new role system or task realtime stream.
 - Session list, history, create, update, fork, move, pin, model, cwd, and message routes.
+- The fork API retains its source parent and existing attachment behavior, with user-origin opening semantics defined by [D-lifecycle-creation-origin](../threads/session-lifecycle.md#d-lifecycle-creation-origin); the creation-route test verifies inherited history and absence of fabricated model confirmation.
 - Agent registry routes: enriched `GET`/existing `POST /api/agents`, memory manifest `GET /api/agents/:agentId/memory`, mutable metadata `PUT /api/agents/:agentId`, and typed-confirmation `DELETE /api/agents/:agentId`.
 - Fixed bounded `/api/session-list/sidebar`, `/children`, `/by-id`,
   `/architecture`, `/descendants/:sessionId`, and `/search` query routes.

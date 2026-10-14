@@ -102,6 +102,8 @@ Bodies cannot override route action/taskId or supply arbitrary creator identity.
 
 ## Tests
 
+The task-linked creation/transfer case in `tools/taskTools.test.ts` covers both fresh and forked children receiving task assignments without a fabricated model confirmation, while preserving completion notifications.
+
 `session/taskContext.test.ts` covers request-only fixed-30 progress and authority-save migration failure/retry. `sessionQueueOptions.test.ts` and real Worker ingress tests cover passive persistence/restart without wake; the detached runner exercises finish-window passivity and three-Session linked completion. `taskService.test.ts` verifies independent recipient results, retries and assignment-revision races. `taskStore.test.ts` exercises the coordinator/executor lifecycle, permission and terminal-state boundaries, simultaneous SQLite connections with one claim winner, immutable parent relationships, fresh-process persistence, bounded list/get output and argument validation. `tools/taskTools.test.ts` checks the single schema/placement, direct/unified/Worker facade behavior, context-derived identities, unchanged Session state and generic authorization at both dispatch and Main effect boundaries. Real local Session moves verify old task references remain readable, writes become canonical, ownership/creator notifications and attached completion still work, and fixed-30 progress/migration mappings survive aliases.
 
 ## Legacy Goal and reminders

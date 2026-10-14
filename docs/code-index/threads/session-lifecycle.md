@@ -53,9 +53,10 @@ Canonical contract: [context compaction and recall](./context-compaction-and-rec
 - `create_child_session` may supply a display name, recorded on the fresh or forked Session and persisted in the Main-owned catalog before initial message delivery; omission preserves prior unnamed-child behavior and does not turn the suffix into a display name. The new-child name does not affect its allocated ID. Creation accepts string display names verbatim (including empty or whitespace-padded strings), matching `create_session`; non-string values fail before allocation. The existing display-name update action separately trims or clears names.
 - Forks copy the model-visible active history/prompt snapshot and inherit prompt-cache/archive lineage only through the fork point. New block caps follow the source’s effective [block ID high-water mark](./archive-and-recall.md#d-context-block-id-high-water), without changing the source or existing lineage caps.
 - Non-fork children start a fresh model-visible prefix and cache key.
+- User-created forks identify the user as their creator without assigning delegated work; model-created children retain task/parent instructions. Creation never appends a fabricated model confirmation. Canonical policy: [D-lifecycle-creation-origin](#d-lifecycle-creation-origin).
 - Fresh cross-Agent children assemble the target Agent's default memory snapshot and do not copy the parent's custom prompt-file selection or cached snapshot. Their Node is the target Agent's isolation binding, then an explicit child Node, then the parent's current Node, then `master`.
 - Forked and non-fork children resolve one raw current model/effort pair. Effort resolution is explicit effort, parent `childEffortDefault`, parent raw `effort`, then unset; unset never freezes a concrete model default into the child. The parent's child policy is consumed for this creation only; the spawned child's future-child defaults stay unset so later children follow its current pair, even after a current-model change or creation override.
-- A manual user fork calls `notifyManualForkCreated` so the parent history records the child even when no initial instruction was supplied.
+- `/fork` calls `notifyManualForkCreated` so the parent history records the child even when no initial instruction was supplied. `/session fork` and the WebUI fork API keep their existing attachment/event behavior.
 
 ## Manual-fork event
 
@@ -64,7 +65,7 @@ Canonical contract: [context compaction and recall](./context-compaction-and-rec
 - metadata uses `kind="session-event"`, `event="manual-fork-created"`, current parent ID, child ID, and `(none)` when there is no initial message;
 - an idle parent receives an appended durable history message with goal-reminder suppression and is not triggered merely by that append;
 - a busy parent receives the same notification as a background queue item;
-- an initial instruction, when supplied, is queued to the child by the fork command path independently of this parent notice.
+- an initial instruction, when supplied, is queued to the child as direct user input by the fork command path independently of this parent notice.
 
 ## Archive and deletion
 
@@ -114,6 +115,12 @@ Persisted prompt-cache keys follow the model-facing prefix, not session identity
 ### D-lifecycle-manual-fork-event
 
 A manual fork remains visible to the parent even with no child instruction. The parent notice is a durable session event; idle parents are not automatically triggered by the append, while busy parents queue it behind current work.
+
+### D-lifecycle-creation-origin
+
+[2026-10-14] User-created forks (`/fork`, `/session fork`, and the WebUI fork API) retain parent relationships and inherited history/prompt/cache/archive lineage, but their opening identifies a manual user fork and explains that the parent link records context provenance, not a work assignment or reporting requirement. They keep the structured Session identity boundary. `/fork` preserves its parent channel binding and independently queues the complete raw multiline initial message as `type: 'user'` through owner-aware durable ingress, not `sendToSession`; consumed input establishes the existing direct-user handoff boundary. With no initial message, neither the child nor an idle parent is automatically triggered. `/session fork` still switches the channel binding, and the WebUI API does not acquire a new attachment or parent notification contract. A later real parent handoff can establish a report-required boundary normally; no permanent creation-role field or history-based role inference is added.
+
+Framework creation paths do not fabricate a model/assistant acknowledgment of understanding or waiting, including ordinary forked children and task-linked children. Fresh/model-created children keep their applicable task/parent guidance. Inherited history remains unchanged, including existing model rows; existing history and Archive are not rewritten. Necessary synthetic tool responses that complete inherited tool-call pairs, structured user/system identity notices, actual provider replies, command replies, and transport acknowledgments retain their own behavior.
 
 ### D-lifecycle-lazy-hydration
 

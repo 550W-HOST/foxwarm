@@ -67,6 +67,8 @@ Attached task completion carries an internal resolved-builtin signal that resolv
 
 `src/sessionTurnRunnerContextLimitCompact.test.ts` drives real background compact jobs through a detached exact owner to pin the over-limit wait and commit-before-continuation order, the safe-point-commit skip above and below the limit, the terminal outcome of failed planning, and Stop releasing the wait without cancelling the job.
 
+The detached-owner child-handoff cases also verify direct-user input suppresses routine reporting without preventing a later genuine parent/other handoff from re-establishing the report-required reminder boundary.
+
 ## Canonical ownership
 
 The user-visible rules are canonical in [message processing pipeline](../threads/message-processing-pipeline.md). This unit records implementation ownership only and introduces no new product decisions.

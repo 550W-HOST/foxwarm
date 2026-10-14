@@ -106,3 +106,7 @@ Parent-cycle traversal canonicalizes every ancestor alias before seen/self check
 - [2026-07-06/2026-07-07] Inter-session source headers use a single `<foxwarm-message type="inter-agent" ...>raw body</foxwarm-message>` system part instead of literal `[SYSTEM:]` text or split body parts. Attribute values are escaped, but the message body is intentionally left raw per user decision; existing `[SYSTEM:]` histories remain compatible.
 - [2026-07-07] Child-session missing-handoff reminders should be structured as `kind="child-reminder" event="missing-handoff"` metadata with the human reminder in the same foxwarm-system body, not as `<foxwarm-system hint="Reminder: ..." />` or a split `systemPayload` part.
 - The persisted reminder-boundary contract is canonical in [D-pipeline-persisted-child-handoff-boundary](../threads/message-processing-pipeline.md#d-pipeline-persisted-child-handoff-boundary).
+
+## Tests
+
+`childHandoffFork.test.ts` verifies fresh/forked ordinary and task-linked children start without inherited handoff state or fabricated model confirmation, while retaining actual inherited model history, paired tool responses, cache lineage, and Archive records. User-origin creation policy is canonical in [D-lifecycle-creation-origin](../threads/session-lifecycle.md#d-lifecycle-creation-origin).
