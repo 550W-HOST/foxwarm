@@ -143,7 +143,8 @@ public sealed partial class ShellHttpTests
             byte[]? sample = null,
             string? connection = null,
             string? total = null,
-            string exit = "0"
+            string exit = "0",
+            string elapsed = ""
         ) =>
             Request(
                 "report",
@@ -154,6 +155,7 @@ public sealed partial class ShellHttpTests
                     ["X-Foxwarm-Result"] = finished ? "finished" : "background",
                     ["X-Foxwarm-Bytes"] = total ?? (sample?.Length ?? 0).ToString(),
                     ["X-Foxwarm-Exit"] = exit,
+                    ["X-Foxwarm-Elapsed-Seconds"] = elapsed,
                     // Untrusted client fields do not route or create authority.
                     ["X-Foxwarm-Session"] = "not-the-owner",
                     ["X-Foxwarm-Completion-Capability"] = "invented",

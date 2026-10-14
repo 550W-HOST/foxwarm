@@ -69,9 +69,14 @@ internal sealed partial class SessionManager
     internal async Task<JsonObject> SelectNodeAsync(
         SessionOwner owner,
         string id,
-        CancellationToken token = default
+        CancellationToken token = default,
+        bool clearCwd = true
     )
     {
+        await WaitForIdentityMutationAsync(owner.Id, token);
+        owner.Entry.RequireIdentityAuthority();
+        if (!IsCurrentOwner(owner))
+            throw new InvalidOperationException("Session owner changed before Node selection.");
         id = id.Trim();
         if (id != "master")
             Foxwarm.Nodes.ApprovedNodeRegistry.ValidateId(id);
@@ -126,11 +131,14 @@ internal sealed partial class SessionManager
         if (!Nodes.Online(id))
             throw new InvalidOperationException("Node disconnected before selection: " + id);
         token.ThrowIfCancellationRequested();
-        await owner.Entry.SaveLane.CommitNodeAsync(id);
+        if (!IsCurrentOwner(owner))
+            throw new InvalidOperationException("Session owner changed before Node selection.");
+        RequireNodeBoundary(owner, id);
+        await owner.Entry.SaveLane.CommitNodeAsync(id, clearCwd);
         return new JsonObject
         {
             ["output"] =
-                $"Current node changed to `{id}`. Session cwd cleared. Node default cwd: `{defaultCwd}`.",
+                $"Current node changed to `{id}`. {(clearCwd ? "Session cwd cleared." : "Session cwd retained.")} Node default cwd: `{defaultCwd}`.",
             ["nodeId"] = id,
             ["defaultCwd"] = defaultCwd,
         };

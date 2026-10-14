@@ -22,7 +22,7 @@ internal sealed partial class NodeConnectionHub
         }
     }
 
-    private static string ShellOutput(byte[] sample, long total, int exit)
+    private static string ShellOutput(byte[] sample, long total, int exit, string duration)
     {
         var text = ShellFullText(sample);
         var rendered =
@@ -33,7 +33,7 @@ internal sealed partial class NodeConnectionHub
             total > ShellOutputBytes
                 ? "\n[Output truncated: first 4096 and last 4096 bytes; full output was not retained.]"
                 : "";
-        return $"{rendered}{truncated}\n\nExit code: {exit}\nTotal output bytes: {total}";
+        return $"{rendered}{truncated}\n\nExit code: {exit}\nDuration: {duration}\nTotal output bytes: {total}";
     }
 
     private async Task ReportShell(HttpContext context, string node)
@@ -83,6 +83,7 @@ internal sealed partial class NodeConnectionHub
             )
         )
             throw new InvalidDataException("Invalid result metadata.");
+        var duration = Foxwarm.Tools.ExecDuration.Shell(ShellHeader(context.Request, "X-Foxwarm-Elapsed-Seconds"));
         await task.Serial.WaitAsync(context.RequestAborted);
         try
         {
@@ -114,7 +115,7 @@ internal sealed partial class NodeConnectionHub
                             ["execId"] = claim.ExecId,
                             ["output"] =
                                 task.Warning
-                                + $"Command continues in background. Exec ID: {claim.ExecId}. Completion will be reported to the originating Session; full output is not retained.",
+                                + $"Command continues in background. Exec ID: {claim.ExecId}. Completion will be reported to the originating Session; full output is not retained.\nElapsed: {duration}",
                         };
                         if (task.Programmatic)
                         {
@@ -130,7 +131,7 @@ internal sealed partial class NodeConnectionHub
                 }
                 else
                 {
-                    var output = task.Warning + ShellOutput(sample, total, exit);
+                    var output = task.Warning + ShellOutput(sample, total, exit, duration);
                     if (task.State == "background")
                     {
                         try

@@ -227,7 +227,8 @@ internal static class IsolatedToolCompatibility
                 && request.Name is "read" or "write" or "edit" or "apply_patch"
             || request.Source == "builtin"
                 && request.Name
-                    is "set_config"
+                    is "node_create_auth_token"
+                        or "set_config"
                         or "send_file"
                         or "image_write_to_file"
                         or "copy_between_nodes"

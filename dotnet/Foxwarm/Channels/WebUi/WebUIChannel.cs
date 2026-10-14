@@ -66,6 +66,7 @@ internal sealed partial class WebUIChannel(
                 Results.Ok(WebUiContract.Models(models, request.Query["current"]))
         );
         RegisterSetupRoutes(app);
+        RegisterSessionNodeRoutes(app);
         app.MapPost(
             "/api/sessions/{id}/cwd",
             async (string id, HttpRequest request) =>

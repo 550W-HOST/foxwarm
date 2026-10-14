@@ -239,7 +239,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             var result = new JsonObject
             {
                 ["output"] =
-                    $"{preview["output"]?.GetValue<string>()}{trailer}\n---\nExit code: {exit}\nexecId: {record.Id}{(warning.Length > 0 ? "\n" + warning.TrimEnd() : "")}",
+                    $"{preview["output"]?.GetValue<string>()}{trailer}\n---\nExit code: {exit}\nDuration: {CompletedDuration(record, status)}\nexecId: {record.Id}{(warning.Length > 0 ? "\n" + warning.TrimEnd() : "")}",
             };
             if (programmatic is not null)
                 await AddProgrammaticAsync(result, record, status, programmatic);
@@ -258,7 +258,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         var running = new JsonObject
         {
             ["output"] =
-                $"Partial Output:\n{partial["output"]?.GetValue<string>()}\n---\n{(ct.IsCancellationRequested ? "[Foreground wait ended by Stop or Run queued]" : $"[Process running longer than {waitSeconds.ToString(CultureInfo.InvariantCulture)}s]")} Switched to background. A completion event will arrive in this Session.\n{warning}execId: {record.Id}\nRead complete output with read_exec({{execId: \"{record.Id}\"}}).",
+                $"Partial Output:\n{partial["output"]?.GetValue<string>()}\n---\n{(ct.IsCancellationRequested ? "[Foreground wait ended by Stop or Run queued]" : $"[Process running longer than {waitSeconds.ToString(CultureInfo.InvariantCulture)}s]")} Switched to background. A completion event will arrive in this Session.\n{warning}execId: {record.Id}\nElapsed: {ExecDuration.Format(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - record.StartedAt) ?? "unknown"}\nRead complete output with read_exec({{execId: \"{record.Id}\"}}).",
         };
         if (programmatic is not null)
             await AddProgrammaticAsync(running, record, null, programmatic);
@@ -464,8 +464,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         // The wrapper owns its log/status descriptors and survives the ASP.NET host process.
         var wrapper =
             "#!/usr/bin/env bash\nset +e\nexec >> \"$FOXWARM_EXEC_LOG_PATH\" 2>&1\n"
-            + "foxwarm_finalize() { code=$?; cwdtmp=\"$FOXWARM_EXEC_CWD_PATH.tmp.$$\"; pwd > \"$cwdtmp\"; mv \"$cwdtmp\" \"$FOXWARM_EXEC_CWD_PATH\"; tmp=\"$FOXWARM_EXEC_STATUS_PATH.tmp.$$\"; "
-            + "printf '{\"exitCode\":%d,\"finishedAt\":\"%s\"}\\n' \"$code\" \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" > \"$tmp\"; "
+            + "foxwarm_finalize() { code=$?; finished=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ); cwdtmp=\"$FOXWARM_EXEC_CWD_PATH.tmp.$$\"; pwd > \"$cwdtmp\"; mv \"$cwdtmp\" \"$FOXWARM_EXEC_CWD_PATH\"; tmp=\"$FOXWARM_EXEC_STATUS_PATH.tmp.$$\"; "
+            + "printf '{\"exitCode\":%d,\"finishedAt\":\"%s\"}\\n' \"$code\" \"$finished\" > \"$tmp\"; "
             + "mv \"$tmp\" \"$FOXWARM_EXEC_STATUS_PATH\"; }\ntrap foxwarm_finalize EXIT\n"
             + allocated.Command
             + (allocated.Command.EndsWith('\n') ? "" : "\n");
@@ -501,6 +501,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         var record = allocated with
         {
             Pid = process.Id,
+            StartedAt = new DateTimeOffset(process.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds(),
             ProcessStartTicks = ReadProcessIdentity(process.Id).Ticks,
         };
         await AtomicWriteAsync(
@@ -620,6 +621,16 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         };
     }
 
+    private static string CompletedDuration(ExecRecord record, JsonObject status)
+    {
+        if (status["finishedAtIsEstimated"]?.GetValue<bool>() == true
+            || SessionWait.Text(status["error"]) == "Process exited but no status file was written.")
+            return "unknown";
+        return DateTimeOffset.TryParse(SessionWait.Text(status["finishedAt"]), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var end)
+            ? ExecDuration.Format(end.ToUnixTimeMilliseconds() - record.StartedAt) ?? "unknown"
+            : "unknown";
+    }
+
     private static async Task<JsonObject?> ReadStatusAsync(ExecRecord record)
     {
         var path = Path.Combine(record.Directory, "status.json");
@@ -638,7 +649,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         var fallback = new JsonObject
         {
             ["exitCode"] = null,
-            ["finishedAt"] = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+            ["finishedAtIsEstimated"] = true,
+            ["observedAt"] = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
             ["error"] = "Process exited but no status file was written.",
         };
         var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
@@ -803,7 +815,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                                 ?.ToString(CultureInfo.InvariantCulture)
                             ?? "unknown";
                         var message =
-                            $"Background Process Finished\nexecId: {record.Id}\nExit code: {code}\nCommand output available with read_exec({{execId: \"{record.Id}\"}})";
+                            $"Background Process Finished\nexecId: {record.Id}\nExit code: {code}\nDuration: {CompletedDuration(record, status)}\nCommand output available with read_exec({{execId: \"{record.Id}\"}})";
                         await notify(record.SessionId, record.Id, message);
                         // A strict Session authority receipt now owns this event; remove only the active tracking flag.
                         if (File.Exists(Path.Combine(record.Directory, "tracking.json")))

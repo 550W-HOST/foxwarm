@@ -18,6 +18,14 @@ internal static class NodeToolDefinitions
                     }, "required": ["action"], "additionalProperties": false }
                   },
                   {
+                    "type": "function", "name": "node_create_auth_token",
+                    "description": "Reserve a new approved Node ID and write its per-node auth token to a private file on Main. Returns the Node ID and file path, never the token. Existing Node IDs and files are not replaced. Use run_script with file transfer or exec tools to configure the Node without putting the token in tool arguments or output.",
+                    "parameters": { "type": "object", "properties": {
+                      "nodeId": { "type": "string", "description": "New Node ID to reserve. Existing IDs are rejected; this does not rotate an existing credential." },
+                      "filePath": { "type": "string", "description": "Absolute path on Main for the new token file. Its parent directory must already exist. The file is created with owner-only permissions and contains the token followed by a newline." }
+                    }, "required": ["nodeId", "filePath"] }
+                  },
+                  {
                     "type": "function", "name": "node_bootstrap_info",
                     "description": "Get Node setup instructions, bootstrap endpoints, and the pairing token. Commands use config.url when set; otherwise replace the example address with one reachable from the new Node. Treat the pairing token as a secret.",
                     "parameters": { "type": "object", "properties": {} }

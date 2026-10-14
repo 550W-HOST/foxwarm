@@ -17,6 +17,8 @@ Discovers concrete tools, projects model definitions, applies output/control pol
 
 Definition discovery is not authorization: execution calls `ToolAuthorizationEvaluation` before local/MCP/Node effects. Tools that change Session state use owner/save-lane boundaries; a model-visible success is not emitted before the underlying operation reports its committed/accepted outcome. Provider-hosted tools remain provider-scoped. JSON source values and model/history projection follow [the cross-module tool contract](../threads/tools-permissions-and-exec.md#outbound-mcp-values-and-trusted-control).
 
+The discoverable hidden `node_create_auth_token` builtin always resolves to Main and returns only Node ID/file path. Its file/registry ordering and private-path boundary are owned by [the external Node unit](./external-nodes.md).
+
 Default model requests project the selected compatible Node's advertised tools, including `exec`, through current concrete visibility policy. An absent capability or hidden tool is not injected from Master. Builtin name collisions remain source-qualified, and explicit schema overrides retain their existing projection behavior.
 
 For concrete remote `read`, `write`, `edit` and `apply_patch`, `SessionToolExecutor.RemoteCodePaths` binds the documented first-party path sidecar to the captured execution Node. It records bounded display-only absolute POSIX targets for the original WebUI's Code actions and strips the private carrier from model/ToolScript output. This metadata is not Main filesystem, cwd or model-control authority; ambiguous relative tool paths remain inert.

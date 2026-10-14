@@ -165,7 +165,8 @@ internal sealed partial class SessionManager
                 && resolved.Name is "read" or "write" or "edit" or "apply_patch" or "exec"
             || resolved.Source == "builtin"
                 && resolved.Name
-                    is "set_config"
+                    is "node_create_auth_token"
+                        or "set_config"
                         or "send_file"
                         or "image_write_to_file"
                         or "run_script"

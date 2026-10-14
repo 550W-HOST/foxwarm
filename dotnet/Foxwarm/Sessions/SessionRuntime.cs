@@ -226,6 +226,14 @@ internal sealed partial class SessionOwner
 
     public JsonObject BuildDto() => BuildDto(Metadata());
 
-    public JsonObject BuildDto(SessionMetadata meta) =>
-        SessionPresentation.Build(meta, models, ResolveAncestry, ToolActive, Compacting);
+    public JsonObject BuildDto(SessionMetadata meta)
+    {
+        var dto = SessionPresentation.Build(meta, models, ResolveAncestry, ToolActive, Compacting);
+        Entry.WithState(state =>
+        {
+            dto["currentNode"] = state.AuthorityEnvelope["currentNode"]?.DeepClone();
+            dto["cwd"] = state.AuthorityEnvelope["cwd"]?.DeepClone();
+        });
+        return dto;
+    }
 }

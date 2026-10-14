@@ -646,6 +646,8 @@ internal sealed partial class SessionToolExecutor(
             );
         handlers["node"] = (owner, args, token) =>
             owner.Manager.ExecuteNodeToolAsync(owner.Hosted, args, token);
+        handlers["node_create_auth_token"] = (owner, args, token) =>
+            owner.Manager.CreateNodeAuthTokenAsync(owner.Hosted, args, token);
         handlers["node_bootstrap_info"] = (owner, args, _) =>
             Task.FromResult(owner.Manager.NodeBootstrapInfo(args));
         handlers["node_pair_list"] = (owner, args, _) =>
@@ -689,6 +691,7 @@ internal sealed partial class SessionToolExecutor(
                     is not (
                         "mcp_config"
                         or "set_agent_isolated"
+                        or "node_create_auth_token"
                         or "node_bootstrap_info"
                         or "node_pair_list"
                         or "node_pair_approve"

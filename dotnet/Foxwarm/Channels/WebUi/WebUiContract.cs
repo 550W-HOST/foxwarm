@@ -43,6 +43,8 @@ internal static class WebUiContract
                 snapshot.AuthorityEnvelope["agent"]?.DeepClone() ?? JsonValue.Create("main"),
             ["parentSessionId"] = snapshot.AuthorityEnvelope["parentSessionId"]?.DeepClone(),
             ["displayName"] = snapshot.AuthorityEnvelope["displayName"]?.DeepClone(),
+            ["currentNode"] = snapshot.AuthorityEnvelope["currentNode"]?.DeepClone(),
+            ["cwd"] = snapshot.AuthorityEnvelope["cwd"]?.DeepClone(),
             ["busy"] = snapshot.Busy,
             ["busyStartedAt"] = snapshot.BusyStartedAt,
             ["queueLength"] = queueLength,

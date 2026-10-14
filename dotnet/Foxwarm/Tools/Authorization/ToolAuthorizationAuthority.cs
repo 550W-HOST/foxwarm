@@ -216,6 +216,7 @@ public sealed partial class WorkspaceTools
         {
             "read" or "set_config" or "send_file" or "run_script" or "start_toolscript_run" =>
                 ResolveReadWrite(raw, true),
+            "node_create_auth_token" => PrivateNodeTokenPath(raw),
             "write" or "image_write_to_file" => ResolveReadWrite(raw, false),
             "edit" => ResolvePatchPath(raw, true),
             "exec" => Paths.ExecCwd(raw),
