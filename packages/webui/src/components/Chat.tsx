@@ -541,7 +541,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     })
   }, [])
 
-  const updateBottomFollowState = useCallback((userIntent: 'none' | 'leave' = 'none') => {
+  const updateBottomFollowState = useCallback((userIntent: 'none' | 'leave' | 'toward-bottom' = 'none') => {
     const container = messagesContainerRef.current
     const distanceFromBottom = container
       ? container.scrollHeight - container.scrollTop - container.clientHeight
@@ -768,6 +768,11 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
           leaveBottomFollow()
         } else {
           markUserViewportInteraction()
+          if (event.deltaY > 0) {
+            // A new downward gesture can finish a tiny leave inside bottom tolerance.
+            updateBottomFollowState('toward-bottom')
+            captureCurrentViewportState()
+          }
         }
       }
       const handleTouchStart = (event: TouchEvent) => {
@@ -789,6 +794,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       }
       const handlePointerDown = () => {
         markUserViewportInteraction()
+        // A fresh pointer gesture supersedes an unfinished earlier wheel leave.
+        if (pendingUserLeaveBottomRef.current) setBottomFollow(false)
         pointerScrollInteractionRef.current = true
       }
       const handlePointerEnd = () => {
@@ -828,7 +835,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         window.removeEventListener('keydown', handleWindowKeyDown)
       }
     }
-  }, [captureCurrentViewportState, leaveBottomFollow, markUserViewportInteraction, messages.length, showFullTimeline])
+  }, [captureCurrentViewportState, leaveBottomFollow, markUserViewportInteraction, messages.length, setBottomFollow, showFullTimeline, updateBottomFollowState])
 
   const applySessionState = useCallback((session: SessionListRecord | null | undefined) => {
     if (!session || typeof session.id !== 'string') return

@@ -47,12 +47,12 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, codeNewWindow, responsiveChat = false, chatMessages = null, timelineView = 'grouped', terminal = null, width = 1400, height = 900 } = {}) {
+async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, codeNewWindow, responsiveChat = false, chatMessages = null, timelineView = 'grouped', showScrollbar, terminal = null, width = 1400, height = 900 } = {}) {
   const page = await browser.newPage()
   const pageErrors = []
   page.on('pageerror', error => pageErrors.push(error.message))
   await page.setViewport({ width, height })
-  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat, splitDirection, initialLayout, themeId, codeNewWindow, responsiveChat, chatMessages, timelineView, terminal }) => {
+  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat, splitDirection, initialLayout, themeId, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal }) => {
     if (window !== window.top) return
     const tabsById = Object.fromEntries(initialTabs.map(tab => [tab.id, tab]))
     const root = initialLayout || (splitPanes
@@ -68,6 +68,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       localStorage.setItem('foxwarm_sidebar_collapsed_v1', 'false')
     }
     if (chatMessages) localStorage.setItem('foxwarm_timeline_view_v1', timelineView)
+    if (showScrollbar !== undefined) localStorage.setItem('foxwarm.contextScrollbar.showScrollbar', String(showScrollbar))
     if (themeId) localStorage.setItem('foxwarm_theme_selection_v2', JSON.stringify({ version: 2, themeId, colorMode: 'light' }))
     if (codeNewWindow !== undefined) localStorage.setItem('foxwarm_code_open_new_window_v1', String(codeNewWindow))
     const json = body => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }))
@@ -154,7 +155,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       close() { this.readyState = 3; this.onclose?.({}) }
     }
     window.WebSocket = FixtureWebSocket
-  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, codeNewWindow, responsiveChat, chatMessages, timelineView, terminal })
+  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal })
   await page.goto(`${baseUrl}${hash}`, { waitUntil: 'domcontentloaded' })
   await page.bringToFront()
   await page.waitForFunction(() => !!window.foxwarmTest || !!document.querySelector('[data-foxwarm-popup-root="chat"]'), { timeout: 8_000 }).catch(async error => {
@@ -2320,3 +2321,43 @@ test('Conversation live text preserves a detached downward reader during continu
     assert.ok(after.sameCard)
   } finally { await page.close() }
 })
+
+
+for (const deltaY of [-160, -3]) {
+  test(`natural scrollbar bottom rejoin ${deltaY < -4 ? 'survives fractional Workbench pane dimensions' : 'finishes a small pending upward leave'}`, async () => {
+    const page = await openFixture({ responsiveChat: true, chatMessages: idleViewportMessages, showScrollbar: true,
+      tabs: [chat('e2e-a', false), system], hash: '#tab/chat:e2e-a', width: 1401, height: 901,
+      layout: { id: 'fractional-split', kind: 'split', direction: 'row', sizes: [47.37, 52.63], children: [
+        { id: 'pane-main', kind: 'pane', tabIds: ['chat:e2e-a'], activeTabId: 'chat:e2e-a' },
+        { id: 'pane-other', kind: 'pane', tabIds: [system.id], activeTabId: system.id },
+      ] } })
+    try {
+      await page.waitForFunction(() => document.querySelectorAll('[data-chat-message-anchor-key]').length === 55)
+      await waitForIdleBottom(page)
+      const bounds = await (await page.$('.foxwarm-chat-messages')).boundingBox()
+      await page.mouse.move(bounds.x + 100, bounds.y + 120)
+      await page.mouse.wheel({ deltaY })
+      await page.waitForFunction(deltaY => {
+        const scroll = document.querySelector('.foxwarm-chat-messages')
+        return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight > (deltaY < -4 ? 100 : 0)
+      }, {}, deltaY)
+      const thumb = await page.$eval('.foxwarm-chat-messages', scroll => {
+        const rect = scroll.getBoundingClientRect()
+        const track = scroll.clientHeight
+        const size = track * track / scroll.scrollHeight
+        const gutter = scroll.offsetWidth - scroll.clientWidth
+        return { x: rect.right - gutter / 2, y: rect.top + scroll.scrollTop / (scroll.scrollHeight - track) * (track - size) + size / 2, bottom: rect.bottom - 1, gutter }
+      })
+      assert.ok(thumb.gutter > 0, 'the real native scrollbar is enabled')
+      await page.mouse.move(thumb.x, thumb.y)
+      await page.mouse.down()
+      await page.mouse.move(thumb.x, thumb.bottom, { steps: 8 })
+      await page.mouse.up()
+      await page.waitForFunction(() => {
+        const scroll = document.querySelector('.foxwarm-chat-messages')
+        return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 1
+      })
+      await page.waitForFunction(() => !document.querySelector('[aria-label="Scroll to bottom"]'))
+    } finally { await page.close() }
+  })
+}

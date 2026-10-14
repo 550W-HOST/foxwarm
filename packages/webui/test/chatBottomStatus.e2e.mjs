@@ -123,6 +123,43 @@ test('the bottom action follows the latch below 200px and even without a native 
   assert.ok((await geometry()).distance < 4)
 })
 
+test('a small upward wheel leave rejoins naturally on downward input, including when no scroll event is possible', async () => {
+  await mount()
+  const bounds = await page.$eval('.foxwarm-chat-messages', element => element.getBoundingClientRect().toJSON())
+  await page.mouse.move(bounds.left + bounds.width * 0.6, bounds.top + bounds.height * 0.5)
+  await page.mouse.wheel({ deltaY: -3 })
+  await page.waitForSelector('[aria-label="Scroll to bottom"]')
+  await page.waitForFunction(() => {
+    const scroll = document.querySelector('.foxwarm-chat-messages')
+    return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight > 0
+  })
+  const near = await geometry()
+  assert.ok(near.distance > 0 && near.distance <= 4, JSON.stringify(near))
+  await page.mouse.wheel({ deltaY: 60 })
+  await page.waitForFunction(() => {
+    const scroll = document.querySelector('.foxwarm-chat-messages')
+    return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 1
+  })
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  assert.equal(await page.$('[aria-label="Scroll to bottom"]'), null, 'the old tiny leave must not block natural bottom rejoin')
+  await page.evaluate(() => window.fixture.append('Follow after natural rejoin.\n\n'.repeat(40)))
+  await page.waitForFunction(() => document.querySelector('[data-chat-timeline="committed"]').textContent.includes('Follow after natural rejoin.'))
+  await page.waitForFunction(() => {
+    const scroll = document.querySelector('.foxwarm-chat-messages')
+    return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 4
+  })
+
+  await mount(true)
+  const before = await geometry()
+  await page.mouse.move(350, 250)
+  await page.mouse.wheel({ deltaY: -60 })
+  await page.waitForSelector('[aria-label="Scroll to bottom"]')
+  assert.equal((await geometry()).scrollTop, before.scrollTop)
+  await page.mouse.wheel({ deltaY: 60 })
+  await page.waitForFunction(() => !document.querySelector('[aria-label="Scroll to bottom"]'))
+  assert.equal((await geometry()).scrollTop, before.scrollTop, 'explicit return intent does not need a native scroll event')
+})
+
 test('a tall manual expansion exposes rejoin immediately and the bottom action wins during its animation', async () => {
   await mount()
   const before = await geometry()

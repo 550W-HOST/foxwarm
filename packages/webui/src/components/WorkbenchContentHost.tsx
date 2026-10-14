@@ -28,10 +28,12 @@ function createContentPositions() {
       const slot = slots.get(host.paneId)
       const rect = layerRect && host.visible && slot?.isConnected ? slot.getBoundingClientRect() : null
       const paneRect = rect && slot ? slot.closest('[data-pane-id]')?.getBoundingClientRect() : null
-      return { host, rect, paneRect, radius: rect && slot ? getComputedStyle(slot).borderRadius : '' }
+      const hostRect = host.element.getBoundingClientRect()
+      return { host, rect, hostRect, paneRect, radius: rect && slot ? getComputedStyle(slot).borderRadius : '' }
     })
-    for (const { host, rect } of positions) {
-      if (rect && (host.element.style.width !== `${rect.width}px` || host.element.style.height !== `${rect.height}px`)) host.beforeResize()
+    for (const { host, rect, hostRect } of positions) {
+      // CSSOM serializes fractional sizes; compare actual layout, not decimal strings.
+      if (rect && (hostRect.width !== rect.width || hostRect.height !== rect.height)) host.beforeResize()
     }
     for (const { host, rect, paneRect, radius } of positions) {
       const visible = !!rect && rect.width > 0 && rect.height > 0
