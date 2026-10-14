@@ -1687,6 +1687,8 @@ public sealed class LlmRequestJournalStore : IDisposable
                 ?? []
         );
         var source = new JsonObject { ["text"] = text };
+        if (result.TruncatedStopReason is string stopReason)
+            source["truncatedStop"] = new JsonObject { ["stopReason"] = stopReason };
         var modelId = SessionWait.Text(assistant?["__meta"]?["modelId"]);
         if (modelId is not null)
             source["modelId"] = modelId;

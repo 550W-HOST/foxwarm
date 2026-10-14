@@ -16,13 +16,20 @@ internal static class AnthropicCanonicalConverter
         double durationMs
     )
     {
+        var stopReason = StopReason(response);
         var parts = new JsonArray();
         var content = response is JsonObject obj ? obj["content"] as JsonArray : null;
         foreach (var raw in content ?? [])
         {
             if (raw is not JsonObject block)
                 continue;
-            switch (SessionWait.Text(block["type"]))
+            var type = SessionWait.Text(block["type"]) ?? "";
+            if (type is "server_tool_use" or "mcp_tool_use" || type.EndsWith("_tool_result", StringComparison.Ordinal))
+                throw new ModelAttemptFailure(
+                    $"Anthropic server tool block \"{type}\" is not supported by Foxwarm.",
+                    "response-error", false, false
+                );
+            switch (type)
             {
                 case "text":
                     var text = SessionWait.Text(block["text"]) ?? "";
@@ -60,17 +67,26 @@ internal static class AnthropicCanonicalConverter
                         throw new ModelPreparationException(
                             "Anthropic output has no stable call ID; the legacy/malformed fallback is not implemented."
                         );
-                    parts.Add(
-                        new JsonObject
-                        {
-                            ["functionCall"] = new JsonObject
-                            {
-                                ["id"] = id,
-                                ["name"] = block["name"]?.DeepClone(),
-                                ["args"] = block["input"]?.DeepClone(),
-                            },
-                        }
+                    // Native non-object inputs are argument errors too, never executor input.
+                    var input = block["input"];
+                    var parsed = FunctionCallArguments.Parse(
+                        input is null or JsonObject || SessionWait.Text(input) is not null
+                            ? input
+                            : JsonValue.Create(input.ToJsonString())
                     );
+                    var call = new JsonObject
+                    {
+                        ["id"] = id,
+                        ["name"] = block["name"]?.DeepClone(),
+                        ["args"] = parsed.Args.DeepClone(),
+                    };
+                    if (parsed.RawArgsText is not null)
+                        call["rawArgsText"] = parsed.RawArgsText;
+                    if (parsed.ArgsParseError is string parseError)
+                        call["argsParseError"] = stopReason is null
+                            ? parseError
+                            : $"Tool call was not executed: the response stopped at {stopReason} before the tool input was known to be complete. {parseError}";
+                    parts.Add(new JsonObject { ["functionCall"] = call });
                     break;
             }
         }
@@ -96,23 +112,45 @@ internal static class AnthropicCanonicalConverter
         };
     }
 
-    internal static JsonObject? Usage(JsonNode? response) =>
-        response is JsonObject body && body["usage"] is JsonObject usage
-            ? new JsonObject
-            {
-                ["inputTokens"] = Reported(usage["input_tokens"]) is double input
-                    ? System.Text.Json.JsonSerializer.SerializeToNode(
-                        input + (Reported(usage["cache_creation_input_tokens"]) ?? 0)
-                    )
-                    : null,
-                ["outputTokens"] = Reported(usage["output_tokens"]) is not null
-                    ? usage["output_tokens"]?.DeepClone()
-                    : null,
-                ["cachedTokens"] = Reported(usage["cache_read_input_tokens"]) is not null
-                    ? usage["cache_read_input_tokens"]!.DeepClone()
-                    : JsonValue.Create(0),
-            }
-            : null;
+    internal static string? StopReason(JsonNode? response)
+    {
+        var reason = response is JsonObject body ? SessionWait.Text(body["stop_reason"]) : null;
+        if (reason == "refusal")
+        {
+            var details = response!["stop_details"] as JsonObject;
+            var category = SessionWait.Text(details?["category"]);
+            var explanation = SessionWait.Text(details?["explanation"])?.Trim();
+            throw new ModelAttemptFailure(
+                "The model declined this request" + (string.IsNullOrEmpty(category) ? "" : $" ({category})")
+                    + "." + (string.IsNullOrEmpty(explanation) ? "" : " " + explanation),
+                "response-error", false, false
+            );
+        }
+        if (reason == "pause_turn")
+            throw new ModelAttemptFailure(
+                "Anthropic paused a server-tool turn, which Foxwarm does not continue automatically.",
+                "response-error", false, false
+            );
+        return reason is "max_tokens" or "model_context_window_exceeded" ? reason : null;
+    }
+
+    internal static JsonObject? Usage(JsonNode? response)
+    {
+        if (response is not JsonObject body || body["usage"] is not JsonObject usage)
+            return null;
+        var result = new JsonObject
+        {
+            ["inputTokens"] = Reported(usage["input_tokens"]) is double input
+                ? System.Text.Json.JsonSerializer.SerializeToNode(
+                    input + (Reported(usage["cache_creation_input_tokens"]) ?? 0))
+                : null,
+            ["outputTokens"] = Reported(usage["output_tokens"]) is not null ? usage["output_tokens"]?.DeepClone() : null,
+            ["cachedTokens"] = Reported(usage["cache_read_input_tokens"]) is not null ? usage["cache_read_input_tokens"]!.DeepClone() : JsonValue.Create(0),
+        };
+        if (Reported(usage["output_tokens_details"]?["thinking_tokens"]) is double reasoning)
+            result["reasoningTokens"] = reasoning;
+        return result;
+    }
 
     private static double? Reported(JsonNode? node) =>
         SessionWait.Number(node) is double value && double.IsFinite(value) ? value : null;

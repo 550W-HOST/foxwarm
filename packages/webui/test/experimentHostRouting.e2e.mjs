@@ -98,7 +98,7 @@ function configuration(generation = 'old', fastThreshold = 1) {
     providerType: protocol, baseUrl: `http://127.0.0.1:${peers[label].address().port}${label === 'c' ? '' : '/v1'}`,
     apiKey: 'synthetic-' + generation + '-' + label, contextLimit: 20000, requestCompression: generation === 'old' ? 'gzip' : 'br',
     effort: label === 'a' ? { allowed: ['none', 'low'], default: 'low' } : label === 'b' ? { allowed: ['high', 'max'], default: 'high' } : { allowed: ['medium'], default: 'medium' },
-    extraHeaders: { 'X-Generation': generation }, extraFields: { cache: '${SESSION_CACHE_KEY}', turn: '${TURN_ID}' }, models: ['wire']
+    extraHeaders: { 'X-Generation': generation }, extraFields: { ...(label === 'c' ? { stream: false } : {}), cache: '${SESSION_CACHE_KEY}', turn: '${TURN_ID}' }, models: ['wire']
   }
   providers.route = { providerType: 'failover', targets: ['a', 'b/wire'], failureThreshold: 5, cooldownMs: 600000 }
   providers.fast = { providerType: 'failover', targets: ['a/wire', 'b'], failureThreshold: fastThreshold, cooldownMs: 600000 }

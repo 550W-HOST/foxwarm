@@ -14,7 +14,7 @@ public sealed class RoutingAttemptsTests
         HostModels.Parse(
             Obj(
                 """
-                {"default":"route","providers":{"a":{"providerType":"openai-responses","baseUrl":"http://localhost/a","apiKey":"TOKEN","effort":{"allowed":["none","low"],"default":"low"},"models":["m"]},"b":{"providerType":"anthropic","baseUrl":"http://localhost/b","effort":{"allowed":["high","max"],"default":"high"},"models":["m"]},"route":{"providerType":"failover","targets":["a","b/m"],"failureThreshold":THRESHOLD,"cooldownMs":1000},"pool":{"providerType":"session-hash","targets":["a/m","b"]}}}
+                {"default":"route","providers":{"a":{"providerType":"openai-responses","baseUrl":"http://localhost/a","apiKey":"TOKEN","effort":{"allowed":["none","low"],"default":"low"},"models":["m"]},"b":{"providerType":"anthropic","extraFields":{"stream":false},"baseUrl":"http://localhost/b","effort":{"allowed":["high","max"],"default":"high"},"models":["m"]},"route":{"providerType":"failover","targets":["a","b/m"],"failureThreshold":THRESHOLD,"cooldownMs":1000},"pool":{"providerType":"session-hash","targets":["a/m","b"]}}}
                 """.Replace("TOKEN", token).Replace(
                     "THRESHOLD",
                     threshold.ToString(System.Globalization.CultureInfo.InvariantCulture)
@@ -71,7 +71,7 @@ public sealed class RoutingAttemptsTests
         Assert.Equal("a/m", routing.Select(rollback, "cache").TargetKey);
         var same = Catalog();
         var parsed = Obj(
-            """{"default":"route","providers":{"route":{"cooldownMs":1000,"failureThreshold":5,"targets":["a","b/m"],"providerType":"failover"},"b":{"models":["m"],"effort":{"default":"high","allowed":["high","max"]},"baseUrl":"http://localhost/b","providerType":"anthropic"},"a":{"models":["m"],"effort":{"default":"low","allowed":["none","low"]},"apiKey":"old","baseUrl":"http://localhost/a","providerType":"openai-responses"}}}"""
+            """{"default":"route","providers":{"route":{"cooldownMs":1000,"failureThreshold":5,"targets":["a","b/m"],"providerType":"failover"},"b":{"models":["m"],"effort":{"default":"high","allowed":["high","max"]},"baseUrl":"http://localhost/b","providerType":"anthropic","extraFields":{"stream":false}},"a":{"models":["m"],"effort":{"default":"low","allowed":["none","low"]},"apiKey":"old","baseUrl":"http://localhost/a","providerType":"openai-responses"}}}"""
         );
         Assert.Equal(
             same.Resolve("route").Configuration["fingerprint"]!.ToString(),
@@ -364,7 +364,7 @@ public sealed class RoutingAttemptsTests
         Assert.Equal(1, aCalls);
         var concrete = HostModels.Parse(
             Obj(
-                """{"default":"route","providers":{"route":{"providerType":"anthropic","baseUrl":"http://localhost/concrete","models":["m"]}}}"""
+                """{"default":"route","providers":{"route":{"providerType":"anthropic","extraFields":{"stream":false},"baseUrl":"http://localhost/concrete","models":["m"]}}}"""
             ),
             new JsonObject()
         );
@@ -382,7 +382,7 @@ public sealed class RoutingAttemptsTests
         );
         Directory.CreateDirectory(Path.Combine(root, "state"));
         string Configuration(string generation) =>
-            """{"default":"route","providers":{"a":{"providerType":"openai-responses","baseUrl":"http://localhost/a","models":["m"],"extraHeaders":{"x-generation":"GEN"}},"b":{"providerType":"anthropic","baseUrl":"http://localhost/b","models":["m"],"extraHeaders":{"x-generation":"GEN"}},"route":{"providerType":"failover","targets":["a","b"],"failureThreshold":1}}}""".Replace(
+            """{"default":"route","providers":{"a":{"providerType":"openai-responses","baseUrl":"http://localhost/a","models":["m"],"extraHeaders":{"x-generation":"GEN"}},"b":{"providerType":"anthropic","extraFields":{"stream":false},"baseUrl":"http://localhost/b","models":["m"],"extraHeaders":{"x-generation":"GEN"}},"route":{"providerType":"failover","targets":["a","b"],"failureThreshold":1}}}""".Replace(
                 "GEN",
                 generation
             );

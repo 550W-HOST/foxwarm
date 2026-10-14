@@ -348,7 +348,7 @@ public sealed class LlmRequestJournalQualificationTests
         HostModels.Parse(
             JsonNode
                 .Parse(
-                    $"{{\"default\":\"model\",\"providers\":{{\"model\":{{\"providerType\":\"{providerType}\",\"baseUrl\":\"http://localhost\",\"apiKey\":\"token\",\"models\":[\"model\"]}}}}}}"
+                    $"{{\"default\":\"model\",\"providers\":{{\"model\":{{\"providerType\":\"{providerType}\",{(providerType == "anthropic" ? "\"extraFields\":{\"stream\":false}," : "")}\"baseUrl\":\"http://localhost\",\"apiKey\":\"token\",\"models\":[\"model\"]}}}}}}"
                 )!
                 .AsObject(),
             new JsonObject()
@@ -359,7 +359,7 @@ public sealed class LlmRequestJournalQualificationTests
             JsonNode
                 .Parse(
                     """
-                    {"default":"route","providers":{"a":{"providerType":"anthropic","baseUrl":"http://localhost/a","apiKey":"token","models":["m"]},"b":{"providerType":"anthropic","baseUrl":"http://localhost/b","apiKey":"token","models":["m"]},"route":{"providerType":"failover","targets":["a/m","b/m"],"failureThreshold":5,"cooldownMs":1}}}
+                    {"default":"route","providers":{"a":{"providerType":"anthropic","extraFields":{"stream":false},"baseUrl":"http://localhost/a","apiKey":"token","models":["m"]},"b":{"providerType":"anthropic","extraFields":{"stream":false},"baseUrl":"http://localhost/b","apiKey":"token","models":["m"]},"route":{"providerType":"failover","targets":["a/m","b/m"],"failureThreshold":5,"cooldownMs":1}}}
                     """
                 )!
                 .AsObject(),

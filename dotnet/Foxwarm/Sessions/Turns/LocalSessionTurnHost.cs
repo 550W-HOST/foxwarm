@@ -133,6 +133,32 @@ public sealed partial class LocalSessionTurnHost
                     var appended = await AppendHistoryMessageStrictAsync(assistant)
                         .ConfigureAwait(false);
                     result.FinalizeHistory(appended, entry.RecordBestEffortFailure);
+                    if (result.TruncatedStopReason is string stopReason)
+                    {
+                        try
+                        {
+                            await AppendHistoryMessageStrictAsync(new JsonObject
+                            {
+                                ["role"] = "model",
+                                ["modelVisible"] = false,
+                                ["parts"] = new JsonArray(new JsonObject
+                                {
+                                    ["text"] = stopReason == "model_context_window_exceeded"
+                                        ? "The response stopped because the context window was reached. The text above may be incomplete."
+                                        : "The response stopped at the output limit. The text above may be incomplete.",
+                                }),
+                                ["__meta"] = new JsonObject
+                                {
+                                    ["noticeType"] = "llm-stop",
+                                    ["stopReason"] = stopReason,
+                                },
+                            }).ConfigureAwait(false);
+                        }
+                        catch (Exception error)
+                        {
+                            entry.RecordBestEffortFailure(error);
+                        }
+                    }
 
                     var calls = ExtractFunctionCalls(assistant);
                     if (calls.Count == 0)

@@ -10,7 +10,9 @@ namespace Foxwarm.Models;
 internal sealed class AnthropicMessagesService(
     HttpClient http,
     ResponsesClientOptions options,
-    int timeoutMs = 300000
+    int timeoutMs = 300000,
+    Action<string, ResponsesStreamProgress>? progress = null,
+    TimeProvider? clock = null
 ) : IChatService
 {
     public async Task<ChatResult> ChatAsync(
@@ -34,7 +36,21 @@ internal sealed class AnthropicMessagesService(
             headers["x-api-key"] = options.Token;
         using var request = ProviderHttpRequest.Create(endpoint, body, options, headers);
         using var activity = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        activity.CancelAfter(timeoutMs);
+        var streaming = body["stream"]!.GetValue<bool>();
+        var reasoning = false;
+        await using var timer = (clock ?? TimeProvider.System).CreateTimer(
+            _ => activity.Cancel(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan
+        );
+        void ScheduleInactivity() => timer.Change(
+            TimeSpan.FromMilliseconds(reasoning
+                ? Math.Max(options.StreamInactivityTimeoutMs ?? 60000, 600000)
+                : options.StreamInactivityTimeoutMs ?? 60000),
+            Timeout.InfiniteTimeSpan
+        );
+        if (streaming)
+            timer.Change(TimeSpan.FromMilliseconds(180000), Timeout.InfiniteTimeSpan);
+        else
+            activity.CancelAfter(timeoutMs);
         var watch = Stopwatch.StartNew();
         try
         {
@@ -43,7 +59,8 @@ internal sealed class AnthropicMessagesService(
                 HttpCompletionOption.ResponseHeadersRead,
                 activity.Token
             );
-            activity.CancelAfter(timeoutMs);
+            if (!streaming)
+                activity.CancelAfter(timeoutMs);
             await using var stream = await response.Content.ReadAsStreamAsync(activity.Token);
             using var registration = activity.Token.Register(() =>
             {
@@ -53,66 +70,33 @@ internal sealed class AnthropicMessagesService(
                 }
                 catch { }
             });
-            using var buffer = new MemoryStream();
-            var bytes = new byte[8192];
+            JsonNode? payload;
             var success = response.StatusCode == HttpStatusCode.OK;
-            while (true)
+            if (streaming && success)
             {
-                var count = await stream.ReadAsync(bytes, activity.Token);
-                if (count == 0)
-                    break;
-                activity.CancelAfter(timeoutMs);
-                var keep = success
-                    ? count
-                    : Math.Min(count, Math.Max(0, 64 * 1024 - (int)buffer.Length));
-                if (keep > 0)
-                    buffer.Write(bytes, 0, keep);
-                if (!success && buffer.Length >= 64 * 1024)
-                    break;
+                await using var decoded = Decode(stream, response.Content.Headers.ContentEncoding.LastOrDefault());
+                payload = await AnthropicSseCollector.CollectAsync(
+                    decoded, activity.Token,
+                    new ResponsesStreamCallbacks
+                    {
+                        OnProgress = update => progress?.Invoke(sessionId, update),
+                        OnMeaningfulProgress = ScheduleInactivity,
+                    },
+                    active =>
+                    {
+                        reasoning = active;
+                        ScheduleInactivity();
+                    }
+                ).ConfigureAwait(false);
+            }
+            else
+            {
+                payload = await ReadJsonAsync(stream, success,
+                    response.Content.Headers.ContentEncoding.LastOrDefault(),
+                    (int)response.StatusCode, activity, cancellationToken).ConfigureAwait(false);
             }
             cancellationToken.ThrowIfCancellationRequested();
             activity.Token.ThrowIfCancellationRequested();
-            var raw = buffer.ToArray();
-            if (
-                success
-                && response.Content.Headers.ContentEncoding.LastOrDefault() is { } encoding
-                && encoding is "gzip" or "br" or "deflate"
-            )
-            {
-                using var compressed = new MemoryStream(raw);
-                using Stream decoder =
-                    encoding == "gzip"
-                        ? new System.IO.Compression.GZipStream(
-                            compressed,
-                            System.IO.Compression.CompressionMode.Decompress
-                        )
-                    : encoding == "br"
-                        ? new System.IO.Compression.BrotliStream(
-                            compressed,
-                            System.IO.Compression.CompressionMode.Decompress
-                        )
-                    : new System.IO.Compression.ZLibStream(
-                        compressed,
-                        System.IO.Compression.CompressionMode.Decompress
-                    );
-                using var decoded = new MemoryStream();
-                await decoder.CopyToAsync(decoded, activity.Token);
-                raw = decoded.ToArray();
-            }
-            var text = Encoding.UTF8.GetString(raw);
-            if (text.StartsWith('\uFEFF'))
-                text = text[1..];
-            if (!success)
-                throw ModelAttemptFailure.Http((int)response.StatusCode, text);
-            JsonNode? payload;
-            try
-            {
-                payload = JsonNode.Parse(text);
-            }
-            catch (JsonException)
-            {
-                payload = JsonValue.Create(text);
-            } // Fixed Axios silently retains non-JSON response text.
             var assistant = AnthropicCanonicalConverter.ConvertAssistant(
                 payload,
                 options.ConcreteModelId,
@@ -124,7 +108,10 @@ internal sealed class AnthropicMessagesService(
                 && (assistant is null || !OpenAIHttp.HasMeaningfulAssistant(assistant))
             )
                 throw ModelAttemptFailure.Empty();
-            return new ChatResult(assistant, AnthropicCanonicalConverter.Usage(payload));
+            return new ChatResult(assistant, AnthropicCanonicalConverter.Usage(payload))
+            {
+                TruncatedStopReason = AnthropicCanonicalConverter.StopReason(payload),
+            };
         }
         catch (Exception error)
             when (activity.IsCancellationRequested
@@ -133,7 +120,9 @@ internal sealed class AnthropicMessagesService(
             )
         {
             throw new TimeoutException(
-                "Anthropic request timed out while waiting for headers or body bytes."
+                streaming
+                    ? "Anthropic streaming request timed out while waiting for model output activity."
+                    : "Anthropic request timed out while waiting for headers or body bytes."
             );
         }
         catch (Exception error)
@@ -148,4 +137,62 @@ internal sealed class AnthropicMessagesService(
             );
         }
     }
+
+    private static Stream Decode(Stream stream, string? encoding) => encoding switch
+    {
+        "gzip" => new System.IO.Compression.GZipStream(stream, System.IO.Compression.CompressionMode.Decompress, leaveOpen: true),
+        "br" => new System.IO.Compression.BrotliStream(stream, System.IO.Compression.CompressionMode.Decompress, leaveOpen: true),
+        "deflate" => new System.IO.Compression.ZLibStream(stream, System.IO.Compression.CompressionMode.Decompress, leaveOpen: true),
+        _ => stream,
+    };
+
+    private async Task<JsonNode?> ReadJsonAsync(
+        Stream stream, bool success, string? encoding, int statusCode,
+        CancellationTokenSource activity, CancellationToken cancellationToken
+    )
+    {
+        using var buffer = new MemoryStream();
+        var bytes = new byte[8192];
+
+        while (true)
+        {
+            var count = await stream.ReadAsync(bytes, activity.Token);
+            if (count == 0)
+                break;
+            activity.CancelAfter(timeoutMs);
+            var keep = success
+                ? count
+                : Math.Min(count, Math.Max(0, 64 * 1024 - (int)buffer.Length));
+            if (keep > 0)
+                buffer.Write(bytes, 0, keep);
+            if (!success && buffer.Length >= 64 * 1024)
+                break;
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        activity.Token.ThrowIfCancellationRequested();
+        var raw = buffer.ToArray();
+        if (success && encoding is not null
+            && encoding is "gzip" or "br" or "deflate")
+        {
+            using var compressed = new MemoryStream(raw);
+            using var decoder = Decode(compressed, encoding);
+            using var decoded = new MemoryStream();
+            await decoder.CopyToAsync(decoded, activity.Token);
+            raw = decoded.ToArray();
+        }
+        var text = Encoding.UTF8.GetString(raw);
+        if (text.StartsWith('\uFEFF'))
+            text = text[1..];
+        if (!success)
+            throw ModelAttemptFailure.Http(statusCode, text);
+        try
+        {
+            return JsonNode.Parse(text);
+        }
+        catch (JsonException)
+        {
+            return JsonValue.Create(text);
+        } // Fixed Axios silently retains non-JSON response text.
+    }
+
 }

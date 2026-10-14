@@ -55,7 +55,7 @@ wsServer.on('connection', (ws, request) => {
   })
 })
 peer.listen(0, '127.0.0.1'); await once(peer, 'listening'); const base = 'http://127.0.0.1:' + peer.address().port
-const config = { default: 'responses', providers: Object.fromEntries([['responses', 'openai-responses'], ['completions', 'openai-completions'], ['anthropic', 'anthropic'], ['ws', 'openai-ws']].map(([key, providerType]) => [key, { providerType, baseUrl: base + '/' + key, models: ['wire'], contextLimit: 20000, asyncCompact: true, effort: { allowed: ['low', 'high'], default: 'low' }, extraFields: { test_cache: '${SESSION_CACHE_KEY}', ...(key === 'ws' ? {} : { test_turn: '${TURN_ID}' }) } }])) }
+const config = { default: 'responses', providers: Object.fromEntries([['responses', 'openai-responses'], ['completions', 'openai-completions'], ['anthropic', 'anthropic'], ['ws', 'openai-ws']].map(([key, providerType]) => [key, { providerType, baseUrl: base + '/' + key, models: ['wire'], contextLimit: 20000, asyncCompact: true, effort: { allowed: ['low', 'high'], default: 'low' }, extraFields: { ...(key === 'anthropic' ? { stream: false } : {}), test_cache: '${SESSION_CACHE_KEY}', ...(key === 'ws' ? {} : { test_turn: '${TURN_ID}' }) } }])) }
 await writeModelFixture(fixture.data, config)
 const png = await sharp({ create: { width: 3, height: 2, channels: 4, background: '#cc2277' } }).png().toBuffer()
 async function create(id, model = 'responses') { assert.equal((await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: id })).status, 200); assert.equal((await fixture.api('POST', route(id) + '/model', { model, effort: 'high' })).status, 200); return id }

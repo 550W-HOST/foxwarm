@@ -72,7 +72,7 @@ const peer = createServer(async (request, response) => {
 peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
 const models = { default: 'local', providers: {
   local: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${peer.address().port}`, models: ['wire'], contextLimit: 200000 },
-  anth: { providerType: 'anthropic', baseUrl: `http://127.0.0.1:${peer.address().port}`, models: ['wire'] }
+  anth: { providerType: 'anthropic', extraFields: { stream: false }, baseUrl: `http://127.0.0.1:${peer.address().port}`, models: ['wire'] }
 } }
 await writeFile(fixture.modelPath, JSON.stringify(models))
 const own = join(fixture.work, 'agents/team')

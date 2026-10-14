@@ -11,7 +11,9 @@ internal static class OpenAISseReader
         CancellationToken cancellationToken,
         Action<JsonObject> consume,
         ResponsesStreamCallbacks? callbacks,
-        StreamOwnership ownership
+        StreamOwnership ownership,
+        Func<bool>? completed = null,
+        bool flushFinalEvent = false
     )
     {
         ArgumentNullException.ThrowIfNull(stream);
@@ -71,6 +73,8 @@ internal static class OpenAISseReader
                 }
                 if (parsed is JsonObject obj)
                     consume(obj);
+                if (completed?.Invoke() == true)
+                    return;
             }
         }
         try
@@ -111,8 +115,14 @@ internal static class OpenAISseReader
                         "SSE decoder did not consume the complete input chunk."
                     );
                 Append(new string(chars, 0, written));
-                if (count == 0)
+                if (completed?.Invoke() == true)
                     return;
+                if (count == 0)
+                {
+                    if (flushFinalEvent && pending.Trim().Length > 0)
+                        Append("\n\n");
+                    return;
+                }
             }
         }
         finally

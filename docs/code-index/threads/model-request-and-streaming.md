@@ -22,7 +22,7 @@ SessionTurnRunner / LocalSessionTurnHost
 
 `ModelRequestOwner.RequestAsync` selects a concrete leaf, builds prompt/cache/options, starts the neutral journal manifest, then calls `ConcreteRequestHistory.PrepareRequest`: request-history repair/visibility is applied before concrete destination filtering. `ImageBlobStore.HydrateAsync` then resolves provider-specific image parts for that concrete model, followed by `ConfiguredModelRequests.CreatePreparedService` and the provider serializer/transport. The transport invokes the journal attempt-start callback only after its concrete semantic payload is complete and before sending HTTP/SSE or a Responses WebSocket suffix/reconnect payload.
 
-`AnthropicMessagesService`, `CompletionsChatService`, and Responses services own only provider-specific forms/events. `LocalSessionTurnHost`/`SessionToolExecutor` own the tool-call loop and strict model/tool message append chain.
+`AnthropicMessagesService`, `CompletionsChatService`, and Responses services own only provider-specific forms/events. Messages SSE now feeds the existing draft/realtime progress path, then shared JSON/SSE canonical conversion; the normal turn host commits its display-only limit notice after the assistant. Its terminal, watchdog, argument-error and replay contracts are mapped in [Anthropic/Completions](../units/model-anthropic-completions.md). `LocalSessionTurnHost`/`SessionToolExecutor` own the tool-call loop and strict model/tool message append chain.
 
 ## Distinct image failure classes
 

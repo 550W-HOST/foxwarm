@@ -71,9 +71,15 @@ internal static class AnthropicRequestSerializer
                             ["type"] = "tool_use",
                             ["id"] = id,
                             ["name"] = call["name"]?.DeepClone(),
-                            ["input"] = CompletionsRequestSerializer.Truthy(call["args"])
-                                ? call["args"]!.DeepClone()
-                                : new JsonObject(),
+                            ["input"] = SessionWait.Text(call["argsParseError"]) is { Length: > 0 }
+                                ? JsonNode.Parse(FunctionCallArguments.Stringify(
+                                    call["args"] as JsonObject,
+                                    SessionWait.Text(call["rawArgsText"]),
+                                    SessionWait.Text(call["argsParseError"])
+                                ))
+                                : CompletionsRequestSerializer.Truthy(call["args"])
+                                    ? call["args"]!.DeepClone()
+                                    : new JsonObject(),
                         }
                     );
                 }
@@ -160,6 +166,8 @@ internal static class AnthropicRequestSerializer
         {
             ["model"] = options.RequestModel,
             ["max_tokens"] = options.MaxOutputTokens,
+            ["stream"] = true,
+            ["cache_control"] = new JsonObject { ["type"] = "ephemeral" },
             ["system"] = options.Instructions,
             ["messages"] = ConvertHistory(history, options.BaseUri),
         };
@@ -181,6 +189,10 @@ internal static class AnthropicRequestSerializer
         if (options.ExtraFields is not null)
             foreach (var (key, value) in options.ExtraFields)
                 body[key] = value?.DeepClone();
+        if (body["stream"] is not JsonValue stream || !stream.TryGetValue<bool>(out _))
+            throw new ModelPreparationException(
+                "Anthropic extraFields.stream must be true or false."
+            );
         if (options.Effort is "none")
         {
             body["thinking"] = new JsonObject { ["type"] = "disabled" };

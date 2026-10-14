@@ -17,7 +17,8 @@ public sealed class AnthropicTests
             "synthetic-token",
             Instructions: "system",
             MaxOutputTokens: 713,
-            Effort: "high"
+            Effort: "high",
+            ExtraFields: Obj("""{"stream":false}""")
         );
 
     [Fact]
@@ -79,7 +80,8 @@ public sealed class AnthropicTests
         Assert.False(body["output_config"]!.AsObject().ContainsKey("effort"));
         Assert.Equal(7, body["output_config"]!["vendor"]!.GetValue<int>());
         Assert.NotNull(body["tools"]![0]!["input_schema"]);
-        Assert.False(body.ContainsKey("stream"));
+        Assert.True(body["stream"]!.GetValue<bool>());
+        Assert.Equal("ephemeral", body["cache_control"]!["type"]!.GetValue<string>());
         Assert.False(body.ContainsKey("prompt_cache_key"));
         options = options with { Effort = "high" };
         body = AnthropicRequestSerializer.BuildRequest([], options);

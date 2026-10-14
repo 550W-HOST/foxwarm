@@ -57,6 +57,7 @@ public sealed class RetryPreparationTests
                         },
                         ["extraFields"] = new JsonObject
                         {
+                            ["stream"] = false,
                             ["test_cache"] = "${SESSION_CACHE_KEY}",
                             ["test_turn"] = "${TURN_ID}",
                         },

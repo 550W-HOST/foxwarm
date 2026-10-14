@@ -51,7 +51,7 @@ wsServer.on('connection', ws => {
   })
 })
 peer.listen(0, '127.0.0.1'); await once(peer, 'listening'); const base = 'http://127.0.0.1:' + peer.address().port
-await writeModelFixture(fixture.data, { default: 'r', providers: { r: { providerType: 'openai-responses', baseUrl: base + '/r', models: ['wire'], contextLimit: 20000 }, c: { providerType: 'openai-completions', baseUrl: base + '/c', models: ['wire'], contextLimit: 20000 }, a: { providerType: 'anthropic', baseUrl: base + '/a', models: ['wire'], contextLimit: 20000 }, w: { providerType: 'openai-ws', baseUrl: base + '/w', models: ['wire'], contextLimit: 20000 } } })
+await writeModelFixture(fixture.data, { default: 'r', providers: { r: { providerType: 'openai-responses', baseUrl: base + '/r', models: ['wire'], contextLimit: 20000 }, c: { providerType: 'openai-completions', baseUrl: base + '/c', models: ['wire'], contextLimit: 20000 }, a: { providerType: 'anthropic', extraFields: { stream: false }, baseUrl: base + '/a', models: ['wire'], contextLimit: 20000 }, w: { providerType: 'openai-ws', baseUrl: base + '/w', models: ['wire'], contextLimit: 20000 } } })
 const headers = { authorization: 'Bearer synthetic-input-images-api' }
 async function upload(bytes, name = 'uploaded.png', mime = 'image/png') { const form = new FormData(); form.append('file', new Blob([bytes], { type: mime }), name); const response = await fetch(fixture.origin + '/api/upload', { method: 'POST', headers, body: form }); return { status: response.status, body: await response.json() } }
 async function done(id, key) { await until(async () => { const state = await authority(id); return !state.busy && state.history.some(row => row.parts?.some(part => part.text === 'DONE-IMAGES-' + key)) }, key) }
