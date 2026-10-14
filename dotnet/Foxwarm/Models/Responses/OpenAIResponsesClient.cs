@@ -1018,7 +1018,10 @@ public sealed class ResponsesChatService : IChatService
         );
         if (options.DisallowEmptyResponse && !OpenAIHttp.HasMeaningfulAssistant(assistant))
             throw ModelAttemptFailure.Empty();
-        return new ChatResult(assistant, ResponsesCanonicalConverter.BuildUsage(completed.Payload["usage"] as JsonObject));
+        return new ChatResult(
+            assistant,
+            ResponsesCanonicalConverter.BuildUsage(completed.Payload["usage"] as JsonObject)
+        );
     }
 
     private static bool HasOtherUsableOutput(JsonArray output) =>

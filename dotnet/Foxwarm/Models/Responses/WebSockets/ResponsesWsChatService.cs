@@ -147,7 +147,13 @@ internal sealed class ResponsesWsChatService(
                     throw;
                 }
             });
-            var result = new ChatResult(assistant, ResponsesCanonicalConverter.BuildUsage(pending.Response["usage"] as JsonObject)) { HistoryAppend = finalizer };
+            var result = new ChatResult(
+                assistant,
+                ResponsesCanonicalConverter.BuildUsage(pending.Response["usage"] as JsonObject)
+            )
+            {
+                HistoryAppend = finalizer,
+            };
             if (scope == ModelRequestScope.LowLevel || ownsTransport)
                 result.FinalizeHistory(null);
             return result;

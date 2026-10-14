@@ -293,7 +293,10 @@ internal sealed partial class CodeWorkbench
                 "Unavailable",
                 "Code webview hash fallback is incompatible with these assets."
             );
-        source = source[..functionMatch.Index] + patched + source[(functionMatch.Index + original.Length)..];
+        source =
+            source[..functionMatch.Index]
+            + patched
+            + source[(functionMatch.Index + original.Length)..];
         var clipboardMatch = Regex.Match(
             source,
             """async hasResources\(\)\{try\{let ([A-Za-z_$][\w$]*)=await ([A-Za-z_$][\w$]*)\(\)\.navigator\.clipboard\.read\(\);""",
@@ -304,12 +307,15 @@ internal sealed partial class CodeWorkbench
                 "Unavailable",
                 "Code Explorer clipboard assets are incompatible."
             );
-        var clipboard = "async hasResources(){if(/Firefox\\//.test(navigator.userAgent))return this.resources.length>0;try{let "
+        var clipboard =
+            "async hasResources(){if(/Firefox\\//.test(navigator.userAgent))return this.resources.length>0;try{let "
             + clipboardMatch.Groups[1].Value
             + "=await "
             + clipboardMatch.Groups[2].Value
             + "().navigator.clipboard.read();";
-        return source[..clipboardMatch.Index] + clipboard + source[(clipboardMatch.Index + clipboardMatch.Length)..];
+        return source[..clipboardMatch.Index]
+            + clipboard
+            + source[(clipboardMatch.Index + clipboardMatch.Length)..];
     }
 
     private static string PatchPre(string source)

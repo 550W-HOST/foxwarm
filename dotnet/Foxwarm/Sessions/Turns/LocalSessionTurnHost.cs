@@ -123,7 +123,8 @@ public sealed partial class LocalSessionTurnHost
                     if (result.AssistantMessage is null)
                     {
                         if (result.Usage is not null)
-                            await AppendHistoryMessageStrictAsync(null, result.Usage).ConfigureAwait(false);
+                            await AppendHistoryMessageStrictAsync(null, result.Usage)
+                                .ConfigureAwait(false);
                         return result;
                     }
                     var assistant = (JsonObject)result.AssistantMessage.DeepClone();
@@ -134,7 +135,10 @@ public sealed partial class LocalSessionTurnHost
                         throw new InvalidOperationException(
                             "Chat result assistant message must be a canonical model message."
                         );
-                    var appended = await AppendHistoryMessageStrictAsync(assistant, result.Usage ?? assistant["__meta"]?["usage"] as JsonObject)
+                    var appended = await AppendHistoryMessageStrictAsync(
+                            assistant,
+                            result.Usage ?? assistant["__meta"]?["usage"] as JsonObject
+                        )
                         .ConfigureAwait(false);
                     result.FinalizeHistory(appended, entry.RecordBestEffortFailure);
                     if (result.TruncatedStopReason is string stopReason)
@@ -553,12 +557,16 @@ public sealed partial class LocalSessionTurnHost
             var stats = stagedEnvelope["stats"] as JsonObject;
             if (stats is null)
                 stagedEnvelope["stats"] = stats = new JsonObject();
-            foreach (var (total, key) in new[] {
-                ("totalCachedTokens", "cachedTokens"),
-                ("totalInputTokens", "inputTokens"),
-                ("totalOutputTokens", "outputTokens")
-            })
-                stats[total] = (SessionWait.Number(stats[total]) ?? 0) + (SessionWait.Number(usage[key]) ?? 0);
+            foreach (
+                var (total, key) in new[]
+                {
+                    ("totalCachedTokens", "cachedTokens"),
+                    ("totalInputTokens", "inputTokens"),
+                    ("totalOutputTokens", "outputTokens"),
+                }
+            )
+                stats[total] =
+                    (SessionWait.Number(stats[total]) ?? 0) + (SessionWait.Number(usage[key]) ?? 0);
             stats["lastUsage"] = usage.DeepClone();
         }
         foreach (var item in selectedItems)
