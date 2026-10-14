@@ -207,7 +207,13 @@ internal sealed partial class McpClient
     {
         try
         {
-            var connection = await ConnectAsync(entry.Key.Server, entry.Config, entry.Token);
+            // Shared initialization can outlive its initiating waiter. Keep its selected
+            // credentials until ConnectAsync has produced a safe error, before publishing
+            // that error to any waiter; GuardAsync then clears this bounded inventory.
+            var connection = await OAuth.GuardAsync(
+                entry.Config,
+                () => ConnectAsync(entry.Key.Server, entry.Config, entry.Token)
+            );
             lock (poolGate)
             {
                 if (

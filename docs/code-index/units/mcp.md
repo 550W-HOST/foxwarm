@@ -15,7 +15,7 @@ Loads configured outbound MCP servers, maintains official SDK clients/transports
 - `InvalidateServer` runs after committed managed configuration changes; `InvalidateOwner` advances the exact owner's connection generation during real identity move/deletion. `BeginShutdown`, `DrainAsync`, and `DisposeAsync` fence new calls and drain admitted operations, initializers, disposal, and disconnect observers.
 - `NormalizeResult`, `PlainText`, and `NormalizeImages` apply [Source MCP normalization](./src-mcp-client.md#d-mcp-source-normalization) at this source boundary, before the ordinary tool/history or native ToolScript projections.
 - `AuthorizationServer`, `Authorizations`, `SetAuthorizationAsync`, and `UpdateConfigurationAsync` supply safe administrator account status/settings. Configuration publication hooks run in the existing serialized mutation lane, after durable publication. OAuth rejects stdio/static Authorization conflicts; configuration uses private temporary files through the existing atomic writer.
-- `FenceServer` closes all affected named-server bindings after an account-generation change. [Instance-shared OAuth](./dotnet-mcp-oauth.md) injects resource authentication and result/error guards without changing trusted caller ownership or same-grant SDK Session state.
+- `FenceServer` closes all affected named-server bindings after an account-generation change. [Instance-shared OAuth](./dotnet-mcp-oauth.md) injects resource authentication and result/error guards without changing trusted caller ownership or same-grant SDK Session state. Shared initialization uses an independent bounded guard so a cancelled first waiter cannot remove protection from errors published to surviving leases.
 
 ## Connection and cancellation contract
 
