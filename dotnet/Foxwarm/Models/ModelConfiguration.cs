@@ -128,7 +128,7 @@ internal sealed partial class ModelConfiguration
     internal JsonObject AppConfiguration => (JsonObject)app.DeepClone();
     internal bool HandoffConfirmationEnabled { get; }
     internal string ProviderImageOutputFormat { get; }
-    public int MaxOutput { get; }
+    public double MaxOutput { get; }
     public double CompactKeep { get; }
     public double CompactThreshold { get; }
 
@@ -145,7 +145,7 @@ internal sealed partial class ModelConfiguration
         AppConfigurationRules.Validate(app);
         HandoffConfirmationEnabled = Foxwarm.Tools.HandoffConfirmation.Enabled(app);
         var llm = app["llm"] as JsonObject;
-        MaxOutput = HostModels.Positive(llm?["maxOutput"], 32768, "llm.maxOutput");
+        MaxOutput = HostModels.PositiveSetting(llm?["maxOutput"], 32768, "llm.maxOutput");
         var imageOutput = llm?["providerImageOutputFormat"];
         ProviderImageOutputFormat =
             llm?.ContainsKey("providerImageOutputFormat") != true ? "webp"

@@ -14,9 +14,9 @@ public sealed class LocalSessionTurnHostFactory
     private readonly int maxToolIterations;
     private readonly Func<long> clock;
     private readonly Func<SessionEntry, Task>? safePoint;
-    private readonly Func<SessionEntry, ChatResult, Task>? automaticCompact;
     private readonly Func<SessionEntry, Task>? retrySafePoint;
     private readonly Func<SessionEntry, string?>? parentSessionResolver;
+    private readonly Func<SessionEntry, ChatResult, Func<Func<Task>, Task>, CancellationToken, Task>? beforeContinuation;
 
     public LocalSessionTurnHostFactory(
         ISessionAuthorityStore store,
@@ -25,9 +25,9 @@ public sealed class LocalSessionTurnHostFactory
         int maxToolIterations,
         Func<long>? clock = null,
         Func<SessionEntry, Task>? safePoint = null,
-        Func<SessionEntry, ChatResult, Task>? automaticCompact = null,
         Func<SessionEntry, Task>? retrySafePoint = null,
-        Func<SessionEntry, string?>? parentSessionResolver = null
+        Func<SessionEntry, string?>? parentSessionResolver = null,
+        Func<SessionEntry, ChatResult, Func<Func<Task>, Task>, CancellationToken, Task>? beforeContinuation = null
     )
     {
         this.store = store;
@@ -36,9 +36,9 @@ public sealed class LocalSessionTurnHostFactory
         this.maxToolIterations = maxToolIterations;
         this.clock = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         this.safePoint = safePoint;
-        this.automaticCompact = automaticCompact;
         this.retrySafePoint = retrySafePoint;
         this.parentSessionResolver = parentSessionResolver;
+        this.beforeContinuation = beforeContinuation;
     }
 
     public LocalSessionTurnHost For(SessionEntry entry) =>
@@ -50,9 +50,9 @@ public sealed class LocalSessionTurnHostFactory
             maxToolIterations,
             clock,
             () => safePoint?.Invoke(entry) ?? Task.CompletedTask,
-            result => automaticCompact?.Invoke(entry, result) ?? Task.CompletedTask,
             () => retrySafePoint?.Invoke(entry) ?? safePoint?.Invoke(entry) ?? Task.CompletedTask,
-            parentSessionResolver is null ? null : () => parentSessionResolver(entry)
+            parentSessionResolver is null ? null : () => parentSessionResolver(entry),
+            beforeContinuation is null ? null : (result, consume, token) => beforeContinuation(entry, result, consume, token)
         );
 }
 
@@ -86,12 +86,22 @@ public sealed class SessionRegistry
             entry =>
                 OnSafePoint?.Invoke(entry)
                 ?? entry.SaveLane.RemoveCompactWakeAsync(staleOnly: true),
-            (entry, result) => OnTurnCompleted?.Invoke(entry, result) ?? Task.CompletedTask,
             entry =>
                 OnRetrySafePoint?.Invoke(entry)
                 ?? OnSafePoint?.Invoke(entry)
                 ?? entry.SaveLane.RemoveCompactWakeAsync(staleOnly: true),
-            parentSessionResolver
+            parentSessionResolver,
+            async (entry, result, consume, token) =>
+            {
+                if (OnBeforeContinuation is not null)
+                    await OnBeforeContinuation(entry, result, consume, token);
+                else
+                {
+                    await consume(() => OnSafePoint?.Invoke(entry) ?? entry.SaveLane.RemoveCompactWakeAsync(staleOnly: true));
+                    if (OnTurnCompleted is not null)
+                        await OnTurnCompleted(entry, result);
+                }
+            }
         );
         runner = new SessionTurnRunner(this, hosts);
         ingress = new SessionIngress(this);
@@ -109,6 +119,7 @@ public sealed class SessionRegistry
     public Func<SessionEntry, ChatResult, Task>? OnTurnCompleted { get; set; }
     public Func<SessionEntry, Task>? OnSafePoint { get; set; }
     public Func<SessionEntry, Task>? OnRetrySafePoint { get; set; }
+    public Func<SessionEntry, ChatResult, Func<Func<Task>, Task>, CancellationToken, Task>? OnBeforeContinuation { get; set; }
     public Func<SessionEntry, bool>? HasCompletedCompact { get; set; }
 
     internal bool HasRunnableWork(SessionEntry entry) =>

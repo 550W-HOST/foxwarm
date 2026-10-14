@@ -99,7 +99,6 @@ internal sealed partial class SessionManager
             modelRouting,
             websockets: websockets,
             images: Images,
-            imageOutputFormat: models.ConfigurationOwner?.ProviderImageOutputFormat ?? "webp",
             journal: Journal
         );
         var captured = requests.Capture(catalog, route, selection.RawEffort);

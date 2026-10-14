@@ -71,6 +71,8 @@ internal sealed partial class ModelConfiguration
                         "webSearch",
                         "imageGeneration",
                         "contextLimit",
+                        "maxOutput",
+                        "providerImageOutputFormat",
                         "streamContentInactivityTimeoutMs",
                         "effort",
                         "historyReasoningField",

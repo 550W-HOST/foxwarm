@@ -10,7 +10,7 @@ using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Tests;
 
-public sealed class CompactLifecycleTests
+public sealed partial class CompactLifecycleTests
 {
     [Fact]
     public void Compact_plan_schema_allows_direct_or_repaired_file_submission()
@@ -1061,6 +1061,11 @@ public sealed class CompactLifecycleTests
         private readonly TempDirectory temp = new();
         private readonly HttpClient http;
         internal readonly CompactPeer Peer = new();
+        internal readonly TaskCompletionSource ContinuationReached = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal readonly TaskCompletionSource ContinuationRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal bool HoldBeforeContinuation;
+        internal Task? Continuation;
+        internal readonly RecordingToolExecutor ToolExecutor = new(new JsonObject { ["output"] = "completed tool" });
         internal readonly TaskCompletionSource StageReached = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -1199,7 +1204,7 @@ public sealed class CompactLifecycleTests
                 memory,
                 (_, _) => { }
             );
-            Owner.Registry = new SessionRegistry(Store, chat);
+            Owner.Registry = new SessionRegistry(Store, chat, ToolExecutor);
             Owner.Registry.Add("s");
             Owner.Compactor = new SessionCompactor(
                 Owner,
@@ -1210,6 +1215,19 @@ public sealed class CompactLifecycleTests
                 requests,
                 memory
             );
+            Owner.Registry.OnTurnCompleted = (_, result) => Owner.Compactor.AutoAfterTurnAsync(result);
+            Owner.Registry.OnBeforeContinuation = async (_, result, consume, token) =>
+            {
+                if (HoldBeforeContinuation)
+                {
+                    ContinuationReached.TrySetResult();
+                    await ContinuationRelease.Task;
+                }
+                Continuation = Owner.Compactor.BeforeContinuationAsync(result, consume, token);
+                if (!HoldBeforeContinuation)
+                    ContinuationReached.TrySetResult();
+                await Continuation;
+            };
             Owner.Registry.OnSafePoint = _ => Owner.Compactor.SafePointAsync();
             Owner.Registry.OnRetrySafePoint = _ =>
                 Owner.Compactor.SafePointAsync(propagateFailure: true);
@@ -1255,6 +1273,7 @@ public sealed class CompactLifecycleTests
         {
             StageRelease.Set();
             ApplyRelease.Set();
+            ContinuationRelease.TrySetResult();
             Peer.ReleaseForeground();
             Peer.ReleasePlan();
             if (Owner.Compactor.Active)
@@ -1281,6 +1300,10 @@ public sealed class CompactLifecycleTests
         internal bool FailPlan,
             FailForegroundOnce;
         internal int NormalRequests;
+        internal int PlannerRequests;
+        internal int? NextUsage;
+        internal bool NextTool;
+        internal readonly TaskCompletionSource NextNormalReached = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal Func<bool>? Phase;
         internal readonly List<string> NormalBodies = [];
         internal readonly List<bool> CompactingAtSend = [];
@@ -1304,8 +1327,10 @@ public sealed class CompactLifecycleTests
                 .Select(row => SessionWait.Text(row["text"]) ?? "")
                 .ToArray();
             JsonArray output;
+            var planning = input.Any(text => text.Contains("COMPACTION STARTED:", StringComparison.Ordinal));
             if (input.Any(text => text.Contains("COMPACTION STARTED:", StringComparison.Ordinal)))
             {
+                Interlocked.Increment(ref PlannerRequests);
                 PlanRequestModel = SessionWait.Text(owned["model"]);
                 PlanInstructions = SessionWait.Text(owned["instructions"]);
                 PlanReached.TrySetResult();
@@ -1352,6 +1377,8 @@ public sealed class CompactLifecycleTests
             else
             {
                 Interlocked.Increment(ref NormalRequests);
+                if (NormalRequests >= 9)
+                    NextNormalReached.TrySetResult();
                 NormalBodies.Add(body);
                 CompactingAtSend.Add(Phase?.Invoke() ?? false);
                 if (input.LastOrDefault() == "hold foreground")
@@ -1378,11 +1405,20 @@ public sealed class CompactLifecycleTests
                     }
                 );
             }
+            if (NextTool && !planning)
+            {
+                NextTool = false;
+                output = new JsonArray(FunctionCall("actual-tool", "read", new JsonObject { ["filePath"] = "fixture.txt" }));
+            }
+            var reportedUsage = planning ? null : NextUsage;
+            if (!planning)
+                NextUsage = null;
             var payload = new JsonObject
             {
                 ["type"] = "response.completed",
                 ["response"] = new JsonObject
                 {
+                    ["usage"] = reportedUsage is null ? null : new JsonObject { ["input_tokens"] = reportedUsage, ["output_tokens"] = 1 },
                     ["id"] = "response",
                     ["status"] = "completed",
                     ["output"] = output,

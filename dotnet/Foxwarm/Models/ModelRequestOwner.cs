@@ -11,7 +11,6 @@ internal sealed class ModelRequestOwner(
     Func<int, CancellationToken, Task>? delay = null,
     ResponsesWsTransport? websockets = null,
     Foxwarm.Images.ImageBlobStore? images = null,
-    string imageOutputFormat = "webp",
     LlmRequestJournalStore? journal = null
 )
 {
@@ -211,7 +210,7 @@ internal sealed class ModelRequestOwner(
                             : leaf.ProviderType is "openai" or "openai-responses" or "openai-ws"
                                 ? "responses"
                             : "anthropic",
-                        outputFormat: imageOutputFormat,
+                        outputFormat: leaf.ProviderImageOutputFormat,
                         token: cancellationToken,
                         concreteModelId: leaf.Key
                     );

@@ -38,6 +38,8 @@ internal static class ModelRoutingFingerprint
                     ["baseUrl"] = leaf.BaseUrl,
                     ["requestCompression"] = config["requestCompression"]?.DeepClone(),
                     ["contextLimit"] = leaf.ContextLimit,
+                    ["maxOutput"] = leaf.MaxOutput,
+                    ["providerImageOutputFormat"] = leaf.ProviderImageOutputFormat,
                     ["streamContentInactivityTimeoutMs"] =
                         config["streamContentInactivityTimeoutMs"]?.DeepClone()
                         ?? JsonValue.Create(60000),

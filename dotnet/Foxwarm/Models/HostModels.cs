@@ -10,13 +10,15 @@ internal sealed record ConcreteHostModel(
     string ProviderType,
     string? BaseUrl,
     string Token,
-    int ContextLimit,
+    double ContextLimit,
     string[] AllowedEfforts,
     string? DefaultEffort,
     JsonObject Configuration,
     string[] Targets
 )
 {
+    internal double MaxOutput => HostModels.PositiveSetting(Configuration["maxOutput"], 32768, "maxOutput");
+    internal string ProviderImageOutputFormat => HostModels.Text(Configuration, "providerImageOutputFormat") ?? "webp";
     internal bool IsVirtual => ProviderType is "session-hash" or "failover";
     internal Uri BaseUri =>
         new(
@@ -34,7 +36,7 @@ internal sealed partial class HostModels
     private readonly ModelConfiguration? owner;
     internal ModelConfiguration? ConfigurationOwner => owner;
     internal bool HandoffConfirmationEnabled { get; private init; }
-    internal double PresentationContextLimit { get; private init; } = 122880;
+    internal double PresentationContextLimit { get; private init; } = 200000;
     internal double CompactKeepFraction { get; private init; } = .3;
     internal double CompactThresholdFraction { get; private init; } = .85;
 
@@ -103,10 +105,10 @@ internal sealed partial class HostModels
             "openai-responses",
             options.BaseUri.ToString(),
             options.Token,
-            122880,
+            200000,
             Efforts,
             "high",
-            new JsonObject(),
+            new JsonObject { ["maxOutput"] = options.MaxOutputTokens, ["providerImageOutputFormat"] = "webp" },
             []
         );
         return new HostModels(
@@ -127,6 +129,11 @@ internal sealed partial class HostModels
         var display = new List<string>();
         var virtuals = new List<(string Key, JsonObject Config)>();
         var llm = app["llm"] as JsonObject ?? new JsonObject();
+        var defaults = root.ContainsKey("defaults")
+            ? root["defaults"] as JsonObject ?? throw new InvalidDataException("Models defaults must be an object.")
+            : new JsonObject();
+        ValidateDefaults(defaults, "defaults", rejectUnknown: true);
+        ValidateDefaults(llm, "llm");
         foreach (var (providerKey, raw) in source)
         {
             if (raw is JsonValue alias && alias.TryGetValue<string>(out var target))
@@ -148,12 +155,15 @@ internal sealed partial class HostModels
             var provider =
                 raw as JsonObject
                 ?? throw new InvalidDataException("Provider must be an object or alias string.");
-            var type = Text(provider, "providerType") ?? Text(provider, "provider") ?? "openai";
+            var type = ProviderType(provider);
             if (type is "session-hash" or "failover")
             {
                 virtuals.Add((providerKey, provider));
                 continue;
             }
+            if (!SetupProviderRequests.IsSupportedProviderType(type))
+                throw new InvalidDataException("Unsupported providerType: " + type + ".");
+            ValidateDefaults(provider, "Provider " + providerKey);
             foreach (var key in new[] { "targets", "failureThreshold", "cooldownMs" })
                 if (provider.ContainsKey(key))
                     throw new InvalidDataException(
@@ -169,7 +179,7 @@ internal sealed partial class HostModels
                 );
             if (members.Length == 0)
             {
-                models[providerKey] = Build(providerKey, "", type, provider, null, llm);
+                models[providerKey] = Build(providerKey, "", type, provider, null, defaults, llm);
                 display.Add(providerKey);
             }
             foreach (var member in members)
@@ -183,7 +193,7 @@ internal sealed partial class HostModels
                     : Text(item, "id")?.Trim() ?? "";
                 if (item is not null && id.Length == 0)
                     throw new InvalidDataException("Model object requires a nonempty id.");
-                var leaf = Build(providerKey, id, type, provider, item, llm);
+                var leaf = Build(providerKey, id, type, provider, item, defaults, llm);
                 var key = providerKey + "/" + id;
                 models[key] = leaf;
                 if (members.Length == 1)
@@ -197,7 +207,7 @@ internal sealed partial class HostModels
         }
         foreach (var (key, config) in virtuals)
         {
-            var type = Text(config, "providerType")!;
+            var type = ProviderType(config);
             foreach (
                 var forbidden in new[]
                 {
@@ -209,6 +219,8 @@ internal sealed partial class HostModels
                     "extraFields",
                     "extraHeaders",
                     "contextLimit",
+                    "maxOutput",
+                    "providerImageOutputFormat",
                     "streamContentInactivityTimeoutMs",
                     "effort",
                     "historyReasoningField",
@@ -298,16 +310,38 @@ internal sealed partial class HostModels
         return new HostModels(selected, models, ordered)
         {
             HandoffConfirmationEnabled = Foxwarm.Tools.HandoffConfirmation.Enabled(app),
-            PresentationContextLimit =
-                SessionWait.Number(llm["contextLimit"]) is { } limit && limit != 0 ? limit : 122880,
+            PresentationContextLimit = PositiveSetting(llm["contextLimit"], 200000, "llm.contextLimit"),
             CompactKeepFraction =
                 SessionWait.Number(llm["compactKeepPercent"] ?? llm["compactPercent"]) ?? .3,
             CompactThresholdFraction = SessionWait.Number(llm["compactThresholdPercent"]) ?? .85,
         };
     }
 
+    private static string ProviderType(JsonObject provider)
+    {
+        foreach (var field in new[] { "providerType", "provider" })
+        {
+            var raw = provider[field];
+            if (raw is null || SessionWait.Text(raw) == "" || SessionWait.Number(raw) == 0
+                || raw is JsonValue flag && flag.TryGetValue<bool>(out var enabled) && !enabled)
+                continue;
+            return SessionWait.Text(raw) ?? throw new InvalidDataException("Unsupported providerType.");
+        }
+        return "openai";
+    }
+
     internal static string? Text(JsonObject data, string key) =>
         SessionWait.Text(data[key]) is { Length: > 0 } value ? value : null;
+
+    internal static double PositiveSetting(JsonNode? data, double fallback, string label)
+    {
+        if (data is null)
+            return fallback;
+        var number = SessionWait.Number(data);
+        return number is > 0 && double.IsFinite(number.Value) && Math.Floor(number.Value) == number.Value
+            ? number.Value
+            : throw new InvalidDataException(label + " must be a positive integer.");
+    }
 
     internal static int Positive(JsonNode? data, int fallback, string label)
     {

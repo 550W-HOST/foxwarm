@@ -19,6 +19,8 @@ internal static class ConfiguredModelRequests
             throw new InvalidDataException(
                 "Selected model executor is not implemented: " + model.ProviderType + "."
             );
+        if (!SetupProviderRequests.IsSupportedProviderType(model.ProviderType))
+            throw new InvalidDataException("Unsupported providerType: " + model.ProviderType + ".");
         var responses = model.ProviderType is "openai" or "openai-responses" or "openai-ws";
         var imageEnabled =
             model.Configuration["imageGeneration"]?["enabled"] is JsonValue image
@@ -88,6 +90,7 @@ internal static class ConfiguredModelRequests
         {
             BaseUri = model.BaseUri,
             RequestModel = model.ModelId,
+            MaxOutputTokens = model.MaxOutput,
             ConcreteModelId = model.Key,
             Token = model.Token,
             Effort = effort,
@@ -157,7 +160,9 @@ internal static class ConfiguredModelRequests
                 )
             : model.ProviderType is "openai" or "openai-responses"
                 ? new ResponsesChatService(http, options, progress)
-            : new AnthropicMessagesService(http, options);
+            : model.ProviderType == "anthropic"
+                ? new AnthropicMessagesService(http, options)
+            : throw new InvalidDataException("Unsupported providerType: " + model.ProviderType + ".");
         return service;
     }
 

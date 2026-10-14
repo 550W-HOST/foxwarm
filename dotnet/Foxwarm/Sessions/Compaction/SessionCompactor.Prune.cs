@@ -53,6 +53,43 @@ internal sealed partial class SessionCompactor
         return string.Concat(runes.Skip(start).Select(rune => rune.ToString()));
     }
 
+    private static HashSet<string> SkillLoadIds(IReadOnlyList<JsonObject> history)
+    {
+        var calls = history.SelectMany(row => (row["parts"] as JsonArray)?.OfType<JsonObject>() ?? [])
+            .Select(part => part["functionCall"]).OfType<JsonObject>()
+            .Where(call => !string.IsNullOrEmpty(SessionWait.Text(call["id"])));
+        return calls.GroupBy(call => SessionWait.Text(call["id"])!)
+            .Where(group => group.Count() == 1 && IsSkillLoad(group.Single()))
+            .Select(group => group.Key).ToHashSet(StringComparer.Ordinal);
+    }
+
+    private static bool IsSkillLoad(JsonObject call)
+    {
+        if (call["argsParseError"] is not null || call["args"] is not JsonObject args)
+            return false;
+        var name = SessionWait.Text(call["name"]);
+        if (name == "load_skill")
+            return !string.IsNullOrWhiteSpace(SessionWait.Text(args["skillName"]));
+        if (name == "call_tool")
+        {
+            var id = SessionWait.Text(args["toolId"]);
+            if (!string.IsNullOrEmpty(id) ? !(id.StartsWith("builtin:", StringComparison.Ordinal) && id[8..].Trim() == "skill")
+                : SessionWait.Text(args["source"])?.Trim() != "builtin" || SessionWait.Text(args["name"]) != "skill")
+                return false;
+            try
+            {
+                args = Foxwarm.Tools.ToolRegistry.ObjectArg(args, "args", "argsJson", required: true)!;
+            }
+            catch (Exception error) when (error is InvalidDataException or System.Text.Json.JsonException)
+            {
+                return false;
+            }
+            name = "skill";
+        }
+        return name == "skill" && SessionWait.Text(args["action"]) == "load"
+            && !string.IsNullOrWhiteSpace(SessionWait.Text(args["skillName"]));
+    }
+
     private static JsonObject? PrunePart(JsonObject part, long seq)
     {
         var function = part["functionResponse"] as JsonObject;
@@ -155,6 +192,7 @@ internal sealed partial class SessionCompactor
             .Where(seq => seq is > 0)
             .GroupBy(seq => seq!.Value)
             .ToDictionary(group => group.Key, group => group.Count());
+        var skillLoads = SkillLoadIds(snapshot.History);
         var rewritten = snapshot.History.Select(row => (JsonObject)row.DeepClone()).ToArray();
         var affected = new HashSet<long>();
         for (var index = 0; index < cutoff; index++)
@@ -178,7 +216,8 @@ internal sealed partial class SessionCompactor
             var changed = false;
             foreach (var part in parts.OfType<JsonObject>())
             {
-                var pruned = PrunePart(part, seq.Value);
+                var id = SessionWait.Text(part["functionResponse"]?["tool_use_id"]);
+                var pruned = id is not null && skillLoads.Contains(id) ? null : PrunePart(part, seq.Value);
                 nextParts.Add(pruned ?? part.DeepClone());
                 changed |= pruned is not null;
             }

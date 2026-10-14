@@ -43,8 +43,8 @@ internal static partial class CompactPrompt
                           {"type":"string","description":"JSON string encoding the same array of replacement blocks."}
                         ]
                       },
-                      "preserveMessages":{"type":"array","items":{"type":"number"},"description":"Message sequence numbers to keep verbatim within ranges being summarized. These messages remain after their summary block in active context."},
-                      "removePreservedMessages":{"type":"array","items":{"type":"number"},"description":"Previously preserved message sequence numbers to remove from active context. Only messages identified as preserved in the compaction prompt are eligible; their archive records and summary blocks are not deleted."}
+                      "preserveMessages":{"type":"array","items":{"type":"number"},"description":"Raw message sequence numbers to keep verbatim within summarized ranges. Selecting any part of a tool exchange also keeps its paired call and responses."},
+                      "removePreservedMessages":{"type":"array","items":{"type":"number"},"description":"Previously preserved message sequence numbers to remove from active context. List every member when removing a preserved tool exchange. Archive records and summary blocks are not deleted."}
                     }
                   },
                   "strict":false

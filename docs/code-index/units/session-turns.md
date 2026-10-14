@@ -13,6 +13,7 @@ Owns one Session's mutable state, exact-owner runtime operations, serialized tur
 - `SessionEntry.TryClaimProcessor`, `MarkBusy`, `BeginStop`, `ReleaseBusy`, and `Snapshot` guard live state and processor ownership under `stateGate`.
 - `SessionIngress.EnqueueAsync` validates supported queue kinds, forces trigger semantics at the ingress boundary, admits through `SessionSaveLane`, and triggers the runner only when the owner is runnable.
 - `SessionTurnRunner.ProcessQueueAsync` claims one processor, runs `LocalSessionTurnHost`, appends canonical messages through the save lane, and finalizes busy/stopping state. `LocalSessionTurnHost` applies child-handoff state for consumed queue items during canonical append, resolves trusted send/task receipts before tool-row append, reads parent identity through the Main catalog-overlay resolver for child reminders and receipt handling, recognizes terminal `NO_ACTION` signals across text parts only when no continuation is possible, queues repeated unresolved-child reminders without a history-window suppression, and stops the outer loop after terminal tool batches.
+- `LocalSessionTurnHost.ContinueAfterResultAsync` delegates continuation maintenance to the owner's compactor while retaining both queued-input safe points. The owner supplies failure propagation and compact commit outcomes; ordinary provider-time queued input and complete tool batches share this path. The turn cancellation token releases a required-compaction wait without cancelling independent planning.
 - `SessionControl.StopAsync`/`DequeueAsync` signal cancellation and await the owner safe point rather than mutating queue state out of band.
 
 Callers: `MessageRouter`, `SessionManager`, WebUI route handlers, task/timer tools, and model/tool services. The exact owner remains authoritative even when a route only needs a catalog projection.
@@ -27,4 +28,4 @@ The turn runner does not write raw JSON or Archive directly. It stages snapshots
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Sessions/SessionTurnTests.cs`; `PersistentSessionTurnTests.cs`; `SessionAdmissionTests.cs`; `RetryInputSafePointTests.cs`; `SessionExecutionEnvironmentTests.cs`; `SessionWait` and `SessionIdentityInterleaving` coverage.
+`dotnet/Foxwarm.Tests/Sessions/SessionTurnTests.cs`; `PersistentSessionTurnTests.cs`; `SessionAdmissionTests.cs`; `RetryInputSafePointTests.cs`; `SessionExecutionEnvironmentTests.cs`; `SessionWait` and `SessionIdentityInterleaving` coverage; `CompactContinuationTests.cs`.

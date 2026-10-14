@@ -14,7 +14,7 @@ public sealed record ResponsesClientOptions(
     string ConcreteModelId,
     string Token,
     string Instructions,
-    int MaxOutputTokens,
+    double MaxOutputTokens,
     JsonArray? Tools = null,
     string? Effort = null,
     JsonObject? ExtraHeaders = null,
@@ -284,7 +284,7 @@ public static partial class ResponsesRequestSerializer
         string requestModel,
         string concreteModelId,
         string instructions,
-        int maxOutputTokens,
+        double maxOutputTokens,
         JsonArray? tools = null,
         string? effort = null
     ) =>
@@ -304,13 +304,13 @@ public static partial class ResponsesRequestSerializer
         string requestModel,
         string concreteModelId,
         string instructions,
-        int maxOutputTokens,
+        double maxOutputTokens,
         JsonArray? tools = null,
         string? effort = null,
         Foxwarm.Images.ImageBlobStore? images = null
     )
     {
-        if (maxOutputTokens <= 0)
+        if (maxOutputTokens <= 0 || !double.IsFinite(maxOutputTokens) || Math.Floor(maxOutputTokens) != maxOutputTokens)
             throw new ArgumentOutOfRangeException(nameof(maxOutputTokens));
         var data = new JsonObject
         {

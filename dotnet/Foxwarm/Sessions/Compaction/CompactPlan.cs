@@ -192,10 +192,6 @@ internal static class CompactPlanValidator
                 throw new CompactPlanInvalidException(
                     $"preserveMessages contains msg#{seq}, but that raw message is not present in the current compact message candidates."
                 );
-            if (candidates.Items[index].Start != candidates.Items[index].End)
-                throw new CompactPlanInvalidException(
-                    $"preserveMessages contains msg#{seq}, but it is inside atomic candidate {candidates.Items[index].Key}; do not preserve only part of a grouped tool call/response candidate."
-                );
             if (
                 operations.All(op =>
                     op.Kind != "message" || seq < op.First.Start || seq > op.Last.End
@@ -204,6 +200,19 @@ internal static class CompactPlanValidator
                 throw new CompactPlanInvalidException(
                     $"preserveMessages contains msg#{seq}, but that message is not covered by any created message-source block."
                 );
+        }
+        foreach (var seq in preserve.ToArray())
+        {
+            var candidate = candidates.Items.First(item => item.Kind == "message" && item.Start <= seq && seq <= item.End);
+            for (var member = candidate.Start; member <= candidate.End; member++)
+                preserve.Add(member);
+        }
+        foreach (var seq in remove)
+        {
+            var item = candidates.Preserved.First(entry => entry.Seq == seq);
+            var missing = item.Exchange.Where(member => !remove.Contains(member)).ToArray();
+            if (missing.Length > 0)
+                throw new CompactPlanInvalidException($"removePreservedMessages contains msg#{seq}, which belongs to a preserved tool exchange; list every member to remove it. Missing: {string.Join(", ", missing.Select(member => $"msg#{member}"))}.");
         }
         var coveredTokens = operations
             .Where(op => op.Kind == "message")

@@ -18,8 +18,8 @@ public sealed partial class LocalSessionTurnHost
     private readonly Func<string?>? parentSessionResolver;
     private int releaseCommits;
     private readonly Func<Task>? safePoint;
-    private readonly Func<ChatResult, Task>? automaticCompact;
     private readonly Func<Task>? retrySafePoint;
+    private readonly Func<ChatResult, Func<Func<Task>, Task>, CancellationToken, Task>? beforeContinuation;
 
     public LocalSessionTurnHost(
         SessionEntry entry,
@@ -29,9 +29,9 @@ public sealed partial class LocalSessionTurnHost
         int maxToolIterations = 500,
         Func<long>? clock = null,
         Func<Task>? safePoint = null,
-        Func<ChatResult, Task>? automaticCompact = null,
         Func<Task>? retrySafePoint = null,
-        Func<string?>? parentSessionResolver = null
+        Func<string?>? parentSessionResolver = null,
+        Func<ChatResult, Func<Func<Task>, Task>, CancellationToken, Task>? beforeContinuation = null
     )
     {
         this.entry = entry;
@@ -45,8 +45,8 @@ public sealed partial class LocalSessionTurnHost
         this.clock = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         this.parentSessionResolver = parentSessionResolver;
         this.safePoint = safePoint;
-        this.automaticCompact = automaticCompact;
         this.retrySafePoint = retrySafePoint;
+        this.beforeContinuation = beforeContinuation;
     }
 
     internal Task SafePointAsync() => safePoint?.Invoke() ?? Task.CompletedTask;
@@ -170,9 +170,7 @@ public sealed partial class LocalSessionTurnHost
                             )
                         )
                             return result;
-                        await AppendQueuedFollowUpsAfterToolAsync().ConfigureAwait(false);
-                        if (automaticCompact is not null)
-                            await automaticCompact(result).ConfigureAwait(false);
+                        await ContinueAfterResultAsync(result, registered.Token).ConfigureAwait(false);
                         continue;
                     }
 
@@ -226,9 +224,7 @@ public sealed partial class LocalSessionTurnHost
                         throw new OperationCanceledException(registered.Token);
                     if (terminal)
                         return result with { Terminal = true };
-                    await AppendQueuedFollowUpsAfterToolAsync().ConfigureAwait(false);
-                    if (automaticCompact is not null)
-                        await automaticCompact(result).ConfigureAwait(false);
+                    await ContinueAfterResultAsync(result, registered.Token).ConfigureAwait(false);
                     if (iteration + 1 >= maxToolIterations)
                         throw new ToolLoopLimitException(maxToolIterations);
                 }
@@ -312,13 +308,23 @@ public sealed partial class LocalSessionTurnHost
         return calls;
     }
 
-    private async Task AppendQueuedFollowUpsAfterToolAsync()
+    private async Task ContinueAfterResultAsync(ChatResult result, CancellationToken token)
     {
-        await SafePointAsync().ConfigureAwait(false);
+        if (beforeContinuation is not null)
+        {
+            await beforeContinuation(result, safe => AppendQueuedFollowUpsAfterToolAsync(safe), token).ConfigureAwait(false);
+            return;
+        }
+        await AppendQueuedFollowUpsAfterToolAsync().ConfigureAwait(false);
+    }
+
+    private async Task AppendQueuedFollowUpsAfterToolAsync(Func<Task>? continuationSafePoint = null)
+    {
+        await (continuationSafePoint?.Invoke() ?? SafePointAsync()).ConfigureAwait(false);
         if (entry.WithState(state => state.Stopping || !state.Queue.Any(SessionCompactor.Ordinary)))
             return;
         await entry.SaveLane.SaveBestEffortAsync().ConfigureAwait(false);
-        await SafePointAsync().ConfigureAwait(false);
+        await (continuationSafePoint?.Invoke() ?? SafePointAsync()).ConfigureAwait(false);
         var batch = SessionTurnRunner.DrainLeading(entry);
         if (batch.Count > 0)
         {

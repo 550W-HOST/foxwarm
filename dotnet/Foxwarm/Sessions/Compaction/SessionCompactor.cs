@@ -39,6 +39,7 @@ internal sealed partial class SessionCompactor
         internal readonly bool Background = background,
             Standalone = standalone;
         internal readonly CancellationTokenSource Cancellation = new();
+        internal readonly TaskCompletionSource PlanningSettled = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal readonly TaskCompletionSource PipelineDone = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -295,26 +296,21 @@ internal sealed partial class SessionCompactor
         }
     }
 
-    public async Task AutoAfterTurnAsync(ChatResult result)
+    public async Task<bool> AutoAfterTurnAsync(ChatResult result)
     {
-        var usage = result.Usage ?? result.AssistantMessage?["__meta"]?["usage"] as JsonObject;
-        if (usage is null)
-            return;
-        var total =
-            (CompactCandidateBuilder.Finite(usage["cachedTokens"]) ?? 0)
-            + (CompactCandidateBuilder.Finite(usage["inputTokens"]) ?? 0)
-            + (CompactCandidateBuilder.Finite(usage["outputTokens"]) ?? 0);
+        var total = UsageTotal(result);
+        if (total <= 0)
+            return false;
         var snapshot = hosted.Entry.Snapshot();
         var catalog = models.Capture();
         if (
-            total <= 0
-            || total <= SessionModelSettings.EffectiveThreshold(snapshot.AuthorityEnvelope, catalog)
+            total <= SessionModelSettings.EffectiveThreshold(snapshot.AuthorityEnvelope, catalog)
         )
-            return;
+            return false;
         var background = SupportsBackground(snapshot, catalog);
         var run = Begin(snapshot, catalog, catalog.CompactKeepFraction, background, false);
         if (run is null)
-            return;
+            return false;
         var handedOff = false;
         try
         {
@@ -323,13 +319,13 @@ internal sealed partial class SessionCompactor
                 run.Committed = true;
                 run.PipelineDone.TrySetResult();
                 await FinishAsync(run);
-                return;
+                return true;
             }
             if (background)
             {
                 handedOff = true;
                 _ = ProduceBackgroundAsync(run, null);
-                return;
+                return false;
             }
             run.PhaseLease = hosted.BeginCompactPhase();
             await PlanAndApplyAwaitedAsync(run, null);
@@ -352,6 +348,74 @@ internal sealed partial class SessionCompactor
                 run.PipelineDone.TrySetResult();
                 await FinishAsync(run);
             }
+        }
+        return run.Committed;
+    }
+
+    private static double UsageTotal(ChatResult result)
+    {
+        var usage = result.Usage ?? result.AssistantMessage?["__meta"]?["usage"] as JsonObject;
+        return (CompactCandidateBuilder.Finite(usage?["cachedTokens"]) ?? 0)
+            + (CompactCandidateBuilder.Finite(usage?["inputTokens"]) ?? 0)
+            + (CompactCandidateBuilder.Finite(usage?["outputTokens"]) ?? 0);
+    }
+
+    internal async Task BeforeContinuationAsync(ChatResult result, Func<Func<Task>, Task> consumeQueuedInputs, CancellationToken token)
+    {
+        var snapshot = hosted.Entry.Snapshot();
+        var catalog = models.Capture();
+        var limit = catalog.Resolve(SessionWait.Text(snapshot.AuthorityEnvelope["model"])).ContextLimit;
+        var overLimit = UsageTotal(result) > limit;
+        try
+        {
+            var committed = false;
+            await consumeQueuedInputs(async () =>
+            {
+                var outcome = await SafePointAsync(propagateFailure: overLimit);
+                committed |= outcome == true;
+                if (overLimit && outcome == false)
+                {
+                    AssertCanContinue();
+                    throw new ModelPreparationException("A completed context compaction did not commit before turn continuation.");
+                }
+            });
+            if (committed)
+                return;
+            var applied = await AutoAfterTurnAsync(result);
+            if (!overLimit)
+                return;
+            AssertCanContinue();
+            if (applied)
+                return;
+            CompactRun? pending;
+            lock (gate)
+                pending = active;
+            if (pending is not null)
+            {
+                // Readiness/completion releases the wait; the exact owner applies it below.
+                // The normal turn token interrupts only this wait, never the planner.
+                AssertCanContinue();
+                await pending.PlanningSettled.Task.WaitAsync(token);
+                AssertCanContinue();
+                if (await SafePointAsync(propagateFailure: true) == true)
+                    return;
+            }
+            throw new ModelPreparationException($"Context compaction did not complete, so this turn stopped before another provider request (previous usage {UsageTotal(result)}, limit {limit}).");
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested || hosted.Entry.WithState(state => state.Stopping))
+        {
+            throw;
+        }
+        catch (Exception error) when (overLimit && error is not ModelPreparationException)
+        {
+            throw new ModelPreparationException("Context compaction failed before turn continuation.", error);
+        }
+
+        void AssertCanContinue()
+        {
+            token.ThrowIfCancellationRequested();
+            if (hosted.Entry.WithState(state => state.Stopping || state.Meta["runQueuedAfterStop"]?.GetValue<bool>() == true))
+                throw new OperationCanceledException(token);
         }
     }
 
@@ -422,6 +486,7 @@ internal sealed partial class SessionCompactor
                 run.Ready = true;
                 run.Phase = "enqueueing";
             }
+            run.PlanningSettled.TrySetResult();
             await hosted.Entry.SaveLane.PublishCompactWakeAsync(
                 run,
                 run.Cancellation.Token,
@@ -443,6 +508,7 @@ internal sealed partial class SessionCompactor
         }
         finally
         {
+            run.PlanningSettled.TrySetResult();
             run.PipelineDone.TrySetResult();
             bool finish,
                 wake;
@@ -450,7 +516,7 @@ internal sealed partial class SessionCompactor
             {
                 var cancelled = run.Cancellation.IsCancellationRequested;
                 finish = !run.Applying && (cancelled || !run.Ready);
-                wake = !cancelled && run.Ready;
+                wake = ReferenceEquals(active, run) && !run.Applying && !cancelled && run.Ready;
             }
             if (finish)
                 await FinishAsync(run);
@@ -463,7 +529,8 @@ internal sealed partial class SessionCompactor
         }
     }
 
-    public async Task ApplyCompletedAsync(bool propagateFailure = false)
+    // null means no completed job; false means an unapplied job; true means a commit.
+    public async Task<bool?> ApplyCompletedAsync(bool propagateFailure = false)
     {
         CompactRun? run;
         lock (gate)
@@ -473,7 +540,7 @@ internal sealed partial class SessionCompactor
                 run is not { Background: true, Ready: true, Applying: false }
                 || run.Cancellation.IsCancellationRequested
             )
-                return;
+                return null;
             run.Applying = true;
             run.Phase = "committing";
         }
@@ -497,11 +564,12 @@ internal sealed partial class SessionCompactor
         {
             await FinishAsync(run);
         }
+        return run.Committed;
     }
 
-    public async Task SafePointAsync(bool propagateFailure = false)
+    public async Task<bool?> SafePointAsync(bool propagateFailure = false)
     {
-        await ApplyCompletedAsync(propagateFailure);
+        var committed = await ApplyCompletedAsync(propagateFailure);
         try
         {
             await hosted.Entry.SaveLane.RemoveCompactWakeAsync(staleOnly: true);
@@ -512,6 +580,7 @@ internal sealed partial class SessionCompactor
             if (propagateFailure)
                 throw;
         }
+        return committed;
     }
 
     internal static long[] OrdinaryVisibleSequences(SessionSnapshot snapshot) =>
