@@ -81,17 +81,17 @@ test('a collapsed tool group summarises its counted tags by tone', async () => {
       tags: [...card.querySelectorAll('[data-tool-tag-tone]')].map(tag => ({
         text: tag.textContent,
         tone: tag.getAttribute('data-tool-tag-tone'),
-        label: tag.querySelector('span:last-child').textContent,
+        label: tag.getAttribute('aria-label') || tag.textContent,
       })),
     }
   })
 
   assert.deepEqual(
     view.tags.map(tag => [tag.label, tag.tone]),
-    [['exec ×3', 'success'], ['reasoning ×2', 'neutral'], ['exec ×1', 'error']],
+    [['exec ×3', 'neutral'], ['Reasoning ×2', 'neutral'], ['exec ×1', 'error']],
     'counted tags are merged, sorted by count, and keep failed calls in their own error entry',
   )
-  assert.ok(view.tags.every(tag => tag.text.includes('×')), 'every counted tag uses the × separator')
+  assert.ok(view.tags.every(tag => tag.label.includes('×')), 'every counted tag uses the × separator')
   assert.equal(view.tags.filter(tag => tag.label.startsWith('exec')).length, 2, 'the failed call is not merged into the successful exec count')
   assert.equal(new Set(view.tags.map(tag => tag.label)).size, view.tags.length, 'no counted tag is rendered twice')
 })

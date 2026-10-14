@@ -108,8 +108,8 @@ async function buildFixtureBundle() {
       const response = (id, name, value, extra = {}) => ({ functionResponse: { tool_use_id: id, name, response: value, ...extra } })
       const messages = [
         { role: 'user', parts: [{ text: 'Inspect the implementation, then report the result.' }] },
-        { role: 'model', parts: [{ thinking: 'Check the supported path.' }, call('read', 'read', { filePath: '/workspace/src/example.ts' }), call('scan', 'RepoScan', { scope: 'src' }), call('bad', 'exec', { command: 'false' }), call('script', 'run_script', { code: 'return call_tool("read", {"filePath":"src/example.ts"})' })] },
-        { role: 'tool', parts: [response('read', 'read', { content: 'export const value = 1' }), response('scan', 'RepoScan', { output: 'Scan completed' }), response('bad', 'exec', { error: 'Command failed' }), response('script', 'run_script', { output: 'Script completed' }, { __meta: { toolScriptSubCalls: [{ id: 'sub-ok', name: 'ReadFile', status: 'completed', durationMs: 20 }, { id: 'sub-bad', name: 'ExecTask', status: 'failed', error: 'Command failed' }, { id: 'sub-live', name: 'StillRunning', status: 'running' }] } })] },
+        { role: 'model', parts: [{ thinking: 'Check the supported path.' }, { thinking: 'Review the response.' }, call('named-reasoning', 'reasoning'), call('read', 'read', { filePath: '/workspace/src/example.ts' }), call('scan', 'RepoScan', { scope: 'src' }), call('bad', 'exec', { command: 'false' }), call('script', 'run_script', { code: 'return call_tool("read", {"filePath":"src/example.ts"})' })] },
+        { role: 'tool', parts: [response('named-reasoning', 'reasoning', { output: 'Real tool returned' }), response('read', 'read', { content: 'export const value = 1' }), response('scan', 'RepoScan', { output: 'Scan completed' }), response('bad', 'exec', { error: 'Command failed' }), response('script', 'run_script', { output: 'Script completed' }, { __meta: { toolScriptSubCalls: [{ id: 'sub-ok', name: 'ReadFile', status: 'completed', durationMs: 20 }, { id: 'sub-bad', name: 'ExecTask', status: 'failed', error: 'Command failed' }, { id: 'sub-live', name: 'StillRunning', status: 'running' }] } })] },
         { role: 'user', parts: [{ system: '<foxwarm-system kind="event" type="inspection">\\nInspection event recorded.\\n</foxwarm-system>' }] },
         { role: 'model', parts: [call('verified', 'exec', { command: 'git diff --check' })] },
         { role: 'tool', parts: [response('verified', 'exec', { output: 'No whitespace errors' })] },
@@ -118,8 +118,8 @@ async function buildFixtureBundle() {
         { role: 'model', parts: [call('tail-ok', 'read', { filePath: '/workspace/src/follow-up.ts' })] },
         { role: 'tool', parts: [response('tail-ok', 'read', { content: 'Follow-up result' })] },
         { role: 'model', parts: [call('tail-running', 'exec', { command: 'long-running-check' })] },
-      ].map((message, index) => ({ ...message, __meta: { seq: index + 1, timestamp: 1700000000000 + index * 1000 } }))
-      document.querySelector('main').innerHTML = '<div class="text-xs text-fw-text-muted mb-4">Mock preview · Grouped tool colors and original-case tags</div><div id="preview-timeline" class="foxwarm-chat-root"></div>'
+      ].map((message, index) => ({ ...message, __meta: { seq: index + 1, timestamp: 1700000000000 + index * 1000, ...(index === 1 ? { usage: { reasoningTokens: 42 } } : {}) } }))
+      document.querySelector('main').innerHTML = '<div class="text-xs text-fw-text-muted mb-4">Mock preview · Icon-only Reasoning tags</div><div id="preview-timeline" class="foxwarm-chat-root"></div>'
       function Preview() {
         const [view, setView] = React.useState('grouped')
         const [visibleMessages, setMessages] = React.useState(messages)
@@ -501,7 +501,7 @@ test('Grouped tool preview uses neutral successes and original-case calls withou
     await page.mouse.move(1050, 780)
     await page.screenshot({ path: `${process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR}/${name}.png`, fullPage: true })
   }
-  const tags = selector => page.$$eval(selector, elements => elements.map(element => ({ text: element.textContent.trim(), tone: element.dataset.toolTagTone, transform: getComputedStyle(element).textTransform })))
+  const tags = selector => page.$$eval(selector, elements => elements.map(element => ({ text: element.textContent.trim(), tone: element.dataset.toolTagTone, transform: getComputedStyle(element).textTransform, name: element.getAttribute('aria-label'), title: element.title, hasIcon: !!element.querySelector('svg') })))
   for (const [theme, mode] of [['foxwarm.default', 'light'], ['foxwarm.550a', 'dark']]) {
     await page.setViewport({ width: 1120, height: 820 })
     await page.goto(`${fixtureUrl}?theme=${theme}&mode=${mode}&preview=grouped`, { waitUntil: 'load' })
@@ -510,7 +510,9 @@ test('Grouped tool preview uses neutral successes and original-case calls withou
     const summary = await tags('[data-tool-group-card] .foxwarm-tool-group-header [data-tool-tag-tone]')
     assert.ok(summary.some(tag => tag.text === 'RepoScan ×1' && tag.tone === 'neutral' && tag.transform === 'none'))
     assert.ok(summary.some(tag => tag.text === 'exec ×1' && tag.tone === 'error' && tag.transform === 'none'))
-    assert.ok(summary.some(tag => tag.text === 'reasoning ×1' && tag.transform === 'uppercase'))
+    assert.ok(summary.some(tag => tag.text === '' && tag.name?.includes('×2') && tag.title === tag.name && tag.hasIcon))
+    assert.ok(await page.$('aria/Reasoning ×2[role="image"]'), 'Icon-only counted Reasoning has an accessible name')
+    assert.ok(summary.some(tag => tag.text === 'reasoning ×1' && tag.tone === 'neutral'), 'A real tool named reasoning keeps its visible label')
     assert.ok(summary.some(tag => tag.text === 'Event ×1' && tag.tone === 'system' && tag.transform === 'uppercase'))
     assert.equal(await page.$$eval('.foxwarm-tool-tone-success', elements => elements.length), 0, 'Grouped tail successes are also neutral')
     assert.ok((await page.$eval('main', element => element.textContent)).includes('Running...'))
@@ -527,7 +529,12 @@ test('Grouped tool preview uses neutral successes and original-case calls withou
     assert.ok(subTags.some(tag => tag.text === 'ExecTask' && tag.tone === 'error' && tag.transform === 'none'))
     assert.ok(await page.$('.foxwarm-tool-group-body .animate-pulse'), 'Running subcall indicator remains present')
     assert.ok((await tags('.foxwarm-system-message-tag')).every(tag => tag.tone === 'system' && tag.transform === 'uppercase'))
-    assert.ok((await tags('.foxwarm-reasoning-tag')).every(tag => tag.transform === 'uppercase'))
+    assert.ok((await tags('.foxwarm-reasoning-tag')).every(tag => tag.text === '' && tag.name && tag.title === tag.name && tag.hasIcon))
+    assert.equal(await page.$eval('[data-reasoning-tokens]', element => element.textContent), '42 tokens')
+    assert.ok(members.some(tag => tag.text === 'reasoning' && tag.tone === 'neutral'), 'A real reasoning tool is not icon-only')
+    await page.click('[aria-label="Expand reasoning"]')
+    await page.waitForSelector('.foxwarm-reasoning-body')
+    assert.ok((await page.$eval('.foxwarm-reasoning-body', element => element.textContent)).includes('Check the supported path.'))
     await page.click('[aria-label="Expand RepoScan tool"]')
     await page.waitForSelector('.foxwarm-tool-group-body .foxwarm-tool-expanded-content')
     assert.ok((await page.$eval('.foxwarm-tool-expanded-content', element => element.textContent)).includes('Scan completed'), 'One native expansion opens the complete result')
@@ -543,6 +550,7 @@ test('Grouped tool preview uses neutral successes and original-case calls withou
     assert.deepEqual(tail, { tone: 'neutral', tag: 'read' }, 'A completed direct tail uses the same neutral tool presentation')
     await page.evaluate(() => window.selectTimelineView('detailed'))
     await page.waitForSelector('.foxwarm-tool-tone-success')
+    assert.ok((await tags('.foxwarm-reasoning-tag')).every(tag => tag.text === '' && tag.name && tag.hasIcon))
     assert.ok((await tags('.foxwarm-tool-tag')).some(tag => tag.text === 'RepoScan' && tag.tone === 'success' && tag.transform === 'none'), 'Detailed keeps its success palette, but real calls keep their case')
     await page.evaluate(() => window.selectTimelineView('conversation'))
     await page.waitForSelector('[data-timeline-activity]')
@@ -550,5 +558,22 @@ test('Grouped tool preview uses neutral successes and original-case calls withou
     await page.waitForSelector('[data-activity-details] .foxwarm-tool-card')
     assert.equal(await page.$$eval('[data-activity-details] .foxwarm-tool-tone-success', elements => elements.length), 0, 'Conversation remains neutral, including ToolScript subcalls')
     assert.ok((await tags('[data-activity-details] .foxwarm-tool-tag')).some(tag => tag.text === 'RepoScan' && tag.tone === 'neutral'))
+    assert.ok((await tags('[data-activity-details] .foxwarm-reasoning-tag')).every(tag => tag.text === '' && tag.name && tag.hasIcon))
   }
+})
+
+test('committed and processing Reasoning keep accessible icon tags and readable content', async () => {
+  await page.goto(`${fixtureUrl}?theme=foxwarm.550a&mode=dark`, { waitUntil: 'load' })
+  await page.waitForSelector('#reasoning-processing .foxwarm-reasoning-tag')
+  for (const id of ['reasoning-message', 'reasoning-processing']) {
+    const tag = await page.$eval(`#${id} .foxwarm-reasoning-tag`, element => ({ text: element.textContent, name: element.getAttribute('aria-label'), title: element.title, icon: !!element.querySelector('svg') }))
+    assert.ok(tag.text === '' && tag.name && tag.name === tag.title && tag.icon)
+  }
+  await page.click('#reasoning-processing [aria-label="Expand reasoning"]')
+  await page.waitForSelector('#reasoning-processing .foxwarm-reasoning-body')
+  assert.ok((await page.$eval('#reasoning-processing .foxwarm-reasoning-body', element => element.textContent)).includes('active reasoning'))
+  await page.click('#reasoning-message [aria-label="Expand reasoning"]')
+  await page.waitForSelector('#reasoning-message .foxwarm-reasoning-body')
+  assert.ok((await page.$eval('#reasoning-message .foxwarm-reasoning-body', element => element.textContent)).includes('completed reasoning'))
+  assert.equal(await page.$eval('#web-search .foxwarm-web-search-tag', element => element.textContent), 'Web Search')
 })

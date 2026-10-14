@@ -130,7 +130,7 @@ const snapshot = async id => page.$eval(`#${id}`, root => {
   const groups = [...root.querySelectorAll('[data-tool-group]')]
   const ordinaryCards = [...root.querySelectorAll('.foxwarm-assistant-message-card')]
   return {
-    groups: groups.map(group => ({ expanded: group.dataset.toolGroupExpanded, header: group.querySelector('.foxwarm-tool-group-header')?.textContent.trim() })),
+    groups: groups.map(group => ({ expanded: group.dataset.toolGroupExpanded, header: [...group.querySelectorAll('.foxwarm-tool-group-header [data-tool-tag-tone]')].map(tag => tag.getAttribute('aria-label') || tag.textContent.trim()).join('') })),
     ordinary: ordinaryCards.map(card => ({ text: card.textContent.trim(), insideCard: !!card.closest('[data-tool-group-card]') })),
     reasoning: [...root.querySelectorAll('[data-model-thread-card="reasoning"]')].map(card => ({ text: card.textContent.trim(), insideCard: !!card.closest('[data-tool-group-card]') })),
     tools: [...root.querySelectorAll('.foxwarm-tool-card:not(.foxwarm-tool-group-card)')].map(card => ({ text: card.textContent.trim(), insideCard: !!card.closest('[data-tool-group-card]') })),
@@ -179,7 +179,7 @@ test('mixed text and tool call leave the ordinary assistant card outside the per
 
 test('folded thinking follows the preceding group, while a mixed next-row text and final text remain ordinary', async () => {
   const collapsed = await snapshot('boundary')
-  assert.deepEqual(collapsed.groups.map(group => group.header), ['exec ×1reasoning ×1', 'exec ×1reasoning ×1'])
+  assert.deepEqual(collapsed.groups.map(group => group.header), ['exec ×1Reasoning ×1', 'exec ×1Reasoning ×1'])
   assert.deepEqual(collapsed.ordinary, [{ text: 'INTRO_NEXT', insideCard: false }, { text: 'FINAL_BOUNDARY', insideCard: false }])
   assert.equal(collapsed.reasoning.length, 0)
   assert.equal(collapsed.tools.length, 0)
@@ -283,7 +283,7 @@ test('independent image between two calls splits A/image/B into two grouped runs
 
 test('a generated image plus next call keeps earlier thinking with the preceding group', async () => {
   const collapsed = await snapshot('imageMixedCall')
-  assert.deepEqual(collapsed.groups.map(group => group.header), ['exec ×1reasoning ×1', 'exec ×1reasoning ×1'])
+  assert.deepEqual(collapsed.groups.map(group => group.header), ['exec ×1Reasoning ×1', 'exec ×1Reasoning ×1'])
   assert.deepEqual(collapsed.allImages, [{ insideCard: false }])
   assert.equal(collapsed.reasoning.length, 0)
   assert.deepEqual(collapsed.anchorKeys, ['seq-local-61', 'seq-local-63', 'seq-local-65'])
@@ -347,7 +347,7 @@ test('tool-role text remains grouped content rather than disappearing with ordin
 
 test('original adjacent reasoning parts share one tag while every original content barrier keeps distinct runs', async () => {
   const state = await page.$eval('#reasoningRuns', root => ({
-    tags: [...root.querySelectorAll('.foxwarm-reasoning-tag')].map(tag => tag.textContent),
+    tags: [...root.querySelectorAll('.foxwarm-reasoning-tag')].map(tag => tag.getAttribute('aria-label')),
     tokens: [...root.querySelectorAll('[data-reasoning-tokens]')].map(el => ({ text: el.textContent, title: el.title, className: el.className })),
     ordinary: [...root.querySelectorAll('.foxwarm-assistant-message-card')].map(el => el.textContent.trim()),
     images: root.querySelectorAll('img').length,
@@ -380,7 +380,7 @@ test('original adjacent reasoning parts share one tag while every original conte
 })
 
 test('empty reasoning cards count real parts and display zero usage without inventing summary or metadata text', async () => {
-  assert.deepEqual(await page.$$eval('#reasoningEmpty .foxwarm-reasoning-tag', elements => elements.map(el => el.textContent)), ['Reasoning ×3', 'Reasoning'])
+  assert.deepEqual(await page.$$eval('#reasoningEmpty .foxwarm-reasoning-tag', elements => elements.map(el => el.getAttribute('aria-label'))), ['Reasoning ×3', 'Reasoning'])
   assert.deepEqual(await page.$$eval('#reasoningEmpty [data-reasoning-tokens]', elements => elements.map(el => el.textContent)), ['0 tokens'])
   assert.equal(await page.$eval('#reasoningEmpty', root => root.textContent.includes('opaque-fixture-not-visible')), false)
   assert.deepEqual(await page.$$eval('#reasoningEmpty .foxwarm-reasoning-preview', elements => elements.map(el => el.textContent)), ['', ''])
@@ -388,10 +388,10 @@ test('empty reasoning cards count real parts and display zero usage without inve
 
 test('folded tool-group summary counts empty reasoning members and expands one original contiguous card', async () => {
   const collapsed = await snapshot('reasoningGrouped')
-  assert.equal(collapsed.groups[0].header, 'reasoning ×3exec ×1')
+  assert.equal(collapsed.groups[0].header, 'Reasoning ×3exec ×1')
   assert.equal(collapsed.reasoning.length, 0)
   await toggle('reasoningGrouped', 0, true)
-  assert.deepEqual(await page.$$eval('#reasoningGrouped .foxwarm-reasoning-tag', elements => elements.map(el => el.textContent)), ['Reasoning ×3'])
+  assert.deepEqual(await page.$$eval('#reasoningGrouped .foxwarm-reasoning-tag', elements => elements.map(el => el.getAttribute('aria-label'))), ['Reasoning ×3'])
   assert.deepEqual(await page.$$eval('#reasoningGrouped [data-reasoning-tokens]', elements => elements.map(el => el.textContent)), ['17 tokens'])
   await toggle('reasoningGrouped', 0, false)
   assert.equal((await snapshot('reasoningGrouped')).reasoning.length, 0)

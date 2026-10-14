@@ -854,13 +854,14 @@ const toolTagToneClasses: Record<ToolTagTone, string> = {
 }
 
 export const ToolTag = ({ name, label = name, tone = 'neutral', className = '', iconName, toolCall = false }: { name: string; label?: string; tone?: ToolTagTone; className?: string; iconName?: string; toolCall?: boolean }) => {
+  const iconOnly = name === 'reasoning' && !toolCall
   const resolvedIconName = iconName || name
   const Icon = getToolIcon(resolvedIconName, iconName?.startsWith('system-') ? Bell : Wrench)
 
   return (
-    <span data-tool-tag-tone={tone} data-tool-call-tag={toolCall || undefined} className={`inline-flex h-[18px] items-center gap-1 rounded-md border px-1.5 text-[10px] font-semibold ${toolCall ? '' : 'uppercase'} tracking-wide leading-none align-middle ${toolTagToneClasses[tone]} ${className}`.trim()}>
-      <Icon size={12} />
-      <span>{label}</span>
+    <span role={iconOnly ? 'img' : undefined} title={iconOnly ? label : undefined} aria-label={iconOnly ? label : undefined} data-tool-tag-tone={tone} data-tool-call-tag={toolCall || undefined} className={`inline-flex h-[18px] items-center gap-1 rounded-md border px-1.5 text-[10px] font-semibold ${toolCall ? '' : 'uppercase'} tracking-wide leading-none align-middle ${toolTagToneClasses[tone]} ${className}`.trim()}>
+      <Icon size={12} aria-hidden={iconOnly || undefined} />
+      {!iconOnly && <span>{label}</span>}
     </span>
   )
 }
@@ -881,7 +882,7 @@ export const summarizeToolTagCounts = (items: ToolTagItem[]): ToolTagItem[] => {
   items.forEach((item) => {
     const label = item.label || item.name
     const isError = item.tone === 'error'
-    const key = `${isError ? 'error' : 'ok'}:${label}`
+    const key = `${item.toolCall ? 'tool' : 'thread'}:${isError ? 'error' : 'ok'}:${label}`
     const existing = byKey.get(key)
     if (!existing) {
       order.push(key)
