@@ -1061,11 +1061,17 @@ public sealed partial class CompactLifecycleTests
         private readonly TempDirectory temp = new();
         private readonly HttpClient http;
         internal readonly CompactPeer Peer = new();
-        internal readonly TaskCompletionSource ContinuationReached = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        internal readonly TaskCompletionSource ContinuationRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal readonly TaskCompletionSource ContinuationReached = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        internal readonly TaskCompletionSource ContinuationRelease = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         internal bool HoldBeforeContinuation;
         internal Task? Continuation;
-        internal readonly RecordingToolExecutor ToolExecutor = new(new JsonObject { ["output"] = "completed tool" });
+        internal readonly RecordingToolExecutor ToolExecutor = new(
+            new JsonObject { ["output"] = "completed tool" }
+        );
         internal readonly TaskCompletionSource StageReached = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -1215,7 +1221,8 @@ public sealed partial class CompactLifecycleTests
                 requests,
                 memory
             );
-            Owner.Registry.OnTurnCompleted = (_, result) => Owner.Compactor.AutoAfterTurnAsync(result);
+            Owner.Registry.OnTurnCompleted = (_, result) =>
+                Owner.Compactor.AutoAfterTurnAsync(result);
             Owner.Registry.OnBeforeContinuation = async (_, result, consume, token) =>
             {
                 if (HoldBeforeContinuation)
@@ -1303,7 +1310,9 @@ public sealed partial class CompactLifecycleTests
         internal int PlannerRequests;
         internal int? NextUsage;
         internal bool NextTool;
-        internal readonly TaskCompletionSource NextNormalReached = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal readonly TaskCompletionSource NextNormalReached = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         internal Func<bool>? Phase;
         internal readonly List<string> NormalBodies = [];
         internal readonly List<bool> CompactingAtSend = [];
@@ -1327,7 +1336,9 @@ public sealed partial class CompactLifecycleTests
                 .Select(row => SessionWait.Text(row["text"]) ?? "")
                 .ToArray();
             JsonArray output;
-            var planning = input.Any(text => text.Contains("COMPACTION STARTED:", StringComparison.Ordinal));
+            var planning = input.Any(text =>
+                text.Contains("COMPACTION STARTED:", StringComparison.Ordinal)
+            );
             if (input.Any(text => text.Contains("COMPACTION STARTED:", StringComparison.Ordinal)))
             {
                 Interlocked.Increment(ref PlannerRequests);
@@ -1408,7 +1419,13 @@ public sealed partial class CompactLifecycleTests
             if (NextTool && !planning)
             {
                 NextTool = false;
-                output = new JsonArray(FunctionCall("actual-tool", "read", new JsonObject { ["filePath"] = "fixture.txt" }));
+                output = new JsonArray(
+                    FunctionCall(
+                        "actual-tool",
+                        "read",
+                        new JsonObject { ["filePath"] = "fixture.txt" }
+                    )
+                );
             }
             var reportedUsage = planning ? null : NextUsage;
             if (!planning)
@@ -1418,7 +1435,13 @@ public sealed partial class CompactLifecycleTests
                 ["type"] = "response.completed",
                 ["response"] = new JsonObject
                 {
-                    ["usage"] = reportedUsage is null ? null : new JsonObject { ["input_tokens"] = reportedUsage, ["output_tokens"] = 1 },
+                    ["usage"] = reportedUsage is null
+                        ? null
+                        : new JsonObject
+                        {
+                            ["input_tokens"] = reportedUsage,
+                            ["output_tokens"] = 1,
+                        },
                     ["id"] = "response",
                     ["status"] = "completed",
                     ["output"] = output,

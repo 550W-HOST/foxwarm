@@ -203,7 +203,9 @@ internal static class CompactPlanValidator
         }
         foreach (var seq in preserve.ToArray())
         {
-            var candidate = candidates.Items.First(item => item.Kind == "message" && item.Start <= seq && seq <= item.End);
+            var candidate = candidates.Items.First(item =>
+                item.Kind == "message" && item.Start <= seq && seq <= item.End
+            );
             for (var member = candidate.Start; member <= candidate.End; member++)
                 preserve.Add(member);
         }
@@ -212,7 +214,9 @@ internal static class CompactPlanValidator
             var item = candidates.Preserved.First(entry => entry.Seq == seq);
             var missing = item.Exchange.Where(member => !remove.Contains(member)).ToArray();
             if (missing.Length > 0)
-                throw new CompactPlanInvalidException($"removePreservedMessages contains msg#{seq}, which belongs to a preserved tool exchange; list every member to remove it. Missing: {string.Join(", ", missing.Select(member => $"msg#{member}"))}.");
+                throw new CompactPlanInvalidException(
+                    $"removePreservedMessages contains msg#{seq}, which belongs to a preserved tool exchange; list every member to remove it. Missing: {string.Join(", ", missing.Select(member => $"msg#{member}"))}."
+                );
         }
         var coveredTokens = operations
             .Where(op => op.Kind == "message")

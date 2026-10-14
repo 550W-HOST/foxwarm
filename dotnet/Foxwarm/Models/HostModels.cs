@@ -17,8 +17,10 @@ internal sealed record ConcreteHostModel(
     string[] Targets
 )
 {
-    internal double MaxOutput => HostModels.PositiveSetting(Configuration["maxOutput"], 32768, "maxOutput");
-    internal string ProviderImageOutputFormat => HostModels.Text(Configuration, "providerImageOutputFormat") ?? "webp";
+    internal double MaxOutput =>
+        HostModels.PositiveSetting(Configuration["maxOutput"], 32768, "maxOutput");
+    internal string ProviderImageOutputFormat =>
+        HostModels.Text(Configuration, "providerImageOutputFormat") ?? "webp";
     internal bool IsVirtual => ProviderType is "session-hash" or "failover";
     internal Uri BaseUri =>
         new(
@@ -108,7 +110,11 @@ internal sealed partial class HostModels
             200000,
             Efforts,
             "high",
-            new JsonObject { ["maxOutput"] = options.MaxOutputTokens, ["providerImageOutputFormat"] = "webp" },
+            new JsonObject
+            {
+                ["maxOutput"] = options.MaxOutputTokens,
+                ["providerImageOutputFormat"] = "webp",
+            },
             []
         );
         return new HostModels(
@@ -130,7 +136,8 @@ internal sealed partial class HostModels
         var virtuals = new List<(string Key, JsonObject Config)>();
         var llm = app["llm"] as JsonObject ?? new JsonObject();
         var defaults = root.ContainsKey("defaults")
-            ? root["defaults"] as JsonObject ?? throw new InvalidDataException("Models defaults must be an object.")
+            ? root["defaults"] as JsonObject
+                ?? throw new InvalidDataException("Models defaults must be an object.")
             : new JsonObject();
         ValidateDefaults(defaults, "defaults", rejectUnknown: true);
         ValidateDefaults(llm, "llm");
@@ -310,7 +317,11 @@ internal sealed partial class HostModels
         return new HostModels(selected, models, ordered)
         {
             HandoffConfirmationEnabled = Foxwarm.Tools.HandoffConfirmation.Enabled(app),
-            PresentationContextLimit = PositiveSetting(llm["contextLimit"], 200000, "llm.contextLimit"),
+            PresentationContextLimit = PositiveSetting(
+                llm["contextLimit"],
+                200000,
+                "llm.contextLimit"
+            ),
             CompactKeepFraction =
                 SessionWait.Number(llm["compactKeepPercent"] ?? llm["compactPercent"]) ?? .3,
             CompactThresholdFraction = SessionWait.Number(llm["compactThresholdPercent"]) ?? .85,
@@ -322,10 +333,15 @@ internal sealed partial class HostModels
         foreach (var field in new[] { "providerType", "provider" })
         {
             var raw = provider[field];
-            if (raw is null || SessionWait.Text(raw) == "" || SessionWait.Number(raw) == 0
-                || raw is JsonValue flag && flag.TryGetValue<bool>(out var enabled) && !enabled)
+            if (
+                raw is null
+                || SessionWait.Text(raw) == ""
+                || SessionWait.Number(raw) == 0
+                || raw is JsonValue flag && flag.TryGetValue<bool>(out var enabled) && !enabled
+            )
                 continue;
-            return SessionWait.Text(raw) ?? throw new InvalidDataException("Unsupported providerType.");
+            return SessionWait.Text(raw)
+                ?? throw new InvalidDataException("Unsupported providerType.");
         }
         return "openai";
     }
@@ -338,7 +354,10 @@ internal sealed partial class HostModels
         if (data is null)
             return fallback;
         var number = SessionWait.Number(data);
-        return number is > 0 && double.IsFinite(number.Value) && Math.Floor(number.Value) == number.Value
+        return
+            number is > 0
+            && double.IsFinite(number.Value)
+            && Math.Floor(number.Value) == number.Value
             ? number.Value
             : throw new InvalidDataException(label + " must be a positive integer.");
     }

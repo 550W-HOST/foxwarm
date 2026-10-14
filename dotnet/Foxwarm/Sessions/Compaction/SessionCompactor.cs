@@ -39,7 +39,9 @@ internal sealed partial class SessionCompactor
         internal readonly bool Background = background,
             Standalone = standalone;
         internal readonly CancellationTokenSource Cancellation = new();
-        internal readonly TaskCompletionSource PlanningSettled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal readonly TaskCompletionSource PlanningSettled = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         internal readonly TaskCompletionSource PipelineDone = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -303,9 +305,7 @@ internal sealed partial class SessionCompactor
             return false;
         var snapshot = hosted.Entry.Snapshot();
         var catalog = models.Capture();
-        if (
-            total <= SessionModelSettings.EffectiveThreshold(snapshot.AuthorityEnvelope, catalog)
-        )
+        if (total <= SessionModelSettings.EffectiveThreshold(snapshot.AuthorityEnvelope, catalog))
             return false;
         var background = SupportsBackground(snapshot, catalog);
         var run = Begin(snapshot, catalog, catalog.CompactKeepFraction, background, false);
@@ -360,11 +360,17 @@ internal sealed partial class SessionCompactor
             + (CompactCandidateBuilder.Finite(usage?["outputTokens"]) ?? 0);
     }
 
-    internal async Task BeforeContinuationAsync(ChatResult result, Func<Func<Task>, Task> consumeQueuedInputs, CancellationToken token)
+    internal async Task BeforeContinuationAsync(
+        ChatResult result,
+        Func<Func<Task>, Task> consumeQueuedInputs,
+        CancellationToken token
+    )
     {
         var snapshot = hosted.Entry.Snapshot();
         var catalog = models.Capture();
-        var limit = catalog.Resolve(SessionWait.Text(snapshot.AuthorityEnvelope["model"])).ContextLimit;
+        var limit = catalog
+            .Resolve(SessionWait.Text(snapshot.AuthorityEnvelope["model"]))
+            .ContextLimit;
         var overLimit = UsageTotal(result) > limit;
         try
         {
@@ -376,7 +382,9 @@ internal sealed partial class SessionCompactor
                 if (overLimit && outcome == false)
                 {
                     AssertCanContinue();
-                    throw new ModelPreparationException("A completed context compaction did not commit before turn continuation.");
+                    throw new ModelPreparationException(
+                        "A completed context compaction did not commit before turn continuation."
+                    );
                 }
             });
             if (committed)
@@ -400,21 +408,31 @@ internal sealed partial class SessionCompactor
                 if (await SafePointAsync(propagateFailure: true) == true)
                     return;
             }
-            throw new ModelPreparationException($"Context compaction did not complete, so this turn stopped before another provider request (previous usage {UsageTotal(result)}, limit {limit}).");
+            throw new ModelPreparationException(
+                $"Context compaction did not complete, so this turn stopped before another provider request (previous usage {UsageTotal(result)}, limit {limit})."
+            );
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested || hosted.Entry.WithState(state => state.Stopping))
+        catch (OperationCanceledException)
+            when (token.IsCancellationRequested || hosted.Entry.WithState(state => state.Stopping))
         {
             throw;
         }
         catch (Exception error) when (overLimit && error is not ModelPreparationException)
         {
-            throw new ModelPreparationException("Context compaction failed before turn continuation.", error);
+            throw new ModelPreparationException(
+                "Context compaction failed before turn continuation.",
+                error
+            );
         }
 
         void AssertCanContinue()
         {
             token.ThrowIfCancellationRequested();
-            if (hosted.Entry.WithState(state => state.Stopping || state.Meta["runQueuedAfterStop"]?.GetValue<bool>() == true))
+            if (
+                hosted.Entry.WithState(state =>
+                    state.Stopping || state.Meta["runQueuedAfterStop"]?.GetValue<bool>() == true
+                )
+            )
                 throw new OperationCanceledException(token);
         }
     }

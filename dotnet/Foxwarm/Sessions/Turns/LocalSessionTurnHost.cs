@@ -19,7 +19,12 @@ public sealed partial class LocalSessionTurnHost
     private int releaseCommits;
     private readonly Func<Task>? safePoint;
     private readonly Func<Task>? retrySafePoint;
-    private readonly Func<ChatResult, Func<Func<Task>, Task>, CancellationToken, Task>? beforeContinuation;
+    private readonly Func<
+        ChatResult,
+        Func<Func<Task>, Task>,
+        CancellationToken,
+        Task
+    >? beforeContinuation;
 
     public LocalSessionTurnHost(
         SessionEntry entry,
@@ -170,7 +175,8 @@ public sealed partial class LocalSessionTurnHost
                             )
                         )
                             return result;
-                        await ContinueAfterResultAsync(result, registered.Token).ConfigureAwait(false);
+                        await ContinueAfterResultAsync(result, registered.Token)
+                            .ConfigureAwait(false);
                         continue;
                     }
 
@@ -312,7 +318,12 @@ public sealed partial class LocalSessionTurnHost
     {
         if (beforeContinuation is not null)
         {
-            await beforeContinuation(result, safe => AppendQueuedFollowUpsAfterToolAsync(safe), token).ConfigureAwait(false);
+            await beforeContinuation(
+                    result,
+                    safe => AppendQueuedFollowUpsAfterToolAsync(safe),
+                    token
+                )
+                .ConfigureAwait(false);
             return;
         }
         await AppendQueuedFollowUpsAfterToolAsync().ConfigureAwait(false);

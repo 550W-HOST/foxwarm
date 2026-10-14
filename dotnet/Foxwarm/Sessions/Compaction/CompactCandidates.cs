@@ -165,7 +165,8 @@ internal static class CompactCandidateBuilder
         }
         var entries = new List<CompactCandidate>();
         var preserved = new List<PreservedCompactMessage>();
-        var preservedExchanges = new List<(HashSet<string> Calls, List<PreservedCompactMessage> Items)>();
+        var preservedExchanges =
+            new List<(HashSet<string> Calls, List<PreservedCompactMessage> Items)>();
         var segment = 1;
         string? priorKind = null;
         int priorLevel = 0;
@@ -181,15 +182,25 @@ internal static class CompactCandidateBuilder
             {
                 if (seq is > 0 && seqCounts.GetValueOrDefault(seq.Value) == 1 && !Ignored(message))
                 {
-                    var item = new PreservedCompactMessage(seq.Value, preservedBlock.Value, Preview(message, true));
+                    var item = new PreservedCompactMessage(
+                        seq.Value,
+                        preservedBlock.Value,
+                        Preview(message, true)
+                    );
                     preserved.Add(item);
                     var prior = preservedExchanges.LastOrDefault();
-                    if (Role(message) == "tool" && prior.Items is { Count: > 0 }
+                    if (
+                        Role(message) == "tool"
+                        && prior.Items is { Count: > 0 }
                         && prior.Items[^1].Seq + 1 == seq
-                        && ToolIds(message, "functionResponse", "tool_use_id").Any(prior.Calls.Contains))
+                        && ToolIds(message, "functionResponse", "tool_use_id")
+                            .Any(prior.Calls.Contains)
+                    )
                         prior.Items.Add(item);
                     else
-                        preservedExchanges.Add((ToolIds(message, "functionCall", "id").ToHashSet(), [item]));
+                        preservedExchanges.Add(
+                            (ToolIds(message, "functionCall", "id").ToHashSet(), [item])
+                        );
                 }
                 segment++;
                 priorKind = null;
@@ -256,10 +267,7 @@ internal static class CompactCandidateBuilder
                 continue;
             }
             previousBlockEnd = null;
-            if (
-                seq is not > 0
-                || seqCounts.GetValueOrDefault(seq.Value) != 1
-            )
+            if (seq is not > 0 || seqCounts.GetValueOrDefault(seq.Value) != 1)
             {
                 segment++;
                 priorKind = null;
@@ -382,8 +390,8 @@ internal static class CompactCandidateBuilder
             );
         }
         foreach (var (_, items) in preservedExchanges)
-            foreach (var item in items)
-                item.Exchange = items.Select(member => member.Seq).ToArray();
+        foreach (var item in items)
+            item.Exchange = items.Select(member => member.Seq).ToArray();
         return new CompactCandidates(
             history,
             split,
@@ -441,7 +449,8 @@ internal static class CompactCandidateBuilder
     private static IEnumerable<string> ToolIds(JsonObject row, string partKind, string field) =>
         ((row["parts"] as JsonArray)?.OfType<JsonObject>() ?? [])
             .Select(part => SessionWait.Text(part[partKind]?[field]))
-            .OfType<string>().Where(id => id.Length > 0);
+            .OfType<string>()
+            .Where(id => id.Length > 0);
 
     public static bool Calls(JsonObject row) =>
         (row["parts"] as JsonArray)

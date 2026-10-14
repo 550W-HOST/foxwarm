@@ -546,7 +546,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         );
         registry.OnTurnStarting = _ => MaybeRefreshStaleAsync(hosted);
         registry.OnTurnCompleted = (_, result) => hosted.Compactor.AutoAfterTurnAsync(result);
-        registry.OnBeforeContinuation = (_, result, consume, token) => hosted.Compactor.BeforeContinuationAsync(result, consume, token);
+        registry.OnBeforeContinuation = (_, result, consume, token) =>
+            hosted.Compactor.BeforeContinuationAsync(result, consume, token);
         registry.OnSafePoint = _ => hosted.Compactor.SafePointAsync();
         registry.OnRetrySafePoint = _ => hosted.Compactor.SafePointAsync(propagateFailure: true);
         registry.HasCompletedCompact = _ => hosted.Compactor.HasCompletedJob;

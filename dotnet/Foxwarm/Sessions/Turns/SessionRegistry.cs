@@ -16,7 +16,13 @@ public sealed class LocalSessionTurnHostFactory
     private readonly Func<SessionEntry, Task>? safePoint;
     private readonly Func<SessionEntry, Task>? retrySafePoint;
     private readonly Func<SessionEntry, string?>? parentSessionResolver;
-    private readonly Func<SessionEntry, ChatResult, Func<Func<Task>, Task>, CancellationToken, Task>? beforeContinuation;
+    private readonly Func<
+        SessionEntry,
+        ChatResult,
+        Func<Func<Task>, Task>,
+        CancellationToken,
+        Task
+    >? beforeContinuation;
 
     public LocalSessionTurnHostFactory(
         ISessionAuthorityStore store,
@@ -27,7 +33,13 @@ public sealed class LocalSessionTurnHostFactory
         Func<SessionEntry, Task>? safePoint = null,
         Func<SessionEntry, Task>? retrySafePoint = null,
         Func<SessionEntry, string?>? parentSessionResolver = null,
-        Func<SessionEntry, ChatResult, Func<Func<Task>, Task>, CancellationToken, Task>? beforeContinuation = null
+        Func<
+            SessionEntry,
+            ChatResult,
+            Func<Func<Task>, Task>,
+            CancellationToken,
+            Task
+        >? beforeContinuation = null
     )
     {
         this.store = store;
@@ -52,7 +64,9 @@ public sealed class LocalSessionTurnHostFactory
             () => safePoint?.Invoke(entry) ?? Task.CompletedTask,
             () => retrySafePoint?.Invoke(entry) ?? safePoint?.Invoke(entry) ?? Task.CompletedTask,
             parentSessionResolver is null ? null : () => parentSessionResolver(entry),
-            beforeContinuation is null ? null : (result, consume, token) => beforeContinuation(entry, result, consume, token)
+            beforeContinuation is null
+                ? null
+                : (result, consume, token) => beforeContinuation(entry, result, consume, token)
         );
 }
 
@@ -97,7 +111,10 @@ public sealed class SessionRegistry
                     await OnBeforeContinuation(entry, result, consume, token);
                 else
                 {
-                    await consume(() => OnSafePoint?.Invoke(entry) ?? entry.SaveLane.RemoveCompactWakeAsync(staleOnly: true));
+                    await consume(() =>
+                        OnSafePoint?.Invoke(entry)
+                        ?? entry.SaveLane.RemoveCompactWakeAsync(staleOnly: true)
+                    );
                     if (OnTurnCompleted is not null)
                         await OnTurnCompleted(entry, result);
                 }
@@ -119,7 +136,13 @@ public sealed class SessionRegistry
     public Func<SessionEntry, ChatResult, Task>? OnTurnCompleted { get; set; }
     public Func<SessionEntry, Task>? OnSafePoint { get; set; }
     public Func<SessionEntry, Task>? OnRetrySafePoint { get; set; }
-    public Func<SessionEntry, ChatResult, Func<Func<Task>, Task>, CancellationToken, Task>? OnBeforeContinuation { get; set; }
+    public Func<
+        SessionEntry,
+        ChatResult,
+        Func<Func<Task>, Task>,
+        CancellationToken,
+        Task
+    >? OnBeforeContinuation { get; set; }
     public Func<SessionEntry, bool>? HasCompletedCompact { get; set; }
 
     internal bool HasRunnableWork(SessionEntry entry) =>

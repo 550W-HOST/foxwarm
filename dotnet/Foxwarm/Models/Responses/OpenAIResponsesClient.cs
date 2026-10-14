@@ -310,7 +310,11 @@ public static partial class ResponsesRequestSerializer
         Foxwarm.Images.ImageBlobStore? images = null
     )
     {
-        if (maxOutputTokens <= 0 || !double.IsFinite(maxOutputTokens) || Math.Floor(maxOutputTokens) != maxOutputTokens)
+        if (
+            maxOutputTokens <= 0
+            || !double.IsFinite(maxOutputTokens)
+            || Math.Floor(maxOutputTokens) != maxOutputTokens
+        )
             throw new ArgumentOutOfRangeException(nameof(maxOutputTokens));
         var data = new JsonObject
         {

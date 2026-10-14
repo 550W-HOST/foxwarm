@@ -40,12 +40,29 @@ internal sealed partial class HostModels
         config["apiKey"] = token;
         if (model is not null)
             ValidateDefaults(model, "Model " + key);
-        var context = PositiveSetting(model?["contextLimit"] ?? provider["contextLimit"] ?? defaults["contextLimit"] ?? llm["contextLimit"], 200000, "contextLimit");
+        var context = PositiveSetting(
+            model?["contextLimit"]
+                ?? provider["contextLimit"]
+                ?? defaults["contextLimit"]
+                ?? llm["contextLimit"],
+            200000,
+            "contextLimit"
+        );
         config["contextLimit"] = context;
-        config["maxOutput"] = PositiveSetting(model?["maxOutput"] ?? provider["maxOutput"] ?? defaults["maxOutput"] ?? llm["maxOutput"], 32768, "maxOutput");
-        config["providerImageOutputFormat"] = SessionWait.Text(model?["providerImageOutputFormat"])
-            ?? Text(provider, "providerImageOutputFormat") ?? Text(defaults, "providerImageOutputFormat")
-            ?? Text(llm, "providerImageOutputFormat") ?? "webp";
+        config["maxOutput"] = PositiveSetting(
+            model?["maxOutput"]
+                ?? provider["maxOutput"]
+                ?? defaults["maxOutput"]
+                ?? llm["maxOutput"],
+            32768,
+            "maxOutput"
+        );
+        config["providerImageOutputFormat"] =
+            SessionWait.Text(model?["providerImageOutputFormat"])
+            ?? Text(provider, "providerImageOutputFormat")
+            ?? Text(defaults, "providerImageOutputFormat")
+            ?? Text(llm, "providerImageOutputFormat")
+            ?? "webp";
         foreach (var scope in new[] { provider, model })
             if (
                 scope?.ContainsKey("keepReasoningOnError") == true
@@ -135,7 +152,11 @@ internal sealed partial class HostModels
         );
     }
 
-    internal static void ValidateDefaults(JsonObject scope, string label, bool rejectUnknown = false)
+    internal static void ValidateDefaults(
+        JsonObject scope,
+        string label,
+        bool rejectUnknown = false
+    )
     {
         if (rejectUnknown)
             foreach (var field in scope.Select(pair => pair.Key))
@@ -145,11 +166,18 @@ internal sealed partial class HostModels
             if (scope.ContainsKey(field))
             {
                 if (scope[field] is null)
-                    throw new InvalidDataException(label + "." + field + " must be a positive integer.");
+                    throw new InvalidDataException(
+                        label + "." + field + " must be a positive integer."
+                    );
                 _ = PositiveSetting(scope[field], 1, label + "." + field);
             }
-        if (scope.ContainsKey("providerImageOutputFormat") && Text(scope, "providerImageOutputFormat") is not ("webp" or "jpeg"))
-            throw new InvalidDataException(label + ".providerImageOutputFormat must be webp or jpeg.");
+        if (
+            scope.ContainsKey("providerImageOutputFormat")
+            && Text(scope, "providerImageOutputFormat") is not ("webp" or "jpeg")
+        )
+            throw new InvalidDataException(
+                label + ".providerImageOutputFormat must be webp or jpeg."
+            );
     }
 
     private static JsonObject Map(JsonNode? node, string label) =>
