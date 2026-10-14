@@ -122,7 +122,7 @@ export default function WorkbenchStatusBar({ running, sessions, nodes, totalUsag
 
   const waiting = sessions.filter(session => getSessionRuntimeStateName(session) === 'waiting')
   const active = sessions.filter(isSessionRuntimeActive)
-  const readyNodes = nodes.filter(node => node.online && !node.unavailable && node.protocolStatus !== 'upgrade-required')
+  const onlineNodes = nodes.filter(node => node.online === true).length
   const label = open === 'total-usage' ? 'Total usage' : open === 'session-usage' ? 'Session usage' : open === 'running' ? 'Sessions' : open === 'waiting' ? 'Waiting sessions' : open === 'tasks' ? 'Tasks' : 'Nodes'
   const openSection = (section: StatusSection, element: HTMLButtonElement) => {
     triggerRef.current = element; setOpen(current => current === section ? null : section)
@@ -135,7 +135,7 @@ export default function WorkbenchStatusBar({ running, sessions, nodes, totalUsag
   })
   const totalTokens = (usage: TokenUsage) => usage.cachedTokens + usage.inputTokens + usage.outputTokens
   const usageValue = (usage?: TokenUsage) => usage ? formatUsageNumber(totalTokens(usage)) : '—'
-  const row = (name: string, count: number) => <div className="flex items-center justify-between gap-4 py-1"><span className="text-fw-text-muted">{name}</span><span className="tabular-nums text-fw-text">{count}</span></div>
+  const row = (name: string, count: number) => <div className="flex items-center justify-between gap-4 py-0.5"><span className="text-fw-text-muted">{name}</span><span className="tabular-nums text-fw-text">{count}</span></div>
   return <>
     <footer data-workbench-status-bar className="foxwarm-status-bar" aria-label="Workbench status">
       <div className="flex h-full items-center gap-0.5">
@@ -147,11 +147,11 @@ export default function WorkbenchStatusBar({ running, sessions, nodes, totalUsag
       <div className="foxwarm-status-usage-group flex h-full items-center gap-0.5">
         <button {...itemProps('total-usage', 'Total token usage')}><ChartPie aria-hidden="true" /><span>Total</span><span>{usageValue(totalUsage)}</span></button>
         {currentSessionId && <button {...itemProps('session-usage', 'Current Session token usage')}><ChartPie aria-hidden="true" /><span>Session</span><span>{usageValue(currentSession?.tokenUsage)}</span></button>}
-        <button {...itemProps('nodes', `Ready nodes: ${readyNodes.length}`)}><Server aria-hidden="true" /><span>Nodes</span><span>{readyNodes.length}</span></button>
+        <button {...itemProps('nodes', `Nodes: ${onlineNodes} online, ${nodes.length} total`)}><Server aria-hidden="true" /><span>Nodes</span><span>{onlineNodes}/{nodes.length}</span></button>
       </div>
     </footer>
-    {open && createPortal(<div ref={popupRef} role="dialog" aria-label={label} tabIndex={-1} data-workbench-status-popup className="foxwarm-status-popup" style={{ left: position?.left ?? 8, bottom: position?.bottom ?? 32, visibility: position ? 'visible' : 'hidden' }}>
-      <h3 className="mb-2 text-sm font-medium text-fw-text-strong">{label}</h3>
+    {open && createPortal(<div ref={popupRef} role="dialog" aria-label={label} tabIndex={-1} data-workbench-status-popup className={`foxwarm-status-popup${open === 'nodes' ? ' foxwarm-status-popup-node-directory' : ''}`} style={{ left: position?.left ?? 8, bottom: position?.bottom ?? 32, visibility: position ? 'visible' : 'hidden' }}>
+      <h3 className="mb-1 shrink-0 text-sm font-medium text-fw-text-strong">{label}</h3>
       {open === 'total-usage' && <TokenUsageDetails usage={totalUsage} detailed />}
       {open === 'session-usage' && <>
         <div className="mb-3 truncate text-xs text-fw-text-muted" title={currentSessionId}>{currentSession?.displayName || currentSessionId}</div>
@@ -159,10 +159,23 @@ export default function WorkbenchStatusBar({ running, sessions, nodes, totalUsag
       </>}
       {open === 'running' && <>{row('Running', running)}{row('Loaded sessions', sessions.length)}</>}
       {open === 'waiting' && row('Waiting · loaded sessions', waiting.length)}
-      {(open === 'running' || open === 'waiting') && <div className="mt-2 border-t border-fw-border-muted pt-2">{(open === 'running' ? active : waiting).slice(0, 4).map(session => <div key={session.id} className="flex min-w-0 items-center justify-between gap-3 py-1"><span className="truncate" title={session.id}>{session.displayName || session.id}</span><span className="shrink-0 text-[11px] text-fw-text-muted">{getSessionRuntimeStateName(session)}</span></div>)}{!(open === 'running' ? active : waiting).length && <div className="py-1 text-fw-text-muted">No matching loaded sessions</div>}</div>}
-      {open === 'tasks' && <>{tasks && <>{row('Active', tasks.active)}{row('Open', tasks.open)}</>}<div className="mt-2 border-t border-fw-border-muted pt-2">{taskPreviewState === 'loading' ? <span className="text-fw-text-muted">Loading…</span> : taskPreviewState === 'error' ? <span className="text-fw-text-muted">Unable to load tasks</span> : taskPreview.map(task => <div key={task.id} className="flex min-w-0 items-center justify-between gap-3 py-1"><span className="truncate" title={task.title}>{task.title}</span><span className="shrink-0 text-[11px] text-fw-text-muted">{task.status}</span></div>)}</div></>}
-      {open === 'nodes' && <>{row('Ready', readyNodes.length)}{row('Offline', nodes.filter(node => !node.online).length)}<div className="mt-2 border-t border-fw-border-muted pt-2">{nodes.slice(0, 6).map(node => <div key={node.id} className="flex min-w-0 items-center justify-between gap-3 py-1"><span className="truncate" title={node.id}>{node.displayName}</span><span className="shrink-0 text-[11px] text-fw-text-muted">{!node.online ? 'Offline' : node.protocolStatus === 'upgrade-required' ? 'Upgrade required' : 'Ready'}</span></div>)}</div></>}
-      {(open === 'tasks' || open === 'nodes') && <div className="mt-3 border-t border-fw-border-muted pt-2">
+      {(open === 'running' || open === 'waiting') && <div className="foxwarm-status-popup-section">{(open === 'running' ? active : waiting).slice(0, 4).map(session => <div key={session.id} className="flex min-w-0 items-center justify-between gap-3 py-1"><span className="truncate" title={session.id}>{session.displayName || session.id}</span><span className="shrink-0 text-[11px] text-fw-text-muted">{getSessionRuntimeStateName(session)}</span></div>)}{!(open === 'running' ? active : waiting).length && <div className="py-1 text-fw-text-muted">No matching loaded sessions</div>}</div>}
+      {open === 'tasks' && <>
+        {tasks && <>{row('Active', tasks.active)}{row('Open', tasks.open)}</>}
+        {taskPreviewState !== 'ready' || taskPreview.length > 0 ? <div className="foxwarm-status-popup-section">
+          {taskPreviewState === 'loading' ? <span className="text-fw-text-muted">Loading…</span> : taskPreviewState === 'error' ? <span className="text-fw-text-muted">Unable to load tasks</span> : taskPreview.map(task => <div key={task.id} className="flex min-w-0 items-center justify-between gap-3 py-1"><span className="truncate" title={task.title}>{task.title}</span><span className="shrink-0 text-[11px] text-fw-text-muted">{task.status}</span></div>)}
+        </div> : null}
+      </>}
+      {open === 'nodes' && <>
+        <div className="shrink-0">{row('Online', onlineNodes)}{row('Total', nodes.length)}</div>
+        <div role="list" aria-label="Node directory" tabIndex={0} className="foxwarm-status-popup-section foxwarm-status-node-list">
+          {nodes.map(node => <div role="listitem" key={node.id} className="flex min-w-0 items-center justify-between gap-3 py-1">
+            <span className="truncate" title={node.id}>{node.displayName}</span>
+            <span className="shrink-0 text-[11px] text-fw-text-muted">{node.online ? 'Online' : 'Offline'}{node.protocolStatus === 'upgrade-required' ? <span className="text-fw-warning"> · Upgrade required</span> : null}</span>
+          </div>)}
+        </div>
+      </>}
+      {(open === 'tasks' || open === 'nodes') && <div className="foxwarm-status-popup-section shrink-0">
         <button type="button" className="w-full rounded-md px-2 py-1.5 text-left text-xs font-medium text-fw-accent hover:bg-fw-hover" onClick={() => {
           const navigate = open === 'tasks' ? onOpenTasks : onOpenNodes
           setOpen(null)

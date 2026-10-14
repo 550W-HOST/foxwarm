@@ -48,12 +48,13 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, codeNewWindow, responsiveChat = false, chatMessages = null, timelineView = 'grouped', showScrollbar, terminal = null, width = 1400, height = 900 } = {}) {
+async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, colorMode = 'light', nodeDirectory = [], taskRows = null, codeNewWindow, responsiveChat = false, chatMessages = null, timelineView = 'grouped', showScrollbar, terminal = null, width = 1400, height = 900 } = {}) {
   const page = await browser.newPage()
   const pageErrors = []
   page.on('pageerror', error => pageErrors.push(error.message))
-  await page.setViewport({ width, height })
-  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat, splitDirection, initialLayout, themeId, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal }) => {
+  // Firefox ESR retains its native viewport; Puppeteer orientation emulation is unsupported.
+  if (!firefox) await page.setViewport({ width, height })
+  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat, splitDirection, initialLayout, themeId, colorMode, nodeDirectory, taskRows, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal }) => {
     if (window !== window.top) return
     const tabsById = Object.fromEntries(initialTabs.map(tab => [tab.id, tab]))
     const root = initialLayout || (splitPanes
@@ -70,7 +71,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
     }
     if (chatMessages) localStorage.setItem('foxwarm_timeline_view_v1', timelineView)
     if (showScrollbar !== undefined) localStorage.setItem('foxwarm.contextScrollbar.showScrollbar', String(showScrollbar))
-    if (themeId) localStorage.setItem('foxwarm_theme_selection_v2', JSON.stringify({ version: 2, themeId, colorMode: 'light' }))
+    if (themeId) localStorage.setItem('foxwarm_theme_selection_v2', JSON.stringify({ version: 2, themeId, colorMode }))
     if (codeNewWindow !== undefined) localStorage.setItem('foxwarm_code_open_new_window_v1', String(codeNewWindow))
     const json = body => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     window.__fetches = []
@@ -91,8 +92,10 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       if (pathname.endsWith('/api/auth/session')) return json({ role: 'admin' })
       if (pathname.endsWith('/api/tasks')) {
         const status = url.searchParams.get('status')
-        const total = status === 'open' ? 3 : status === 'active' ? 2 : 0
-        return json({ tasks: [], total, omitted: total })
+        const matching = taskRows?.filter(task => task.status === status)
+        const total = matching ? matching.length : status === 'open' ? 3 : status === 'active' ? 2 : 0
+        const tasks = matching?.slice(0, Number(url.searchParams.get('limit') || 50)) || []
+        return json({ tasks, total, omitted: total - tasks.length })
       }
       if (pathname.endsWith('/api/setup/status')) return json({ oobe: false, models: { exists: true, hasPlaceholderSecrets: false }, channels: [] })
       if (pathname.endsWith('/api/terminals') && options.method === 'POST' && terminalTemplate) {
@@ -109,7 +112,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       if (pathname.includes('/api/terminals/') && terminal) return json({ terminal })
       if (pathname.endsWith('/api/terminals')) return json({ terminals: terminal ? [terminal] : [] })
       if (pathname.endsWith('/api/tasks')) return json({ tasks: [], omitted: 0 })
-      if (pathname.endsWith('/api/nodes')) return json({ nodes: [] })
+      if (pathname.endsWith('/api/nodes')) return json({ nodes: nodeDirectory })
       if (pathname.endsWith('/api/agents')) return json({ agents: [] })
       if (pathname.endsWith('/api/webui/settings')) return json({ settings: {} })
       if (pathname.endsWith('/api/models')) return json({ models: responsiveChat ? [{ key: 'fixture/model', label: 'Fixture model', contextLimit: 128000 }] : [] })
@@ -161,7 +164,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
     }
     window.__emitRealtime = data => { for (const socket of FixtureWebSocket.instances) socket.onmessage?.({ data: JSON.stringify(data) }) }
     window.WebSocket = FixtureWebSocket
-  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal })
+  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, colorMode, nodeDirectory, taskRows, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal })
   await page.goto(`${baseUrl}${hash}`, { waitUntil: 'domcontentloaded' })
   await page.bringToFront()
   await page.waitForFunction(() => !!window.foxwarmTest || !!document.querySelector('[data-foxwarm-popup-root="chat"]'), { timeout: 8_000 }).catch(async error => {
@@ -1968,7 +1971,7 @@ async function workbenchScreenshot(page, name) {
 
 async function clickStatusPageEntry(page, section) {
   const popup = '[data-workbench-status-popup]'
-  await page.click(`[data-workbench-status-bar] button[aria-label^="${section === 'Tasks' ? 'Tasks:' : 'Ready nodes:'}"]`)
+  await page.click(`[data-workbench-status-bar] button[aria-label^="${section === 'Tasks' ? 'Tasks:' : 'Nodes:'}"]`)
   await page.waitForSelector(popup, { visible: true })
   const entry = await page.evaluateHandle(label => [...document.querySelectorAll('[data-workbench-status-popup] button')].find(button => button.textContent === label), `Open ${section}`)
   await entry.asElement().click()
@@ -1994,7 +1997,7 @@ test('Tasks and Nodes popup entries close the preview and activate singleton pag
     await page.evaluate(() => [...document.querySelectorAll('[data-workbench-status-popup] button')].find(button => button.textContent === 'Open Tasks').click())
     await page.waitForSelector('[data-workbench-status-popup]', { hidden: true })
     assert.equal(Object.keys((await state(page)).tabsById).filter(id => id === 'system:tasks').length, 1)
-    await page.click('[data-workbench-status-bar] button[aria-label^="Ready nodes:"]')
+    await page.click('[data-workbench-status-bar] button[aria-label^="Nodes:"]')
     await page.waitForSelector('[data-workbench-status-popup]', { visible: true })
     await page.waitForFunction(() => document.querySelector('[data-workbench-status-popup]')?.textContent.includes('Open Nodes'))
     await workbenchScreenshot(page, 'status-nodes-popup.png')
@@ -2017,6 +2020,7 @@ test('Tasks and Nodes popup entries close the preview and activate singleton pag
     await page.evaluate(() => [...document.querySelectorAll('header button')].find(button => button.textContent.includes('protocol-compatible execution')).click())
     await page.waitForSelector('[data-node-surface]')
     await page.setViewport({ width: 390, height: 844 })
+    await page.waitForSelector('[data-workbench-status-bar]', { hidden: true })
     await workbenchScreenshot(page, 'nodes-workbench-narrow.png')
     assert.equal(await page.$('[data-workbench-status-bar]'), null)
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false)
@@ -2082,7 +2086,7 @@ test('Desktop status bar opens upward details without navigation and stays outsi
     assert.equal(await page.$eval(tasks, element => document.activeElement === element), true)
     await page.evaluate(() => window.dispatchEvent(new CustomEvent('foxwarm-task-counts', { detail: { open: 1, active: 1 } })))
     await page.waitForSelector(`${bar} button[aria-label="Tasks: 1 active, 2 unfinished"]`)
-    await page.click(`${bar} button[aria-label="Ready nodes: 1"]`)
+    await page.click(`${bar} button[aria-label="Nodes: 1 online, 1 total"]`)
     await page.waitForSelector('[data-workbench-status-popup]', { visible: true })
     assert.match(await page.$eval('[data-workbench-status-popup]', element => element.textContent), /master/)
     assert.equal(await page.evaluate(() => location.hash), hash)
@@ -2768,3 +2772,89 @@ for (const deltaY of [-160, -3]) {
     } finally { await page.close() }
   })
 }
+
+
+test('status popups keep full Node connectivity counts and compact theme-visible sections', async () => {
+  const nodeDirectory = Array.from({ length: 14 }, (_, index) => ({
+    id: `fixture-node-${String(index + 1).padStart(2, '0')}`,
+    displayName: `Fixture node ${index + 1}`,
+    type: 'cli-node', online: index < 8,
+    services: { 'vscode-fs': 1 },
+    ...(index === 2 ? { protocolCompatibility: { status: 'upgrade-required' } } : {}),
+  }))
+  const taskRows = [
+    { id: 'fixture-active', title: 'Review Node status', status: 'active' },
+    { id: 'fixture-open', title: 'Check pending setup', status: 'open' },
+  ]
+  for (const [themeId, colorMode] of [['foxwarm.default', 'dark'], ['foxwarm.default', 'light'], ['foxwarm.550a', 'dark']]) {
+    const page = await openFixture({ tabs: [nodesTab], activeTabId: nodesTab.id, themeId, colorMode, nodeDirectory, taskRows, width: 1280, height: 760 })
+    try {
+      const label = `${themeId.split('.').at(-1)}-${colorMode}`
+      const nodesTrigger = '[data-workbench-status-bar] button[aria-label^="Nodes:"]'
+      const popup = '[data-workbench-status-popup]'
+      await page.waitForSelector('[data-node-surface]')
+      await page.waitForSelector('[data-workbench-status-bar] button[aria-label="Tasks: 1 active, 2 unfinished"]')
+      await page.waitForSelector(`${nodesTrigger}[title="Nodes: 9 online, 15 total"]`)
+      assert.equal(await page.$eval(`${nodesTrigger} span:last-child`, element => element.textContent), '9/15')
+      assert.match(await page.$eval('[data-node-surface]', element => element.textContent), /Online 9 · Total 15/)
+      assert.equal(await page.$$eval('[data-node-surface] article', cards => cards.length), 15)
+      assert.match(await page.$eval('[data-node-surface] article:nth-child(4)', card => card.textContent), /Online.*Upgrade required/)
+      await workbenchScreenshot(page, `nodes-page-${label}.png`)
+      const directoryReads = await page.evaluate(() => window.__fetches.filter(request => request.path.endsWith('/api/nodes')).length)
+      await page.click(nodesTrigger)
+      await page.waitForSelector(popup, { visible: true })
+      await workbenchScreenshot(page, `nodes-popup-${label}.png`)
+      const summary = await page.$eval(popup, element => element.textContent)
+      assert.match(summary, /Online9Total15/)
+      const list = `${popup} [role="list"]`
+      assert.equal(await page.$$eval(`${list} [role="listitem"]`, rows => rows.length), 15)
+      assert.deepEqual(await page.$$eval(`${list} [role="listitem"] > span:first-child`, names => names.map(name => name.title)), ['master', ...nodeDirectory.map(node => node.id)])
+      assert.match(await page.$eval(`${list} [role="listitem"]:nth-child(4)`, row => row.textContent), /Online · Upgrade required/)
+      const initial = await page.$eval(popup, element => {
+        const rect = element.getBoundingClientRect()
+        const list = element.querySelector('[role=list]')
+        return { top: rect.top, bottom: rect.bottom, viewport: innerHeight, body: document.body.scrollHeight, bodyClient: document.body.clientHeight, popupScroll: element.scrollTop, listHeight: list.clientHeight, listScrollHeight: list.scrollHeight }
+      })
+      assert.ok(initial.top >= 8 && initial.bottom <= initial.viewport - 8, JSON.stringify(initial))
+      assert.ok(initial.listScrollHeight > initial.listHeight)
+      const listBounds = await (await page.$(list)).boundingBox()
+      await page.mouse.move(listBounds.x + listBounds.width / 2, listBounds.y + listBounds.height / 2)
+      await page.mouse.wheel({ deltaY: 100 })
+      await page.waitForFunction(() => document.querySelector('[aria-label="Node directory"]').scrollTop > 0)
+      const seventhVisible = await page.$eval(`${list} [role="listitem"]:nth-child(7)`, row => { const rect = row.getBoundingClientRect(); const parent = row.parentElement.getBoundingClientRect(); return rect.top >= parent.top && rect.bottom <= parent.bottom })
+      assert.equal(seventhVisible, true)
+      await page.mouse.wheel({ deltaY: 1000 })
+      await page.waitForFunction(() => { const list = document.querySelector('[aria-label="Node directory"]'); return list.scrollTop + list.clientHeight >= list.scrollHeight - 1 })
+      const scroll = await page.$eval(popup, element => {
+        const list = element.querySelector('[role=list]'); const last = list.lastElementChild.getBoundingClientRect(); const rect = list.getBoundingClientRect()
+        return { listScroll: list.scrollTop, popupScroll: element.scrollTop, windowScroll: scrollY, bodyScroll: document.body.scrollTop, pageScroll: document.querySelector('[data-node-surface]').parentElement.parentElement.scrollTop, lastVisible: last.top >= rect.top && last.bottom <= rect.bottom + 1 }
+      })
+      await workbenchScreenshot(page, `nodes-popup-last-${label}.png`)
+      assert.equal(scroll.lastVisible, true); assert.equal(scroll.popupScroll, 0); assert.equal(scroll.windowScroll, 0); assert.equal(scroll.bodyScroll, 0); assert.equal(scroll.pageScroll, 0)
+      assert.equal(await page.evaluate(() => window.__fetches.filter(request => request.path.endsWith('/api/nodes')).length), directoryReads)
+      console.info('status popup geometry', label, { initial, scroll })
+      console.info('status popup styles', label, await page.$eval(popup, element => {
+        const style = getComputedStyle(element)
+        const section = element.querySelector('.foxwarm-status-popup-section')
+        const sectionStyle = getComputedStyle(section)
+        return { surface: style.backgroundColor, divider: sectionStyle.borderTopColor, dividerWidth: sectionStyle.borderTopWidth, marginTop: sectionStyle.marginTop, paddingTop: sectionStyle.paddingTop, height: element.getBoundingClientRect().height }
+      }))
+      assert.equal(await page.$eval(`${popup} .foxwarm-status-popup-section`, element => getComputedStyle(element).borderTopColor !== getComputedStyle(element.parentElement).backgroundColor), true)
+      await page.evaluate(() => [...document.querySelectorAll('[data-workbench-status-popup] button')].find(button => button.textContent === 'Open Nodes').focus())
+      await page.keyboard.press('Enter')
+      await page.waitForSelector(popup, { hidden: true })
+      assert.equal((await state(page)).hash, '#tab/system:nodes')
+      await page.click('[data-workbench-status-bar] button[aria-label="Tasks: 1 active, 2 unfinished"]')
+      await page.waitForFunction(() => document.querySelector('[data-workbench-status-popup]')?.textContent.includes('Review Node status'))
+      await workbenchScreenshot(page, `tasks-popup-${label}.png`)
+      const tasksGeometry = await page.$eval(popup, element => {
+        const sections = [...element.querySelectorAll('.foxwarm-status-popup-section')].map(section => { const style = getComputedStyle(section); return { border: style.borderTopColor, margin: parseFloat(style.marginTop), padding: parseFloat(style.paddingTop) } })
+        return { height: element.getBoundingClientRect().height, surface: getComputedStyle(element).backgroundColor, sections }
+      })
+      assert.ok(tasksGeometry.height < 210, JSON.stringify(tasksGeometry))
+      assert.ok(tasksGeometry.sections.every(section => section.border !== tasksGeometry.surface && section.margin + section.padding <= 12))
+      console.info('task popup geometry', label, tasksGeometry)
+      assert.ok((await page.evaluate(() => window.__fetches.filter(request => request.path.endsWith('/tasks') && new URLSearchParams(request.search).get('limit') === '3'))).length === 2)
+    } finally { await page.close() }
+  }
+})

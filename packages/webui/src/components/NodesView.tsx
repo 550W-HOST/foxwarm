@@ -10,11 +10,12 @@ function NodeOverviewCard({ node }: { node: WebUiNodeTarget }) {
   return <article className="rounded-xl border border-fw-border bg-fw-surface p-4">
     <div className="flex items-center justify-between gap-2">
       <h3 className="truncate font-semibold text-fw-text-strong">{node.displayName}</h3>
-      <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${incompatible ? 'bg-fw-warning-surface text-fw-warning' : node.online ? 'bg-fw-accent-surface text-fw-accent' : 'bg-fw-surface-sunken text-fw-text-muted'}`}>{incompatible ? 'Upgrade required' : node.online ? 'Ready' : 'Offline'}</span>
+      <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${node.online ? 'bg-fw-accent-surface text-fw-accent' : 'bg-fw-surface-sunken text-fw-text-muted'}`}>{node.online ? 'Online' : 'Offline'}</span>
     </div>
     <p className="mt-1 break-all font-mono text-xs text-fw-text-muted">{node.id}</p>
     <p className="mt-2 text-xs text-fw-text-muted">{node.type}{node.lastSeenAt ? ` · Last seen ${new Date(node.lastSeenAt).toLocaleString()}` : ''}</p>
-    {node.protocolMessage ? <p className="mt-2 text-xs text-fw-warning">{node.protocolMessage}</p> : null}
+    {incompatible ? <p className="mt-2 text-xs text-fw-warning">Upgrade required</p> : null}
+    {node.protocolMessage && node.protocolMessage !== 'upgrade required' ? <p className="mt-2 text-xs text-fw-warning">{node.protocolMessage}</p> : null}
     <div className="mt-3 flex flex-wrap gap-1.5">
       {Object.entries(node.services).map(([name, version]) => <span key={name} className="rounded bg-fw-canvas px-2 py-1 text-xs text-fw-text-muted">{name} v{version}</span>)}
     </div>
@@ -24,6 +25,7 @@ function NodeOverviewCard({ node }: { node: WebUiNodeTarget }) {
 export default function NodesView({ onBack }: { onBack?: () => void }) {
   const tabHeader = useWorkbenchTabHeader()
   const { nodes, error, reload } = useNodeDirectory()
+  const onlineNodes = nodes.filter(node => node.online === true).length
   const [onboardingOpen, setOnboardingOpen] = useState(false)
   const closeOnboarding = useCallback(() => setOnboardingOpen(false), [])
   const pendingApprovals = useNodePendingApprovals(true)
@@ -48,7 +50,7 @@ export default function NodesView({ onBack }: { onBack?: () => void }) {
         </WorkbenchHeaderDragArea>
       </header>
       <main data-node-surface className="space-y-4">
-        <p className="text-xs text-fw-text-muted">{nodes.length} {nodes.length === 1 ? 'node' : 'nodes'}</p>
+        <p className="text-xs text-fw-text-muted">Online {onlineNodes} · Total {nodes.length}</p>
         {error || pendingApprovals.error ? <p role="alert" className="text-sm text-fw-danger">{error || pendingApprovals.error}</p> : null}
         <div className="grid gap-3 md:grid-cols-2">{nodes.map(node => <NodeOverviewCard key={node.id} node={node} />)}</div>
       </main>

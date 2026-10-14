@@ -2308,6 +2308,15 @@ html[data-foxwarm-theme] .foxwarm-chat-composer-textarea {
   box-shadow: var(--foxwarm-panel-shadow); font-size: 12px;
 }
 .foxwarm-status-popup:focus { outline: none; }
+.foxwarm-status-popup-section {
+  margin-top: 6px; padding-top: 6px;
+  border-top: 1px solid var(--foxwarm-color-border);
+}
+.foxwarm-status-popup-node-directory { display: flex; flex-direction: column; overflow: hidden; }
+.foxwarm-status-node-list {
+  min-height: 0; max-height: 200px; overflow-y: auto; overscroll-behavior: contain;
+}
+.foxwarm-status-node-list:focus-visible { outline: 1px solid var(--foxwarm-color-focus-ring); outline-offset: -1px; }
 /* Tab overflow is an overlay, not a second strip between tab and content. */
 .foxwarm-workbench-tab-row { scrollbar-width: none; }
 .foxwarm-workbench-tab-row::-webkit-scrollbar { display: none; }
