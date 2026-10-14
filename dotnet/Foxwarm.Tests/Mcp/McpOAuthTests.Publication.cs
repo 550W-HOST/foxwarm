@@ -7,6 +7,36 @@ namespace Foxwarm.Tests;
 public sealed partial class McpOAuthTests
 {
     [Fact]
+    public async Task Consent_started_before_a_completed_rotation_preserves_the_current_live_tokens()
+    {
+        await using var peer = await McpOAuthPeer.StartAsync();
+        await using var f = await OutboundMcpFixture.CreateAsync(PublicBase);
+        await ConfigureAsync(f, peer);
+        await peer.AuthorizeAsync(f.Mcp);
+        var original = McpOAuthPeer.Value(await f.CallAsync(f.First, "state"));
+        await peer.GateAsync("metadata");
+        var consent = f.Mcp.OAuth.BeginAsync("peer", f.Mcp.AuthorizationServer("peer"), default);
+        await peer.WaitAsync("metadataEntered");
+        await peer.SetAsync(new() { ["force401"] = 1 });
+        var renewed = McpOAuthPeer.Value(await f.CallAsync(f.First, "state"));
+        Assert.Equal(original["context"]!.GetValue<int>(), renewed["context"]!.GetValue<int>());
+        var file = Path.Combine(f.Data, "state", "mcp-oauth.json");
+        var rotated = JsonNode.Parse(await File.ReadAllTextAsync(file))!["servers"]!["peer"]![
+            "tokens"
+        ]!.DeepClone();
+        await peer.ReleaseAsync("metadata");
+        Assert.Contains("state=", await consent);
+        Assert.True(
+            JsonNode.DeepEquals(
+                rotated,
+                JsonNode.Parse(await File.ReadAllTextAsync(file))!["servers"]!["peer"]!["tokens"]
+            )
+        );
+        Assert.Equal(1, Count(await peer.StateAsync(), "refreshes"));
+        Assert.Equal(1, Count(await peer.StateAsync(), "registrations"));
+    }
+
+    [Fact]
     public async Task Caller_Stop_releases_only_its_waiter_while_another_owner_uses_shared_refresh()
     {
         await using var peer = await McpOAuthPeer.StartAsync();

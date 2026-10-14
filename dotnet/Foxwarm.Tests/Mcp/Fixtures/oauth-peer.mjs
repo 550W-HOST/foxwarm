@@ -6,10 +6,15 @@ const source = process.env.FOXWARM_TS_ROOT
 if (!source) throw new Error('Set FOXWARM_TS_ROOT to the built repository checkout')
 const { createMcpOAuthFixture } = require(resolve(source, 'lib/mcpOAuthTestFixture.js'))
 const fixture = await createMcpOAuthFixture()
-let releaseRefresh, releaseSlow
-let slowEntered = false, refreshEntered = false
+let releaseRefresh, releaseSlow, releaseMetadata
+let slowEntered = false, refreshEntered = false, metadataEntered = false
 const handle = fixture.app.handle.bind(fixture.app)
 fixture.app.handle = (req, res, next) => {
+  if (req.url.startsWith('/.well-known/oauth-authorization-server/') && fixture.state.metadataGate) {
+    metadataEntered = true
+    fixture.state.metadataGate.then(() => handle(req, res, next))
+    return
+  }
   if (req.url === '/token') {
     const json = fixture.app.response.json.bind(res)
     res.json = body => {
@@ -35,7 +40,7 @@ fixture.app.post('/fixture/client-metadata', (req, res) => {
 })
 fixture.app.get('/fixture/state', (_req, res) => res.json({
   ...Object.fromEntries(Object.entries(fixture.state).filter(([, value]) => typeof value !== 'function' && !(value instanceof Promise))),
-  slowEntered, refreshEntered, accessTokens: [...fixture.tokens.keys()], refreshTokens: [...fixture.refreshTokens.keys()],
+  slowEntered, refreshEntered, metadataEntered, accessTokens: [...fixture.tokens.keys()], refreshTokens: [...fixture.refreshTokens.keys()],
 }))
 fixture.app.post('/fixture/state', (req, res) => {
   for (const [key, value] of Object.entries(req.body)) {
@@ -54,14 +59,18 @@ fixture.app.post('/fixture/gate/:kind', (req, res) => {
   } else if (req.params.kind === 'slow') {
     slowEntered = false
     fixture.state.slowGate = new Promise(done => { releaseSlow = done })
+  } else if (req.params.kind === 'metadata') {
+    metadataEntered = false
+    fixture.state.metadataGate = new Promise(done => { releaseMetadata = done })
   } else { res.sendStatus(400); return }
   res.json({ ok: true })
 })
 fixture.app.post('/fixture/release/:kind', (req, res) => {
   if (req.params.kind === 'refresh') releaseRefresh?.()
   else if (req.params.kind === 'slow') { fixture.state.slowGate = undefined; releaseSlow?.() }
+  else if (req.params.kind === 'metadata') { fixture.state.metadataGate = undefined; releaseMetadata?.() }
   else { res.sendStatus(400); return }
   res.json({ ok: true })
 })
 process.stdout.write(JSON.stringify({ url: fixture.baseUrl }) + '\n')
-process.once('SIGTERM', async () => { releaseRefresh?.(); releaseSlow?.(); await fixture.close(); process.exit(0) })
+process.once('SIGTERM', async () => { releaseRefresh?.(); releaseSlow?.(); releaseMetadata?.(); await fixture.close(); process.exit(0) })
