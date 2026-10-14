@@ -255,7 +255,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   const { isMobile, compactModelSelector, compactComposer } = layout
   const [connectionState, setConnectionState] = useState<'connected' | 'connecting' | 'disconnected' | 'reconnecting'>('connecting')
   const [reconnectCountdown, setReconnectCountdown] = useState<number>(0)
-  const [showScrollButton, setShowScrollButton] = useState(false)
+  const [followingBottom, setFollowingBottom] = useState(true)
   const [showScrollTopButton, setShowScrollTopButton] = useState(false)
   const [showDebugInfo, setShowDebugInfo] = useState(false)
   const [streamingAssistantDraft, setStreamingAssistantDraft] = useState<StreamingAssistantDraft | null>(null)
@@ -482,6 +482,12 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     return () => observer.disconnect()
   }, [])
 
+  const setBottomFollow = useCallback((following: boolean, pendingUserLeave = false) => {
+    shouldAutoScrollRef.current = following
+    pendingUserLeaveBottomRef.current = pendingUserLeave
+    setFollowingBottom(following)
+  }, [])
+
   const scrollToBottom = useCallback(() => {
     const container = messagesContainerRef.current
     if (container) {
@@ -490,11 +496,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       const state: ChatViewportState = { kind: 'bottom' }
       currentViewportStateRef.current = state
       currentViewportGeometryRef.current = null
-      shouldAutoScrollRef.current = true
-      pendingUserLeaveBottomRef.current = false
+      setBottomFollow(true)
       storeChatViewportState(viewportSessionId, state)
     }
-  }, [viewportSessionId])
+  }, [setBottomFollow, viewportSessionId])
 
   useEffect(() => () => {
     cardHeightChangesRef.current.clear()
@@ -547,10 +552,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       distanceFromBottom,
       userIntent,
     })
-    shouldAutoScrollRef.current = next.following
-    pendingUserLeaveBottomRef.current = next.pendingUserLeave
+    setBottomFollow(next.following, next.pendingUserLeave)
     return next
-  }, [])
+  }, [setBottomFollow])
 
   const captureCurrentViewportState = useCallback((): ChatViewportState | null => {
     if (pendingContentResizeRef.current) return pendingContentResizeRef.current.state
@@ -586,8 +590,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       container.scrollTop = container.scrollHeight
       currentViewportStateRef.current = state
       currentViewportGeometryRef.current = null
-      shouldAutoScrollRef.current = true
-      pendingUserLeaveBottomRef.current = false
+      setBottomFollow(true)
       storeChatViewportState(viewportSessionId, state)
       return true
     }
@@ -606,11 +609,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     }
     currentViewportStateRef.current = state
     currentViewportGeometryRef.current = null
-    shouldAutoScrollRef.current = false
-    pendingUserLeaveBottomRef.current = false
+    setBottomFollow(false)
     storeChatViewportState(viewportSessionId, state)
     return true
-  }, [viewportSessionId])
+  }, [setBottomFollow, viewportSessionId])
 
   const applyViewportAnchorCandidates = useCallback((anchors: Array<{ messageKey: string; offsetPx: number }>): boolean => {
     for (const candidate of anchors) {
@@ -635,6 +637,14 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     pendingViewportRestoreRef.current = null
     currentViewportGeometryRef.current = null
   }, [])
+
+  const handleBottomNavigation = useCallback(() => {
+    markUserViewportInteraction()
+    pendingContextScrollbarNavigationRef.current = null
+    pendingScrollToTrueTopRef.current = false
+    capturedInteractionVersionRef.current = userInteractionVersionRef.current
+    scrollToBottom()
+  }, [markUserViewportInteraction, scrollToBottom])
 
   const leaveBottomFollow = useCallback(() => {
     markUserViewportInteraction()
@@ -668,8 +678,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     const container = messagesContainerRef.current
     if (container) {
       markUserViewportInteraction()
-      shouldAutoScrollRef.current = false
-      pendingUserLeaveBottomRef.current = false
+      setBottomFollow(false)
       if (!showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
         pendingScrollToTrueTopRef.current = true
         setShowFullTimeline(true)
@@ -677,7 +686,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       }
       container.scrollTop = 0
     }
-  }, [markUserViewportInteraction, messages.length, showFullTimeline])
+  }, [markUserViewportInteraction, messages.length, setBottomFollow, showFullTimeline])
 
   const scrollToContextScrollbarAnchor = useCallback((anchorKey: string, fraction: number): boolean => {
     const container = messagesContainerRef.current
@@ -714,7 +723,6 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         leaveBottomFollow()
       }
 
-      setShowScrollButton(distanceFromBottom > 200)
       setShowScrollTopButton(scrollTop > 200)
       captureCurrentViewportState()
 
@@ -1805,8 +1813,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     if (!container) return
     container.scrollTop = pending.scrollTop + (container.scrollHeight - pending.scrollHeight)
     pendingViewportRestoreRef.current = null
-    shouldAutoScrollRef.current = false
-    pendingUserLeaveBottomRef.current = false
+    setBottomFollow(false)
 
     const nextState = readCurrentViewportState(CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX)
     if (nextState?.kind === 'anchor') {
@@ -1821,7 +1828,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       }
       capturedInteractionVersionRef.current = userInteractionVersionRef.current
     }
-  }, [applyViewportAnchorCandidates, applyViewportState, historyLoaded, messages.length, readCurrentViewportState, showFullTimeline, timelineMessages, viewportSessionId])
+  }, [applyViewportAnchorCandidates, applyViewportState, historyLoaded, messages.length, readCurrentViewportState, setBottomFollow, showFullTimeline, timelineMessages, viewportSessionId])
 
   useLayoutEffect(() => {
     const pending = pendingContextScrollbarNavigationRef.current
@@ -1849,7 +1856,6 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       }
       resizeRestoreFrameRef.current = window.requestAnimationFrame(() => {
         resizeRestoreFrameRef.current = null
-        setShowScrollButton(container.scrollHeight - container.scrollTop - container.clientHeight > 200)
         const contentResize = pendingContentResizeRef.current
         if (contentResize) {
           if (contentResize.interactionVersion === userInteractionVersionRef.current) applyViewportState(contentResize.state)
@@ -2337,7 +2343,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
                 <ThreadCardHeightContext.Provider value={cardHeightContext}><ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} timelineView={timelineView} showUsageBadge={false} showTimeDividers={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} /></ThreadCardHeightContext.Provider>
               </div>
             )}
-            <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />
+            <div aria-hidden="true" data-chat-composer-spacer style={{ height: 'calc(var(--chat-composer-offset, 224px) - 2.5rem)' }} />
           </div>
         </div>
         <div className="foxwarm-display-effect-overlay" aria-hidden="true" />
@@ -2353,9 +2359,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
           </button>
         )}
 
-        {showScrollButton && (
+        {!followingBottom && (
           <button
-            onClick={scrollToBottom}
+            onClick={handleBottomNavigation}
             className="absolute bottom-4 right-4 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-fw-accent text-fw-text-inverse shadow-lg transition-all hover:bg-fw-accent dark:bg-fw-accent dark:hover:bg-fw-accent"
             style={{ bottom: 'calc(var(--chat-composer-offset, 224px) + 1rem)' }}
             aria-label="Scroll to bottom"

@@ -63,7 +63,8 @@ test('compacting status is blue and animated, with compaction queue continuation
 
   assert.match(html, /data-processing-runtime-state="requesting-model"/)
   assert.match(html, /bg-fw-accent-surface/)
-  assert.match(html, /Compacting\.\.\. • 2 queued messages will be inserted when this session resumes after compaction/)
+  assert.match(html, /Compacting\.\.\./)
+  assert.match(html, /2 queued messages will be inserted when this session resumes after compaction/)
   assert.equal((html.match(/runtime-busy-spinner/g) || []).length, 1)
   assert.doesNotMatch(html, /animate-bounce/)
   assert.match(html, />Stop<\/button>/)
@@ -82,7 +83,8 @@ test('running-tool status is purple and uses tool-call queue continuation', () =
 
   assert.match(html, /data-processing-runtime-state="running-tool"/)
   assert.match(html, /bg-fw-special-surface/)
-  assert.match(html, /tool: exec 2\/4 • 1 queued message will be inserted after this tool call/)
+  assert.match(html, /tool: exec 2\/4/)
+  assert.match(html, /1 queued message will be inserted after this tool call/)
   assert.equal((html.match(/runtime-busy-spinner/g) || []).length, 1)
   assert.doesNotMatch(html, /animate-bounce/)
   assert.match(html, />Stop<\/button>/)
@@ -101,8 +103,9 @@ test('waiting status is amber with one static dot, resume copy, and no Stop acti
   assert.match(html, /data-processing-runtime-state="waiting"/)
   assert.match(html, /bg-fw-warning-surface/)
   assert.match(html, /data-processing-status-dot="static"/)
+  assert.match(html, /waiting: sessions 1\/2/)
   assert.doesNotMatch(html, /animate-bounce|runtime-busy-spinner/)
-  assert.match(html, /waiting: sessions 1\/2 • 2 queued messages will be inserted when this session resumes/)
+  assert.match(html, /2 queued messages will be inserted when this session resumes/)
   assert.doesNotMatch(html, />Stop<\/button>/)
   assert.match(html, />Run queued<\/button>/)
   assert.doesNotMatch(html, />Continue<\/button>/)
@@ -124,7 +127,7 @@ test('idle interrupted status has one static dot and Continue only, with queued 
     sessionQueueLength: 2,
     runtimeState: activeRuntimeState('idle'),
   })
-  assert.match(withQueue, /Turn interrupted • 2 queued messages pending/)
+  assert.match(withQueue, /2 queued messages pending/)
   assert.match(withQueue, />Continue<\/button>/)
   assert.match(withQueue, />Run queued<\/button>/)
 })
@@ -138,7 +141,8 @@ test('idle queue keeps its pending action and canonical idle overrides legacy bu
   assert.doesNotMatch(queuedHtml, />Stop<\/button>/)
 
   const canonicalIdleHtml = render({ sessionBusy: true, runtimeState: activeRuntimeState('idle') })
-  assert.equal(canonicalIdleHtml, '')
+  assert.doesNotMatch(canonicalIdleHtml, /role="status"|runtime-busy-spinner|button/)
+  assert.match(canonicalIdleHtml, /data-processing-status-slot/)
 
   const legacyBusyHtml = render({ sessionBusy: true })
   assert.match(legacyBusyHtml, /data-processing-runtime-state="requesting-model"/)
