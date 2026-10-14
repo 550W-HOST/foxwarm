@@ -210,7 +210,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
         definitions.Add(CompactPrompt.ToolDefinition());
         foreach (var definition in UnifiedToolDefinitions.All())
             definitions.Add(definition?.DeepClone());
-        mcp = new Foxwarm.McpClient(this.root, SessionWait.Text(models.ConfigurationOwner?.AppConfiguration["url"]));
+        mcp = new Foxwarm.McpClient(
+            this.root,
+            SessionWait.Text(models.ConfigurationOwner?.AppConfiguration["url"])
+        );
         tools = SessionToolExecutor.CreateRegistry(
             definitions,
             mcp,

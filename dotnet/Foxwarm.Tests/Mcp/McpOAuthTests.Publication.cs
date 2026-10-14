@@ -11,10 +11,12 @@ public sealed partial class McpOAuthTests
     {
         await using var peer = await McpOAuthPeer.StartAsync();
         await using var f = await OutboundMcpFixture.CreateAsync(PublicBase);
-        await ConfigureAsync(f, peer); await peer.AuthorizeAsync(f.Mcp);
+        await ConfigureAsync(f, peer);
+        await peer.AuthorizeAsync(f.Mcp);
         await f.CallAsync(f.First, "state");
         var second = McpOAuthPeer.Value(await f.CallAsync(f.Second, "state"));
-        await peer.GateAsync("refresh"); await peer.SetAsync(new() { ["force401"] = 2 });
+        await peer.GateAsync("refresh");
+        await peer.SetAsync(new() { ["force401"] = 2 });
         using var stop = new CancellationTokenSource();
         var stopped = f.CallAsync(f.First, "state", token: stop.Token);
         await peer.WaitAsync("refreshEntered");
@@ -22,7 +24,10 @@ public sealed partial class McpOAuthTests
         stop.Cancel();
         Assert.NotNull((await stopped)!["error"]);
         await peer.ReleaseAsync("refresh");
-        Assert.Equal(second["context"]!.GetValue<int>(), McpOAuthPeer.Value(await surviving)["context"]!.GetValue<int>());
+        Assert.Equal(
+            second["context"]!.GetValue<int>(),
+            McpOAuthPeer.Value(await surviving)["context"]!.GetValue<int>()
+        );
         Assert.Equal(1, Count(await peer.StateAsync(), "refreshes"));
     }
 
@@ -34,12 +39,18 @@ public sealed partial class McpOAuthTests
         await ConfigureAsync(f, peer);
         var fail = false;
         var closes = 0;
-        var service = new McpOAuthService(f.Data, PublicBase, f.Mcp.AuthorizationServer,
-            _ => closes++, CancellationToken.None, stage =>
+        var service = new McpOAuthService(
+            f.Data,
+            PublicBase,
+            f.Mcp.AuthorizationServer,
+            _ => closes++,
+            CancellationToken.None,
+            stage =>
             {
                 if (fail && stage == AtomicJsonWriteStage.AfterRenameBeforeDirectorySync)
                     throw new IOException("Owned durability fixture failure");
-            });
+            }
+        );
         async Task Consent()
         {
             var url = await service.BeginAsync("peer", f.Mcp.AuthorizationServer("peer"), default);
@@ -49,23 +60,36 @@ public sealed partial class McpOAuthTests
         using var old = service.ResourceClient("peer", f.Mcp.AuthorizationServer("peer"));
         using (var response = await old.GetAsync(peer.Url + "/unknown-resource"))
             Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-        await peer.GateAsync("refresh"); await peer.SetAsync(new() { ["force401"] = 1 });
+        await peer.GateAsync("refresh");
+        await peer.SetAsync(new() { ["force401"] = 1 });
         var renewing = old.GetAsync(peer.Resource);
         await peer.WaitAsync("refreshEntered");
         var pending = await service.BeginAsync("peer", f.Mcp.AuthorizationServer("peer"), default);
         var query = await peer.CallbackAsync(pending);
         fail = true;
-        var error = await Assert.ThrowsAsync<McpOAuthException>(() => service.FinishAsync(query, default));
+        var error = await Assert.ThrowsAsync<McpOAuthException>(() =>
+            service.FinishAsync(query, default)
+        );
         Assert.Equal("storage", error.Code);
         var file = Path.Combine(f.Data, "state", "mcp-oauth.json");
-        var committed = JsonNode.Parse(await File.ReadAllTextAsync(file))!["servers"]!["peer"]!["tokens"]!.DeepClone();
-        Assert.Equal("authorized", service.Status("peer", f.Mcp.AuthorizationServer("peer"))["state"]!.GetValue<string>());
+        var committed = JsonNode.Parse(await File.ReadAllTextAsync(file))!["servers"]!["peer"]![
+            "tokens"
+        ]!.DeepClone();
+        Assert.Equal(
+            "authorized",
+            service.Status("peer", f.Mcp.AuthorizationServer("peer"))["state"]!.GetValue<string>()
+        );
         Assert.Equal(2, closes);
         fail = false;
         await peer.ReleaseAsync("refresh");
         await Assert.ThrowsAsync<McpOAuthException>(() => renewing);
         await service.DrainAsync();
-        Assert.True(JsonNode.DeepEquals(committed, JsonNode.Parse(await File.ReadAllTextAsync(file))!["servers"]!["peer"]!["tokens"]));
+        Assert.True(
+            JsonNode.DeepEquals(
+                committed,
+                JsonNode.Parse(await File.ReadAllTextAsync(file))!["servers"]!["peer"]!["tokens"]
+            )
+        );
         await Assert.ThrowsAsync<McpOAuthException>(() => old.GetAsync(peer.Resource));
         using var current = service.ResourceClient("peer", f.Mcp.AuthorizationServer("peer"));
         using var usable = await current.GetAsync(peer.Url + "/unknown-resource");

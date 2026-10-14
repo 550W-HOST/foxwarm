@@ -45,8 +45,14 @@ internal sealed class OutboundMcpFixture : IAsyncDisposable
             if (publicBaseUrl is not null)
             {
                 Directory.CreateDirectory(Path.Combine(f.Data, "state"));
-                File.WriteAllText(Path.Combine(f.Data, "state", "config.yaml"), new JsonObject { ["url"] = publicBaseUrl }.ToJsonString());
-                File.WriteAllText(Path.Combine(f.Data, "state", "models.yaml"), "{\"default\":\"local\",\"providers\":{\"local\":{\"providerType\":\"openai-responses\",\"baseUrl\":\"http://127.0.0.1:1\",\"models\":[\"wire\"]}}}");
+                File.WriteAllText(
+                    Path.Combine(f.Data, "state", "config.yaml"),
+                    new JsonObject { ["url"] = publicBaseUrl }.ToJsonString()
+                );
+                File.WriteAllText(
+                    Path.Combine(f.Data, "state", "models.yaml"),
+                    "{\"default\":\"local\",\"providers\":{\"local\":{\"providerType\":\"openai-responses\",\"baseUrl\":\"http://127.0.0.1:1\",\"models\":[\"wire\"]}}}"
+                );
                 models = new ModelConfiguration(f.Data).Models;
             }
             f.Manager = new(f.Data, f.Work, options, models);

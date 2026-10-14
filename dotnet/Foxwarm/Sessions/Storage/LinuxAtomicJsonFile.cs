@@ -94,9 +94,7 @@ public sealed class LinuxAtomicJsonFile
             };
             if (privateFile && !OperatingSystem.IsWindows())
                 options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-            using (
-                var stream = new FileStream(tempPath, options)
-            )
+            using (var stream = new FileStream(tempPath, options))
             {
                 write(stream);
                 stream.Flush(flushToDisk: true);

@@ -75,9 +75,15 @@ internal sealed partial class McpClient : IAsyncDisposable
     {
         try
         {
-            if (OAuth.Credentials().Any(secret => message.Contains(secret, StringComparison.Ordinal)))
+            if (
+                OAuth
+                    .Credentials()
+                    .Any(secret => message.Contains(secret, StringComparison.Ordinal))
+            )
                 return "The MCP operation failed with private credential data. Its outcome may be unknown; do not retry automatically.";
-            return Foxwarm.Images.ImageTransport.DiagnosticBody(configuration.Redact(message, configs));
+            return Foxwarm.Images.ImageTransport.DiagnosticBody(
+                configuration.Redact(message, configs)
+            );
         }
         catch
         {

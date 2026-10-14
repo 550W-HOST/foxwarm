@@ -57,8 +57,12 @@ internal sealed class McpConfiguration(string root)
         return config;
     }
 
-    internal async Task UpdateAsync(string name, JsonObject patch, bool enabledOnly,
-        Action<JsonObject?, JsonObject>? published = null)
+    internal async Task UpdateAsync(
+        string name,
+        JsonObject patch,
+        bool enabledOnly,
+        Action<JsonObject?, JsonObject>? published = null
+    )
     {
         await mutation.WaitAsync();
         try
@@ -97,8 +101,9 @@ internal sealed class McpConfiguration(string root)
 
     private void Persist(JsonObject servers)
     {
-        new LinuxAtomicJsonFile(root, "state/mcp.json", privateFile: true)
-            .WritePayload(new JsonObject { ["servers"] = servers.DeepClone() });
+        new LinuxAtomicJsonFile(root, "state/mcp.json", privateFile: true).WritePayload(
+            new JsonObject { ["servers"] = servers.DeepClone() }
+        );
     }
 
     internal void Close()
@@ -186,26 +191,41 @@ internal sealed class McpConfiguration(string root)
             throw new InvalidDataException("MCP HTTP transport requires url.");
         if (config["oauth"] is not null)
         {
-            if (config["oauth"] is not JsonObject oauth
-                || oauth.Any(pair => pair.Key is not ("scope" or "clientId" or "clientSecret")))
-                throw new InvalidDataException("OAuth configuration accepts only scope and pre-registered client credentials.");
+            if (
+                config["oauth"] is not JsonObject oauth
+                || oauth.Any(pair => pair.Key is not ("scope" or "clientId" or "clientSecret"))
+            )
+                throw new InvalidDataException(
+                    "OAuth configuration accepts only scope and pre-registered client credentials."
+                );
             var normalized = new JsonObject();
             foreach (var (key, value) in oauth)
             {
                 var text = SessionWait.Text(value);
                 if (text is null || text.Length > 8192 || text.IndexOfAny(['\r', '\n', '\0']) >= 0)
-                    throw new InvalidDataException("OAuth fields must be bounded single-line strings.");
+                    throw new InvalidDataException(
+                        "OAuth fields must be bounded single-line strings."
+                    );
                 if (text.Length > 0)
                     normalized[key] = text;
             }
             if (normalized["clientSecret"] is not null && normalized["clientId"] is null)
-                throw new InvalidDataException("A client secret requires a pre-registered client ID.");
+                throw new InvalidDataException(
+                    "A client secret requires a pre-registered client ID."
+                );
             if (transport == "stdio")
                 throw new InvalidDataException("OAuth is available only for HTTP MCP servers.");
             _ = McpOAuthHttp.Endpoint(SessionWait.Text(config["url"]));
-            if (!string.IsNullOrEmpty(SessionWait.Text(config["token"]))
-                || config["headers"] is JsonObject headers && headers.Any(pair => pair.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase)))
-                throw new InvalidDataException("Configure OAuth or static Authorization, not both.");
+            if (
+                !string.IsNullOrEmpty(SessionWait.Text(config["token"]))
+                || config["headers"] is JsonObject headers
+                    && headers.Any(pair =>
+                        pair.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase)
+                    )
+            )
+                throw new InvalidDataException(
+                    "Configure OAuth or static Authorization, not both."
+                );
             config["oauth"] = normalized;
         }
         else

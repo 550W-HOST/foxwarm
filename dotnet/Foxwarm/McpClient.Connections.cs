@@ -82,7 +82,11 @@ internal sealed partial class McpClient
         SessionOwner? owner,
         long? ownerGeneration,
         Func<SdkClient, JsonObject, CancellationToken, Task<T>> operation
-    ) => await OAuth.GuardAsync(configuration.Get(server), () => WithClientCoreAsync(server, token, owner, ownerGeneration, operation));
+    ) =>
+        await OAuth.GuardAsync(
+            configuration.Get(server),
+            () => WithClientCoreAsync(server, token, owner, ownerGeneration, operation)
+        );
 
     private async Task<T> WithClientCoreAsync<T>(
         string server,
@@ -403,23 +407,27 @@ internal sealed partial class McpClient
                 foreach (var (key, value) in additional)
                     headers[key] = SessionWait.Text(value)!;
             var options = new HttpClientTransportOptions
+            {
+                Name = server,
+                Endpoint = new Uri(
+                    SessionWait.Text(config["url"])
+                        ?? throw new InvalidDataException("MCP HTTP requires url.")
+                ),
+                AdditionalHeaders = headers,
+                OwnsSession = true,
+                TransportMode = SessionWait.Text(config["transport"]) switch
                 {
-                    Name = server,
-                    Endpoint = new Uri(
-                        SessionWait.Text(config["url"])
-                            ?? throw new InvalidDataException("MCP HTTP requires url.")
-                    ),
-                    AdditionalHeaders = headers,
-                    OwnsSession = true,
-                    TransportMode = SessionWait.Text(config["transport"]) switch
-                    {
-                        "streamable-http" => HttpTransportMode.StreamableHttp,
-                        "sse" => HttpTransportMode.Sse,
-                        _ => HttpTransportMode.AutoDetect,
-                    },
-                };
+                    "streamable-http" => HttpTransportMode.StreamableHttp,
+                    "sse" => HttpTransportMode.Sse,
+                    _ => HttpTransportMode.AutoDetect,
+                },
+            };
             transport = config["oauth"] is not null
-                ? new HttpClientTransport(options, OAuth.ResourceClient(server, config), ownsHttpClient: true)
+                ? new HttpClientTransport(
+                    options,
+                    OAuth.ResourceClient(server, config),
+                    ownsHttpClient: true
+                )
                 : new HttpClientTransport(options);
         }
         try
