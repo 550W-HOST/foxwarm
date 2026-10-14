@@ -47,12 +47,12 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, codeNewWindow, responsiveChat = false, chatMessages = null, terminal = null, width = 1400, height = 900 } = {}) {
+async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, codeNewWindow, responsiveChat = false, chatMessages = null, timelineView = 'grouped', terminal = null, width = 1400, height = 900 } = {}) {
   const page = await browser.newPage()
   const pageErrors = []
   page.on('pageerror', error => pageErrors.push(error.message))
   await page.setViewport({ width, height })
-  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat, splitDirection, initialLayout, themeId, codeNewWindow, responsiveChat, chatMessages, terminal }) => {
+  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat, splitDirection, initialLayout, themeId, codeNewWindow, responsiveChat, chatMessages, timelineView, terminal }) => {
     if (window !== window.top) return
     const tabsById = Object.fromEntries(initialTabs.map(tab => [tab.id, tab]))
     const root = initialLayout || (splitPanes
@@ -67,7 +67,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       localStorage.setItem('foxwarm_last_active_tab_v1', activeId)
       localStorage.setItem('foxwarm_sidebar_collapsed_v1', 'false')
     }
-    if (chatMessages) localStorage.setItem('foxwarm_timeline_view_v1', 'grouped')
+    if (chatMessages) localStorage.setItem('foxwarm_timeline_view_v1', timelineView)
     if (themeId) localStorage.setItem('foxwarm_theme_selection_v2', JSON.stringify({ version: 2, themeId, colorMode: 'light' }))
     if (codeNewWindow !== undefined) localStorage.setItem('foxwarm_code_open_new_window_v1', String(codeNewWindow))
     const json = body => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }))
@@ -131,10 +131,12 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
     }
     function sessionFixture(id) { return { tokenUsage: id === 'e2e-a' ? { cachedTokens: 12000, inputTokens: 1000, outputTokens: 200 } : { cachedTokens: 2000, inputTokens: 400, outputTokens: 100 }, id, aliases: [], archived: false, parentSessionId: null, childTotal: 0, messageCount: 0, lastMessageTime: 1, busy: false } }
     class FixtureWebSocket {
+      static instances = []
       static OPEN = 1
       readyState = 1
       onopen = null; onmessage = null; onclose = null; onerror = null
       constructor(url) {
+        FixtureWebSocket.instances.push(this)
         if (new URL(url).pathname.endsWith('/terminals/stream')) window.__terminalConnections.push(url)
         queueMicrotask(() => {
         this.onopen?.({})
@@ -152,7 +154,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       close() { this.readyState = 3; this.onclose?.({}) }
     }
     window.WebSocket = FixtureWebSocket
-  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, codeNewWindow, responsiveChat, chatMessages, terminal })
+  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, codeNewWindow, responsiveChat, chatMessages, timelineView, terminal })
   await page.goto(`${baseUrl}${hash}`, { waitUntil: 'domcontentloaded' })
   await page.bringToFront()
   await page.waitForFunction(() => !!window.foxwarmTest || !!document.querySelector('[data-foxwarm-popup-root="chat"]'), { timeout: 8_000 }).catch(async error => {
@@ -2199,5 +2201,122 @@ test('idle continuous viewport resize lets upward wheel replace pending bottom r
     await settleIdleViewport(page)
     await waitForIdleBottom(page)
     assert.ok((await idleViewportSnapshot(page)).distance <= 1, 'explicit rejoin restores follow for later resizing')
+  } finally { await page.close() }
+})
+
+async function openConversationScrollFixture(phase) {
+  const page = await openFixture({ responsiveChat: true, chatMessages: idleViewportMessages,
+    timelineView: 'conversation', height: 1100, hash: '#tab/chat:e2e-a', tabs: [chat('e2e-a', false)] })
+  await page.waitForFunction(() => document.querySelectorAll('[data-chat-message-anchor-key]').length === 55)
+  await page.evaluate(phase => {
+    let sequence = 0
+    let paragraphs = 160
+    const container = document.querySelector('.foxwarm-chat-messages')
+    window.__conversationScrollFrames = []
+    window.__conversationStreamTicks = 0
+    window.__conversationWheelSeen = false
+    window.__conversationLeftBottom = false
+    container.addEventListener('wheel', () => { window.__conversationWheelSeen = true }, { passive: true })
+    container.addEventListener('scroll', () => {
+      if (window.__conversationWheelSeen && container.scrollHeight - container.scrollTop - container.clientHeight > 4) window.__conversationLeftBottom = true
+    }, { passive: true })
+    const frame = () => {
+      window.__conversationScrollFrames.push({ top: container.scrollTop, height: container.scrollHeight, reading: window.__conversationLeftBottom })
+      if (window.__conversationRecording) requestAnimationFrame(frame)
+    }
+    window.__conversationRecording = true
+    requestAnimationFrame(frame)
+    window.__growConversationText = () => {
+      window.__conversationStreamTicks++
+      const text = 'CONVERSATION_SCROLL ordinary reply. ' + ('Visible answer text grows while the reader uses the native wheel. '.repeat(4) + '\n\n').repeat(paragraphs++)
+      window.WebSocket.instances.at(-1).onmessage({ data: JSON.stringify({ type: 'session-event', sessionId: 'e2e-a', event: {
+        type: 'model-stream-update', streamVersion: 2, sequence: ++sequence, streamId: 'conversation-scroll',
+        llmRequestId: 'conversation-scroll-request', startedAt: 1700000005000,
+        partDeltas: [{ outputIndex: 0, contentIndex: 0, kind: 'text', ...(phase ? { phase } : {}), textDelta: { offset: 0, text } }],
+      } }) })
+    }
+    window.__growConversationText()
+  }, phase)
+  await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-assistant-message-card')].some(card => card.textContent.includes('CONVERSATION_SCROLL')))
+  await waitForIdleBottom(page)
+  await settleIdleViewport(page)
+  return page
+}
+
+async function conversationScrollPosition(page) {
+  return page.evaluate(() => {
+    const container = document.querySelector('.foxwarm-chat-messages')
+    const card = [...document.querySelectorAll('.foxwarm-assistant-message-card')].find(card => card.textContent.includes('CONVERSATION_SCROLL'))
+    return { top: container.scrollTop, height: container.scrollHeight, distance: container.scrollHeight - container.scrollTop - container.clientHeight,
+      preview: !!card.closest('[data-conversation-preview]'), expanded: !!document.querySelector('[data-activity-expanded="true"]'),
+      sameCard: !window.__conversationOriginalCard || card === window.__conversationOriginalCard }
+  })
+}
+
+for (const phase of ['final_answer', undefined]) {
+  test(`Conversation ${phase || 'unknown-phase preview'} text does not pull an upward wheel reader forward during continued streaming`, async () => {
+    const page = await openConversationScrollFixture(phase)
+    try {
+      const attached = await conversationScrollPosition(page)
+      assert.equal(attached.preview, !phase)
+      assert.equal(attached.expanded, false)
+      await page.evaluate(() => {
+        window.__conversationOriginalCard = [...document.querySelectorAll('.foxwarm-assistant-message-card')].find(card => card.textContent.includes('CONVERSATION_SCROLL'))
+        window.__growConversationText()
+      })
+      await waitForIdleBottom(page)
+      assert.ok((await conversationScrollPosition(page)).height > attached.height, 'attached streaming genuinely added visible content')
+      const box = await (await page.$('.foxwarm-chat-messages')).boundingBox()
+      await page.mouse.move(box.x + 100, box.y + 120)
+      await page.evaluate(() => { window.__conversationStreamTimer = setInterval(window.__growConversationText, 20) })
+      await page.mouse.wheel({ deltaY: -160 })
+      await page.waitForFunction(() => window.__conversationLeftBottom)
+      const startTick = await page.evaluate(() => window.__conversationStreamTicks)
+      await page.waitForFunction(tick => window.__conversationStreamTicks >= tick + 6, {}, startTick)
+      await page.mouse.wheel({ deltaY: -160 })
+      await page.waitForFunction(tick => window.__conversationStreamTicks >= tick + 9, {}, startTick)
+      await page.evaluate(() => clearInterval(window.__conversationStreamTimer))
+      await settleIdleViewport(page)
+      await page.evaluate(() => { window.__conversationRecording = false })
+      const frames = await page.evaluate(() => window.__conversationScrollFrames)
+      const reverse = frames.flatMap((frame, index) => {
+        const previous = frames[index - 1]
+        return previous?.reading && frame.top > previous.top + 1 ? [{ before: previous, after: frame }] : []
+      })
+      assert.deepEqual(reverse, [], 'no token-only frame may reverse native upward reader movement')
+      const reader = await conversationScrollPosition(page)
+      assert.ok(reader.distance > 4)
+      assert.ok(reader.sameCard)
+      assert.equal(reader.preview, !phase)
+      assert.equal(reader.expanded, false)
+      // Explicit rejoin restores attached follow, including subsequent streaming.
+      await clickReadyControl(page, '[aria-label="Scroll to bottom"]')
+      await page.evaluate(() => window.__growConversationText())
+      await waitForIdleBottom(page)
+    } finally { await page.close() }
+  })
+}
+
+test('Conversation live text preserves a detached downward reader during continued growth', async () => {
+  const page = await openConversationScrollFixture('final_answer')
+  try {
+    await page.evaluate(() => { window.__conversationOriginalCard = [...document.querySelectorAll('.foxwarm-assistant-message-card')].find(card => card.textContent.includes('CONVERSATION_SCROLL')) })
+    const box = await (await page.$('.foxwarm-chat-messages')).boundingBox()
+    await page.mouse.move(box.x + 100, box.y + 120)
+    await page.mouse.wheel({ deltaY: -600 })
+    await page.waitForFunction(() => window.__conversationLeftBottom)
+    await settleIdleViewport(page)
+    const before = await conversationScrollPosition(page)
+    await page.evaluate(() => { window.__conversationStreamTimer = setInterval(window.__growConversationText, 20) })
+    await page.mouse.wheel({ deltaY: 100 })
+    await page.waitForFunction(top => document.querySelector('.foxwarm-chat-messages').scrollTop >= top + 99, {}, before.top)
+    const startTick = await page.evaluate(() => window.__conversationStreamTicks)
+    await page.waitForFunction(tick => window.__conversationStreamTicks >= tick + 6, {}, startTick)
+    await page.evaluate(() => clearInterval(window.__conversationStreamTimer))
+    await settleIdleViewport(page)
+    const after = await conversationScrollPosition(page)
+    assert.ok(Math.abs(after.top - before.top - 100) <= 2, 'only the requested downward wheel changes reader position')
+    assert.ok(after.distance > 4)
+    assert.ok(after.sameCard)
   } finally { await page.close() }
 })
