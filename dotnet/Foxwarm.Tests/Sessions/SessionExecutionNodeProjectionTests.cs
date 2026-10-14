@@ -62,7 +62,14 @@ public sealed class SessionExecutionNodeProjectionTests
                 },
             }.ToJsonString()
         );
-        var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
+        var options = new ResponsesClientOptions(
+            new Uri("http://127.0.0.1:1"),
+            "wire",
+            "a",
+            "",
+            "",
+            713
+        );
         var models = HostModels.ForTest(options);
         await using var manager = new SessionManager(data, work, options, models);
         await manager.LoadAsync();
@@ -93,6 +100,11 @@ public sealed class SessionExecutionNodeProjectionTests
         Assert.Equal(hasNode, snapshot.AuthorityEnvelope.ContainsKey("currentNode"));
         Assert.Equal(storedNode, SessionWait.Text(snapshot.AuthorityEnvelope["currentNode"]));
         Assert.Equal(original, await File.ReadAllTextAsync(file));
-        Assert.True(JsonNode.DeepEquals(snapshot.AuthorityEnvelope, owner.Entry.Snapshot().AuthorityEnvelope));
+        Assert.True(
+            JsonNode.DeepEquals(
+                snapshot.AuthorityEnvelope,
+                owner.Entry.Snapshot().AuthorityEnvelope
+            )
+        );
     }
 }
