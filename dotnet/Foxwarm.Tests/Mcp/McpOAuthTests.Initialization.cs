@@ -30,7 +30,9 @@ public sealed partial class McpOAuthTests
             stop.Cancel();
             Assert.Equal(
                 "tool_call_cancelled",
-                (await first.WaitAsync(TimeSpan.FromSeconds(5)))!["error"]!["type"]!.GetValue<string>()
+                (await first.WaitAsync(TimeSpan.FromSeconds(5)))!["error"]![
+                    "type"
+                ]!.GetValue<string>()
             );
         }
         Assert.False(surviving.IsCompleted);
