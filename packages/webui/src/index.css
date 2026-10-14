@@ -2279,6 +2279,12 @@ html[data-foxwarm-theme] .foxwarm-chat-composer-textarea {
 }
 
 .foxwarm-sidebar-frame { z-index: 40; }
+.status-badge { display: inline-flex; align-items: center; flex-shrink: 0; gap: 5px; border-radius: 5px; padding: 3px 7px; font-size: 11px; line-height: 18px; white-space: nowrap; color: var(--foxwarm-color-text-muted); background: var(--foxwarm-color-canvas); }
+.status-badge > span { display: inline-block; width: 5px; height: 5px; border-radius: 50%; flex: none; background: currentColor; }
+.status-badge[data-tone="accent"] { background: var(--foxwarm-color-accent-surface); color: var(--foxwarm-color-accent); }
+.status-badge[data-tone="success"] { background: var(--foxwarm-color-success-surface); color: var(--foxwarm-color-success); }
+.status-badge[data-tone="warning"] { background: var(--foxwarm-color-warning-surface); color: var(--foxwarm-color-warning); }
+
 .foxwarm-status-bar {
   display: flex; align-items: center; justify-content: space-between;
   height: 24px; flex-shrink: 0;

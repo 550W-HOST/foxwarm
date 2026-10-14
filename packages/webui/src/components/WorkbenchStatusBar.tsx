@@ -4,6 +4,7 @@ import { CirclePlay, ClipboardList, Clock3, Server, ChartPie, SquareTerminal } f
 import { makeApiUrl } from '../config'
 import type { WebUiNodeTarget } from '../nodeTargets'
 import type { Session } from './SessionListCore'
+import { NodeStatusBadge, StatusBadge, TaskStatusBadge } from './StatusBadge'
 import TokenUsageDetails, { formatUsageNumber, type TokenUsage } from './TokenUsageDetails'
 import { getSessionRuntimeStateName, isSessionRuntimeActive } from '../sessionRuntimeState'
 
@@ -163,7 +164,7 @@ export default function WorkbenchStatusBar({ running, sessions, nodes, totalUsag
       {open === 'tasks' && <>
         {tasks && <>{row('Active', tasks.active)}{row('Open', tasks.open)}</>}
         {taskPreviewState !== 'ready' || taskPreview.length > 0 ? <div className="foxwarm-status-popup-section">
-          {taskPreviewState === 'loading' ? <span className="text-fw-text-muted">Loading…</span> : taskPreviewState === 'error' ? <span className="text-fw-text-muted">Unable to load tasks</span> : taskPreview.map(task => <div key={task.id} className="flex min-w-0 items-center justify-between gap-3 py-1"><span className="truncate" title={task.title}>{task.title}</span><span className="shrink-0 text-[11px] text-fw-text-muted">{task.status}</span></div>)}
+          {taskPreviewState === 'loading' ? <span className="text-fw-text-muted">Loading…</span> : taskPreviewState === 'error' ? <span className="text-fw-text-muted">Unable to load tasks</span> : taskPreview.map(task => <div key={task.id} className="flex min-w-0 items-center justify-between gap-3 py-1"><span className="truncate" title={task.title}>{task.title}</span><TaskStatusBadge status={task.status} /></div>)}
         </div> : null}
       </>}
       {open === 'nodes' && <>
@@ -171,7 +172,7 @@ export default function WorkbenchStatusBar({ running, sessions, nodes, totalUsag
         <div role="list" aria-label="Node directory" tabIndex={0} className="foxwarm-status-popup-section foxwarm-status-node-list">
           {nodes.map(node => <div role="listitem" key={node.id} className="flex min-w-0 items-center justify-between gap-3 py-1">
             <span className="truncate" title={node.id}>{node.displayName}</span>
-            <span className="shrink-0 text-[11px] text-fw-text-muted">{node.online ? 'Online' : 'Offline'}{node.protocolStatus === 'upgrade-required' ? <span className="text-fw-warning"> · Upgrade required</span> : null}</span>
+            <span className="flex shrink-0 items-center gap-1"><NodeStatusBadge online={node.online} />{node.protocolStatus === 'upgrade-required' ? <StatusBadge tone="warning">Upgrade required</StatusBadge> : null}</span>
           </div>)}
         </div>
       </>}

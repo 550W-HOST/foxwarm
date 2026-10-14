@@ -4,12 +4,12 @@ import { ArrowLeft, Check, ClipboardList, Copy, X, Plus, RefreshCw, List, Column
 import { makeApiUrl } from '../config'
 import { WorkbenchHeaderDragArea, WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import SessionSelector from './SessionSelector'
+import { TaskStatusBadge, TASK_STATUS_LABELS as STATUS_LABELS } from './StatusBadge'
 import './TasksView.css'
 import { copyTextToClipboard } from './chatShared'
 
 const STATUSES = ['open', 'active', 'completed', 'cancelled'] as const
 type TaskStatus = typeof STATUSES[number]
-const STATUS_LABELS = { open: 'Open', active: 'Active', completed: 'Completed', cancelled: 'Cancelled' }
 const LIST_LIMIT = 50
 const TASK_SCOPES = ['work', 'all', 'history'] as const
 const TASK_SCOPE_LABELS = { work: 'Work', all: 'All', history: 'History' } as const
@@ -94,11 +94,6 @@ const relativeTime = (value: number) => {
   if (minutes < 10080) return `${Math.floor(minutes / 1440)}d ago`
   return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
-function TaskStatusBadge({ status }: { status: TaskStatus }) {
-  return <span className="task-status" data-status={status}><span aria-hidden="true" />{STATUS_LABELS[status]}</span>
-}
-
-
 const compactSessionLabel = (sessionId: string, agent?: string | null) => {
   const parts = sessionId.split('/').filter(Boolean)
   const leaf = parts[parts.length - 1] || sessionId

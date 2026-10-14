@@ -41,13 +41,9 @@
 .tasks-status-counts { display: flex; flex-wrap: wrap; gap: 12px; color: var(--foxwarm-color-text-muted); font-size: 11px; }
 .tasks-status-counts > span { display: inline-flex; align-items: center; gap: 5px; }
 .tasks-secondary-summary { margin-bottom: 12px; color: var(--foxwarm-color-text-muted); font-size: 11px; }
-.tasks-count-dot, .task-status > span { display: inline-block; width: 5px; height: 5px; border-radius: 50%; flex: none; background: var(--foxwarm-color-text-muted); }
+.tasks-count-dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; flex: none; background: var(--foxwarm-color-text-muted); }
 .tasks-count-dot[data-status="active"] { background: var(--foxwarm-color-accent); }
 .tasks-count-dot[data-status="completed"] { background: var(--foxwarm-color-success); }
-.task-status { display: inline-flex; align-items: center; gap: 5px; border-radius: 5px; padding: 3px 7px; font-size: 11px; line-height: 18px; white-space: nowrap; color: var(--foxwarm-color-text-muted); background: var(--foxwarm-color-canvas); }
-.task-status[data-status="active"] { background: var(--foxwarm-color-accent-surface); color: var(--foxwarm-color-accent); }
-.task-status[data-status="completed"] { background: var(--foxwarm-color-success-surface); color: var(--foxwarm-color-success); }
-.task-status[data-status="active"] > span, .task-status[data-status="completed"] > span { background: currentColor; }
 .tasks-table-shell { margin-top: 16px; border: 1px solid var(--foxwarm-color-border-muted); border-radius: 10px; background: var(--foxwarm-color-surface); overflow: hidden; }
 .tasks-table { width: 100%; table-layout: fixed; text-align: left; }
 .tasks-table th { font-weight: 450; font-size: 11px; color: var(--foxwarm-color-text-muted); padding: 11px 16px; background: var(--foxwarm-color-canvas); border-bottom: 1px solid var(--foxwarm-color-border-muted); }

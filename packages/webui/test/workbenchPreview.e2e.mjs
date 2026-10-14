@@ -2774,17 +2774,25 @@ for (const deltaY of [-160, -3]) {
 }
 
 
+async function badgePresentation(page, selector) {
+  return page.$eval(selector, badge => {
+    const style = getComputedStyle(badge)
+    const dot = getComputedStyle(badge.firstElementChild)
+    return { font: style.fontSize, line: style.lineHeight, padding: style.padding, radius: style.borderRadius, gap: style.gap, color: style.color, background: style.backgroundColor, dot: [dot.width, dot.height, dot.borderRadius, dot.backgroundColor] }
+  })
+}
+
 test('status popups keep full Node connectivity counts and compact theme-visible sections', async () => {
   const nodeDirectory = Array.from({ length: 14 }, (_, index) => ({
     id: `fixture-node-${String(index + 1).padStart(2, '0')}`,
-    displayName: `Fixture node ${index + 1}`,
+    displayName: `Fixture node ${index + 1}${[0, 2, 8].includes(index) ? ' — a long display name that must truncate inside the popup' : ''}`,
     type: 'cli-node', online: index < 8,
     services: { 'vscode-fs': 1 },
     ...(index === 2 ? { protocolCompatibility: { status: 'upgrade-required' } } : {}),
   }))
   const taskRows = [
-    { id: 'fixture-active', title: 'Review Node status', status: 'active' },
-    { id: 'fixture-open', title: 'Check pending setup', status: 'open' },
+    { id: 'fixture-active', title: 'Review Node status — a long task title that must truncate without hiding the badge', status: 'active', updatedAt: 1700000000000, ownerSessionId: null },
+    { id: 'fixture-open', title: 'Check pending setup', status: 'open', updatedAt: 1700000000000, ownerSessionId: null },
   ]
   for (const [themeId, colorMode] of [['foxwarm.default', 'dark'], ['foxwarm.default', 'light'], ['foxwarm.550a', 'dark']]) {
     const page = await openFixture({ tabs: [nodesTab], activeTabId: nodesTab.id, themeId, colorMode, nodeDirectory, taskRows, width: 1280, height: 760 })
@@ -2800,6 +2808,8 @@ test('status popups keep full Node connectivity counts and compact theme-visible
       assert.equal(await page.$$eval('[data-node-surface] article', cards => cards.length), 15)
       assert.match(await page.$eval('[data-node-surface] article:nth-child(4)', card => card.textContent), /Online.*Upgrade required/)
       await workbenchScreenshot(page, `nodes-page-${label}.png`)
+      const nodePageBadge = await badgePresentation(page, '[data-node-surface] [data-status="online"]')
+      assert.deepEqual({ font: nodePageBadge.font, line: nodePageBadge.line, padding: nodePageBadge.padding, radius: nodePageBadge.radius, gap: nodePageBadge.gap, dot: nodePageBadge.dot.slice(0, 3) }, { font: '11px', line: '18px', padding: '3px 7px', radius: '5px', gap: '5px', dot: ['5px', '5px', '50%'] })
       const directoryReads = await page.evaluate(() => window.__fetches.filter(request => request.path.endsWith('/api/nodes')).length)
       await page.click(nodesTrigger)
       await page.waitForSelector(popup, { visible: true })
@@ -2807,9 +2817,13 @@ test('status popups keep full Node connectivity counts and compact theme-visible
       const summary = await page.$eval(popup, element => element.textContent)
       assert.match(summary, /Online9Total15/)
       const list = `${popup} [role="list"]`
+      assert.deepEqual(await badgePresentation(page, `${list} [data-status="online"]`), nodePageBadge)
+      const rowOverflow = await page.$$eval(`${list} [role="listitem"]`, rows => rows.some(row => row.scrollWidth > row.clientWidth))
+      assert.equal(rowOverflow, false)
+      assert.equal(await page.$eval(`${list} [role="listitem"]:nth-child(2) > span:first-child`, name => name.scrollWidth > name.clientWidth), true)
       assert.equal(await page.$$eval(`${list} [role="listitem"]`, rows => rows.length), 15)
       assert.deepEqual(await page.$$eval(`${list} [role="listitem"] > span:first-child`, names => names.map(name => name.title)), ['master', ...nodeDirectory.map(node => node.id)])
-      assert.match(await page.$eval(`${list} [role="listitem"]:nth-child(4)`, row => row.textContent), /Online · Upgrade required/)
+      assert.match(await page.$eval(`${list} [role="listitem"]:nth-child(4)`, row => row.textContent), /Online.*Upgrade required/)
       const initial = await page.$eval(popup, element => {
         const rect = element.getBoundingClientRect()
         const list = element.querySelector('[role=list]')
@@ -2823,7 +2837,8 @@ test('status popups keep full Node connectivity counts and compact theme-visible
       await page.waitForFunction(() => document.querySelector('[aria-label="Node directory"]').scrollTop > 0)
       const seventhVisible = await page.$eval(`${list} [role="listitem"]:nth-child(7)`, row => { const rect = row.getBoundingClientRect(); const parent = row.parentElement.getBoundingClientRect(); return rect.top >= parent.top && rect.bottom <= parent.bottom })
       assert.equal(seventhVisible, true)
-      await page.mouse.wheel({ deltaY: 1000 })
+      await page.focus(list)
+      await page.keyboard.press('End')
       await page.waitForFunction(() => { const list = document.querySelector('[aria-label="Node directory"]'); return list.scrollTop + list.clientHeight >= list.scrollHeight - 1 })
       const scroll = await page.$eval(popup, element => {
         const list = element.querySelector('[role=list]'); const last = list.lastElementChild.getBoundingClientRect(); const rect = list.getBoundingClientRect()
@@ -2847,14 +2862,31 @@ test('status popups keep full Node connectivity counts and compact theme-visible
       await page.click('[data-workbench-status-bar] button[aria-label="Tasks: 1 active, 2 unfinished"]')
       await page.waitForFunction(() => document.querySelector('[data-workbench-status-popup]')?.textContent.includes('Review Node status'))
       await workbenchScreenshot(page, `tasks-popup-${label}.png`)
+      const taskPopupBadge = await badgePresentation(page, `${popup} .task-status[data-status="active"]`)
+      assert.deepEqual(taskPopupBadge, nodePageBadge)
+      assert.equal(await page.evaluate(() => performance.getEntriesByType('resource').some(resource => /TasksView-.*\.css/.test(resource.name))), false, 'first popup is styled before the lazy Tasks page/CSS is loaded')
+      assert.equal(await page.$eval(`${popup} .task-status`, badge => badge.textContent), 'Active')
+      assert.equal(await page.$eval(`${popup} .task-status`, badge => badge.parentElement.scrollWidth > badge.parentElement.clientWidth), false)
+      assert.equal(await page.$eval(`${popup} .task-status`, badge => { const name = badge.previousElementSibling; return name.scrollWidth > name.clientWidth }), true)
       const tasksGeometry = await page.$eval(popup, element => {
         const sections = [...element.querySelectorAll('.foxwarm-status-popup-section')].map(section => { const style = getComputedStyle(section); return { border: style.borderTopColor, margin: parseFloat(style.marginTop), padding: parseFloat(style.paddingTop) } })
         return { height: element.getBoundingClientRect().height, surface: getComputedStyle(element).backgroundColor, sections }
       })
-      assert.ok(tasksGeometry.height < 210, JSON.stringify(tasksGeometry))
+      assert.ok(tasksGeometry.height < 230, JSON.stringify(tasksGeometry))
       assert.ok(tasksGeometry.sections.every(section => section.border !== tasksGeometry.surface && section.margin + section.padding <= 12))
       console.info('task popup geometry', label, tasksGeometry)
       assert.ok((await page.evaluate(() => window.__fetches.filter(request => request.path.endsWith('/tasks') && new URLSearchParams(request.search).get('limit') === '3'))).length === 2)
+      if (themeId === 'foxwarm.default') {
+        await page.evaluate(() => [...document.querySelectorAll('[data-workbench-status-popup] button')].find(button => button.textContent === 'Open Tasks').focus())
+        await page.keyboard.press('Enter')
+        await page.waitForSelector('.tasks-table .task-status[data-status="active"]')
+        assert.deepEqual(await badgePresentation(page, '.tasks-table .task-status[data-status="active"]'), taskPopupBadge)
+        await workbenchScreenshot(page, `tasks-page-${label}.png`)
+        await page.click('[data-workbench-status-bar] button[aria-label="Tasks: 1 active, 2 unfinished"]')
+        await page.waitForFunction(() => document.querySelector('[data-workbench-status-popup] .task-status')?.textContent === 'Active')
+        await workbenchScreenshot(page, `tasks-page-popup-${label}.png`)
+      }
+
     } finally { await page.close() }
   }
 })

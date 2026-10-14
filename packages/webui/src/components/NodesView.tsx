@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react'
 import { ArrowLeft, Server } from 'lucide-react'
 import type { WebUiNodeTarget } from '../nodeTargets'
 import { useNodeDirectory } from '../useNodeDirectory'
+import { NodeStatusBadge, StatusBadge } from './StatusBadge'
 import NodeOnboardingModal, { useNodePendingApprovals } from './NodeOnboardingModal'
 import { WorkbenchHeaderDragArea, WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 
@@ -10,11 +11,11 @@ function NodeOverviewCard({ node }: { node: WebUiNodeTarget }) {
   return <article className="rounded-xl border border-fw-border bg-fw-surface p-4">
     <div className="flex items-center justify-between gap-2">
       <h3 className="truncate font-semibold text-fw-text-strong">{node.displayName}</h3>
-      <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${node.online ? 'bg-fw-accent-surface text-fw-accent' : 'bg-fw-surface-sunken text-fw-text-muted'}`}>{node.online ? 'Online' : 'Offline'}</span>
+      <NodeStatusBadge online={node.online} />
     </div>
     <p className="mt-1 break-all font-mono text-xs text-fw-text-muted">{node.id}</p>
     <p className="mt-2 text-xs text-fw-text-muted">{node.type}{node.lastSeenAt ? ` · Last seen ${new Date(node.lastSeenAt).toLocaleString()}` : ''}</p>
-    {incompatible ? <p className="mt-2 text-xs text-fw-warning">Upgrade required</p> : null}
+    {incompatible ? <div className="mt-2"><StatusBadge tone="warning">Upgrade required</StatusBadge></div> : null}
     {node.protocolMessage && node.protocolMessage !== 'upgrade required' ? <p className="mt-2 text-xs text-fw-warning">{node.protocolMessage}</p> : null}
     <div className="mt-3 flex flex-wrap gap-1.5">
       {Object.entries(node.services).map(([name, version]) => <span key={name} className="rounded bg-fw-canvas px-2 py-1 text-xs text-fw-text-muted">{name} v{version}</span>)}
