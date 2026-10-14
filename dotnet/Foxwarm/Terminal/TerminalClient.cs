@@ -242,20 +242,33 @@ internal sealed partial class TerminalRegistry
                     }
                     catch (TimeoutException)
                     {
-                        lifetime.Cancel();
+                        CancelUnlessDisposed();
                         socket.Abort();
                         await sender;
                     }
                 }
-                lifetime.Cancel();
+                CancelUnlessDisposed();
+            }
+
+            private void CancelUnlessDisposed()
+            {
+                lock (sendGate)
+                {
+                    if (disposed == 0)
+                        lifetime.Cancel();
+                }
             }
 
             public async ValueTask DisposeAsync()
             {
-                if (Interlocked.Exchange(ref disposed, 1) != 0)
-                    return;
-                lifetime.Cancel();
-                queue.Writer.TryComplete();
+                lock (sendGate)
+                {
+                    if (disposed != 0)
+                        return;
+                    disposed = 1;
+                    lifetime.Cancel();
+                    queue.Writer.TryComplete();
+                }
                 if (sender is not null)
                     await sender;
                 socket.Dispose();

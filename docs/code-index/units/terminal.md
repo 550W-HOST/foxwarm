@@ -26,8 +26,8 @@ Only one live opt-in `control=code` client owns helper requests. Ordinary stream
 
 ## Contract and side effects
 
-Terminal routes require normal host auth and deployment-relative identifiers. PTY failure/exit produces explicit terminal events; it does not mutate Session queue or report a model turn completion. Code helper file/Git capabilities remain bounded by the Code server and Main tool/path policy.
+Terminal routes require normal host auth and deployment-relative identifiers. PTY exit may hold a snapshot of browser clients while ordinary detach disposes one of them. Finishing that snapshot synchronizes lifetime cancellation with disposal; a retired client must not throw and prevent PTY cleanup. PTY failure/exit produces explicit terminal events; it does not mutate Session queue or report a model turn completion. Code helper file/Git capabilities remain bounded by the Code server and Main tool/path policy.
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Channels/CodeRoutesTests.cs`; `WebUiRealtimeRevisionTests.cs`; `NodeServiceTransportTests.cs`; `packages/webui/test/experimentHostNodeCode.e2e.mjs` (real CLI process/input/output/resize, two browser clients, pending helper owner-detach rejection, ordinary-client exclusion, explicit close and reconnect/restart rediscovery); `packages/webui/test/experimentHostNodeTerminalList.e2e.mjs` (delayed genuine list response, concurrently created real CLI PTY, unchanged browser attachment/PID/output and explicit kill).
+`dotnet/Foxwarm.Tests/Channels/CodeRoutesTests.cs`; `TerminalClientLifecycleTests.cs` (real paired WebSockets, normal detach/disposal followed by retained exit-snapshot completion); `WebUiRealtimeRevisionTests.cs`; `NodeServiceTransportTests.cs`; `packages/webui/test/experimentHostNodeCode.e2e.mjs` (real CLI process/input/output/resize, two browser clients, pending helper owner-detach rejection, ordinary-client exclusion, explicit close and reconnect/restart rediscovery); `packages/webui/test/experimentHostNodeTerminalList.e2e.mjs` (delayed genuine list response, concurrently created real CLI PTY, unchanged browser attachment/PID/output and explicit kill).

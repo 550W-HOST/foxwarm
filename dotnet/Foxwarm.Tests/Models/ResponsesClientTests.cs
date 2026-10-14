@@ -422,6 +422,7 @@ public sealed class ResponsesClientTests
         Assert.Equal(1, server.RequestCount);
         Assert.Single(entry.Snapshot().History);
         Assert.Equal("user", entry.Snapshot().History[0]["role"]?.GetValue<string>());
+        Assert.Equal(1, entry.Snapshot().AuthorityEnvelope["stats"]!["totalInputTokens"]!.GetValue<double>());
     }
 
     [Fact]

@@ -754,7 +754,7 @@ public static class ResponsesCanonicalConverter
         };
     }
 
-    private static JsonObject? BuildUsage(JsonObject? usage)
+    internal static JsonObject? BuildUsage(JsonObject? usage)
     {
         if (usage is null)
             return null;
@@ -1018,7 +1018,7 @@ public sealed class ResponsesChatService : IChatService
         );
         if (options.DisallowEmptyResponse && !OpenAIHttp.HasMeaningfulAssistant(assistant))
             throw ModelAttemptFailure.Empty();
-        return new ChatResult(assistant);
+        return new ChatResult(assistant, ResponsesCanonicalConverter.BuildUsage(completed.Payload["usage"] as JsonObject));
     }
 
     private static bool HasOtherUsableOutput(JsonArray output) =>

@@ -68,7 +68,7 @@ internal sealed partial class WebUIChannel
             "/api/sessions/{id}/debug-file",
             async (string id, HttpRequest request) =>
             {
-                var resolved = SessionCatalog.Text(runtime.Catalog.Resolve(id)["sessionId"]);
+                var resolved = CatalogRoute(request);
                 if (resolved is null || runtime.Catalog.Get(resolved) is null)
                     return Results.NotFound(new { error = "Session not found" });
                 var path = Path.Combine(sessions.DataRoot, "state", "sessions", resolved + ".json");

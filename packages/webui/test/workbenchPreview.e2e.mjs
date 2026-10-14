@@ -1928,7 +1928,7 @@ test('Code retains its iframe/window across split, docking, collapse and desktop
     await assertFrame()
     await page.click('[data-tab-id="vscode-web"]')
     await page.setViewport({ width: 390, height: 844 })
-    await page.click('[data-tab-id="chat:e2e-a"]')
+    await page.locator('[data-tab-id="chat:e2e-a"]').click()
     await page.waitForSelector('.foxwarm-chat-root button[title="Back"]')
     await page.evaluate(() => { window.__ordinaryChat = document.querySelector('.foxwarm-chat-root') })
     await page.click('.foxwarm-chat-root button[title="Back"]')

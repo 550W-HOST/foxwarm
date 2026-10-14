@@ -121,7 +121,11 @@ public sealed partial class LocalSessionTurnHost
                 try
                 {
                     if (result.AssistantMessage is null)
+                    {
+                        if (result.Usage is not null)
+                            await AppendHistoryMessageStrictAsync(null, result.Usage).ConfigureAwait(false);
                         return result;
+                    }
                     var assistant = (JsonObject)result.AssistantMessage.DeepClone();
                     if (
                         assistant["role"]?.GetValue<string>() != "model"
@@ -130,7 +134,7 @@ public sealed partial class LocalSessionTurnHost
                         throw new InvalidOperationException(
                             "Chat result assistant message must be a canonical model message."
                         );
-                    var appended = await AppendHistoryMessageStrictAsync(assistant)
+                    var appended = await AppendHistoryMessageStrictAsync(assistant, result.Usage ?? assistant["__meta"]?["usage"] as JsonObject)
                         .ConfigureAwait(false);
                     result.FinalizeHistory(appended, entry.RecordBestEffortFailure);
                     if (result.TruncatedStopReason is string stopReason)
@@ -316,20 +320,22 @@ public sealed partial class LocalSessionTurnHost
     }
 
     private async Task<IReadOnlyList<JsonObject>> AppendHistoryMessageStrictAsync(
-        JsonObject message
+        JsonObject? message,
+        JsonObject? usage = null
     )
     {
-        if (store is PersistentSessionAuthorityStore persistent)
+        if (message is not null && store is PersistentSessionAuthorityStore persistent)
             await persistent.Images.ExternalizeMessageAsync(message);
         var rows = await entry
             .SaveLane.CommitCanonicalAppendWithResultAsync(state =>
                 PrepareCanonicalAppend(
                     state,
-                    [message],
+                    message is null ? [] : [message],
                     [],
                     updateLastMessageTime: false,
                     finalizing: false,
-                    clock
+                    clock,
+                    usage
                 )
             )
             .ConfigureAwait(false);
@@ -499,7 +505,8 @@ public sealed partial class LocalSessionTurnHost
         IReadOnlyList<QueueItem> selectedItems,
         bool updateLastMessageTime,
         bool finalizing,
-        Func<long> clock
+        Func<long> clock,
+        JsonObject? usage = null
     )
     {
         var capturedNextSeq = state.NextMessageSeq;
@@ -541,6 +548,19 @@ public sealed partial class LocalSessionTurnHost
             .ToArray();
         var stagedMeta = (JsonObject)state.Meta.DeepClone();
         var stagedEnvelope = (JsonObject)state.AuthorityEnvelope.DeepClone();
+        if (usage is not null)
+        {
+            var stats = stagedEnvelope["stats"] as JsonObject;
+            if (stats is null)
+                stagedEnvelope["stats"] = stats = new JsonObject();
+            foreach (var (total, key) in new[] {
+                ("totalCachedTokens", "cachedTokens"),
+                ("totalInputTokens", "inputTokens"),
+                ("totalOutputTokens", "outputTokens")
+            })
+                stats[total] = (SessionWait.Number(stats[total]) ?? 0) + (SessionWait.Number(usage[key]) ?? 0);
+            stats["lastUsage"] = usage.DeepClone();
+        }
         foreach (var item in selectedItems)
             SessionBoundary.ApplyChildHandoff(stagedEnvelope, item);
         JsonNode? previousLastMessageTime = state.Meta["lastMessageTime"]?.DeepClone();
@@ -587,6 +607,8 @@ public sealed partial class LocalSessionTurnHost
                 live.NextMessageSeq = nextSeq;
                 live.HistoryVersion = stagedHistoryVersion;
                 live.Meta["messageCount"] = live.History.Count;
+                if (usage is not null)
+                    live.AuthorityEnvelope["stats"] = stagedEnvelope["stats"]!.DeepClone();
                 if (stagedEnvelope["childHandoffState"] is null)
                     live.AuthorityEnvelope.Remove("childHandoffState");
                 else

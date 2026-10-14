@@ -18,7 +18,7 @@ Callers: `SessionChatService`, `ModelRequestOwner`, model routing, image transpo
 
 ## Contract and side effects
 
-HTTP/SSE and WebSocket attempts preserve provider request IDs and usage/error provenance. A disconnected stream or invalid event leaves the attempt incomplete; retry preparation must use the safe request-history state rather than duplicating partial assistant/tool records. Hosted tools remain provider-scoped and are not confused with local ToolAuthorization.
+HTTP/SSE and WebSocket attempts preserve provider request IDs and usage/error provenance. Both adapters return normalized result usage even when an empty completed response has no canonical assistant row, so the owner can commit cumulative totals without manufacturing history. A disconnected stream or invalid event leaves the attempt incomplete; retry preparation must use the safe request-history state rather than duplicating partial assistant/tool records. Hosted tools remain provider-scoped and are not confused with local ToolAuthorization.
 
 ## Replay and hosted output boundaries
 

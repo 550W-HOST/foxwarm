@@ -12,7 +12,7 @@ History routes use `SessionRuntime`/Archive context readers for exact owner/hist
 
 ## Contract and side effects
 
-Semantic history/queue/wait comes from active Session authority; identity/topology/presentation/list summaries come from Main catalog; immutable Archive is read-only context/audit. Pagination/cursor/agent-scope limits are validated before SQL/read work. A missing authority for an already cataloged Session remains an admission integrity error, not an empty replay.
+Semantic history/queue/wait comes from active Session authority; identity/topology/presentation/list summaries come from Main catalog; immutable Archive is read-only context/audit. The Debug file route resolves encoded Session IDs through the same raw-target/catalog helper as other Session routes, so ordinary Agent-qualified IDs and aliases locate the real authority file. Pagination/cursor/agent-scope limits are validated before SQL/read work. A missing authority for an already cataloged Session remains an admission integrity error, not an empty replay.
 
 ## Tests
 

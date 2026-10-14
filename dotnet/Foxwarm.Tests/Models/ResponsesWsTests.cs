@@ -14,6 +14,25 @@ namespace Foxwarm.Tests;
 public sealed class ResponsesWsTests
 {
     [Fact]
+    public async Task Empty_completed_socket_response_retains_usage_without_fabricating_an_assistant()
+    {
+        await using var peer = await WsPeer.StartAsync((_, number) =>
+        {
+            var response = Response(number);
+            response["output"] = new JsonArray();
+            response["usage"] = new JsonObject { ["input_tokens"] = 13, ["output_tokens"] = 2 };
+            return response;
+        });
+        await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
+        var service = new ResponsesWsChatService(Options(peer.Uri), transport, ModelRequestScope.Canonical, false, "lineage");
+        var result = await service.ChatAsync("session", [Message("user", "input")], CancellationToken.None);
+        Assert.Null(result.AssistantMessage);
+        Assert.Equal(13, result.Usage!["inputTokens"]!.GetValue<long>());
+        Assert.Equal(2, result.Usage["outputTokens"]!.GetValue<long>());
+        result.FinalizeHistory(null);
+    }
+
+    [Fact]
     public void Fixed_source_item_boundary_hash_vector_includes_tagged_invariant_and_ignores_transport_fields()
     {
         var body = JsonNode

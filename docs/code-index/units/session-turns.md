@@ -24,8 +24,10 @@ One processor claim may run per Session. Busy and stopping are distinct state: r
 
 Tool execution carries source JSON values; ordinary history projection and trusted receipts follow [the tool contract](../threads/tools-permissions-and-exec.md#outbound-mcp-values-and-trusted-control).
 
+Completed provider usage updates the existing authority `stats` totals and `lastUsage` in the same ordered canonical append transaction as its assistant row. The explicit result usage takes precedence over normalized message metadata; tool rows, unrelated input and ordinary saves do not recount history. A usage-only completion persists totals without inventing an assistant row. Pre-commit failure leaves hot totals unchanged; post-commit failure publishes the committed totals. Existing Session/catalog projections feed cumulative usage consumers without an additional stats API.
+
 The turn runner does not write raw JSON or Archive directly. It stages snapshots and canonical rows through [the save lane](./session-save-lane-core.md) and [the authority store](./session-authority-store.md), preserving pre/post-rename failure classification.
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Sessions/SessionTurnTests.cs`; `PersistentSessionTurnTests.cs`; `SessionAdmissionTests.cs`; `RetryInputSafePointTests.cs`; `SessionExecutionEnvironmentTests.cs`; `SessionWait` and `SessionIdentityInterleaving` coverage; `CompactContinuationTests.cs`.
+`dotnet/Foxwarm.Tests/Sessions/SessionTurnTests.cs`; `PersistentSessionTurnTests.cs`; `SessionAdmissionTests.cs`; `RetryInputSafePointTests.cs`; `SessionExecutionEnvironmentTests.cs`; `SessionWait` and `SessionIdentityInterleaving` coverage; `CompactContinuationTests.cs`; `SessionUsageTests.cs` (cumulative usage, metadata/explicit usage, usage-only completions, reopen and pre/post-commit boundaries).
