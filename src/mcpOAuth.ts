@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { OAuthClientProvider, OAuthDiscoveryState } from '@modelcontextprotocol/sdk/client/auth.js';
 import type { OAuthTokens, OAuthClientInformationMixed } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { McpServerConfig } from './mcpClient';
@@ -139,6 +140,7 @@ export class McpOAuthService {
   private readonly epochs = new Map<string, number>();
   private readonly refreshing = new Map<string, { epoch: number; promise: Promise<OAuthTokens> }>();
   private readonly starting = new Set<string>();
+  private readonly operationCredentials = new AsyncLocalStorage<{ server: string; active: boolean; values: Set<string> }>();
   constructor(private readonly options: Options) {
     this.filePath = options.filePath || path.join(STATE_DIR, 'mcp-oauth.json');
     this.publicBaseUrl = options.publicBaseUrl ?? PUBLIC_BASE_URL;
@@ -324,7 +326,8 @@ export class McpOAuthService {
       if (result !== 'REDIRECT' || !flow.authorizationUrl || !flow.verifier) throw new McpOAuthError('authorization', 'The server did not start browser authorization.');
       await this.current(name, config, epoch);
       // Retain client registration, but do not publish a new account grant until callback succeeds.
-      this.save(name, { ...flow.grant, ...(reuse ? { tokens: previous.tokens, expiresAt: previous.expiresAt } : {}) });
+      const live = this.load()[name];
+      this.save(name, reuse ? { ...live, discovery, clientInformation: flow.grant.clientInformation } : flow.grant);
       for (const [state, pending] of this.flows) if (pending.server === name) this.flows.delete(state);
       this.flows.set(flow.state, flow);
       return flow.authorizationUrl;
@@ -411,7 +414,7 @@ export class McpOAuthService {
           fetchFn: createOAuthFetch(config.url),
         });
         await this.current(name, config, epoch);
-        this.save(name, this.withTokens(grant, tokens));
+        this.save(name, this.withTokens(this.requireGrant(name, config), tokens));
         return tokens;
       } catch (error) {
         await this.current(name, config, epoch);
@@ -436,7 +439,7 @@ export class McpOAuthService {
   }
 
   /** One authenticated fetch per caller transport; credentials are shared, remote state is not. */
-  resourceFetch(name: string, config: McpServerConfig): typeof fetch | undefined {
+  resourceFetch(name: string, config: McpServerConfig, streamCredentials?: Set<string>): typeof fetch | undefined {
     if (!config.oauth) return undefined;
     const epoch = this.epoch(name);
     const origin = new URL(config.url).origin;
@@ -447,11 +450,20 @@ export class McpOAuthService {
       let tokens = await this.access(name, config);
       const send = async () => {
         await this.current(name, config, epoch);
+        const values = [tokens.access_token, tokens.refresh_token, config.oauth.clientSecret,
+          this.requireGrant(name, config).clientInformation?.client_secret].filter(Boolean);
+        const operation = this.operationCredentials.getStore();
+        if (operation?.active && operation.server === name) for (const value of values) operation.values.add(value);
         const headers = new Headers(init.headers);
         headers.set('Authorization', `Bearer ${tokens.access_token}`);
         // Prevent credential-bearing resource requests from redirecting to a
         // different origin or forwarding private custom headers.
-        return fetch(input, { ...init, headers, redirect: 'error' });
+        const response = await fetch(input, { ...init, headers, redirect: 'error' });
+        if (init.method === 'GET' && response.ok && streamCredentials) {
+          streamCredentials.clear();
+          for (const value of values) streamCredentials.add(value);
+        }
+        return response;
       };
       let response = await send();
       if (response.status === 401 && /^Bearer(?:\s|$)/i.test(response.headers.get('www-authenticate') || '')) {
@@ -482,9 +494,32 @@ export class McpOAuthService {
 
   credentials(name?: string): string[] {
     const grants = this.load();
-    return (name ? [grants[name]] : Object.values(grants)).flatMap(grant => grant
+    const operation = this.operationCredentials.getStore();
+    return [...(name ? [grants[name]] : Object.values(grants)).flatMap(grant => grant
       ? [grant.tokens?.access_token, grant.tokens?.refresh_token, grant.clientInformation?.client_secret] : [])
-      .filter((value): value is string => typeof value === 'string' && !!value);
+      .filter((value): value is string => typeof value === 'string' && !!value),
+      ...(operation?.active && (!name || operation.server === name) ? operation.values : [])];
+  }
+
+  async guardOperation<T>(name: string, clientSecret: string | undefined, run: () => Promise<T>): Promise<T> {
+    const operation = { server: name, active: true, values: new Set([clientSecret, ...this.credentials(name)].filter(Boolean)) };
+    return this.operationCredentials.run(operation, async () => {
+      try {
+        const result = await run();
+        if (containsOAuthCredential(result, this.credentials(name))) {
+          throw new Error('The MCP operation may have completed, but its output contained OAuth credentials and was withheld. Do not retry automatically.');
+        }
+        return result;
+      } catch (error) {
+        if (containsOAuthCredential(error instanceof Error ? error.message : error, this.credentials(name))) {
+          throw new Error('The MCP operation failed with private credential data. Its outcome may be unknown; do not retry automatically.');
+        }
+        throw error;
+      } finally {
+        operation.active = false;
+        operation.values.clear();
+      }
+    });
   }
 
   safeError(error: unknown): McpOAuthError {

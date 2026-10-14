@@ -18,6 +18,7 @@ Main-owned OAuth client authorization for configured outbound HTTP MCP servers. 
 | `registerMcpOAuthRoutes` | Administrator-only management/completion APIs and fixed public callback/client metadata |
 | `resourceFetch` | Grant-aware HTTP/SSE request authentication and one bounded same-grant refresh retry after a standard Bearer 401 |
 | `containsOAuthCredential` | Refuse recognized OAuth secrets in textual metadata/results/errors without changing binary media |
+| `guardOperation` | Track credentials actually used by one MCP operation through its result/error boundary; clear the context on completion |
 
 ## Configuration and persistence
 
@@ -40,7 +41,9 @@ Main-owned OAuth client authorization for configured outbound HTTP MCP servers. 
 ## Runtime lifecycle
 
 - Ordinary tool calls never start human consent or dynamic registration. They use the named server's administrator-managed grant. SDK helpers own discovery, PKCE/code exchange and refresh; the resource fetch adapter keeps those credentials separate from resource headers and existing transport lifecycle.
-- Refresh is single-flight for the same named-server grant generation. Rotating credentials are atomically persisted. A new grant cannot join or publish an old refresh. Missing refresh credentials or `invalid_grant` require explicit reauthorization and fence dependent caller bindings/notifications.
+- Refresh is single-flight for the same named-server grant generation. Rotating credentials are atomically persisted. Starting consent updates registration/discovery fields on the current live record, never a captured credential snapshot; token publication also merges into the current same-grant record. A new grant cannot join or publish an old refresh. Missing refresh credentials or `invalid_grant` require explicit reauthorization and fence dependent caller bindings/notifications.
+- An operation-local async context records credentials actually selected by resource requests, including intermediate refreshed tokens. Its result/error guard runs before releasing that context; completion marks it inactive and clears it even when a transport stream retains the async ancestry. This is not a global token history.
+- Caller entries retain only credentials used by their active authenticated GET stream and clear them on stream end/cancellation or disposal. Notification admission checks message and endpoint against that captured stream context and currently known dynamic credentials before ordinary Session ingress. Known dynamic access/refresh/registration credentials also participate in the external facade's existing before/after result and error inventory, including calls through static aliases.
 - A standard Bearer HTTP 401 is an authentication rejection before MCP dispatch and permits one refresh/resend. Network errors, 404 and unknown-effect tool errors are never replayed. An insufficient-scope 403 records a reviewable scope request without retrying an effect or discarding the still-valid remote context.
 - Same-grant renewal retains caller-specific remote context and notifications. Explicit browser reauthorization may select another account and closes only that named server's bindings. Local Disconnect clears access/refresh authority, retains client registration for later consent, and fences bindings; it does not promise upstream revocation or rollback of started effects.
 - Existing Session/external-context owner keys, concrete permission checks, stdio pooling and auto HTTP-to-SSE initialization fallback remain in their existing owners. OAuth authorization errors are not treated as a reason to try a different transport.

@@ -13,6 +13,12 @@ import * as client from './mcpClient';
 import { closeMcpCallerConnections } from './mcpCallerConnections';
 import { HttpServer } from './httpServer';
 import { registerMcpOAuthRoutes } from './mcpOAuthRoutes';
+import { McpInboundHttpService } from './mcpInboundHttp';
+import { McpInboundMcpCatalog } from './mcpInboundCatalog';
+import { normalizeAccessConfig } from './accessConfig';
+import { setToolAuthorizationPolicyForTests } from './toolAuthorization';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 async function environment() {
   const remote = await createMcpOAuthFixture();
@@ -46,6 +52,147 @@ async function environment() {
     } };
 }
 const owner = (id: string) => ({ kind: 'session' as const, id, isActive: () => true });
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(yes => { resolve = yes; });
+  return { promise, resolve };
+}
+
+test('starting consent retains a concurrently rotated grant in memory and durable storage', async () => {
+  const env = await environment();
+  const crypto = globalThis.crypto || require('node:crypto').webcrypto;
+  const digest = crypto.subtle.digest;
+  const entered = deferred();
+  const release = deferred();
+  try {
+    await (await env.authorize()).finish();
+    const alpha = owner('alpha');
+    const context = await client.callTool('remote', 'state', { value: 'retained context' }, { owner: alpha });
+    const original = env.service.credentials('remote')[0];
+    crypto.subtle.digest = async (...args: any[]) => {
+      const bytes = await digest.apply(crypto.subtle, args);
+      entered.resolve();
+      await release.promise;
+      return bytes;
+    };
+    const begin = env.service.begin('remote', (await client.getServers()).remote);
+    await entered.promise;
+    env.state.force401 = 1;
+    await client.callTool('remote', 'state', {}, { owner: alpha });
+    const rotated = env.service.credentials('remote')[0];
+    assert.equal(rotated !== original, true);
+    release.resolve();
+    await begin;
+    assert.equal(env.service.credentials('remote')[0] === rotated, true);
+    const saved = JSON.parse(fs.readFileSync(env.serviceOptions.filePath, 'utf8')).servers.remote.tokens.access_token;
+    assert.equal(saved === rotated, true);
+    env.state.force401 = 1;
+    const after = await client.callTool('remote', 'state', {}, { owner: alpha });
+    assert.equal(after.context, context.context);
+    assert.equal(after.value, 'retained context');
+    assert.equal(env.state.refreshes, 2);
+  } finally { crypto.subtle.digest = digest; release.resolve(); await env.cleanup(); }
+});
+
+for (const error of [false, true]) {
+  test(`an operation withholds its actually used intermediate token in ${error ? 'errors' : 'results'} after another caller rotates`, async () => {
+    const env = await environment();
+    const entered = deferred();
+    const release = deferred();
+    let echoed: string;
+    try {
+      await (await env.authorize()).finish();
+      const alpha = owner('alpha');
+      const beta = owner('beta');
+      await client.callTool('remote', 'state', {}, { owner: alpha });
+      await client.callTool('remote', 'state', {}, { owner: beta });
+      const original = env.service.credentials('remote')[0];
+      env.state.delayedTool = async access => {
+        echoed = access;
+        entered.resolve();
+        await release.promise;
+        return { text: access, error };
+      };
+      env.state.force401 = 1;
+      const slow = client.callTool('remote', 'state', { label: 'slow' }, { owner: alpha });
+      await entered.promise;
+      assert.equal(echoed !== original, true);
+      env.state.force401 = 1;
+      await client.callTool('remote', 'state', {}, { owner: beta });
+      assert.equal(env.service.credentials('remote')[0] !== echoed, true);
+      release.resolve();
+      await assert.rejects(slow, /OAuth credentials|private credential data/);
+      assert.equal(env.service.credentials().includes(echoed), false, 'finished operation does not retain intermediate token history');
+      assert.equal(env.state.refreshes, 2);
+      assert.equal(env.state.effects, 4);
+    } finally { release.resolve(); await env.cleanup(); }
+  });
+}
+
+test('notification admission rejects current credentials and actual old stream credentials in message or endpoint', async () => {
+  const env = await environment();
+  const admitted: Array<{ message: string; endpoint: string }> = [];
+  const ordinary = deferred();
+  try {
+    await (await env.authorize()).finish();
+    const alpha = owner('alpha');
+    await client.startNotifications('remote', alpha, { assertActive: async () => {}, receive: async (message, endpoint) => {
+      admitted.push({ message, endpoint });
+      if (message === 'ordinary marker') ordinary.resolve();
+    } });
+    const streamToken = env.service.credentials('remote')[0];
+    env.state.force401 = 1;
+    await client.callTool('remote', 'state', {}, { owner: alpha });
+    const current = env.service.credentials('remote')[0];
+    assert.equal(streamToken !== current, true);
+    await env.notify(streamToken);
+    await env.notify('ordinary message', streamToken);
+    await env.notify(current);
+    await env.notify('ordinary marker');
+    await ordinary.promise;
+    assert.deepEqual(admitted, [{ message: 'ordinary marker', endpoint: 'fixture-endpoint' }]);
+  } finally { await env.cleanup(); }
+});
+
+test('verified inbound callers cannot receive any dynamically stored OAuth credential through a static alias or its error', async () => {
+  const env = await environment();
+  const main = new HttpServer(0, 'fixture-admin');
+  const access = normalizeAccessConfig({ identities: { fixture: { token: 'inbound-fixture-token', surfaces: { mcp: {} } } } });
+  const inbound = new McpInboundHttpService(access, new McpInboundMcpCatalog());
+  inbound.register(main);
+  setToolAuthorizationPolicyForTests({ version: 1, defaultAction: 'deny', rules: [{ id: 'allow-fixture', enabled: true,
+    match: { tool: { source: 'mcp', server: 'staticAlias', name: 'state' } }, action: 'allow' }] });
+  const listener = http.createServer(main.app);
+  await new Promise<void>(resolve => listener.listen(0, '127.0.0.1', resolve));
+  const sdkClient = new Client({ name: 'owned-fixture', version: '1.0.0' });
+  const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${(listener.address() as { port: number }).port}/mcp`),
+    { requestInit: { headers: { Authorization: 'Bearer inbound-fixture-token' } } });
+  try {
+    await (await env.authorize()).finish();
+    await client.upsertServer('staticAlias', { transport: 'streamable-http', url: env.resource, token: 'fixture-static-token' });
+    await sdkClient.connect(transport);
+    const known = env.service.credentials('remote');
+    assert.equal(known.length, 3);
+    for (const secret of known) {
+      for (const error of [false, true]) {
+        env.state.delayedTool = async () => ({ text: secret, error });
+        const result = await sdkClient.callTool({ name: 'foxwarm_call', arguments: {
+          toolId: 'mcp:staticAlias/state', args: { label: 'slow' },
+        } });
+        assert.equal(result.isError, true);
+        assert.equal(JSON.stringify(result).includes(secret), false);
+      }
+    }
+    assert.equal(env.state.effects, 6);
+  } finally {
+    await sdkClient.close();
+    await inbound.stop();
+    listener.closeAllConnections();
+    await new Promise<void>(resolve => listener.close(() => resolve()));
+    setToolAuthorizationPolicyForTests(undefined);
+    await env.cleanup();
+  }
+});
 
 for (const registration of ['dcr', 'cimd', 'none'] as const) {
   test(`browser code/PKCE grant works with ${registration} and survives service restart`, async () => {

@@ -3,7 +3,7 @@ import { MCP_CONFIG_PATH } from './config';
 import { logger } from './common';
 import { DiskJsonData } from './utils/diskJsonData';
 import { promises as fs } from 'node:fs';
-import { containsOAuthCredential, getMcpOAuthService, normalizeMcpOAuthConfig, type McpOAuthConfig } from './mcpOAuth';
+import { getMcpOAuthService, normalizeMcpOAuthConfig, type McpOAuthConfig } from './mcpOAuth';
 import { oauthEndpoint } from './mcpOAuthHttp';
 import { closeMcpCallerConnections, withMcpCallerConnection, startMcpNotifications, MCP_NOTIFICATION_CAPABILITY, type McpConnectionOwner, type McpCallerConnection } from './mcpCallerConnections';
 
@@ -481,28 +481,17 @@ function httpOptions(name: string, config: McpServerConfig, owner?: McpConnectio
   // Persisted OAuth configurations receive the same conflict validation as a
   // managed update; an old fixed Authorization must not override the grant.
   if (config.oauth) normalizeManagedMcpServerConfig(config);
+  const oauthStreamCredentials = config.oauth ? new Set<string>() : undefined;
   return { owner, server: name, mode, url: requireUrl(config, mode), headers: buildMcpHttpHeaders(config), sdk: loadMcpSdk(),
-    oauthFetch: getMcpOAuthService().resourceFetch(name, config) };
+    oauthStreamCredentials, oauthFetch: getMcpOAuthService().resourceFetch(name, config, oauthStreamCredentials) };
 }
 
 async function withServerConnection<T>(serverName: string, config: McpServerConfig,
   fn: (connection: Pick<McpCallerConnection, 'client' | 'reception'>) => Promise<T>, owner?: McpConnectionOwner, signal?: AbortSignal): Promise<T> {
   signal?.throwIfAborted();
   if (normalizeTransport(config) !== 'stdio') {
-    const credentials = config.oauth ? [config.oauth.clientSecret, ...getMcpOAuthService().credentials(serverName)].filter(Boolean) : [];
-    const currentCredentials = () => config.oauth ? [...credentials, ...getMcpOAuthService().credentials(serverName)] : [];
-    try {
-      const result = await withMcpCallerConnection(httpOptions(serverName, config, owner), fn, signal);
-      if (containsOAuthCredential(result, currentCredentials())) {
-        throw new Error('The MCP operation may have completed, but its output contained OAuth credentials and was withheld. Do not retry automatically.');
-      }
-      return result;
-    } catch (error) {
-      if (containsOAuthCredential(error instanceof Error ? error.message : error, currentCredentials())) {
-        throw new Error('The MCP operation failed with private credential data. Its outcome may be unknown; do not retry automatically.');
-      }
-      throw error;
-    }
+    const run = () => withMcpCallerConnection(httpOptions(serverName, config, owner), fn, signal);
+    return config.oauth ? getMcpOAuthService().guardOperation(serverName, config.oauth.clientSecret, run) : run();
   }
 
   const connection = await getOrCreatePooledStdioConnection(serverName, config);

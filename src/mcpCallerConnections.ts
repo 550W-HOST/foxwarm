@@ -1,5 +1,5 @@
 import { logger } from './common';
-import { McpOAuthError } from './mcpOAuth';
+import { containsOAuthCredential, getMcpOAuthService, McpOAuthError } from './mcpOAuth';
 
 export const MCP_NOTIFICATION_CAPABILITY = 'foxwarm/session-notifications';
 export const MCP_SESSION_MESSAGE_METHOD = 'notifications/foxwarm/session_message';
@@ -16,6 +16,7 @@ export type McpConnectionOptions = {
   url: string;
   headers?: Record<string, string>;
   oauthFetch?: typeof fetch;
+  oauthStreamCredentials?: Set<string>;
   sdk: { Client: any; StreamableHTTPClientTransport: any; SSEClientTransport: any };
 };
 type Reception = {
@@ -63,6 +64,7 @@ async function dispose(entry: McpCallerConnection, terminate = true): Promise<vo
   if (entry.closing) return entry.closing;
   entry.closed = true;
   entry.reception = undefined;
+  entry.options.oauthStreamCredentials?.clear();
   if (entry.idle) clearTimeout(entry.idle);
   if (entry.ping) clearInterval(entry.ping);
   entry.getReady.reject(new Error('MCP caller connection is closed.'));
@@ -92,6 +94,7 @@ async function connect(entry: McpCallerConnection, kind: 'streamable-http' | 'ss
   const { sdk, url, headers, owner } = entry.options;
   entry.transportKind = kind;
   const disconnected = () => {
+    entry.options.oauthStreamCredentials?.clear();
     if (entry.receiving) entry.getReady = deferred();
     entry.receiving = false;
   };
@@ -154,7 +157,13 @@ async function connect(entry: McpCallerConnection, kind: 'streamable-http' | 'ss
       assertLive(entry);
       if (entry.reception !== reception) throw new Error('MCP notification reception is stopped.');
     };
-    try { await reception.assertActive(); assertReception(); await reception.receive(params.message, params.endpoint, assertReception); }
+    const streamCredentials = [...(entry.options.oauthStreamCredentials || [])];
+    try {
+      await reception.assertActive();
+      assertReception();
+      if (containsOAuthCredential(params, [...streamCredentials, ...getMcpOAuthService().credentials()])) return;
+      await reception.receive(params.message, params.endpoint, assertReception);
+    }
     catch { logger.warn({ server: entry.options.server }, 'MCP notification was not admitted'); }
   };
   assertLive(entry);

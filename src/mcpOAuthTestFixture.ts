@@ -39,6 +39,7 @@ export async function createMcpOAuthFixture() {
     omitRefreshScope: false,
     imageData: undefined as string | undefined,
     deepResult: false,
+    delayedTool: undefined as undefined | ((access: string) => Promise<{ text: string; error?: boolean }>),
   };
   const protectedResource = (pathname: string) => ({
     resource: state.mismatchResource ? `${baseUrl}/different` : `${baseUrl}${pathname}`,
@@ -167,6 +168,13 @@ export async function createMcpOAuthFixture() {
       transport.onclose = () => { if (transport.sessionId) transports.delete(transport.sessionId); };
     }
     if (!transport) { res.status(404).send('Remote context lost'); return; }
+    if (req.body?.method === 'tools/call' && req.body.params?.arguments?.label === 'slow' && state.delayedTool) {
+      state.effects++;
+      const output = await state.delayedTool(String(req.headers.authorization).replace(/^Bearer /, ''));
+      if (output.error) res.status(503).type('text').send(output.text);
+      else res.json({ jsonrpc: '2.0', id: req.body.id, result: { content: [{ type: 'text', text: output.text }] } });
+      return;
+    }
     if (req.method === 'DELETE') state.deletes++;
     await transport.handleRequest(req, res, req.body);
   });
@@ -182,8 +190,8 @@ export async function createMcpOAuthFixture() {
     await transport.handlePostMessage(req, res, req.body);
   });
   return { app, baseUrl, issuer, resource, state, tokens, refreshTokens, transports,
-    notify: async (message: string) => { await Promise.all([...peers].map(peer => (peer as any).notification({
-      method: 'notifications/foxwarm/session_message', params: { message, endpoint: 'fixture-endpoint' },
+    notify: async (message: string, endpoint = 'fixture-endpoint') => { await Promise.all([...peers].map(peer => (peer as any).notification({
+      method: 'notifications/foxwarm/session_message', params: { message, endpoint },
     }).catch(() => {}))); },
     close: async () => {
       await Promise.all([...transports.values(), ...sseTransports.values()].map(transport => transport.close()));
