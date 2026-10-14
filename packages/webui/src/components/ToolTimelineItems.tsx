@@ -27,6 +27,7 @@ import {
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import JsonInspectorDialog from './JsonInspectorDialog'
 import { shouldUseStreamingToolPlaceholder } from '../../../shared/src/webuiToolRendering'
+import { formatToolScriptExecutionResponse } from '../../../shared/src/toolResponseFormatting'
 import ImageParts from './ImageParts'
 import { SyntaxHighlightedText } from './SyntaxHighlightedText'
 import { buildPathDownloadUrl, triggerBrowserDownload } from './downloadShared'
@@ -39,7 +40,9 @@ import { getLegacyEditLineCounts } from './legacyEditCounts'
 import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
 import { useThreadCardHeightTransition } from './useThreadCardHeightTransition'
 
-const formatToolResponseText = (resp: { response: unknown }): string => formatCompactObjectPreview(resp.response)
+const formatToolResponseText = (resp: FunctionResponse): string => resp.__meta?.toolScriptSubCalls !== undefined
+  ? formatToolScriptExecutionResponse(resp.response)
+  : formatCompactObjectPreview(resp.response)
 
 /** Search the same expanded text surfaces as a Tool card, never its raw JSON view or response metadata. */
 export const getToolCallSearchText = (call: FunctionCall): string => {
@@ -73,7 +76,7 @@ export const getToolResponseSearchText = (resp: FunctionResponse): string => {
   if (resp.name === 'exec' && typeof resp.response?.output === 'string') {
     return resp.response.output.replace(/\x1b\[[0-9;]+m/g, '')
   }
-  if (TOOLSCRIPT_TOOL_NAMES.has(resp.name) || resp.__meta?.toolScriptSubCalls !== undefined) return formatCompactObjectPreview(stripToolScriptSubCallsFromResponse(resp.response))
+  if (TOOLSCRIPT_TOOL_NAMES.has(resp.name) || resp.__meta?.toolScriptSubCalls !== undefined) return formatToolResponseText({ ...resp, response: stripToolScriptSubCallsFromResponse(resp.response) })
   return formatToolResponseText(resp)
 }
 
@@ -623,7 +626,7 @@ const stripToolScriptSubCallsFromResponse = (response: unknown): unknown => {
 
 const renderToolScriptResultContent = (resp: FunctionResponse, expanded: boolean): ReactNode | null => {
   const strippedResponse = stripToolScriptSubCallsFromResponse(resp.response)
-  const primaryText = formatCompactObjectPreview(strippedResponse)
+  const primaryText = formatToolResponseText({ ...resp, response: strippedResponse })
   if (!primaryText) {
     return null
   }

@@ -61,7 +61,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 ## Dependencies
 
 - `./chatShared` — shared types (`FunctionCall`, `FunctionResponse`, `Message`, `MessagePart`, `ToolScriptSubCall`, `ToolTagItem`), utilities (`formatToolLabel`, `formatCompactObjectPreview`, `parseApplyPatchPreview`, `buildPatchHunkSnippets`, `clampContentStyle`, `parseAnsi`, `summarizeToolTagCounts`), and UI components (`IconToggleButton`, `MiniToggleButton`, `ToolTag`, `ToolTagList`, `SessionHashLink`)
-- `../../../shared/src/toolResponseFormatting` — `formatCompactObjectPreview`
+- `../../../shared/src/toolResponseFormatting` — `formatCompactObjectPreview`, `formatToolScriptExecutionResponse`
 - `../../../shared/src/webuiToolRendering` — pure helpers for streaming partial-tool guards and session-link text parsing tests
 - `./ImageParts` — renders image message parts
 - `./SyntaxHighlightedText` — code syntax highlighting component
@@ -88,6 +88,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 - `ExecCommandText` parses shell commands to detect heredoc blocks and applies per-language syntax highlighting to heredoc bodies
 - `ExecOutputText` infers output language from command context or content heuristics (JSON detection, import patterns, HTML tags)
 - ToolScript subcalls use live `ToolScriptProgressContext` events and persisted `FunctionResponse.__meta.toolScriptSubCalls` for completed/reloaded direct and unified executions. Older `response.subCalls` remains readable; script-owned nested result fields are not removed. See [D-dispatch-toolscript-execution-projection](../threads/tool-dispatch-node-execution.md#d-dispatch-toolscript-execution-projection).
+- Responses carrying the exact-target ToolScript activity metadata use the shared print/return/metadata text renderer in expanded bodies, collapsed previews and pane-local Search. Native status/error styling and JSON inspection still use the structured response; older results keep their existing formatter and activity fallback.
 - Status-based theming (success/error/neutral) applies to thread lines, headers, and surface backgrounds. Standard treatment retains the established tone-specific opacity composition. Console treatment consumes the complete success/error surface pairs and uses its panel/hover pair for neutral cards and group summaries.
 - Real-tool tags retain original case in every view; other labels keep their theme treatment. [webui-chat-shared](./webui-chat-shared.md) owns their identity and CSS hook.
 - Tool tags carry the shared `data-tool-tag-tone` hook even when they are rendered through `ToolTagList` and have no `.foxwarm-tool-tag` class. Completed-tool tags consume the manifest V2 `tool*` family in both treatments; errors and system tags retain their distinct semantic families.

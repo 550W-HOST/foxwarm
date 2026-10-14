@@ -15,11 +15,12 @@ before(async () => {
   const source = `
     import React from 'react'
     import { createRoot } from 'react-dom/client'
-    import { InterleavedToolGroup } from ${JSON.stringify(componentPath)}
+    import { InterleavedToolGroup, getToolResponseSearchText } from ${JSON.stringify(componentPath)}
     import { ToolScriptProgressContext } from ${JSON.stringify(progressPath)}
     const root = createRoot(document.getElementById('root'))
     window.renderCases = (cases, progress = {}) => {
       localStorage.setItem('script-activity-history', JSON.stringify(cases))
+      window.responseSearchText = cases.map(({ response }) => response ? getToolResponseSearchText(response) : '')
       root.render(React.createElement(ToolScriptProgressContext.Provider, { value: progress },
         cases.map(({ id, call, response }) => React.createElement('div', { id, key: id },
           React.createElement(InterleavedToolGroup, {
@@ -68,7 +69,7 @@ test('nested activity survives live completion and historical reload using displ
     const subCalls = [{ id: 'tss_1', name: 'nested_probe', status: 'completed', startedAt: 1, completedAt: 4, durationMs: 3, argsSummary: 'persisted target' }]
     const response = (id, name, legacy = false) => ({
       tool_use_id: id, name,
-      response: { status: 'completed', runId: 'tsr_fixture', result: { subCalls: ['author result'] }, ...(legacy ? { subCalls } : {}) },
+      response: { status: 'completed', runId: 'tsr_fixture', stdout: 'printed "quotes"\n\\path\n', result: { subCalls: ['author result'], text: 'first\nsecond' }, ...(legacy ? { subCalls } : {}) },
       ...(!legacy ? { __meta: { toolScriptSubCalls: subCalls } } : {}),
     })
     window.renderCases([
@@ -83,11 +84,18 @@ test('nested activity survives live completion and historical reload using displ
   assert.equal(await page.$eval('#current .foxwarm-tool-result-content', node => node.textContent.includes('Running...')), false)
   assert.ok(await page.$eval('#current', element => element.textContent.includes('persisted target')))
   assert.ok(await page.$eval('#current', element => element.textContent.includes('author result')))
+  const sectionText = await page.$eval('#current .foxwarm-tool-result-content', element => element.textContent)
+  assert.ok(sectionText.includes('--- print ---\nprinted "quotes"\n\\path\n--- return ---\n'))
+  assert.ok(sectionText.includes('text: |-\n  first\n  second\n---\nstatus: completed\nrunId: tsr_fixture'))
+  assert.ok((await page.evaluate(() => window.responseSearchText[0])).includes('--- print ---\nprinted "quotes"\n\\path\n--- return ---\n'))
   await page.reload()
   await page.waitForFunction(() => ['current', 'unified', 'legacy', 'legacy-unified'].every(id => document.getElementById(id)?.textContent.includes('nested_probe')))
   for (const id of ['current', 'unified', 'legacy', 'legacy-unified']) {
     await page.click(`#${id} .foxwarm-tool-header-toggle`)
     await page.waitForFunction(id => document.getElementById(id)?.textContent.includes('persisted target'), {}, id)
     assert.ok(await page.$eval(`#${id}`, element => element.textContent.includes('author result')))
+    if (id === 'current' || id === 'unified') {
+      assert.ok(await page.$eval(`#${id} .foxwarm-tool-result-content`, element => element.textContent.includes('--- return ---\n')))
+    }
   }
 })

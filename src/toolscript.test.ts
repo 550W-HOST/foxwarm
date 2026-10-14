@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import path from 'path';
+import axios from 'axios';
 
 import { executeTools } from './llm';
 import * as llm from './llm';
@@ -15,7 +16,7 @@ import * as nodeExecution from './nodeExecution';
 import { getAgentDir, STATE_DIR } from './config';
 import { convertToOpenAIResponsesFormat } from './llmProviders/openai';
 import { ensureToolScriptMontyRuntimeForTests, tool_cancel_toolscript_run, tool_continue_script, tool_get_toolscript_run, tool_list_toolscript_runs, tool_run_script, tool_start_toolscript_run, forceToolScriptNativeImportFailureForTests, getToolScriptRunForTests, resetToolScriptMontyRuntimeForTests, resetToolScriptRunsForTests, setToolScriptMontyRuntimeFactoryForTests, shutdownToolScriptRuntime } from './toolscript';
-import type { Session } from './types';
+import type { FunctionCall, Message, Session } from './types';
 import { readSessionHistorySnapshot } from './session/metadataStore';
 import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from './toolAuthorization';
 
@@ -342,6 +343,78 @@ test('nested script execution cannot replace its outer invocation activity metad
     assert.deepEqual(response.__meta?.toolScriptSubCalls?.map(call => call.name), ['run_script']);
     assert.deepEqual(Object.keys(response.response).sort(), ['result', 'runId', 'status']);
   } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
+test('real outer execution projects print, return, waits, errors and promoted images into model text', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_model_sections');
+  const session = await sessionManager.getSession(sessionId);
+  const ctx = { sessionId, session };
+  const originalPost = axios.post;
+  let captured: any;
+  (axios as any).post = async (_url: string, body: any) => {
+    captured = body;
+    return { status: 200, statusText: 'OK', headers: {}, data: {
+      content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn',
+    } };
+  };
+  const modelText = async (call: FunctionCall, message: Message): Promise<string> => {
+    const snapshot = structuredClone(message);
+    await llm.requestLlmOnce({
+      contents: [{ role: 'model', parts: [{ functionCall: call }] }, message], systemPrompt: '',
+      modelEntryOverride: { providerKey: 'fixture', providerType: 'anthropic', baseUrl: 'https://fixture.example',
+        apiKey: '', model: 'chat', extraFields: { stream: false }, extraHeaders: {} },
+      toolDefinitions: [], maxRetries: 1, notifySessionEvents: false, registerAbortController: false,
+    });
+    assert.deepEqual(message, snapshot, 'model projection must not change native/UI history');
+    const content = captured.messages.flatMap((entry: any) => entry.content).find((entry: any) => entry.type === 'tool_result').content;
+    return typeof content === 'string' ? content : content.filter((entry: any) => entry.type === 'text').map((entry: any) => entry.text).join('\n');
+  };
+  try {
+    const literal = '"quotes"\n\\backslash\n--- return ---\n{"not":"decoded"}';
+    const runCall = { id: 'literal-script', name: 'run_script', args: { code: 'print(args["text"])\nreturn args["text"]', args: { text: literal } } };
+    const message = await executeTools([runCall], ctx, session);
+    const response = message.parts[0].functionResponse!.response;
+    assert.equal(await modelText(runCall, message), `--- print ---\n${literal}\n--- return ---\n${literal}\n---\nstatus: completed\nrunId: ${response.runId}`);
+
+    const waitingCall = { id: 'waiting-script', name: 'call_tool', args: { toolId: 'builtin:run_script', args: {
+      code: 'print("before")\nask_agent("Continue?")\nprint("after")\nreturn False',
+    } } };
+    const waitingMessage = await executeTools([waitingCall], ctx, session);
+    const waiting = waitingMessage.parts[0].functionResponse!.response;
+    const waitingText = await modelText(waitingCall, waitingMessage);
+    assert.match(waitingText, /^--- print ---\nbefore\n---\nstatus: waiting\n/);
+    assert.ok(waitingText.includes(`continuationId: ${waiting.continuationId}`));
+    assert.match(waitingText, /question: Continue\?/);
+    assert.doesNotMatch(waitingText, /--- return ---/);
+    const continueCall = { id: 'continue-script', name: 'continue_script', args: {
+      runId: waiting.runId, continuationId: waiting.continuationId, input: 'yes',
+    } };
+    const continued = await executeTools([continueCall], ctx, session);
+    assert.equal(await modelText(continueCall, continued), `--- print ---\nafter\n--- return ---\nfalse\n---\nstatus: completed\nrunId: ${waiting.runId}`);
+    assert.equal((await tool_get_toolscript_run({ runId: waiting.runId }, ctx)).stdout, 'before\nafter\n');
+
+    const errorCall = { id: 'failed-script', name: 'run_script', args: { code: 'print("partial")\nraise ValueError("useful failure")' } };
+    const errorMessage = await executeTools([errorCall], ctx, session);
+    const errorText = await modelText(errorCall, errorMessage);
+    assert.match(errorText, /^--- print ---\npartial\n---\nstatus: failed\n/);
+    assert.match(errorText, /Traceback[\s\S]*ValueError: useful failure/);
+    assert.doesNotMatch(errorText, /--- return ---|ToolScript context/);
+
+    const imageCall = { id: 'image-script', name: 'run_script', args: { code: 'return args', args: {
+      inlineData: { mimeType: 'image/png', data: TINY_PNG_BASE64 }, value: 0,
+    } } };
+    const imageMessage = await executeTools([imageCall], ctx, session);
+    assert.equal(imageMessage.parts.filter(part => part.inlineData).length, 1);
+    const imageText = await modelText(imageCall, imageMessage);
+    assert.match(imageText, /--- return ---\nvalue: 0\ninlineData: .*image promoted/);
+    assert.match(imageText, /image-script#1/);
+    assert.doesNotMatch(imageText, new RegExp(TINY_PNG_BASE64));
+  } finally {
+    (axios as any).post = originalPost;
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);
   }
