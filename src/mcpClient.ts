@@ -2,6 +2,9 @@ import { isDeepStrictEqual } from 'node:util';
 import { MCP_CONFIG_PATH } from './config';
 import { logger } from './common';
 import { DiskJsonData } from './utils/diskJsonData';
+import { promises as fs } from 'node:fs';
+import { containsOAuthCredential, getMcpOAuthService, normalizeMcpOAuthConfig, type McpOAuthConfig } from './mcpOAuth';
+import { oauthEndpoint } from './mcpOAuthHttp';
 import { closeMcpCallerConnections, withMcpCallerConnection, startMcpNotifications, MCP_NOTIFICATION_CAPABILITY, type McpConnectionOwner, type McpCallerConnection } from './mcpCallerConnections';
 
 type McpSdkModules = {
@@ -48,6 +51,7 @@ export type McpServerConfig = {
   stderr?: 'inherit' | 'pipe' | 'ignore';
   token?: string;
   headers?: Record<string, string>;
+  oauth?: McpOAuthConfig;
   description?: string;
   timeoutSeconds?: number;
   enable?: boolean;
@@ -72,6 +76,7 @@ export type McpServerSummary = {
   envKeys: string[];
   headerKeys: string[];
   hasToken: boolean;
+  authentication: 'static' | 'oauth';
   timeoutSeconds: number | null;
 };
 
@@ -117,6 +122,7 @@ function normalizeMcpConfigPayload(raw: any, filePath: string): McpConfig {
 export function createMcpConfigStore(filePath: string = MCP_CONFIG_PATH): DiskJsonData<McpConfig> {
   return new DiskJsonData<McpConfig>(filePath, {
     backup: false,
+    hooks: { beforeRename: ({ tempPath }) => fs.chmod(tempPath, 0o600) },
     normalizeLoadedData: normalizeMcpConfigPayload,
     onReadError: (err: unknown, candidatePath: string) => {
       logger.warn({ err, candidatePath }, 'Failed to read MCP config candidate');
@@ -155,6 +161,7 @@ function normalizeTransport(server: McpServerConfig): McpTransport {
 
 function sanitizeServerConfig(server: McpServerConfig): McpServerConfig {
   const next = { ...server };
+  if (next.oauth !== undefined) next.oauth = normalizeMcpOAuthConfig(next.oauth);
   if (next.transport === undefined && typeof next.type === 'string') {
     next.transport = next.type as McpTransport;
   }
@@ -184,6 +191,13 @@ export function normalizeManagedMcpServerConfig(server: McpServerConfig): McpSer
   } else if (!normalized.url) {
     throw new Error(`MCP transport ${transport} requires url.`);
   }
+  if (normalized.oauth) {
+    if (transport === 'stdio') throw new Error('OAuth is available only for HTTP MCP servers.');
+    oauthEndpoint(normalized.url);
+    if (normalized.token || Object.keys(normalized.headers || {}).some(key => key.toLowerCase() === 'authorization')) {
+      throw new Error('Choose OAuth or a static Authorization header, not both.');
+    }
+  }
   return normalized;
 }
 
@@ -206,6 +220,7 @@ export function summarizeServerConfig(name: string, server: McpServerConfig): Mc
       ? Object.keys(normalized.headers).sort()
       : [],
     hasToken: Boolean(normalized.token),
+    authentication: normalized.oauth ? 'oauth' : 'static',
     timeoutSeconds: normalized.timeoutSeconds ?? null,
   };
 }
@@ -225,6 +240,7 @@ function cloneMcpConfig(config: McpConfig): McpConfig {
         ...(Array.isArray(server.args) ? { args: [...server.args] } : {}),
         ...(server.env ? { env: { ...server.env } } : {}),
         ...(server.headers ? { headers: { ...server.headers } } : {}),
+        ...(server.oauth ? { oauth: { ...server.oauth } } : {}),
       }]),
     ),
   };
@@ -462,13 +478,32 @@ async function getOrCreatePooledStdioConnection(serverName: string, config: McpS
 
 function httpOptions(name: string, config: McpServerConfig, owner?: McpConnectionOwner) {
   const mode = normalizeTransport(config) as 'streamable-http' | 'sse' | 'auto';
-  return { owner, server: name, mode, url: requireUrl(config, mode), headers: buildMcpHttpHeaders(config), sdk: loadMcpSdk() };
+  // Persisted OAuth configurations receive the same conflict validation as a
+  // managed update; an old fixed Authorization must not override the grant.
+  if (config.oauth) normalizeManagedMcpServerConfig(config);
+  return { owner, server: name, mode, url: requireUrl(config, mode), headers: buildMcpHttpHeaders(config), sdk: loadMcpSdk(),
+    oauthFetch: getMcpOAuthService().resourceFetch(name, config) };
 }
 
 async function withServerConnection<T>(serverName: string, config: McpServerConfig,
   fn: (connection: Pick<McpCallerConnection, 'client' | 'reception'>) => Promise<T>, owner?: McpConnectionOwner, signal?: AbortSignal): Promise<T> {
   signal?.throwIfAborted();
-  if (normalizeTransport(config) !== 'stdio') return withMcpCallerConnection(httpOptions(serverName, config, owner), fn, signal);
+  if (normalizeTransport(config) !== 'stdio') {
+    const credentials = config.oauth ? [config.oauth.clientSecret, ...getMcpOAuthService().credentials(serverName)].filter(Boolean) : [];
+    const currentCredentials = () => config.oauth ? [...credentials, ...getMcpOAuthService().credentials(serverName)] : [];
+    try {
+      const result = await withMcpCallerConnection(httpOptions(serverName, config, owner), fn, signal);
+      if (containsOAuthCredential(result, currentCredentials())) {
+        throw new Error('The MCP operation may have completed, but its output contained OAuth credentials and was withheld. Do not retry automatically.');
+      }
+      return result;
+    } catch (error) {
+      if (containsOAuthCredential(error instanceof Error ? error.message : error, currentCredentials())) {
+        throw new Error('The MCP operation failed with private credential data. Its outcome may be unknown; do not retry automatically.');
+      }
+      throw error;
+    }
+  }
 
   const connection = await getOrCreatePooledStdioConnection(serverName, config);
   connection.lastUsedAt = Date.now();
@@ -664,11 +699,17 @@ export async function callTool(serverName: string | undefined, tool: string, arg
 }
 
 export async function upsertServer(name: string, server: McpServerConfig) {
+  let changedAuthorization = false;
   await mutateConfig((config) => {
     config.servers = config.servers || {};
-    config.servers[name] = normalizeManagedMcpServerConfig({ ...config.servers[name], ...server });
+    const previous = config.servers[name];
+    const next = normalizeManagedMcpServerConfig({ ...previous, ...server });
+    changedAuthorization = !!(previous?.oauth || next.oauth)
+      && (previous?.url !== next.url || !isDeepStrictEqual(previous?.oauth, next.oauth));
+    config.servers[name] = next;
   });
-  await closeMcpCallerConnections({ server: name });
+  if (changedAuthorization) await getMcpOAuthService().configurationChanged(name);
+  else await closeMcpCallerConnections({ server: name });
 }
 
 export async function setServerEnabled(name: string, enable: boolean) {
@@ -679,7 +720,7 @@ export async function setServerEnabled(name: string, enable: boolean) {
     }
     config.servers[name].enable = enable;
   });
-  await closeMcpCallerConnections({ server: name });
+  await getMcpOAuthService().configurationChanged(name, false);
 }
 
 export async function getServers() {

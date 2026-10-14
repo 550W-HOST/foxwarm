@@ -148,6 +148,7 @@ function redactConfiguredSecrets(error: unknown, configs: mcpClient.McpServerCon
   const originalMessage = error instanceof Error ? error.message : String(error);
   const values = configs.flatMap(config => [
     config.token,
+    config.oauth?.clientSecret,
     ...(Array.isArray(config.args) ? config.args : []),
     ...Object.values(config.env || {}),
     ...Object.values(config.headers || {}),
@@ -184,6 +185,7 @@ async function externalCredentials(before: mcpClient.McpServerConfig[], afterEff
   }
   return Array.from(new Set([...before, ...Object.values(servers)].flatMap(config => [
     config.token,
+    config.oauth?.clientSecret,
     ...Object.entries(config.headers || {}).flatMap(([name, value]) => {
       if (!CREDENTIAL_HEADER_NAMES.has(name.toLowerCase())) return [];
       const bearer = /^Bearer\s+(\S+)$/i.exec(value);

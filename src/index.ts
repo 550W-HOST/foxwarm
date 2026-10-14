@@ -56,6 +56,7 @@ import {
 } from './config';
 import type { TelegramConfig } from './config';
 import { HttpServer, setHttpServer } from './httpServer';
+import { registerMcpOAuthRoutes } from './mcpOAuthRoutes';
 import { registerNodeWebSocket } from './nodes/websocket';
 import { registerNodeHttpRoutes } from './nodes/httpRoutes';
 import { initializeNodeRegistry } from './nodes/registry';
@@ -422,6 +423,7 @@ async function start() {
         // rejects requests; later saves can enable the first MCP surface.
         mcpInboundHttp = new McpInboundHttpService(ACCESS_RUNTIME, new McpInboundMcpCatalog());
         mcpInboundHttp.register(httpServerInstance);
+        registerMcpOAuthRoutes(httpServerInstance);
         configInstaller.setHttpAvailable(true);
         
         // Start HTTP server
