@@ -9,14 +9,21 @@ using SdkClient = ModelContextProtocol.Client.McpClient;
 
 namespace Foxwarm;
 
-internal sealed partial class McpClient(string root) : IAsyncDisposable
+internal sealed partial class McpClient : IAsyncDisposable
 {
-    private readonly McpConfiguration configuration = new(root);
+    private readonly McpConfiguration configuration;
+    internal McpOAuthService OAuth { get; }
     private readonly object lifecycle = new();
     private readonly Dictionary<long, Task> operations = [];
     private readonly CancellationTokenSource shutdown = new();
     private long nextOperation;
     private bool closed;
+
+    internal McpClient(string root, string? publicBaseUrl = null)
+    {
+        configuration = new(root);
+        OAuth = new(root, publicBaseUrl, configuration.Get, FenceServer, shutdown.Token);
+    }
 
     private Task<T> RunAsync<T>(
         Func<CancellationToken, Task<T>> operation,
@@ -68,9 +75,9 @@ internal sealed partial class McpClient(string root) : IAsyncDisposable
     {
         try
         {
-            return Foxwarm.Images.ImageTransport.DiagnosticBody(
-                configuration.Redact(message, configs)
-            );
+            if (OAuth.Credentials().Any(secret => message.Contains(secret, StringComparison.Ordinal)))
+                return "The MCP operation failed with private credential data. Its outcome may be unknown; do not retry automatically.";
+            return Foxwarm.Images.ImageTransport.DiagnosticBody(configuration.Redact(message, configs));
         }
         catch
         {
@@ -121,17 +128,14 @@ internal sealed partial class McpClient(string root) : IAsyncDisposable
                 token.ThrowIfCancellationRequested();
                 try
                 {
-                    await configuration.UpdateAsync(
+                    await UpdateConfigurationAsync(
                         name,
                         patch,
                         enabledOnly: patch.Count == 1 && patch.ContainsKey("enable")
                     );
-                    InvalidateServer(name);
                 }
                 catch (Exception error)
                 {
-                    if (error is AuthorityCommittedException)
-                        InvalidateServer(name);
                     throw new InvalidOperationException(SafeError(error.Message, patch));
                 }
                 var timeout = SessionWait.Number(args["timeoutSeconds"]);
@@ -191,6 +195,7 @@ internal sealed partial class McpClient(string root) : IAsyncDisposable
                                 .ToArray()
                         ),
                         ["hasToken"] = !string.IsNullOrEmpty(SessionWait.Text(config["token"])),
+                        ["authentication"] = config["oauth"] is not null ? "oauth" : "static",
                         ["timeoutSeconds"] = config["timeoutSeconds"]?.DeepClone(),
                     };
                     foreach (var key in new[] { "description", "url", "command", "cwd", "stderr" })
@@ -453,6 +458,7 @@ internal sealed partial class McpClient(string root) : IAsyncDisposable
             await Task.WhenAll(active);
         }
         catch { }
+        await OAuth.DrainAsync();
     }
 
     public async ValueTask DisposeAsync()

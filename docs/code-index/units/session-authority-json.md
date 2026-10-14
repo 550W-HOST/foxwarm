@@ -20,6 +20,7 @@ Callers: `PersistentSessionAuthorityStore` builds the authority envelope; `Sessi
 - Unsupported `childHandoffState`, worker mailbox/frontier state, and catalog-only semantic fields fail closed instead of being silently migrated into active history.
 - A failure before rename leaves the previous authority and removes the temp file. A failure after rename raises `AuthorityCommittedException`; reading the file returns the newly published document.
 - Directory sync may be unsupported on a platform, but the result is recorded; the host still distinguishes publication from durability-finalization failure.
+- The optional `privateFile` creation mode supplies owner-only temporary files for MCP configuration and OAuth credentials. The same write/fsync/rename/directory-sync primitive remains canonical; ordinary Session authority callers keep their existing defaults.
 
 ## Tests
 

@@ -1,6 +1,6 @@
 # Unit: Outbound MCP client
 
-Files: `dotnet/Foxwarm/McpClient.Connections.cs`, `dotnet/Foxwarm/McpClient.cs`, `dotnet/Foxwarm/McpConfiguration.cs`
+Files: `dotnet/Foxwarm/McpClient.Connections.cs`, `dotnet/Foxwarm/McpClient.cs`, `dotnet/Foxwarm/McpClient.Authorizations.cs`, `dotnet/Foxwarm/McpConfiguration.cs`
 Secondary files: `dotnet/Foxwarm.Tests/Mcp/OutboundMcpFixture.cs`, `dotnet/Foxwarm.Tests/Mcp/OutboundMcpLifecycleTests.cs`, `dotnet/Foxwarm.Tests/Mcp/OutboundMcpResultsTests.cs`, `dotnet/Foxwarm.Tests/Mcp/Fixtures/outbound-peer.mjs`, `packages/webui/test/experimentHostMcp.e2e.mjs`, `packages/webui/test/experimentHostMcp.peer.mjs`
 
 ## Purpose
@@ -14,6 +14,8 @@ Loads configured outbound MCP servers, maintains official SDK clients/transports
 - `WithClientAsync`, `ConnectEntryAsync`, and `ObserveDisconnectAsync` acquire/release bindings, fence late initialization, and remove disconnected clients. `MatchesConfiguration` rechecks the live configuration at acquisition and publication, including concurrent publication before the mutation hook runs.
 - `InvalidateServer` runs after committed managed configuration changes; `InvalidateOwner` advances the exact owner's connection generation during real identity move/deletion. `BeginShutdown`, `DrainAsync`, and `DisposeAsync` fence new calls and drain admitted operations, initializers, disposal, and disconnect observers.
 - `NormalizeResult`, `PlainText`, and `NormalizeImages` apply [Source MCP normalization](./src-mcp-client.md#d-mcp-source-normalization) at this source boundary, before the ordinary tool/history or native ToolScript projections.
+- `AuthorizationServer`, `Authorizations`, `SetAuthorizationAsync`, and `UpdateConfigurationAsync` supply safe administrator account status/settings. Configuration publication hooks run in the existing serialized mutation lane, after durable publication. OAuth rejects stdio/static Authorization conflicts; configuration uses private temporary files through the existing atomic writer.
+- `FenceServer` closes all affected named-server bindings after an account-generation change. [Instance-shared OAuth](./dotnet-mcp-oauth.md) injects resource authentication and result/error guards without changing trusted caller ownership or same-grant SDK Session state.
 
 ## Connection and cancellation contract
 

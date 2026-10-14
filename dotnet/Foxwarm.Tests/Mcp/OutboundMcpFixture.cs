@@ -28,7 +28,7 @@ internal sealed class OutboundMcpFixture : IAsyncDisposable
     internal Foxwarm.McpClient Mcp => Manager.OutboundMcp;
     internal ToolRegistry Registry = null!;
 
-    internal static async Task<OutboundMcpFixture> CreateAsync()
+    internal static async Task<OutboundMcpFixture> CreateAsync(string? publicBaseUrl = null)
     {
         var f = new OutboundMcpFixture();
         try
@@ -41,7 +41,15 @@ internal sealed class OutboundMcpFixture : IAsyncDisposable
                 "",
                 713
             );
-            f.Manager = new(f.Data, f.Work, options, HostModels.ForTest(options));
+            var models = HostModels.ForTest(options);
+            if (publicBaseUrl is not null)
+            {
+                Directory.CreateDirectory(Path.Combine(f.Data, "state"));
+                File.WriteAllText(Path.Combine(f.Data, "state", "config.yaml"), new JsonObject { ["url"] = publicBaseUrl }.ToJsonString());
+                File.WriteAllText(Path.Combine(f.Data, "state", "models.yaml"), "{\"default\":\"local\",\"providers\":{\"local\":{\"providerType\":\"openai-responses\",\"baseUrl\":\"http://127.0.0.1:1\",\"models\":[\"wire\"]}}}");
+                models = new ModelConfiguration(f.Data).Models;
+            }
+            f.Manager = new(f.Data, f.Work, options, models);
             await f.Manager.LoadMainHostAsync();
             f.First = await f.Manager.CreateNamedAsync("main", "first", null, null);
             f.Second = await f.Manager.CreateNamedAsync("main", "second", null, null);

@@ -5,6 +5,7 @@ The .NET MCP boundary loads outbound server configuration, maintains SDK connect
 ## Units
 
 - [Outbound MCP client](../units/mcp.md)
+- [Instance-shared outbound OAuth](../units/dotnet-mcp-oauth.md)
 
 ## Cross-module contract
 

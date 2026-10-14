@@ -1,0 +1,30 @@
+# Unit: Instance-shared outbound MCP OAuth
+
+Files: `dotnet/Foxwarm/McpOAuth.cs`, `dotnet/Foxwarm/McpOAuth.Consent.cs`, `dotnet/Foxwarm/McpOAuth.Resource.cs`, `dotnet/Foxwarm/McpOAuthHttp.cs`
+Secondary files: `dotnet/Foxwarm/McpClient.Authorizations.cs`, `dotnet/Foxwarm/McpClient.Connections.cs`, `dotnet/Foxwarm/Sessions/SessionManager.cs`, `dotnet/Foxwarm.Tests/Mcp/McpOAuthFixture.cs`, `dotnet/Foxwarm.Tests/Mcp/McpOAuthTests.cs`, `dotnet/Foxwarm.Tests/Mcp/McpOAuthTests.Rotation.cs`, `dotnet/Foxwarm.Tests/Mcp/Fixtures/oauth-peer.mjs`
+
+## Purpose and governing contract
+
+One administrator-selected third-party account authorizes the named server for this instance. Caller permissions and trusted Session-specific MCP contexts remain in their original owners. The canonical decision and Source contract are [outbound instance OAuth](./src-mcp-oauth.md#d-mcp-outbound-instance-oauth). This unit does not implement inbound authorization, notifications or restricted identities.
+
+The pinned official Core SDK 2.2.0 exposes OAuth only through per-transport `HttpClientTransportOptions.OAuth`; its reusable discovery, exchange and refresh helpers are internal/private. That provider can start interactive consent and replay insufficient-scope responses, and its refresh lock belongs to a transport. The .NET service therefore implements the required standard OAuth requests through an injected `HttpClient` handler. The SDK continues to own MCP serialization, initialization, transport selection, request dispatch and remote Session termination. There is no reflection or replacement protocol implementation.
+
+## Stable symbols and callers
+
+- `McpOAuthService.PublicUrl` and `ClientMetadata` derive fixed callback/CIMD addresses from the startup app `url`, preserving its deployment prefix. Missing URL is harmless to normal hosting; OAuth reports an actionable error. Neither request Host nor the ordinary HTTP address fallback creates OAuth authority.
+- `BeginAsync`, `DiscoverAsync` and `RegisterAsync` probe authentication without invoking MCP, validate canonical resource/issuer/S256, prefer pre-registration or retained registration, then choose advertised HTTPS CIMD or DCR. A new consent preparation merges registration/discovery into the current live grant, never an earlier token snapshot.
+- `FinishAsync` binds the in-memory state, verifier, issuer, captured configuration and generation; it consumes the flow before exchanging the code. Pending flows expire after ten minutes, are bounded to 32, and do not survive restart.
+- `Status`, `Disconnect` and `ConfigurationChanged` own safe account status and explicit authority removal. Disconnect retains registration, not tokens; config or new-account changes advance the generation and fence only the affected named server's bindings.
+- `ResourceClient`, `AccessAsync`, `RefreshAsync` and `RenewAsync` provide one grant-aware HTTP adapter per caller transport and instance-level same-generation single-flight renewal. Stop cancels the caller's waiter, not another caller's shared refresh. All renewals, including superseded ones, remain in shutdown drain tracking.
+- `GuardAsync`, `Remember`, `Credentials` and `ContainsCredential` protect ordinary discovery/results/errors using current dynamic credentials and credentials actually selected during the operation, including intermediate rotations. The operation context becomes inactive and clears on completion; it is not a global token history. Binary image/audio data is not censored.
+- `McpOAuthHttp.Endpoint`, `PinnedClientAsync`, `RequestAsync` and `ProbeAsync` separate AS requests from resource credentials, vet and pin DNS, reject redirects and unrelated private addresses, and bound discovery/token responses to 1 MiB and 15 seconds. Configured same-origin private resources and narrow loopback development peers remain supported.
+
+## Persistence and runtime behavior
+
+`state/mcp-oauth.json` is a Source-compatible version-1 named-server registration/grant store, separate from ephemeral SDK transports. It uses the existing synced atomic replacement primitive with owner-only creation permissions and publishes committed authority even when a post-rename durability step fails. Token scope is reported only when supplied by the AS; same-grant renewal preserves an omitted refresh token and previously reported scope.
+
+Ordinary calls never initiate consent or registration. A standard Bearer HTTP 401 permits one refresh/resend of the same request bytes before dispatch. Network failures, 404 and unknown-effect tool failures are not replayed. A scope 403 records a reviewable scope request without replay or loss of the still-valid remote context. Authorization failures throw before the SDK's auto fallback can mask them. Renewal retains caller contexts; a new browser grant, disconnect, invalid grant or changed configuration fences stale publication and affected bindings.
+
+## Tests
+
+The owned loopback AS/official SDK fixture qualifies pre-registration, CIMD and DCR, state/issuer/config/S256/resource rejection, private version-1 persistence and fresh-client use, distinct trusted Session contexts, native Monty/search/call consumers, rotation and stale refresh fences, consent/renewal merging, nonrotating refresh tokens, scope status, no ambiguous replay, credential-bearing results/errors across intermediate rotations, expiry, and static/SSE/auto regressions. Existing outbound lifecycle/result tests remain applicable. The public-route and original-App qualification belongs to the host integration entry.

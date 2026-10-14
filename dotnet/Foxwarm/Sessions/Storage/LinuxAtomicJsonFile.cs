@@ -31,11 +31,13 @@ public sealed class LinuxAtomicJsonFile
     private readonly string root;
     private readonly string filePath;
     private readonly Action<AtomicJsonWriteStage>? stageHook;
+    private readonly bool privateFile;
 
     public LinuxAtomicJsonFile(
         string root,
         string relativePath,
-        Action<AtomicJsonWriteStage>? stageHook = null
+        Action<AtomicJsonWriteStage>? stageHook = null,
+        bool privateFile = false
     )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
@@ -48,6 +50,7 @@ public sealed class LinuxAtomicJsonFile
                 nameof(relativePath)
             );
         this.stageHook = stageHook;
+        this.privateFile = privateFile;
     }
 
     public string FilePath => filePath;
@@ -81,15 +84,18 @@ public sealed class LinuxAtomicJsonFile
         try
         {
             stageHook?.Invoke(AtomicJsonWriteStage.BeforeTempWrite);
+            var options = new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+                BufferSize = 4096,
+                Options = FileOptions.WriteThrough,
+            };
+            if (privateFile && !OperatingSystem.IsWindows())
+                options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
             using (
-                var stream = new FileStream(
-                    tempPath,
-                    FileMode.CreateNew,
-                    FileAccess.Write,
-                    FileShare.None,
-                    4096,
-                    FileOptions.WriteThrough
-                )
+                var stream = new FileStream(tempPath, options)
             )
             {
                 write(stream);

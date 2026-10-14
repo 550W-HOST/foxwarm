@@ -82,6 +82,14 @@ internal sealed partial class McpClient
         SessionOwner? owner,
         long? ownerGeneration,
         Func<SdkClient, JsonObject, CancellationToken, Task<T>> operation
+    ) => await OAuth.GuardAsync(configuration.Get(server), () => WithClientCoreAsync(server, token, owner, ownerGeneration, operation));
+
+    private async Task<T> WithClientCoreAsync<T>(
+        string server,
+        CancellationToken token,
+        SessionOwner? owner,
+        long? ownerGeneration,
+        Func<SdkClient, JsonObject, CancellationToken, Task<T>> operation
     )
     {
         PoolEntry? entry = null;
@@ -323,6 +331,13 @@ internal sealed partial class McpClient
         }
     }
 
+    private void FenceServer(string server)
+    {
+        lock (poolGate)
+            foreach (var entry in pool.Values.Where(entry => entry.Key.Server == server).ToArray())
+                InvalidateEntry(entry);
+    }
+
     private async Task IdleCloseAsync(PoolEntry entry, CancellationTokenSource idle)
     {
         try
@@ -387,8 +402,7 @@ internal sealed partial class McpClient
             if (config["headers"] is JsonObject additional)
                 foreach (var (key, value) in additional)
                     headers[key] = SessionWait.Text(value)!;
-            transport = new HttpClientTransport(
-                new HttpClientTransportOptions
+            var options = new HttpClientTransportOptions
                 {
                     Name = server,
                     Endpoint = new Uri(
@@ -403,8 +417,10 @@ internal sealed partial class McpClient
                         "sse" => HttpTransportMode.Sse,
                         _ => HttpTransportMode.AutoDetect,
                     },
-                }
-            );
+                };
+            transport = config["oauth"] is not null
+                ? new HttpClientTransport(options, OAuth.ResourceClient(server, config), ownsHttpClient: true)
+                : new HttpClientTransport(options);
         }
         try
         {
