@@ -336,9 +336,8 @@ test('Agent scopes follow real ownership across creation and moves on HTTP, WS, 
       assert.equal((await fetch(swappedGlobal)).status, 401);
 
       const form = new FormData();
-      form.append('sessionId', initial);
       form.append('file', new Blob(['private attachment']), 'attachment.txt');
-      const uploaded = await fetch(`${baseUrl}/api/upload`, { method: 'POST',
+      const uploaded = await fetch(`${baseUrl}/api/upload?sessionId=${encodeURIComponent(initial)}`, { method: 'POST',
         headers: { Authorization: `Bearer ${webUiToken}` }, body: form });
       assert.equal(uploaded.status, 200);
       const uploadedFile = await uploaded.json() as any;

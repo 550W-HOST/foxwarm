@@ -26,9 +26,12 @@ export async function uploadReferencedFiles(
   for (const { ref, file } of attachments) {
     const formData = new FormData()
     formData.append('file', file, buildAttachmentUploadName(ref, file.name))
-    if (sessionId) formData.append('sessionId', sessionId)
-    const response = await fetchImpl(uploadUrl, { method: 'POST', body: formData })
-    if (!response.ok) throw new Error(`Failed to upload ${file.name}`)
+    const targetUrl = sessionId ? `${uploadUrl}?sessionId=${encodeURIComponent(sessionId)}` : uploadUrl
+    const response = await fetchImpl(targetUrl, { method: 'POST', body: formData })
+    if (!response.ok) {
+      const detail = await response.json().catch(() => null) as { error?: string } | null
+      throw new Error(detail?.error ? `Failed to upload ${file.name}: ${detail.error}` : `Failed to upload ${file.name}`)
+    }
     const data = await response.json()
     if (!data || typeof data.path !== 'string' || !data.path) throw new Error(`Invalid upload response for ${file.name}`)
     uploaded.push({

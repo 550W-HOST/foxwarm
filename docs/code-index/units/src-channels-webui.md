@@ -36,7 +36,7 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 - Fixed bounded `/api/session-list/sidebar`, `/children`, `/by-id`,
   `/architecture`, `/descendants/:sessionId`, and `/search` query routes.
 - One authenticated multiplexed `/api/webui/stream` WebSocket for current clients, plus legacy per-session and global session-list SSE routes.
-- File upload, administrator-only `POST /api/download/sign` issuance, and cookie/Bearer-or-signature `GET`/`HEAD /download` delivery.
+- File upload, administrator-only `POST /api/download/sign` issuance, and cookie/Bearer-or-signature `GET`/`HEAD /download` delivery. Uploads authorize the `sessionId` query first; oversize bodies get 413.
 - Content-addressed image blob delivery with existing authenticated display URLs and explicit resource-scoped download signatures.
 - Authenticated read-only global history search (`GET /api/history/search`) and bounded exact/adjacent archive viewing (`GET /api/history/window`). The search route accepts optional Agent or Session scope, returns structured source groups, and reports Vector-disabled/unavailable separately; the exact route does not require Vector. Exact `msg#N[-M]` ranges validate safe ascending sequence IDs, return bounded ordered pages plus requested/shown range and `hasMoreInTarget`; continuation can bound `afterSeq` by optional `targetEndSeq` before normal later browsing. Viewer message transport uses image-blob projection and drops provider replay-only opaque fields without changing archived data or the existing Chat DTO.
 - Model/provider and channel configuration, validation, and connectivity tests.

@@ -149,9 +149,8 @@ test('Setup and Worker set_config share live WebUI/MCP identities without resett
     assert.deepEqual(released, []);
 
     const upload = new FormData();
-    upload.set('sessionId', bound);
     upload.set('file', new Blob(['synthetic attachment']), 'attachment.txt');
-    const uploaded = await fetch(`${base}/api/upload`, { method: 'POST', headers: headers('alpha-token'), body: upload });
+    const uploaded = await fetch(`${base}/api/upload?sessionId=${encodeURIComponent(bound)}`, { method: 'POST', headers: headers('alpha-token'), body: upload });
     assert.equal(uploaded.status, 200);
     const uploadedFile: any = await uploaded.json();
     const alphaSocket = await socket(base, 'alpha-token', bound);

@@ -66,6 +66,7 @@ import { buildQueuedPreviewMessages, MAX_QUEUED_PREVIEW_ITEMS, sanitizeQueuedPre
 import { registerWebUiSetupRoutes } from './webuiSetup';
 
 const WEBUI_UPLOAD_DIR = path.join(os.tmpdir(), 'foxwarm-uploads');
+const WEBUI_UPLOAD_MAX_BYTES = 1024 * 1024 * 1024;
 const WEBUI_IDENTITY_FEATURES = {
   chat: true,
   attachments: true,
@@ -2832,16 +2833,31 @@ export class WebUIChannel implements Channel {
             // Setup multer for file upload
             const upload = multer({
               dest: WEBUI_UPLOAD_DIR,
-              limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
+              limits: { fileSize: WEBUI_UPLOAD_MAX_BYTES }
             });
             
             // Ensure upload directory exists
             await fs.ensureDir(WEBUI_UPLOAD_DIR);
+
+            const declaredLength = Number(req.headers['content-length']);
+            if (Number.isFinite(declaredLength) && declaredLength > WEBUI_UPLOAD_MAX_BYTES) {
+              req.unpipe();
+              setImmediate(() => req.resume());
+              res.status(413).json({ error: 'Upload too large', maxBytes: WEBUI_UPLOAD_MAX_BYTES });
+              return;
+            }
+
+            const declaredSessionId = typeof req.query?.sessionId === 'string' ? req.query.sessionId.trim() : '';
+            const preAuth = await this.getAuthContext(req);
+            if (preAuth?.role === 'webui' && declaredSessionId && !this.webUiCanAccessSession(preAuth, declaredSessionId)) {
+              res.status(403).json({ error: 'Forbidden: WebUI identity is not bound to this session', code: 'WEBUI_SESSION_NOT_ALLOWED' });
+              return;
+            }
             
             // Handle upload
             upload.single('file')(req, res, async (err: any) => {
               if (err) {
-                res.status(400).json({ error: err.message });
+                res.status(err?.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ error: err.message });
                 return;
               }
               
@@ -2853,7 +2869,7 @@ export class WebUIChannel implements Channel {
               const originalName = normalizeWebUiMultipartFilename(req.file.originalname);
 
               const auth = await this.getAuthContext(req);
-              const uploadSessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : '';
+              const uploadSessionId = declaredSessionId;
               if (!auth || (auth.role === 'webui' && (!uploadSessionId || !this.webUiCanAccessSession(auth, uploadSessionId)))) {
                 await fs.remove(req.file.path).catch(() => {});
                 res.status(!auth ? 401 : uploadSessionId ? 403 : 400).json({ error: 'WebUI identity upload requires a bound sessionId.' });
