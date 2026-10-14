@@ -282,6 +282,9 @@ internal sealed partial class SessionManager
                 var owner = await RequiredAsync(row["id"]!.GetValue<string>());
                 await owner.Entry.SaveLane.CommitNodeAsync(node, clearCwd: false);
             }
+        if (updateNode && node is null)
+            foreach (var owner in sessions.Values.Where(owner => owner.Agent == agent))
+                CaptureLocalProjection(owner);
         TopologyChanged?.Invoke();
     }
 }
