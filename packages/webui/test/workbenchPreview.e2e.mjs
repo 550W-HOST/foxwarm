@@ -154,6 +154,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       }
       close() { this.readyState = 3; this.onclose?.({}) }
     }
+    window.__emitRealtime = data => { for (const socket of FixtureWebSocket.instances) socket.onmessage?.({ data: JSON.stringify(data) }) }
     window.WebSocket = FixtureWebSocket
   }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal })
   await page.goto(`${baseUrl}${hash}`, { waitUntil: 'domcontentloaded' })
@@ -712,6 +713,183 @@ test('Close tab owns a small pointer move inside its button instead of starting 
         && state.root.activeTabId === 'chat:e2e-a'
         && !document.querySelector('[data-tab-id="chat:e2e-b"]')
     })
+  } finally { await page.close() }
+})
+
+async function waitForTabPaint(page) {
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+}
+
+async function openOverflowFixture(activeIndex = 0) {
+  const groups = ['a', 'b'].map(group => Array.from({ length: 12 }, (_, index) => chat(index ? `scroll-${group}-${index}` : `e2e-${group}`, false)))
+  const layout = { id: 'split-main', kind: 'split', direction: 'row', sizes: [50, 50], children: groups.map((tabs, index) => ({
+    id: index ? 'pane-other' : 'pane-main', kind: 'pane', tabIds: tabs.map(tab => tab.id), activeTabId: tabs[activeIndex].id,
+  })) }
+  const page = await openFixture({ tabs: groups.flat(), activeTabId: groups[0][activeIndex].id, layout, responsiveChat: true })
+  await page.waitForSelector('[data-pane-id="pane-other"] .foxwarm-workbench-tab-row')
+  await waitForTabPaint(page)
+  return page
+}
+
+async function tabScrollPositions(page) {
+  return page.$$eval('.foxwarm-workbench-tab-row', rows => rows.map(row => row.scrollLeft))
+}
+
+async function scrollTabRow(page, paneId, deltaY = 750) {
+  const box = await (await page.$(`[data-pane-id="${paneId}"] .foxwarm-workbench-tab-row`)).boundingBox()
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.wheel({ deltaY })
+  await waitForTabPaint(page)
+}
+
+async function visibleTabControl(page, paneId, close = true) {
+  return page.evaluate(({ paneId, close }) => {
+    const row = document.querySelector(`[data-pane-id="${paneId}"] .foxwarm-workbench-tab-row`)
+    const bounds = row.getBoundingClientRect()
+    for (const tab of row.children) {
+      if (tab.dataset.tabActive) continue
+      const control = tab.querySelector(close ? 'button' : 'span')
+      const rect = control.getBoundingClientRect()
+      const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2
+      if (rect.left > bounds.left + 8 && rect.right < bounds.right - 8 && control.contains(document.elementFromPoint(x, y))) return { id: tab.dataset.tabId, x, y }
+    }
+    throw new Error('Expected an inactive visible tab control')
+  }, { paneId, close })
+}
+
+async function mousePressAt(page, point, button = 'left') {
+  await page.mouse.move(point.x, point.y)
+  await page.mouse.down({ button })
+  await new Promise(resolve => setTimeout(resolve, 100))
+  await page.mouse.up({ button })
+  await waitForTabPaint(page)
+}
+
+async function tabToControl(page, selector) {
+  for (let index = 0; index < 120; index++) {
+    if (await page.evaluate(selector => document.activeElement?.matches(selector), selector)) return
+    await page.keyboard.press('Tab')
+  }
+  assert.fail(`Keyboard navigation did not reach ${selector}`)
+}
+
+async function assertTabVisible(page, tabId) {
+  await page.waitForFunction(tabId => {
+    const tab = document.querySelector(`[data-tab-id="${tabId}"]`)
+    if (!tab) return false
+    const rect = tab.getBoundingClientRect(), row = tab.parentElement.getBoundingClientRect()
+    return rect.left >= row.left - 1 && rect.right <= row.right + 1
+  }, {}, tabId)
+}
+
+test('Workbench tab scroll respects metadata, pane focus and split resizing but reveals explicit navigation', async () => {
+  const page = await openOverflowFixture()
+  try {
+    await scrollTabRow(page, 'pane-main')
+    await scrollTabRow(page, 'pane-other')
+    const before = await tabScrollPositions(page)
+    assert.ok(before.every(left => left >= 700))
+    await page.evaluate(() => window.__emitRealtime({ type: 'session-list-delta', sessions: [{ id: 'e2e-a', aliases: [], archived: false, parentSessionId: null, childTotal: 0, messageCount: 0, lastMessageTime: 2, busy: true }] }))
+    await page.waitForSelector('[data-session-id="e2e-a"] .runtime-busy-spinner')
+    await waitForTabPaint(page)
+    assert.deepEqual(await tabScrollPositions(page), before, 'a normal busy delta must not reveal either old active tab')
+
+    const divider = await (await page.$('[role="separator"][aria-orientation="vertical"]')).boundingBox()
+    await page.mouse.move(divider.x + divider.width / 2, divider.y + divider.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(divider.x - 45, divider.y + divider.height / 2, { steps: 5 })
+    await page.mouse.up()
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.sizes[0] < 49)
+    await waitForTabPaint(page)
+    assert.deepEqual(await tabScrollPositions(page), before, 'publishing split sizes must preserve manual tab scrolling')
+
+    const composer = await (await page.$('[data-workbench-content-tab="chat:e2e-b"] [role="textbox"][aria-label="Message"]')).boundingBox()
+    await mousePressAt(page, { x: composer.x + composer.width / 2, y: composer.y + composer.height / 2 })
+    assert.equal((await page.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.focusedPaneId)), 'pane-other')
+    assert.deepEqual(await tabScrollPositions(page), before, 'pane focus is not a tab reveal request')
+
+    await page.evaluate(() => window.foxwarmTest.switchToSession('e2e-b'))
+    await assertTabVisible(page, 'chat:e2e-b')
+    assert.equal((await tabScrollPositions(page))[0], before[0], 'same-ID navigation reveals only its target pane')
+    await page.evaluate(() => window.foxwarmTest.switchToSession('scroll-b-11'))
+    await assertTabVisible(page, 'chat:scroll-b-11')
+    assert.equal((await state(page)).root.children[1].activeTabId, 'chat:scroll-b-11')
+
+    const range = await (await page.$('[data-pane-id="pane-other"] input[aria-label="Scroll tabs"]')).boundingBox()
+    await page.mouse.move(range.x + range.width * .35, range.y + range.height / 2)
+    await page.mouse.down()
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const rangeDown = (await tabScrollPositions(page))[1]
+    assert.ok(rangeDown > 0 && rangeDown < 650, 'the overflow range is not pulled back to the active tab during its press')
+    await page.mouse.move(range.x + range.width * .65, range.y + range.height / 2, { steps: 5 })
+    await page.mouse.up()
+    assert.ok((await tabScrollPositions(page))[1] > rangeDown + 100)
+  } finally { await page.close() }
+})
+
+test('Workbench tab Close and middle gestures keep their pressed target while the strip is scrolled', async () => {
+  const page = await openOverflowFixture()
+  try {
+    await scrollTabRow(page, 'pane-other')
+    const target = await visibleTabControl(page, 'pane-other')
+    await mousePressAt(page, target)
+    let snapshot = await state(page)
+    assert.equal(snapshot.tabsById[target.id], undefined, 'X closes its original inactive target')
+    assert.equal(snapshot.root.children[1].activeTabId, 'chat:e2e-b')
+    assert.ok((await tabScrollPositions(page))[1] >= 700)
+    assert.equal(await page.$('[data-workbench-pane-drop-overlay]'), null, 'Close never starts a drag')
+
+    const middleTarget = await visibleTabControl(page, 'pane-other', false)
+    await mousePressAt(page, middleTarget, 'middle')
+    snapshot = await state(page)
+    assert.equal(snapshot.tabsById[middleTarget.id], undefined, 'middle Close retains the pressed tab identity')
+    assert.ok(snapshot.tabsById['chat:e2e-b'])
+
+    const canceledTarget = await visibleTabControl(page, 'pane-other', false)
+    const beforeCancel = Object.keys(snapshot.tabsById)
+    await page.mouse.move(canceledTarget.x, canceledTarget.y)
+    await page.mouse.down({ button: 'middle' })
+    await page.mouse.wheel({ deltaY: -200 })
+    await waitForTabPaint(page)
+    assert.notEqual(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-tab-id]')?.dataset.tabId, canceledTarget), canceledTarget.id)
+    await page.mouse.up({ button: 'middle' })
+    await waitForTabPaint(page)
+    assert.deepEqual(Object.keys((await state(page)).tabsById), beforeCancel, 'releasing over a different tab must not close that tab')
+
+    const releaseTarget = await visibleTabControl(page, 'pane-other', false)
+    const toolbar = await (await page.$('[data-pane-id="pane-other"] button[title="Split right with active tab"]')).boundingBox()
+    await page.mouse.move(toolbar.x + toolbar.width / 2, toolbar.y + toolbar.height / 2)
+    await page.mouse.down({ button: 'middle' })
+    await page.mouse.move(releaseTarget.x, releaseTarget.y)
+    await page.mouse.up({ button: 'middle' })
+    await waitForTabPaint(page)
+    assert.deepEqual(Object.keys((await state(page)).tabsById), beforeCancel, 'a mouseup without a tab press cannot independently close it')
+  } finally { await page.close() }
+})
+
+test('Workbench tab restore, keyboard Close and active-close fallback retain normal navigation', async () => {
+  const page = await openOverflowFixture(11)
+  try {
+    await assertTabVisible(page, 'chat:scroll-a-11')
+    await assertTabVisible(page, 'chat:scroll-b-11')
+    assert.ok((await tabScrollPositions(page)).every(left => left > 700), 'initial restored tabs are revealed in both panes')
+    for (const [tabId, key] of [['chat:scroll-b-6', 'Enter'], ['chat:scroll-b-7', ' ']]) {
+      await tabToControl(page, `[data-tab-id="${tabId}"] button[title="Close tab"]`)
+      await page.keyboard.press(key)
+      await page.waitForFunction(tabId => !document.querySelector(`[data-tab-id="${tabId}"]`), {}, tabId)
+      assert.equal((await state(page)).root.children[1].activeTabId, 'chat:scroll-b-11', 'keyboard Close does not select its inactive parent tab')
+    }
+    await tabToControl(page, '[data-tab-id="chat:scroll-b-9"]')
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(() => document.querySelector('[data-tab-id="chat:scroll-b-9"]')?.dataset.tabActive === 'true')
+    await assertTabVisible(page, 'chat:scroll-b-9')
+    const close = await (await page.$('[data-tab-id="chat:scroll-b-9"] button[title="Close tab"]')).boundingBox()
+    await mousePressAt(page, { x: close.x + close.width / 2, y: close.y + close.height / 2 })
+    await assertTabVisible(page, 'chat:scroll-b-10')
+    const snapshot = await state(page)
+    assert.equal(snapshot.root.children[1].activeTabId, 'chat:scroll-b-10')
+    assert.equal(snapshot.hash, '#tab/chat:scroll-b-10')
+    assert.equal(snapshot.tabsById['chat:scroll-b-9'], undefined)
   } finally { await page.close() }
 })
 

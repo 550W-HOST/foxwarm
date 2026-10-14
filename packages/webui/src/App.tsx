@@ -486,6 +486,7 @@ function App() {
   const updateSplitSizes = useWorkbenchStore((state) => state.updateSplitSizes)
 
   const [draggingItem, setDraggingItem] = useState<{ type: 'tab' | 'session' | 'pane'; id: string; title: string } | null>(null)
+  const [tabRevealRequest, setTabRevealRequest] = useState<{ tabId: string } | null>(null)
 
   const pendingRouteTabIdRef = useRef<string | null>(null)
   const currentRouteTabIdRef = useRef<string | null>(route.tabId)
@@ -614,6 +615,7 @@ function App() {
     const handleHashChange = () => {
       const nextRoute = getHashState()
       if (!setupOobe && nextRoute.tabId && tabsById[nextRoute.tabId]) {
+        if (nextRoute.tabId !== currentRouteTabIdRef.current) setTabRevealRequest({ tabId: nextRoute.tabId })
         activateTab(nextRoute.tabId)
       }
       setRoute(setupOobe && nextRoute.tabId !== SETUP_TAB_ID ? { view: 'tab', tabId: SETUP_TAB_ID } : nextRoute)
@@ -854,7 +856,8 @@ function App() {
     setTabHash(tab.id)
   }, [route.tabId, flattenedTabIds.length, focusedPaneId, paneIds.join('|')])
 
-  const navigateToTab = (tabId: string, origin: SessionNavigationOrigin = 'user') => {
+  const navigateToTab = (tabId: string, origin: SessionNavigationOrigin = 'user', options?: { reveal?: boolean }) => {
+    if (options?.reveal !== false) setTabRevealRequest({ tabId })
     pendingRouteTabIdRef.current = tabId
     currentRouteTabIdRef.current = tabId
     activateTab(tabId)
@@ -1663,7 +1666,7 @@ function App() {
       focusPane(targetPaneId)
       const active = findPaneNode(useWorkbenchStore.getState().root, targetPaneId)?.activeTabId
       if (active) {
-        navigateToTab(active)
+        navigateToTab(active, 'user', { reveal: false })
       }
     }
 
@@ -1694,6 +1697,7 @@ function App() {
       collapseDirection,
       tabs: paneTabs,
       activeTabId: pane.activeTabId,
+      revealRequest: tabRevealRequest,
       collapsed: pane.collapsed,
       focused: focusedPaneId === paneId,
       emphasizeFocus: paneIds.length > 1,

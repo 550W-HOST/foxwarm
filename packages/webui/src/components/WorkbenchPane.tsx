@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { Columns2, Move, PanelLeftClose, PanelLeftOpen, PanelTopClose, PanelTopOpen, Rows2, X } from 'lucide-react'
-import WorkbenchTabs from './WorkbenchTabs'
+import WorkbenchTabs, { type WorkbenchTabRevealRequest } from './WorkbenchTabs'
 import type { WorkbenchTab } from '../workbench/types'
 
 export interface WorkbenchPaneProps {
@@ -9,6 +9,7 @@ export interface WorkbenchPaneProps {
   collapseDirection: 'row' | 'column'
   tabs: WorkbenchTab[]
   activeTabId: string | null
+  revealRequest?: WorkbenchTabRevealRequest | null
   collapsed: boolean
   focused: boolean
   emphasizeFocus?: boolean
@@ -148,6 +149,7 @@ export default function WorkbenchPane({
   collapseDirection,
   tabs,
   activeTabId,
+  revealRequest,
   collapsed,
   focused,
   emphasizeFocus = true,
@@ -230,6 +232,7 @@ export default function WorkbenchPane({
               paneId={paneId}
               tabs={tabs}
               activeTabId={activeTabId}
+              revealRequest={revealRequest}
               focused={focused}
               dragEnabled={dragEnabled}
               toolbar={(
