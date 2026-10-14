@@ -380,7 +380,7 @@ export class McpOAuthService {
   private requireGrant(name: string, config: McpServerConfig): Grant {
     const grant = this.load()[name];
     if (!this.matches(grant, config) || !grant.tokens) {
-      throw new McpOAuthError('needs-authorization', 'This MCP server needs administrator authorization in Setup → Authorizations.');
+      throw new McpOAuthError('needs-authorization', 'This MCP server needs administrator OAuth authorization.');
     }
     return grant;
   }
@@ -485,7 +485,7 @@ export class McpOAuthService {
           const grant = this.requireGrant(name, config);
           this.save(name, { ...grant, requiredScope: safeScope(challenge.scope), error: 'Additional access is required. Review the scopes and authorize again.' });
           await response.body?.cancel();
-          throw new McpOAuthError('scope', 'Additional MCP access requires administrator authorization in Setup → Authorizations.');
+          throw new McpOAuthError('scope', 'Additional MCP access requires administrator review and reauthorization.');
         }
       }
       return response;
