@@ -82,4 +82,6 @@ Renders an interactive terminal session in the browser using xterm.js, connectin
 
 ## Workbench header integration
 
+Connection startup checks disposal before creating a missing PTY, so hiding or closing a pane during lookup cannot create a replacement after unmount. Desktop panel placement and distinct Collapse/Close semantics are governed by [D-workbench-terminal-panel](./webui-workbench.md#d-workbench-terminal-panel).
+
 The normal sole-tab header close/icon controls use [Single-tab headers](./webui-workbench.md#single-tab-headers). Standalone and embedded leaf roots retain their existing navigation and do not own Workbench tabs.

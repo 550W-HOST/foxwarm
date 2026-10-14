@@ -51,11 +51,11 @@ Defines the model-facing `submit_compact_plan` schema, candidate/policy types, c
 - A create-block operation stays inside one prompt-listed segment, source kind, and source block level.
 - Operations do not overlap and summaries are non-empty.
 - Block-source operations normally consume multiple blocks; only the explicit stranded-island exception permits a single source block.
-- `preserveMessages` must name raw candidates covered by a newly created message block and cannot split an atomic tool group.
-- `removePreservedMessages` can name only previously marked preserved active-history entries listed to the planner.
+- `preserveMessages` must name raw candidates covered by a newly created message block. Naming any member of an atomic tool group expands the selection to the whole group (call plus all paired responses) before conflict checks and quota accounting.
+- `removePreservedMessages` can name only previously marked preserved active-history entries listed to the planner; naming part of a preserved tool exchange is rejected, and the error lists the missing member seqs that must be removed together.
 - Preserved raw tokens do not count as replaced quota; stranded single-block lifts do not count as block reduction.
 - Quota coverage may accumulate across segments, but one operation never crosses a segment.
-- Optional missing/invalid `frictionScore` values are omitted without invalidating a plan. Source scores appear only in dedicated block-candidate prompts; see [execution friction](../threads/context-compaction-and-recall.md#d-context-block-execution-friction).
+- Optional missing/invalid `frictionScore` values are omitted without invalidating a plan. Source scores appear only in dedicated block-candidate prompts; see [execution friction](../threads/context-compaction.md#d-context-block-execution-friction).
 - Optional malformed block memory facts are skipped rather than failing a valid compaction plan; the bounded total and text deduplication apply across all created blocks.
 - Successful validation returns each normalized create-block entry with its resolved candidate-index range; runtime commit consumes that range without reinterpreting source endpoints.
 
@@ -63,7 +63,7 @@ Defines the model-facing `submit_compact_plan` schema, candidate/policy types, c
 
 - `COMPACT_PLAN_TOOL_DEFINITION` exposes optional `argsFilePath` alongside direct fields without a top-level schema combinator or required direct field. Direct submissions still require `replaceAsBlocks`, which exposes an explicit direct-array-or-JSON-string union. The direct-array branch describes required block fields and nested optional `memoryFacts` and `frictionScore`; there is no top-level fact argument.
 - Its caller-facing copy explains plan submission, candidate-only ranges, preservation/removal, and per-block durable facts; schema tests assert the union and required fields rather than editorial wording.
-- The dedicated compact runtime accepts a single plan submission or, while a repair file is pending, an exact-file edit/patch. Its lifecycle and security contract is canonical in [D-context-compact-runtime-gate](../threads/context-compaction-and-recall.md#d-context-compact-runtime-gate).
+- The dedicated compact runtime accepts a single plan submission or, while a repair file is pending, an exact-file edit/patch. Its lifecycle and security contract is canonical in [D-context-compact-runtime-gate](../threads/context-compaction.md#d-context-compact-runtime-gate).
 - The supported block input is `replaceAsBlocks`, preferably a direct array or alternatively a JSON string encoding that array. `preserveMessages` / `removePreservedMessages` remain direct arrays. Obsolete top-level `createBlocksJson` and `createBlocks` are rejected.
 - Validated resolved operations are consumed by [src-session-history](./src-session-history.md).
 - Cross-module behavior and rationale are canonical in [context compaction and recall](../threads/context-compaction-and-recall.md).

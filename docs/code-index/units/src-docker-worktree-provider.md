@@ -5,7 +5,7 @@ Secondary files: src/config.ts, packages/shared/src/configSchemas.ts, src/nodes/
 
 ## Purpose
 
-- Internal script exec forwards the programmatic hint into the existing generation-owned runtime; retained script content is separate from display and preserves deferred cwd effects. See [programmatic data](../threads/tool-dispatch.md#d-dispatch-programmatic-tool-data).
+- Internal script exec forwards the programmatic hint into the existing generation-owned runtime; retained script content is separate from display and preserves deferred cwd effects. See [programmatic data](../threads/tool-dispatch-node-execution.md#d-dispatch-programmatic-tool-data).
 
 Implements the first resident concrete sandbox-kind provider: one provider-owned Linux Docker container for one already-existing allowlisted Git worktree or checkout. The provider owns exact lifecycle, Docker identity, and per-generation execution artifacts while reusing canonical shared file and persistent-exec semantics.
 
@@ -47,4 +47,4 @@ The same FakeDocker fixture plus a real local Bash launcher covers external-owne
 - `src/nodes/providers.ts` selects this resident provider for normalized `type: docker-worktree` config while retaining executable-provider behavior.
 - Generic authorization, topology, selection, lifecycle confirmation, and no-fallback behavior remain in `src/nodeExecutionService.ts` and `NodeProviderRegistry`.
 - `skills/isolated-worker/create_isolated_worker.py` may compose provider-neutral ensure plus read-only inspect, validate the exact ready descriptor/worktree/network evidence, and only then create a bound isolated agent/session. The skill never creates a worktree or treats binding as provider ownership; canonical workflow decision: [D-node-isolated-worker-provider-compose](../modules/nodes.md#d-node-isolated-worker-provider-compose).
-- Canonical contract: [D-dispatch-docker-worktree-provider](../threads/tool-dispatch.md#d-dispatch-docker-worktree-provider).
+- Canonical contract: [D-dispatch-docker-worktree-provider](../threads/tool-dispatch-node-execution.md#d-dispatch-docker-worktree-provider).

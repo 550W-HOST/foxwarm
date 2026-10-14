@@ -41,4 +41,4 @@ Defines the persisted exact agent tool-rule shape, validates and canonicalizes s
 
 ## Design decisions
 
-Persisted exact agent-level rules are canonical in [D-dispatch-exact-agent-tool-rules](../threads/tool-dispatch.md#d-dispatch-exact-agent-tool-rules).
+Persisted exact agent-level rules are canonical in [D-dispatch-exact-agent-tool-rules](../threads/tool-dispatch-authorization.md#d-dispatch-exact-agent-tool-rules).

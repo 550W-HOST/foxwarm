@@ -52,6 +52,7 @@ Master Git uses argument-array process spawning. Remote status/content use `vsco
 - A versioned same-origin parent-source-checked request/ack bridge accepts only fixed add-folder/open-file/open-commit requests.
 - Runtime URLs are derived from the actual browser path so reverse-proxy prefixes survive even when a stripping proxy does not provide `X-Forwarded-Prefix`.
 - Missing individual assets are 404; missing required workbench assets produce the 503 setup page.
+- The authenticated workbench-main route applies the Firefox clipboard safeguard and insecure-context SHA-256 fallback by matching the stable generated helper bodies; minifier-generated function names are not part of the compatibility contract.
 
 ## Webview compatibility
 

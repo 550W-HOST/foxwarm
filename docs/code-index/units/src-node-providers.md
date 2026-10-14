@@ -50,7 +50,7 @@ Executable providers use the fixed `foxwarm-node-provider@1` JSON stdin/stdout p
 - Create/ensure resolve an exact configured provider because the Node may not exist. A supplied canonical requested Node ID is preflighted before provider effect: create rejects any owner, while ensure permits the selected provider or no owner and rejects another provider. The returned descriptor must match a supplied ID; provider-generated IDs retain post-result global duplicate checks. Inspect/destroy resolve all providers for one exact existing Node ID so duplicate ownership and descriptor mismatches fail closed. Unsupported provider methods reject explicitly and never fall back to master.
 - One registry-owned async mutation lane serializes every create/ensure/destroy resolution, preflight, provider effect, result validation, and post-result duplicate check in the Main process. Inspect does not acquire it. Queued calls recheck cancellation before provider effect, every terminal path releases the lane, and no retry or rollback is implied.
 - Lifecycle parameters/details are bounded plain JSON. Safe effect and data-retention fields are provider descriptions only; Core does not infer deletion, erasure, isolation, or security guarantees. Unknown in-process provider exceptions are replaced by a bounded generic lifecycle-provider failure so private launch/configuration data cannot cross the service boundary.
-- Primitive filesystem/exec calls reject leading Agent path tokens before invoking an opaque provider operation; their ordinary URI-like paths remain unchanged. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch.md#d-dispatch-native-agent-paths-and-code-targets).
+- Primitive filesystem/exec calls reject leading Agent path tokens before invoking an opaque provider operation; their ordinary URI-like paths remain unchanged. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch-node-execution.md#d-dispatch-native-agent-paths-and-code-targets).
 - The registry is a narrow Node boundary, not a generic plugin or service registry.
 - Core awaits the registry lifecycle only after Session catalog/ingress readiness. Provider initialization is ordered and shared across concurrent callers; any failure shuts down the failing provider plus earlier providers in reverse order and remains observable. Registry shutdown is reverse-order and idempotent.
 
@@ -60,7 +60,7 @@ Executable providers use the fixed `foxwarm-node-provider@1` JSON stdin/stdout p
 
 ## Integration
 
-- Primitive/provider context preserves the trusted script producer hint without changing owner authority. Custom exec backends supply retained data themselves, never through Core display parsing; see [programmatic data](../threads/tool-dispatch.md#d-dispatch-programmatic-tool-data).
+- Primitive/provider context preserves the trusted script producer hint without changing owner authority. Custom exec backends supply retained data themselves, never through Core display parsing; see [programmatic data](../threads/tool-dispatch-node-execution.md#d-dispatch-programmatic-tool-data).
 
 - `src/nodeExecutionService.ts` owns authorization, RPC validation/bounds, visibility filtering, and authoritative Main-side provider resolution.
 - `src/tools/resolvedTools.ts` carries the exact `executionNode`; it does not classify remote or sandbox implementations.

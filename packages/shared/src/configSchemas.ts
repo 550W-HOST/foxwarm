@@ -1,19 +1,33 @@
-export const KNOWN_PROVIDER_TYPES = [
+export const CONCRETE_PROVIDER_TYPES = [
   'openai-completions',
   'openai-responses',
   'openai-ws',
   'openai',
   'anthropic',
+] as const
+
+export const VIRTUAL_PROVIDER_TYPES = [
   'session-hash',
   'failover',
 ] as const
 
+export const KNOWN_PROVIDER_TYPES = [
+  ...CONCRETE_PROVIDER_TYPES,
+  ...VIRTUAL_PROVIDER_TYPES,
+] as const
+
+export type ConcreteProviderType = typeof CONCRETE_PROVIDER_TYPES[number]
+
+export function isConcreteProviderType(value: unknown): value is ConcreteProviderType {
+  return typeof value === 'string' && (CONCRETE_PROVIDER_TYPES as readonly string[]).includes(value)
+}
+
 const knownProviderType = {
   anyOf: [
     { enum: KNOWN_PROVIDER_TYPES },
-    { type: 'string' },
+    { const: '' },
   ],
-  description: 'Provider protocol or virtual routing strategy. Known Foxwarm values are suggested; custom provider types remain valid.',
+  description: 'Provider protocol or virtual routing strategy. Omit or leave empty to use the OpenAI protocol.',
 }
 
 const effectiveProviderTypeIs = (providerType: string) => ({
@@ -112,9 +126,15 @@ const modelEffortConfig = {
   },
 }
 
+const modelDefaultProperties = {
+  contextLimit: { ...positiveInteger, description: 'Context limit in tokens.' },
+  maxOutput: { ...positiveInteger, description: 'Maximum output tokens requested from the provider. Provider-specific extraFields may override this value.' },
+  providerImageOutputFormat: { enum: ['webp', 'jpeg'], description: 'Format used for optimized input images: webp, or jpeg with PNG for transparent images.' },
+}
+
 const modelOverrideProperties = {
+  ...modelDefaultProperties,
   streamContentInactivityTimeoutMs: { type: 'integer', minimum: 1, maximum: 2147483647, default: 60000, description: 'Streaming output inactivity timeout in milliseconds. Model overrides provider; default 60000. First-output timeout and explicit caller deadline remain independent. Safety buffering uses at least 600000.' },
-  contextLimit: { type: 'integer', minimum: 1, description: 'Context window size in tokens.' },
   effort: modelEffortConfig,
   historyReasoningField: {
     enum: ['reasoning_content', 'reasoning'],
@@ -167,7 +187,7 @@ const providerObjectEntry = {
         { type: 'array', items: modelItem },
       ],
     },
-    contextLimit: modelOverrideProperties.contextLimit,
+    ...modelDefaultProperties,
     streamContentInactivityTimeoutMs: modelOverrideProperties.streamContentInactivityTimeoutMs,
     effort: modelEffortConfig,
     historyReasoningField: modelOverrideProperties.historyReasoningField,
@@ -189,7 +209,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -197,7 +217,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -240,6 +260,12 @@ export const MODELS_CONFIG_SCHEMA = {
   additionalProperties: true,
   properties: {
     default: { type: 'string', minLength: 1, description: 'Default concrete or virtual model key.' },
+    defaults: {
+      type: 'object',
+      additionalProperties: false,
+      description: 'Default model settings. Concrete providers and model entries may override these values.',
+      properties: modelDefaultProperties,
+    },
     providers: {
       type: 'object',
       minProperties: 1,
@@ -551,7 +577,7 @@ export const APP_CONFIG_SCHEMA = {
       additionalProperties: true,
       properties: {
         ollamaBaseUrl: { type: 'string', description: 'Legacy vector endpoint root. Prefer top-level vector.baseUrl.' },
-        contextLimit: { type: 'integer', minimum: 1 },
+        contextLimit: { ...modelDefaultProperties.contextLimit, deprecated: true, description: 'Legacy fallback. Prefer defaults in models.yaml.' },
         compactKeepPercent: { type: 'number', exclusiveMinimum: 0, maximum: 1, default: 0.3 },
         compactThresholdPercent: { type: 'number', exclusiveMinimum: 0, maximum: 1, default: 0.85 },
         compactBlockLevelMinTokens: { type: 'integer', minimum: 1 },
@@ -559,8 +585,8 @@ export const APP_CONFIG_SCHEMA = {
         compactBlockCandidateFraction: { type: 'number', minimum: 0, maximum: 1 },
         compactBlockForceCompactFraction: { type: 'number', minimum: 0, maximum: 1 },
         compactMessageForceCompactFraction: { type: 'number', minimum: 0, maximum: 1 },
-        maxOutput: { type: 'integer', minimum: 1, default: 32768, description: 'Maximum provider output tokens. Defaults to 32768.' },
-        providerImageOutputFormat: { enum: ['webp', 'jpeg'], default: 'webp', description: 'Format for optimized provider-bound images. Transparent pixels use PNG when JPEG is selected.' },
+        maxOutput: { ...modelDefaultProperties.maxOutput, default: 32768, deprecated: true, description: 'Legacy fallback. Prefer defaults in models.yaml.' },
+        providerImageOutputFormat: { ...modelDefaultProperties.providerImageOutputFormat, default: 'webp', deprecated: true, description: 'Legacy fallback. Prefer defaults in models.yaml.' },
         openaiBaseUrl: { type: 'string' },
         openaiApiKey: { type: 'string' },
         anthropicBaseUrl: { type: 'string' },

@@ -8,7 +8,15 @@ export type WorkbenchTab =
   | (WorkbenchTabBase & { type: 'terminal'; terminalId?: string; nodeId?: string; cwd?: string; createMode?: 'new' | 'reuse' })
   | (WorkbenchTabBase & { type: 'vscode' })
   | (WorkbenchTabBase & { type: 'agents' })
-  | (WorkbenchTabBase & { type: 'search' })
+  | (WorkbenchTabBase & {
+      type: 'search'
+      /** Browser-local draft metadata; archive results remain ephemeral to the tab instance. */
+      searchQuery?: string
+      searchAgentName?: string
+      searchSessionId?: string
+      searchStarted?: boolean
+      searchSubmittedQuery?: string
+    })
   | (WorkbenchTabBase & { type: 'logs' })
   | (WorkbenchTabBase & { type: 'tasks' })
   | (WorkbenchTabBase & { type: 'setup' })

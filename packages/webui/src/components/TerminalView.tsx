@@ -260,6 +260,9 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
           }
         }
 
+        // A hidden/closed pane must not create a replacement PTY after its lookup settles.
+        if (disposed) return
+
         if (!terminalId) {
           const createRes = await fetch(`${API_BASE_PATH}/terminals`, {
             method: 'POST',

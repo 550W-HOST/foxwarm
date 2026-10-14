@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useDroppable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
 import { SortableContext, horizontalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
@@ -65,6 +65,22 @@ function TabStripRow({
   onOpenContextMenu: (tabId: string, event: React.MouseEvent<HTMLDivElement>) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const [scrollMetrics, setScrollMetrics] = useState({ left: 0, max: 0, thumb: 0 })
+  const updateScrollMetrics = () => {
+    const container = containerRef.current
+    if (!container) return
+    const next = { left: container.scrollLeft, max: Math.max(0, container.scrollWidth - container.clientWidth), thumb: Math.max(24, container.clientWidth * container.clientWidth / Math.max(1, container.scrollWidth)) }
+    setScrollMetrics(current => current.left === next.left && current.max === next.max && current.thumb === next.thumb ? current : next)
+  }
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    const observer = new ResizeObserver(updateScrollMetrics)
+    observer.observe(container)
+    for (const child of container.children) observer.observe(child)
+    updateScrollMetrics()
+    return () => observer.disconnect()
+  }, [tabs])
   const tabRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
   const { setNodeRef, isOver } = useDroppable({
     id: `tab-row:${paneId}`,
@@ -115,13 +131,14 @@ function TabStripRow({
   return (
     <div
       ref={setNodeRef}
-      className={`pb-px ${isOver ? 'rounded-lg bg-fw-accent/5 dark:bg-fw-accent/10' : ''}`}
+      className={`foxwarm-workbench-tab-drop-row relative pb-px ${isOver ? 'rounded-lg bg-fw-accent/5 dark:bg-fw-accent/10' : ''}`}
     >
       <SortableContext items={tabs.map((tab) => tab.id)} strategy={horizontalListSortingStrategy}>
         <div
           ref={containerRef}
           onWheel={handleWheel}
-          className="flex min-w-0 items-end gap-1 overflow-x-auto overflow-y-hidden overscroll-x-contain"
+          onScroll={updateScrollMetrics}
+          className="foxwarm-workbench-tab-row flex min-w-0 items-end gap-1 overflow-x-auto overflow-y-hidden overscroll-x-contain"
         >
           {tabs.map((tab) => (
             <SortableTab
@@ -145,6 +162,17 @@ function TabStripRow({
           ))}
         </div>
       </SortableContext>
+      {scrollMetrics.max > 0 && <input
+        type="range" min={0} max={scrollMetrics.max} step={1} value={scrollMetrics.left}
+        aria-label="Scroll tabs" className="foxwarm-tab-overflow"
+        style={{ '--foxwarm-tab-scroll-thumb': `${scrollMetrics.thumb}px` } as CSSProperties}
+        onPointerDown={event => event.stopPropagation()}
+        onKeyDown={event => event.stopPropagation()}
+        onChange={event => {
+          if (containerRef.current) containerRef.current.scrollLeft = Number(event.target.value)
+          updateScrollMetrics()
+        }}
+      />}
     </div>
   )
 }
@@ -192,6 +220,7 @@ function SortableTab({
         setTabRef(node)
       }}
       data-tab-id={tab.id}
+      data-tab-active={active || undefined}
       style={style}
       onClick={() => onSelectTab(tab.id)}
       onDoubleClick={() => onKeepTab(tab.id)}
@@ -213,7 +242,7 @@ function SortableTab({
           onSelectTab(tab.id)
         }
       }}
-      className={`group relative -mb-px flex min-w-[88px] max-w-[12rem] shrink-0 cursor-pointer items-center gap-1.5 rounded-t-lg border border-b-0 px-2.5 py-2 text-sm transition-colors ${active ? 'border-fw-border bg-fw-surface text-fw-accent shadow-sm dark:border-fw-border dark:bg-fw-surface dark:text-fw-accent' : 'border-transparent bg-fw-neutral-border/70 text-fw-text hover:bg-fw-surface/70 dark:bg-fw-surface/70 dark:text-fw-text dark:hover:bg-fw-hover'} ${isDragging ? 'opacity-50' : ''}`}
+      className={`foxwarm-workbench-tab group relative -mb-px flex min-w-[88px] max-w-[12rem] shrink-0 cursor-pointer items-center gap-1.5 rounded-t-lg border border-b-0 px-2.5 py-2 text-sm transition-colors ${active ? 'border-fw-border bg-fw-surface text-fw-accent shadow-sm dark:border-fw-border dark:bg-fw-surface dark:text-fw-accent' : 'border-transparent bg-fw-neutral-border/70 text-fw-text hover:bg-fw-surface/70 dark:bg-fw-surface/70 dark:text-fw-text dark:hover:bg-fw-hover'} ${isDragging ? 'opacity-50' : ''}`}
       title={isPreview ? `${tab.title} (preview)` : tab.title}
       {...attributes}
       {...listeners}
@@ -226,7 +255,7 @@ function SortableTab({
           event.stopPropagation()
           onCloseTab(tab.id)
         }}
-        className="rounded p-0.5 text-fw-text-muted opacity-70 hover:bg-fw-overlay/5 hover:text-fw-text group-hover:opacity-100 dark:hover:bg-fw-surface/10 dark:hover:text-fw-text-strong"
+        className="foxwarm-workbench-tab-close rounded p-0.5 text-fw-text-muted opacity-70 hover:bg-fw-overlay/5 hover:text-fw-text group-hover:opacity-100 dark:hover:bg-fw-surface/10 dark:hover:text-fw-text-strong"
         title="Close tab"
       >
         <X className="h-3.5 w-3.5" />
@@ -253,7 +282,7 @@ export default function WorkbenchTabs({
   const { openContextMenu, menu } = useWorkbenchTabMenu({ tabs, onCloseTab, onKeepTab, onMoveTabToNewWindow, canMoveTabToNewWindow, onCloseOtherTabs, onCloseAllTabs })
 
   return (
-    <div className="overflow-hidden border-b border-fw-border bg-fw-neutral-surface px-3 pt-2 dark:border-fw-border dark:bg-fw-canvas">
+    <div className="foxwarm-workbench-tab-strip overflow-hidden border-b border-fw-border bg-fw-neutral-surface px-3 pt-2 dark:border-fw-border dark:bg-fw-canvas">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <TabStripRow
@@ -268,7 +297,7 @@ export default function WorkbenchTabs({
           />
         </div>
         {toolbar && (
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="foxwarm-workbench-tab-toolbar flex shrink-0 items-center gap-1">
             {toolbar}
           </div>
         )}

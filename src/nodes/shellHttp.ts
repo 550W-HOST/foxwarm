@@ -4,7 +4,7 @@ import type { Request, Response } from 'express';
 import { HttpServer } from '../httpServer';
 import { nodesManager, type HttpExecTransport } from './manager';
 import { authenticateApprovedNode, touchApprovedNode } from './registry';
-import { BACKGROUND_COMPLETION_EVENT_RETENTION_MS, resolveExecTimeoutSeconds } from '../../packages/shared/dist/persistentExec';
+import { BACKGROUND_COMPLETION_EVENT_RETENTION_MS, formatExecDuration, resolveExecTimeoutSeconds } from '../../packages/shared/dist/persistentExec';
 
 export const SHELL_EXEC_CAPABILITY = {
   name: 'exec',
@@ -52,11 +52,11 @@ async function body(req: Request, limit: number): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
-function outputText(sample: Buffer, total: number, exitCode: number): string {
+function outputText(sample: Buffer, total: number, exitCode: number, duration: string): string {
   const binary = sample.includes(0) || !Buffer.from(sample.toString('utf8')).equals(sample);
   const rendered = binary ? `[Binary output sample, hexadecimal]\n${sample.toString('hex')}` : sample.toString('utf8');
   const truncation = total > OUTPUT_BYTES ? '\n[Output truncated: first 4096 and last 4096 bytes; full output was not retained.]' : '';
-  return `${rendered || '(No output)'}${truncation}\n\nExit code: ${exitCode}\nTotal output bytes: ${total}`;
+  return `${rendered || '(No output)'}${truncation}\n\nExit code: ${exitCode}\nDuration: ${duration}\nTotal output bytes: ${total}`;
 }
 
 /** Process-local HTTP transport; a handed-out command is never returned to the queue. */
@@ -198,6 +198,12 @@ export function registerShellNodeHttpRoutes(server: HttpServer): () => void {
     const exitField = header(req, 'X-Foxwarm-Exit');
     const total = Number(totalField);
     const exitCode = Number(exitField);
+    // Both endpoints are measured by the client. Main dispatch/report timestamps
+    // include transport delay and must never stand in for remote process time.
+    const elapsedField = header(req, 'X-Foxwarm-Elapsed-Seconds');
+    const elapsedSeconds = Number(elapsedField);
+    const elapsed = /^\d+$/.test(elapsedField) && Number.isSafeInteger(elapsedSeconds)
+      ? elapsedSeconds === 0 ? '<1s' : `~${formatExecDuration(elapsedSeconds * 1000)}` : undefined;
     if (kind === 'finished' && (!/^\d+$/.test(totalField) || !/^\d+$/.test(exitField)
       || !Number.isSafeInteger(total) || sample.length !== Math.min(total, OUTPUT_BYTES)
       || !Number.isInteger(exitCode) || exitCode < 0 || exitCode > 255)) throw new Error('Invalid result metadata');
@@ -215,12 +221,12 @@ export function registerShellNodeHttpRoutes(server: HttpServer): () => void {
             task.state = 'background';
             nodesManager.handleToolResponse(request.callId, {
               execId: identity.execId,
-              output: `${task.warning ? `${task.warning}\n` : ''}Command continues in background. Exec ID: ${identity.execId}. Completion will be reported to the originating session; full output is not retained.`,
+              output: `${task.warning ? `${task.warning}\n` : ''}Command continues in background. Exec ID: ${identity.execId}. Completion will be reported to the originating session; full output is not retained.\nElapsed: ${elapsed ?? 'unknown'}`,
               ...(request.programmatic ? { status: 'running', truncated: true } : {}),
             }, nodeId);
           }
         } else {
-          const output = `${task.warning ? `${task.warning}\n` : ''}${outputText(sample, total, exitCode)}`;
+          const output = `${task.warning ? `${task.warning}\n` : ''}${outputText(sample, total, exitCode, elapsed ?? 'unknown')}`;
           if (task.state === 'background') {
             try {
               await nodesManager.handleSessionEvent(nodeId, request.sessionId, `Shell Node exec ${identity.execId} completed.\n${output}`, 'background', {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CheckCircle2, Palette, RefreshCw, Settings, XCircle } from 'lucide-react'
+import { Bot, CheckCircle2, KeyRound, Palette, RefreshCw, Settings, SlidersHorizontal, XCircle } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import { buildModelsYaml, makeDefaultProvider } from '../setupModels'
 import { refreshModelOptions } from '../modelOptionsLoader'
@@ -9,6 +9,7 @@ import { useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import SimpleCodeEditor from './SimpleCodeEditor'
 import ThemeManager from './ThemeManager'
 import WebUiBrandingSettings, { type WebUiBrandingSettingsValue } from './WebUiBrandingSettings'
+import AuthorizationsPanel from './AuthorizationsPanel'
 
 type SetupStatus = {
   oobe: boolean
@@ -50,6 +51,7 @@ interface SetupViewProps {
   onClose?: () => void
   onSetupChanged?: () => void
   focusModelsRequest?: number
+  onFocusModelsRequestHandled?: (request: number) => void
   webUiSettings?: WebUiBrandingSettingsValue
   onInstanceNameChange?: (name: string) => Promise<void> | void
   onTabIconChange?: (tabIcon: string) => Promise<void> | void
@@ -89,8 +91,8 @@ function StatusPill({ ok, label }: { ok: boolean; label: string }) {
 }
 
 type SaveResult = { kind: 'success' | 'error'; message: string }
-type SetupTab = 'appearance' | 'models' | 'config'
-const SETUP_TABS: SetupTab[] = ['appearance', 'models', 'config']
+type SetupTab = 'appearance' | 'models' | 'config' | 'authorizations'
+const SETUP_TABS: SetupTab[] = ['appearance', 'models', 'config', 'authorizations']
 
 function SaveFeedback({ section, result }: { section: 'models' | 'config'; result: SaveResult | null }) {
   if (!result) return null
@@ -117,9 +119,20 @@ function normalizeWeixinQrPayload(value: string): { imageSrc: string | null; raw
   return { imageSrc: null, raw: trimmed }
 }
 
-export default function SetupView({ forced = false, onClose, onSetupChanged, focusModelsRequest = 0, webUiSettings, onInstanceNameChange, onTabIconChange }: SetupViewProps) {
+export default function SetupView({ forced = false, onClose, onSetupChanged, focusModelsRequest = 0, onFocusModelsRequestHandled, webUiSettings, onInstanceNameChange, onTabIconChange }: SetupViewProps) {
   const tabHeader = useWorkbenchTabHeader()
   const [activeTab, setActiveTab] = useState<SetupTab>('appearance')
+  const setupRootRef = useRef<HTMLDivElement | null>(null)
+  const [verticalSections, setVerticalSections] = useState(false)
+  useEffect(() => {
+    const root = setupRootRef.current
+    if (!root) return
+    const sync = () => setVerticalSections(root.clientWidth >= 700)
+    sync()
+    const observer = new ResizeObserver(sync)
+    observer.observe(root)
+    return () => observer.disconnect()
+  }, [])
   const [modelsEditorFocusRequest, setModelsEditorFocusRequest] = useState(0)
   const [status, setStatus] = useState<SetupStatus | null>(null)
   const [loading, setLoading] = useState(true)
@@ -139,6 +152,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
   const modelsTabRef = useRef<HTMLButtonElement | null>(null)
   const configTabRef = useRef<HTMLButtonElement | null>(null)
   const appearanceTabRef = useRef<HTMLButtonElement | null>(null)
+  const authorizationsTabRef = useRef<HTMLButtonElement | null>(null)
   const rawModelsYamlRef = useRef(rawModelsYaml)
   const configYamlRef = useRef(configYaml)
   const modelsRevisionRef = useRef(0)
@@ -148,7 +162,6 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
   const savingModelsRef = useRef(false)
   const savingConfigRef = useRef(false)
   const loadGenerationRef = useRef(0)
-  const handledFocusModelsRequestRef = useRef(0)
 
   rawModelsYamlRef.current = rawModelsYaml
   configYamlRef.current = configYaml
@@ -240,27 +253,26 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
 
   useEffect(() => {
     if (focusModelsRequest <= 0 || activeTab !== 'models') return
-    if (handledFocusModelsRequestRef.current === focusModelsRequest) return
-    handledFocusModelsRequestRef.current = focusModelsRequest
+    // The owner clears this one-shot request after it is consumed, so a later remount or ordinary Setup activation cannot replay it.
+    onFocusModelsRequestHandled?.(focusModelsRequest)
     setModelsEditorFocusRequest((current) => current + 1)
-    const frame = requestAnimationFrame(() => modelsSectionRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }))
-    return () => cancelAnimationFrame(frame)
-  }, [activeTab, focusModelsRequest])
+    requestAnimationFrame(() => modelsSectionRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }))
+  }, [activeTab, focusModelsRequest, onFocusModelsRequestHandled])
 
   const activateTab = (tab: SetupTab, focus = false) => {
     setActiveTab(tab)
-    if (focus) requestAnimationFrame(() => ({ models: modelsTabRef, config: configTabRef, appearance: appearanceTabRef })[tab].current?.focus())
+    if (focus) requestAnimationFrame(() => ({ models: modelsTabRef, config: configTabRef, appearance: appearanceTabRef, authorizations: authorizationsTabRef })[tab].current?.focus())
   }
 
   const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
-    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return
     event.preventDefault()
     const currentIndex = SETUP_TABS.indexOf(activeTab)
     const nextTab = event.key === 'Home'
       ? SETUP_TABS[0]
       : event.key === 'End'
         ? SETUP_TABS[SETUP_TABS.length - 1]
-        : SETUP_TABS[(currentIndex + (event.key === 'ArrowRight' ? 1 : -1) + SETUP_TABS.length) % SETUP_TABS.length]
+        : SETUP_TABS[(currentIndex + (event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : -1) + SETUP_TABS.length) % SETUP_TABS.length]
     activateTab(nextTab, true)
   }
 
@@ -417,7 +429,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-fw-canvas">
+    <div ref={setupRootRef} className="foxwarm-setup-root flex h-full min-h-0 flex-col bg-fw-canvas">
       <ContentHeader
         icon={<Settings className="h-5 w-5" />}
         title={forced ? 'Foxwarm first-time setup' : 'Foxwarm Setup'}
@@ -444,14 +456,14 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
         }
       />
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4 md:p-6">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex min-h-0 w-full flex-1 flex-col">
           {loading && <div className="rounded-xl border border-fw-border bg-fw-surface p-4 text-sm text-fw-text dark:border-fw-border-muted dark:text-fw-text">Loading setup status…</div>}
           {error && <div className="mt-4 rounded-xl border border-fw-danger-border bg-fw-danger-surface p-4 text-sm text-fw-danger dark:border-fw-danger-border/60 dark:bg-fw-danger-surface-strong/30 dark:text-fw-danger">{error}</div>}
 
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-sm dark:border-fw-border-muted">
-            <div className="shrink-0 border-b border-fw-border px-2 pt-2 dark:border-fw-border-muted">
-              <div role="tablist" aria-label="Setup sections" className="flex gap-1">
+          <div className="foxwarm-setup-body flex min-h-0 flex-1 flex-col overflow-hidden">
+            <div className="foxwarm-setup-navigation shrink-0 border-b border-fw-border px-2 pt-2 dark:border-fw-border-muted">
+              <div role="tablist" aria-label="Setup sections" aria-orientation={verticalSections ? 'vertical' : 'horizontal'} className="foxwarm-setup-section-list flex gap-1">
                 <button
                   ref={appearanceTabRef}
                   id="setup-tab-appearance"
@@ -481,6 +493,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
                   onKeyDown={handleTabKeyDown}
                   className={`inline-flex min-w-0 items-center gap-2 rounded-t-lg border-b-2 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'models' ? 'border-fw-accent-border text-fw-accent dark:border-fw-accent-border dark:text-fw-accent' : 'border-transparent text-fw-text hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse'}`}
                 >
+                  <Bot className="h-4 w-4 shrink-0" aria-hidden="true" />
                   <span>Models</span>
                   {status && (status.models.exists && !status.models.hasPlaceholderSecrets ? (
                     <CheckCircle2 data-setup-tab-status="complete" className="h-4 w-4 shrink-0 text-fw-success dark:text-fw-success" aria-hidden="true" />
@@ -502,10 +515,18 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
                   onKeyDown={handleTabKeyDown}
                   className={`inline-flex min-w-0 items-center gap-2 rounded-t-lg border-b-2 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'config' ? 'border-fw-accent-border text-fw-accent dark:border-fw-accent-border dark:text-fw-accent' : 'border-transparent text-fw-text hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse'}`}
                 >
+                  <SlidersHorizontal className="h-4 w-4 shrink-0" aria-hidden="true" />
                   <span>Config</span>
                   {configTabStatus === 'complete' && <CheckCircle2 data-setup-tab-status="complete" className="h-4 w-4 shrink-0 text-fw-success dark:text-fw-success" aria-hidden="true" />}
                   {configTabStatus === 'attention' && <XCircle data-setup-tab-status="attention" className="h-4 w-4 shrink-0 text-fw-warning dark:text-fw-warning" aria-hidden="true" />}
                   {configTabStatus && <span className="sr-only">{configTabStatus === 'complete' ? 'Channels ready' : 'Channels need attention'}</span>}
+                </button>
+                <button ref={authorizationsTabRef} id="setup-tab-authorizations" type="button" role="tab"
+                  aria-selected={activeTab === 'authorizations'} aria-controls="setup-panel-authorizations"
+                  tabIndex={activeTab === 'authorizations' ? 0 : -1} data-setup-tab="authorizations"
+                  onClick={() => activateTab('authorizations')} onKeyDown={handleTabKeyDown}
+                  className={`inline-flex min-w-0 items-center gap-2 rounded-t-lg border-b-2 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'authorizations' ? 'border-fw-accent-border text-fw-accent' : 'border-transparent text-fw-text hover:bg-fw-hover'}`}>
+                  <KeyRound className="h-4 w-4 shrink-0" aria-hidden="true" /><span>Authorizations</span>
                 </button>
               </div>
             </div>
@@ -517,6 +538,11 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
                   <WebUiBrandingSettings value={webUiSettings} onInstanceNameChange={onInstanceNameChange} onTabIconChange={onTabIconChange} />
                 )}
               </div>
+            </section>
+
+            <section id="setup-panel-authorizations" role="tabpanel" aria-labelledby="setup-tab-authorizations" data-setup-section="authorizations"
+              hidden={activeTab !== 'authorizations'} className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
+              {activeTab === 'authorizations' && <AuthorizationsPanel />}
             </section>
 
             <section ref={modelsSectionRef} id="setup-panel-models" role="tabpanel" aria-labelledby="setup-tab-models" data-setup-section="models" hidden={activeTab !== 'models'} className={`${activeTab === 'models' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto scroll-mt-4 p-4 md:p-5`}>

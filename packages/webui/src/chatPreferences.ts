@@ -8,6 +8,7 @@ export type ChatPreferences = {
   timelineView: TimelineView
   showUsageBadge: boolean
   showUserMessageMetadata: boolean
+  fullWidth: boolean
 }
 
 const SEND_KEY_MODE_STORAGE_KEY = 'foxwarm_send_key_mode_v1'
@@ -15,12 +16,14 @@ const GROUP_TOOLS_STORAGE_KEY = 'foxwarm_group_tools_v1'
 const TIMELINE_VIEW_STORAGE_KEY = 'foxwarm_timeline_view_v1'
 const SHOW_USAGE_BADGE_STORAGE_KEY = 'foxwarm_show_usage_badge_v1'
 const SHOW_USER_MESSAGE_METADATA_STORAGE_KEY = 'foxwarm_show_user_message_metadata_v1'
+const FULL_WIDTH_STORAGE_KEY = 'foxwarm_chat_full_width_v1'
 const CHAT_PREFERENCE_STORAGE_KEYS = new Set([
   SEND_KEY_MODE_STORAGE_KEY,
   GROUP_TOOLS_STORAGE_KEY,
   TIMELINE_VIEW_STORAGE_KEY,
   SHOW_USAGE_BADGE_STORAGE_KEY,
   SHOW_USER_MESSAGE_METADATA_STORAGE_KEY,
+  FULL_WIDTH_STORAGE_KEY,
 ])
 
 export function readChatPreferences(): ChatPreferences {
@@ -33,6 +36,7 @@ export function readChatPreferences(): ChatPreferences {
     timelineView,
     showUsageBadge: localStorage.getItem(SHOW_USAGE_BADGE_STORAGE_KEY) !== 'false',
     showUserMessageMetadata: localStorage.getItem(SHOW_USER_MESSAGE_METADATA_STORAGE_KEY) === 'true',
+    fullWidth: localStorage.getItem(FULL_WIDTH_STORAGE_KEY) !== 'false',
   }
 }
 
@@ -69,11 +73,17 @@ export function useChatPreferences() {
     setPreferences(current => current.showUserMessageMetadata === showUserMessageMetadata ? current : { ...current, showUserMessageMetadata })
   }, [])
 
+  const setFullWidth = useCallback((fullWidth: boolean) => {
+    localStorage.setItem(FULL_WIDTH_STORAGE_KEY, fullWidth ? 'true' : 'false')
+    setPreferences(current => current.fullWidth === fullWidth ? current : { ...current, fullWidth })
+  }, [])
+
   return {
     ...preferences,
     setSendKeyMode,
     setTimelineView,
     setShowUsageBadge,
     setShowUserMessageMetadata,
+    setFullWidth,
   }
 }

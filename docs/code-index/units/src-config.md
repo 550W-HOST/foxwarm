@@ -15,20 +15,21 @@ Owns application/model configuration types, path resolution, YAML readers/writer
   QQ generic-file media limits), guest-agent,
   ASR, and `AppConfig` types.
 - `readAppConfigFile`, `writeAppConfigFile`.
-- `normalizePublicUrl`, `PUBLIC_BASE_URL` — optional top-level public HTTP(S) URL for Node bootstrap examples; no effect on HTTP bind or internal API origin.
+- `normalizePublicUrl`, `PUBLIC_BASE_URL` — optional startup public HTTP(S) URL for Node bootstrap examples and outbound MCP OAuth callback/client metadata links; preserves deployment pathname and does not change HTTP bind or internal API origin. OAuth public URL requirements belong to [outbound MCP OAuth](./src-mcp-oauth.md).
 - `safeAppConfigYamlError()` — converts an app-config YAML parse failure to a non-secret error with its 1-based line/column when available; Setup uses the same formatter.
 - `ACCESS_CONFIG`, `ACCESS_RUNTIME`, `normalizeAccessConfig`, and `authenticateAccessBearer` / `authenticateAccessToken` — validated shared WebUI and inbound MCP identities with a Main-owned live snapshot, explicit surface declarations, and verified principal creation; the validator is shared with Setup. The implementation is owned by [src-access-config](./src-access-config.md).
 - `ExecutableNodeProviderConfig`, `DockerWorktreeNodeProviderConfig`, normalized provider unions, `normalizeNodeProvidersConfig`, and `NODE_PROVIDERS_CONFIG` — strict startup definitions for trusted one-shot executable providers and resident Docker worktree providers.
 - `normalizeCompactionConfig`, `COMPACT_KEEP_PERCENT`, and `COMPACT_THRESHOLD_PERCENT` — finite `(0, 1]` keep/trigger fractions with current defaults and the narrow legacy keep-key fallback.
-- `normalizeProviderImageOutputFormat`, `PROVIDER_IMAGE_OUTPUT_FORMAT` — optimized provider-request output defaults to WebP; optional `llm.providerImageOutputFormat: jpeg` emits PNG when pixels are transparent.
+- `normalizeProviderImageOutputFormat`, `PROVIDER_IMAGE_OUTPUT_FORMAT` — startup-owned legacy image-format fallback; effective concrete model settings are resolved through model defaults, with PNG for transparent pixels in JPEG mode.
 - `getNormalizedChannelConfigs`, `getChannelConfigById`, `getChannelConfigsByType`, `getDefaultChannelConfigByType`, `getDefaultChannelIdByType`.
 - Resolved path/server/context constants and agent/session path helpers.
 
 ### Model configuration
 
-- `ProviderConfigEntry`, `ProviderConfigValue`, `ProviderModelListItem`, `ModelConfigEntry` (including canonical concrete identity, first-class model effort capabilities/default, and optional OpenAI Responses `webSearch` and hosted `imageGeneration` settings), `ModelsConfig`, and virtual routing config types/guards. A raw provider value may also be a non-empty string alias; raw `webSearch` and `imageGeneration` provider/model values accept a boolean or an options object, and resolved concrete entries contain normalized effort, web-search, and image-generation forms.
+- `ModelDefaults`, `ProviderConfigEntry`, `ProviderConfigValue`, `ProviderModelListItem`, `ModelConfigEntry` (including canonical concrete identity, first-class model effort capabilities/default, and optional OpenAI Responses `webSearch` and hosted `imageGeneration` settings), `ModelsConfig`, and virtual routing config types/guards. A raw provider value may also be a non-empty string alias; raw `webSearch` and `imageGeneration` provider/model values accept a boolean or an options object, and resolved concrete entries contain normalized effort, web-search, and image-generation forms.
 - `MODEL_EFFORTS`, `ModelEffort`, `DEFAULT_MODEL_EFFORT`, `normalizeModelEffortConfig`, and `getConcreteModelEffortConfig`.
 - `expandModelsConfig`, `loadModelsConfig`, `loadModelsConfigFromObject`, `resolveModelConfig`.
+- `normalizePositiveIntegerSetting` — strict positive-integer reader shared by startup legacy settings and canonical model/default validation; Setup uses the same check for the two legacy numeric settings.
 
 ### Setup configuration
 
@@ -73,7 +74,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 | HTTP port | `3001` |
 | WebUI / trigger | enabled unless explicitly `false` |
 | TUI | disabled unless configured or `--tui` is present |
-| context limit | `122880` |
+| context limit | `200000` |
 | recent compact keep fraction (`compactKeepPercent`) | `0.3` |
 | automatic compact threshold fraction (`compactThresholdPercent`) | `0.85` |
 | block eligibility / force tokens | `3000` / `5000` |
@@ -97,10 +98,11 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 - `providerType` is current; `provider` is a legacy reader.
 - A single-model provider gets both provider-key and provider/model lookup entries; multi-model providers use provider/model keys.
 - Provider defaults are applied before model-level overrides. Header overrides merge one level by key. Nested plain objects under `extraFields` merge recursively. `contextLimit` overrides directly, `webSearch` and `imageGeneration` settings merge from provider to concrete model override, and Chat Completions `historyReasoningField` inherits or overrides as one normalized enum. Each `imageGeneration` side is normalized before merging, and the merged configuration is checked again for field combinations that only become contradictory through inheritance, so a provider background and a model output format cannot combine into an unsupported request.
+- Root `default` remains the model-selection string. Root `defaults` is a strict object supporting only `contextLimit`, `maxOutput`, and `providerImageOutputFormat`; unknown fields are rejected. Each concrete leaf materializes these settings in order: model own value, provider own value, root defaults, the corresponding startup-owned app `llm` legacy fallback, then `200000` / `32768` / `webp`. Numeric candidates must be positive integers; invalid explicit provider/model/default values are rejected even if a more specific valid value would mask them. The image format must be `webp` or `jpeg`. Virtual context resolution takes the minimum effective leaf value; virtual entries and string aliases never receive root output/image defaults as their own settings. This fallback does not declare a model's supported context capacity. Compaction policy and other model fields keep their existing owners and inheritance.
 - Provider-scoped `disallowEmptyResponse` inherits from the provider entry to each concrete model entry, is rejected on virtual entries, participates in the route fingerprint, and controls whether empty/reasoning-only completions are retryable failures.
 - `keepReasoningOnError` is a strict provider/concrete-model boolean with model override and effective default `false`. It is rejected on virtual providers, preserved through concrete Setup forms and raw YAML/schema editing, and included in virtual leaf fingerprints. Only normal Responses streams consume it; see [D-streaming-keep-reasoning-on-error](../threads/streaming-pipeline.md#d-streaming-keep-reasoning-on-error).
 - First-class `effort` uses `{ allowed, default }`. Omission allows `none`, `low`, `medium`, `high`, `xhigh`, and `max` with `high` as the default. A model-level `allowed` list replaces the provider list; omitted model fields inherit provider values, and the resulting default must be allowed. Virtual entries cannot configure effort directly and expose the canonical union of reachable concrete levels.
-- `openai`, `openai-responses`, `openai-ws`, and `openai-completions` receive OpenAI defaults; `anthropic` receives Anthropic defaults; custom types must provide their own base URL/protocol-compatible settings. `openai-ws` rejects request compression because compression is an HTTP-body setting.
+- `openai`, `openai-responses`, `openai-ws`, and `openai-completions` receive OpenAI defaults; `anthropic` receives Anthropic defaults. Any other non-empty `providerType` (or legacy `provider`) is rejected during concrete expansion with an `unsupported providerType` error; an empty or unset value keeps the OpenAI default. Third-party compatible services choose the protocol they speak and set `baseUrl`. `openai-ws` rejects request compression because compression is an HTTP-body setting.
 - Invalid provider objects, model lists, and cross-strategy fields fail with provider-qualified validation errors.
 - A non-empty provider string is normalized at expansion to one `session-hash` target and then follows the canonical leaf-only virtual routing contract; it is not retained as a separate runtime alias type.
 - `session-hash` and `failover` entries resolve strict concrete lookup keys, safe context/async-compact values, and a stable full-leaf configuration fingerprint. Their schema and semantics are canonical in [model routing](../threads/model-routing.md).
@@ -111,7 +113,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 - App config validation normalizes both executable and Docker worktree Node providers through the same runtime/setup path; launcher/image/roots/resources remain trusted host configuration and are never model-facing mutation fields.
 - Runtime startup and Setup validate `url` as an absolute HTTP(S) address without credentials, query, or fragment, trim outer whitespace/trailing slash, and preserve an optional deployment path. Missing `url` retains placeholder-based Node instructions. Shared JSON schema exposes the field to config editors.
 - Setup and `set_config` validate through the same current config readers and preserve submitted bytes with atomic replacement. See [D-config-live-install](#d-config-live-install).
-- Structured setup accepts virtual target/failover fields; Models Setup remains a raw-YAML surface for string aliases, and raw virtual/alias YAML remains byte-preserving after validation. When retained structured setup changes a concrete provider into a virtual entry, provider-only fields including `effort`, `webSearch`, and `imageGeneration` are removed before the result is reparsed.
+- Structured setup accepts virtual target/failover fields; Models Setup remains a raw-YAML surface for string aliases, and raw virtual/alias YAML remains byte-preserving after validation. When retained structured setup changes a concrete provider into a virtual entry, provider-only fields including the three model-default fields, `effort`, `webSearch`, and `imageGeneration` are removed before the result is reparsed.
 - `writeAppConfigWithChannels` preserves surrounding raw YAML text/comments when possible.
 - Template models config is a read fallback only and logs once; it is not silently copied into mutable state.
 - Code's fixed workspace-root response consumes exported `BASE_DIR`, resolved `DATA_ROOT_DIR`, `APP_CONFIG_PATH`, and `DEFAULT_MODELS_CONFIG_PATH`; it does not introduce a second path resolver. See [D-code-master-workspace-roots](../threads/code-integration.md#d-code-master-workspace-roots) and [D-code-config-schema-assistance](../threads/code-integration.md#d-code-config-schema-assistance).
@@ -151,11 +153,11 @@ The mutable models configuration has one active location: `<data-root>/state/mod
 
 ### D-config-default-max-output
 
-[2026-08-18] `llm.maxOutput` remains the single application-level provider output-token override and defaults to `32768` when omitted. The default applies as `max_output_tokens` for OpenAI Responses requests and `max_tokens` for OpenAI Chat Completions and Anthropic-compatible requests; provider/model `extraFields` retain their existing later override position.
+[2026-10-14] The resolved concrete leaf `maxOutput` uses the five-layer model-default contract above; `llm.maxOutput` remains a startup-owned legacy fallback, with `32768` as the built-in default. The default applies as `max_output_tokens` for OpenAI Responses requests and `max_tokens` for OpenAI Chat Completions and Anthropic-compatible requests; provider/model `extraFields` retain their existing later override position.
 
 ### D-config-provider-image-output
 
-[2026-09-19] `llm.providerImageOutputFormat` is one optional application-level provider-request image output setting: `webp` by default, or `jpeg` for opaque images with PNG selected on actual transparency. JPEG mode converts incoming WebP even below size/dimension thresholds so an endpoint lacking WebP support never receives it as ordinary vision input. It does not change hosted image-generation tool settings, original canonical blobs, provider/model inheritance, or the fixed optimization thresholds. The selected format participates in the derived-cache policy key.
+[2026-10-14] The resolved concrete leaf `providerImageOutputFormat` uses the same five-layer model-default contract, retaining `llm.providerImageOutputFormat` as a startup-owned legacy fallback: `webp` by default, or `jpeg` for opaque images with PNG selected on actual transparency. JPEG mode converts incoming WebP even below size/dimension thresholds so an endpoint lacking WebP support never receives it as ordinary vision input. It does not change hosted image-generation tool settings, original canonical blobs or the fixed optimization thresholds. Each concrete attempt uses its own resolved format, including cross-format failover. The selected format participates in the derived-cache policy key.
 
 ### D-config-chat-history-reasoning-field
 

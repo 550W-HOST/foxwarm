@@ -30,8 +30,8 @@ Scripting owns ToolScript: a constrained Python-like automation runtime implemen
 - A persisted run belongs to one session; other sessions cannot inspect or resume it.
 - A background run cannot be resumed concurrently.
 - VM snapshots and run records persist an exact runtime/format identity so compatible waiting runs survive process restart; incompatible waiting snapshots fail clearly without affecting completed history, as required by [D-toolscript-versioned-snapshot-runtime](../units/src-toolscript.md#d-toolscript-versioned-snapshot-runtime).
-- Nested read/exec/search calls opt into producer-owned script data without widening ordinary outputs; see [programmatic data](../threads/tool-dispatch.md#d-dispatch-programmatic-tool-data).
-- Nested tool calls use the normal tool layer; run diagnostics and model-invisible presentation metadata retain their activity without separate outer-session tool history. See [lean execution results](../threads/tool-dispatch.md#d-dispatch-toolscript-execution-projection).
+- Nested read/exec/search calls opt into producer-owned script data without widening ordinary outputs; see [programmatic data](../threads/tool-dispatch-node-execution.md#d-dispatch-programmatic-tool-data).
+- Nested tool calls use the normal tool layer; run diagnostics and model-invisible presentation metadata retain their activity without separate outer-session tool history. See [lean execution results](../threads/tool-dispatch-node-execution.md#d-dispatch-toolscript-execution-projection).
 - Managed-session leases are released explicitly by controllers or best-effort during cancellation and incompatible-snapshot terminalization; failed cleanup remains retryable from the terminal run record under [D-toolscript-versioned-snapshot-runtime](../units/src-toolscript.md#d-toolscript-versioned-snapshot-runtime).
 - Only background managed-event waits auto-wake. Agent-input and timeout waits require `continue_script` in either mode.
 
@@ -55,7 +55,7 @@ ToolScript exposes `ask_agent`, not a separate direct-user prompt primitive. The
 
 ### D-toolscript-history-boundary
 
-Nested calls remain observable in presentation metadata and run diagnostics without separate outer-session tool calls. The lean result projection is canonical in [D-dispatch-toolscript-execution-projection](../threads/tool-dispatch.md#d-dispatch-toolscript-execution-projection).
+Nested calls remain observable in presentation metadata and run diagnostics without separate outer-session tool calls. The lean result projection is canonical in [D-dispatch-toolscript-execution-projection](../threads/tool-dispatch-node-execution.md#d-dispatch-toolscript-execution-projection).
 
 ### D-toolscript-managed-controller
 

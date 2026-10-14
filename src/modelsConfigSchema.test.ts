@@ -188,6 +188,44 @@ test('Chat Completions history reasoning field defaults, inherits, and overrides
   assert.equal(parsed.models.omitted.historyReasoningField, 'reasoning_content');
 });
 
+test('providerType accepts known protocols, legacy provider, unset defaults, and virtual routes without unknown fallback', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'route',
+    providers: {
+      unset: { baseUrl: 'https://example.test/v1', models: ['model'] },
+      empty: { providerType: '', baseUrl: 'https://example.test/v1', models: ['model'] },
+      legacy: { provider: 'anthropic', baseUrl: 'https://example.test/anthropic', models: ['model'] },
+      responses: { providerType: 'openai-responses', baseUrl: 'https://example.test/v1', models: ['model'] },
+      ws: { providerType: 'openai-ws', baseUrl: 'https://example.test/v1', models: ['model'] },
+      completions: { providerType: 'openai-completions', baseUrl: 'https://example.test/v1', models: ['model'] },
+      route: { providerType: 'session-hash', targets: ['legacy/model'] },
+    },
+  });
+  assert.equal(parsed.models.unset.providerType, 'openai');
+  assert.equal(parsed.models.empty.providerType, 'openai');
+  assert.equal(parsed.models.legacy.providerType, 'anthropic');
+  assert.equal(parsed.models.responses.providerType, 'openai-responses');
+  assert.equal(parsed.models.ws.providerType, 'openai-ws');
+  assert.equal(parsed.models.completions.providerType, 'openai-completions');
+  assert.equal(parsed.models['legacy/model'].providerType, 'anthropic');
+  assert.equal(parsed.models.route.providerType, 'session-hash');
+});
+
+test('unrecognized providerType is rejected during models config validation for both fields', () => {
+  assert.throws(
+    () => loadModelsConfigFromObject({ default: 'custom', providers: {
+      custom: { providerType: 'company-protocol', baseUrl: 'https://example.test/v1', models: ['model'] },
+    } }),
+    /Provider `custom` has unsupported providerType `company-protocol`/,
+  );
+  assert.throws(
+    () => loadModelsConfigFromObject({ default: 'custom', providers: {
+      custom: { provider: 'anthropic-compatible', baseUrl: 'https://example.test/v1', models: ['model'] },
+    } }),
+    /unsupported providerType `anthropic-compatible`/,
+  );
+});
+
 test('history reasoning field rejects invalid values and non-Chat concrete or virtual providers', () => {
   const parse = (provider: any) => loadModelsConfigFromObject({ default: 'provider', providers: { provider } });
   assert.throws(
@@ -837,5 +875,58 @@ test('editor schema exposes the same stream timeout bounds at provider and model
   assert.deepEqual(model.properties.streamContentInactivityTimeoutMs, field);
   for (const rule of provider.allOf.slice(0, 2)) {
     assert.ok(rule.then.not.anyOf.some((entry: any) => entry.required.includes('streamContentInactivityTimeoutMs')));
+  }
+});
+
+
+test('models defaults reject invalid candidates even when a more specific value would mask them', () => {
+  const valid = () => ({
+    defaults: { contextLimit: 200000, maxOutput: 32768, providerImageOutputFormat: 'webp' },
+    providers: { leaf: { models: [{ id: 'model', contextLimit: 1000, maxOutput: 500, providerImageOutputFormat: 'jpeg' }] } },
+  });
+  const cases: Array<[string, (raw: any) => void, RegExp]> = [
+    ['null defaults', raw => { raw.defaults = null; }, /defaults.*object/],
+    ['unknown defaults field', raw => { raw.defaults.apiKey = 'not-supported'; }, /defaults.*unsupported field.*apiKey/],
+    ['zero defaults context', raw => { raw.defaults.contextLimit = 0; }, /defaults.*contextLimit.*positive integer/],
+    ['fractional provider output', raw => { raw.providers.leaf.maxOutput = 1.5; }, /Provider.*maxOutput.*positive integer/],
+    ['boolean provider context', raw => { raw.providers.leaf.contextLimit = false; }, /Provider.*contextLimit.*positive integer/],
+    ['null model output', raw => { raw.providers.leaf.models[0].maxOutput = null; }, /Model.*maxOutput.*positive integer/],
+    ['string model context', raw => { raw.providers.leaf.models[0].contextLimit = '1000'; }, /Model.*contextLimit.*positive integer/],
+    ['invalid image format', raw => { raw.providers.leaf.providerImageOutputFormat = 'png'; }, /providerImageOutputFormat.*webp.*jpeg/],
+  ];
+  for (const [label, mutate, pattern] of cases) {
+    const raw = valid(); mutate(raw);
+    assert.throws(() => loadModelsConfigFromObject(raw), pattern, label);
+  }
+  for (const field of ['maxOutput', 'providerImageOutputFormat']) {
+    const raw: any = valid();
+    raw.providers.route = { providerType: 'session-hash', targets: ['leaf'], [field]: field === 'maxOutput' ? 500 : 'jpeg' };
+    assert.throws(() => loadModelsConfigFromObject(raw), new RegExp(`Virtual.*forbids field.*${field}`));
+  }
+});
+
+test('effective defaults affect virtual safe limits and request fingerprints without becoming virtual overrides', () => {
+  const raw = {
+    defaults: { contextLimit: 120000, maxOutput: 2048, providerImageOutputFormat: 'webp' },
+    providers: {
+      leaf: { models: ['model'] },
+      smaller: { models: [{ id: 'model', contextLimit: 64000 }] },
+      route: { providerType: 'failover', targets: ['leaf', 'smaller'] },
+      alias: 'leaf',
+    },
+  };
+  const parsed = loadModelsConfigFromObject(raw);
+  assert.equal(parsed.models.route.contextLimit, 64000);
+  assert.equal(parsed.models.alias.contextLimit, 120000);
+  for (const key of ['route', 'alias']) {
+    assert.equal(parsed.models[key].maxOutput, undefined);
+    assert.equal(parsed.models[key].providerImageOutputFormat, undefined);
+  }
+  for (const defaults of [
+    { ...raw.defaults, maxOutput: 4096 },
+    { ...raw.defaults, providerImageOutputFormat: 'jpeg' },
+  ]) {
+    const changed = loadModelsConfigFromObject({ ...raw, defaults });
+    assert.notEqual(changed.models.route.virtualRouting?.fingerprint, parsed.models.route.virtualRouting?.fingerprint);
   }
 });

@@ -30,6 +30,7 @@ import {
 import type { OpenAIWsHistoryAppendFinalizer, OpenAIWsHistoryAppendOutcome } from './llmProviders/openaiWsState';
 import { requestOpenAIResponsesWs } from './llmProviders/openaiWsTransport';
 import { boundSafetyBufferingMetadata, createStreamingAttemptWatchdog } from './llmStreamingTimeout';
+import { collectAnthropicMessagesStream as collectAnthropicMessagesStreamProvider } from './llmProviders/anthropic';
 import {
     buildOpenAIImageGenerationTool,
     createGeneratedImageExternalizationBudget,
@@ -42,6 +43,7 @@ import {
     type GeneratedImageExternalizationBudget,
 } from './llmProviders/openaiImages';
 import { parseFunctionCallArgs } from './toolCallArgs';
+import { createDisplayOnlyModelMessage } from './session/messageVisibility';
 import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 import { formatFoxwarmSystemTag, formatSystemPartForModel, isFoxwarmMetadataLine } from './utils/promptWrappers';
@@ -2595,6 +2597,19 @@ export async function chat(
                 'Failed to finalize provider state after assistant history commit',
             );
             committedAssistantMessage = assistantMsg;
+            if (result.truncatedStop) {
+                // Display-only notice: the model already has the truncated turn in history.
+                try {
+                    await appendMessage(createDisplayOnlyModelMessage(
+                        result.truncatedStop.stopReason === 'model_context_window_exceeded'
+                            ? 'The response stopped because the context window was reached. The text above may be incomplete.'
+                            : 'The response stopped at the output limit. The text above may be incomplete.',
+                        { noticeType: 'llm-stop', stopReason: result.truncatedStop.stopReason },
+                    ));
+                } catch (error) {
+                    logger.error({ err: error, sessionId: session.id, stopReason: result.truncatedStop.stopReason }, 'Failed to append truncated-response notice');
+                }
+            }
         } else {
             settleHistoryAppendFinalizer(
                 completion.finalizeHistoryAppend,
@@ -2642,6 +2657,8 @@ type ConcreteRequestPlan = {
     useOpenAIResponsesWs: boolean;
     useOpenAIChatCompletionsApi: boolean;
     useStreamingApi: boolean;
+    /** True when the Anthropic Messages body requests SSE; the collector must match it. */
+    useAnthropicMessagesStream: boolean;
     /** True when the physical request declares the hosted image_generation tool. */
     usesHostedImageGeneration: boolean;
     /**
@@ -2951,7 +2968,7 @@ function buildConcreteRequestPlan(options: {
             tool_choice: webSearchToolChoice,
             parallel_tool_calls: true,
             reasoning: effectiveEffort === 'none' ? undefined : { summary: 'auto' },
-            max_output_tokens: MAX_OUTPUT,
+            max_output_tokens: modelEntry.maxOutput ?? MAX_OUTPUT,
             store: false,
             include: effectiveEffort === 'none' ? undefined : ['reasoning.encrypted_content'],
             prompt_cache_key: providerPromptCacheKey,
@@ -2971,7 +2988,7 @@ function buildConcreteRequestPlan(options: {
         };
         data = {
             model: modelName,
-            max_tokens: MAX_OUTPUT,
+            max_tokens: modelEntry.maxOutput ?? MAX_OUTPUT,
             prompt_cache_key: promptCacheKey,
             stream: true,
             stream_options: { include_usage: true },
@@ -2989,9 +3006,7 @@ function buildConcreteRequestPlan(options: {
                 },
             })) : undefined,
         };
-    } else {
-        // Preserve current custom-provider behavior: any concrete provider type
-        // not recognized as OpenAI-compatible uses Anthropic serialization.
+    } else if (providerType === 'anthropic') {
         messages = convertToAnthropicFormat(providerContents, modelEntry);
         url = `${baseUrl}/v1/messages`;
         headers = {
@@ -3003,7 +3018,12 @@ function buildConcreteRequestPlan(options: {
         };
         data = {
             model: modelName,
-            max_tokens: MAX_OUTPUT,
+            max_tokens: modelEntry.maxOutput ?? MAX_OUTPUT,
+            // Messages streaming is the default transport. extraFields.stream:false
+            // selects the JSON response path; the parser choice follows this flag.
+            stream: true,
+            // Top-level automatic prompt caching; explicit extraFields.cache_control overrides it below.
+            cache_control: { type: 'ephemeral' },
             system: request.systemPrompt,
             messages,
             tools: availableToolDefinitions.length > 0 ? availableToolDefinitions.map(fd => ({
@@ -3012,6 +3032,10 @@ function buildConcreteRequestPlan(options: {
                 input_schema: fd.parameters,
             })) : undefined,
         };
+    } else {
+        // Reject before any headers, auth, or body are built: an unrecognized
+        // type must never be sent with Anthropic credentials or serialization.
+        throw new Error(`Model \`${modelKey}\` uses unsupported providerType \`${providerType}\`.`);
     }
 
     const templateVars: Record<string, string> = {
@@ -3045,6 +3069,9 @@ function buildConcreteRequestPlan(options: {
         }
     }
     Object.assign(data, extraFields);
+    if (providerType === 'anthropic' && typeof data.stream !== 'boolean') {
+        throw new Error(`Model \`${modelKey}\` extraFields.stream must be true or false for the anthropic providerType.`);
+    }
     applyFirstClassEffort(data, providerType, effectiveEffort);
     if (useOpenAIResponsesWs) data.store = false;
 
@@ -3061,6 +3088,7 @@ function buildConcreteRequestPlan(options: {
         }, 'Sanitized lone surrogate code units from provider request payload');
     }
 
+    const useAnthropicMessagesStream = providerType === 'anthropic' && data.stream === true;
     const { requestBody, requestHeaders: compressionHeaders } = maybeCompressLlmRequestBody(data, modelEntry);
     return {
         modelEntry,
@@ -3081,7 +3109,8 @@ function buildConcreteRequestPlan(options: {
         useOpenAIResponsesApi,
         useOpenAIResponsesWs,
         useOpenAIChatCompletionsApi,
-        useStreamingApi,
+        useStreamingApi: useStreamingApi || useAnthropicMessagesStream,
+        useAnthropicMessagesStream,
         usesHostedImageGeneration: !!imageGenerationTool,
         // Raw content capture is disabled whenever the request can carry or
         // receive hosted image bytes: either the tool is declared for this
@@ -3095,11 +3124,48 @@ function buildConcreteRequestPlan(options: {
     };
 }
 
+/** Anthropic content block types that Foxwarm does not execute or replay (server-side tools). */
+function isUnsupportedAnthropicServerBlock(block: { type?: unknown }): boolean {
+    const type = typeof block.type === 'string' ? block.type : '';
+    return type === 'server_tool_use' || type === 'mcp_tool_use' || type.endsWith('_tool_result');
+}
+
+/**
+ * Decides how an Anthropic message's stop_reason is handled before its blocks
+ * are read. Refusals and paused server-tool turns are non-retryable failures;
+ * output-limit stops keep the usable text and mark the result as truncated.
+ */
+function assertAnthropicStopCanBeParsed(resp: any): { stopReason: 'max_tokens' | 'model_context_window_exceeded' } | undefined {
+    const stopReason = resp?.stop_reason;
+    if (stopReason === 'refusal') {
+        const details = resp?.stop_details && typeof resp.stop_details === 'object' ? resp.stop_details : {};
+        const category = typeof details.category === 'string' && details.category ? ` (${details.category})` : '';
+        const explanation = typeof details.explanation === 'string' && details.explanation.trim() ? ` ${details.explanation.trim()}` : '';
+        throw new ConcreteAttemptFailure(`The model declined this request${category}.${explanation}`, {
+            kind: 'response-error',
+            retryable: false,
+            countable: false,
+        });
+    }
+    if (stopReason === 'pause_turn') {
+        throw new ConcreteAttemptFailure('Anthropic paused a server-tool turn, which Foxwarm does not continue automatically.', {
+            kind: 'response-error',
+            retryable: false,
+            countable: false,
+        });
+    }
+    if (stopReason === 'max_tokens' || stopReason === 'model_context_window_exceeded') {
+        return { stopReason };
+    }
+    return undefined;
+}
+
 async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any, allowEmptySuffix = false,
     generatedImageBudget?: GeneratedImageExternalizationBudget, outputIndexStart = 0): Promise<ChatResult> {
     let responseText = '';
     const allParts: Message['parts'] = [];
     let messageProviderMeta: ChatResult['providerMeta'];
+    let truncatedStop: ChatResult['truncatedStop'];
     let successfulImageCount = 0;
     let imageFailureNote: string | undefined;
     let imageFailureCount = 0;
@@ -3236,8 +3302,16 @@ async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: an
             }
         }
     } else if (Array.isArray(resp?.content)) {
+        truncatedStop = assertAnthropicStopCanBeParsed(resp);
         for (const rawBlock of resp.content) {
             const block = rawBlock as AnthropicContentBlock;
+            if (isUnsupportedAnthropicServerBlock(block)) {
+                throw new ConcreteAttemptFailure(`Anthropic server tool block "${block.type}" is not supported by Foxwarm.`, {
+                    kind: 'response-error',
+                    retryable: false,
+                    countable: false,
+                });
+            }
             if (block.type === 'text') {
                 const blockText = typeof block.text === 'string' ? block.text : '';
                 const extractedParts = blockText ? extractAnthropicThinkingTaggedParts(blockText) : null;
@@ -3257,7 +3331,11 @@ async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: an
             } else if (block.type === 'redacted_thinking' && typeof block.data === 'string') {
                 allParts.push({ providerMeta: { redactedThinking: block.data } });
             } else if (block.type === 'tool_use') {
-                allParts.push({ functionCall: { id: block.id, name: block.name, args: block.input } });
+                const parsedArgs = parseFunctionCallArgs(block.input);
+                if (truncatedStop && parsedArgs.argsParseError) {
+                    parsedArgs.argsParseError = `Tool call was not executed: the response stopped at ${truncatedStop.stopReason} before the tool input was known to be complete. ${parsedArgs.argsParseError}`;
+                }
+                allParts.push({ functionCall: { id: block.id, name: block.name, ...parsedArgs } });
             }
         }
     }
@@ -3321,10 +3399,14 @@ async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: an
         const inputTokens = getReportedTokenCount(resp?.usage?.input_tokens);
         const cacheCreationTokens = getReportedTokenCount(resp?.usage?.cache_creation_input_tokens) ?? 0;
         const cachedTokens = getReportedTokenCount(resp?.usage?.cache_read_input_tokens) ?? 0;
+        // Anthropic reports thinking as a component of output_tokens, which
+        // stays the complete output count. Streamed usage is cumulative.
+        const reasoningTokens = getReportedTokenCount(resp?.usage?.output_tokens_details?.thinking_tokens);
         usage = resp?.usage ? {
             inputTokens: inputTokens === undefined ? undefined : inputTokens + cacheCreationTokens,
             outputTokens: getReportedTokenCount(resp.usage.output_tokens),
             cachedTokens,
+            ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
         } : null;
     }
 
@@ -3335,6 +3417,7 @@ async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: an
         toolCalls,
         allParts: allParts.length > 0 ? allParts : undefined,
         ...(messageProviderMeta ? { providerMeta: messageProviderMeta } : {}),
+        ...(truncatedStop ? { truncatedStop } : {}),
     };
 }
 
@@ -3601,7 +3684,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
                 protocol: requestApi === 'responses' ? 'openai-responses'
                     : requestApi === 'chat-completions' ? 'openai-chat-completions' : 'anthropic',
                 concreteModelId,
-                outputFormat: PROVIDER_IMAGE_OUTPUT_FORMAT,
+                outputFormat: modelEntry.providerImageOutputFormat ?? PROVIDER_IMAGE_OUTPUT_FORMAT,
             });
             const effectiveSystemPrompt = options.resolveSystemPromptForModel
                 ? await options.resolveSystemPromptForModel(concreteModelId)
@@ -3715,6 +3798,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
                 let markMeaningfulProgress: (() => void) | undefined;
                 let handleSafetyBuffering: ((metadata: Record<string, unknown>) => void) | undefined;
                 let imageGenerationWatchdog: { reportImageGenerationActivity(): void } | undefined;
+                let reasoningPhaseWatchdog: { enterReasoningPhase(): void; exitReasoningPhase(): void } | undefined;
                 if (plan.useStreamingApi) {
                     const attemptAbortController = new AbortController();
                     const abortAttemptFromOuter = () => attemptAbortController.abort();
@@ -3731,6 +3815,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
                     attemptSignal = attemptAbortController.signal;
                     markMeaningfulProgress = () => watchdog.markMeaningfulProgress();
                     imageGenerationWatchdog = watchdog;
+                    reasoningPhaseWatchdog = watchdog;
                     handleSafetyBuffering = metadata => {
                         const boundedMetadata = boundSafetyBufferingMetadata(metadata);
                         const inactivityTimeoutMs = watchdog.enterSafetyBuffering(boundedMetadata);
@@ -3767,6 +3852,10 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
                         ? (metadata: Record<string, unknown>) => withLocalStreamCallback(() => handleSafetyBuffering(metadata))
                         : undefined,
                     onImageGenerationActivity: () => withLocalStreamCallback(() => imageGenerationWatchdog?.reportImageGenerationActivity()),
+                    onReasoningPhase: (active: boolean) => withLocalStreamCallback(() => {
+                        if (active) reasoningPhaseWatchdog?.enterReasoningPhase();
+                        else reasoningPhaseWatchdog?.exitReasoningPhase();
+                    }),
                     onRawChunk: (text: string) => withLocalStreamCallback(() => attemptRawStreamLog?.appendChunk(text)),
                     onRawSseBlock: (block: string) => withLocalStreamCallback(() => attemptRawStreamLog?.appendSseBlock(block)),
                 };
@@ -3865,7 +3954,9 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
                 }
 
                 if (plan.useStreamingApi && response) {
-                    if (plan.useOpenAIResponsesApi) {
+                    if (plan.useAnthropicMessagesStream) {
+                        resp = await collectAnthropicMessagesStreamProvider(response.data, attemptSignal, streamCollectOptions);
+                    } else if (plan.useOpenAIResponsesApi) {
                         try { resp = await collectOpenAIResponsesStreamProvider(response.data, attemptSignal, streamCollectOptions); }
                         catch (error) { upstreamStreamInterrupted = !providerResponseCompleted; throw error; }
                     } else {

@@ -1,4 +1,5 @@
 import { logger } from './common';
+import { containsOAuthCredential, getMcpOAuthService, McpOAuthError } from './mcpOAuth';
 
 export const MCP_NOTIFICATION_CAPABILITY = 'foxwarm/session-notifications';
 export const MCP_SESSION_MESSAGE_METHOD = 'notifications/foxwarm/session_message';
@@ -14,6 +15,8 @@ export type McpConnectionOptions = {
   mode: 'streamable-http' | 'sse' | 'auto';
   url: string;
   headers?: Record<string, string>;
+  oauthFetch?: typeof fetch;
+  oauthStreamCredentials?: Set<string>;
   sdk: { Client: any; StreamableHTTPClientTransport: any; SSEClientTransport: any };
 };
 type Reception = {
@@ -61,6 +64,7 @@ async function dispose(entry: McpCallerConnection, terminate = true): Promise<vo
   if (entry.closing) return entry.closing;
   entry.closed = true;
   entry.reception = undefined;
+  entry.options.oauthStreamCredentials?.clear();
   if (entry.idle) clearTimeout(entry.idle);
   if (entry.ping) clearInterval(entry.ping);
   entry.getReady.reject(new Error('MCP caller connection is closed.'));
@@ -90,15 +94,17 @@ async function connect(entry: McpCallerConnection, kind: 'streamable-http' | 'ss
   const { sdk, url, headers, owner } = entry.options;
   entry.transportKind = kind;
   const disconnected = () => {
+    entry.options.oauthStreamCredentials?.clear();
     if (entry.receiving) entry.getReady = deferred();
     entry.receiving = false;
   };
   const fetchConnection: typeof fetch = async (input, init) => {
     const get = init?.method === 'GET';
     try {
-      const response = await fetch(input, init?.method === 'DELETE'
+      const response = await (entry.options.oauthFetch || fetch)(input, init?.method === 'DELETE'
         ? { ...init, signal: AbortSignal.any([...(init.signal ? [init.signal] : []), AbortSignal.timeout(5000)]) } : init);
-      if (init?.method !== 'DELETE' && entry.transport?.sessionId && [401, 403, 404].includes(response.status)) void dispose(entry, false);
+      if (init?.method !== 'DELETE' && entry.transport?.sessionId
+        && (response.status === 404 || (!entry.options.oauthFetch && [401, 403].includes(response.status)))) void dispose(entry, false);
       if (!get) return response;
       if (!response.ok || !response.body) {
         disconnected();
@@ -129,7 +135,8 @@ async function connect(entry: McpCallerConnection, kind: 'streamable-http' | 'ss
   };
   const transport = kind === 'streamable-http'
     ? new sdk.StreamableHTTPClientTransport(new URL(url), { requestInit: { headers }, fetch: fetchConnection })
-    : new sdk.SSEClientTransport(new URL(url), { eventSourceInit: headers ? { headers } : undefined, requestInit: headers ? { headers } : undefined });
+    : new sdk.SSEClientTransport(new URL(url), { eventSourceInit: headers ? { headers } : undefined,
+      requestInit: headers ? { headers } : undefined, ...(entry.options.oauthFetch ? { fetch: fetchConnection } : {}) });
   const client = new sdk.Client({ name: 'foxwarm-mcp-client', version: '1.0.0' }, {
     // Support is negotiated now; local delivery remains opt-in. External owners
     // have no internal receiving Session and do not claim this client capability.
@@ -150,7 +157,13 @@ async function connect(entry: McpCallerConnection, kind: 'streamable-http' | 'ss
       assertLive(entry);
       if (entry.reception !== reception) throw new Error('MCP notification reception is stopped.');
     };
-    try { await reception.assertActive(); assertReception(); await reception.receive(params.message, params.endpoint, assertReception); }
+    const streamCredentials = [...(entry.options.oauthStreamCredentials || [])];
+    try {
+      await reception.assertActive();
+      assertReception();
+      if (containsOAuthCredential(params, [...streamCredentials, ...getMcpOAuthService().credentials()])) return;
+      await reception.receive(params.message, params.endpoint, assertReception);
+    }
     catch { logger.warn({ server: entry.options.server }, 'MCP notification was not admitted'); }
   };
   assertLive(entry);
@@ -163,6 +176,7 @@ async function setup(entry: McpCallerConnection) {
   if (mode !== 'auto') return connect(entry, mode);
   try { await connect(entry, 'streamable-http'); }
   catch (streamableError) {
+    if (streamableError instanceof McpOAuthError) throw streamableError;
     if (!current(entry)) throw streamableError;
     // Failed initialization may already have allocated a remote HTTP context.
     await entry.transport?.terminateSession?.().catch(() => {});

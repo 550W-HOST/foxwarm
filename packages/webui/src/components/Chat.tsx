@@ -1,6 +1,7 @@
+import { useContentBeforeResize } from '../contentResize'
 import type { TimelineView } from '../chatPreferences'
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { ChevronDown, ChevronUp, Code2, ExternalLink, MessageSquareText, Search, SquareTerminal, X } from 'lucide-react'
+import { ChevronDown, ChevronUp, Code2, MessageSquareText, Search, SquareTerminal, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
 import type { ModelOption } from './ChatComposer'
@@ -185,7 +186,6 @@ interface ChatProps {
   onBack?: () => void
   onOpenTerminal?: () => void
   onOpenCode?: () => void
-  onOpenCodeNewWindow?: () => void
   onOpenCodeFile?: (filePath: string, lines?: { startLine?: number; endLine?: number }, target?: { nodeId: string; resolvedPath: string }) => void
   onOpenCodeCommit?: (target: CodeCommitTarget) => void | Promise<void>
   onOpenModelSettings?: () => void
@@ -193,6 +193,8 @@ interface ChatProps {
   timelineView?: TimelineView
   showUsageBadge?: boolean
   showUserMessageMetadata?: boolean
+  fullWidth?: boolean
+  onFullWidthChange?: (enabled: boolean) => void
   onSendKeyModeChange?: (mode: 'modEnter' | 'enter') => void
   onTimelineViewChange?: (mode: TimelineView) => void
   onShowUsageBadgeChange?: (enabled: boolean) => void
@@ -240,7 +242,7 @@ type SessionListRecord = {
   isolated?: boolean
 }
 
-const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experimentalTextOnly = false, experimentalAttachments = false, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', timelineView = 'detailed', showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onTimelineViewChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experimentalTextOnly = false, experimentalAttachments = false, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', timelineView = 'detailed', showUsageBadge = true, showUserMessageMetadata = false, fullWidth = true, onFullWidthChange = () => {}, onSendKeyModeChange = () => {}, onTimelineViewChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
   const [timelineState, dispatchTimeline] = useReducer(timelineReducer, { messages: [], queuedMessages: [] })
   const messages = timelineState.messages
   const queuedMessages = timelineState.queuedMessages
@@ -255,7 +257,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
   const { isMobile, compactModelSelector, compactComposer } = layout
   const [connectionState, setConnectionState] = useState<'connected' | 'connecting' | 'disconnected' | 'reconnecting'>('connecting')
   const [reconnectCountdown, setReconnectCountdown] = useState<number>(0)
-  const [showScrollButton, setShowScrollButton] = useState(false)
+  const [followingBottom, setFollowingBottom] = useState(true)
   const [showScrollTopButton, setShowScrollTopButton] = useState(false)
   const [showDebugInfo, setShowDebugInfo] = useState(false)
   const [streamingAssistantDraft, setStreamingAssistantDraft] = useState<StreamingAssistantDraft | null>(null)
@@ -328,12 +330,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
   const currentViewportGeometryRef = useRef<{ scrollTop: number; scrollHeight: number } | null>(null)
   const userInteractionVersionRef = useRef(0)
   const capturedInteractionVersionRef = useRef(0)
+  const pendingContentResizeRef = useRef<{ state: ChatViewportState; interactionVersion: number } | null>(null)
   const resizeRestoreFrameRef = useRef<number | null>(null)
-  const heightFollowHoldsRef = useRef(new Set<object>())
-  const heightFollowAnimatingRef = useRef(new Set<object>())
-  const heightFollowPendingContentRef = useRef(false)
-  const heightFollowPreparesRef = useRef(new Set<object>())
-  const heightFollowReleaseTimersRef = useRef(new Set<number>())
+  const cardHeightChangesRef = useRef(new Set<object>())
   const pendingContextScrollbarNavigationRef = useRef<{ anchorKey: string; fraction: number } | null>(null)
   const pendingScrollToTrueTopRef = useRef(false)
   const modelRequestGateRef = useRef(createLatestRequestGate())
@@ -485,94 +484,27 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     return () => observer.disconnect()
   }, [])
 
+  const setBottomFollow = useCallback((following: boolean, pendingUserLeave = false) => {
+    shouldAutoScrollRef.current = following
+    pendingUserLeaveBottomRef.current = pendingUserLeave
+    setFollowingBottom(following)
+  }, [])
+
   const scrollToBottom = useCallback(() => {
     const container = messagesContainerRef.current
     if (container) {
-      // Explicit bottom navigation and independent new content win over a card-only hold.
-      heightFollowReleaseTimersRef.current.forEach(timer => window.clearTimeout(timer))
-      heightFollowReleaseTimersRef.current.clear()
-      heightFollowHoldsRef.current.clear()
-      heightFollowAnimatingRef.current.clear()
-      heightFollowPendingContentRef.current = false
-      if (!heightFollowPreparesRef.current.size) container.style.removeProperty('overflow-anchor')
+      // Explicit bottom navigation and attached content updates use the same follow state.
       container.scrollTop = container.scrollHeight
       const state: ChatViewportState = { kind: 'bottom' }
       currentViewportStateRef.current = state
       currentViewportGeometryRef.current = null
-      shouldAutoScrollRef.current = true
-      pendingUserLeaveBottomRef.current = false
+      setBottomFollow(true)
       storeChatViewportState(viewportSessionId, state)
     }
-  }, [viewportSessionId])
-
-  const prepareCardHeight = useCallback(() => {
-    const token = {}
-    heightFollowPreparesRef.current.add(token)
-    const container = messagesContainerRef.current
-    if (container) container.style.overflowAnchor = 'none'
-    return () => {
-      heightFollowPreparesRef.current.delete(token)
-      if (!heightFollowHoldsRef.current.size && !heightFollowPreparesRef.current.size) {
-        container?.style.removeProperty('overflow-anchor')
-      }
-    }
-  }, [])
-
-  const holdTallCardFollow = useCallback((card: HTMLElement, startHeight: number, targetHeight: number) => {
-    const container = messagesContainerRef.current
-    // Clicking a disclosure is viewport interaction, not a request to detach. Re-arm
-    // the existing ResizeObserver generation after its pointerdown invalidation.
-    capturedInteractionVersionRef.current = userInteractionVersionRef.current
-    if (!container || !shouldAutoScrollRef.current || pendingUserLeaveBottomRef.current || targetHeight <= startHeight) return () => {}
-    const viewport = container.getBoundingClientRect()
-    // Predict the card's top after bottom alignment, including the unscrolled distance
-    // below the current viewport. No fixed card-height cutoff or scrollTop snapshot.
-    const bottomAlignmentDelta = Math.max(0, container.scrollHeight - container.clientHeight - container.scrollTop)
-    if (card.getBoundingClientRect().top - bottomAlignmentDelta >= viewport.top) return () => {}
-    const hold = {}
-    heightFollowHoldsRef.current.add(hold)
-    heightFollowAnimatingRef.current.add(hold)
-    // An initial bottom restoration still pending when the user opens a card must
-    // not reassert bottom after the temporary hold expires.
-    if (pendingViewportRestoreRef.current?.kind === 'state' && pendingViewportRestoreRef.current.state.kind === 'bottom') {
-      pendingViewportRestoreRef.current = null
-    }
-    container.style.overflowAnchor = 'none'
-    return () => {
-      heightFollowAnimatingRef.current.delete(hold)
-      // A stream/history update while a tall card is still moving is distinct
-      // from the card's own resize. Follow once after the last active transition,
-      // without letting an earlier reversal release another card's hold.
-      if (heightFollowPendingContentRef.current) queueMicrotask(() => {
-        if (!heightFollowPendingContentRef.current || heightFollowAnimatingRef.current.size) return
-        heightFollowPendingContentRef.current = false
-        if (shouldAutoScrollRef.current && !pendingUserLeaveBottomRef.current && !pendingViewportRestoreRef.current) {
-          scrollToBottom()
-        }
-      })
-      // The final auto-height cleanup can deliver a ResizeObserver notification
-      // after transitionend. Drain that notification before normal follow resumes;
-      // a later token/layout update can use the unchanged follow latch as usual.
-      const timer = window.setTimeout(() => {
-        heightFollowReleaseTimersRef.current.delete(timer)
-        heightFollowHoldsRef.current.delete(hold)
-        if (heightFollowHoldsRef.current.size === 0 && heightFollowPreparesRef.current.size === 0 && messagesContainerRef.current === container) {
-          container.style.removeProperty('overflow-anchor')
-        }
-      }, 200)
-      heightFollowReleaseTimersRef.current.add(timer)
-    }
-  }, [scrollToBottom])
-
-  const cardHeightContext = useMemo(() => ({ before: prepareCardHeight, begin: holdTallCardFollow }), [prepareCardHeight, holdTallCardFollow])
+  }, [setBottomFollow, viewportSessionId])
 
   useEffect(() => () => {
-    heightFollowReleaseTimersRef.current.forEach(timer => window.clearTimeout(timer))
-    heightFollowReleaseTimersRef.current.clear()
-    heightFollowHoldsRef.current.clear()
-    heightFollowAnimatingRef.current.clear()
-    heightFollowPendingContentRef.current = false
-    heightFollowPreparesRef.current.clear()
+    cardHeightChangesRef.current.clear()
     messagesContainerRef.current?.style.removeProperty('overflow-anchor')
   }, [sessionId])
 
@@ -611,7 +543,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     })
   }, [])
 
-  const updateBottomFollowState = useCallback((userIntent: 'none' | 'leave' = 'none') => {
+  const updateBottomFollowState = useCallback((userIntent: 'none' | 'leave' | 'toward-bottom' = 'none') => {
     const container = messagesContainerRef.current
     const distanceFromBottom = container
       ? container.scrollHeight - container.scrollTop - container.clientHeight
@@ -622,18 +554,18 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       distanceFromBottom,
       userIntent,
     })
-    shouldAutoScrollRef.current = next.following
-    pendingUserLeaveBottomRef.current = next.pendingUserLeave
+    setBottomFollow(next.following, next.pendingUserLeave)
     return next
-  }, [])
+  }, [setBottomFollow])
 
   const captureCurrentViewportState = useCallback((): ChatViewportState | null => {
-    if (heightFollowHoldsRef.current.size && shouldAutoScrollRef.current && !pendingUserLeaveBottomRef.current) return currentViewportStateRef.current
+    if (pendingContentResizeRef.current) return pendingContentResizeRef.current.state
     const followState = updateBottomFollowState()
     const bottomThresholdPx = followState.pendingUserLeave
       ? -1
       : followState.following
-        ? undefined
+        // Passive reflow must not turn an active follow intent into an anchor.
+        ? Number.POSITIVE_INFINITY
         : CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX
     const state = readCurrentViewportState(bottomThresholdPx)
     if (!state) return null
@@ -645,17 +577,22 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     return state
   }, [readCurrentViewportState, updateBottomFollowState, viewportSessionId])
 
+  useContentBeforeResize(useCallback(() => {
+    // Do not acknowledge detached user input before its native scroll captures position.
+    if (!shouldAutoScrollRef.current && capturedInteractionVersionRef.current !== userInteractionVersionRef.current) return
+    const state = captureCurrentViewportState()
+    if (state) pendingContentResizeRef.current = { state, interactionVersion: userInteractionVersionRef.current }
+  }, [captureCurrentViewportState]))
+
   const applyViewportState = useCallback((state: ChatViewportState): boolean => {
     const container = messagesContainerRef.current
     if (!container) return false
 
     if (state.kind === 'bottom') {
-      if (heightFollowHoldsRef.current.size) return false
       container.scrollTop = container.scrollHeight
       currentViewportStateRef.current = state
       currentViewportGeometryRef.current = null
-      shouldAutoScrollRef.current = true
-      pendingUserLeaveBottomRef.current = false
+      setBottomFollow(true)
       storeChatViewportState(viewportSessionId, state)
       return true
     }
@@ -674,11 +611,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     }
     currentViewportStateRef.current = state
     currentViewportGeometryRef.current = null
-    shouldAutoScrollRef.current = false
-    pendingUserLeaveBottomRef.current = false
+    setBottomFollow(false)
     storeChatViewportState(viewportSessionId, state)
     return true
-  }, [viewportSessionId])
+  }, [setBottomFollow, viewportSessionId])
 
   const applyViewportAnchorCandidates = useCallback((anchors: Array<{ messageKey: string; offsetPx: number }>): boolean => {
     for (const candidate of anchors) {
@@ -698,22 +634,53 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
   }, [applyViewportState])
 
   const markUserViewportInteraction = useCallback(() => {
+    pendingContentResizeRef.current = null
     userInteractionVersionRef.current += 1
     pendingViewportRestoreRef.current = null
     currentViewportGeometryRef.current = null
   }, [])
+
+  const handleBottomNavigation = useCallback(() => {
+    markUserViewportInteraction()
+    pendingContextScrollbarNavigationRef.current = null
+    pendingScrollToTrueTopRef.current = false
+    capturedInteractionVersionRef.current = userInteractionVersionRef.current
+    scrollToBottom()
+  }, [markUserViewportInteraction, scrollToBottom])
 
   const leaveBottomFollow = useCallback(() => {
     markUserViewportInteraction()
     updateBottomFollowState('leave')
   }, [markUserViewportInteraction, updateBottomFollowState])
 
+  const prepareCardHeight = useCallback(() => {
+    const token = {}
+    cardHeightChangesRef.current.add(token)
+    const container = messagesContainerRef.current
+    if (container) container.style.overflowAnchor = 'none'
+    return () => {
+      cardHeightChangesRef.current.delete(token)
+      if (!cardHeightChangesRef.current.size) container?.style.removeProperty('overflow-anchor')
+    }
+  }, [])
+
+  const beginCardHeight = useCallback((card: HTMLElement, startHeight: number, targetHeight: number) => {
+    const container = messagesContainerRef.current
+    if (!container) return
+    if (shouldAutoScrollRef.current && targetHeight > startHeight) {
+      const bottomAlignmentDelta = Math.max(0, container.scrollHeight - container.clientHeight - container.scrollTop)
+      if (card.getBoundingClientRect().top - bottomAlignmentDelta < container.getBoundingClientRect().top) leaveBottomFollow()
+    }
+    captureCurrentViewportState()
+  }, [captureCurrentViewportState, leaveBottomFollow])
+
+  const cardHeightContext = useMemo(() => ({ before: prepareCardHeight, begin: beginCardHeight }), [prepareCardHeight, beginCardHeight])
+
   const scrollToTop = useCallback(() => {
     const container = messagesContainerRef.current
     if (container) {
       markUserViewportInteraction()
-      shouldAutoScrollRef.current = false
-      pendingUserLeaveBottomRef.current = false
+      setBottomFollow(false)
       if (!showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
         pendingScrollToTrueTopRef.current = true
         setShowFullTimeline(true)
@@ -721,7 +688,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       }
       container.scrollTop = 0
     }
-  }, [markUserViewportInteraction, messages.length, showFullTimeline])
+  }, [markUserViewportInteraction, messages.length, setBottomFollow, showFullTimeline])
 
   const scrollToContextScrollbarAnchor = useCallback((anchorKey: string, fraction: number): boolean => {
     const container = messagesContainerRef.current
@@ -758,7 +725,6 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
         leaveBottomFollow()
       }
 
-      setShowScrollButton(distanceFromBottom > 200)
       setShowScrollTopButton(scrollTop > 200)
       captureCurrentViewportState()
 
@@ -798,10 +764,17 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     const container = messagesContainerRef.current
     if (container) {
       const handleWheel = (event: WheelEvent) => {
-        if (event.deltaY < 0) {
+        const readingAwayFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight > CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX
+        // Reading navigation away from the actual tail outranks pending reflow.
+        if (event.deltaY < 0 || (event.deltaY > 0 && readingAwayFromBottom)) {
           leaveBottomFollow()
         } else {
           markUserViewportInteraction()
+          if (event.deltaY > 0) {
+            // A new downward gesture can finish a tiny leave inside bottom tolerance.
+            updateBottomFollowState('toward-bottom')
+            captureCurrentViewportState()
+          }
         }
       }
       const handleTouchStart = (event: TouchEvent) => {
@@ -823,6 +796,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       }
       const handlePointerDown = () => {
         markUserViewportInteraction()
+        // A fresh pointer gesture supersedes an unfinished earlier wheel leave.
+        if (pendingUserLeaveBottomRef.current) setBottomFollow(false)
         pointerScrollInteractionRef.current = true
       }
       const handlePointerEnd = () => {
@@ -862,7 +837,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
         window.removeEventListener('keydown', handleWindowKeyDown)
       }
     }
-  }, [captureCurrentViewportState, leaveBottomFollow, markUserViewportInteraction, messages.length, showFullTimeline])
+  }, [captureCurrentViewportState, leaveBottomFollow, markUserViewportInteraction, messages.length, setBottomFollow, showFullTimeline, updateBottomFollowState])
 
   const applySessionState = useCallback((session: SessionListRecord | null | undefined) => {
     if (!session || typeof session.id !== 'string') return
@@ -1520,6 +1495,23 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     }
   }, [sessionId])
 
+  const updateSessionNode = useCallback(async (nodeId: string, signal: AbortSignal) => {
+    const response = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/node`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nodeId }),
+      signal,
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data?.error || 'Could not switch node.')
+    signal.throwIfAborted()
+    setSessionRecord(previous => ({
+      ...(previous || { id: sessionId }),
+      currentNode: data.session.currentNode,
+      cwd: data.session.cwd,
+    }))
+  }, [sessionId])
+
   const updateChildModel = useCallback(async (model: string | null) => {
     setModelBusy(true)
     setModelError(null)
@@ -1586,12 +1578,6 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
 
   useEffect(() => {
     if (pendingViewportRestoreRef.current || !shouldAutoScrollRef.current) return
-    if (heightFollowAnimatingRef.current.size) {
-      heightFollowPendingContentRef.current = true
-      return
-    }
-    // A fresh message/draft during only the final observer-settling grace is
-    // independent content: resume the existing follow immediately.
     scrollToBottom()
   }, [messages, scrollToBottom, streamingAssistantDraft])
 
@@ -1836,8 +1822,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     if (!container) return
     container.scrollTop = pending.scrollTop + (container.scrollHeight - pending.scrollHeight)
     pendingViewportRestoreRef.current = null
-    shouldAutoScrollRef.current = false
-    pendingUserLeaveBottomRef.current = false
+    setBottomFollow(false)
 
     const nextState = readCurrentViewportState(CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX)
     if (nextState?.kind === 'anchor') {
@@ -1852,7 +1837,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       }
       capturedInteractionVersionRef.current = userInteractionVersionRef.current
     }
-  }, [applyViewportAnchorCandidates, applyViewportState, historyLoaded, messages.length, readCurrentViewportState, showFullTimeline, timelineMessages, viewportSessionId])
+  }, [applyViewportAnchorCandidates, applyViewportState, historyLoaded, messages.length, readCurrentViewportState, setBottomFollow, showFullTimeline, timelineMessages, viewportSessionId])
 
   useLayoutEffect(() => {
     const pending = pendingContextScrollbarNavigationRef.current
@@ -1867,19 +1852,36 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     const container = messagesContainerRef.current
     if (!content || !container) return
 
+    const syncScrollbarGutter = () => {
+      if (container.clientWidth > 0) {
+        chatRootRef.current?.style.setProperty('--foxwarm-chat-scrollbar-gutter', `${container.offsetWidth - container.clientWidth}px`)
+      }
+    }
+    syncScrollbarGutter()
     const observer = new ResizeObserver(() => {
+      syncScrollbarGutter()
       if (resizeRestoreFrameRef.current !== null) {
         window.cancelAnimationFrame(resizeRestoreFrameRef.current)
       }
       resizeRestoreFrameRef.current = window.requestAnimationFrame(() => {
         resizeRestoreFrameRef.current = null
+        const contentResize = pendingContentResizeRef.current
+        if (contentResize) {
+          if (contentResize.interactionVersion === userInteractionVersionRef.current) applyViewportState(contentResize.state)
+          // A width-band React commit can resize the Timeline again after this
+          // delivery. Keep the pre-resize anchor until a frame has settled;
+          // another observer delivery cancels this release and restores again.
+          resizeRestoreFrameRef.current = window.requestAnimationFrame(() => {
+            resizeRestoreFrameRef.current = null
+            if (pendingContentResizeRef.current === contentResize) {
+              if (contentResize.interactionVersion === userInteractionVersionRef.current) applyViewportState(contentResize.state)
+              pendingContentResizeRef.current = null
+            }
+          })
+        }
         if (capturedInteractionVersionRef.current !== userInteractionVersionRef.current) return
 
         const pending = pendingViewportRestoreRef.current
-        if (heightFollowHoldsRef.current.size && !pending) {
-          setShowScrollButton(container.scrollHeight - container.scrollTop - container.clientHeight > 200)
-          return
-        }
         if (pending) {
           if (pending.interactionVersion === userInteractionVersionRef.current) {
             if (pending.kind === 'state') {
@@ -1903,6 +1905,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       })
     })
     observer.observe(content)
+    observer.observe(container)
 
     return () => {
       observer.disconnect()
@@ -2239,25 +2242,15 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
             <button type="button" onClick={() => activateSearch()} aria-label="Find in chat" title="Find in chat" className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover">
               <Search className="h-4 w-4" /><span className="foxwarm-chat-sm-label">Find</span>
             </button>
-            {(onOpenCode || onOpenCodeNewWindow) && (
-              <div className="inline-flex">
-                {onOpenCode && <button
-                  onClick={onOpenCode}
-                  className={`foxwarm-chat-code-button inline-flex items-center gap-1 border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover ${onOpenCodeNewWindow ? 'rounded-l-lg' : 'rounded-lg'}`}
-                  title="Code"
-                >
-                  <Code2 className="h-4 w-4" />
-                  <span className="foxwarm-chat-sm-label">Code</span>
-                </button>}
-                {onOpenCodeNewWindow && <button
-                  onClick={onOpenCodeNewWindow}
-                  className="inline-flex items-center rounded-r-lg border-y border-r border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover"
-                  title="Open Code in new window"
-                  aria-label="Open Code in new window"
-                >
-                  <ExternalLink className="h-4 w-4" />
-                </button>}
-              </div>
+            {onOpenCode && (
+              <button
+                onClick={onOpenCode}
+                className="foxwarm-chat-code-button inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover"
+                title="Code"
+              >
+                <Code2 className="h-4 w-4" />
+                <span className="foxwarm-chat-sm-label">Code</span>
+              </button>
             )}
             {onOpenTerminal && (
               <button
@@ -2276,6 +2269,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
               onTimelineViewChange={onTimelineViewChange}
               showUsageBadge={showUsageBadge}
               onShowUsageBadgeChange={onShowUsageBadgeChange}
+              fullWidth={fullWidth}
+              onFullWidthChange={onFullWidthChange}
               showUserMessageMetadata={showUserMessageMetadata}
               onShowUserMessageMetadataChange={onShowUserMessageMetadataChange}
               onOpenDebugInfo={handleOpenDebugInfo}
@@ -2297,7 +2292,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       )}
 
       <div className="foxwarm-chat-message-region relative min-h-0 flex-1">
-        <div id={chatMessageContainerId} ref={messagesContainerRef} className="foxwarm-chat-messages h-full overflow-x-hidden overflow-y-auto p-4">
+        <div id={chatMessageContainerId} ref={messagesContainerRef} className="foxwarm-chat-messages foxwarm-content-gutter h-full overflow-x-hidden overflow-y-auto py-4">
           {!isMobile && (
             <div className="foxwarm-context-scrollbar-overlay">
               <ContextScrollbar
@@ -2312,7 +2307,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
               />
             </div>
           )}
-          <div ref={messagesContentRef} className="foxwarm-chat-messages-content min-w-0 max-w-full">
+          <div ref={messagesContentRef} data-full-width={fullWidth} className="foxwarm-chat-messages-content foxwarm-content-column">
             {hiddenMessageCount > 0 && !showFullTimeline && (
               <div className="mb-3 rounded-lg border border-fw-border bg-fw-surface/80 px-3 py-2 text-xs text-fw-text-muted shadow-sm dark:border-fw-border dark:bg-fw-surface/80 dark:text-fw-text">
                 Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.
@@ -2357,7 +2352,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
                 <ThreadCardHeightContext.Provider value={cardHeightContext}><ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} timelineView={timelineView} showUsageBadge={false} showTimeDividers={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} /></ThreadCardHeightContext.Provider>
               </div>
             )}
-            <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />
+            <div aria-hidden="true" data-chat-composer-spacer style={{ height: 'calc(var(--chat-composer-offset, 224px) - 2.5rem)' }} />
           </div>
         </div>
         <div className="foxwarm-display-effect-overlay" aria-hidden="true" />
@@ -2373,9 +2368,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
           </button>
         )}
 
-        {showScrollButton && (
+        {!followingBottom && (
           <button
-            onClick={scrollToBottom}
+            onClick={handleBottomNavigation}
             className="absolute bottom-4 right-4 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-fw-accent text-fw-text-inverse shadow-lg transition-all hover:bg-fw-accent dark:bg-fw-accent dark:hover:bg-fw-accent"
             style={{ bottom: 'calc(var(--chat-composer-offset, 224px) + 1rem)' }}
             aria-label="Scroll to bottom"
@@ -2393,6 +2388,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
         compactModelSelector={compactModelSelector}
         sessionId={sessionId}
         webUiIdentityMode={webUiIdentityMode}
+        currentNode={sessionRecord?.currentNode}
+        onChangeNode={updateSessionNode}
         sessionMissing={sessionMissing}
         loading={loading}
         asrAvailable={asrAvailable}
@@ -2463,7 +2460,6 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
   Boolean(prev.onBack) === Boolean(next.onBack) &&
   prev.onOpenTerminal === next.onOpenTerminal
   && prev.onOpenCode === next.onOpenCode
-  && prev.onOpenCodeNewWindow === next.onOpenCodeNewWindow
   && prev.onOpenCodeFile === next.onOpenCodeFile
   && prev.onOpenCodeCommit === next.onOpenCodeCommit
   && prev.onOpenModelSettings === next.onOpenModelSettings
@@ -2471,6 +2467,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
   && prev.timelineView === next.timelineView
   && prev.showUsageBadge === next.showUsageBadge
   && prev.webUiIdentityMode === next.webUiIdentityMode
+  && prev.fullWidth === next.fullWidth
+  && prev.onFullWidthChange === next.onFullWidthChange
   && prev.showUserMessageMetadata === next.showUserMessageMetadata
   && prev.onSendKeyModeChange === next.onSendKeyModeChange
   && prev.onTimelineViewChange === next.onTimelineViewChange

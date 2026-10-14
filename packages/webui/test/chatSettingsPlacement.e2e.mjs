@@ -2,7 +2,7 @@ import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { readdir, readFile } from 'node:fs/promises'
-import { build } from 'esbuild'
+import { build } from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
 
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
@@ -47,6 +47,7 @@ async function buildFixtureBundle() {
             timelineView, onTimelineViewChange: setTimelineView,
             showUsageBadge, onShowUsageBadgeChange: setShowUsageBadge,
             showUserMessageMetadata: showMetadata, onShowUserMessageMetadataChange: setShowMetadata,
+            fullWidth: preferences.fullWidth, onFullWidthChange: preferences.setFullWidth,
             onOpenDebugInfo() {},
           })
         ),
@@ -209,7 +210,7 @@ test('session menu owns Input and Chat settings and persists the metadata toggle
   await page.waitForFunction(() => window.chatSettingsFixture?.showUserMessageMetadata === false)
   await openMenu()
   const menuText = await page.$eval('[data-session-ui-settings-menu]', menu => menu.textContent || '')
-  for (const label of ['Input', 'Chat', 'Timeline view', 'Detailed', 'Grouped', 'Conversation', 'Show usage badges', 'Show minimap', 'Show user message metadata', 'debug info']) {
+  for (const label of ['Input', 'Chat', 'Timeline view', 'Detailed', 'Grouped', 'Conversation', 'Full width', 'Show usage badges', 'Show minimap', 'Show user message metadata', 'debug info']) {
     assert.equal(menuText.includes(label), true, `${label} is present`)
   }
   await page.evaluate(() => {
@@ -305,17 +306,18 @@ test('outer and embedded Chat roots synchronize all relocated preferences in bot
   await embeddedFrame.waitForSelector('[data-session-ui-settings-menu]')
   await embeddedFrame.evaluate(() => {
     const buttons = [...document.querySelectorAll('[data-session-ui-settings-menu] button')]
-    for (const label of ['Show usage badges', 'Show user message metadata']) {
+    for (const label of ['Full width', 'Show usage badges', 'Show user message metadata']) {
       const button = buttons.find(candidate => candidate.textContent?.trim() === label)
       if (!(button instanceof HTMLButtonElement)) throw new Error(`Missing embedded menu button: ${label}`)
       button.click()
     }
   })
-  await page.waitForFunction(() => window.chatSettingsFixture?.showUsageBadge === false && window.chatSettingsFixture?.showUserMessageMetadata === true)
+  await page.waitForFunction(() => window.chatSettingsFixture?.fullWidth === false && window.chatSettingsFixture?.showUsageBadge === false && window.chatSettingsFixture?.showUserMessageMetadata === true)
   assert.deepEqual(await page.evaluate(() => ({
     sendKeyMode: window.chatSettingsFixture.sendKeyMode,
     timelineView: window.chatSettingsFixture.timelineView,
+    fullWidth: window.chatSettingsFixture.fullWidth,
     showUsageBadge: window.chatSettingsFixture.showUsageBadge,
     showUserMessageMetadata: window.chatSettingsFixture.showUserMessageMetadata,
-  })), { sendKeyMode: 'enter', timelineView: 'grouped', showUsageBadge: false, showUserMessageMetadata: true })
+  })), { sendKeyMode: 'enter', timelineView: 'grouped', fullWidth: false, showUsageBadge: false, showUserMessageMetadata: true })
 })

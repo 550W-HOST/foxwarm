@@ -69,10 +69,10 @@ When output overflows, shorten extreme individual lines and omit whole middle li
 
 Wrappers retain only environment-specific roots/namespaces, permission and ownership checks, transport, interactive approval, and result/presentation metadata. The patch parser/matcher is `packages/shared/src/applyPatch.ts`; the file patch executor is `packages/shared/src/fileToolCore.ts` over `FileOperations`, including provider-owned asynchronous parents. Main file/memory, native CLI, and primitive Provider calls use these same implementations. Compact repair reuses pure patch semantics while retaining its exact pending-file descriptor boundary.
 
-This ownership rule is not a claim that all historical implementations have already converged: existing exact edit replacement remains separate and requires its own assessment. Current file composition is mapped by [D-dispatch-shared-file-semantics](../threads/tool-dispatch.md#d-dispatch-shared-file-semantics).
+This ownership rule is not a claim that all historical implementations have already converged: existing exact edit replacement remains separate and requires its own assessment. Current file composition is mapped by [D-dispatch-shared-file-semantics](../threads/tool-dispatch-node-execution.md#d-dispatch-shared-file-semantics).
 
 ## Canonical cross-module ownership
 
-- Shared master/node file semantics: [D-dispatch-shared-file-semantics](../threads/tool-dispatch.md#d-dispatch-shared-file-semantics).
+- Shared master/node file semantics: [D-dispatch-shared-file-semantics](../threads/tool-dispatch-node-execution.md#d-dispatch-shared-file-semantics).
 - Model tools versus fixed backend services: [D-node-thread-tool-service-split](../threads/node-communication.md#d-node-thread-tool-service-split).
 - Terminal helper IPC and trusted routing: [D-node-thread-helper-ipc](../threads/node-communication.md#d-node-thread-helper-ipc).

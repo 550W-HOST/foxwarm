@@ -12,6 +12,7 @@ Owns persisted MCP server configuration, safe summaries, transport connection li
 
 - `McpTransport`, `McpServerConfig`, `McpConfig`, `McpServerSummary`.
 - `MIN_MCP_TOOL_TIMEOUT_SECONDS`, `MAX_MCP_TOOL_TIMEOUT_SECONDS` — managed per-server tool-call timeout bounds (1-3600 seconds; zero is accepted only as a clearing input).
+- `McpServerConfig.oauth` — optional administrator-managed OAuth client configuration; grant ownership is [outbound MCP OAuth](./src-mcp-oauth.md).
 - `createMcpConfigStore(filePath?)`, `setMcpConfigStoreForTests(store)`.
 - `summarizeServerConfig(name, server)`, `summarizeServers(servers)`.
 - `listTools(serverName?, signal?, owner?)`.
@@ -39,7 +40,7 @@ Owns persisted MCP server configuration, safe summaries, transport connection li
 
 ## Transport behavior
 
-- The first runtime read loads and normalizes the durable configuration (including fallback recovery) into one live snapshot. Later list/discovery/call reads use that snapshot; manual file edits remain invisible until process/store reinitialization. Managed writes publish a cloned snapshot only after durable persistence succeeds. Canonical contract: [D-dispatch-mcp-live-configuration](../threads/tool-dispatch.md#d-dispatch-mcp-live-configuration).
+- The first runtime read loads and normalizes the durable configuration (including fallback recovery) into one live snapshot. Later list/discovery/call reads use that snapshot; manual file edits remain invisible until process/store reinitialization. Managed writes publish a cloned snapshot only after durable persistence succeeds. Canonical contract: [D-dispatch-mcp-live-configuration](../threads/tool-dispatch-mcp.md#d-dispatch-mcp-live-configuration).
 - Managed upsert merges with the current named server and then runs one authoritative transport validator inside `mcpClient`: `stdio` requires a command, all HTTP/SSE/auto placements require a URL, and unknown transports fail before any durable write or live-snapshot publication. Tool wrappers retain argument parsing and user-facing success messages but do not duplicate these semantics.
 - Optional `timeoutSeconds` controls only `client.callTool`. Omission sends no request override and retains the installed SDK default (currently 60 seconds); managed input accepts finite 1-3600 seconds, while zero removes the persisted field and restores that default. Invocation converts the override to milliseconds and passes it through the SDK call's third `RequestOptions` argument. Connection setup, tool listing, retry/progress policy, and pool keys are unchanged.
 - The external inbound adapter can supply an SDK request AbortSignal to listing/calling and request the raw SDK result to preserve original text, structured content, images and `isError`. Internal callers supply a trusted Session owner and keep canonical normalization. When an external HTTP call is cancelled, the connection remains owned by its real external context and SDK cancellation retains its existing semantics; completion of a remote effect is not guaranteed to stop.
@@ -47,10 +48,12 @@ Owns persisted MCP server configuration, safe summaries, transport connection li
 - `streamable-http`, `sse` and `auto` require a URL and reuse one connection per trusted caller/server, whether reception is enabled or not. Owners are exact internal Sessions or real verified inbound contexts, never an anonymous shared identity. Unowned low-level calls are short-lived and terminate their remote Streamable HTTP session before closing. See [caller connections](./src-mcp-caller-connections.md).
 - `auto` tries Streamable HTTP initialization and then SSE; an allocated failed HTTP attempt is terminated before fallback. Tool effects are never retried by transport fallback.
 - For HTTP transports, `token` supplies default `Authorization: Bearer <token>`. Configured custom headers are applied afterward; a custom `Authorization` key in any casing removes the generated default and wins with its configured casing/value.
+- OAuth and static Authorization are mutually exclusive. OAuth resources use a grant-aware fetch without forwarding resource credentials to AS discovery/token endpoints. Safe summaries expose authentication mode, not configured client secrets or tokens. The Main-owned instance grant, administrator APIs and refresh contract are canonical in [D-mcp-outbound-instance-oauth](./src-mcp-oauth.md#d-mcp-outbound-instance-oauth).
 - Streamable HTTP, SSE, and both `auto` attempts use the same header builder.
 - `stdio` applies no HTTP token/headers. Its pool signature includes only server name plus command/args/env/cwd/stderr, so token/header-only edits neither change its key nor restart the process.
 - Ordinary discovery/calls retain their existing resolver: requested/default name when present, otherwise the first configured server; an empty configuration or disabled resolved server fails. Notification start has exact-name semantics instead. Successful managed updates close all HTTP caller connections for that server after durable publication.
 - Safe server summaries expose `timeoutSeconds` as the configured override or `null` for the SDK default; no secret-bearing values are added.
+- MCP configuration writes protect the same-directory temporary file with mode 0600. Relevant URL/OAuth configuration changes invalidate that named server's authorization after durable configuration publication; unrelated changes retain its grant while closing the existing transport bindings.
 
 - `startNotifications` resolves only the exact enabled server name, without ordinary discovery/call fallback, and uses the same caller-owned connection and preserves prior Node/cwd/exec state. For a peer advertising the Foxwarm extension, `foxwarm_session` send with `allowReply:true` fails locally before `client.callTool` unless that connection has enabled reception. Third-party same-name tools without the capability are unaffected.
 
@@ -64,7 +67,7 @@ Owns persisted MCP server configuration, safe summaries, transport connection li
 - Internal normal calls and ToolScript use this source normalization. `rawResult:true` external MCP passthrough bypasses it and retains the original protocol representations; server wire output and persisted history are unchanged.
 - Valid MCP `image` content blocks with `image/*` MIME types become `inlineDataItems`; per-image annotations and `_meta` remain attached, and pure, mixed, and multiple-image results share the normal Foxwarm image pipeline.
 - Non-image content blocks other than plain duplicate structured JSON retain their original order and shape. Text, audio, resource/blob, malformed image, `isError`, `structuredContent`, `_meta`, annotations, and other metadata are not misclassified as images.
-- Multimodal promotion precedes output guarding as defined by [D-dispatch-output-boundary](../threads/tool-dispatch.md#d-dispatch-output-boundary).
+- Multimodal promotion precedes output guarding as defined by [D-dispatch-output-boundary](../threads/tool-dispatch-authorization.md#d-dispatch-output-boundary).
 
 ## Compatibility
 

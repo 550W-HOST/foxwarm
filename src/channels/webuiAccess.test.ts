@@ -94,6 +94,14 @@ test('unified access config authenticates WebUI identities and keeps MCP-only id
       assert.equal(accepted.status, 200);
       assert.equal(calls.count, 1);
 
+      for (const [suffix, method] of [['nodes', 'GET'], ['node', 'POST']]) {
+        const deniedNodeControl = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(bound)}/${suffix}`, {
+          method, headers: { Authorization: `Bearer ${webUiToken}`, 'Content-Type': 'application/json' },
+          ...(method === 'POST' ? { body: JSON.stringify({ nodeId: 'master' }) } : {}),
+        });
+        assert.equal(deniedNodeControl.status, 403);
+      }
+
       const socket = new WebSocket(`${baseUrl.replace('http:', 'ws:')}/api/webui/stream`, {
         headers: { Authorization: `Bearer ${webUiToken}` },
       });

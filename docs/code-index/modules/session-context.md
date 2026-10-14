@@ -51,7 +51,7 @@ Session context owns model-context budgeting, layered compaction and direct acti
 
 - Obsolete `contextFrontier` is ignored on read and omitted on write. The startup migration only retires standalone frontier files.
 - Legacy JSONL message/block archives are migration-only inputs; current runtime is SQLite-only and explicit export provides compatibility JSONL. Their stream framing is shared with [src-jsonl](../units/src-jsonl.md).
-- The compact-completion wire shape is owned by [D-context-compact-completion](../threads/context-compaction-and-recall.md#d-context-compact-completion).
+- The compact-completion wire shape is owned by [D-context-compact-completion](../threads/context-compaction.md#d-context-compact-completion).
 
 ## Design decisions
 
@@ -63,7 +63,7 @@ Active history authority is canonical in [D-context-active-history-authority](..
 
 ### D-session-context-best-effort-index
 
-Archive durability does not depend on vector availability. Backfill and compact-fact embedding may be disabled, lag, or fail without pretending that source archive data was lost. Optional/default-disabled behavior is canonical in [D-context-optional-vector](../threads/context-compaction-and-recall.md#d-context-optional-vector).
+Archive durability does not depend on vector availability. Backfill and compact-fact embedding may be disabled, lag, or fail without pretending that source archive data was lost. Optional/default-disabled behavior is canonical in [D-context-optional-vector](../threads/archive-and-recall.md#d-context-optional-vector).
 
 ## Open questions
 

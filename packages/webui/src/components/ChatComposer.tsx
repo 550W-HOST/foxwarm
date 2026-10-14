@@ -18,6 +18,7 @@ import {
 import { filterModelOptions, formatVirtualModelDetail, groupModelOptionsByProvider, resolveModelDisplayName, resolveModelTriggerDisplayName } from './modelFilter'
 import { buildChildModelComposerState, type ChildPolicyChainEntry } from './childModelState'
 import InlineComposerEditor, { type InlineComposerEditorHandle } from './InlineComposerEditor'
+import NodePicker from './NodePicker'
 import {
   clearComposerDraft,
   getPlainComposerDraftText,
@@ -49,6 +50,8 @@ interface ChatComposerProps {
   experimentalTextOnly?: boolean
   experimentalAttachments?: boolean
   webUiIdentityMode?: boolean
+  currentNode?: string
+  onChangeNode?: (nodeId: string, signal: AbortSignal) => Promise<void>
   sessionMissing: boolean
   loading: boolean
   asrAvailable: boolean
@@ -541,7 +544,7 @@ function ModelSelector({
   }
 
   return (
-    <div ref={rootRef} data-chat-layout={compact === undefined ? undefined : "true"} className="foxwarm-model-selector-root relative flex min-w-0 max-w-[30rem] flex-1" title={error || undefined}>
+    <div ref={rootRef} data-chat-layout={compact === undefined ? undefined : "true"} className="foxwarm-model-selector-root relative flex min-w-0 max-w-[30rem] shrink" title={error || undefined}>
       <button
         ref={buttonRef}
         type="button"
@@ -670,6 +673,8 @@ const ChatComposer = memo(function ChatComposer({
   compactModelSelector,
   sessionId,
   webUiIdentityMode = false,
+  currentNode,
+  onChangeNode,
   sessionMissing,
   loading,
   asrAvailable,
@@ -1350,7 +1355,7 @@ const ChatComposer = memo(function ChatComposer({
   return (
     <div
       ref={rootRef}
-      className="pointer-events-none absolute inset-x-0 bottom-0 z-20 p-4 pt-10"
+      className="foxwarm-chat-composer foxwarm-content-gutter pointer-events-none absolute inset-x-0 bottom-0 z-20 pb-4 pt-10"
     >
       {isDragging && attachmentEnabled && (
         <div className="absolute inset-0 flex items-center justify-center bg-fw-accent-surface/80 dark:bg-fw-accent-surface-strong/40 pointer-events-none">
@@ -1362,7 +1367,7 @@ const ChatComposer = memo(function ChatComposer({
       )}
 
       <div
-        className="foxwarm-chat-composer-inner pointer-events-auto mx-auto max-w-5xl"
+        className="foxwarm-chat-composer-inner foxwarm-content-column pointer-events-auto"
         onDragOver={!attachmentEnabled ? undefined : handleDragOver}
         onDragLeave={!attachmentEnabled ? undefined : handleDragLeave}
         onDrop={!attachmentEnabled ? undefined : handleDrop}
@@ -1485,7 +1490,7 @@ const ChatComposer = memo(function ChatComposer({
         {draftPersistenceError && <div className="px-3 pb-1 text-xs text-fw-danger" role="alert">{draftPersistenceError}</div>}
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 flex-1 items-center gap-1">
-            <div className="flex min-w-0 items-center gap-1 overflow-x-auto pb-0.5">
+            <div className="flex min-w-0 shrink-0 items-center gap-1 overflow-x-auto pb-0.5">
               {attachmentEnabled && <label
                 htmlFor="file-upload"
                 onClick={(event) => { if (recordingLockRef.current) event.preventDefault() }}
@@ -1535,6 +1540,13 @@ const ChatComposer = memo(function ChatComposer({
               onChangeChildEffort={onChangeChildEffort}
               onRefreshModels={onRefreshModels}
               onOpenModelSettings={onOpenModelSettings}
+            />}
+            {!webUiIdentityMode && onChangeNode && <NodePicker
+              key={sessionId}
+              sessionId={sessionId}
+              currentNode={currentNode}
+              disabled={sessionMissing}
+              onChangeNode={onChangeNode}
             />}
           </div>
           <button

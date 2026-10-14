@@ -5,6 +5,23 @@ description: Set reasoning effort, route between models, and enable supported ho
 
 Start with a working provider from [model setup](/docs/model-setup/). The settings below go in `state/models.yaml`, which you can edit in **Setup → Models**. Use the model IDs and capabilities offered by your endpoint; the names in these examples are placeholders.
 
+## Shared model settings
+
+Use `defaults` in `state/models.yaml` for settings shared by concrete models:
+
+```yaml
+defaults:
+  contextLimit: 200000
+  maxOutput: 32768
+  providerImageOutputFormat: webp
+```
+
+Only these three fields are supported in `defaults`. Each setting resolves from the individual model, then its concrete provider, then root `defaults`, then the legacy `config.yaml.llm` value, and finally the built-in value shown above. Model object entries and concrete providers can override any of the three. Virtual providers cannot override them; they route to concrete leaves and report the smallest reachable context limit.
+
+Context and output limits must be positive integers. Set the context limit to match your endpoint's capacity. `maxOutput` controls the requested output-token limit; provider-specific `extraFields` can override the request field. `providerImageOutputFormat` controls optimized input images: `webp`, or `jpeg` with PNG for transparent images. It does not change original images or hosted image-generation output settings.
+
+Saving Models in Setup changes later requests. An in-flight request keeps one resolved snapshot, including when it fails over to another concrete provider. Compaction policy remains in `config.yaml.llm`.
+
 ## Choose the API format
 
 | `providerType` | Use it for |

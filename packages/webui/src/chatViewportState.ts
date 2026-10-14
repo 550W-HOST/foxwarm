@@ -25,7 +25,7 @@ export interface ChatBottomFollowState {
 
 export function updateChatBottomFollow(options: ChatBottomFollowState & {
   distanceFromBottom: number
-  userIntent?: 'none' | 'leave'
+  userIntent?: 'none' | 'leave' | 'toward-bottom'
   rejoinThresholdPx?: number
 }): ChatBottomFollowState {
   const threshold = options.rejoinThresholdPx ?? CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX
@@ -38,7 +38,7 @@ export function updateChatBottomFollow(options: ChatBottomFollowState & {
     }
   }
 
-  if (options.pendingUserLeave) {
+  if (options.pendingUserLeave && options.userIntent !== 'toward-bottom') {
     return distanceFromBottom > threshold
       ? { following: false, pendingUserLeave: false }
       : { following: false, pendingUserLeave: true }

@@ -39,8 +39,7 @@ const ProcessingStatus = memo(function ProcessingStatus({
   const visibleRuntimeSummary = timelineView === 'conversation' && (runtimeStateName === 'requesting-model' || runtimeStateName === 'running-tool')
     ? isCompacting ? 'Compacting…' : 'Working…'
     : timelineView === 'conversation' && runtimeStateName === 'waiting'
-    ? runtimeState?.waiting?.reason ? `Waiting · ${runtimeState.waiting.reason}`
-      : runtimeState?.waiting?.waitingFor === 'input' || runtimeState?.waiting?.waitForInput ? 'Waiting for input' : 'Waiting'
+    ? 'Waiting'
     : isCompacting
     ? 'Compacting...'
     : runtimeStateName === 'requesting-model'
@@ -54,7 +53,7 @@ const ProcessingStatus = memo(function ProcessingStatus({
         controls: 'text-fw-special dark:text-fw-special',
         dot: 'bg-fw-special dark:bg-fw-special',
       }
-    : runtimeStateName === 'waiting'
+    : runtimeStateName === 'waiting' || runtimeStateName === 'idle'
       ? {
           surface: 'bg-fw-warning-surface dark:bg-fw-warning-surface-strong/20 border-fw-warning-border dark:border-fw-warning-border',
           text: 'text-fw-warning dark:text-fw-warning',
@@ -77,68 +76,51 @@ const ProcessingStatus = memo(function ProcessingStatus({
         : `${queuedLabel} will be inserted after this model response`
     : ''
 
+  const interrupted = runtimeStateName === 'idle' && turnIncomplete && !loading
+  const statusLabel = interrupted ? 'Turn interrupted' : visibleRuntimeSummary
+  const queueLabel = runtimeStateName === 'idle' ? `${queuedLabel} pending` : queuedContinuation
+
   return (
     <>
-      {showRuntimeStatus && (
-        <div className="flex justify-start mt-4">
-          <div className={`${rowWidthClass} overflow-x-hidden`}>
+      <div data-processing-status-slot className="h-10 pt-2">
+        {(loading || showRuntimeStatus || interrupted) && (
+          <div className={`min-w-0 ${rowWidthClass}`}>
             <div
-              className={`inline-block max-w-full border px-4 py-2 rounded-lg ${tone.surface}`}
-              data-processing-runtime-state={runtimeStateName}
+              className={`inline-flex h-8 max-w-full items-center gap-2 rounded-lg border px-3 ${loading ? 'bg-fw-surface border-fw-border' : tone.surface}`}
+              data-processing-runtime-state={loading ? undefined : interrupted ? 'interrupted' : runtimeStateName}
               role="status"
             >
-              <div className="flex flex-wrap items-center gap-2">
-                {runtimeStateName === 'waiting' ? (
-                  <span className={`w-2 h-2 ${tone.dot} rounded-full`} data-processing-status-dot="static" />
-                ) : (
-                  <RuntimeBusySpinner className={`h-4 w-4 ${tone.text}`} />
-                )}
-                <span className={`text-sm ${tone.text}`}>
-                  {visibleRuntimeSummary}{queuedContinuation ? ` • ${queuedContinuation}` : ''}
+              {loading ? (
+                <span className="flex items-center gap-2" aria-label="Loading">
+                  <span className="h-2 w-2 rounded-full bg-fw-text-subtle dark:bg-fw-text-muted animate-bounce" />
+                  <span className="h-2 w-2 rounded-full bg-fw-text-subtle dark:bg-fw-text-muted animate-bounce" style={{ animationDelay: '0.1s' }} />
+                  <span className="h-2 w-2 rounded-full bg-fw-text-subtle dark:bg-fw-text-muted animate-bounce" style={{ animationDelay: '0.2s' }} />
                 </span>
-                {(isActive || sessionQueueLength > 0) && (
-                  <div className={`ml-auto flex items-center gap-1 ${tone.controls}`}>
-                    {isActive && onStop && (
-                      <button type="button" onClick={onStop} className={controlButtonClass}>Stop</button>
-                    )}
-                    {sessionQueueLength > 0 && onRunQueued && (
-                      <button type="button" onClick={onRunQueued} className={controlButtonClass}>Run queued</button>
-                    )}
-                  </div>
-                )}
-              </div>
+              ) : (
+                <>
+                  {runtimeStateName === 'waiting' || interrupted ? (
+                    <span className={`h-2 w-2 shrink-0 rounded-full ${tone.dot}`} data-processing-status-dot="static" />
+                  ) : (
+                    <RuntimeBusySpinner className={`h-4 w-4 shrink-0 ${tone.text}`} />
+                  )}
+                  <span className={`min-w-0 truncate text-sm leading-5 ${tone.text}`} title={statusLabel}>{statusLabel}</span>
+                  {(isActive || interrupted) && (
+                    <div className={`ml-auto flex shrink-0 items-center gap-1 ${tone.controls}`}>
+                      {isActive && onStop && <button type="button" onClick={onStop} className={controlButtonClass}>Stop</button>}
+                      {interrupted && onContinue && <button type="button" onClick={onContinue} className={controlButtonClass}>Continue</button>}
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           </div>
-        </div>
-      )}
-      {runtimeStateName === 'idle' && !loading && (turnIncomplete || sessionQueueLength > 0) && (
-        <div className="flex justify-start mt-4">
-          <div className={`${rowWidthClass} overflow-x-hidden`}>
-            <div
-              className="inline-flex max-w-full flex-wrap items-center gap-2 bg-fw-warning-surface dark:bg-fw-warning-surface-strong/20 border border-fw-warning-border dark:border-fw-warning-border px-4 py-2 rounded-lg text-sm text-fw-warning dark:text-fw-warning"
-              data-processing-runtime-state={turnIncomplete ? 'interrupted' : undefined}
-              role={turnIncomplete ? 'status' : undefined}
-            >
-              {turnIncomplete && <span className="w-2 h-2 bg-fw-warning dark:bg-fw-warning rounded-full" data-processing-status-dot="static" />}
-              <span>{turnIncomplete ? `Turn interrupted${sessionQueueLength > 0 ? ` • ${queuedLabel} pending` : ''}` : `${queuedLabel} pending`}</span>
-              <div className="flex items-center gap-1 text-fw-warning dark:text-fw-warning">
-                {turnIncomplete && onContinue && <button type="button" onClick={onContinue} className={controlButtonClass}>Continue</button>}
-                {sessionQueueLength > 0 && onRunQueued && <button type="button" onClick={onRunQueued} className={controlButtonClass}>Run queued</button>}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-      {loading && (
-        <div className="flex justify-start mt-4">
-          <div className={`${rowWidthClass} overflow-x-hidden`}>
-            <div className="inline-block max-w-full bg-fw-surface border border-fw-border px-4 py-2 rounded-lg">
-              <div className="flex space-x-2">
-                <div className="w-2 h-2 bg-fw-text-subtle dark:bg-fw-text-muted rounded-full animate-bounce"></div>
-                <div className="w-2 h-2 bg-fw-text-subtle dark:bg-fw-text-muted rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                <div className="w-2 h-2 bg-fw-text-subtle dark:bg-fw-text-muted rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
-              </div>
-            </div>
+        )}
+      </div>
+      {sessionQueueLength > 0 && (
+        <div data-processing-queue-status role="status" className={`mt-2 min-w-0 ${rowWidthClass}`}>
+          <div className={`inline-flex max-w-full flex-wrap items-center gap-2 rounded-lg border px-3 py-1 text-sm ${tone.surface} ${tone.text}`}>
+            <span className="min-w-0 break-words">{queueLabel}</span>
+            {onRunQueued && <button type="button" onClick={onRunQueued} className={`shrink-0 ${controlButtonClass}`}>Run queued</button>}
           </div>
         </div>
       )}

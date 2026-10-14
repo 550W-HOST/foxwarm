@@ -1,11 +1,10 @@
-import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef } from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect, useImperativeHandle, useLayoutEffect, useRef, type Ref } from 'react'
+import { useDndContext } from '@dnd-kit/core'
 import { CODE_BRIDGE_CHANNEL, CODE_BRIDGE_VERSION, type CodeOpenRequest } from '../vscodeWeb'
 
-interface VscodeWebFrameHostProps {
+interface VscodeWebFrameBridgeOptions {
   started: boolean
   src: string
-  slot: HTMLElement | null
 }
 
 export interface VscodeWebFrameHostHandle {
@@ -23,7 +22,7 @@ type PendingRequest = {
 
 const BRIDGE_TIMEOUT_MS = 30_000
 
-const VscodeWebFrameHost = forwardRef<VscodeWebFrameHostHandle, VscodeWebFrameHostProps>(function VscodeWebFrameHost({ started, src, slot }, ref) {
+export function useVscodeWebFrameBridge({ started, src }: VscodeWebFrameBridgeOptions, ref: Ref<VscodeWebFrameHostHandle>) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const bridgeReadyRef = useRef(false)
   const pendingRef = useRef(new Map<string, PendingRequest>())
@@ -116,77 +115,27 @@ const VscodeWebFrameHost = forwardRef<VscodeWebFrameHostHandle, VscodeWebFrameHo
     pendingRef.current.clear()
   }, [])
 
-  useLayoutEffect(() => {
-    const iframe = iframeRef.current
-    if (!iframe) return
+  return {
+    iframeRef,
+    onLoad: () => {
+      bridgeReadyRef.current = false
+      for (const pending of pendingRef.current.values()) pending.sent = false
+    },
+  }
+}
 
-    let frame = 0
-    let wasVisible = false
-    const updatePosition = () => {
-      window.cancelAnimationFrame(frame)
-      frame = window.requestAnimationFrame(() => {
-        const currentIframe = iframeRef.current
-        if (!currentIframe) return
-
-        if (!slot?.isConnected) {
-          currentIframe.style.visibility = 'hidden'
-          currentIframe.style.pointerEvents = 'none'
-          wasVisible = false
-          return
-        }
-
-        const rect = slot.getBoundingClientRect()
-        const visible = rect.width > 0 && rect.height > 0
-        currentIframe.style.left = `${Math.max(0, rect.left)}px`
-        currentIframe.style.top = `${Math.max(0, rect.top)}px`
-        currentIframe.style.width = `${Math.max(0, rect.width)}px`
-        currentIframe.style.height = `${Math.max(0, rect.height)}px`
-        currentIframe.style.visibility = visible ? 'visible' : 'hidden'
-        currentIframe.style.pointerEvents = visible ? 'auto' : 'none'
-
-        if (visible && !wasVisible) {
-          try {
-            currentIframe.contentWindow?.dispatchEvent(new Event('resize'))
-          } catch {
-            // Same-origin in production; ignore if a development proxy changes origin.
-          }
-        }
-        wasVisible = visible
-      })
-    }
-
-    const observer = slot ? new ResizeObserver(updatePosition) : null
-    if (slot) observer?.observe(slot)
-    window.addEventListener('resize', updatePosition)
-    document.addEventListener('scroll', updatePosition, true)
-    updatePosition()
-
-    return () => {
-      window.cancelAnimationFrame(frame)
-      observer?.disconnect()
-      window.removeEventListener('resize', updatePosition)
-      document.removeEventListener('scroll', updatePosition, true)
-    }
-  }, [slot])
-
-  if (!started) return null
-
-  return createPortal(
+export default function VscodeWebFrameHost({ src, bridge }: { src: string; bridge: ReturnType<typeof useVscodeWebFrameBridge> }) {
+  const { active } = useDndContext()
+  return (
     <iframe
-      ref={iframeRef}
+      ref={bridge.iframeRef}
       src={src}
       title="Code"
       allow="clipboard-read; clipboard-write"
-      className="fixed border-0 bg-fw-canvas-edge"
-      style={{ zIndex: 35, visibility: 'hidden', pointerEvents: 'none' }}
-      onLoad={() => {
-        bridgeReadyRef.current = false
-        for (const pending of pendingRef.current.values()) pending.sent = false
-      }}
+      className="relative h-full w-full border-0 bg-fw-canvas-edge"
+      style={{ zIndex: 35, pointerEvents: active ? 'none' : undefined }}
+      onLoad={bridge.onLoad}
       data-foxwarm-vscode-web-frame="true"
-    />,
-    document.body,
+    />
   )
-})
-
-export default VscodeWebFrameHost
+}

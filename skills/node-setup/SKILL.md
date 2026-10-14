@@ -173,6 +173,42 @@ Two supported paths are available. For a Node created before the remote client r
 
 It reserves `my-node` and returns the per-node auth token once. Do not confuse this with the shared pairing token. The token is not a six-digit pairing code; the server stores only its hash. Use it on a new host with `--node-id=my-node --auth-token=YOUR_PER_NODE_AUTH_TOKEN` (Windows `-NodeId my-node -AuthToken YOUR_PER_NODE_AUTH_TOKEN`). The client saves credentials on successful registration; later runs use the credentials file. For URLs with a deployment path also pass `--host=YOUR_REACHABLE_URL` or `-HostUrl`. `/node remove my-node` revokes the credential. The command is user-facing, not a model tool.
 
+For an agent-managed setup, discover `builtin:node_create_auth_token` with
+`search_tools` and call it through `call_tool`. This is separate from
+`node({ action: "create" })`: the latter runs a configured provider lifecycle,
+while this tool reserves a new approved Node ID and writes its credential to a
+new owner-only file on Main. It returns only `{ nodeId, filePath }`; it never
+returns the token. The Node ID and destination file must both be new, and this
+tool does not rotate an existing credential.
+
+Keep the file path private and pass only file paths, host names, and Node IDs to
+the existing `exec`/SSH or file-transfer tools. A concise local ToolScript
+pattern is:
+
+```python
+def main(args):
+    created = call_tool(
+        toolId="builtin:node_create_auth_token",
+        args={"nodeId": "my-node", "filePath": "/secure/new-node.token"},
+    )
+    # Run this on Main, using the existing exec/SSH facilities. The command
+    # reads the protected file as needed; do not print its contents or return
+    # the nested exec result.
+    call_tool(
+        source="node",
+        nodeId="master",
+        name="exec",
+        args={"command": "scp -- '/secure/new-node.token' 'node-host:/secure/new-node.token'"},
+    )
+    return {"nodeId": created["nodeId"], "filePath": created["filePath"], "transfer": "requested"}
+```
+
+Adjust the transfer and Node startup command for the target deployment. Do not
+put the token in a command argument, environment interpolation visible to the
+tool call, script output, or a captured `cat`; avoid shell tracing such as
+`set -x`. The protected file may remain on Main until the operator moves or
+deletes it.
+
 For the existing request/approve path, start the Node with the shared pairing token:
 
 On first run, the node connects with a **pairing token** and creates a pending pairing request.

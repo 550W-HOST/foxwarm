@@ -29,6 +29,7 @@ import { mergeModelStreamDeltaEvents } from './sessionWorkerHost';
 import { isSessionTurnIncomplete } from './sessionContinuation';
 import { clearOpenAIWsCompletedChains, getOpenAIWsCompletedChainCountForTests, setOpenAIWsTransportTestHooks } from './llmProviders/openaiWsTransport';
 import { isToolAuthorizationPolicyUnavailable, parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests, setToolAuthorizationPolicyPathForTests } from './toolAuthorization';
+import { makeAnthropicMessageStream } from './testFixtures/anthropicMessageStream';
 
 const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -672,7 +673,7 @@ test('requestLlmOnce can make a direct provider-specific request without a sessi
       status: 200,
       statusText: 'OK',
       headers: {},
-      data: {
+      data: makeAnthropicMessageStream({
         content: [
           { type: 'text', text: 'anthropic ok' },
         ],
@@ -682,7 +683,7 @@ test('requestLlmOnce can make a direct provider-specific request without a sessi
           cache_read_input_tokens: 22903,
           output_tokens: 3,
         },
-      },
+      }),
     };
   };
 
@@ -728,10 +729,10 @@ test('Anthropic usage keeps legacy input/output counts when cache fields are abs
     status: 200,
     statusText: 'OK',
     headers: {},
-    data: {
+    data: makeAnthropicMessageStream({
       content: [{ type: 'text', text: 'anthropic legacy usage' }],
       usage: { input_tokens: 7, output_tokens: 3 },
-    },
+    }),
   });
 
   try {
@@ -778,15 +779,15 @@ test('Anthropic thinking and redacted_thinking preserve empty blocks, order, and
       statusText: 'OK',
       headers: {},
       data: capturedBodies.length === 1
-        ? {
+        ? makeAnthropicMessageStream({
             content: [
               { type: 'thinking', thinking: '', signature: 'opaque-signature' },
               { type: 'redacted_thinking', data: 'opaque-redacted-data' },
               { type: 'tool_use', id: 'call_round_trip', name: 'read', input: { filePath: 'README.md' } },
               { type: 'text', text: 'The answer.' },
             ],
-          }
-        : { content: [{ type: 'text', text: 'ack' }] },
+          })
+        : makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ack' }] }),
     };
   };
 
@@ -872,7 +873,7 @@ test('first-class effort defaults high and maps every canonical level across pro
       headers: {},
       data: url.endsWith('/responses') ? makeResponsesStream()
         : url.endsWith('/chat/completions') ? makeChatCompletionStream()
-          : { content: [{ type: 'text', text: 'ok' }] },
+          : makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }] }),
     };
   };
 
@@ -924,8 +925,30 @@ test('first-class effort defaults high and maps every canonical level across pro
       }
     }
 
-    await request('custom-anthropic-compatible', 'medium');
-    assert.equal(captured.at(-1)?.body.output_config.effort, 'medium');
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('unrecognized providerType is rejected before any request is sent instead of using Anthropic', async () => {
+  const originalPost = axios.post;
+  const captured: Array<{ url: string; body: any }> = [];
+  (axios as any).post = async (url: string, body: any) => {
+    captured.push({ url, body });
+    return { status: 200, statusText: 'OK', headers: {}, data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }] }) };
+  };
+
+  try {
+    await assert.rejects(requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'unknown provider' }] }],
+      systemPrompt: '',
+      modelEntryOverride: {
+        providerKey: 'fixture', providerType: 'company-protocol', baseUrl: 'https://fixture.example/v1', apiKey: 'fixture-key',
+        model: 'model', effort: { allowed: ['high'], default: 'high' }, extraFields: {}, extraHeaders: {},
+      } as any,
+      toolDefinitions: [], notifySessionEvents: false, registerAbortController: false, maxRetries: 1,
+    }), /unsupported providerType `company-protocol`/);
+    assert.equal(captured.length, 0);
   } finally {
     (axios as any).post = originalPost;
   }
@@ -940,7 +963,7 @@ test('first-class effort overrides known extraFields paths last without mutating
       status: 200, statusText: 'OK', headers: {},
       data: url.endsWith('/responses') ? makeResponsesStream()
         : url.endsWith('/chat/completions') ? makeChatCompletionStream()
-          : { content: [{ type: 'text', text: 'ok' }] },
+          : makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }] }),
     };
   };
   const allEfforts = ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -1000,6 +1023,276 @@ test('first-class effort overrides known extraFields paths last without mutating
     assert.deepEqual(captured.at(-1)?.thinking, { type: 'disabled' });
     assert.deepEqual(captured.at(-1)?.output_config, { custom: true });
     assert.deepEqual({ responses, chat, anthropic }, before);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('Anthropic Messages requests enable ephemeral top-level caching by default and honor explicit extraFields', async () => {
+  const originalPost = axios.post;
+  const captured: any[] = [];
+  (axios as any).post = async (url: string, body: any) => {
+    captured.push({ url, body });
+    return {
+      status: 200, statusText: 'OK', headers: {},
+      data: url.endsWith('/responses') ? makeResponsesStream()
+        : url.endsWith('/chat/completions') ? makeChatCompletionStream()
+          : makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }] }),
+    };
+  };
+  const request = async (modelEntryOverride: any) => requestLlmOnce({
+    contents: [{ role: 'user', parts: [{ text: 'cache default' }] }], systemPrompt: '',
+    modelEntryOverride, toolDefinitions: [], notifySessionEvents: false,
+    registerAbortController: false, maxRetries: 1,
+  });
+  const anthropic = {
+    providerKey: 'fixture', providerType: 'anthropic', baseUrl: 'https://fixture.example', apiKey: '', model: 'claude',
+    extraFields: {}, extraHeaders: {},
+  };
+  const responses = {
+    providerKey: 'fixture', providerType: 'openai-responses', baseUrl: 'https://fixture.example/v1', apiKey: '', model: 'responses',
+    extraFields: {}, extraHeaders: {},
+  };
+  const chat = {
+    providerKey: 'fixture', providerType: 'openai-completions', baseUrl: 'https://fixture.example/v1', apiKey: '', model: 'chat',
+    extraFields: {}, extraHeaders: {},
+  };
+
+  try {
+    await request(anthropic);
+    assert.deepEqual(captured.at(-1)?.body.cache_control, { type: 'ephemeral' });
+
+    await request({ ...anthropic, extraFields: { cache_control: { type: 'ephemeral', ttl: '1h' } } });
+    assert.deepEqual(captured.at(-1)?.body.cache_control, { type: 'ephemeral', ttl: '1h' });
+
+    await request(responses);
+    assert.equal(captured.at(-1)?.body.cache_control, undefined);
+    await request(chat);
+    assert.equal(captured.at(-1)?.body.cache_control, undefined);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('Anthropic Messages streams by default and extraFields.stream:false selects the JSON parser', async () => {
+  const originalPost = axios.post;
+  const captured: Array<{ body: any; config: any }> = [];
+  let mode: 'stream' | 'json' = 'stream';
+  (axios as any).post = async (_url: string, body: any, config: any) => {
+    captured.push({ body, config });
+    return {
+      status: 200, statusText: 'OK', headers: {},
+      data: mode === 'stream'
+        ? makeAnthropicMessageStream({ content: [{ type: 'text', text: 'streamed ok' }] })
+        : { content: [{ type: 'text', text: 'json ok' }], stop_reason: 'end_turn' },
+    };
+  };
+  const request = (extraFields: Record<string, unknown>) => requestLlmOnce({
+    contents: [{ role: 'user', parts: [{ text: 'transport' }] }], systemPrompt: '',
+    modelEntryOverride: {
+      providerKey: 'fixture', providerType: 'anthropic', baseUrl: 'https://fixture.example', apiKey: '', model: 'claude',
+      extraFields, extraHeaders: {},
+    },
+    toolDefinitions: [], notifySessionEvents: false, registerAbortController: false, maxRetries: 1,
+  });
+
+  try {
+    const streamed = await request({});
+    assert.equal(captured.at(-1)?.body.stream, true);
+    assert.equal(captured.at(-1)?.config.responseType, 'stream');
+    assert.equal(streamed.text, 'streamed ok');
+
+    mode = 'json';
+    const json = await request({ stream: false });
+    assert.equal(captured.at(-1)?.body.stream, false);
+    assert.notEqual(captured.at(-1)?.config.responseType, 'stream');
+    assert.equal(json.text, 'json ok');
+
+    const before = captured.length;
+    await assert.rejects(request({ stream: 'yes' }), /extraFields\.stream must be true or false/);
+    assert.equal(captured.length, before);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('Anthropic SSE stop reasons keep usable truncated text, preserve complete tools, and fail refusals and server turns explicitly', async () => {
+  const originalPost = axios.post;
+  let calls = 0;
+  let next: any;
+  (axios as any).post = async () => {
+    calls += 1;
+    return { status: 200, statusText: 'OK', headers: {}, data: makeAnthropicMessageStream(next) };
+  };
+  const request = () => requestLlmOnce({
+    contents: [{ role: 'user', parts: [{ text: 'stop' }] }], systemPrompt: '',
+    modelEntryOverride: {
+      providerKey: 'fixture', providerType: 'anthropic', baseUrl: 'https://fixture.example', apiKey: '', model: 'claude',
+      extraFields: {}, extraHeaders: {},
+    },
+    toolDefinitions: [], notifySessionEvents: false, registerAbortController: false, maxRetries: 1,
+  });
+
+  try {
+    next = { content: [{ type: 'text', text: 'partial' }], stop_reason: 'max_tokens', usage: { input_tokens: 5, output_tokens: 1000 } };
+    const truncated = await request();
+    assert.equal(truncated.text, 'partial');
+    assert.deepEqual(truncated.truncatedStop, { stopReason: 'max_tokens' });
+
+    next = {
+      content: [{ type: 'tool_use', id: 'toolu_cut', name: 'read', input: '{"filePath":' }],
+      stop_reason: 'max_tokens',
+    };
+    const cutTool = await request();
+    const cutCall = cutTool.allParts?.find(part => part.functionCall)?.functionCall;
+    assert.equal(cutCall?.args && Object.keys(cutCall.args).length, 0);
+    assert.match(String(cutCall?.argsParseError), /Tool call was not executed/);
+
+    next = {
+      content: [{ type: 'tool_use', id: 'toolu_complete', name: 'read', input: { filePath: 'README.md' } }],
+      stop_reason: 'max_tokens',
+    };
+    const completeAtLimit = await request();
+    const completeAtLimitCall = completeAtLimit.allParts?.find(part => part.functionCall)?.functionCall;
+    assert.deepEqual(completeAtLimitCall?.args, { filePath: 'README.md' });
+    assert.equal(completeAtLimitCall?.argsParseError, undefined);
+    assert.deepEqual(completeAtLimit.truncatedStop, { stopReason: 'max_tokens' });
+
+    next = { content: [{ type: 'tool_use', id: 'toolu_ok', name: 'read', input: { filePath: 'README.md' } }], stop_reason: 'tool_use' };
+    const complete = await request();
+    const okCall = complete.allParts?.find(part => part.functionCall)?.functionCall;
+    assert.deepEqual(okCall?.args, { filePath: 'README.md' });
+    assert.equal(okCall?.argsParseError, undefined);
+    assert.equal(complete.truncatedStop, undefined);
+
+    const beforeRefusal = calls;
+    next = {
+      content: [], stop_reason: 'refusal',
+      stop_details: { type: 'refusal', category: 'cyber', explanation: 'Declined by policy.' },
+    };
+    await assert.rejects(request(), /declined this request \(cyber\)\. Declined by policy\./);
+    assert.equal(calls, beforeRefusal + 1, 'refusals are not retried or switched automatically');
+
+    next = { content: [{ type: 'text', text: 'paused' }], stop_reason: 'pause_turn' };
+    await assert.rejects(request(), /paused a server-tool turn/);
+
+    next = { content: [{ type: 'server_tool_use', id: 'srvtoolu_1', name: 'web_search', input: { query: 'x' } }], stop_reason: 'end_turn' };
+    await assert.rejects(request(), /server tool block "server_tool_use" is not supported/);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('Anthropic thinking_tokens map to reasoningTokens inside outputTokens without summing cumulative usage', async () => {
+  const originalPost = axios.post;
+  (axios as any).post = async () => ({
+    status: 200, statusText: 'OK', headers: {},
+    data: makeAnthropicMessageStream({
+      content: [{ type: 'thinking', thinking: 'short plan', signature: 'SIG-USAGE' }, { type: 'text', text: 'answer' }],
+      usage: { input_tokens: 9, cache_creation_input_tokens: 2, cache_read_input_tokens: 4, output_tokens: 42, output_tokens_details: { thinking_tokens: 30 } },
+    }),
+  });
+  try {
+    const result = await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'usage' }] }], systemPrompt: '',
+      modelEntryOverride: {
+        providerKey: 'fixture', providerType: 'anthropic', baseUrl: 'https://fixture.example', apiKey: '', model: 'claude',
+        extraFields: {}, extraHeaders: {},
+      },
+      toolDefinitions: [], notifySessionEvents: false, registerAbortController: false, maxRetries: 1,
+    });
+    assert.equal(result.usage?.inputTokens, 11);
+    assert.equal(result.usage?.cachedTokens, 4);
+    assert.equal(result.usage?.outputTokens, 42);
+    assert.equal(result.usage?.reasoningTokens, 30);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('Anthropic SSE thinking and text reach the model stream events without signature leakage', async () => {
+  const originalPost = axios.post;
+  const events: any[] = [];
+  const effects: any = {
+    placement: 'local',
+    notifySessionEvent: (_sessionId: string, event: any) => { events.push(event); },
+    appendMessage: async (): Promise<void> => undefined,
+    persistSession: async (): Promise<void> => undefined,
+    registerAbortController: (): void => undefined,
+    clearAbortController: (): void => undefined,
+    clearWaitById: async (): Promise<boolean> => false,
+  };
+  (axios as any).post = async () => ({
+    status: 200, statusText: 'OK', headers: {},
+    data: makeAnthropicMessageStream({
+      content: [
+        { type: 'thinking', thinking: 'visible plan', signature: 'SIG-LEAK-CHECK' },
+        { type: 'text', text: 'Answer' },
+      ],
+    }),
+  });
+  try {
+    const result = await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'stream ui' }] }],
+      systemPrompt: '',
+      model: 'anthropic/claude-sonnet-4-5',
+      sessionId: makeId('anthropic_stream_ui'),
+      currentSessionEffects: effects,
+      toolDefinitions: [],
+      notifySessionEvents: true,
+      registerAbortController: false,
+      maxRetries: 1,
+    });
+    assert.equal(result.text, 'Answer');
+    assert.equal(events.some(event => event.type === 'model-stream-reset'), true);
+    assert.equal(events.some(event => event.type === 'model-stream-update'), true);
+    assert.equal(JSON.stringify(events).includes('SIG-LEAK-CHECK'), false);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('a local model-stream callback failure rejects the request without retrying the provider', async () => {
+  const originalPost = axios.post;
+  let calls = 0;
+  let eventCalls = 0;
+  const effects: any = {
+    placement: 'local',
+    notifySessionEvent: () => {
+      eventCalls++;
+      if (eventCalls > 1) throw new Error('local stream callback failed');
+    },
+    appendMessage: async (): Promise<void> => undefined,
+    persistSession: async (): Promise<void> => undefined,
+    registerAbortController: (): void => undefined,
+    clearAbortController: (): void => undefined,
+    clearWaitById: async (): Promise<boolean> => false,
+  };
+  (axios as any).post = async () => {
+    calls++;
+    return {
+      status: 200, statusText: 'OK', headers: {},
+      data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'answer' }] }),
+    };
+  };
+  try {
+    let callbackError: unknown;
+    await assert.rejects(() => requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'callback failure' }] }],
+      systemPrompt: '',
+      modelEntryOverride: {
+        providerKey: 'fixture', providerType: 'anthropic', baseUrl: 'https://fixture.example', apiKey: '', model: 'claude',
+        extraFields: {}, extraHeaders: {},
+      },
+      sessionId: makeId('anthropic_stream_callback_failure'),
+      currentSessionEffects: effects,
+      toolDefinitions: [],
+      notifySessionEvents: true,
+      registerAbortController: false,
+      maxRetries: 1,
+    }), error => { callbackError = error; return true; });
+    assert.match(String((callbackError as Error).message), /local stream callback failed/);
+    assert.equal(calls, 1);
   } finally {
     (axios as any).post = originalPost;
   }
@@ -1091,7 +1384,7 @@ test('OpenAI custom function tools explicitly use non-strict mode without changi
       headers: {},
       data: url.endsWith('/responses') ? makeResponsesStream()
         : url.endsWith('/chat/completions') ? makeChatCompletionStream()
-          : { content: [{ type: 'text', text: 'ok' }] },
+          : makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }] }),
     };
   };
 
@@ -1290,7 +1583,7 @@ test('a post-response journal failure never retries a successful provider genera
   let callCount = 0;
   (axios as any).post = async () => {
     callCount += 1;
-    return { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'one generation' }] } };
+    return { status: 200, statusText: 'OK', headers: {}, data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'one generation' }] }) };
   };
   setLlmRequestJournalFaultInjectorForTests((phase, record: any) => {
     if (phase === 'after-jsonl-append' && record.kind === 'attempt-result' && record.outcome === 'success') throw new Error('injected result journal failure');
@@ -1474,7 +1767,7 @@ test('all provider protocols hydrate canonical image refs only in outbound paylo
     await t.test('Anthropic Messages', async () => {
       (axios as any).post = async (_url: string, data: any) => {
         captured.push(data);
-        return { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } } };
+        return { status: 200, statusText: 'OK', headers: {}, data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } }) };
       };
       await requestLlmOnce({ contents: canonical, systemPrompt: '', modelEntryOverride: models.anthropic as any, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
     });
@@ -1527,7 +1820,7 @@ test('all provider protocols receive the same provider-safe HEIC hydration clone
     await t.test('Anthropic Messages', async () => {
       (axios as any).post = async (_url: string, data: any) => {
         captured.push(data);
-        return { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } } };
+        return { status: 200, statusText: 'OK', headers: {}, data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } }) };
       };
       await requestLlmOnce({ contents: canonical, systemPrompt: '', modelEntryOverride: models.anthropic as any, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
     });
@@ -1685,7 +1978,7 @@ test('all provider protocols filter historical reasoning only for a proven diffe
     await t.test('Anthropic Messages', async () => {
       (axios as any).post = async (_url: string, data: any) => {
         captured.set('anthropic', data);
-        return { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'ok' }] } };
+        return { status: 200, statusText: 'OK', headers: {}, data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }] }) };
       };
       await requestLlmOnce({ contents: history, systemPrompt: '', modelEntryOverride: models.anthropic as any, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
     });
@@ -1890,6 +2183,56 @@ test('assistant post-commit hook runs once only after append and its failure can
     assert.equal(dispatched, 0);
   } finally {
     (axios as any).post = originalPost;
+  }
+});
+
+test('a truncated-response notice failure does not undo the committed assistant result', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession(makeId('anthropic_truncated_notice'));
+  const dirPath = await fs.mkdtemp('/tmp/foxwarm-anthropic-tool-dispatch-');
+  const filePath = `${dirPath}/README.md`;
+  await fs.writeFile(filePath, 'dispatch proof');
+  session.cwd = dirPath;
+  session.model = 'anthropic/claude-sonnet-4-5';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="anthropic/claude-sonnet-4-5" />\n\nsystem prompt';
+  const appended: Message[] = [];
+  (axios as any).post = async () => ({
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    data: makeAnthropicMessageStream({
+      content: [
+        { type: 'text', text: 'partial answer' },
+        { type: 'tool_use', id: 'toolu_complete', name: 'read', input: { filePath: 'README.md' } },
+      ],
+      stop_reason: 'max_tokens',
+    }),
+  });
+  try {
+    const result = await chat([{ text: 'hello' }], session, 0, {
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+      appendMessage: async message => {
+        if (message.modelVisible === false) throw new Error('synthetic notice append failure');
+        appended.push(message);
+        session.history.push(message);
+      },
+    });
+    assert.equal(result.text, 'partial answer');
+    assert.equal(appended.filter(message => message.role === 'model').length, 1);
+    const assistant = appended.find(message => message.role === 'model');
+    assert.deepEqual(assistant?.parts.find(part => part.functionCall)?.functionCall?.args, { filePath: 'README.md' });
+    assert.deepEqual(session.history.filter(message => message.role === 'model').length, 1);
+    const dispatched = await new LocalSessionTurnHost(createDefaultCurrentSessionEffects()).executeTools(
+      [assistant!.parts.find(part => part.functionCall)!.functionCall!],
+      { sessionId: session.id, session },
+      session,
+    );
+    assert.match(String((dispatched.parts[0].functionResponse?.response as any)?.output), /dispatch proof/);
+  } finally {
+    (axios as any).post = originalPost;
+    await fs.remove(dirPath);
   }
 });
 
@@ -3351,7 +3694,7 @@ test('Anthropic request serialization normalizes consecutive internal user messa
       status: 200,
       statusText: 'OK',
       headers: {},
-      data: { content: [{ type: 'text', text: 'ok' }] },
+      data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }] }),
     };
   };
 
@@ -3387,7 +3730,7 @@ test('Anthropic tool serialization keeps the persisted timing marker first in it
   let capturedBody: any = null;
   (axios as any).post = async (_url: string, data: any) => {
     capturedBody = data;
-    return { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'ok' }] } };
+    return { status: 200, statusText: 'OK', headers: {}, data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }] }) };
   };
 
   try {
@@ -3725,7 +4068,7 @@ test('normal Chat Completions and Anthropic retry preparation rebuilds committed
         bodies.push(body);
         if (bodies.length === 1) throw new Error('retry this transport failure');
         return { status: 200, statusText: 'OK', headers: {}, data: model.startsWith('anthropic/')
-          ? { content: [{ type: 'text', text: 'prepared answer' }] } : makeChatCompletionStream('prepared answer') };
+          ? makeAnthropicMessageStream({ content: [{ type: 'text', text: 'prepared answer' }] }) : makeChatCompletionStream('prepared answer') };
       };
       try {
         const result = await chat([{ text: 'initial input' }], session, 0, {
@@ -3930,10 +4273,10 @@ test('chat journals only historical concrete model provenance and strips all __m
       status: 200,
       statusText: 'OK',
       headers: {},
-      data: {
+      data: makeAnthropicMessageStream({
         content: [{ type: 'text', text: 'ok' }],
         usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0 },
-      },
+      }),
     };
   };
 
@@ -3991,7 +4334,7 @@ test('requestLlmOnce excludes presentation paths, ToolScript activity and planne
         capturedBody = body;
         const data = providerType === 'openai-completions' ? makeChatCompletionStream('ok')
           : providerType === 'openai-responses' ? makeResponsesStream('ok')
-          : { content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } };
+          : makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } });
         return { status: 200, statusText: 'OK', headers: {}, data };
       };
       const result = await requestLlmOnce({ contents, systemPrompt: '',
@@ -4091,7 +4434,7 @@ test('chat stores each model request usage and model id on its assistant message
         status: 200,
         statusText: 'OK',
         headers: {},
-        data: {
+        data: makeAnthropicMessageStream({
           content: [
             { type: 'tool_use', id: 'call_1', name: 'read', input: { filePath: 'README.md' } },
           ],
@@ -4100,7 +4443,7 @@ test('chat stores each model request usage and model id on its assistant message
             output_tokens: 5,
             cache_read_input_tokens: 2,
           },
-        },
+        }),
       };
     }
 
@@ -4108,7 +4451,7 @@ test('chat stores each model request usage and model id on its assistant message
       status: 200,
       statusText: 'OK',
       headers: {},
-      data: {
+      data: makeAnthropicMessageStream({
         content: [
           { type: 'text', text: 'done' },
         ],
@@ -4117,7 +4460,7 @@ test('chat stores each model request usage and model id on its assistant message
           output_tokens: 3,
           cache_read_input_tokens: 4,
         },
-      },
+      }),
     };
   };
 
@@ -4413,7 +4756,7 @@ test('compact-plan provider schemas export direct/file fields and returned calls
         exportedSchema = fixture.provider === 'anthropic' ? body.tools[0].input_schema
           : fixture.provider === 'openai-completions' ? body.tools[0].function.parameters : body.tools[0].parameters;
         const payload = fixture.payload();
-        let data: any = payload;
+        let data: any = fixture.provider === 'anthropic' ? makeAnthropicMessageStream(payload as any) : payload;
         if (fixture.provider !== 'anthropic') {
           const stream = new PassThrough();
           process.nextTick(() => { stream.end(`data: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n`); });
@@ -4474,4 +4817,95 @@ test('normal task request context reaches provider/retry but never canonical his
     assert.doesNotMatch(JSON.stringify(session.history), /task_fixture|task-reminder/);
     assert.deepEqual(session.history.map(message => message.role), ['user', 'model']);
   } finally { (axios as any).post = originalPost; }
+});
+
+
+test('provider payloads use resolved leaf output limits and retain later extraFields overrides', async () => {
+  const originalPost = axios.post;
+  const parsed = loadModelsConfigFromObject({
+    defaults: { maxOutput: 2048 },
+    providers: {
+      responses: { providerType: 'openai-responses', models: ['model'] },
+      chat: { providerType: 'openai-completions', maxOutput: 4096, models: ['model'] },
+      anthropic: { providerType: 'anthropic', maxOutput: 4096, models: [{ id: 'model', maxOutput: 8192 }] },
+      extra: { providerType: 'openai-responses', models: ['model'], extraFields: { max_output_tokens: 777 } },
+    },
+  });
+  const captured: any[] = [];
+  try {
+    (axios as any).post = async (url: string, body: any) => {
+      captured.push(body);
+      return { status: 200, statusText: 'OK', headers: {}, data: url.endsWith('/responses') ? makeResponsesStream()
+        : url.endsWith('/chat/completions') ? makeChatCompletionStream()
+        : makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } }) };
+    };
+    for (const model of ['responses', 'chat', 'anthropic', 'extra']) {
+      await requestLlmOnce({ contents: [{ role: 'user', parts: [{ text: 'ok' }] }], systemPrompt: '',
+        model, modelsConfigOverride: parsed, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
+    }
+    assert.deepEqual(captured.map(body => body.max_output_tokens ?? body.max_tokens), [2048, 4096, 8192, 777]);
+  } finally { (axios as any).post = originalPost; }
+});
+
+test('failover consumes each leaf image format and output limit while retaining one request snapshot', async () => {
+  const originalPost = axios.post;
+  const previousResolver = configModule.resolveModelConfig;
+  const originalImage = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#123456' } }).webp().toBuffer();
+  const ref = await putImageBlob({ buffer: originalImage, mimeType: 'image/webp', imageId: makeId('leaf_format') });
+  const canonical: Message[] = [{ role: 'user', parts: [{ text: 'image' }, { inlineDataRef: ref }] }];
+  const before = structuredClone(canonical);
+  const raw: any = {
+    default: 'route',
+    defaults: { maxOutput: 3333, providerImageOutputFormat: 'webp' },
+    providers: {
+      first: { providerType: 'openai-responses', maxOutput: 1000, models: ['model'] },
+      second: { providerType: 'openai-completions', maxOutput: 2000, providerImageOutputFormat: 'jpeg', models: ['model'] },
+      route: { providerType: 'failover', targets: ['first', 'second'], failureThreshold: 1 },
+    },
+  };
+  let active = loadModelsConfigFromObject(raw);
+  let resolutions = 0;
+  const bodies: any[] = [];
+  const request = () => requestLlmOnce({ contents: canonical, systemPrompt: '', model: 'route', maxRetries: 2,
+    toolDefinitions: [], notifySessionEvents: false, registerAbortController: false,
+    onRetry: async () => {
+      const changed = structuredClone(raw);
+      delete changed.providers.first.maxOutput;
+      changed.defaults.providerImageOutputFormat = 'jpeg';
+      active = loadModelsConfigFromObject(changed);
+    },
+  });
+  try {
+    (configModule as any).resolveModelConfig = () => {
+      resolutions += 1;
+      return { modelsConfig: active, defaultKey: 'route', currentKey: 'route', modelEntry: active.models.route,
+        contextLimit: active.models.route.contextLimit };
+    };
+    (axios as any).post = async (url: string, body: any) => {
+      bodies.push(body);
+      if (bodies.length === 1) {
+        const error: any = new Error('retryable fixture');
+        error.response = { status: 503, data: 'unavailable' }; throw error;
+      }
+      return { status: 200, statusText: 'OK', headers: {}, data: url.endsWith('/responses') ? makeResponsesStream() : makeChatCompletionStream() };
+    };
+    const result = await request();
+    assert.equal(result.modelId, 'second/model');
+    assert.equal(resolutions, 1);
+    assert.equal(bodies[0].max_output_tokens, 1000);
+    assert.equal(bodies[1].max_tokens, 2000);
+    assert.match(JSON.stringify(bodies[0]), /image\/webp/);
+    assert.match(JSON.stringify(bodies[1]), /image\/jpeg/);
+    assert.equal(JSON.stringify(bodies[1]).includes(originalImage.toString('base64')), false);
+    await request();
+    assert.equal(resolutions, 2);
+    assert.equal(bodies[2].max_output_tokens, 3333);
+    assert.match(JSON.stringify(bodies[2]), /image\/jpeg/);
+    assert.deepEqual(canonical, before);
+    assert.deepEqual(await fs.readFile(resolveImageBlobPath(ref.blobId!)), originalImage);
+  } finally {
+    (axios as any).post = originalPost;
+    (configModule as any).resolveModelConfig = previousResolver;
+    if (ref.blobId) await fs.remove(resolveImageBlobPath(ref.blobId));
+  }
 });

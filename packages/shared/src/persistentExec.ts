@@ -76,6 +76,8 @@ const BACKGROUND_PROCESS_TREE_MAX_INDENT = 20;
 export interface ExecStatus {
   exitCode: number | null;
   finishedAt: string;
+  /** Internal display hint; the event timestamp is not a measured exit time. */
+  finishedAtIsEstimated?: boolean;
   error?: string;
 }
 
@@ -164,7 +166,7 @@ export interface PersistentExecManagerOptions {
   onTrackingExpired?: (entry: RunningExecEntry) => void;
   /** Test seam for petname selection. Production uses crypto.randomInt. */
   randomInt?: (maxExclusive: number) => number;
-  /** Test seam for completion-retention boundary checks. Production uses Date.now. */
+  /** Test seam for elapsed display and completion-retention checks. Production uses Date.now. */
   now?: () => number;
   logger?: {
     info?: (payload?: any, message?: string) => void;
@@ -283,6 +285,25 @@ function summarizeCommandForNotification(text: string, maxLength: number = BACKG
 
 function formatExecTimeoutSeconds(seconds: number): string {
   return Number.isInteger(seconds) ? String(seconds) : String(seconds);
+}
+
+export function formatExecDuration(milliseconds: number): string | undefined {
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return undefined;
+  if (milliseconds < 1000) return `${Math.round(milliseconds)}ms`;
+  const tenths = Math.round(milliseconds / 100);
+  const hours = Math.floor(tenths / 36_000);
+  const minutes = Math.floor((tenths % 36_000) / 600);
+  const seconds = (tenths % 600) / 10;
+  return [hours ? `${hours}h` : '', minutes ? `${minutes}m` : '', `${seconds}s`].filter(Boolean).join(' ');
+}
+
+const MISSING_STATUS_ERROR = 'Process exited but no status file was written.';
+
+function formatCompletedExecDuration(entry: RunningExecEntry, status: ExecStatus): string {
+  // Older fallback files recorded detection time, not the process's exit time.
+  const duration = status.finishedAtIsEstimated || status.error === MISSING_STATUS_ERROR ? undefined
+    : formatExecDuration(Date.parse(status.finishedAt) - entry.startedAt);
+  return `Duration: ${duration ?? 'unknown'}`;
 }
 
 function buildBackgroundTimeoutShortNotice(timeoutSeconds: number): string {
@@ -739,6 +760,7 @@ export class PersistentExecManager {
       : { command: '/bin/bash', args: [scriptPath] };
 
     let launched: { pid: number };
+    let processStartedAt: number;
     try {
       options.onBeforeProcessLaunch?.();
       // Reserved names belong to this launch, not to the host process or a prior Agent.
@@ -747,6 +769,7 @@ export class PersistentExecManager {
         const name = platform === 'win32' ? key.toLowerCase() : key;
         if (name === 'fw_agentdir' || name === 'fw_tmp') delete hostEnv[key];
       }
+      processStartedAt = Date.now();
       launched = await processOperations.launch({
         command: launcher.command,
         args: launcher.args,
@@ -787,7 +810,7 @@ export class PersistentExecManager {
       statusPath: resolvedPaths.statusPath,
       cwdPath: resolvedPaths.cwdPath,
       scriptPath,
-      startedAt: startedAt.getTime(),
+      startedAt: processStartedAt,
       notifyOnCompletion: false,
       completionCapability: options.completionCapability,
     };
@@ -940,6 +963,7 @@ export class PersistentExecManager {
 
   private buildForegroundFooter(entry: RunningExecEntry, status: ExecStatus, output: LogExcerpt, warning?: string): string {
     const lines = ['---', `Exit code: ${status.exitCode === null ? 'unknown' : status.exitCode}`];
+    lines.push(formatCompletedExecDuration(entry, status));
     if (status.error) lines.push(`Error: ${status.error}`);
     if (warning) lines.push(warning);
     if (output.truncated) {
@@ -974,6 +998,7 @@ export class PersistentExecManager {
       return {
         exitCode: typeof raw?.exitCode === 'number' ? raw.exitCode : null,
         finishedAt: typeof raw?.finishedAt === 'string' && raw.finishedAt ? raw.finishedAt : new Date().toISOString(),
+        ...(typeof raw?.finishedAt === 'string' && raw.finishedAt ? {} : { finishedAtIsEstimated: true }),
         error: typeof raw?.error === 'string' ? raw.error : undefined,
       };
     } catch (err: any) {
@@ -987,7 +1012,7 @@ export class PersistentExecManager {
     if (existing) return existing;
     if (this.options.isEntryRunning ? await this.options.isEntryRunning(entry) : await this.processOperations.isRunning(entry.pid)) return null;
     if (Date.now() - entry.startedAt < MISSING_STATUS_GRACE_MS) return null;
-    const fallback: ExecStatus = { exitCode: null, finishedAt: new Date().toISOString(), error: 'Process exited but no status file was written.' };
+    const fallback: ExecStatus = { exitCode: null, finishedAt: new Date().toISOString(), error: MISSING_STATUS_ERROR };
     await fs.ensureDir(path.dirname(entry.statusPath));
     const tempPath = `${entry.statusPath}.tmp.${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
     await fs.writeJson(tempPath, fallback);
@@ -1060,14 +1085,15 @@ export class PersistentExecManager {
     const trailingNewlineLine = !partialOutput.capturedOutputWasEmpty && !partialOutput.capturedOutputEndedWithLf
       ? 'Partial output captured so far had no trailing newline.\n'
       : '';
-    return `Partial Output:\n${partialOutput.text}${footerSeparator}---\n${fullNotice}\n${trailingNewlineLine}${warningLine}execId: ${entry.id}\n${nodeLine}PID: ${entry.pid}\n${processTree}\nLog file: ${entry.logPath}${sizeLine}${conversionNote}`;
+    const elapsed = formatExecDuration((this.options.now?.() ?? Date.now()) - entry.startedAt);
+    return `Partial Output:\n${partialOutput.text}${footerSeparator}---\n${fullNotice}\n${trailingNewlineLine}${warningLine}execId: ${entry.id}\nElapsed: ${elapsed ?? 'unknown'}\n${nodeLine}PID: ${entry.pid}\n${processTree}\nLog file: ${entry.logPath}${sizeLine}${conversionNote}`;
   }
 
   buildCompletionMessage(entry: RunningExecEntry, status: ExecStatus): string {
     const exitText = status.exitCode === null ? 'unknown' : String(status.exitCode);
     const nodeLine = entry.nodeId && entry.nodeId !== 'master' ? `\nNode: \`${entry.nodeId}\`` : '';
     const errorLine = status.error ? `\nError: ${status.error}` : '';
-    return `Background Process Finished\nexecId: ${entry.id}\ncommand: \`${escapeInlineCode(summarizeCommandForNotification(entry.command))}\`${nodeLine}\nExit code: ${exitText}${errorLine}\nCommand output in ${entry.logPath}`;
+    return `Background Process Finished\nexecId: ${entry.id}\ncommand: \`${escapeInlineCode(summarizeCommandForNotification(entry.command))}\`${nodeLine}\nExit code: ${exitText}\n${formatCompletedExecDuration(entry, status)}${errorLine}\nCommand output in ${entry.logPath}`;
   }
 
   async readFinishedExecWorkingDirectory(entry: RunningExecEntry): Promise<string | null> {

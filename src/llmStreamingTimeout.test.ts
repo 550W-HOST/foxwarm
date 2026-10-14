@@ -5,6 +5,7 @@ import {
   createStreamingAttemptWatchdog,
   DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
   DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS,
+  REASONING_CONTENT_INACTIVITY_TIMEOUT_MS,
   SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS,
   setStreamingTimeoutTestHooks,
 } from './llmStreamingTimeout';
@@ -242,4 +243,32 @@ test('every reported image activity restarts the extended window', () => {
   assert.deepEqual(fired, []);
   watchdog.finish();
   for (const entry of timers.entries) entry.callback();
+});
+
+test('reasoning phase widens inactivity only while a thinking block is open', () => {
+  const timers = new FakeTimers();
+  setStreamingTimeoutTestHooks(timers.hooks);
+  const fired: string[] = [];
+  const watchdog = createStreamingAttemptWatchdog({ onTimeout: (_error, kind) => fired.push(kind) });
+  watchdog.markMeaningfulProgress();
+  watchdog.enterReasoningPhase();
+  const reasoningEntry = timers.entries.at(-1)!;
+  assert.equal(reasoningEntry.delayMs, REASONING_CONTENT_INACTIVITY_TIMEOUT_MS);
+  watchdog.exitReasoningPhase();
+  assert.equal(reasoningEntry.cleared, true);
+  assert.equal(timers.entries.at(-1)!.delayMs, DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS);
+  watchdog.finish();
+  assert.deepEqual(fired, []);
+});
+
+test('reasoning silence still times out at the bounded reasoning window', () => {
+  const timers = new FakeTimers();
+  setStreamingTimeoutTestHooks(timers.hooks);
+  const fired: string[] = [];
+  const watchdog = createStreamingAttemptWatchdog({ onTimeout: (_error, kind) => fired.push(kind) });
+  watchdog.enterReasoningPhase();
+  const reasoningIndex = timers.entries.length - 1;
+  assert.equal(timers.entries[reasoningIndex].delayMs, REASONING_CONTENT_INACTIVITY_TIMEOUT_MS);
+  timers.fire(reasoningIndex);
+  assert.deepEqual(fired, ['content-inactivity']);
 });

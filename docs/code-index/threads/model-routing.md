@@ -6,7 +6,7 @@ This thread owns the cross-module contract for concrete and virtual model select
 
 ## Configuration and resolved graph
 
-Concrete provider entries continue to use `providerType` plus provider connection fields and `models`. The preferred field remains `providerType`; persisted legacy `provider` is only a reader when `providerType` is absent.
+Concrete provider entries continue to use `providerType` plus provider connection fields and `models`. The preferred field remains `providerType`; persisted legacy `provider` is only a reader when `providerType` is absent. An unset or empty type uses the OpenAI protocol. Any other non-empty value must be one of the concrete or virtual types; unknown values are rejected during validation and never fall back to Anthropic.
 
 The concrete `openai-ws` type uses OpenAI Responses request/event semantics over
 a provider WebSocket. It remains a concrete leaf for virtual routing; completed
@@ -22,7 +22,9 @@ Two virtual `providerType` values are supported:
 
 A virtual entry uses `targets`, containing model lookup keys that resolve strictly to concrete leaves in the same models-config snapshot. Canonical identity is an actual expansion key, so slash-containing model IDs remain exact and a single-model bare alias and qualified key resolve to the same leaf. Version 1 rejects empty targets, unknown targets, self references, virtual-to-virtual references, and aliases that resolve to the same canonical concrete target. `session-hash` accepts one or more targets; `failover` requires at least two.
 
-Virtual entries do not accept `models`, legacy `model`, `baseUrl`, `apiKey`, `requestCompression`, `extraFields`, `extraHeaders`, `webSearch`, `imageGeneration`, `contextLimit`, `effort`, `historyReasoningField`, or `asyncCompact`. `session-hash` also rejects failover-only threshold/cooldown fields. Concrete entries reject virtual routing fields. Provider entries must be plain objects, and failover threshold/cooldown values are positive integers. Request connection and serialization fields always come from the selected concrete leaf.
+Virtual entries do not accept `models`, legacy `model`, `baseUrl`, `apiKey`, `requestCompression`, `extraFields`, `extraHeaders`, `webSearch`, `imageGeneration`, `contextLimit`, `maxOutput`, `providerImageOutputFormat`, `effort`, `historyReasoningField`, or `asyncCompact`. `session-hash` also rejects failover-only threshold/cooldown fields. Concrete entries reject virtual routing fields. Provider entries must be plain objects, and failover threshold/cooldown values are positive integers. Request connection and serialization fields always come from the selected concrete leaf.
+
+The three model settings `contextLimit`, `maxOutput`, and `providerImageOutputFormat` resolve once per concrete leaf from model → provider → root `defaults` → startup-owned legacy app `llm` → built-in defaults. The root defaults object accepts only these three fields. Effective limits and image formats participate in the existing leaf fingerprint, while virtual entries expose only their derived safe context limit. Canonical configuration ownership is [src-config](../units/src-config.md#model-resolution).
 
 Concrete provider/model entries may configure first-class `effort: { allowed, default }`. Omission allows `none`, `low`, `medium`, `high`, `xhigh`, and `max` with default `high`. Model-level fields inherit the provider values except that an explicit model `allowed` list replaces the provider list; the resolved default must be included. Virtual entries cannot configure effort and expose the ordered union of reachable concrete levels.
 
@@ -38,7 +40,7 @@ The resolved virtual model reports:
 
 1. `requestLlmOnce` resolves one models-config snapshot and one logical prompt-cache routing key for the entire outer request. Virtual selection and request-journal lineage use that unchanged key; a selected `openai-ws` leaf derives its provider-facing key only inside the final concrete plan under [D-model-routing-openai-ws-prompt-cache-key](#d-model-routing-openai-ws-prompt-cache-key).
 2. A concrete model uses its resolved entry directly. A virtual model selects one concrete target for the current attempt.
-3. Every outer attempt rebuilds the selected leaf's URL, credentials, headers, payload, request compression, provider serializer, stream collector, and response parser. Historical model reasoning is compatibility-filtered against that attempt's canonical concrete destination, then Chat Completions emits it under that leaf's resolved `historyReasoningField`.
+3. Every outer attempt rebuilds the selected leaf's URL, credentials, headers, payload (including its effective output-token limit), request compression, provider serializer, stream collector, and response parser. Image hydration optimizes an attempt-local clone using that leaf's effective input-image format and the existing format-specific derived cache; canonical original blobs remain unchanged. Historical model reasoning is compatibility-filtered against that attempt's canonical concrete destination, then Chat Completions emits it under that leaf's resolved `historyReasoningField`.
    For `openai-ws`, the rebuilt complete plan is matched against process-local completed chains only after this boundary; a match changes only the transport wire suffix, not the semantic request or journal.
 4. One optional provider-neutral requested effort is captured for the outer request. Each concrete attempt uses it when allowed by that leaf, otherwise it falls back to that leaf's configured default. An omitted request also uses each selected leaf's default.
 5. A successful result records the concrete provider-qualified model ID. The session's selected model remains the virtual key.

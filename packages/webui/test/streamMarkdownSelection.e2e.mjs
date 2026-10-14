@@ -6,7 +6,7 @@ import path from 'node:path'
 import test, { after, before } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import * as esbuild from 'esbuild'
+import * as esbuild from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
 import { webuiReactAliases } from './reactRendererAliases.mjs'
 
@@ -191,7 +191,7 @@ for (const browserSpec of browsers) {
       expectPreserved(await readSelection(reasoningSelector, '__reasoningSelection'), selectedReasoning)
 
       const orderedCard='#ordered-reasoning-fixture [data-model-thread-card="reasoning"]'
-      assert.equal(await page.$eval(`${orderedCard} .foxwarm-reasoning-tag`,el=>el.textContent),'Reasoning ×2')
+      assert.equal(await page.$eval(`${orderedCard} .foxwarm-reasoning-tag`,el=>el.getAttribute('aria-label')),'Reasoning ×2')
       assert.equal(await page.$(`${orderedCard} [data-reasoning-tokens]`),null)
       await page.$eval(`${orderedCard} .foxwarm-reasoning-header`,el=>el.click())
       await page.waitForSelector(`${orderedCard} [data-search-part-index="1"]`)

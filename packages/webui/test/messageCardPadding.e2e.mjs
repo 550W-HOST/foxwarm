@@ -2,7 +2,7 @@ import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { readdir, readFile } from 'node:fs/promises'
-import { build } from 'esbuild'
+import { build } from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
 import { fileURLToPath } from 'node:url'
 
@@ -92,11 +92,9 @@ test('assistant and user cards keep their shared vertical and role-specific hori
   }
 })
 
-test('assistant Raw and JSON views retain the card inset without nested padding', async () => {
+test('assistant Raw retains the card inset without nested padding', async () => {
   const assistant = '.foxwarm-assistant-message-card'
-  for (const title of ['Raw Text', 'JSON']) {
-    await page.click(`${assistant} button[title="${title}"]`)
-    assert.deepEqual(await readPadding(assistant), ['8px', '8px', '8px', '8px'])
-    assert.deepEqual(await readPadding(`${assistant} .foxwarm-assistant-message-raw`), ['0px', '0px', '0px', '0px'])
-  }
+  await page.click(`${assistant} button[title="Raw Text"]`)
+  assert.deepEqual(await readPadding(assistant), ['8px', '8px', '8px', '8px'])
+  assert.deepEqual(await readPadding(`${assistant} .foxwarm-assistant-message-raw`), ['0px', '0px', '0px', '0px'])
 })

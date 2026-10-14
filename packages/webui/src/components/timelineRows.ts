@@ -12,12 +12,13 @@ import {
 import { readPersistedRequestTiming, deriveRequestTimings, type DerivedRequestTiming, type DurationSample } from '../usageTiming'
 import { getContextScrollbarAnchorKey, getMessageStableKey, getMessageViewportAnchorKey } from '../chatViewportState'
 import { parsePastedTextSegments } from '../pastedText'
-import { deriveTimelineTimeMarkers, type TimelineTimeMarker } from './timelineTime'
+import { deriveTimelineTimeMarkers, selectTimelineTimeMarker, type TimelineTimeMarker } from './timelineTime'
 import { isReasoningPart } from './reasoningParts'
 import { getContextBlockMetaFromMessage } from './ContextBlockCard'
 import { isCommittedHistoryMessage } from '../chatHistoryState'
 import { buildConversationActivitySummary } from './conversationActivity'
-import { applyConversationTiming, type ConversationTimingContext } from './conversationTiming'
+import { applyConversationTiming, readConversationWorkInterval, getConversationActivityStart, getConversationLiveRequestStart, type ConversationTimingContext } from './conversationTiming'
+import { isCompactCompletionMaintenanceMessage } from '../sessionContinuation'
 import { getWebSearchAction } from '../webSearchAction'
 
 /**
@@ -71,15 +72,29 @@ export interface TimelineUsageBadgeView {
   readonly attribution: UsageAttribution
 }
 
+export interface ConversationActivityView {
+  readonly messages: Message[]
+  readonly closedAt?: Message
+  readonly sources?: Message[]
+  readonly preview?: { message: Message; partIndex: number }
+  readonly usage?: TimelineUsageBadgeView | null
+  readonly missingRequests?: number
+  readonly pendingRequests?: number
+  readonly summary: string
+  readonly dynamic?: boolean
+  readonly runtimeOnly?: boolean
+}
+
 export interface TimelineRowView {
   readonly key: string
   readonly msg: Message
   /** Conversation body slice; original indices retain Search and streaming identity. */
+  readonly conversationImageOnly?: boolean
   readonly conversationPartIndex?: number
   /** Undefined outside Conversation user rows; false retains legacy channel metadata rendering. */
   readonly literalUserText?: boolean
   /** Technical fragments only, in source order. Ordinary output is never duplicated here. */
-  readonly activity?: { readonly messages: Message[]; readonly summary: string; readonly dynamic?: boolean }
+  readonly activity?: ConversationActivityView
   readonly prevMsg: Message | null
   readonly nextMsg: Message | null
   readonly pairedToolResponse: Message | null
@@ -260,6 +275,50 @@ const hasConversationImage = (part: Message['parts'][number]): boolean => (
   !!(part.inlineData || part.inlineDataRef || part.inlineDataUnavailable) && !part.toolUseId && !part.functionResponse
 )
 
+type ConversationRequest = { messages: Message[]; tools: boolean; complete: boolean }
+
+/** Link only loaded segments within one CTX scope; never infer a work ID or change history. */
+const conversationRequests = (history: readonly Message[], visible: readonly Message[]) => {
+  const byMessage = new Map<Message, ConversationRequest>()
+  let requests = new Map<string, ConversationRequest>()
+  const loaded = new Set(history)
+  for (const message of [...history, ...visible.filter(message => !loaded.has(message))]) {
+    if (getContextBlockMetaFromMessage(message)) { requests = new Map(); continue }
+    if (message.role !== 'model' || getLlmErrorMessageDetails(message)) continue
+    const id = message.__meta?.llmRequestId
+    const request = id ? requests.get(id) || { messages: [], tools: false, complete: false } : { messages: [], tools: false, complete: false }
+    if (id) requests.set(id, request)
+    request.messages.push(message)
+    request.tools ||= message.parts.some(part => !!part.functionCall || !!getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem))
+    request.complete ||= !message.__meta?.streaming && isCommittedHistoryMessage(message) && message.__meta?.llmSegment?.complete !== false
+    byMessage.set(message, request)
+  }
+  return byMessage
+}
+
+const conversationTextKind = (message: Message, part: Message['parts'][number], request?: ConversationRequest): 'body' | 'process' => {
+  if (part.phase === 'final_answer') return 'body'
+  if (part.phase === 'commentary') return 'process'
+  if (message.__meta?.streaming || message.__meta?.llmSegment?.complete === false && !request?.complete) return 'process'
+  // Unknown old text remains readable; only the complete logical request's actual tools justify folding it.
+  return request?.tools ? 'process' : 'body'
+}
+
+/** A conservative display cut, not a task result: all loaded request segments must be accounted for. */
+const isClosedCommentaryRequest = (request: ConversationRequest | undefined): boolean => {
+  if (!request?.complete || request.tools || request.messages.some(message => message.__meta?.streaming || !isCommittedHistoryMessage(message))) return false
+  const text = request.messages.flatMap(message => message.parts.filter(hasConversationText))
+  if (!text.length || text.some(part => part.phase !== 'commentary')) return false
+  let covered = 0
+  for (const message of request.messages) {
+    const segment = message.__meta?.llmSegment
+    if (!segment) continue
+    if (segment.outputStart !== covered) return false
+    covered = segment.outputEndExclusive
+  }
+  return true
+}
+
 /** Ordinary model output breaks a tool run; tool-linked images stay with their tool response. */
 export const getGroupContentPartIndex = (msg: Message): number => msg.parts.findIndex((part) => (
   (part.text && part.text.trim()) || (part.system && String(part.system).trim()) ||
@@ -404,12 +463,13 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
       // Thinking folds into the summary whenever the group holds tool calls, including messages
       // that also carry text.
       if (isReasoningPart(part) && groupHasToolCalls) {
-        items.push({ name: 'reasoning', tone: 'neutral' })
+        items.push({ name: 'reasoning', label: 'Reasoning', tone: 'neutral' })
       }
       if (part.functionCall) {
         const status = part.functionCall.id ? toolStatusById.get(part.functionCall.id) : undefined
         items.push({
           name: part.functionCall.name,
+          toolCall: true,
           label: formatToolLabel(part.functionCall.name, part.functionCall.args),
           tone: status === 'error' ? 'error' : status === 'success' ? 'success' : 'neutral',
         })
@@ -443,7 +503,7 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
       : trailing.parts.slice(0, trailingFirstContentIdx).filter(isReasoningPart)
     if (foldedThoughts.length > 0) {
       foldedThinkingIdx = contentBreakIdx
-      foldedThoughts.forEach(() => items.push({ name: 'reasoning', tone: 'neutral' }))
+      foldedThoughts.forEach(() => items.push({ name: 'reasoning', label: 'Reasoning', tone: 'neutral' }))
     }
   }
 
@@ -466,7 +526,7 @@ const sameTokenUsage = (a: NormalizedTokenUsage | null, b: NormalizedTokenUsage 
 
 const sameTagItems = (a: ToolTagItem[], b: ToolTagItem[]): boolean => (
   a === b || (a.length === b.length && a.every((item, index) => (
-    item.name === b[index].name && item.label === b[index].label && item.tone === b[index].tone
+    item.name === b[index].name && item.label === b[index].label && item.tone === b[index].tone && item.toolCall === b[index].toolCall
   )))
 )
 
@@ -508,6 +568,7 @@ const sameRowView = (a: TimelineRowView, b: TimelineRowView): boolean => (
   a.key === b.key
   && a.msg === b.msg
   && a.conversationPartIndex === b.conversationPartIndex
+  && a.conversationImageOnly === b.conversationImageOnly
   && a.literalUserText === b.literalUserText
   && a.activity === b.activity
   && a.prevMsg === b.prevMsg
@@ -539,6 +600,7 @@ const reuseWhenEqual = <T,>(previous: T | undefined, next: T, isEqual: (a: T, b:
 const applyConversationTimeMarkers = (
   rows: readonly TimelineRowView[], messages: readonly Message[], history: readonly Message[],
   boundary: (message: Message) => 'visible' | 'context' | undefined,
+  timing?: ConversationTimingContext,
 ): TimelineRowView[] => {
   const isBody = (row: TimelineRowView | undefined) => row?.msg.role === 'model'
     && !getContextBlockMetaFromMessage(row.msg) && row.conversationPartIndex !== undefined
@@ -548,13 +610,16 @@ const applyConversationTimeMarkers = (
   rows.forEach((row, index) => {
     if (rows[index - 1]?.activity && isBody(row)) return
     const pairedActivity = row.activity && isBody(rows[index + 1])
-    if (!pairedActivity && (row.msg.role === 'tool' || isGroupableSystemMessage(row.msg))) return
+    if (!row.activity && !pairedActivity && (row.msg.role === 'tool' || isGroupableSystemMessage(row.msg))) return
     if (!sources.has(row.msg)) starts.add(row)
     sources.add(row.msg)
   })
+  const activities = new Map(rows.filter(row => row.activity && !row.activity.runtimeOnly).map(row => [row.msg.__meta, row]))
   // Resolve each logical origin within its CTX scope, then date later units from their visible cut.
   const unitStarts = new Map<Message['__meta'], number | null>()
   let scope: Message[] = []
+  let contextFloor: number | undefined
+  let hasContext = false
   const finishScope = () => {
     const requestOrigins = new Map<string, number>()
     for (const message of scope) {
@@ -562,6 +627,11 @@ const applyConversationTimeMarkers = (
       const timing = readPersistedRequestTiming(message.__meta.llmRequestTiming)
       if (timing && timing !== 'invalid') requestOrigins.set(message.__meta.llmRequestId, timing.startedAt)
     }
+    const firstBoundary = scope.findIndex(message => !!boundary(message))
+    const leading = scope.slice(0, firstBoundary < 0 ? undefined : firstBoundary + (scope[firstBoundary].role === 'model' ? 1 : 0))
+    const liveStart = getConversationLiveRequestStart(timing)
+    const scopedLiveStart = hasContext ? contextFloor !== undefined && liveStart !== undefined ? Math.max(contextFloor, liveStart) : undefined : liveStart
+    const leadingStart = getConversationActivityStart(leading, scope, scopedLiveStart)
     let previousVisible: Message | undefined
     const seenRequests = new Set<string>()
     for (const message of scope) {
@@ -575,6 +645,22 @@ const applyConversationTimeMarkers = (
         } else if (requestOrigins.has(id)) unitStarts.set(message.__meta, requestOrigins.get(id)!)
         seenRequests.add(id)
       }
+      const row = activities.get(message.__meta)
+      if (row) {
+        const maintenanceOnly = row.activity!.messages.every(isCompactCompletionMaintenanceMessage)
+        if (maintenanceOnly) unitStarts.set(message.__meta, null)
+        else if (!previousVisible && (unitStarts.get(message.__meta) !== null || message.__meta?.llmSegment?.outputStart === 0 && scopedLiveStart !== undefined)) unitStarts.set(message.__meta, leadingStart ?? null)
+        else if (!unitStarts.has(message.__meta) && (message.role === 'tool' || isGroupableSystemMessage(message))) {
+          const executions = message.parts.map(part => readConversationWorkInterval(part.functionResponse?.executionTiming)).filter((value): value is NonNullable<typeof value> => !!value)
+          const start = message.role === 'tool'
+            ? executions.length ? Math.min(...executions.map(value => value.start)) : undefined
+            : getConversationActivityStart([message], scope)
+          const cut = previousVisible?.__meta?.timestamp
+          const crossesCut = cut !== undefined && executions.some(value => value.start <= cut && value.end >= cut)
+          if (start !== undefined) unitStarts.set(message.__meta, crossesCut ? Math.max(start, cut!) : start)
+          else if (!isBody(rows[rows.indexOf(row) + 1])) unitStarts.set(message.__meta, null)
+        }
+      }
       if (boundary(message) === 'visible' || message.role === 'model' && message.parts.some(hasConversationImage)) previousVisible = message
     }
     scope = []
@@ -582,6 +668,8 @@ const applyConversationTimeMarkers = (
   for (const message of history) {
     if (boundary(message) === 'context') {
       finishScope()
+      hasContext = true
+      contextFloor = typeof message.__meta?.timestamp === 'number' && Number.isFinite(message.__meta.timestamp) && message.__meta.timestamp > 0 ? message.__meta.timestamp : undefined
       continue
     }
     if (isCommittedHistoryMessage(message) && !message.__meta?.synthetic && !message.__meta?.queuedPreview) scope.push(message)
@@ -592,6 +680,7 @@ const applyConversationTimeMarkers = (
     (message, fallback) => unitStarts.has(message.__meta) ? unitStarts.get(message.__meta)! : fallback)
   const byMessage = new Map(messages.map((message, index) => [message, markers[index]]))
   return rows.map(row => {
+    if (row.activity?.runtimeOnly) return row
     const marker = starts.has(row) ? byMessage.get(row.msg) ?? null : null
     return row.timeMarker?.timestamp === marker?.timestamp ? row : { ...row, timeMarker: marker }
   })
@@ -612,7 +701,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
   let foldedThinkingOwnerKey: string | null = null
 
   const anchoredMessages = new Set<number>()
-  const emitRow = (index: number, group: TimelineGroupView | null, isGroupStart: boolean, foldedOwnerKey: string | null, conversation?: { key: string; partIndex?: number; literalUserText?: boolean; activity?: TimelineRowView['activity'] }): void => {
+  const emitRow = (index: number, group: TimelineGroupView | null, isGroupStart: boolean, foldedOwnerKey: string | null, conversation?: { key: string; partIndex?: number; imageOnly?: boolean; literalUserText?: boolean; activity?: TimelineRowView['activity'] }): void => {
     const msg = messages[index]
     const prevMsg = index > 0 ? messages[index - 1] : null
     const nextMsg = index < messages.length - 1 ? messages[index + 1] : null
@@ -632,7 +721,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
     if (collapsedGroup && isGroupableSystemMessage(msg)) return
     const requestTiming = requestTimings[index]
     const ownUsage = getModelMessageUsage(msg)
-    const usageBadge: TimelineUsageBadgeView | null = !showUsageBadge || conversation?.activity || (conversation && conversation.key !== messageKeys[index])
+    const usageBadge: TimelineUsageBadgeView | null = !showUsageBadge || conversation
       ? null
       : collapsedGroup
         ? (isGroupStart && activeGroup !== null && activeGroup.usage
@@ -649,7 +738,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
     const next: TimelineRowView = {
       key,
       msg,
-      ...(conversation ? { conversationPartIndex: conversation.partIndex, literalUserText: conversation.literalUserText, activity: conversation.activity } : {}),
+      ...(conversation ? { conversationPartIndex: conversation.partIndex, conversationImageOnly: conversation.imageOnly, literalUserText: conversation.literalUserText, activity: conversation.activity } : {}),
       prevMsg,
       nextMsg,
       pairedToolResponse,
@@ -687,37 +776,68 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
 
   if (timelineView === 'conversation') {
     const historyTailLlmError = historyMessages ? getHistoryTailLlmError(historyMessages) : undefined
+    const requests = conversationRequests(historyMessages || messages, messages)
     const summaryForActivity = buildConversationActivitySummary(messages, historyMessages)
+    const isBody = (msg: Message, part: Message['parts'][number]) => hasConversationText(part) && conversationTextKind(msg, part, requests.get(msg)) === 'body'
     const boundary = (msg: Message, partIndex?: number): 'visible' | 'context' | undefined => {
       if (getContextBlockMetaFromMessage(msg)) return 'context'
       if (msg.role === 'user' && getConversationInputKind(msg) !== 'activity') return 'visible'
-      if (msg.role === 'model' && !getLlmErrorMessageDetails(msg) && (partIndex === undefined ? msg.parts.some(hasConversationText) : hasConversationText(msg.parts[partIndex]))) return 'visible'
+      if (msg.role === 'model' && !getLlmErrorMessageDetails(msg) && (partIndex === undefined ? msg.parts.some(part => isBody(msg, part)) : isBody(msg, msg.parts[partIndex]))) return 'visible'
       return undefined
     }
     let activityStart = -1
     let activityKey = ''
     let activityMessages: Message[] = []
+    let activitySources = new Set<Message>()
     let lastActivitySource = -1
-    const flushActivity = () => {
+    const requestOwners = new Map<ConversationRequest, string>()
+    const flushActivity = (hasReply = false, closedAt?: Message) => {
       if (activityStart < 0) return
       const summary = summaryForActivity(activityMessages)
+      const sources = [...activitySources]
       const old = previous?.rows.get(activityKey)?.activity
-      const activity = old && old.summary === summary && old.messages.length === activityMessages.length && old.messages.every((msg, i) => msg === activityMessages[i])
-        ? old : {
-          messages: activityMessages,
-          summary,
+      // Reuse unchanged fragments as well as rows; a clock tick must not remount their disclosures.
+      activityMessages = activityMessages.map((message, index) => {
+        const prior = old?.messages[index]
+        return prior && prior.__meta === message.__meta && prior.role === message.role && prior.parts.length === message.parts.length
+          && prior.parts.every((part, partIndex) => part === message.parts[partIndex]) ? prior : message
+      })
+      let preview: ConversationActivityView['preview']
+      if (!hasReply) {
+        for (const message of activityMessages) {
+          message.parts.forEach((part, partIndex) => { if (message.role === 'model' && !getLlmErrorMessageDetails(message) && hasConversationText(part)) preview = { message, partIndex } })
         }
+      }
+      for (const source of sources) {
+        const request = requests.get(source)
+        if (request && !requestOwners.has(request)) requestOwners.set(request, activityKey)
+      }
+      const activity = old && old.summary === summary && old.closedAt === closedAt && old.preview?.message === preview?.message && old.preview?.partIndex === preview?.partIndex
+        && old.messages.length === activityMessages.length && old.messages.every((msg, i) => msg === activityMessages[i])
+        && old.sources?.length === sources.length && old.sources.every((msg, i) => msg === sources[i])
+        ? old : { messages: activityMessages, sources, preview, summary, closedAt }
       emitRow(activityStart, null, false, null, { key: activityKey, activity })
       activityStart = -1
       activityMessages = []
+      activitySources = new Set()
       lastActivitySource = -1
     }
-    const addActivity = (index: number, fragment: Message, partIndex = 0) => {
-      if (messages[index].__meta?.queuedPreview) return // Pending events belong to the existing queue status.
+    const beginActivity = (index: number, partIndex = 0) => {
       if (activityStart < 0) {
         activityStart = index
         activityKey = `${messageKeys[index]}-activity-${partIndex}`
       }
+      activitySources.add(messages[index])
+    }
+    const addActivity = (index: number, fragment: Message, partIndex = 0) => {
+      if (messages[index].__meta?.queuedPreview) return
+      const previousRow = rows.at(-1)
+      if (activityStart < 0 && isCompactCompletionMaintenanceMessage(fragment) && previousRow?.activity?.closedAt) {
+        const members = [...previousRow.activity.messages, fragment]
+        rows[rows.length - 1] = { ...previousRow, activity: { ...previousRow.activity, messages: members, sources: [...previousRow.activity.sources || [], messages[index]] } }
+        return
+      }
+      beginActivity(index, partIndex)
       if (lastActivitySource === index) {
         const last = activityMessages[activityMessages.length - 1]
         activityMessages[activityMessages.length - 1] = { ...last, parts: [...last.parts, ...fragment.parts] }
@@ -726,7 +846,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
     }
     messages.forEach((msg, index) => {
       const contextBlock = msg.role === 'model' && getContextBlockMetaFromMessage(msg)
-      if (nestedDepth === 0 && msg === historyTailLlmError) {
+      if (contextBlock || nestedDepth === 0 && msg === historyTailLlmError) {
         flushActivity()
         emitRow(index, null, false, null, { key: messageKeys[index] })
         return
@@ -745,35 +865,82 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
         if (msg.__meta?.retry?.final === true) flushActivity()
         return
       }
-      if (!contextBlock && !msg.parts.some(part => hasConversationText(part) || hasConversationImage(part))) {
-        const parts = msg.parts.filter(part => part.system || part.functionCall || part.functionResponse || part.toolUseId || isReasoningPart(part) || getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem) || part.text === undefined && Object.keys(part).length > 0)
-        if (parts.length) addActivity(index, parts.length === msg.parts.length ? msg : { ...msg, parts })
-        return
-      }
+      const request = requests.get(msg)
+      // A metadata-only completion contributes usage to its prefix's process, not an empty second process.
+      if (!msg.parts.length && request && requestOwners.has(request)) return
+      if (activityStart >= 0) activitySources.add(msg)
       let visiblePartCount = 0
       msg.parts.forEach((part, partIndex) => {
-        const visible = hasConversationText(part) || hasConversationImage(part)
-        const technical = part.system || part.functionCall || part.functionResponse || part.toolUseId || isReasoningPart(part) || getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem)
-        if (technical) {
-          const fragment = visible ? { ...part, text: undefined, inlineData: undefined, inlineDataRef: undefined, inlineDataUnavailable: undefined } : part
-          addActivity(index, { ...msg, parts: [fragment], __meta: { ...msg.__meta, usage: undefined, contextBlock: undefined } }, partIndex)
+        const textBody = isBody(msg, part)
+        const image = hasConversationImage(part)
+        const processText = hasConversationText(part) && !textBody
+        const technical = part.system || part.functionCall || part.functionResponse || part.toolUseId || isReasoningPart(part) || getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem) || !hasConversationText(part) && !image && part.text === undefined && Object.keys(part).length > 0
+        if (technical || processText) {
+          const fragment = textBody || image ? { ...part, text: processText ? part.text : undefined, inlineData: undefined, inlineDataRef: undefined, inlineDataUnavailable: undefined } : part
+          addActivity(index, { ...msg, parts: [fragment] }, partIndex)
         }
-        if (visible) {
-          flushActivity()
+        if (textBody || image) {
+          // Include the final request before its reply, even when the final message has no technical parts.
+          if (textBody && (activityStart >= 0 || !requestOwners.has(request!) && showUsageBadge && request?.messages.some(message => getModelMessageUsage(message)))) beginActivity(index, partIndex)
+          if (textBody) flushActivity(true)
+          else flushActivity()
           emitRow(index, null, false, null, {
             key: visiblePartCount++ === 0 ? messageKeys[index] : `${messageKeys[index]}-part-${partIndex}`,
-            partIndex,
+            partIndex, imageOnly: image && !textBody,
           })
         }
       })
-      // Even an unusual empty CTX summary remains a real context card boundary.
-      if (contextBlock && visiblePartCount === 0) {
-        flushActivity()
-        emitRow(index, null, false, null, { key: messageKeys[index] })
-      }
+      if (!msg.parts.length && activityStart >= 0) activitySources.add(msg)
+      if (!visiblePartCount && getModelMessageUsage(msg) && !requestOwners.has(request!)) beginActivity(index)
+      if (isClosedCommentaryRequest(request) && request?.messages.at(-1) === msg) flushActivity(false, msg)
     })
     flushActivity()
-    const markedRows = showTimeDividers && nestedDepth === 0 ? applyConversationTimeMarkers(rows, messages, historyMessages || messages, boundary).map(row => {
+    if (showUsageBadge) {
+      for (let index = 0; index < rows.length; index++) {
+        const row = rows[index]
+        if (!row.activity) continue
+        const owned = [...requestOwners].filter(([, key]) => key === row.key).map(([request]) => request)
+        const total = { cachedTokens: 0, inputTokens: 0, outputTokens: 0 }
+        const attribution: UsageAttribution = { models: [], timestamps: [], apiDurationsMs: [], messageSeqs: [] }
+        let callCount = 0
+        let pendingRequests = 0
+        let missingRequests = 0
+        for (const request of owned) {
+          const candidates = request.messages.filter(message => !isCompactCompletionMaintenanceMessage(message) && !message.__meta?.synthetic)
+          const sample = candidates.findLast(message => getModelMessageUsage(message))
+          if (!candidates.length && request.complete) continue
+          if (!sample) { if (request.complete) missingRequests++; else pendingRequests++; continue }
+          const usage = getModelMessageUsage(sample)!
+          total.cachedTokens += usage.cachedTokens
+          total.inputTokens += usage.inputTokens
+          total.outputTokens += usage.outputTokens
+          callCount++
+          const details = getMessageUsageAttribution(sample, deriveRequestTimings([sample])[0])
+          attribution.models.push(...details.models)
+          attribution.timestamps.push(...details.timestamps)
+          attribution.apiDurationsMs.push(...details.apiDurationsMs)
+          attribution.messageSeqs.push(...details.messageSeqs)
+        }
+        const usage = callCount ? { usage: total, callCount, attribution } : null
+        const old = previous?.rows.get(row.key)?.activity
+        const activity = old && old.messages === row.activity.messages && old.summary === row.activity.summary
+          && old.pendingRequests === pendingRequests && old.missingRequests === missingRequests && sameUsageBadge(old.usage || null, usage) ? old : { ...row.activity, usage, pendingRequests, missingRequests }
+        rows[index] = { ...row, activity }
+      }
+    }
+    const liveStart = getConversationLiveRequestStart(input.timing)
+    if (nestedDepth === 0 && historyMessages && input.timing?.now !== undefined && liveStart !== undefined && messages.length
+      && !rows.at(-1)?.activity?.messages.some(message => !isCompactCompletionMaintenanceMessage(message))) {
+      emitRow(messages.length - 1, null, false, null, { key: 'conversation-live-request', activity: { messages: [], summary: 'Activity', runtimeOnly: true } })
+      const row = rows.at(-1)!
+      const last = historyMessages.findLast(message => isCommittedHistoryMessage(message) && !isCompactCompletionMaintenanceMessage(message))
+      const lastBoundary = historyMessages.findLast(message => isCommittedHistoryMessage(message) && !!boundary(message))
+      const baseline = last?.__meta?.contextBlock ? last.__meta.contextBlock.rawStartTimestamp : last?.__meta?.timestamp
+      const boundaryTime = lastBoundary?.__meta?.timestamp
+      const start = typeof boundaryTime === 'number' && Number.isFinite(boundaryTime) && boundaryTime > 0 ? Math.max(liveStart, boundaryTime) : liveStart
+      rows[rows.length - 1] = { ...row, anchorKey: undefined, scrollbarAnchorKey: undefined, timeMarker: showTimeDividers ? selectTimelineTimeMarker(start, typeof baseline === 'number' && Number.isFinite(baseline) ? baseline : null) : null }
+    }
+    const markedRows = showTimeDividers && nestedDepth === 0 ? applyConversationTimeMarkers(rows, messages, historyMessages || messages, boundary, input.timing).map(row => {
       const cached = reuseWhenEqual(previous?.rows.get(row.key), row, sameRowView)
       rowCache.set(row.key, cached)
       return cached

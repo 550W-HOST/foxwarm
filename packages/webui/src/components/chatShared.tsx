@@ -82,9 +82,8 @@ export interface SlashCommandCompletion {
   trailingSpace: boolean
 }
 
-export type ViewMode = 'rendered' | 'raw' | 'json'
+export type ViewMode = 'rendered' | 'raw'
 
-export type ToolViewMode = 'default' | 'json'
 
 export interface FunctionCall {
   id?: string
@@ -172,6 +171,7 @@ export interface MessagePartProviderMeta {
 }
 
 export interface MessagePart {
+  phase?: 'commentary' | 'final_answer'
   text?: string
   system?: string
   thinking?: string
@@ -842,6 +842,7 @@ export interface ToolTagItem {
   name: string
   label?: string
   tone?: ToolTagTone
+  toolCall?: boolean
 }
 
 const toolTagToneClasses: Record<ToolTagTone, string> = {
@@ -851,14 +852,15 @@ const toolTagToneClasses: Record<ToolTagTone, string> = {
   system: 'border-fw-system-border bg-fw-system-surface-strong text-fw-system-accent dark:bg-fw-system-surface/20',
 }
 
-export const ToolTag = ({ name, label = name, tone = 'neutral', className = '', iconName }: { name: string; label?: string; tone?: ToolTagTone; className?: string; iconName?: string }) => {
+export const ToolTag = ({ name, label = name, tone = 'neutral', className = '', iconName, toolCall = false }: { name: string; label?: string; tone?: ToolTagTone; className?: string; iconName?: string; toolCall?: boolean }) => {
+  const iconOnly = name === 'reasoning' && !toolCall
   const resolvedIconName = iconName || name
   const Icon = getToolIcon(resolvedIconName, iconName?.startsWith('system-') ? Bell : Wrench)
 
   return (
-    <span data-tool-tag-tone={tone} className={`inline-flex h-[18px] items-center gap-1 rounded-md border px-1.5 text-[10px] font-semibold uppercase tracking-wide leading-none align-middle ${toolTagToneClasses[tone]} ${className}`.trim()}>
-      <Icon size={12} />
-      <span>{label}</span>
+    <span role={iconOnly ? 'img' : undefined} title={iconOnly ? label : undefined} aria-label={iconOnly ? label : undefined} data-tool-tag-tone={tone} data-tool-call-tag={toolCall || undefined} className={`inline-flex h-[18px] items-center gap-1 rounded-md border px-1.5 text-[10px] font-semibold ${toolCall ? '' : 'uppercase'} tracking-wide leading-none align-middle ${toolTagToneClasses[tone]} ${className}`.trim()}>
+      <Icon size={12} aria-hidden={iconOnly || undefined} />
+      {!iconOnly && <span>{label}</span>}
     </span>
   )
 }
@@ -866,7 +868,7 @@ export const ToolTag = ({ name, label = name, tone = 'neutral', className = '', 
 export const ToolTagList = ({ items }: { items: ToolTagItem[] }) => (
   <div className="flex min-w-0 flex-wrap items-center gap-1.5">
     {items.map((item, idx) => (
-      <ToolTag key={`${item.name}-${idx}`} name={item.name} label={item.label} tone={item.tone} />
+      <ToolTag key={`${item.name}-${idx}`} name={item.name} label={item.label} tone={item.tone} toolCall={item.toolCall} />
     ))}
   </div>
 )
@@ -874,16 +876,16 @@ export const ToolTagList = ({ items }: { items: ToolTagItem[] }) => (
 /** Collapses repeated tags of the same kind into `name ×N`, most frequent first. Errored calls count separately from successful ones. */
 export const summarizeToolTagCounts = (items: ToolTagItem[]): ToolTagItem[] => {
   const order: string[] = []
-  const byKey = new Map<string, { name: string; label: string; count: number; tone: ToolTagTone }>()
+  const byKey = new Map<string, { name: string; label: string; count: number; tone: ToolTagTone; toolCall?: boolean }>()
 
   items.forEach((item) => {
     const label = item.label || item.name
     const isError = item.tone === 'error'
-    const key = `${isError ? 'error' : 'ok'}:${label}`
+    const key = `${item.toolCall ? 'tool' : 'thread'}:${isError ? 'error' : 'ok'}:${label}`
     const existing = byKey.get(key)
     if (!existing) {
       order.push(key)
-      byKey.set(key, { name: item.name, label, count: 1, tone: isError ? 'error' : item.tone || 'neutral' })
+      byKey.set(key, { name: item.name, label, count: 1, toolCall: item.toolCall, tone: isError ? 'error' : item.tone || 'neutral' })
       return
     }
 
@@ -900,6 +902,7 @@ export const summarizeToolTagCounts = (items: ToolTagItem[]): ToolTagItem[] => {
       name: entry.name,
       label: `${entry.label} ×${entry.count}`,
       tone: entry.tone,
+      toolCall: entry.toolCall,
     }))
 }
 

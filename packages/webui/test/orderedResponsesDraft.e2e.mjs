@@ -5,7 +5,7 @@ import { PassThrough } from 'node:stream'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { build } from 'esbuild'
+import { build } from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
 
 const packageDir = fileURLToPath(new URL('..', import.meta.url))

@@ -2,7 +2,7 @@ import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { readdir, readFile } from 'node:fs/promises'
-import { build } from 'esbuild'
+import { build } from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
 import { fileURLToPath } from 'node:url'
 
@@ -39,7 +39,7 @@ async function buildFixtureBundle() {
       if (url.includes('/asr/status')) return new Response(JSON.stringify({ configured: false, available: false }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       return new Response('{}', { status: 404 })
     }
-    class FixtureWebSocket { static CLOSED = 3; static instances = []; constructor() { this.readyState = 0; this.sessionId = 'fixture/main'; FixtureWebSocket.instances.push(this); queueMicrotask(() => { this.readyState = 1; this.onopen?.({}) }) } close() { this.readyState = FixtureWebSocket.CLOSED } send(raw) { const payload = JSON.parse(raw); if (payload.type !== 'set-subscriptions') return; this.sessionId = payload.sessionIds[0] || this.sessionId; queueMicrotask(() => { this.emit({ type: 'subscriptions-accepted', revision: payload.revision, sessionListResolutions: {}, sessionResolutions: Object.fromEntries(payload.sessionIds.map(id => [id, id])) }); this.emit({ type: 'subscriptions-applied', revision: payload.revision }) }) } emit(payload) { const message = payload.type === 'session-event' ? { ...payload, sessionId: this.sessionId } : payload; this.onmessage?.({ data: JSON.stringify(message) }) } }
+    class FixtureWebSocket { static CLOSED = 3; static instances = []; constructor() { this.readyState = 0; this.sessionId = 'fixture/main'; FixtureWebSocket.instances.push(this); queueMicrotask(() => { this.readyState = 1; this.onopen?.({}); this.emit({ type: 'connected' }) }) } close() { this.readyState = FixtureWebSocket.CLOSED } send(raw) { const payload = JSON.parse(raw); if (payload.type !== 'set-subscriptions') return; this.sessionId = payload.sessionIds[0] || this.sessionId; queueMicrotask(() => { this.emit({ type: 'subscriptions-accepted', revision: payload.revision, sessionListResolutions: {}, sessionResolutions: Object.fromEntries(payload.sessionIds.map(id => [id, id])) }); this.emit({ type: 'subscriptions-applied', revision: payload.revision }) }) } emit(payload) { const message = payload.type === 'session-event' ? { ...payload, sessionId: this.sessionId } : payload; this.onmessage?.({ data: JSON.stringify(message) }) } }
     window.WebSocket = FixtureWebSocket
     window.appendFixtureStream = () => FixtureWebSocket.instances.at(-1)?.emit({ type: 'session-event', event: { type: 'model-stream-update', streamId: 'stream', text: 'streaming '.repeat(100) } })
     createRoot(document.getElementById('root')).render(React.createElement(Chat, { sessionId: 'fixture/main', canonicalSessionId: 'fixture/main', sessionDisplayName: 'Fixture' }))
@@ -89,12 +89,12 @@ test('desktop reserves a flush 32px context track with full-history semantic bar
     const trackRect = document.querySelector('.foxwarm-context-scrollbar').getBoundingClientRect()
     const thumb = document.querySelector('.foxwarm-context-scrollbar-viewport')
     const content = document.querySelector('.foxwarm-chat-messages-content')
-    return { shellWidth: getComputedStyle(shell).width, trackWidth: `${trackRect.width}px`, shellBackground: getComputedStyle(shell).backgroundColor, contentRightPadding: getComputedStyle(content).paddingRight, trackToContainerRight: containerRect.right - trackRect.right, scrollbarWidth: getComputedStyle(container).scrollbarWidth, segments: segments.length, tones: segments.map(x => x.className), usedHeight: Number.parseFloat(used.style.height), usedOverflow: used.scrollHeight - used.clientHeight, leftMargin: trackRect.left - shellRect.left, bottomMargin: shellRect.bottom - trackRect.bottom, rightInset: shellRect.right - trackRect.right, thumbBackground: getComputedStyle(thumb).backgroundColor }
+    return { shellWidth: getComputedStyle(shell).width, trackWidth: `${trackRect.width}px`, shellBackground: getComputedStyle(shell).backgroundColor, contentToTrackGap: trackRect.left - content.getBoundingClientRect().right, trackToContainerRight: containerRect.right - trackRect.right, scrollbarWidth: getComputedStyle(container).scrollbarWidth, segments: segments.length, tones: segments.map(x => x.className), usedHeight: Number.parseFloat(used.style.height), usedOverflow: used.scrollHeight - used.clientHeight, leftMargin: trackRect.left - shellRect.left, bottomMargin: shellRect.bottom - trackRect.bottom, rightInset: shellRect.right - trackRect.right, thumbBackground: getComputedStyle(thumb).backgroundColor }
   })
   assert.equal(state.shellWidth, '32px')
   assert.equal(state.trackWidth, '32px')
   assert.equal(state.scrollbarWidth, 'none')
-  assert.equal(state.contentRightPadding, '32px')
+  assert.ok(state.contentToTrackGap >= 15.5, 'the column keeps its outer gutter before the minimap')
   assert.ok(Math.abs(state.trackToContainerRight) <= 0.1, 'track reaches the scroll container outer right edge')
   assert.ok(state.segments > 800, 'full history should be represented before all rows mount')
   assert.ok(state.tones.some(tone => tone.includes('tool-success')))
@@ -427,7 +427,7 @@ test('per-pane composer clearance and gutter controls stay above the composer', 
       tooltipTopmost: !!topElement?.closest('.foxwarm-context-scrollbar-tooltip'),
     }
   })
-  assert.ok(constrained.rightGap >= 63.5, 'constrained pane preserves 64px right composer clearance')
+  assert.ok(Math.abs(constrained.rightGap - 48) < 0.1, 'constrained pane reserves the shared outer gutter and minimap width')
   assert.ok(Math.abs(constrained.iconCenter - constrained.trackCenter) < 0.1, 'info icon is centered in the visible track')
   assert.ok(Math.abs(constrained.sideGap - 7.5) < 0.1 && Math.abs(constrained.bottomGap - 7.5) < 0.1, 'icon has equal 7.5px track-relative side and bottom gaps')
   assert.ok(constrained.shellZ > constrained.composerZ, 'context shell and tooltip layer above the z-20 composer')
@@ -440,7 +440,7 @@ test('per-pane composer clearance and gutter controls stay above the composer', 
     const composer = document.querySelector('.foxwarm-chat-composer-inner').getBoundingClientRect()
     return { leftGap: composer.left - root.left, rightGap: root.right - composer.right }
   })
-  assert.ok(Math.abs(wide.leftGap - wide.rightGap) < 0.1, 'wide pane retains natural equal centering')
+  assert.ok(Math.abs(wide.rightGap - wide.leftGap - 32) < 0.1, 'wide pane centers the column after reserving the minimap')
 })
 
 test('mobile leaves the native chat layout and hides the custom gutter', async () => {

@@ -34,6 +34,22 @@ See the [installation guide](https://foxwarm.550w.host/docs/installing/) for pre
 
 Keep access tokens private. Back up the whole data directory; see [data, upgrades, and backups](https://foxwarm.550w.host/docs/data-upgrades-backups/).
 
+## Model defaults
+
+In `state/models.yaml`, `default` selects a model, while `defaults` sets shared model parameters:
+
+```yaml
+default: openai/gpt-5.6-sol
+defaults:
+  contextLimit: 200000
+  maxOutput: 32768
+  providerImageOutputFormat: webp
+```
+
+`defaults` supports only these three fields. Each value resolves in order: individual model → concrete provider → `models.yaml.defaults` → legacy `config.yaml.llm` value → built-in default shown above. Context and output limits must be positive integers; configure the context limit to match your endpoint. Input-image optimization accepts `webp` or `jpeg` (with PNG for transparent images), without changing original images or generated-image settings. Provider-specific `extraFields` may still override requested output tokens. Compaction policy remains in `config.yaml.llm`.
+
+Save Models in Setup to apply changes to subsequent requests; an in-flight request retains its resolved configuration.
+
 ## Agents, Sessions, and Nodes
 
 An **Agent** holds a workspace, long-term memory, and instructions. A **Session** is a conversation bound to an Agent; one Agent can have several Sessions and create child Sessions for parallel work. **Skills** provide reusable instructions, and **tools** perform actions such as reading files or running commands.

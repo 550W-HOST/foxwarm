@@ -50,10 +50,10 @@ before(async () => {
   const assets = new URL('../dist/assets/', import.meta.url)
   const cssName = (await readdir(assets)).find(name => /^index-.*\.css$/.test(name))
   assert.ok(cssName, 'Build the WebUI before running its browser fixtures.')
-  const css = await readFile(new URL(cssName, assets), 'utf8')
+  const css = (await Promise.all([cssName, ...(await readdir(assets)).filter(name => /^TasksView-.*\.css$/.test(name))].map(name => readFile(new URL(name, assets), 'utf8')))).join('\n')
   const bundle = await build({
     stdin: { contents: `import React from 'react'; import { createRoot } from 'react-dom/client'; import TasksView from './src/components/TasksView'; import { initializeThemeRuntime } from './src/theme'; initializeThemeRuntime(); createRoot(document.getElementById('root')).render(React.createElement(TasksView));`, resolveDir: new URL('..', import.meta.url).pathname, sourcefile: 'tasks-fixture.tsx' },
-    bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false,
+    bundle: true, outfile: '/tmp/tasks-fixture.js', format: 'iife', platform: 'browser', target: 'chrome120', write: false,
     define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent',
   })
   server = createServer(async (request, response) => {
@@ -110,7 +110,7 @@ before(async () => {
       return
     }
     response.writeHead(200, { 'Content-Type': 'text/html' })
-    response.end(`<html><head><style>${css} html, body, #root { height: 100%; margin: 0; }</style></head><body><div id="root"></div><script>${bundle.outputFiles[0].text}</script></body></html>`)
+    response.end(`<html><head><style>${css} html, body, #root { height: 100%; margin: 0; }</style></head><body><div id="root"></div><script>${bundle.outputFiles.find(file => file.path.endsWith('.js')).text}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}/prefix/ui/`
@@ -128,7 +128,7 @@ after(async () => {
 })
 
 async function click(label) {
-  await page.evaluate(label => Array.from(document.querySelectorAll('button')).find(button => button.textContent === label).click(), label)
+  await page.evaluate(label => Array.from(document.querySelectorAll('button')).find(button => (button.getAttribute('aria-label') || button.textContent) === label).click(), label)
 }
 async function waitLoaded() {
   await page.waitForSelector('[data-tasks-view][aria-busy="false"]')
@@ -137,11 +137,13 @@ async function waitLoaded() {
 test('Tasks reads bounded status windows, switches Table/Board, and shows bounded details', async () => {
   await page.goto(fixtureUrl)
   await page.waitForSelector('[data-task-row]')
-  assert.deepEqual(await page.$$eval('thead th', rows => rows.map(row => row.textContent)), ['Title', 'Status', 'Owner', 'Created by', 'Updated'])
+  assert.equal(await page.$eval('.tasks-table-shell', element => element.getBoundingClientRect().width), 1100)
+  if (process.env.FOXWARM_CONTENT_WIDTH_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.FOXWARM_CONTENT_WIDTH_SCREENSHOT_DIR}/tasks-table.png` })
+  assert.deepEqual(await page.$$eval('thead th', rows => rows.map(row => row.textContent)), ['Task', 'Status', 'Owner', 'Updated'])
   assert.match(await page.$eval('[data-task-new]', button => button.className), /bg-fw-accent/)
   assert.equal(await page.$$eval('[data-task-row]', rows => rows.length), 2)
-  assert.match(await page.$eval('[data-task-row="task-open"]', row => row.textContent), /Unassigned.*creator\/main/)
-  assert.equal(await page.$eval('[data-task-row="task-active"] [data-session-reference]', node => node.textContent), 'worker/main')
+  assert.match(await page.$eval('[data-task-row="task-open"]', row => row.textContent), /Unassigned/)
+  await page.waitForFunction(() => document.querySelector('[data-task-row="task-active"] [data-session-reference]')?.textContent === 'Worker')
   assert.equal(await page.$eval('[data-task-row="task-active"] [data-session-reference]', node => node.getAttribute('title')), 'worker/main')
   assert.deepEqual(await page.$eval('[data-task-row="task-active"] [data-session-copy]', button => ({ label: button.getAttribute('aria-label'), title: button.getAttribute('title'), text: button.textContent })), { label: 'Copy Session ID worker/main', title: 'Copy Session ID worker/main', text: '' })
   await page.evaluate(() => {
@@ -153,34 +155,44 @@ test('Tasks reads bounded status windows, switches Table/Board, and shows bounde
   assert.equal(await page.evaluate(() => window.__taskCopiedSessionId), 'worker/main')
   assert.equal(await page.$('[data-task-details]'), null, 'Copying a Session ID does not open task details')
   await page.evaluate(() => { navigator.clipboard.writeText = async () => { throw new Error('clipboard unavailable') } })
-  await page.click('[data-task-row="task-open"] [data-session-copy="creator/main"]')
+  await page.click('[data-task-row="task-active"] [data-session-copy="worker/main"]')
   await page.waitForSelector('[data-session-copy-error]')
-  assert.deepEqual(await page.$eval('[data-task-row="task-open"] [data-session-copy="creator/main"]', button => ({ label: button.getAttribute('aria-label'), title: button.getAttribute('title'), state: button.getAttribute('data-session-copy-state') })), { label: 'Copy failed for Session ID creator/main', title: 'Copy failed for Session ID creator/main', state: 'error' })
-  assert.deepEqual(await page.$eval('[data-task-row="task-active"] td:nth-child(3)', cell => ({ whiteSpace: getComputedStyle(cell).whiteSpace, wideEnough: cell.getBoundingClientRect().width >= 256 })), { whiteSpace: 'nowrap', wideEnough: true })
-  assert.match(await page.$eval('[data-task-summary]', element => element.textContent), /2 tasks loaded.*Work.*Open 1.*Active 1/)
-  assert.match(await page.$eval('[data-task-secondary-summary]', element => element.textContent), /Additional tasks not loaded: 2/)
-  assert.match(await page.$eval('[data-task-filters]', element => element.textContent), /Agent.*Relationship/)
+  assert.deepEqual(await page.$eval('[data-task-row="task-active"] [data-session-copy="worker/main"]', button => ({ label: button.getAttribute('aria-label'), title: button.getAttribute('title'), state: button.getAttribute('data-session-copy-state') })), { label: 'Copy failed for Session ID worker/main', title: 'Copy failed for Session ID worker/main', state: 'error' })
+  assert.ok(await page.$eval('[data-task-row="task-active"] td:nth-child(3)', cell => cell.getBoundingClientRect().width <= 400), 'owner cell stays bounded')
+  assert.match(await page.$eval('[data-task-summary]', element => element.textContent), /2 tasks.*Work.*Open 1.*Active 1/)
+  assert.match(await page.$eval('[data-task-secondary-summary]', element => element.textContent), /2 additional tasks not loaded/)
+  assert.match(await page.$eval('[data-task-filters]', element => element.textContent), /Agent/)
   assert.deepEqual(await page.$$eval('[data-task-agent-filter] option', options => options.map(option => option.value)), ['', 'creator', 'worker'])
   await page.select('[data-task-agent-filter]', 'worker')
   assert.equal(await page.$$eval('[data-task-row]', rows => rows.length), 1)
+  await page.click('[aria-label="Relationship filter"]')
   await page.select('[data-task-agent-relation]', 'creator')
   assert.equal(await page.$$eval('[data-task-row]', rows => rows.length), 0)
   await page.select('[data-task-agent-relation]', 'owner')
-  assert.match(await page.$eval('[data-task-secondary-summary]', element => element.textContent), /Agent filter hides 1 loaded task.*Additional tasks not loaded: 2/)
+  assert.match(await page.$eval('[data-task-secondary-summary]', element => element.textContent), /1 hidden by filters.*2 additional tasks not loaded/)
   await page.select('[data-task-agent-filter]', '')
   assert.deepEqual(requests.filter(request => request.status).map(request => [request.status, request.limit]), statuses.map(status => [status, '50']))
   assert.ok(requests.every(request => request.method === 'GET' && request.pathname.startsWith('/prefix/ui/api/tasks')))
   await click('All')
   assert.equal(await page.$$eval('[data-task-row]', rows => rows.length), 4)
-  assert.match(await page.$eval('[data-task-summary]', element => element.textContent), /4 tasks loaded.*All.*Open 1.*Active 1.*Completed 1.*Cancelled 1/)
+  assert.match(await page.$eval('[data-task-summary]', element => element.textContent), /4 tasks.*All.*Open 1.*Active 1.*Completed 1.*Cancelled 1/)
   await click('Board')
+  assert.equal(await page.$eval('[data-task-board]', element => element.getBoundingClientRect().width), 1100)
+  if (process.env.FOXWARM_CONTENT_WIDTH_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.FOXWARM_CONTENT_WIDTH_SCREENSHOT_DIR}/tasks-board.png` })
   assert.deepEqual(await page.$$eval('[data-task-column]', columns => columns.map(column => column.dataset.taskColumn)), statuses)
   for (const status of statuses) {
     assert.equal(await page.$$eval(`[data-task-column="${status}"] [data-task-card]`, cards => cards.length), 1)
-    assert.match(await page.$eval(`[data-task-card="task-${status}"]`, card => card.textContent), new RegExp(`task-${status}`))
+    assert.match(await page.$eval(`[data-task-card="task-${status}"]`, card => card.textContent), new RegExp(`${status} task`))
   }
   await page.click('[data-task-card="task-completed"]')
   await page.waitForFunction(() => document.querySelector('[data-task-details] h4')?.textContent === 'completed task')
+  const inspectorLayout = await page.evaluate(() => ['.tasks-toolbar', '.tasks-content'].map(selector => {
+    const box = document.querySelector(selector).getBoundingClientRect()
+    return { left: box.left, right: box.right }
+  }))
+  assert.deepEqual(inspectorLayout[0], inspectorLayout[1], 'Filters stay aligned with the list beside the desktop inspector')
+  await page.setViewport({ width: 1050, height: 900 })
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Inspector and filters remain bounded just above the modal breakpoint')
   assert.match(await page.$eval('[data-task-details]', detail => detail.textContent), /Task details.*completed task.*Description.*A small task.*Parent.*task-parent.*Owner.*worker\/main.*Result.*The result is ready\..*2 more child tasks.*3 more notes/s)
   assert.ok(await page.$('[data-task-details] [data-session-copy="worker/main"]'))
   assert.deepEqual(await page.$eval('[data-task-details]', detail => ({ role: detail.getAttribute('role'), ariaModal: detail.getAttribute('aria-modal') })), { role: null, ariaModal: null })
@@ -215,7 +227,7 @@ test('loading, errors, empty views and Refresh use the same bounded reader', asy
   await click('Refresh')
   await page.waitForSelector('[data-tasks-view][aria-busy="true"]')
   assert.match(await page.$eval('[role="status"]', element => element.textContent), /Loading tasks/)
-  assert.equal(await page.$$eval('[data-tasks-view] button', buttons => buttons.find(button => button.textContent === 'Refresh').disabled), true)
+  assert.equal(await page.$$eval('[data-tasks-view] button', buttons => buttons.find(button => button.getAttribute('aria-label') === 'Refresh').disabled), true)
   await listsHeld
   mode = 'empty'
   heldLists.splice(0).forEach(reply => reply())

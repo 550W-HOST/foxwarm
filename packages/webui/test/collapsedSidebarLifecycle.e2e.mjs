@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
 import { fileURLToPath } from 'node:url'
+import { readFile, readdir } from 'node:fs/promises'
 import puppeteer from 'puppeteer-core'
 
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
@@ -139,6 +140,7 @@ test('collapsed Session-list controller follows the desktop rail mount and physi
           setTimeout(() => {
             this.readyState = 1
             this.onopen?.({})
+            this.onmessage?.({ data: JSON.stringify({ type: 'connected' }) })
           }, 0)
         }
         send(value) {
@@ -343,4 +345,76 @@ test('collapsed Session-list controller follows the desktop rail mount and physi
   } finally {
     await browser.close()
   }
+})
+
+
+test('collapsed busy indicator travels around the tile perimeter without rotating its initial', async () => {
+  const source = `
+    import React, { useState } from 'react'
+    import { createRoot } from 'react-dom/client'
+    import CollapsedSidebar from './src/components/CollapsedSidebar'
+    import { initializeThemeRuntime } from './src/theme/runtime'
+    initializeThemeRuntime()
+    function Fixture() {
+      const [state, setState] = useState('requesting-model')
+      window.setFixtureRuntime = setState
+      const sessions = [
+        { id: 'fixture/main', displayName: 'Alpha', runtimeState: { state } },
+        { id: 'fixture/tool', displayName: 'Beta', runtimeState: { state: 'running-tool' } },
+        { id: 'fixture/wait', displayName: 'Gamma', runtimeState: { state: 'waiting' } },
+      ]
+      return React.createElement('div', { style: { height: 320 } }, React.createElement(CollapsedSidebar, {
+        sessions, currentSession: 'fixture/main',
+        onSelectSession(id) { window.clickedSession = id },
+        onCreateSession() {}, onSelectSearch() {}, onSelectSetup() {}, onSelectLogs() {}, onToggleCollapsed() {},
+      }))
+    }
+    createRoot(document.getElementById('root')).render(React.createElement(Fixture))
+  `
+  const bundle = await build({ stdin: { contents: source, resolveDir: packageDir, sourcefile: 'collapsed-perimeter-fixture.tsx' }, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
+  const assets = new URL('../dist/assets/', import.meta.url)
+  const names = await readdir(assets)
+  const styles = await readFile(new URL(names.find(name => /^index-.*\.css$/.test(name)), assets), 'utf8')
+  const browser = await puppeteer.launch({ executablePath: chromiumPath, headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
+  const page = await browser.newPage()
+  try {
+    await page.setRequestInterception(true)
+    page.on('request', request => void request.respond({ status: 200, contentType: 'text/html', body: '<div id="root"></div>' }))
+    await page.goto('http://foxwarm.test/')
+    await page.addStyleTag({ content: styles })
+    await page.addScriptTag({ content: bundle.outputFiles[0].text })
+    const tile = 'button[aria-label="Alpha"]'
+    const segment = tile + ' .collapsed-runtime-perimeter-segment'
+    await page.waitForSelector(segment)
+    assert.equal(await page.$$eval('[data-runtime-perimeter]', elements => elements.length), 2)
+    assert.equal(await page.$(tile + ' .runtime-busy-spinner'), null)
+    const start = await page.$eval(segment, element => {
+      const animation = element.getAnimations()[0]
+      animation.pause(); animation.currentTime = 0
+      return { tag: element.tagName, pathLength: element.getAttribute('pathLength'), name: getComputedStyle(element).animationName, rx: getComputedStyle(element).rx }
+    })
+    assert.equal(start.tag, 'rect'); assert.equal(start.pathLength, '100')
+    assert.equal(start.name, 'collapsed-perimeter-travel'); assert.equal(start.rx, '7px')
+    const frames = await page.$eval(segment, async element => {
+      const animation = element.getAnimations()[0]
+      const frame = async time => {
+        animation.currentTime = time
+        await new Promise(resolve => requestAnimationFrame(resolve))
+        const svg = element.ownerSVGElement
+        return { offset: getComputedStyle(element).strokeDashoffset, transform: getComputedStyle(svg).transform, bounds: svg.getBoundingClientRect().toJSON(), text: svg.parentElement.textContent }
+      }
+      return [await frame(0), await frame(1000)]
+    })
+    assert.notEqual(frames[0].offset, frames[1].offset)
+    assert.equal(frames[1].transform, 'none')
+    assert.deepEqual(frames[0].bounds, frames[1].bounds)
+    assert.equal(frames[1].text, 'A')
+    await page.click(tile)
+    assert.equal(await page.evaluate(() => window.clickedSession), 'fixture/main')
+    await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }])
+    assert.equal(await page.$eval(segment, element => getComputedStyle(element).animationName), 'none')
+    await page.evaluate(() => window.setFixtureRuntime('idle'))
+    await page.waitForFunction(() => !document.querySelector('button[aria-label="Alpha"] [data-runtime-perimeter]'))
+    assert.equal(await page.$eval(tile, element => element.textContent), 'A')
+  } finally { await page.close(); await browser.close() }
 })

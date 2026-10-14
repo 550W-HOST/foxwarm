@@ -239,7 +239,7 @@ test('models schema deliberately accepts current, legacy, custom, and backend-to
     {
       default: 'custom/model-a',
       providers: {
-        custom: { providerType: 'company-protocol', baseUrl: 'https://example.invalid', models: ['model-a'] },
+        custom: { providerType: 'anthropic', baseUrl: 'https://example.invalid', models: ['model-a'] },
       },
     },
     {
@@ -266,6 +266,8 @@ test('models schema deliberately accepts current, legacy, custom, and backend-to
     { providers: { invalid: { providerType: 'openai-responses', models: [{ id: 'model', historyReasoningField: 'reasoning' }] } } },
     { providers: { invalid: { providerType: 'anthropic', model: [{ id: 'model', historyReasoningField: 'reasoning_content' }] } } },
     { providers: { invalid: { providerType: 'company-protocol', models: [{ id: 'model', historyReasoningField: 'reasoning' }] } } },
+    { providers: { invalid: { providerType: 'company-protocol', baseUrl: 'https://example.invalid', models: ['model'] } } },
+    { providers: { invalid: { provider: 'anthropic-compatible', baseUrl: 'https://example.invalid', models: ['model'] } } },
   ]
   for (const fixture of invalidFixtures) {
     assert.equal(validateModelsSchema(fixture), false)
@@ -301,13 +303,13 @@ test('Setup lets both YAML editors fill their flex-owned panel space', async () 
   assert.equal((setupSource.match(/mt-4 min-h-72 flex-1/g) || []).length, 2)
 })
 
-test('models schema suggests known provider types while accepting custom strings and documents legacy readers', () => {
+test('models schema lists only known provider types and documents legacy readers', () => {
   const providerEntry = schemas.MODELS_CONFIG_SCHEMA.properties.providers.additionalProperties
   const provider = providerEntry.oneOf.find((entry) => entry.type === 'object')
   const alias = providerEntry.oneOf.find((entry) => entry.type === 'string')
   assert.equal(alias.pattern, '\\S')
   assert.deepEqual(provider.properties.providerType.anyOf[0].enum, [...schemas.KNOWN_PROVIDER_TYPES])
-  assert.equal(provider.properties.providerType.anyOf[1].type, 'string')
+  assert.deepEqual(provider.properties.providerType.anyOf[1], { const: '' })
   assert.equal(provider.properties.provider.deprecated, true)
   assert.equal(provider.properties.model.deprecated, true)
   assert.equal(schemas.MODELS_CONFIG_SCHEMA.properties.models.deprecated, true)
@@ -576,4 +578,31 @@ test('provider model inflight requests merge and editor removal aborts late resu
   assert.equal(aborted, true)
   assert.deepEqual((await late).suggestions, [])
   support.dispose()
+})
+
+
+test('shared and editor schemas accept narrow model defaults and reject invalid settings at every scope', () => {
+  const valid = {
+    default: 'leaf/model',
+    defaults: { contextLimit: 200000, maxOutput: 32768, providerImageOutputFormat: 'webp' },
+    providers: { leaf: { models: [{ id: 'model', maxOutput: 500, providerImageOutputFormat: 'jpeg' }] } },
+  }
+  for (const validate of [validateModelsSchema, validateSharedModelsSchema]) {
+    assert.equal(validate(valid), true, JSON.stringify(validate.errors))
+    for (const mutate of [
+      raw => { raw.defaults = null },
+      raw => { raw.defaults.apiKey = 'not-supported' },
+      raw => { raw.defaults.contextLimit = 0 },
+      raw => { raw.providers.leaf.contextLimit = false },
+      raw => { raw.providers.leaf.maxOutput = 1.5 },
+      raw => { raw.providers.leaf.models[0].maxOutput = null },
+      raw => { raw.providers.leaf.models[0].contextLimit = '1000' },
+      raw => { raw.providers.leaf.providerImageOutputFormat = 'png' },
+      raw => { raw.providers.route = { providerType: 'session-hash', targets: ['leaf'], maxOutput: 500 } },
+      raw => { raw.providers.route = { providerType: 'failover', targets: ['leaf', 'other'], providerImageOutputFormat: 'jpeg' } },
+    ]) {
+      const candidate = structuredClone(valid); mutate(candidate)
+      assert.equal(validate(candidate), false, JSON.stringify(candidate))
+    }
+  }
 })

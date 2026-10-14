@@ -8,6 +8,7 @@ import sharp from 'sharp';
 import axios from 'axios';
 import { PassThrough } from 'node:stream';
 import type { Message } from './types';
+import { makeAnthropicMessageStream } from './testFixtures/anthropicMessageStream';
 
 const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-image-request-'));
 fs.ensureDirSync(path.join(dataRoot, 'state'));
@@ -64,7 +65,7 @@ test('all three physical request bodies use optimized bytes, preserve canonical 
       (axios as any).post = async (_url: string, data: any) => {
         wire = typeof data === 'string' ? JSON.parse(data) : data;
         return providerType === 'anthropic'
-          ? { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } } }
+          ? { status: 200, statusText: 'OK', headers: {}, data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } }) }
           : { status: 200, statusText: 'OK', headers: {}, data: providerType === 'openai-completions' ? chatStream() : responseStream() };
       };
       await requestLlmOnce({

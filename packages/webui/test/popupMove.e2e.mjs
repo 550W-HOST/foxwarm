@@ -25,6 +25,11 @@ const tabs = {
 
 async function serve(request, response) {
   const pathname = new URL(request.url, 'http://fixture').pathname
+  if (pathname.endsWith('/api/auth/session')) {
+    response.writeHead(200, { 'Content-Type': 'application/json' })
+    response.end(JSON.stringify({ role: 'admin' }))
+    return
+  }
   const relative = pathname.startsWith('/prefix/ui/') ? pathname.slice('/prefix/ui/'.length) : ''
   const file = relative && !relative.endsWith('/') ? new URL(relative, dist) : new URL('index.html', dist)
   try {
@@ -54,6 +59,7 @@ function installFixture(page, initialTabs = tabs) {
     window.fetch = (input, init = {}) => {
       const url = new URL(typeof input === 'string' ? input : input.url, location.href)
       window.__fetches.push({ method: init.method || 'GET', path: url.pathname })
+      if (url.pathname.endsWith('/api/auth/session')) return response({ role: 'admin' })
       if (url.pathname.endsWith('/api/setup/status')) return response({ oobe: false, models: { exists: true, rawYaml: 'providers: {}', providerCount: 1, defaultModel: 'test', hasPlaceholderSecrets: false, placeholderProviders: [] }, config: { rawYaml: 'channels: {}', channelsYaml: '', channelCount: 0 }, channels: [] })
       if (url.pathname.endsWith('/api/terminals')) return response({ terminals: initialTabs['terminal:term-1'] ? [{ id: 'term-1', nodeId: 'master', cwd: '/tmp', shell: '/bin/sh', pid: 1, createdAt: 1, cols: 80, rows: 24 }] : [] })
       if (url.pathname.includes('/api/terminals/term-1')) return response({ terminal: { id: 'term-1', nodeId: 'master', cwd: '/tmp', shell: '/bin/sh', pid: 1, createdAt: 1, cols: 80, rows: 24 } })
@@ -209,7 +215,7 @@ test('History popup uses its short window title and keeps the Search history pag
     assert.equal(await page.$eval('[data-history-search-view] h2', heading => heading.textContent), 'Search history')
     assert.equal(await page.$('[data-pane-id]'), null)
     assert.equal(await page.$('[data-workbench-tab-close], [data-workbench-tab-handle]'), null)
-    await page.type('#history-search-query', 'popup fixture')
+    await page.type('[data-history-query-input]', 'popup fixture')
     await page.click('button[type=submit]')
     await page.waitForFunction(() => document.querySelector('[data-history-result="popup-history-hit"] header')?.textContent.includes('Popup session name'))
     const url = new URL(await page.$eval('a[aria-label="Open session"]', anchor => anchor.href))

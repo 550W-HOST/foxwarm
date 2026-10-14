@@ -2,7 +2,7 @@ import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { readFile, readdir } from 'node:fs/promises'
-import { build } from 'esbuild'
+import { build } from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
 
 const chatEntry = new URL('../src/components/Chat.tsx', import.meta.url).pathname
@@ -63,7 +63,7 @@ before(async () => {
         const wrapped = url.includes('fixture%2Fwrapped')
         const compact = url.includes('fixture%2Fcompact-')
         const messages = compact ? window.fixture.compactHistory : wrapped ? wrappedHistory : history
-        return new Response(JSON.stringify({session:{id:compact?window.fixture.compactSessionId:wrapped?'fixture/wrapped':'fixture/main',busy:compact?window.fixture.compactRuntime.busy:false,runtimeState:compact?window.fixture.compactRuntime:{state:'idle'},queueLength:0,messageCount:messages.length,historyVersion:0,modelKey:'fixture/model'},messages,queuedMessages:[],queueLength:0,latestSeq:compact?messages.at(-1).__meta.seq:wrapped?503:129,historyVersion:0,prefixLength:0,historyComplete:true}),{status:200,headers:{'Content-Type':'application/json'}})
+        return new Response(JSON.stringify({session:{id:compact?window.fixture.compactSessionId:wrapped?'fixture/wrapped':'fixture/main',busy:compact?window.fixture.compactRuntime.busy:false,busyStartedAt:compact?window.fixture.compactBusyStartedAt:null,runtimeState:compact?window.fixture.compactRuntime:{state:'idle'},queueLength:0,messageCount:messages.length,historyVersion:0,modelKey:'fixture/model'},messages,queuedMessages:[],queueLength:0,latestSeq:compact?messages.at(-1).__meta.seq:wrapped?503:129,historyVersion:0,prefixLength:0,historyComplete:true}),{status:200,headers:{'Content-Type':'application/json'}})
       }
       if (url.includes('/models')) return new Response(JSON.stringify({models:[{key:'fixture/model',contextLimit:128000}]}),{status:200})
       if (url.includes('/asr/status')) return new Response(JSON.stringify({configured:false,available:false}),{status:200})
@@ -82,13 +82,18 @@ before(async () => {
       const [showUserMessageMetadata,setMetadata]=React.useState(false)
       window.fixture.setTimelineView=setTimelineView
       window.fixture.showWrappers=()=>{setSessionId('fixture/wrapped');setTimelineView('conversation')}
-      window.fixture.showCompactTiming=(messages,now,runtime)=>{
+      window.fixture.showCompactTiming=(messages,now,runtime,busyStartedAt=null)=>{
         window.fixture.compactHistory=messages
         window.fixture.now=now
         Date.now=()=>window.fixture.now
         window.fixture.compactRuntime=runtime
+        window.fixture.compactBusyStartedAt=busyStartedAt
         window.fixture.compactSessionId='fixture/compact-'+(window.fixture.compactSerial=(window.fixture.compactSerial||0)+1)
         setSessionId(window.fixture.compactSessionId);setTimelineView('conversation')
+      }
+      window.fixture.updateCompactTiming=(messages,now,runtime)=>{
+        window.fixture.compactHistory=messages;window.fixture.now=now;window.fixture.compactRuntime=runtime
+        window.fixture.socket.onmessage({data:JSON.stringify({type:'session-state',sessionId:window.fixture.compactSessionId,session:{id:window.fixture.compactSessionId,busy:runtime.busy,busyStartedAt:window.fixture.compactBusyStartedAt,runtimeState:runtime,queueLength:0,messageCount:messages.length,historyVersion:0,modelKey:'fixture/model'}})})
       }
       return React.createElement(Chat,{sessionId,timelineView,showUsageBadge:false,showUserMessageMetadata,onShowUserMessageMetadataChange:setMetadata})
     }
@@ -229,7 +234,7 @@ test('finds already-loaded older unmounted rows, read results, reasoning, render
         const range=entry?.[1].values().next().value
         const body=range?.startContainer.parentElement.closest('[data-search-surface="reasoning"]')
         const card=body?.closest('[data-model-thread-card="reasoning"]')
-        return {index:body?.dataset.searchPartIndex,tag:card?.querySelector('.foxwarm-reasoning-tag')?.textContent,tokens:card?.querySelector('[data-reasoning-tokens]')?.textContent}
+        return {index:body?.dataset.searchPartIndex,tag:card?.querySelector('.foxwarm-reasoning-tag')?.getAttribute('aria-label'),tokens:card?.querySelector('[data-reasoning-tokens]')?.textContent}
       }),{index:'1',tag:'Reasoning ×3',tokens:'31 tokens'})
     }
   }
@@ -511,4 +516,144 @@ test('Actual Chat retains real idle coordination timing through maintenance and 
   await showCompact([compactStart,compactReply,maintenance,quote],30)
   await page.waitForFunction(()=>[...document.querySelectorAll('[data-search-surface="user"]')].some(node=>node.textContent.includes('compact-completed')))
   assert.equal(await page.$$eval('[data-search-surface="user"]',nodes=>nodes.filter(node=>node.textContent.includes('compact-completed')).length),1,'authored text stays a visible body, not maintenance details')
+})
+
+
+test('Actual Chat keeps a runtime-confirmed parallel tool batch Worked while receipts are pending, then uses measured results',async()=>{
+  const base=compactEpoch
+  const user={role:'user',parts:[{text:'LIVE_TOOL_REQUEST'}],__meta:{seq:401,timestamp:base}}
+  const model={role:'model',parts:['live-a','live-b'].map(id=>({functionCall:{id,name:'exec',args:{command:'echo '+id}}})),__meta:{seq:402,timestamp:base+10000,llmRequestId:'live-request',llmRequestTiming:{startedAt:base,completedAt:base+10000,durationMs:10000}}}
+  const running={state:'running-tool',busy:true,since:base+10030,tool:{id:'live-b',name:'exec',index:1,total:2,startedAt:base+10030},queueLength:0}
+  let serial=0
+  const show=async(records,runtime=running,now=base+20030,busyStartedAt=null)=>{
+    const text='LIVE_TOOL_REQUEST_'+(++serial)
+    records=[{...user,parts:[{text}]},...records.slice(1)]
+    await page.evaluate(({records,runtime,now,busyStartedAt})=>window.fixture.showCompactTiming(records,now,runtime,busyStartedAt),{records,runtime,now,busyStartedAt})
+    await page.waitForFunction(text=>[...document.querySelectorAll('[data-search-surface="user"]')].some(node=>node.textContent.includes(text)),{},text)
+    await page.waitForFunction(()=>document.querySelectorAll('[data-timeline-activity]').length===1)
+    return records
+  }
+  let records=await show([user,model])
+  assert.match((await compactHeaders()).join(' '),/Worked for 20s.*Called 2 tools/)
+  assert.doesNotMatch((await compactHeaders()).join(' '),/Elapsed|Waited/)
+  await page.click('[aria-label="Expand activity"]')
+  const receipt={role:'tool',parts:[['live-a',10020,10120],['live-b',10030,20030]].map(([id,start,end])=>({functionResponse:{name:'exec',tool_use_id:id,response:{output:'LIVE_BATCH_RESULT_'+id},executionTiming:{startedAt:base+start,completedAt:base+end,durationMs:end-start}}})),__meta:{seq:403,timestamp:base+20030}}
+  records=[...records,receipt]
+  await page.evaluate(({records,now})=>window.fixture.updateCompactTiming(records,now,{state:'requesting-model',busy:true,since:now,queueLength:0}),{records,now:base+20040})
+  await page.waitForFunction(()=>document.querySelector('[data-activity-details]')?.textContent.includes('LIVE_BATCH_RESULT_live-b'))
+  assert.match((await compactHeaders()).join(' '),/Worked for 20s.*Called 2 tools/)
+  assert.doesNotMatch((await compactHeaders()).join(' '),/Elapsed|Waited/)
+  const final={role:'model',parts:[{text:'LIVE_TOOL_DONE'}],__meta:{seq:404,timestamp:base+21000,llmRequestId:'live-final',llmRequestTiming:{startedAt:base+20040,completedAt:base+21000,durationMs:960}}}
+  records=[...records,final]
+  await page.evaluate(({records,now})=>window.fixture.updateCompactTiming(records,now,{state:'idle',busy:false,queueLength:0}),{records,now:base+21000})
+  await page.waitForFunction(()=>document.querySelector('.foxwarm-chat-messages').textContent.includes('LIVE_TOOL_DONE'))
+  assert.match((await compactHeaders()).join(' '),/Worked for 20s.*Called 2 tools/)
+  assert.doesNotMatch((await compactHeaders()).join(' '),/Elapsed|Waited/)
+  // The real session busy start is also transported by Chat; no extra phase-gap fix is needed for this case.
+  await show([user,model],{...running,since:base+15000,tool:{...running.tool,startedAt:base+15000}},base+20030,base)
+  assert.match((await compactHeaders()).join(' '),/Worked for 20s/)
+  // A busy flag or unrelated runtime identity cannot rescue unknown older work.
+  const laterModel={...model,__meta:{...model.__meta,timestamp:base+40000,llmRequestTiming:{startedAt:base+30000,completedAt:base+40000,durationMs:10000}}}
+  const laterRuntime={...running,since:base+40030,tool:{...running.tool,startedAt:base+40030}}
+  const unknownRequest={role:'model',parts:[{thinking:'UNKNOWN_OLDER_REQUEST'}],__meta:{timestamp:base+10000,llmRequestId:'older-unknown'}}
+  const oldCall={role:'model',parts:[{functionCall:{id:'old-tool',name:'exec',args:{command:'echo old'}}}],__meta:{timestamp:base+10000,llmRequestTiming:{startedAt:base,completedAt:base+10000,durationMs:10000}}}
+  const oldReceipt={role:'tool',parts:[{functionResponse:{name:'exec',tool_use_id:'old-tool',response:{output:'Legacy receipt without execution timing'}}}],__meta:{timestamp:base+20000}}
+  const retry={role:'model',parts:[{text:'⚠️ LLM Error: Older failed request'}],__meta:{timestamp:base+10000,noticeType:'llm-retry'}}
+  for(const past of [[unknownRequest],[oldCall,oldReceipt],[retry]]) {
+    const history=[user,...past,laterModel].map((message,index)=>({...message,__meta:{...message.__meta,seq:501+index}}))
+    await show(history,laterRuntime,base+50030)
+    assert.match((await compactHeaders()).join(' '),/Elapsed/)
+  }
+  await show([user,model],{...running,tool:{...running.tool,id:'unrelated-tool'}})
+  assert.match((await compactHeaders()).join(' '),/Elapsed/)
+  // If a prior batch slice is genuinely unmeasured, do not label its larger gap as waiting.
+  await show([user,model],{...running,since:base+20000,tool:{...running.tool,startedAt:base+20000}},base+30000)
+  assert.match((await compactHeaders()).join(' '),/Elapsed/)
+})
+
+test('a boundary-free new Session times real Task work, not its creation, through live and committed output', async () => {
+  const base = 1700000000000
+  const request = (startedAt, completedAt) => ({ startedAt: base + startedAt, completedAt: base + completedAt, durationMs: completedAt - startedAt })
+  const records = [
+    { role: 'user', parts: [{ system: '<foxwarm-system kind="session-boundary" event="new-child" />' }], __meta: { seq: 1, timestamp: base - 1800000 } },
+    { role: 'user', parts: [{ system: '<foxwarm-message type="task" event="assigned">\nLEADING_TASK_PUBLIC\n</foxwarm-message>' }], __meta: { seq: 2, timestamp: base } },
+    { role: 'model', parts: [{ thinking: 'LEADING_REASONING_PUBLIC' }, { functionCall: { id: 'leading-exec', name: 'exec', args: { command: 'printf example' } } }], __meta: { seq: 3, timestamp: base + 10100, llmRequestId: 'leading-first', llmRequestTiming: request(100, 10100) } },
+    { role: 'tool', parts: [{ functionResponse: { name: 'exec', tool_use_id: 'leading-exec', response: { output: 'EXAMPLE_RESULT' }, executionTiming: request(10100, 20100) } }], __meta: { seq: 4, timestamp: base + 20100 } },
+  ]
+  const runtime = { state: 'requesting-model', since: base + 20100, busy: true, queueLength: 0 }
+  await page.evaluate((records, now, runtime, start) => window.fixture.showCompactTiming(records, now, runtime, start), records, base + 30100, runtime, base + 100)
+  await page.waitForFunction(() => document.querySelector('[data-timeline-activity]')?.textContent.includes('Worked for 30s'))
+  await page.click('[data-timeline-activity] button')
+  await page.waitForFunction(() => document.querySelector('[data-activity-details]')?.textContent.includes('LEADING_TASK_PUBLIC'))
+  await page.click('[data-timeline-activity] button')
+  await page.waitForFunction(() => document.querySelector('[data-timeline-activity]')?.textContent.includes('Worked for 30s'))
+  assert.match(await page.$eval('[data-timeline-activity]', node => node.textContent), /Received 1 message · Called 1 tool/)
+  assert.deepEqual(await page.$$eval('[data-timeline-time-separator] time', nodes => nodes.map(node => node.dateTime)), [new Date(base).toISOString()])
+  await page.evaluate(now => { window.fixture.now = now }, base + 35100)
+  await page.waitForFunction(() => document.querySelector('[data-timeline-activity]')?.textContent.includes('Worked for 35s'))
+  const finished = [...records, { role: 'model', parts: [{ text: 'LEADING_FINAL_PUBLIC' }], __meta: { seq: 5, timestamp: base + 40120, llmRequestId: 'leading-final', llmRequestTiming: request(20100, 40100) } }]
+  await page.evaluate((records, now) => window.fixture.updateCompactTiming(records, now, { state: 'idle', busy: false, queueLength: 0 }), finished, base + 90120)
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-search-surface="model"]')].some(node => node.textContent.includes('LEADING_FINAL_PUBLIC')))
+  assert.match(await page.$eval('[data-timeline-activity]', node => node.textContent), /Worked for 40s/)
+  assert.doesNotMatch(await page.$eval('[data-timeline-activity]', node => node.textContent), /Waited|Elapsed/)
+  assert.deepEqual(await page.$$eval('[data-timeline-time-separator] time', nodes => nodes.map(node => node.dateTime)), [new Date(base).toISOString()])
+})
+
+test('requesting-model counts first-response work before any provider part, without inventing queued or idle work', async () => {
+  const base = 1700000000000
+  const user = { role: 'user', parts: [{ text: 'FIRST_RESPONSE_PUBLIC' }], __meta: { seq: 1, timestamp: base, clientMessageId: 'first-response-public' } }
+  const runtime = { state: 'requesting-model', since: base + 60000, busy: true, queueLength: 0 }
+  await page.evaluate((records, now, runtime, start) => window.fixture.showCompactTiming(records, now, runtime, start), [user], base + 70000, runtime, base + 60000)
+  await page.waitForFunction(() => document.querySelector('[data-search-surface="user"]')?.textContent === 'FIRST_RESPONSE_PUBLIC')
+  await page.waitForFunction(() => document.querySelector('[data-timeline-activity]')?.textContent.includes('Worked for 10s'))
+  assert.match(await page.$eval('[data-timeline-activity]', node => node.textContent), /Waited for 1m/)
+  assert.equal(await page.$('[data-timeline-activity] button'), null)
+  assert.deepEqual(await page.$$eval('[data-timeline-time-separator] time', nodes => nodes.map(node => node.dateTime)), [base, base + 60000].map(date => new Date(date).toISOString()))
+  const anchorCount = await page.$$eval('[data-chat-message-anchor-key]', nodes => nodes.length)
+  await page.evaluate(() => { window.fixture.retainedFirstResponseUser = document.querySelector('[data-search-surface="user"]') })
+  await page.evaluate(now => { window.fixture.now = now }, base + 75000)
+  await page.waitForFunction(() => document.querySelector('[data-timeline-activity]')?.textContent.includes('Worked for 15s'))
+  assert.equal(await page.evaluate(() => window.fixture.retainedFirstResponseUser === document.querySelector('[data-search-surface="user"]')), true)
+  assert.equal(await page.$$eval('[data-chat-message-anchor-key]', nodes => nodes.length), anchorCount)
+  const thinking = { role: 'model', parts: [{ thinking: 'FIRST_RESPONSE_REASONING_PUBLIC' }], __meta: { seq: 2, timestamp: base + 75000, llmRequestId: 'first-response-public', llmSegment: { outputStart: 0, outputEnd: 1, complete: false } } }
+  await page.evaluate((records, now, runtime, start) => window.fixture.updateCompactTiming(records, now, runtime, start), [user, thinking], base + 75000, runtime, base + 60000)
+  await page.waitForFunction(() => document.querySelector('[data-timeline-activity] button'))
+  assert.match(await page.$eval('[data-timeline-activity]', node => node.textContent), /Worked for 15s/)
+  const final = { role: 'model', parts: [{ text: 'FIRST_RESPONSE_FINAL_PUBLIC' }], __meta: { seq: 3, timestamp: base + 80000, llmRequestId: 'first-response-public', llmSegment: { outputStart: 1, outputEnd: 2, complete: true }, llmRequestTiming: { startedAt: base + 60000, completedAt: base + 80000, durationMs: 20000 } } }
+  await page.evaluate((records, now) => window.fixture.updateCompactTiming(records, now, { state: 'idle', busy: false, queueLength: 0 }), [user, thinking, final], base + 100000)
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-search-surface="model"]')].some(node => node.textContent.includes('FIRST_RESPONSE_FINAL_PUBLIC')))
+  assert.equal(await page.$$eval('[data-timeline-activity]', nodes => nodes.length), 1)
+  assert.match(await page.$eval('[data-timeline-activity]', node => node.textContent), /Worked for 20s · Waited for 1m/)
+  for (const state of [
+    { state: 'idle', busy: false, queueLength: 1 },
+    { state: 'waiting', since: base + 60000, busy: false, queueLength: 1, waiting: { waitId: 'public-wait', waitingFor: 'input', waitForInput: true } },
+    { state: 'requesting-model', busy: true, queueLength: 0 },
+  ]) {
+    await page.evaluate((state, now) => window.fixture.showCompactTiming([{ role: 'user', parts: [{ text: 'NO_SPECULATIVE_WORK_PUBLIC_' + state.state + '_' + !!state.since }], __meta: { seq: 1, timestamp: 1700000000000, clientMessageId: 'no-speculative-work' } }], now, state), state, base + 90000)
+    await page.waitForFunction(text => document.querySelector('[data-search-surface="user"]')?.textContent === text, {}, 'NO_SPECULATIVE_WORK_PUBLIC_' + state.state + '_' + !!state.since)
+    assert.equal(await page.$$eval('[data-timeline-activity]', nodes => nodes.length), 0)
+  }
+})
+
+test('a leading execution origin is usable without an input, but unknown earlier work and CTX cuts stay conservative', async () => {
+  const base = 1700000000000
+  const model = { role: 'model', parts: [{ thinking: 'EXECUTION_ORIGIN_PUBLIC' }], __meta: { seq: 2, timestamp: base + 10000, llmRequestId: 'execution-origin', llmRequestTiming: { startedAt: base, completedAt: base + 10000, durationMs: 10000 } } }
+  const creation = { role: 'user', parts: [{ system: '<foxwarm-system kind="session-boundary" event="new-child" />' }], __meta: { seq: 1, timestamp: base - 1800000 } }
+  const requesting = { state: 'requesting-model', since: base + 10000, busy: true, queueLength: 0 }
+  await page.evaluate((records, now, runtime, start) => window.fixture.showCompactTiming(records, now, runtime, start), [creation, model], base + 20000, requesting, base)
+  await page.waitForFunction(date => document.querySelector('[data-timeline-time-separator] time')?.dateTime === date, {}, new Date(base).toISOString())
+  assert.match(await page.$eval('[data-timeline-activity]', node => node.textContent), /Worked for 20s/)
+  const unknown = { ...model, __meta: { seq: 2, timestamp: base + 5000, llmRequestId: 'unknown-origin' } }
+  await page.evaluate((records, now, runtime) => window.fixture.showCompactTiming(records, now, runtime), [creation, unknown], base + 20000, requesting)
+  await page.waitForFunction(() => document.querySelector('[data-timeline-activity]')?.textContent.trim() === '›Activity')
+  assert.equal(await page.$$eval('[data-timeline-time-separator]', nodes => nodes.length), 0)
+  const old = { ...model, __meta: { seq: 1, timestamp: base - 190000, llmRequestId: 'cross-context', llmRequestTiming: { startedAt: base - 400000, completedAt: base - 190000, durationMs: 210000 } } }
+  const block = { role: 'model', parts: [{ text: '[CTX-BLOCK L1 B#5501 raw#1-#1] CONTEXT_PUBLIC' }], __meta: { seq: 2, timestamp: base + 10000, contextBlock: { id: 5501, level: 1, rawStartSeq: 1, rawEndSeq: 1, sourceKind: 'message', rawStartTimestamp: base - 190000 } } }
+  const suffix = { role: 'model', parts: [{ thinking: 'AFTER_CONTEXT_UNKNOWN_PUBLIC' }], __meta: { seq: 3, timestamp: base + 20000, llmRequestId: 'cross-context', llmSegment: { outputStart: 1, outputEnd: 2, complete: false } } }
+  const final = { role: 'model', parts: [{ text: 'AFTER_CONTEXT_FINAL_PUBLIC' }], __meta: { seq: 4, timestamp: base + 40000, llmRequestId: 'after-context-final', llmRequestTiming: { startedAt: base + 30000, completedAt: base + 40000, durationMs: 10000 } } }
+  await page.evaluate((records, now) => window.fixture.showCompactTiming(records, now, { state: 'idle', busy: false, queueLength: 0 }), [old, block, suffix, final], base + 50000)
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-search-surface="model"]')].some(node => node.textContent.includes('AFTER_CONTEXT_FINAL_PUBLIC')))
+  assert.match(await page.$$eval('[data-timeline-activity]', nodes => nodes.at(-1).textContent), /Elapsed 30s/)
+  assert.doesNotMatch(await page.$$eval('[data-timeline-activity]', nodes => nodes.at(-1).textContent), /Worked|Waited/)
+  assert.deepEqual(await page.$$eval('[data-timeline-time-separator] time', nodes => nodes.map(node => node.dateTime)), [new Date(base - 400000).toISOString()])
 })

@@ -10,6 +10,7 @@ import { AccessConfigRuntime, normalizeAccessConfig, type AccessConfig } from '.
 export { normalizeAccessConfig, assertAccessTokensDoNotMatch, authenticateAccessBearer, authenticateAccessToken, hasAccessSurface } from './accessConfig';
 export type { AccessConfig, NormalizedAccessConfig, VerifiedAccessIdentity } from './accessConfig';
 import { DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS } from './llmStreamingTimeout';
+import { CONCRETE_PROVIDER_TYPES, VIRTUAL_PROVIDER_TYPES, isConcreteProviderType } from '../packages/shared/dist/configSchemas';
 
 export type ChannelProgressConfig = false | {
   intervalMs: number;
@@ -855,7 +856,7 @@ export const TRIGGER_PORT = HTTP_PORT; // For backward compatibility
 export const WEBUI_PORT = HTTP_PORT; // For backward compatibility
 
 // Context and compaction settings
-export const CONTEXT_LIMIT = APP_CONFIG.llm?.contextLimit || 122880; // 120K tokens
+export const CONTEXT_LIMIT = normalizePositiveIntegerSetting(APP_CONFIG.llm?.contextLimit, 'app config `llm.contextLimit`') ?? 200000; // Framework fallback in tokens
 export const COMPACT_KEEP_PERCENT = COMPACTION_CONFIG.compactKeepPercent;
 export const COMPACT_THRESHOLD_PERCENT = COMPACTION_CONFIG.compactThresholdPercent;
 export const COMPACT_BLOCK_LEVEL_MIN_TOKENS = APP_CONFIG.llm?.compactBlockLevelMinTokens ?? 3000;
@@ -864,8 +865,8 @@ export const COMPACT_BLOCK_CANDIDATE_FRACTION = APP_CONFIG.llm?.compactBlockCand
 export const COMPACT_BLOCK_FORCE_COMPACT_FRACTION = APP_CONFIG.llm?.compactBlockForceCompactFraction ?? 0.2;
 export const COMPACT_MESSAGE_FORCE_COMPACT_FRACTION = APP_CONFIG.llm?.compactMessageForceCompactFraction ?? 0.2;
 
-// TODO: move to models config
-export const MAX_OUTPUT = APP_CONFIG.llm?.maxOutput || 32768;
+// Startup-owned legacy fallbacks for concrete model resolution.
+export const MAX_OUTPUT = normalizePositiveIntegerSetting(APP_CONFIG.llm?.maxOutput, 'app config `llm.maxOutput`') ?? 32768;
 
 // Models configuration
 export function resolveDataModelsConfigPath(dataRoot: string = DATA_ROOT_DIR): string {
@@ -1127,8 +1128,13 @@ function mergeOpenAIImageGenerationConfig(
   return merged;
 }
 
-export type ModelConfigOverride = {
+export type ModelDefaults = {
   contextLimit?: number;
+  maxOutput?: number;
+  providerImageOutputFormat?: 'webp' | 'jpeg';
+};
+
+export type ModelConfigOverride = ModelDefaults & {
   streamContentInactivityTimeoutMs?: number;
   effort?: ModelEffortConfig;
   historyReasoningField?: HistoryReasoningField;
@@ -1141,14 +1147,13 @@ export type ModelConfigOverride = {
 
 export type ProviderModelListItem = string | ({ id: string } & ModelConfigOverride);
 
-export type ProviderConfigEntry = {
+export type ProviderConfigEntry = ModelDefaults & {
   providerType?: string;
   provider?: string; // legacy alias
   models?: ProviderModelListItem[];
   model?: string | string[] | ProviderModelListItem[]; // legacy alias
   baseUrl?: string;
   apiKey?: string;
-  contextLimit?: number;
   streamContentInactivityTimeoutMs?: number;
   effort?: ModelEffortConfig;
   historyReasoningField?: HistoryReasoningField;
@@ -1179,14 +1184,13 @@ export type VirtualModelRoutingConfig = {
   fingerprint: string;
 };
 
-export type ModelConfigEntry = {
+export type ModelConfigEntry = ModelDefaults & {
   providerKey: string;
   canonicalModelKey?: string;
   providerType?: string;
   model: string;
   baseUrl?: string;
   apiKey?: string;
-  contextLimit?: number;
   streamContentInactivityTimeoutMs?: number;
   effort?: NormalizedModelEffortConfig;
   historyReasoningField?: HistoryReasoningField;
@@ -1203,6 +1207,7 @@ export type ModelConfigEntry = {
 
 export type ModelsConfig = {
   default: string;
+  defaults?: ModelDefaults;
   models: Record<string, ModelConfigEntry>;
   displayModels: string[];
 };
@@ -1213,6 +1218,40 @@ function isPlainObject(value: unknown): value is Record<string, any> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
+}
+
+export function normalizePositiveIntegerSetting(value: unknown, label: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+  return value;
+}
+
+function normalizeModelDefaults(value: unknown, label: string, rejectUnknownFields = false): ModelDefaults {
+  if (!isPlainObject(value)) throw new Error(`${label} must be an object.`);
+  const settings: ModelDefaults = {};
+  if (rejectUnknownFields) {
+    for (const key of Object.keys(value)) {
+      if (!['contextLimit', 'maxOutput', 'providerImageOutputFormat'].includes(key)) {
+        throw new Error(`${label} has unsupported field \`${key}\`.`);
+      }
+    }
+  }
+  for (const key of ['contextLimit', 'maxOutput'] as const) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      if (value[key] === undefined) throw new Error(`${label}.${key} must be a positive integer.`);
+      settings[key] = normalizePositiveIntegerSetting(value[key], `${label}.${key}`);
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(value, 'providerImageOutputFormat')) {
+    const format = value.providerImageOutputFormat;
+    if (format !== 'webp' && format !== 'jpeg') {
+      throw new Error(`${label}.providerImageOutputFormat must be \`webp\` or \`jpeg\`.`);
+    }
+    settings.providerImageOutputFormat = format;
+  }
+  return settings;
 }
 
 function cloneConfigValue<T>(value: T): T {
@@ -1392,9 +1431,11 @@ function applyProviderDefaults(providerEntry: ProviderConfigEntry): ProviderConf
   };
 }
 
-function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderConfigEntry, modelId: string, modelOverride?: ModelConfigOverride): ModelConfigEntry {
+function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderConfigEntry, modelId: string, modelOverride?: ModelConfigOverride, defaults: ModelDefaults = {}): ModelConfigEntry {
   const resolvedProviderEntry = applyProviderDefaults(providerEntry);
   const providerType = resolvedProviderEntry.providerType;
+  const providerSettings = normalizeModelDefaults(providerEntry, `Provider \`${providerKey}\``);
+  const modelSettings = modelOverride === undefined ? {} : normalizeModelDefaults(modelOverride, `Model \`${providerKey}/${modelId}\``);
   for (const [value, scope] of [
     [resolvedProviderEntry.keepReasoningOnError, `Provider \`${providerKey}\``],
     [modelOverride?.keepReasoningOnError, `Model \`${providerKey}/${modelId}\``],
@@ -1453,7 +1494,10 @@ function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderCon
     model: modelId,
     baseUrl: resolvedProviderEntry.baseUrl,
     apiKey: resolvedProviderEntry.apiKey,
-    contextLimit: modelOverride?.contextLimit ?? resolvedProviderEntry.contextLimit,
+    contextLimit: modelSettings.contextLimit ?? providerSettings.contextLimit ?? defaults.contextLimit ?? CONTEXT_LIMIT,
+    maxOutput: modelSettings.maxOutput ?? providerSettings.maxOutput ?? defaults.maxOutput ?? MAX_OUTPUT,
+    providerImageOutputFormat: modelSettings.providerImageOutputFormat ?? providerSettings.providerImageOutputFormat
+      ?? defaults.providerImageOutputFormat ?? PROVIDER_IMAGE_OUTPUT_FORMAT,
     streamContentInactivityTimeoutMs: modelOverride?.streamContentInactivityTimeoutMs
       ?? resolvedProviderEntry.streamContentInactivityTimeoutMs ?? DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
     effort,
@@ -1475,7 +1519,8 @@ function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderCon
   };
 }
 
-export function expandModelsConfig(rawProviderEntries: Record<string, ProviderConfigValue>) {
+export function expandModelsConfig(rawProviderEntries: Record<string, ProviderConfigValue>, rawDefaults: ModelDefaults = {}) {
+  const defaults = normalizeModelDefaults(rawDefaults, 'models config `defaults`', true);
   const models: Record<string, ModelConfigEntry> = {};
   const canonicalConcreteKeyByLookupKey = new Map<string, string>();
   const displayModels: string[] = [];
@@ -1500,6 +1545,13 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
       virtualEntries.push([providerKey, providerEntry, providerType]);
       continue;
     }
+    if (!isConcreteProviderType(providerType)) {
+      throw new Error(
+        `Provider \`${providerKey}\` has unsupported providerType \`${providerType}\`. ` +
+        `Use one of: ${[...CONCRETE_PROVIDER_TYPES, ...VIRTUAL_PROVIDER_TYPES].join(', ')}. ` +
+        'For a compatible service, choose the protocol it speaks and set baseUrl.'
+      );
+    }
 
     for (const field of ['targets', 'failureThreshold', 'cooldownMs'] as const) {
       if (Object.prototype.hasOwnProperty.call(providerEntry, field)) {
@@ -1511,7 +1563,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
 
     // Allow empty/undefined (some providers has default model)
     if (!normalizedModels || normalizedModels.length === 0) {
-      models[providerKey] = buildResolvedModelEntry(providerKey, providerEntry, '');
+      models[providerKey] = buildResolvedModelEntry(providerKey, providerEntry, '', undefined, defaults);
       canonicalConcreteKeyByLookupKey.set(providerKey, providerKey);
       displayModels.push(providerKey);
       continue;
@@ -1521,7 +1573,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
       const onlyModel = normalizedModels[0];
       const modelId = typeof onlyModel === 'string' ? onlyModel : onlyModel.id;
       const modelOverride = typeof onlyModel === 'string' ? undefined : onlyModel;
-      const resolvedEntry = buildResolvedModelEntry(providerKey, providerEntry, modelId, modelOverride);
+      const resolvedEntry = buildResolvedModelEntry(providerKey, providerEntry, modelId, modelOverride, defaults);
       const qualifiedModelKey = `${providerKey}/${modelId}`;
       models[providerKey] = resolvedEntry;
       models[qualifiedModelKey] = { ...resolvedEntry };
@@ -1533,7 +1585,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
         const modelId = typeof rawModel === 'string' ? rawModel : rawModel.id;
         const modelOverride = typeof rawModel === 'string' ? undefined : rawModel;
         const modelKey = `${providerKey}/${modelId}`;
-        models[modelKey] = buildResolvedModelEntry(providerKey, providerEntry, modelId, modelOverride);
+        models[modelKey] = buildResolvedModelEntry(providerKey, providerEntry, modelId, modelOverride, defaults);
         canonicalConcreteKeyByLookupKey.set(modelKey, modelKey);
         displayModels.push(modelKey);
       }
@@ -1550,6 +1602,8 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
     'extraFields',
     'extraHeaders',
     'contextLimit',
+    'maxOutput',
+    'providerImageOutputFormat',
     'streamContentInactivityTimeoutMs',
     'effort',
     'historyReasoningField',
@@ -1624,7 +1678,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
       throw new Error(`Virtual provider \`${virtualKey}\` cooldownMs must be a positive integer.`);
     }
 
-    const contextLimit = Math.min(...leafEntries.map(entry => entry.contextLimit || CONTEXT_LIMIT));
+    const contextLimit = Math.min(...leafEntries.map(entry => entry.contextLimit ?? CONTEXT_LIMIT));
     const asyncCompact = leafEntries.every(entry => entry.asyncCompact !== false);
     const allowedEffortSet = new Set<ModelEffort>();
     for (const entry of leafEntries) {
@@ -1645,6 +1699,8 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
           baseUrl: entry.baseUrl || null,
           requestCompression: entry.requestCompression || null,
           contextLimit: entry.contextLimit ?? CONTEXT_LIMIT,
+          maxOutput: entry.maxOutput ?? MAX_OUTPUT,
+          providerImageOutputFormat: entry.providerImageOutputFormat ?? PROVIDER_IMAGE_OUTPUT_FORMAT,
           streamContentInactivityTimeoutMs: entry.streamContentInactivityTimeoutMs ?? DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
           asyncCompact: entry.asyncCompact !== false,
           disallowEmptyResponse: entry.disallowEmptyResponse === true,
@@ -1731,9 +1787,11 @@ export function loadModelsConfigFromObject(config: any): ModelsConfig {
     throw new Error('Expected root `providers` (preferred) or legacy `models` object in models config');
   }
 
-  const expanded = expandModelsConfig(rawProviderEntries);
+  const defaults = Object.prototype.hasOwnProperty.call(config, 'defaults')
+    ? normalizeModelDefaults(config.defaults, 'models config `defaults`', true) : undefined;
+  const expanded = expandModelsConfig(rawProviderEntries, defaults);
   const defaultKey = expanded.models[config?.default] ? config.default : (expanded.displayModels[0] || config?.default);
-  return { default: defaultKey, models: expanded.models, displayModels: expanded.displayModels };
+  return { default: defaultKey, ...(defaults ? { defaults } : {}), models: expanded.models, displayModels: expanded.displayModels };
 }
 
 export function resolveModelConfig(sessionModel?: string) {
@@ -1741,7 +1799,7 @@ export function resolveModelConfig(sessionModel?: string) {
   const defaultKey = modelsConfig.default;
   const currentKey = sessionModel && modelsConfig.models[sessionModel] ? sessionModel : defaultKey;
   const modelEntry = modelsConfig.models[currentKey] || modelsConfig.models[defaultKey];
-  const contextLimit = modelEntry?.contextLimit || CONTEXT_LIMIT;
+  const contextLimit = modelEntry?.contextLimit ?? CONTEXT_LIMIT;
 
   return { modelsConfig, defaultKey, currentKey, modelEntry, contextLimit };
 }

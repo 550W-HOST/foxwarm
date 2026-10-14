@@ -27,9 +27,11 @@ Static WebUI and state-changing routes are served only after normal host auth; `
 
 ## Current gaps
 
-The .NET channel has real routes for current tasks/terminal/files/images/history; Vector-backed history/admission remains `VECTOR_DISABLED` and remote Node/Worker routes are not claimed as fully connected to this Main. Root package start/build still targets TypeScript Main even though this .NET host is the active replacement architecture.
+The .NET channel has real routes for current tasks/terminal/files/images/history and connected external Node onboarding, ordinary tools, exec/completion, file consumers, Code/PTY and exec-only Shell HTTP. The connected Node contract and remaining Worker boundary belong to [Remote Node compatibility](./remote-node-compatibility.md#net-external-node-integration). Vector-backed history/admission remains `VECTOR_DISABLED`. Root package start/build still targets TypeScript Main even though this .NET host is the active replacement architecture.
 
 The current React entry point requests `GET /api/auth/session` before mounting any normal, popup, or embedded root. It expects `{ role: 'admin' }` for the administrator app or a verified scoped WebUI identity response for the restricted root. The .NET host implements the authenticated administrator response, so successful instance-token login allows the merged client to mount the administrator app. Restricted WebUI identities remain explicitly deferred and are not accepted or represented as supported.
+
+The merged React Node picker calls `GET /api/sessions/{id}/nodes` and `POST /api/sessions/{id}/node`; these HTTP handlers are not yet registered by the .NET host. Existing model-tool Node selection does not establish these new UI routes or their cwd-preserving selection contract. The Setup Authorizations panel calls `/api/setup/authorizations` and its per-server actions, which also have no .NET route or outbound OAuth lifecycle implementation yet. The client and TypeScript reference implementations remain present; merge ancestry does not establish .NET support for either flow.
 
 ## Canonical units and tests
 

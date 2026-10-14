@@ -3,6 +3,12 @@ export const DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS = 60 * 1000;
 export const SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000;
 /** Local inactivity allowance once an attempt reports hosted image generation activity. */
 export const IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000;
+/**
+ * Inactivity allowance while a reasoning block is open. Hidden reasoning can
+ * produce no visible event for minutes; this bounds that silence without
+ * letting keep-alive pings extend it.
+ */
+export const REASONING_CONTENT_INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000;
 
 export type StreamingTimeoutKind = 'first-content' | 'content-inactivity' | 'hard-deadline';
 
@@ -31,6 +37,13 @@ export type StreamingAttemptWatchdog = {
    * restarts it. A later attempt starts from the configured value.
    */
   reportImageGenerationActivity(): void;
+  /**
+   * A reasoning block opened: allow the reasoning inactivity window until it
+   * closes. Keep-alive events must not call markMeaningfulProgress.
+   */
+  enterReasoningPhase(): void;
+  /** The reasoning block closed: return to the ordinary content inactivity window. */
+  exitReasoningPhase(): void;
   finish(): void;
 };
 
@@ -79,9 +92,15 @@ export function createStreamingAttemptWatchdog(options: {
   let inactivityTimeoutMs = options.streamContentInactivityTimeoutMs ?? DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS;
   let safetyBufferingMetadata: Record<string, unknown> | undefined;
   let imageGenerationStarted = false;
+  let reasoningPhaseActive = false;
 
-  const effectiveInactivityTimeoutMs = () =>
-    imageGenerationStarted ? Math.max(inactivityTimeoutMs, IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS) : inactivityTimeoutMs;
+  const effectiveInactivityTimeoutMs = () => {
+    let timeoutMs = imageGenerationStarted
+      ? Math.max(inactivityTimeoutMs, IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS)
+      : inactivityTimeoutMs;
+    if (reasoningPhaseActive) timeoutMs = Math.max(timeoutMs, REASONING_CONTENT_INACTIVITY_TIMEOUT_MS);
+    return timeoutMs;
+  };
 
   const clearPhase = () => {
     if (!phaseTimer) return;
@@ -131,6 +150,16 @@ export function createStreamingAttemptWatchdog(options: {
     reportImageGenerationActivity() {
       if (finished) return;
       imageGenerationStarted = true;
+      schedulePhase('content-inactivity', effectiveInactivityTimeoutMs());
+    },
+    enterReasoningPhase() {
+      if (finished) return;
+      reasoningPhaseActive = true;
+      schedulePhase('content-inactivity', effectiveInactivityTimeoutMs());
+    },
+    exitReasoningPhase() {
+      if (finished) return;
+      reasoningPhaseActive = false;
       schedulePhase('content-inactivity', effectiveInactivityTimeoutMs());
     },
     finish() {

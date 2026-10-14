@@ -183,6 +183,50 @@ test('workbench pane collapse survives normalization and older panes default to 
   assert.deepEqual(normalized.root.children.map(pane => pane.tabIds), [['system:agents'], ['system:setup']])
 })
 
+test('user tab activation expands its pane while restore and inactive insertion preserve collapse', async () => {
+  const { useWorkbenchStore } = await loadTypeScriptModule('../src/workbench/store.ts')
+  const state = {
+    version: 4,
+    tabsById: {
+      'tab:collapsed': { id: 'tab:collapsed', type: 'search', title: 'Collapsed' },
+      'tab:other': { id: 'tab:other', type: 'chat', sessionId: 'other', title: 'Other' },
+      'tab:open': { id: 'tab:open', type: 'chat', sessionId: 'open', title: 'Open' },
+    },
+    root: {
+      id: 'split-main',
+      kind: 'split',
+      direction: 'row',
+      sizes: [50, 50],
+      children: [
+        { id: 'pane-collapsed', kind: 'pane', tabIds: ['tab:collapsed', 'tab:other'], activeTabId: 'tab:collapsed', collapsed: true },
+        { id: 'pane-open', kind: 'pane', tabIds: ['tab:open'], activeTabId: 'tab:open', collapsed: false },
+      ],
+    },
+    focusedPaneId: 'pane-open',
+  }
+  useWorkbenchStore.setState(state)
+
+  useWorkbenchStore.getState().activateTab('tab:collapsed')
+  assert.equal(useWorkbenchStore.getState().root.children[0].collapsed, false, 'activating the already-selected tab expands its pane')
+
+  useWorkbenchStore.setState(state)
+  useWorkbenchStore.getState().setPaneCollapsed('pane-collapsed', true)
+  useWorkbenchStore.getState().activateTab('tab:other')
+  assert.equal(useWorkbenchStore.getState().root.children[0].collapsed, false, 'activating another tab expands its pane')
+
+  useWorkbenchStore.setState(state)
+  useWorkbenchStore.getState().upsertTab({ id: 'tab:inserted', type: 'logs', title: 'Inserted' }, { paneId: 'pane-collapsed', activate: true })
+  assert.equal(useWorkbenchStore.getState().root.children[0].collapsed, false, 'an activating insert expands its target pane')
+
+  useWorkbenchStore.setState(state)
+  useWorkbenchStore.getState().upsertTab({ id: 'tab:background', type: 'logs', title: 'Background' }, { paneId: 'pane-collapsed', activate: false })
+  assert.equal(useWorkbenchStore.getState().root.children[0].collapsed, true, 'background insertion preserves a collapsed target pane')
+
+  useWorkbenchStore.setState(state)
+  useWorkbenchStore.getState().setPaneActiveTab('pane-collapsed', 'tab:collapsed', { expandPane: false })
+  assert.equal(useWorkbenchStore.getState().root.children[0].collapsed, true, 'route/restore activation can preserve collapse')
+})
+
 test('Code workspace URLs preserve paths and reverse-proxy base paths', async () => {
   const { getVscodeWebPath, makeCodeWorkspaceUri, makeVscodeWebUrl, normalizeCodePath } = await loadTypeScriptModule('../src/vscodeWeb.ts')
   assert.equal(getVscodeWebPath('/api'), '/vscode-web/')
@@ -227,7 +271,7 @@ test('global Code launch preference defaults safely and controls sidebar launche
 test('node launch targets preserve stale selection and apply service-specific availability', async () => {
   const { formatNodeTargetLabel, getNodeTargetAvailability, parseWebUiNodeTargets, preserveSelectedNodeTarget } = await loadTypeScriptModule('../src/nodeTargets.ts')
   const nodes = parseWebUiNodeTargets({ nodes: [
-    { id: 'master', type: 'master', online: true, services: {} },
+    { id: 'master', type: 'master', online: true, services: { 'vscode-pty': 1 } },
     { id: 'full', type: 'cli-node', online: true, services: { 'vscode-fs': 1, 'vscode-git': 2, 'vscode-pty': 1 } },
     { id: 'fs-only', type: 'cli-node', online: true, services: { 'vscode-fs': 1 } },
     { id: 'offline', type: 'cli-node', online: false, services: { 'vscode-fs': 1, 'vscode-pty': 1 } },
@@ -266,7 +310,7 @@ test('terminal targets normalize cwd and never reuse a different node at the sam
 
 test('session-header terminal orchestration keeps the session node and replaces a mismatched lower-pane target', async () => {
   const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8')
-  assert.match(app, /onOpenTerminal=\{\(\) => openTerminalTab\(\{ nodeId: sessionRecord\?\.currentNode \|\| 'master', path: sessionRecord\?\.cwd \|\| '\/', sourcePaneId \}\)\}/)
+  assert.match(app, /onOpenTerminal=\{isMobile(?: && [^\n]+)? \? \(\) => openTerminalTab\(\{ nodeId: sessionRecord\?\.currentNode \|\| 'master', path: sessionRecord\?\.cwd \|\| '\/', sourcePaneId \}\) : undefined\}/)
   const openTerminalStart = app.indexOf('const openTerminalTab')
   const openTerminalEnd = app.indexOf('const closeWorkbenchTab', openTerminalStart)
   const block = app.slice(openTerminalStart, openTerminalEnd)
@@ -595,4 +639,19 @@ test('sidebar session node resolution prefers the running tool node, then the se
   assert.equal(getResolvedSessionNodeId({ runtimeState: { tool: { name: 'exec', executionNode: 'mac-mini', startedAt: 1 } } }), 'mac-mini')
   assert.equal(getResolvedSessionNodeId({ currentNode: 'visualdust-a6000-ws1', runtimeState: { tool: undefined } }), 'visualdust-a6000-ws1')
   assert.equal(getResolvedSessionNodeId({ runtimeState: {} }), 'master')
+})
+
+
+test('bottom panel placement supports an explicit initial ratio without changing ordinary splits', async () => {
+  const { createPaneNode, createSplitNode, replacePaneWithSplit } = await loadTypeScriptModule('../src/workbench/utils.ts')
+  const source = createPaneNode(['chat:a'], 'chat:a', 'editor')
+  const other = createPaneNode(['chat:b'], 'chat:b', 'other')
+  const terminal = createPaneNode(['terminal:shell'], 'terminal:shell', 'terminal')
+  const root = createSplitNode('row', [source, other], [60, 40], 'root')
+  const panel = replacePaneWithSplit(root, 'editor', 'column', terminal, 'after', [70, 30])
+  assert.deepEqual(panel.sizes, [60, 40])
+  assert.deepEqual(panel.children[0].sizes, [70, 30])
+  assert.deepEqual(panel.children[0].children.map(pane => pane.id), ['editor', 'terminal'])
+  const ordinary = replacePaneWithSplit(source, 'editor', 'row', terminal, 'after')
+  assert.deepEqual(ordinary.sizes, [50, 50])
 })

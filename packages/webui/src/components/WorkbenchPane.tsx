@@ -2,12 +2,9 @@ import type { ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { Columns2, Move, PanelLeftClose, PanelLeftOpen, PanelTopClose, PanelTopOpen, Rows2, X } from 'lucide-react'
 import WorkbenchTabs from './WorkbenchTabs'
-import { WorkbenchTabHeaderProvider } from './WorkbenchTabHeader'
-import WorkbenchTabErrorBoundary from './WorkbenchTabErrorBoundary'
-import { useWorkbenchTabMenu } from './useWorkbenchTabMenu'
 import type { WorkbenchTab } from '../workbench/types'
 
-interface WorkbenchPaneProps {
+export interface WorkbenchPaneProps {
   paneId: string
   collapseDirection: 'row' | 'column'
   tabs: WorkbenchTab[]
@@ -19,8 +16,7 @@ interface WorkbenchPaneProps {
   showPaneControls?: boolean
   hideTabStrip?: boolean
   canClosePane: boolean
-  canCloseActiveTab?: boolean
-  renderContent: () => ReactNode
+  contentSlot: ReactNode
   onFocusPane: (paneId: string) => void
   onSetCollapsed: (paneId: string, collapsed: boolean) => void
   onSelectTab: (tabId: string) => void
@@ -77,73 +73,24 @@ function PaneDragHandle({ paneId }: { paneId: string }) {
   )
 }
 
-function PaneDropZone({ paneId, edge, className }: { paneId: string; edge?: 'left' | 'right' | 'top' | 'bottom'; className: string }) {
-  const { setNodeRef, isOver } = useDroppable({
-    id: edge ? `pane-edge:${paneId}:${edge}` : `pane-center:${paneId}`,
-    data: edge ? { type: 'pane-edge', paneId, edge } : { type: 'pane-center', paneId },
-  })
-  return (
-    <div
-      ref={setNodeRef}
-      data-workbench-pane-drop={edge || 'center'}
-      className={`${className} border-2 border-transparent ${isOver ? 'border-fw-accent-border/70 bg-fw-accent/10 dark:border-fw-accent-border/60' : ''}`}
-    />
-  )
-}
-
-function PaneDropTargets({ paneId }: { paneId: string }) {
-  const { active } = useDndContext()
-  if (!active) return null
-  const draggingPane = active.data.current?.type === 'pane'
-  if (draggingPane && active.data.current?.paneId === paneId) return null
-  return (
-    <div className="pointer-events-none absolute inset-0 z-[80]">
-      {!draggingPane && <PaneDropZone paneId={paneId} className="absolute inset-3 rounded-xl" />}
-      <PaneDropZone paneId={paneId} edge="left" className="absolute inset-y-0 left-0 w-14 max-w-[25%] rounded-l-xl" />
-      <PaneDropZone paneId={paneId} edge="right" className="absolute inset-y-0 right-0 w-14 max-w-[25%] rounded-r-xl" />
-      {draggingPane && <PaneDropZone paneId={paneId} edge="top" className="absolute inset-x-0 top-0 h-12 max-h-[25%] rounded-t-xl" />}
-      <PaneDropZone paneId={paneId} edge="bottom" className="absolute inset-x-0 bottom-0 h-12 max-h-[25%] rounded-b-xl" />
-    </div>
-  )
-}
-
-function RenderedPaneContent({ renderContent }: { renderContent: () => ReactNode }) {
-  return <>{renderContent()}</>
-}
-
-export default function WorkbenchPane({
+export function WorkbenchPaneToolbar({
   paneId,
-  collapseDirection,
-  tabs,
-  activeTabId,
   collapsed,
-  focused,
-  emphasizeFocus = true,
-  dragEnabled = true,
-  showPaneControls = true,
-  hideTabStrip = false,
+  verticalRail,
   canClosePane,
-  canCloseActiveTab = true,
-  renderContent,
-  onFocusPane,
+  dragEnabled,
   onSetCollapsed,
-  onSelectTab,
-  onCloseTab,
-  onKeepTab,
-  onMoveTabToNewWindow,
-  canMoveTabToNewWindow,
-  onCloseOtherTabs,
-  onCloseAllTabs,
-  onSplitRight,
-  onSplitDown,
   onClosePane,
-}: WorkbenchPaneProps) {
-  const { openContextMenu, openMenuAtElement, menu } = useWorkbenchTabMenu({ tabs, onCloseTab, onKeepTab, onMoveTabToNewWindow, canMoveTabToNewWindow, onCloseOtherTabs, onCloseAllTabs })
-  const verticalRail = collapseDirection === 'row'
-  const containerChromeClass = emphasizeFocus
-    ? (focused ? 'border-fw-accent-border ring-1 ring-fw-accent/25 dark:border-fw-accent-border/60' : 'border-fw-border')
-    : 'border-transparent shadow-none'
-  const paneControls = (
+}: {
+  paneId: string
+  collapsed: boolean
+  verticalRail: boolean
+  canClosePane: boolean
+  dragEnabled: boolean
+  onSetCollapsed: (paneId: string, collapsed: boolean) => void
+  onClosePane: () => void
+}) {
+  return (
     <>
       {canClosePane && dragEnabled && <PaneDragHandle paneId={paneId} />}
       {(canClosePane || collapsed) && (
@@ -164,15 +111,85 @@ export default function WorkbenchPane({
       )}
     </>
   )
-  const header = hideTabStrip && tabs.length === 1
-    ? { tab: tabs[0], paneId, dragEnabled, paneControls, onCloseTab, onKeepTab, openContextMenu, openMenuAtElement }
-    : null
+}
+
+function PaneDropZone({ paneId, edge, className }: { paneId: string; edge?: 'left' | 'right' | 'top' | 'bottom'; className: string }) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: edge ? `pane-edge:${paneId}:${edge}` : `pane-center:${paneId}`,
+    data: edge ? { type: 'pane-edge', paneId, edge } : { type: 'pane-center', paneId },
+  })
+  return (
+    <div
+      ref={setNodeRef}
+      data-workbench-pane-drop={edge || 'center'}
+      className={`${className} border-2 border-transparent ${isOver ? 'border-fw-accent-border/70 bg-fw-accent/10 dark:border-fw-accent-border/60' : ''}`}
+    />
+  )
+}
+
+export function PaneDropTargets({ paneId, onOverlayMount }: { paneId: string; onOverlayMount?: (element: HTMLDivElement | null) => void }) {
+  const { active } = useDndContext()
+  if (!active) return null
+  const draggingPane = active.data.current?.type === 'pane'
+  if (draggingPane && active.data.current?.paneId === paneId) return null
+  return (
+    <div ref={onOverlayMount} data-workbench-pane-drop-overlay className="pointer-events-none absolute inset-0 z-[80]">
+      {!draggingPane && <PaneDropZone paneId={paneId} className="absolute inset-3 rounded-xl" />}
+      <PaneDropZone paneId={paneId} edge="left" className="absolute inset-y-0 left-0 w-14 max-w-[25%] rounded-l-xl" />
+      <PaneDropZone paneId={paneId} edge="right" className="absolute inset-y-0 right-0 w-14 max-w-[25%] rounded-r-xl" />
+      {draggingPane && <PaneDropZone paneId={paneId} edge="top" className="absolute inset-x-0 top-0 h-12 max-h-[25%] rounded-t-xl" />}
+      <PaneDropZone paneId={paneId} edge="bottom" className="absolute inset-x-0 bottom-0 h-12 max-h-[25%] rounded-b-xl" />
+    </div>
+  )
+}
+
+export default function WorkbenchPane({
+  paneId,
+  collapseDirection,
+  tabs,
+  activeTabId,
+  collapsed,
+  focused,
+  emphasizeFocus = true,
+  dragEnabled = true,
+  showPaneControls = true,
+  hideTabStrip = false,
+  canClosePane,
+  contentSlot,
+  onFocusPane,
+  onSetCollapsed,
+  onSelectTab,
+  onCloseTab,
+  onKeepTab,
+  onMoveTabToNewWindow,
+  canMoveTabToNewWindow,
+  onCloseOtherTabs,
+  onCloseAllTabs,
+  onSplitRight,
+  onSplitDown,
+  onClosePane,
+}: WorkbenchPaneProps) {
+  const verticalRail = collapseDirection === 'row'
+  const containerChromeClass = emphasizeFocus
+    ? (focused ? 'border-fw-accent-border ring-1 ring-fw-accent/25 dark:border-fw-accent-border/60' : 'border-fw-border')
+    : 'border-transparent shadow-none'
+  const paneControls = (
+    <WorkbenchPaneToolbar
+      paneId={paneId}
+      collapsed={collapsed}
+      verticalRail={verticalRail}
+      canClosePane={canClosePane}
+      dragEnabled={dragEnabled}
+      onSetCollapsed={onSetCollapsed}
+      onClosePane={onClosePane}
+    />
+  )
 
   return (
     <div
       data-pane-id={paneId}
       data-workbench-collapsed-pane={collapsed ? 'true' : undefined}
-      className={`relative flex min-h-0 min-w-0 overflow-hidden border ${containerChromeClass} ${collapsed ? verticalRail ? 'h-full w-12 flex-col' : 'h-10 w-full flex-row items-center' : 'h-full flex-col'}`}
+      className={`foxwarm-workbench-panel relative flex min-h-0 min-w-0 overflow-hidden border ${containerChromeClass} ${collapsed ? verticalRail ? 'h-full w-12 flex-col' : 'h-10 w-full flex-row items-center' : 'h-full flex-col'}`}
       onMouseDown={() => onFocusPane(paneId)}
     >
       {collapsed ? (
@@ -240,22 +257,11 @@ export default function WorkbenchPane({
             />
           )}
           <div className="min-h-0 flex-1 overflow-hidden bg-fw-canvas">
-            <WorkbenchTabHeaderProvider value={header}>
-              <WorkbenchTabErrorBoundary
-                key={`${paneId}:${activeTabId || 'empty'}`}
-                tabId={activeTabId || 'empty'}
-                tabTitle={tabs.find((tab) => tab.id === activeTabId)?.title || 'tab'}
-                canClose={!!activeTabId && canCloseActiveTab}
-                onClose={() => { if (activeTabId) onCloseTab(activeTabId) }}
-              >
-                <RenderedPaneContent renderContent={renderContent} />
-              </WorkbenchTabErrorBoundary>
-            </WorkbenchTabHeaderProvider>
+            {contentSlot}
           </div>
         </>
       )}
-      {menu}
-      <PaneDropTargets paneId={paneId} />
+      {(collapsed || !activeTabId) && <PaneDropTargets paneId={paneId} />}
     </div>
   )
 }

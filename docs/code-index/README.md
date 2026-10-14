@@ -74,4 +74,6 @@ From the Foxwarm repository root:
 npm run quality:code-index
 ```
 
-The command runs `docs/code-index/scripts/audit_index.py` with the repository root as source tree and treats CJK content as an error. The audit checks local Markdown links, primary file existence/ownership, private-path and credential-like patterns, decision density, and likely near-duplicate decisions. Warnings require review; errors must be resolved before merging.
+The command runs `docs/code-index/scripts/audit_index.py` with the repository root as the source tree and treats CJK content as an error. The audit checks local Markdown links, primary file existence and ownership, private-path and credential-like patterns, decision density, and likely near-duplicate decisions. Warnings require review; errors must be resolved before merging.
+
+Each Markdown file is also measured by its on-disk size in bytes. Files strictly above 24 KiB (24576 bytes) produce a warning, and files strictly above 48 KiB (49152 bytes) are errors instead of warnings. Split an oversized file by responsibility rather than trimming its content. The audit's own unit tests run with `npm run test:code-index-audit`.

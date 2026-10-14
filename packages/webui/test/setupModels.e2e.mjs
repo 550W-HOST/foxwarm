@@ -199,6 +199,10 @@ async function attachRequestMocks(targetPage, options = {}) {
       })
       return
     }
+    if (url.pathname.endsWith('/api/setup/authorizations')) {
+      void respondJson(request, { servers: [] })
+      return
+    }
     if (url.pathname.endsWith('/api/models')) {
       options.modelOptionsRequests?.push(url.pathname)
       const respondModels = () => respondJson(request, {
@@ -536,7 +540,7 @@ after(async () => {
   preview?.kill('SIGTERM')
 })
 
-test('Setup uses accessible Models, Config, and Appearance tabs with status icons and product copy', async () => {
+test('Setup uses accessible Appearance, Models, Config and Authorizations tabs with status icons and product copy', async () => {
   const setupPage = await browser.newPage()
   await setupPage.setBypassServiceWorker(true)
   await attachRequestMocks(setupPage)
@@ -563,6 +567,7 @@ test('Setup uses accessible Models, Config, and Appearance tabs with status icon
       { tab: 'appearance', selected: 'true', status: null },
       { tab: 'models', selected: 'false', status: 'complete' },
       { tab: 'config', selected: 'false', status: null },
+      { tab: 'authorizations', selected: 'false', status: null },
     ])
     assert.deepEqual(await setupPage.$$eval('[data-monaco-model-uri]', (elements) => elements.map((element) => element.getAttribute('data-monaco-model-uri'))), [
       'inmemory://foxwarm/setup/foxwarm-models.yaml',
@@ -593,6 +598,9 @@ test('Setup uses accessible Models, Config, and Appearance tabs with status icon
     await setupPage.waitForFunction(() => document.body.textContent?.includes('Connected as weixin-e2e-user. Channel config saved and reloaded.'))
 
     await setupPage.focus('[data-setup-tab="config"]')
+    await setupPage.keyboard.press('ArrowRight')
+    await setupPage.waitForSelector('[data-setup-tab="authorizations"][aria-selected="true"]')
+    await setupPage.waitForFunction(() => document.querySelector('[data-setup-section="authorizations"]')?.textContent.includes('No HTTP MCP servers'))
     await setupPage.keyboard.press('ArrowRight')
     await setupPage.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]')
     assert.equal(await setupPage.$eval('[data-theme-manager]', element => element.textContent?.includes('WebUI theme')), true)
@@ -1984,6 +1992,64 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
     await normalPage.waitForFunction(() => (
       !!document.activeElement?.closest('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]')
     ), { timeout: 15_000 })
+    assert.equal(await normalPage.$$eval('[data-tab-id="system:setup"]', (tabs) => tabs.length), 1)
+  } finally {
+    await normalPage.close()
+  }
+})
+
+test('model picker Models focus is one-shot per request; later ordinary Setup opens keep their own tab', async () => {
+  const normalPage = await browser.newPage()
+  await attachRequestMocks(normalPage)
+  try {
+    const modelsEditorFocused = () => normalPage.evaluate(() => (
+      !!document.activeElement?.closest('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]')
+    ))
+    const openPickerAndConfigure = async () => {
+      await normalPage.click('[data-tab-id="chat:model-filter-normal"]')
+      const modelButton = await normalPage.waitForSelector('.foxwarm-model-selector-trigger', { timeout: 15_000 })
+      await modelButton.click()
+      await normalPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'), { timeout: 15_000 })
+      await normalPage.click('button[aria-label="Configure models"]')
+      await normalPage.waitForSelector('[data-setup-tab="models"][aria-selected="true"]', { timeout: 15_000 })
+      await normalPage.waitForFunction(() => (
+        !!document.activeElement?.closest('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]')
+      ), { timeout: 15_000 })
+    }
+    const openSetupFromSettingsMenu = async () => {
+      await normalPage.click('button[aria-label="Open UI settings"]')
+      await normalPage.waitForSelector('[data-global-ui-settings-menu]')
+      await normalPage.evaluate(() => {
+        const button = [...document.querySelectorAll('[data-global-ui-settings-menu] button')].find((candidate) => candidate.textContent?.includes('Open setup'))
+        button?.click()
+      })
+      await normalPage.waitForSelector('[data-tab-id="system:setup"]', { timeout: 15_000 })
+    }
+
+    await normalPage.evaluateOnNewDocument(() => {
+      try {
+        localStorage.setItem('foxwarm_theme_selection_v2', JSON.stringify({ version: 2, themeId: 'foxwarm.550a', colorMode: 'auto' }))
+      } catch {}
+    })
+    await normalPage.goto(`${baseUrl}/normal/#session/model-filter-normal`, { waitUntil: 'networkidle2' })
+    await openPickerAndConfigure()
+
+    await normalPage.click('[data-tab-id="system:setup"] button[title="Close tab"]')
+    await normalPage.waitForFunction(() => !document.querySelector('[data-tab-id="system:setup"]'), { timeout: 15_000 })
+
+    await openSetupFromSettingsMenu()
+    await normalPage.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]', { timeout: 15_000 })
+    await normalPage.waitForSelector('[data-setup-section="models"] [data-editor-ready="true"]', { timeout: 15_000 })
+    assert.equal(await modelsEditorFocused(), false, 'a reopened Setup must not reclaim Models focus from an old request')
+    assert.equal(await normalPage.$eval('[data-setup-tab="models"]', (tab) => tab.getAttribute('aria-selected')), 'false')
+
+    await normalPage.click('[data-setup-tab="config"]')
+    await normalPage.waitForSelector('[data-setup-tab="config"][aria-selected="true"]')
+    await openSetupFromSettingsMenu()
+    await normalPage.waitForSelector('[data-setup-tab="config"][aria-selected="true"]', { timeout: 15_000 })
+    assert.equal(await modelsEditorFocused(), false, 'ordinary activation of an open Setup keeps its tab and does not move focus')
+
+    await openPickerAndConfigure()
     assert.equal(await normalPage.$$eval('[data-tab-id="system:setup"]', (tabs) => tabs.length), 1)
   } finally {
     await normalPage.close()

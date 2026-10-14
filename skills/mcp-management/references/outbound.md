@@ -4,7 +4,7 @@ This reference covers Foxwarm connecting to another tool server. It does not con
 
 ## Outbound configuration lifecycle
 
-- Change MCP configuration only through the hidden `mcp_config` builtin, invoked with `call_tool`.
+- Use the hidden `mcp_config` builtin, invoked with `call_tool`, for connection settings. Administrators manage shared OAuth accounts through WebUI Setup → Authorizations.
 - A successful `mcp_config` call updates the live runtime configuration immediately. Existing HTTP caller connections are closed after the update, and subsequent discovery/calls use the change; **no Foxwarm restart is required**.
 - Do **not** manually edit the MCP state/config file. Manual file edits do not update the live cached configuration immediately and can leave disk and runtime behavior inconsistent.
 - Never print, copy into chat, or commit real tokens, environment secrets, private headers, or credentials. Use values supplied through an approved secret-handling path and keep diagnostic output redacted.
@@ -77,6 +77,18 @@ Provider schemas may hide free-form objects. In that case, use the documented `e
 ### Tool-call timeout
 
 `timeoutSeconds` is optional and applies only to tool calls for that server. Acceptable overrides are finite values from 1 through 3600 seconds. Omitting the field leaves the current timeout setting unchanged; servers without an override use 60 seconds. To remove an existing override without changing the connection settings, invoke `mcp_config` with the server name and `timeoutSeconds: 0`; the canonical persisted configuration removes the field. Connection setup and tool listing do not use this override.
+
+## Administrator-managed OAuth
+
+For an HTTP MCP server that uses browser OAuth, configure its name/URL/transport first, then ask the administrator to open **Setup → Authorizations**:
+
+1. Set the top-level app Config `url` to the instance's public HTTPS URL, including any deployment prefix, and restart if it changed. It is distinct from the third-party MCP server URL. Localhost HTTP is supported for development; no public URL is needed for static or stdio installations.
+2. Choose OAuth for the named server. Supply requested scopes and pre-registered client ID/secret only when needed. Otherwise Foxwarm uses supported public client metadata or dynamic registration. The panel displays the generated callback URL.
+3. If static Authorization is already configured, explicitly choose to replace it; OAuth cannot silently override it. Other resource headers remain unchanged.
+4. Select Authorize and complete the third-party consent page. Status and returned scopes appear in the panel. Client secrets and tokens are not returned by its API or safe summaries.
+5. Reauthorize when expired, revoked or additional scope is required. Disconnect removes local account authorization and closes this server's caller bindings; it does not promise upstream revocation or rollback of running effects.
+
+The selected account is deliberately shared by the instance. Existing tool permissions still apply and each caller retains a separate remote MCP context. Same-grant refresh preserves those contexts; explicit reauthorization may select another account and replaces them. Stdio continues to use environment credentials. Do not turn a model/tool error into a human OAuth flow or request a token in chat; direct the administrator to this panel.
 
 ## Disable or re-enable
 

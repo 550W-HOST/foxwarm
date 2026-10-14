@@ -36,6 +36,9 @@ export interface PreservedMessageCandidateItem {
   key: string;
   preservedFromBlockId?: number;
   preview: string;
+  /** First and last seq of the tool exchange this message belongs to; removal keeps the exchange together. */
+  exchangeStartSeq?: number;
+  exchangeEndSeq?: number;
 }
 
 export interface LayeredCreateBlockPlan {
@@ -203,12 +206,12 @@ export const COMPACT_PLAN_TOOL_DEFINITION: ToolDefinition = {
       preserveMessages: {
         type: 'array',
         items: { type: 'number' },
-        description: "Message sequence numbers to keep verbatim within ranges being summarized. These messages remain after their summary block in active context.",
+        description: "Raw message sequence numbers to keep verbatim within summarized ranges. Selecting any part of a tool exchange also keeps its paired call and responses.",
       },
       removePreservedMessages: {
         type: 'array',
         items: { type: 'number' },
-        description: "Previously preserved message sequence numbers to remove from active context. Only messages identified as preserved in the compaction prompt are eligible; their archive records and summary blocks are not deleted.",
+        description: "Previously preserved message sequence numbers to remove from active context. List every member when removing a preserved tool exchange. Archive records and summary blocks are not deleted.",
       },
     },
   },
@@ -549,8 +552,8 @@ export function buildCompactPromptText(options: {
     '- Each replaceAsBlocks entry may include memoryFacts: an array of durable facts tied to exactly that source range. Invalid/omitted facts are ignored and never affect block creation; do not repeat them manually in summary prose.',
     '- Raw messages are summarized by L1 blocks, L1 blocks are summarized by L2 blocks, and so on.',
     '- Items covered by replaceAsBlocks will be replaced by the summary. Other items stay verbatim unless listed in removePreservedMessages.',
-    '- Use preserveMessages for a small number of raw message seqs that must remain verbatim even though they are covered by a newly created message-source block. The system will extract them after the covering block in working history.',
-    '- Use removePreservedMessages only for messages listed in the "Previously preserved raw messages" section. This removes the raw message from active history only; it does not delete archive records or existing summary blocks.',
+    '- Use preserveMessages for a small number of raw message seqs that must remain verbatim even though they are covered by a newly created message-source block. The system will extract them after the covering block in working history. Selecting any member of a tool exchange in preserveMessages keeps the model call message and all its paired response messages together.',
+    '- Use removePreservedMessages only for messages listed in the "Previously preserved raw messages" section. This removes the raw message from active history only; it does not delete archive records or existing summary blocks. When removing a preserved tool exchange, list every member; partial removal is rejected.',
     '- Block compression is optional after satisfying the hard minima above. Prefer compressing only older/resolved/repetitive block segments; keep recent, detail-rich, decision-heavy, or still-active blocks verbatim by omitting them from replaceAsBlocks.',
     '- Subject to the hard minima above, if a block/message still seems useful, you can leave it uncompressed by simply omitting it from replaceAsBlocks.',
     '',
@@ -744,6 +747,14 @@ function getMessageCandidateCoveringSeq(candidateItems: CompactCandidateItem[], 
   ));
 }
 
+/** Seqs of the preserved tool exchange that contains the item (the item alone when it is not part of one). */
+function getPreservedExchangeMemberSeqs(item: PreservedMessageCandidateItem, removablePreservedItems: PreservedMessageCandidateItem[]): number[] {
+  if (item.exchangeStartSeq === undefined || item.exchangeEndSeq === undefined) return [item.seq];
+  return removablePreservedItems
+    .filter(candidate => candidate.seq >= item.exchangeStartSeq! && candidate.seq <= item.exchangeEndSeq!)
+    .map(candidate => candidate.seq);
+}
+
 function isSeqCoveredByCreatedMessageBlock(createBlocks: LayeredCreateBlockPlan[], seq: number): boolean {
   return createBlocks.some(block => block.sourceKind === 'message' && block.sourceStart <= seq && block.sourceEnd >= seq);
 }
@@ -758,43 +769,55 @@ function validateNormalizedCompactPlan(
   };
 
   const createBlocks = normalizeReplacementBlocks(rawArgs, details);
-  const preserveMessages = normalizePositiveIntegerArray(rawArgs, 'preserveMessages', details);
-  const removePreservedMessages = normalizePositiveIntegerArray(rawArgs, 'removePreservedMessages', details);
+  const requestedPreserveMessages = normalizePositiveIntegerArray(rawArgs, 'preserveMessages', details);
+  const requestedRemovePreservedMessages = normalizePositiveIntegerArray(rawArgs, 'removePreservedMessages', details);
   if (details.createBlockErrors.length > 0) {
     return { details };
   }
 
-  if (createBlocks.length === 0 && removePreservedMessages.length === 0) {
+  if (createBlocks.length === 0 && requestedRemovePreservedMessages.length === 0) {
     details.createBlockErrors.push('replaceAsBlocks must contain at least one block unless removePreservedMessages removes previously preserved raw messages.');
     return { details };
   }
 
-  const removeSet = new Set(removePreservedMessages);
-  for (const seq of preserveMessages) {
-    if (removeSet.has(seq)) {
-      details.createBlockErrors.push(`msg#${seq} cannot appear in both preserveMessages and removePreservedMessages.`);
+  const removablePreservedItems = options.removablePreservedMessages || [];
+  const removableSeqs = new Set(removablePreservedItems.map(item => item.seq));
+  const removeSet = new Set(requestedRemovePreservedMessages);
+  for (const seq of requestedRemovePreservedMessages) {
+    if (!removableSeqs.has(seq)) {
+      details.createBlockErrors.push(`removePreservedMessages contains msg#${seq}, but that message is not listed as a previously preserved raw message in the current compact candidates.`);
+      continue;
     }
+    const item = removablePreservedItems.find(candidate => candidate.seq === seq)!;
+    const missing = getPreservedExchangeMemberSeqs(item, removablePreservedItems).filter(memberSeq => !removeSet.has(memberSeq));
+    if (missing.length > 0) {
+      details.createBlockErrors.push(`removePreservedMessages contains msg#${seq}, which belongs to a preserved tool exchange; list every member to remove it. Missing: ${missing.map(memberSeq => `msg#${memberSeq}`).join(', ')}.`);
+    }
+  }
+
+  const preserveSet = new Set<number>();
+  for (const seq of requestedPreserveMessages) {
     const coveringCandidate = getMessageCandidateCoveringSeq(candidateItems, seq);
     if (!coveringCandidate) {
       details.createBlockErrors.push(`preserveMessages contains msg#${seq}, but that raw message is not present in the current compact message candidates.`);
       continue;
     }
-    if (coveringCandidate.startSeq !== coveringCandidate.endSeq) {
-      details.createBlockErrors.push(`preserveMessages contains msg#${seq}, but it is inside atomic candidate ${coveringCandidate.key}; do not preserve only part of a grouped tool call/response candidate.`);
-    }
     if (!isSeqCoveredByCreatedMessageBlock(createBlocks, seq)) {
       details.createBlockErrors.push(`preserveMessages contains msg#${seq}, but that message is not covered by any created message-source block. If you want it to stay verbatim outside compaction, leave it out of the compacted range instead.`);
+      continue;
+    }
+    // A grouped candidate is one atomic exchange, so keep every seq it spans.
+    for (let memberSeq = coveringCandidate.startSeq; memberSeq <= coveringCandidate.endSeq; memberSeq += 1) {
+      preserveSet.add(memberSeq);
     }
   }
-
-  if (removePreservedMessages.length > 0) {
-    const removableSeqs = new Set((options.removablePreservedMessages || []).map(item => item.seq));
-    for (const seq of removePreservedMessages) {
-      if (!removableSeqs.has(seq)) {
-        details.createBlockErrors.push(`removePreservedMessages contains msg#${seq}, but that message is not listed as a previously preserved raw message in the current compact candidates.`);
-      }
+  for (const seq of preserveSet) {
+    if (removeSet.has(seq)) {
+      details.createBlockErrors.push(`msg#${seq} cannot appear in both preserveMessages and removePreservedMessages.`);
     }
   }
+  const preserveMessages = [...preserveSet].sort((left, right) => left - right);
+  const removePreservedMessages = [...removeSet].sort((left, right) => left - right);
 
   if (details.createBlockErrors.length > 0) {
     return { details };
