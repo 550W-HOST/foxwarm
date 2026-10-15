@@ -25,6 +25,7 @@ import { MASTER_NODE_TARGET, parseWebUiNodeTargets, type WebUiNodeTarget } from 
 import { findTerminalForTarget, normalizeTerminalTarget } from './terminalTarget'
 import { useChatPreferences } from './chatPreferences'
 import { makeFoxwarmPopupUrl, type FoxwarmPopupTarget } from './popupWebUi'
+import { FoxPaneLoader } from './components/FoxLoaders'
 
 type AppView = 'session' | 'agents' | 'setup' | 'logs' | 'tasks' | 'nodes'
 
@@ -270,7 +271,7 @@ function applyCustomTabIcon(tabIcon: string) {
 function LazyViewFallback({ label = 'Loading…' }: { label?: string }) {
   return (
     <div className="flex h-full min-h-0 items-center justify-center bg-fw-surface-sunken px-6 text-center text-sm text-fw-text-muted dark:bg-fw-canvas-edge dark:text-fw-text-muted">
-      <div>{label}</div>
+      <FoxPaneLoader label={label} />
     </div>
   )
 }

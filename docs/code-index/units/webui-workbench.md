@@ -170,3 +170,7 @@ The panel uses the existing pane/tab DND, divider resize, persisted layout, and 
 ### D-workbench-text-controls
 
 [2026-10-12] Text-entry controls use a small bounded corner radius, normal weight, semantic text/placeholder colors, and the manifest's dedicated control typography. The 16px focus-zoom floor is touch-only, not a desktop-wide override. Built-in composer radii and typography are reduced through their manifests; body and code typography remain independent. Monaco inputs and its controlled fallback are excluded from form-control overrides. This common rendering path applies to imported themes without theme-ID CSS branches.
+
+Focused desktop panes retain neutral borders without the old accent ring. Focus ownership, routing, keyboard behavior, and active-tab indicators remain intact; this avoids a clipped colored outline appearing only at rounded pane corners. Chrome palette roles and the independent mode choices are owned by [D-webui-theme-v3-chrome](./webui-theme-system.md#d-webui-theme-v3-chrome).
+
+The status bar itself is transparent and does not paint a full-width plate. Individual controls retain hover/focus/open highlights; theme status-surface data is an interaction base, not a permanent footer fill. Gallery and detailed previews use the same transparent footer treatment.

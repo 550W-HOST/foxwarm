@@ -51,7 +51,7 @@ const defaultDark = variant({
 })
 
 export const DEFAULT_THEME = checkedBuiltin({
-  schemaVersion: 2,
+  schemaVersion: 3,
   id: DEFAULT_THEME_ID,
   name: 'Default',
   description: 'Foxwarm’s standard application theme.',

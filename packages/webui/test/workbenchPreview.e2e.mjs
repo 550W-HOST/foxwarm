@@ -48,8 +48,9 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, colorMode = 'light', nodeDirectory = [], taskRows = null, codeNewWindow, responsiveChat = false, chatMessages = null, timelineView = 'grouped', showScrollbar, terminal = null, width = 1400, height = 900 } = {}) {
+async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, colorMode = 'light', nodeDirectory = [], taskRows = null, codeNewWindow, responsiveChat = false, chatMessages = null, timelineView = 'grouped', showScrollbar, terminal = null, width = 1400, height = 900, reducedMotion = false, waitForSplash = true } = {}) {
   const page = await browser.newPage()
+  if (reducedMotion) await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }])
   const pageErrors = []
   page.on('pageerror', error => pageErrors.push(error.message))
   // Firefox ESR retains its native viewport; Puppeteer orientation emulation is unsupported.
@@ -71,7 +72,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
     }
     if (chatMessages) localStorage.setItem('foxwarm_timeline_view_v1', timelineView)
     if (showScrollbar !== undefined) localStorage.setItem('foxwarm.contextScrollbar.showScrollbar', String(showScrollbar))
-    if (themeId) localStorage.setItem('foxwarm_theme_selection_v2', JSON.stringify({ version: 2, themeId, colorMode }))
+    if (themeId) localStorage.setItem('foxwarm_theme_selection_v3', JSON.stringify({ version: 3, themeId, lightThemeId: themeId, darkThemeId: themeId, colorMode }))
     if (codeNewWindow !== undefined) localStorage.setItem('foxwarm_code_open_new_window_v1', String(codeNewWindow))
     const json = body => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     window.__fetches = []
@@ -171,6 +172,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
     const body = await page.evaluate(() => document.body.innerText).catch(() => '')
     throw new Error(`${error.message}; page errors: ${pageErrors.join(' | ')}; body: ${body.slice(0, 500)}`)
   })
+  if (waitForSplash) await page.waitForSelector('[data-fox-splash]', { hidden: true })
   return page
 }
 
@@ -1883,7 +1885,10 @@ test('Timeline, Composer, History and Tasks share the reading column and pane-lo
     if (process.env.FOXWARM_CONTENT_WIDTH_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.FOXWARM_CONTENT_WIDTH_SCREENSHOT_DIR}/chat-reading-column.png` })
     for (const width of [1200, 900, 390]) {
       await page.setViewport({ width, height: 900 })
-      if (width < 768) await page.evaluate(() => window.foxwarmTest.switchToSession('e2e-a'))
+      if (width < 768) {
+        await page.waitForFunction(() => !document.querySelector('.foxwarm-desktop-workbench-shell'))
+        await clickReadyControl(page, '[data-session-id="e2e-a"]')
+      }
       await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root').getBoundingClientRect().width > 0)
       await aligned()
     }
@@ -1906,8 +1911,8 @@ test('Timeline, Composer, History and Tasks share the reading column and pane-lo
     await aligned()
     await page.setViewport({ width: 1800, height: 900 })
     for (const [id, selector] of [['system:search', '[data-history-search-view] > .foxwarm-content-column'], ['system:tasks', '.tasks-content']]) {
-      await page.waitForSelector(`[data-tab-id="${id}"]`, { visible: true })
-      await page.$eval(`[data-tab-id="${id}"]`, element => element.click())
+      await page.waitForSelector('.foxwarm-desktop-workbench-shell', { visible: true })
+      await clickReadyControl(page, `[data-tab-id="${id}"]`)
       await page.waitForSelector(selector, { visible: true })
       assert.equal(await page.$eval(selector, element => element.getBoundingClientRect().width), 1100)
       if (id === 'system:search') {
@@ -1924,7 +1929,11 @@ test('Timeline, Composer, History and Tasks share the reading column and pane-lo
         assert.deepEqual(edges[0], edges[1])
       }
       await page.setViewport({ width: 390, height: 900 })
-      await page.waitForFunction(selector => document.querySelector(selector)?.getBoundingClientRect().width > 0, {}, selector)
+      await page.waitForFunction(() => !document.querySelector('.foxwarm-desktop-workbench-shell'))
+      await page.waitForFunction(selector => {
+        const width = document.querySelector(selector)?.getBoundingClientRect().width
+        return width > 0 && width <= innerWidth - 32
+      }, {}, selector)
       assert.ok(await page.$eval(selector, element => element.getBoundingClientRect().width <= 390 - 32))
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
       await page.setViewport({ width: 1800, height: 900 })
@@ -2010,7 +2019,7 @@ test('Tasks and Nodes popup entries close the preview and activate singleton pag
     await page.reload({ waitUntil: 'domcontentloaded' })
     await page.waitForSelector('[data-node-surface]')
     assert.equal((await state(page)).tabsById['system:nodes'].title, 'Nodes')
-    await page.click('[data-tab-id="system:nodes"] button[title="Close tab"]')
+    await clickReadyControl(page, '[data-tab-id="system:nodes"] button[title="Close tab"]')
     await page.waitForFunction(() => !JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById['system:nodes'])
     assert.notEqual((await state(page)).hash, '#tab/system:nodes')
     await page.click('[data-tab-id="system:agents"]')
@@ -2616,6 +2625,148 @@ test('idle continuous viewport resize lets upward wheel replace pending bottom r
   } finally { await page.close() }
 })
 
+async function themePackageFromPreview(page, id, mode) {
+  await clickReadyControl(page, `[data-theme-preview-mode="${mode}"][data-theme-preview="${id}"]`)
+  await page.waitForSelector('[data-theme-preview-dialog]')
+  await page.evaluate(() => {
+    URL.createObjectURL = blob => { window.__exportedTheme = blob.text(); return 'blob:fixture-theme' }
+    HTMLAnchorElement.prototype.click = function () {}
+  })
+  await page.click('[data-theme-preview-dialog] button[aria-label="Export theme"]')
+  const manifest = await page.evaluate(async () => JSON.parse(await window.__exportedTheme))
+  await page.keyboard.press('Escape')
+  return manifest
+}
+
+async function importThemePackage(page, manifest) {
+  await page.$eval('[data-theme-manager] input[type="file"]', (input, text) => {
+    const files = new DataTransfer(); files.items.add(new File([text], 'fixture.foxwarm-theme.json', { type: 'application/json' }))
+    input.files = files.files; input.dispatchEvent(new Event('change', { bubbles: true }))
+  }, JSON.stringify(manifest))
+  await page.waitForSelector('[data-theme-preview-dialog]')
+}
+
+test('Appearance Auto keeps independent choices and previews require explicit application', async () => {
+  const setup = { id: 'system:setup', type: 'setup', title: 'Setup' }
+  const page = await openFixture({ tabs: [setup], activeTabId: setup.id, hash: '#setup', width: 1400 })
+  try {
+    await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }])
+    await page.waitForSelector('[data-theme-manager]')
+    await clickReadyControl(page, '[data-theme-color-mode="auto"]')
+    assert.equal(await page.$$eval('[data-theme-mode-panel]', panels => panels.length), 2)
+    await clickReadyControl(page, '[data-theme-preview-mode="light"][data-theme-preview="foxwarm.vector"]')
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.foxwarmTheme), 'foxwarm.default')
+    assert.equal(await page.$('[data-theme-preview-dialog] button[aria-label="Delete theme"]'), null)
+    assert.equal(await page.$('[data-theme-manager] select'), null)
+    assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-theme-preview-close')), true)
+    await page.keyboard.down('Shift'); await page.keyboard.press('Tab'); await page.keyboard.up('Shift')
+    assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Use for dark')
+    await page.keyboard.press('Tab')
+    assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-theme-preview-close')), true)
+    await page.keyboard.press('Escape')
+    assert.equal(await page.evaluate(() => document.activeElement?.dataset.themePreview), 'foxwarm.vector')
+    await clickReadyControl(page, '[data-theme-option-mode="light"][data-theme-option="foxwarm.vector"]')
+    await page.waitForSelector('[data-theme-preview-dialog]', { hidden: true })
+    await clickReadyControl(page, '[data-theme-preview-mode="dark"][data-theme-preview="foxwarm.catppuccin"]')
+    const rootAccent = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--foxwarm-color-accent'))
+    const darkScene = await page.$eval('[data-theme-workbench-preview]', scene => getComputedStyle(scene).getPropertyValue('--foxwarm-color-accent'))
+    assert.notEqual(darkScene, rootAccent, 'the detailed sample is locally themed, not inherited from the active app')
+    await page.click('[aria-label="Preview light"]')
+    assert.notEqual(await page.$eval('[data-theme-workbench-preview]', scene => getComputedStyle(scene).getPropertyValue('--foxwarm-color-accent')), darkScene)
+    assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--foxwarm-color-accent')), rootAccent)
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.foxwarmTheme), 'foxwarm.vector')
+    await page.click('[aria-label="Use for dark"]')
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.foxwarmTheme), 'foxwarm.vector', 'editing the inactive slot does not change the current appearance')
+    const selection = await page.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_theme_selection_v3')))
+    assert.equal(selection.lightThemeId, 'foxwarm.vector'); assert.equal(selection.darkThemeId, 'foxwarm.catppuccin')
+    await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'dark' }])
+    await page.waitForFunction(() => document.documentElement.dataset.foxwarmTheme === 'foxwarm.catppuccin')
+    assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--foxwarm-color-accent-text').trim()), '#11111b')
+    await clickReadyControl(page, '[data-theme-color-mode="light"]')
+    await page.waitForFunction(() => document.documentElement.dataset.foxwarmTheme === 'foxwarm.vector')
+    assert.equal(await page.$$eval('[data-theme-mode-panel]', panels => panels.length), 1)
+    await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForSelector('[data-theme-manager]')
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.foxwarmTheme), 'foxwarm.vector')
+    await clickReadyControl(page, '[data-theme-color-mode="auto"]')
+    await page.waitForFunction(() => document.documentElement.dataset.foxwarmTheme === 'foxwarm.catppuccin')
+    const manifest = await themePackageFromPreview(page, 'foxwarm.catppuccin', 'dark')
+    manifest.id = 'custom.auto-pair'; manifest.name = 'Imported fixture'
+    await importThemePackage(page, manifest)
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.foxwarmTheme), 'foxwarm.catppuccin', 'Import previews without silently applying')
+    await page.click('[aria-label="Use for dark"]')
+    await page.waitForFunction(() => document.documentElement.dataset.foxwarmTheme === 'custom.auto-pair')
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_theme_selection_v3')).lightThemeId), 'foxwarm.vector')
+    await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }])
+    await page.waitForFunction(() => document.documentElement.dataset.foxwarmTheme === 'foxwarm.vector')
+    await clickReadyControl(page, '[data-theme-preview-mode="dark"][data-theme-preview="custom.auto-pair"]')
+    page.once('dialog', dialog => dialog.accept())
+    await page.click('[aria-label="Delete theme"]')
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_theme_selection_v3')).darkThemeId === 'foxwarm.default')
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.foxwarmTheme), 'foxwarm.vector', 'deleting the inactive-slot theme preserves the active slot')
+    await page.setViewport({ width: 850, height: 900 })
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false)
+    await clickReadyControl(page, '[data-theme-preview-mode="dark"][data-theme-preview="foxwarm.catppuccin"]')
+    await page.setViewport({ width: 390, height: 844 })
+    assert.equal(await page.$eval('[data-theme-preview-dialog]', element => element.getBoundingClientRect().width <= innerWidth - 24), true)
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.theme-scene-sidebar')).display === 'none')
+    assert.ok(await page.$('[data-theme-workbench-preview] .theme-scene-composer'))
+    await page.keyboard.press('Escape')
+  } finally { await page.close() }
+})
+
+test('Focused panes keep neutral outlines and Sidebar launcher buttons keep visible borders', async () => {
+  const page = await openFixture({ tabs: [chat('e2e-a', false), chat('e2e-b', false)], split: true, splitSecondChat: true, responsiveChat: true, themeId: 'foxwarm.vector' })
+  try {
+    await page.waitForSelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) .foxwarm-chat-root')
+    const before = await page.$eval('[data-pane-id="pane-main"]', element => ({ border: getComputedStyle(element).borderColor, shadow: getComputedStyle(element).boxShadow }))
+    await page.click(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) .foxwarm-chat-root')
+    assert.deepEqual(await page.$eval('[data-pane-id="pane-main"]', element => ({ border: getComputedStyle(element).borderColor, shadow: getComputedStyle(element).boxShadow })), before)
+    assert.equal(before.shadow, 'none')
+    for (const title of ['Open agents overview', 'Open code', 'Create terminal tab']) {
+      const selector = `.foxwarm-sidebar-panel button[title="${title}"]`
+      const border = await page.$eval(selector, element => ({ width: getComputedStyle(element).borderTopWidth, style: getComputedStyle(element).borderTopStyle, color: getComputedStyle(element).borderTopColor }))
+      assert.equal(border.width, '1px'); assert.equal(border.style, 'solid'); assert.notEqual(border.color, 'rgba(0, 0, 0, 0)')
+    }
+  } finally { await page.close() }
+})
+
+test('Imported V3 theme independently binds workbench chrome and accent foreground', async () => {
+  const setup = { id: 'system:setup', type: 'setup', title: 'Setup' }
+  const page = await openFixture({ tabs: [setup, chat('e2e-a', false)], activeTabId: setup.id, hash: '#setup', width: 1400 })
+  try {
+    await page.waitForSelector('[data-theme-manager]')
+    await clickReadyControl(page, '[data-theme-color-mode="light"]')
+    const exported = await themePackageFromPreview(page, 'foxwarm.default', 'light')
+    assert.equal(exported.schemaVersion, 3)
+    exported.id = 'example.chrome-contract'; exported.name = 'Chrome contract'
+    const overrides = { sidebarSurface: '#fbeee8', tabBarSurface: '#e5eafa', workbenchHeaderSurface: '#e8fbe9', statusBarSurface: '#f8e8fb', accent: '#f0df80', accentText: '#242414' }
+    Object.assign(exported.variants.light.colors, overrides)
+    exported.variants.light.shape.cardRadiusPx = 24
+    exported.variants.light.composition.header = 'banded'
+    await importThemePackage(page, exported)
+    const cardGeometry = await page.$eval('[data-theme-workbench-preview] .theme-scene-tool', card => {
+      const header = card.querySelector('.theme-scene-tool-header')
+      const rect = card.getBoundingClientRect()
+      return { outerRadius: getComputedStyle(card).borderTopLeftRadius, clipping: getComputedStyle(card).overflow, innerRadius: getComputedStyle(header).borderTopLeftRadius, headerLeaksAtCorner: header.contains(document.elementFromPoint(rect.left + 3, rect.top + 3)) }
+    })
+    assert.deepEqual(cardGeometry, { outerRadius: '24px', clipping: 'hidden', innerRadius: '23px', headerLeaksAtCorner: false })
+    const apply = await page.$eval('[aria-label="Use for light"]', button => ({ ink: getComputedStyle(button).color, fill: getComputedStyle(button).backgroundColor }))
+    assert.equal(apply.ink, 'rgb(255, 255, 255)', 'the preview dialog retains the active application theme')
+    await page.click('[aria-label="Use for light"]')
+    await page.waitForFunction(() => document.documentElement.dataset.foxwarmTheme === 'example.chrome-contract')
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.foxwarm-sidebar-panel')).backgroundColor === 'rgb(251, 238, 232)')
+    assert.equal(await page.$eval('.foxwarm-workbench-tab-strip', element => getComputedStyle(element).backgroundColor), 'rgb(229, 234, 250)')
+    assert.equal(await page.$eval('.foxwarm-workbench-tab[data-tab-active="true"]', element => getComputedStyle(element).backgroundColor), 'rgb(232, 251, 233)')
+    assert.equal(await page.$eval('[data-workbench-status-bar]', element => getComputedStyle(element).backgroundColor), 'rgba(0, 0, 0, 0)', 'the full status bar stays transparent even with a custom status surface')
+    await clickReadyControl(page, '[data-theme-preview-mode="light"][data-theme-preview="foxwarm.vector"]')
+    assert.deepEqual(await page.$eval('[aria-label="Use for light"]', button => ({ ink: getComputedStyle(button).color, fill: getComputedStyle(button).backgroundColor })), { ink: 'rgb(36, 36, 20)', fill: 'rgb(240, 223, 128)' })
+    await page.keyboard.press('Escape')
+    await page.click('[data-tab-id="chat:e2e-a"]')
+    await page.waitForSelector('.foxwarm-chat-root')
+    assert.equal(await page.$eval('.foxwarm-chat-root .sticky', element => getComputedStyle(element).backgroundColor), 'rgb(232, 251, 233)')
+  } finally { await page.close() }
+})
+
 async function openConversationScrollFixture(phase) {
   const page = await openFixture({ responsiveChat: true, chatMessages: idleViewportMessages,
     timelineView: 'conversation', height: 1100, hash: '#tab/chat:e2e-a', tabs: [chat('e2e-a', false)] })
@@ -2891,4 +3042,46 @@ test('status popups keep full Node connectivity counts and compact theme-visible
 
     } finally { await page.close() }
   }
+})
+
+for (const reducedMotion of [false, true]) {
+  test(`startup splash unmounts and releases pointer input with reduced motion ${reducedMotion}`, async () => {
+    const page = await openFixture({ tabs: [chat('e2e-a', false)], activeTabId: 'chat:e2e-a', reducedMotion, waitForSplash: false })
+    try {
+      if (reducedMotion) {
+        const animations = await page.$$eval('[data-fox-splash] svg path', paths => paths.map(path => getComputedStyle(path).animationName))
+        assert.ok(animations.every(name => name === 'none'))
+      }
+      await page.waitForFunction(() => !document.querySelector('[data-fox-splash]'), { timeout: 8_000 })
+      await clickReadyControl(page, '.foxwarm-chat-composer-textarea')
+      assert.equal(await page.$eval('.foxwarm-chat-composer-textarea', editor => document.activeElement === editor), true)
+    } finally { await page.close() }
+  })
+}
+
+test('cross-window theme changes close a deleted preview and release the background', async () => {
+  const setup = { id: 'system:setup', type: 'setup', title: 'Setup' }
+  const first = await openFixture({ tabs: [setup], activeTabId: setup.id, hash: '#setup' })
+  let second
+  try {
+    await clickReadyControl(first, '[data-theme-color-mode="light"]')
+    const exported = await themePackageFromPreview(first, 'foxwarm.default', 'light')
+    exported.id = 'custom.cross-window'; exported.name = 'Cross-window fixture'
+    await importThemePackage(first, exported)
+    second = await openFixture({ tabs: [setup], activeTabId: setup.id, hash: '#setup' })
+    await clickReadyControl(second, '[data-theme-option-mode="light"][data-theme-option="custom.cross-window"]')
+    await first.bringToFront()
+    await first.waitForFunction(() => document.documentElement.dataset.foxwarmTheme === 'custom.cross-window')
+    await second.bringToFront()
+    await clickReadyControl(second, '[data-theme-preview-mode="light"][data-theme-preview="custom.cross-window"]')
+    second.once('dialog', dialog => dialog.accept())
+    await second.click('[aria-label="Delete theme"]')
+    await first.bringToFront()
+    await first.waitForFunction(() => !document.querySelector('[data-theme-preview-dialog]') && !document.getElementById('root').inert)
+    assert.notEqual(await first.evaluate(() => document.body.style.overflow), 'hidden')
+    assert.equal(await first.evaluate(() => document.documentElement.dataset.foxwarmTheme), 'foxwarm.default')
+    await clickReadyControl(first, '[data-theme-color-mode="dark"]')
+    await second.bringToFront()
+    await second.waitForFunction(() => document.documentElement.dataset.foxwarmThemeMode === 'dark')
+  } finally { await first.close(); await second?.close() }
 })

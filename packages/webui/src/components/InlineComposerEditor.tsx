@@ -1273,7 +1273,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
                 if (chip) removeChip(chip)
                 setActiveAttachmentRef(null)
               }}>Remove</button>
-              <button type="button" className="rounded bg-fw-accent px-3 py-1.5 text-sm text-fw-text-inverse" onClick={() => setActiveAttachmentRef(null)}>Close</button>
+              <button type="button" className="rounded bg-fw-accent px-3 py-1.5 text-sm text-fw-accent-text" onClick={() => setActiveAttachmentRef(null)}>Close</button>
             </div>
           </div>
         </div>, document.body,

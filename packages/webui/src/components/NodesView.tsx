@@ -45,7 +45,7 @@ export default function NodesView({ onBack }: { onBack?: () => void }) {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {pendingApprovals.total > 0 && !pendingApprovals.error ? <span className="text-xs text-fw-accent">{pendingApprovals.total} pending approvals</span> : null}
-            <button type="button" onClick={() => setOnboardingOpen(true)} className="rounded-lg bg-fw-accent px-3 py-2 text-sm font-medium text-white">New nodes</button>
+            <button type="button" onClick={() => setOnboardingOpen(true)} className="rounded-lg bg-fw-accent px-3 py-2 text-sm font-medium text-fw-accent-text">New nodes</button>
             <WorkbenchPaneControls />
           </div>
         </WorkbenchHeaderDragArea>

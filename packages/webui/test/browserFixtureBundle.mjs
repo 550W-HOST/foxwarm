@@ -5,6 +5,8 @@ import { build as esbuild } from 'esbuild'
 export function build(options) {
   return esbuild({
     ...options,
+    // Fixtures load the built stylesheet separately, including component CSS.
+    loader: { ...options.loader, '.css': 'empty' },
     plugins: [...(options.plugins || []), {
       name: 'standalone-editor-fallback',
       setup(builder) {

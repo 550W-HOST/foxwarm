@@ -8,6 +8,7 @@ import ContentHeader from './ContentHeader'
 import { useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import SimpleCodeEditor from './SimpleCodeEditor'
 import ThemeManager from './ThemeManager'
+import FoxLoaderPreview from './FoxLoaderPreview'
 import WebUiBrandingSettings, { type WebUiBrandingSettingsValue } from './WebUiBrandingSettings'
 
 type SetupStatus = {
@@ -519,6 +520,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
             <section id="setup-panel-appearance" role="tabpanel" aria-labelledby="setup-tab-appearance" data-setup-section="appearance" hidden={activeTab !== 'appearance'} className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
               <div className="mx-auto w-full max-w-5xl">
                 <ThemeManager />
+                <FoxLoaderPreview />
                 {webUiSettings && onInstanceNameChange && onTabIconChange && (
                   <WebUiBrandingSettings value={webUiSettings} onInstanceNameChange={onInstanceNameChange} onTabIconChange={onTabIconChange} />
                 )}
@@ -544,7 +546,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
               </div>
 
               <div className="mt-4 flex shrink-0 flex-wrap items-center gap-2">
-                <button disabled={savingModels} onClick={() => void saveModels()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-text-inverse hover:bg-fw-accent disabled:opacity-60">{savingModels ? 'Saving…' : 'Save models'}</button>
+                <button disabled={savingModels} onClick={() => void saveModels()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:opacity-60">{savingModels ? 'Saving…' : 'Save models'}</button>
                 <SaveFeedback section="models" result={modelsSaveResult} />
                 {forced && !canLeave && <span className="text-sm text-fw-warning dark:text-fw-warning">Save a valid model configuration to continue.</span>}
               </div>
@@ -560,7 +562,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
                 <SimpleCodeEditor value={configYaml} onChange={updateConfigYaml} language="yaml" height="100%" modelUri={APP_CONFIG_YAML_MODEL_URI} ariaLabel="Application config YAML editor" />
               </div>
               <div className="mt-4 flex shrink-0 flex-wrap items-center gap-2">
-                <button disabled={savingConfig} onClick={() => void saveConfig()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-text-inverse hover:bg-fw-accent disabled:opacity-60">{savingConfig ? 'Saving…' : 'Save config'}</button>
+                <button disabled={savingConfig} onClick={() => void saveConfig()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:opacity-60">{savingConfig ? 'Saving…' : 'Save config'}</button>
                 <SaveFeedback section="config" result={configSaveResult} />
               </div>
               {channelRows.length > 0 && (
@@ -583,7 +585,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
                 <h3 className="font-medium text-fw-text-strong">Weixin login</h3>
                 <p className="mt-1 text-sm text-fw-text">Connect Weixin by scanning a QR code.</p>
                 <div className="mt-4 flex flex-wrap items-center gap-2">
-                  <button disabled={weixinBusy} onClick={() => void startWeixinLogin()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-text-inverse hover:bg-fw-accent disabled:opacity-60">{weixinBusy ? 'Working…' : 'Start Weixin login'}</button>
+                  <button disabled={weixinBusy} onClick={() => void startWeixinLogin()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:opacity-60">{weixinBusy ? 'Working…' : 'Start Weixin login'}</button>
                   <button disabled={weixinBusy || !weixinSessionKey} onClick={() => void waitWeixinLogin()} className="rounded-lg border border-fw-border px-4 py-2 text-sm font-medium text-fw-text hover:bg-fw-hover disabled:opacity-60 dark:border-fw-border dark:text-fw-text-strong dark:hover:bg-fw-hover">Check login</button>
                 </div>
                 {weixinMessage && <div className="mt-3 text-sm text-fw-text">{weixinMessage}</div>}

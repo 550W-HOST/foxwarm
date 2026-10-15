@@ -38,21 +38,18 @@ function resolveSnapshot(): ThemeRuntimeSnapshot {
   const storage = browserStorage()
   const registry = readThemeRegistry(storage)
   const persistedSelection = readThemeSelection(storage)
-  let selection = persistedSelection
-  let activeTheme = registry.themes.find(theme => theme.id === persistedSelection.themeId)
-  if (!activeTheme) {
-    // A different tab may still be running an older WebUI bundle whose
-    // built-in registry does not know a newly added foxwarm.* theme. Fall
-    // back only in this runtime: persisting Default here would make that
-    // stale tab immediately overwrite the newer tab's valid selection.
-    selection = { ...persistedSelection, themeId: DEFAULT_THEME_ID }
-    activeTheme = registry.themes.find(theme => theme.id === DEFAULT_THEME_ID)!
-  }
   const systemPrefersDark = mediaQuery?.matches
     ?? (typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-color-scheme: dark)').matches)
-  const effectiveMode: ResolvedThemeMode = selection.colorMode === 'auto'
+  const effectiveMode: ResolvedThemeMode = persistedSelection.colorMode === 'auto'
     ? (systemPrefersDark ? 'dark' : 'light')
-    : selection.colorMode
+    : persistedSelection.colorMode
+  const chosenId = effectiveMode === 'light' ? persistedSelection.lightThemeId : persistedSelection.darkThemeId
+  let activeTheme = registry.themes.find(theme => theme.id === chosenId)
+  if (!activeTheme) {
+    // A stale bundle or an unavailable custom theme must not erase either stored choice.
+    activeTheme = registry.themes.find(theme => theme.id === DEFAULT_THEME_ID)!
+  }
+  const selection = { ...persistedSelection, themeId: activeTheme.id }
   return { selection, effectiveMode, activeTheme, registry, systemPrefersDark }
 }
 
@@ -226,28 +223,28 @@ export function subscribeThemeRuntime(listener: () => void): () => void {
   return () => listeners.delete(listener)
 }
 
-export function setThemeSelection(update: Partial<Pick<ThemeSelection, 'themeId' | 'colorMode'>>): ThemeRuntimeSnapshot {
+export function setThemeSelection(update: Partial<Omit<ThemeSelection, 'version'>>): ThemeRuntimeSnapshot {
   const current = getThemeSnapshot()
-  const themeId = update.themeId ?? current.selection.themeId
   const colorMode = update.colorMode ?? current.selection.colorMode
-  if (!current.registry.themes.some(theme => theme.id === themeId)) {
-    throw new Error(`Theme ${themeId} is not installed`)
-  }
   if (!(['auto', 'light', 'dark'] as ThemeColorMode[]).includes(colorMode)) {
     throw new Error(`Color mode ${colorMode} is not supported`)
   }
-  const selection: ThemeSelection = { version: 2, themeId, colorMode }
-  if (!writeThemeSelection(browserStorage(), selection)) {
-    throw new Error('Theme selection could not be persisted')
+  const mode = colorMode === 'auto' ? (current.systemPrefersDark ? 'dark' : 'light') : colorMode
+  const lightThemeId = update.lightThemeId ?? (mode === 'light' ? update.themeId : undefined) ?? current.selection.lightThemeId
+  const darkThemeId = update.darkThemeId ?? (mode === 'dark' ? update.themeId : undefined) ?? current.selection.darkThemeId
+  for (const [id, changed] of [[lightThemeId, update.lightThemeId !== undefined || (mode === 'light' && update.themeId !== undefined)], [darkThemeId, update.darkThemeId !== undefined || (mode === 'dark' && update.themeId !== undefined)]] as const) {
+    if (changed && !current.registry.themes.some(theme => theme.id === id)) throw new Error(`Theme ${id} is not installed`)
   }
+  const selection: ThemeSelection = { version: 3, themeId: mode === 'light' ? lightThemeId : darkThemeId, lightThemeId, darkThemeId, colorMode }
+  if (!writeThemeSelection(browserStorage(), selection)) throw new Error('Theme selection could not be persisted')
   return refresh()
 }
 
-export function installTheme(serialized: string, options: { replace?: boolean; select?: boolean } = {}): InstallThemeResult {
+export function installTheme(serialized: string, options: { replace?: boolean; select?: boolean; selectMode?: ResolvedThemeMode } = {}): InstallThemeResult {
   const result = installThemeFromJson(browserStorage(), serialized, options)
   if (!result.ok) return result
   refresh()
-  if (options.select) setThemeSelection({ themeId: result.theme.id })
+  if (options.select) setThemeSelection(options.selectMode === 'light' ? { lightThemeId: result.theme.id } : options.selectMode === 'dark' ? { darkThemeId: result.theme.id } : { themeId: result.theme.id })
   return result
 }
 
@@ -255,9 +252,12 @@ export function removeTheme(themeId: string): boolean {
   const current = getThemeSnapshot()
   const deleted = deleteCustomTheme(browserStorage(), themeId)
   if (!deleted) return false
-  if (current.selection.themeId === themeId) {
-    writeThemeSelection(browserStorage(), { ...current.selection, themeId: DEFAULT_THEME_ID })
-  }
+  writeThemeSelection(browserStorage(), {
+    ...current.selection,
+    themeId: current.selection.themeId === themeId ? DEFAULT_THEME_ID : current.selection.themeId,
+    lightThemeId: current.selection.lightThemeId === themeId ? DEFAULT_THEME_ID : current.selection.lightThemeId,
+    darkThemeId: current.selection.darkThemeId === themeId ? DEFAULT_THEME_ID : current.selection.darkThemeId,
+  })
   refresh()
   return true
 }

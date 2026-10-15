@@ -1,5 +1,6 @@
 import { memo } from 'react'
 import RuntimeBusySpinner from './RuntimeBusySpinner'
+import { FoxThinking } from './FoxLoaders'
 import type { TimelineView } from '../chatPreferences'
 import { getRuntimeStateSummary, type SessionRuntimeState } from '../sessionRuntimeState'
 
@@ -97,14 +98,12 @@ const ProcessingStatus = memo(function ProcessingStatus({
           >
             <div className="flex min-w-0 max-w-full items-center gap-2">
               {loading ? (
-                <span className="flex shrink-0 items-center gap-2" aria-label="Loading">
-                  <span className="h-2 w-2 rounded-full bg-fw-text-subtle dark:bg-fw-text-muted animate-bounce" />
-                  <span className="h-2 w-2 rounded-full bg-fw-text-subtle dark:bg-fw-text-muted animate-bounce" style={{ animationDelay: '0.1s' }} />
-                  <span className="h-2 w-2 rounded-full bg-fw-text-subtle dark:bg-fw-text-muted animate-bounce" style={{ animationDelay: '0.2s' }} />
-                </span>
+                <FoxThinking label="Loading" />
               ) : showStatusLabel && (
                 runtimeStateName === 'waiting' || interrupted ? (
                   <span className={`h-2 w-2 shrink-0 rounded-full ${tone.dot}`} data-processing-status-dot="static" />
+                ) : runtimeStateName === 'requesting-model' && !isCompacting ? (
+                  <FoxThinking className="shrink-0" />
                 ) : (
                   <RuntimeBusySpinner className={`h-4 w-4 shrink-0 ${tone.text}`} />
                 )

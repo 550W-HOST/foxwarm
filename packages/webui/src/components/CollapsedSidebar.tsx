@@ -40,7 +40,7 @@ export default function CollapsedSidebar({
     .filter((s) => (s.pinned || !s.parentSessionId) && !s.archived)
 
   return (
-    <div className="foxwarm-sidebar-panel h-full w-12 flex flex-col items-center bg-fw-surface border-r border-fw-border">
+    <div className="foxwarm-sidebar-panel h-full w-12 flex flex-col items-center bg-fw-sidebar-surface border-r border-fw-border">
       {/* Header */}
       <div className="flex flex-col items-center gap-2 py-3 border-b border-fw-border w-full">
         <button

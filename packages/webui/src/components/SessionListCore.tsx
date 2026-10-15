@@ -1642,7 +1642,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               </button>
               <button
                 onClick={() => renameSession()}
-                className="px-4 py-2 text-sm rounded bg-fw-accent text-fw-text-inverse hover:bg-fw-accent disabled:opacity-60"
+                className="px-4 py-2 text-sm rounded bg-fw-accent text-fw-accent-text hover:bg-fw-accent disabled:opacity-60"
                 disabled={renameSubmitting}
               >
                 {renameSubmitting ? 'Saving...' : (renameValue.trim() ? 'Save' : 'Clear name')}
@@ -1748,7 +1748,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               </button>
               <button
                 onClick={() => toggleArchive(archiveConfirm, true, effectiveArchiveIncludeDescendants)}
-                className="rounded bg-fw-accent px-4 py-2 text-sm text-fw-text-inverse hover:bg-fw-accent disabled:opacity-60"
+                className="rounded bg-fw-accent px-4 py-2 text-sm text-fw-accent-text hover:bg-fw-accent disabled:opacity-60"
                 disabled={archiveSubmitting}
               >
                 {archiveSubmitting

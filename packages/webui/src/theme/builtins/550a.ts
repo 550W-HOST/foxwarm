@@ -101,7 +101,7 @@ const consoleDark = variant({
 })
 
 export const THEME_550A = checkedBuiltin({
-  schemaVersion: 2,
+  schemaVersion: 3,
   id: THEME_550A_ID,
   name: '550A',
   description: 'A dense monospace console theme with a red accent and subtle grid.',

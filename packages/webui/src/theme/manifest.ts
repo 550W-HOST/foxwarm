@@ -1,8 +1,9 @@
-export const THEME_SCHEMA_VERSION = 2 as const
+export const THEME_SCHEMA_VERSION = 3 as const
 export const THEME_FILE_SUFFIX = '.foxwarm-theme.json'
 export const THEME_MAX_FILE_BYTES = 64 * 1024
 
 export const THEME_COLOR_KEYS = [
+  'sidebarSurface', 'tabBarSurface', 'workbenchHeaderSurface', 'statusBarSurface', 'accentText',
   'canvas', 'canvasEdge', 'surface', 'surfaceRaised', 'surfaceSunken', 'input', 'overlay',
   'hover', 'selected', 'borderMuted', 'border', 'borderStrong', 'text', 'textMuted',
   'textSubtle', 'textStrong', 'textInverse', 'accent', 'accentMuted', 'accentSurface',
@@ -404,7 +405,7 @@ export function validateThemeManifest(value: unknown): ThemeValidationResult {
       [colors.text, colors.surface, 'text on surface', 4.5],
       [colors.textStrong, colors.canvas, 'strong text on canvas', 4.5],
       [colors.surface, colors.textStrong, 'surface text on strong fill', 4.5],
-      [colors.textInverse, colors.accent, 'inverse text on accent', 3],
+      [colors.accentText, colors.accent, 'accent text on accent', 3],
       [colors.tool, colors.toolSurface, 'tool text on tool surface', 3],
     ] as const) {
       const ratio = colorContrastRatio(foreground, background)
