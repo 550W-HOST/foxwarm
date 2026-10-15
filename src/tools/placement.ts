@@ -10,7 +10,7 @@ export interface ToolPlacementMetadata {
   defaultAction?: string;
   actionOwners?: Readonly<Record<string, ToolPlacementOwner>>;
   /** Root `node` selects where this tool's own file effect/source lives. */
-  nodeArgumentRole?: 'placement';
+  nodeArgumentRole?: 'placement' | 'file-source';
 }
 
 export interface ResolvedBuiltinToolPlacement {
@@ -74,8 +74,8 @@ export const BUILTIN_TOOL_PLACEMENTS = {
   browse_interact: { owner: 'node-environment' },
   search_tools: { owner: 'dispatcher/container' },
   call_tool: { owner: 'dispatcher/container' },
-  run_script: { owner: 'dispatcher/container' },
-  start_toolscript_run: { owner: 'dispatcher/container' },
+  run_script: { owner: 'dispatcher/container', nodeArgumentRole: 'file-source' },
+  start_toolscript_run: { owner: 'dispatcher/container', nodeArgumentRole: 'file-source' },
   continue_script: { owner: 'dispatcher/container' },
   list_toolscript_runs: { owner: 'dispatcher/container' },
   get_toolscript_run: { owner: 'dispatcher/container' },
@@ -143,4 +143,29 @@ export function resolveBuiltinToolPlacement(
 export function builtinNodeArgumentSelectsPlacement(name: string): boolean {
   const metadata = BUILTIN_TOOL_PLACEMENTS[name as RegisteredBuiltinToolName] as ToolPlacementMetadata | undefined;
   return metadata?.nodeArgumentRole === 'placement';
+}
+
+export function builtinNodeArgumentSelectsFileSource(name: string): boolean {
+  const metadata = BUILTIN_TOOL_PLACEMENTS[name as RegisteredBuiltinToolName] as ToolPlacementMetadata | undefined;
+  return metadata?.nodeArgumentRole === 'file-source';
+}
+
+export function builtinHasOptionalFileNode(name: string): boolean {
+  return builtinNodeArgumentSelectsPlacement(name) || builtinNodeArgumentSelectsFileSource(name);
+}
+
+/** Resolve only a ToolScript source; the VM and nested tools keep their owner context. */
+export function resolveToolScriptSourceNode(args: Record<string, any>, currentNode: string): string | undefined {
+  if (typeof args.code === 'string' && args.code.trim()) {
+    if (Object.prototype.hasOwnProperty.call(args, 'node')) {
+      throw new Error('node applies only to filePath, not inline code.');
+    }
+    return undefined;
+  }
+  const selector = args.node;
+  if (selector !== undefined && selector !== null && typeof selector !== 'string') {
+    throw new Error('node must be a Node ID or current.');
+  }
+  const node = typeof selector === 'string' ? selector.trim() : '';
+  return !node || node.toLowerCase() === 'current' ? currentNode : node;
 }

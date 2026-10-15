@@ -21,7 +21,9 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - `BUILTIN_TOOL_PLACEMENTS` — Exhaustive ownership metadata for every registered builtin, independent of schemas and permission rules.
 - `NODE_ENVIRONMENT_BUILTIN_NAMES` — Intentional current-node environment primitive names.
 - `resolveBuiltinToolPlacement(name, args, currentNode)` — Resolves action-aware ownership and the current execution node.
-- `builtinNodeArgumentSelectsPlacement(name)` — Reports the explicit root-`node` placement classification used only by file source/target builtins.
+- `builtinNodeArgumentSelectsPlacement(name)` — Reports root-`node` placement selection for file delivery/image operations.
+- `builtinNodeArgumentSelectsFileSource(name)` / `resolveToolScriptSourceNode(args, currentNode)` — Classifies and resolves ToolScript source-only selectors without relocating execution; inline rejects an explicit selector.
+- `builtinHasOptionalFileNode(name)` — Marks unsupplied placement/source selectors for conservative authorization discovery.
 - `isToolDirectlyExposedToModel(toolName)` — Check if a tool has `defaultInject: true`
 - `getToolPermissionNode(toolName, executionNode, targetNode)` — Determine which node governs permission for a tool call
 - `resolveMemorySearchOptions` — Scope/lineage helper used by `recall({ vector_query })` to constrain semantic retrieval before archive back-resolution; an exact trusted current owner supplies source identity/aliases directly.

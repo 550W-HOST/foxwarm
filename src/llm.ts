@@ -17,7 +17,7 @@ import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotat
 import { listSkills } from './skills';
 import { checkGenericToolAuthorizationForSession, checkPathAccess, isToolVisibleForSession } from './isolatedCheck';
 import { isPermissionNeutralBuiltinDispatcher } from './permissions';
-import { builtinNodeArgumentSelectsPlacement, NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './tools/placement';
+import { builtinHasOptionalFileNode, NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './tools/placement';
 import type { ResolvedTool } from './tools/resolvedTools';
 import { executeResolvedTool, parseUnifiedToolCall, resolveDirectTool } from './tools/resolvedTools';
 import { expandHomePath } from './utils/pathResolve';
@@ -2395,7 +2395,7 @@ export async function resolveSessionToolDefinitions(session: Session, override?:
         }
         const placement = resolveBuiltinToolPlacement(tool.name, undefined, currentNode);
         return isToolVisibleForSession(session, { source: 'builtin', tool: tool.name }, placement.executionNode,
-            { targetNodeUnknown: builtinNodeArgumentSelectsPlacement(tool.name) });
+            { targetNodeUnknown: builtinHasOptionalFileNode(tool.name) });
     });
     if (!session.currentNode || session.currentNode === 'master') return definitions;
     let node;

@@ -15,8 +15,8 @@ import {
 import { nodeProviderRegistry } from './nodes/providers';
 import type { Session } from './types';
 import { getAgentDir } from './config';
-import { checkToolPermission, isToolVisibleForSession } from './isolatedCheck';
-import { createHash } from 'node:crypto';
+import { checkToolPermission, checkToolPermissionForSession, isToolVisibleForSession } from './isolatedCheck';
+import { decodeNodeTransferFile } from './nodeFileTransfer';
 import type { NodeProtocolCompatibility } from '../packages/shared/dist/nodeProtocol';
 
 export type NodeExecutionRoutingSnapshot = {
@@ -35,6 +35,8 @@ export type NodeExecutionRequest = {
 };
 
 export type NodeExecutionResponse = { result: unknown };
+export type NodeFileReadRequest = { sourceSessionId: string; nodeId: string; filePath: string; routingSnapshot?: NodeExecutionRoutingSnapshot };
+export type NodeFileReadResponse = { content: string };
 export type NodeTopologyListRequest = { sourceSessionId: string; nodeId?: string; currentNode?: string };
 export type NodeTopologyListResponse = { nodes: Array<{
   id: string;
@@ -63,7 +65,8 @@ export type NodeLifecycleRequest = {
 };
 export type NodeLifecycleResponse = { result: NodeLifecycleResult };
 
-export const nodeExecutionServiceDescriptor = defineRpcService('node-execution', 6, {
+export const nodeExecutionServiceDescriptor = defineRpcService('node-execution', 7, {
+  readFile: rpcMethod<NodeFileReadRequest, NodeFileReadResponse>(),
   execute: rpcMethod<NodeExecutionRequest, NodeExecutionResponse>({ cancellation: 'settle' }),
   list: rpcMethod<NodeTopologyListRequest, NodeTopologyListResponse>(),
   select: rpcMethod<NodeSelectRequest, NodeSelectResponse>(),
@@ -284,6 +287,28 @@ export function createNodeExecutionServiceHandler(options: {
         rethrowProviderError(error);
       }
     },
+    async readFile(input, rpcContext) {
+      const { sourceSessionId, source } = await requireSource(input,
+        ['sourceSessionId', 'nodeId', 'filePath', 'routingSnapshot'], 'Node file read request');
+      const nodeId = requireBoundedString(input.nodeId, 'nodeId', 128);
+      if (nodeId === 'master') throw new RpcError('NODE_EXECUTION_MASTER_FORBIDDEN', 'The colocated master node must read files directly without Node execution RPC.');
+      const filePath = requireString(input.filePath, 'filePath');
+      const routingSnapshot = normalizeRoutingSnapshot(input.routingSnapshot);
+      if (routingSnapshot && routingSnapshot.currentNode !== nodeId) {
+        throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'File read cwd must belong to the target Node.');
+      }
+      await requireNodeExecutionAccess(sourceSessionId, nodeId);
+      await checkToolPermissionForSession(source, { source: 'node', node: nodeId, tool: 'read' }, nodeId, { filePath });
+      const routing = routingSnapshot || (!options.expectedSourceSessionId && source.currentNode === nodeId
+        ? { currentNode: nodeId, ...(typeof source.cwd === 'string' ? { cwd: source.cwd } : {}) } : undefined);
+      try {
+        const bytes = await providers.readFile({
+          sourceSessionId, nodeId, toolName: 'read', args: { filePath },
+          context: { agent: source.agent || 'main', ...(routing ? { currentNode: nodeId, ...(routing.cwd !== undefined ? { cwd: routing.cwd } : {}) } : {}) },
+        }, { signal: rpcContext.signal });
+        return { content: bytes.toString('utf8') };
+      } catch (error) { rethrowProviderError(error); }
+    },
     async list(input, rpcContext) {
       const { source } = await requireSource(input, ['sourceSessionId', 'nodeId', 'currentNode'], 'Node list request');
       const filter = input.nodeId === undefined ? undefined : requireBoundedString(input.nodeId, 'nodeId', 128);
@@ -354,16 +379,7 @@ export function createNodeExecutionServiceHandler(options: {
       if (sourceNode !== 'master') await requireNodeExecutionAccess(sourceSessionId, sourceNode);
       if (targetNode !== 'master') await requireNodeExecutionAccess(sourceSessionId, targetNode);
       const file = await nodesManager.readFileFromNode(sourceNode, sourcePath, sourceSessionId);
-      if (typeof file.dataBase64 !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(file.dataBase64)) {
-        invalidResponse('Node copy source returned invalid base64 data.');
-      }
-      const decoded = Buffer.from(file.dataBase64, 'base64');
-      if (decoded.toString('base64') !== file.dataBase64) invalidResponse('Node copy source returned non-canonical base64 data.');
-      if (!Number.isSafeInteger(file.sizeBytes) || file.sizeBytes < 0 || file.sizeBytes !== decoded.length) invalidResponse('Node copy source returned an invalid sizeBytes.');
-      if (typeof file.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(file.sha256)
-        || createHash('sha256').update(decoded).digest('hex').toLowerCase() !== file.sha256.toLowerCase()) {
-        invalidResponse('Node copy source returned an invalid sha256.');
-      }
+      try { decodeNodeTransferFile(file); } catch (error) { invalidResponse((error as Error).message); }
       const written = await nodesManager.writeFileToNode(targetNode, targetPath, file.dataBase64, input.overwrite === true, sourceSessionId);
       if (typeof written.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(written.sha256)) invalidResponse('Node copy returned an invalid sha256.');
       if (typeof written.overwritten !== 'boolean') invalidResponse('Node copy returned an invalid overwritten flag.');

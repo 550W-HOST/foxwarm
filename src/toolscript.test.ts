@@ -761,7 +761,7 @@ test('run_script nested builtin calls use unified placement for session-owner to
 
   try {
     const toolMessage = await executeTools(
-      [{ id: 'run-script-placement', name: 'run_script', args: { filePath: scriptName } }],
+      [{ id: 'run-script-placement', name: 'run_script', args: { node: 'master', filePath: scriptName } }],
       { sessionId, session },
       session,
     );
@@ -929,7 +929,7 @@ test('run_script nested remote builtin uses the Node execution service', async (
       return { forwarded: true };
     };
     const toolMessage = await executeTools(
-      [{ id: 'run-script-remote-builtin', name: 'run_script', args: { filePath: scriptName } }],
+      [{ id: 'run-script-remote-builtin', name: 'run_script', args: { node: 'master', filePath: scriptName } }],
       { sessionId, session },
       session,
     );

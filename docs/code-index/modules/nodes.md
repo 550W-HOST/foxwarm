@@ -31,6 +31,7 @@ Client implementations are separate modules: [CLI node](./cli-node.md) and [brow
 - `nodeProviderRegistry` — production registry for fixed master/authenticated-remote providers plus normalized startup executable providers.
 - `foxwarm-node-provider@1` — one-shot bounded JSON stdin/stdout contract for trusted executable sandbox providers exposing filesystem primitives, optional complete exec, and optional create/ensure/inspect/destroy operations; see `docs/executable-node-provider-protocol.md`.
 - `executeNodeTool()` — placement-neutral service caller for direct and dynamic non-master Node capability execution.
+- `readNodeFile()` — source-fenced complete non-master file reader behind ToolScript source loading; it retains canonical read authorization and provider availability rather than using displayed tool text.
 
 ## Bootstrap surface
 

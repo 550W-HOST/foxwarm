@@ -3,19 +3,19 @@
 Files: src/nodeExecutionService.ts, src/nodeExecution.ts, src/nodeExecution.test.ts
 Secondary files: src/llm.ts, src/tools/nodeTools.ts, src/tools/unifiedTools.test.ts, src/toolscript.test.ts, src/nodeExecutionExternalPlacement.test.ts, src/index.ts
 
-The `node-execution@6` execute method retains settled receipts on ordinary caller cancellation. Main pre-effect admission checks the signal; only providers advertising `supportsExecWaitCancellation` receive it during internal exec waiting, avoiding an unsupported adapter's ordinary-Stop abort-to-kill path while forwarding independent hard cancellation for its existing deadline/owner-loss cleanup. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
+The `node-execution@7` execute method retains settled receipts on ordinary caller cancellation. Main pre-effect admission checks the signal; only providers advertising `supportsExecWaitCancellation` receive it during internal exec waiting, avoiding an unsupported adapter's ordinary-Stop abort-to-kill path while forwarding independent hard cancellation for its existing deadline/owner-loss cleanup. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
 
 ## Purpose
 
-Provides the versioned RPC boundary for canonical Node tool execution over provider backends and bounded topology, lifecycle, and file-transfer operations. Main-local callers use a local transport; a Session worker borrows its one reverse transport to reach the same Main-owned handler. Main resolves every non-master Node through the generic provider registry, while the colocated `master` Node preserves direct local named-handler execution.
+Provides the versioned RPC boundary for canonical Node tool execution over provider backends and bounded topology, lifecycle, and file-transfer operations. Main-local callers use a local transport; a Session worker borrows its one reverse transport to reach the same Main-owned handler. Main resolves every non-master Node through the generic provider registry, while the colocated `master` Node preserves direct local named-handler execution and the separately authorized native ToolScript source loader.
 
 ## Key exports
 
 - `plainJsonWithin(value, maxBytes)` — shared bounded plain-JSON copy for Node capability/schema disclosure; no Session authority is implied.
 
-- `nodeExecutionServiceDescriptor` — version 5 descriptor with fixed complete-capability execute, topology/provider list, selection validation, provider lifecycle, and compound copy methods; topology retains structured Node unavailability and core protocol compatibility; version 5 adds the trusted optional programmatic producer hint to execute.
+- `nodeExecutionServiceDescriptor` — version 7 descriptor with fixed complete-capability execute, readonly complete-file read, topology/provider list, selection validation, provider lifecycle, and compound copy methods; topology retains structured Node unavailability and core protocol compatibility. Execute retains the trusted optional programmatic producer hint.
 - `createNodeExecutionServiceHandler()` — validates source identity, optional exact worker-source fence, non-master target, isolation binding, args, optional routing snapshot, and independently validated producer hint before authoritative provider resolution.
-- `executeNodeTool()` / `listNodeTopology()` / `validateNodeSelection()` / `listNodeLifecycleProviders()` / `executeNodeLifecycle()` / `copyBetweenNodes()` — placement-neutral callers for Node execution and operation-specific topology/lifecycle/copy behavior.
+- `executeNodeTool()` / `readNodeFile()` / `listNodeTopology()` / `validateNodeSelection()` / `listNodeLifecycleProviders()` / `executeNodeLifecycle()` / `copyBetweenNodes()` — placement-neutral callers for Node execution and operation-specific topology/lifecycle/copy behavior.
 - `initializeNodeExecution()` / `shutdownNodeExecution()` — owned-local or borrowed-reverse client lifecycle with one-way terminal fencing.
 - `resetNodeExecutionForTests()` — explicit test-only reset after terminal shutdown.
 
@@ -28,6 +28,8 @@ Every reverse method fences the exact expected source before lookup/effect. The 
 Direct adjacent `exec` calls pass the batch's captured Node/cwd snapshot plus a trusted deferred-cwd marker, allowing resident providers to return the existing private `__execBatchCwdSync` result for ordered application by the exact owner. Worker direct non-exec and unified builtins also pass the exact-owner snapshot when they target its current non-master Node because Main's projection is not authoritative yet. Dynamic explicit other-Node calls omit cwd, so cwd is not leaked across Node targets. The marker is routing metadata, never a model argument or visible result field.
 
 - Core rejects leading Agent path tokens for primitive filesystem/exec providers before invoking their target-local backends; URI/opaque ordinary paths remain provider-owned. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch-node-execution.md#d-dispatch-native-agent-paths-and-code-targets).
+
+The fixed `readFile` method accepts only exact source/Node/filePath and optional routing snapshot, rejects master, checks the reverse source fence and existing Node access/read authorization, and returns complete UTF-8 text from the registry filesystem boundary. A supplied cwd must identify that same target Node; Worker source routing comes from its exact hot owner, not Main projection. Primitive source reads retain provider-owned paths and detect incomplete data against stat size; authenticated CLI reads retain canonical local read approval before consuming proven complete content or reusing full-file transport and its existing integrity contract. Legacy Windows cross-drive relative ambiguity fails explicitly when no resolved source path is available. They never parse formatted read output, consume a truncated programmatic result, or fall back to Main. See [ToolScript source](./src-toolscript.md#d-toolscript-authorized-file-source).
 
 ## Integration
 

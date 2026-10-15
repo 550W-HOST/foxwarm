@@ -6,7 +6,7 @@ import { nodesManager } from '../nodes/manager';
 import path from 'path';
 import { checkToolPermission, checkToolPermissionForSession } from '../isolatedCheck';
 import { isPermissionNeutralBuiltinDispatcher } from '../permissions';
-import { builtinNodeArgumentSelectsPlacement, NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './placement';
+import { builtinNodeArgumentSelectsFileSource, builtinNodeArgumentSelectsPlacement, resolveToolScriptSourceNode, NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './placement';
 import type { ToolArgs, ToolContext, UnifiedToolSource } from './helpers';
 import { RESOLVED_PATH_SIDECAR, type ResolvedToolPath } from '../../packages/shared/dist/resolvedPathMetadata';
 
@@ -116,7 +116,9 @@ function resolveBuiltin(invocationName: string, name: string, rawArgs: ToolArgs,
   const targetNode = nodeSelectsPlacement ? normalizeNodeId(rawArgs.node, current) : current;
   const args = { ...rawArgs }; if (nodeSelectsPlacement) delete args.node;
   const placement = resolveBuiltinToolPlacement(name, args, targetNode);
-  const permissionNode = nodeSelectsPlacement ? targetNode : placement.executionNode;
+  const sourceNode = builtinNodeArgumentSelectsFileSource(name) ? resolveToolScriptSourceNode(args, current) : undefined;
+  if (sourceNode !== undefined) args.node = sourceNode;
+  const permissionNode = sourceNode ?? (nodeSelectsPlacement ? targetNode : placement.executionNode);
   return validatePlacement({ invocationName, source: 'builtin', name, args, executionNode: placement.executionNode,
     permissionNode, ...(nodeSelectsPlacement ? { targetNode } : {}) }, ctx);
 }
