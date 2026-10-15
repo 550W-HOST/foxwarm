@@ -620,7 +620,10 @@ public sealed partial class CompactLifecycleTests
         {
             Assert.Single(fixture.Store.Archive.ReadBlocks());
             Assert.Equal(archive.Length + 1, fixture.Store.Archive.ReadMessages().Count);
-            Assert.Contains(live.History.Materialize(), row => row["__meta"]?["contextBlock"] is JsonObject);
+            Assert.Contains(
+                live.History.Materialize(),
+                row => row["__meta"]?["contextBlock"] is JsonObject
+            );
             Assert.Contains(
                 "refreshed memory",
                 SessionWait.Text(live.AuthorityEnvelope["persistentMemorySnapshot"])
@@ -936,7 +939,10 @@ public sealed partial class CompactLifecycleTests
         {
             Assert.Null(fixture.Owner.Entry.LastBackgroundProcessorFailure);
             Assert.Empty(current.Queue);
-            Assert.Contains(current.History.Materialize(), row => row["__meta"]?["contextBlock"] is JsonObject);
+            Assert.Contains(
+                current.History.Materialize(),
+                row => row["__meta"]?["contextBlock"] is JsonObject
+            );
             var body = fixture.Peer.NormalBodies.Last();
             Assert.Contains("CTX-BLOCK", body);
             Assert.Contains("refreshed system snapshot during retry", body);
@@ -1021,7 +1027,8 @@ public sealed partial class CompactLifecycleTests
         while (
             !fixture
                 .Owner.Entry.Snapshot()
-                .History.Materialize().Any(row => row["__meta"]?["noticeType"]?.GetValue<string>() == "llm-retry")
+                .History.Materialize()
+                .Any(row => row["__meta"]?["noticeType"]?.GetValue<string>() == "llm-retry")
         )
             await Task.Delay(5, timeout.Token);
         fixture.HoldIngress = true;

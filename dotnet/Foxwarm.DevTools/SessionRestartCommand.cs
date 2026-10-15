@@ -260,18 +260,10 @@ internal static class SessionRestartCommand
                 ["stopping"] = final.Stopping,
                 ["successfulEffects"] = tools.SuccessfulEffects,
                 ["roles"] = new JsonArray(
-                    final
-                        .History.Select(message =>
-                            JsonValue.Create(message.Role)
-                        )
-                        .ToArray()
+                    final.History.Select(message => JsonValue.Create(message.Role)).ToArray()
                 ),
                 ["seqs"] = new JsonArray(
-                    final
-                        .History.Select(message =>
-                            JsonValue.Create(message.Sequence)
-                        )
-                        .ToArray()
+                    final.History.Select(message => JsonValue.Create(message.Sequence)).ToArray()
                 ),
             }
         );

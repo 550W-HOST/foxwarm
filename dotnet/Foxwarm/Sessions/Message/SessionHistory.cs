@@ -10,10 +10,14 @@ public sealed class HistoryMessage
 {
     public JsonElement Data { get; }
     public string? Role => Text(Data, "role");
-    public long? Sequence => Data.TryGetProperty("__meta", out var meta)
+    public long? Sequence =>
+        Data.TryGetProperty("__meta", out var meta)
         && meta.ValueKind == JsonValueKind.Object
-        && meta.TryGetProperty("seq", out var seq) ? Integer(seq) : null;
-    public bool IsModelVisible => !Data.TryGetProperty("modelVisible", out var visible)
+        && meta.TryGetProperty("seq", out var seq)
+            ? Integer(seq)
+            : null;
+    public bool IsModelVisible =>
+        !Data.TryGetProperty("modelVisible", out var visible)
         || visible.ValueKind != JsonValueKind.False;
 
     private HistoryMessage(JsonElement owned) => Data = owned;
@@ -29,7 +33,9 @@ public sealed class HistoryMessage
     }
 
     public JsonObject ToJson() => JsonObject.Create(Data)!;
+
     public string ToJsonString() => Data.GetRawText();
+
     internal bool ContentEquals(HistoryMessage other) =>
         ReferenceEquals(this, other) || JsonElement.DeepEquals(Data, other.Data);
 
@@ -40,14 +46,21 @@ public sealed class HistoryMessage
         if (value.TryGetInt64(out var integer))
             return integer;
         var real = value.GetDouble();
-        return double.IsFinite(real) && real >= long.MinValue && real <= long.MaxValue
-            && Math.Truncate(real) == real ? (long)real : null;
+        return
+            double.IsFinite(real)
+            && real >= long.MinValue
+            && real <= long.MaxValue
+            && Math.Truncate(real) == real
+            ? (long)real
+            : null;
     }
 
     internal static string? Text(JsonElement element, string property) =>
         element.ValueKind == JsonValueKind.Object
         && element.TryGetProperty(property, out var value)
-        && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+        && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
 }
 
 /// <summary>A persistent history root; unchanged records and tree branches are shared.</summary>
@@ -76,7 +89,9 @@ public sealed class SessionHistory : IReadOnlyList<HistoryMessage>
         new(messages.SetItem(index, message));
 
     public JsonObject[] Materialize() => messages.Select(message => message.ToJson()).ToArray();
+
     public IEnumerator<HistoryMessage> GetEnumerator() => messages.GetEnumerator();
+
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 }
 
@@ -86,14 +101,26 @@ public sealed class SessionHistoryBuffer : IReadOnlyList<HistoryMessage>
     private SessionHistory history = SessionHistory.Empty;
     public int Count => history.Count;
     public HistoryMessage this[int index] => history[index];
+
     public SessionHistory Snapshot() => history;
+
     public void Reset(SessionHistory value) => history = value;
+
     public void Clear() => history = SessionHistory.Empty;
+
     public void Add(JsonObject message) => Add(HistoryMessage.FromJson(message));
+
     public void Add(HistoryMessage message) => history = history.Append([message]);
-    public void AddRange(IEnumerable<JsonObject> messages) => history = history.AppendJson(messages);
-    public void AddRange(IEnumerable<HistoryMessage> messages) => history = history.Append(messages);
-    public void Replace(int index, HistoryMessage message) => history = history.Replace(index, message);
+
+    public void AddRange(IEnumerable<JsonObject> messages) =>
+        history = history.AppendJson(messages);
+
+    public void AddRange(IEnumerable<HistoryMessage> messages) =>
+        history = history.Append(messages);
+
+    public void Replace(int index, HistoryMessage message) =>
+        history = history.Replace(index, message);
+
     public int FindIndex(Predicate<HistoryMessage> predicate)
     {
         for (var index = 0; index < Count; index++)
@@ -101,6 +128,8 @@ public sealed class SessionHistoryBuffer : IReadOnlyList<HistoryMessage>
                 return index;
         return -1;
     }
+
     public IEnumerator<HistoryMessage> GetEnumerator() => history.GetEnumerator();
+
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 }

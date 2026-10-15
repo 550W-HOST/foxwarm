@@ -333,7 +333,8 @@ public sealed class HandoffConfirmationTests
                 var child = await manager.RequiredAsync(row["id"]!.GetValue<string>());
                 var text = child
                     .Entry.Snapshot()
-                    .History.Materialize().SelectMany(message => message["parts"]!.AsArray())
+                    .History.Materialize()
+                    .SelectMany(message => message["parts"]!.AsArray())
                     .Select(part => part?["system"]?.GetValue<string>())
                     .Where(value => value is not null);
                 Assert.Equal(

@@ -24,8 +24,8 @@ public sealed class CanonicalMessage
         return FromOwned(node);
     }
 
-    public static CanonicalMessage FromNode(JsonObject input)
-        => FromOwned((JsonObject)input.DeepClone());
+    public static CanonicalMessage FromNode(JsonObject input) =>
+        FromOwned((JsonObject)input.DeepClone());
 
     private static CanonicalMessage FromOwned(JsonObject owned)
     {
@@ -48,7 +48,8 @@ public sealed class CanonicalMessage
 
     internal static bool IsVisible(JsonObject input)
     {
-        var role = input["role"]?.GetValue<string>()
+        var role =
+            input["role"]?.GetValue<string>()
             ?? throw new FormatException("Message role is required.");
         if (role is not ("user" or "model" or "tool"))
             throw new FormatException($"Unsupported message role: {role}");
@@ -57,13 +58,15 @@ public sealed class CanonicalMessage
         if (parts.Any(part => part is not JsonObject))
             throw new FormatException("Message parts must contain objects.");
         return input["modelVisible"] is not JsonValue value
-            || !value.TryGetValue<bool>(out var visible) || visible;
+            || !value.TryGetValue<bool>(out var visible)
+            || visible;
     }
 
     internal static bool IsVisible(HistoryMessage input)
     {
         var json = input.Data;
-        var role = HistoryMessage.Text(json, "role")
+        var role =
+            HistoryMessage.Text(json, "role")
             ?? throw new FormatException("Message role is required.");
         if (role is not ("user" or "model" or "tool"))
             throw new FormatException($"Unsupported message role: {role}");

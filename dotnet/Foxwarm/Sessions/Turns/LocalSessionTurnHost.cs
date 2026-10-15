@@ -109,9 +109,7 @@ public sealed partial class LocalSessionTurnHost
                 registered.Token.ThrowIfCancellationRequested();
                 await SafePointAsync().ConfigureAwait(false);
                 registered.Token.ThrowIfCancellationRequested();
-                var history = entry.WithState(state =>
-                    state.History.Snapshot().Materialize()
-                );
+                var history = entry.WithState(state => state.History.Snapshot().Materialize());
                 var result = chat is ISessionChatService ordinary
                     ? await ordinary
                         .ChatAsync(entry.State.Id, history, PrepareRetryAsync, registered.Token)

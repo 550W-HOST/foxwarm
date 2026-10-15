@@ -23,8 +23,14 @@ public sealed class SessionHistoryOwnershipTests
         part["text"] = "changed part";
         canonical.ToJson()["parts"]![0]!["text"] = "changed canonical output";
         Assert.Equal("first", canonical.Parts[0].GetString("text"));
-        Assert.Equal("first", history[0].Data.GetProperty("parts")[0].GetProperty("text").GetString());
-        Assert.Equal("document", history[1].Data.GetProperty("parts")[0].GetProperty("text").GetString());
+        Assert.Equal(
+            "first",
+            history[0].Data.GetProperty("parts")[0].GetProperty("text").GetString()
+        );
+        Assert.Equal(
+            "document",
+            history[1].Data.GetProperty("parts")[0].GetProperty("text").GetString()
+        );
         Assert.Same(history[0], history[0]);
         Assert.Same(history[0], history.First());
     }
@@ -34,7 +40,9 @@ public sealed class SessionHistoryOwnershipTests
     [InlineData("1e0")]
     public void Historical_integral_sequence_spellings_remain_readable(string number)
     {
-        using var document = JsonDocument.Parse("{\"role\":\"user\",\"parts\":[],\"__meta\":{\"seq\":" + number + "}}");
+        using var document = JsonDocument.Parse(
+            "{\"role\":\"user\",\"parts\":[],\"__meta\":{\"seq\":" + number + "}}"
+        );
         var message = HistoryMessage.FromElement(document.RootElement);
         Assert.Equal(1, message.Sequence);
     }
@@ -59,7 +67,10 @@ public sealed class SessionHistoryOwnershipTests
         var afterAppend = entry.Snapshot();
         Assert.Single(before.History);
         Assert.Same(before.History[0], afterAppend.History[0]);
-        Assert.Equal("appended", afterAppend.History[1].ToJson()["parts"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(
+            "appended",
+            afterAppend.History[1].ToJson()["parts"]![0]!["text"]!.GetValue<string>()
+        );
 
         var notice = new RetryNoticeState();
         await entry.SaveLane.CommitRetryNoticeAsync(notice, "retry one", new JsonObject());
@@ -68,8 +79,14 @@ public sealed class SessionHistoryOwnershipTests
         await entry.SaveLane.CommitDisplayNameAsync("new name");
         entry.SetStoppingForTest(true);
         var current = entry.Snapshot();
-        Assert.Equal("retry one", firstRetry.History[2].ToJson()["parts"]![0]!["text"]!.GetValue<string>());
-        Assert.Equal("retry one\nretry two", current.History[2].ToJson()["parts"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(
+            "retry one",
+            firstRetry.History[2].ToJson()["parts"]![0]!["text"]!.GetValue<string>()
+        );
+        Assert.Equal(
+            "retry one\nretry two",
+            current.History[2].ToJson()["parts"]![0]!["text"]!.GetValue<string>()
+        );
         Assert.Same(firstRetry.History[0], current.History[0]);
         Assert.Same(firstRetry.History[1], current.History[1]);
         Assert.NotSame(firstRetry.History[2], current.History[2]);
@@ -91,7 +108,10 @@ public sealed class SessionHistoryOwnershipTests
         changed["parts"]![0]!["text"] = "rewritten";
         var rewrite = old.History.Replace(1, HistoryMessage.FromJson(changed));
         state.PublishCommittedHistoryRewrite(rewrite, 0, 3, 3);
-        var request = ConcreteRequestHistory.PrepareRequest(state.History.Snapshot().Materialize(), "m");
+        var request = ConcreteRequestHistory.PrepareRequest(
+            state.History.Snapshot().Materialize(),
+            "m"
+        );
         request[0]["parts"]![0]!["text"] = "request-only mutation";
         Assert.Same(old.History[0], state.History[0]);
         Assert.Equal("first", state.History[0].ToJson()["parts"]![0]!["text"]!.GetValue<string>());
@@ -104,16 +124,20 @@ public sealed class SessionHistoryOwnershipTests
         Assert.Equal(3, fork.History.Count);
     }
 
-    private static JsonObject Message(string text, long seq) => new()
-    {
-        ["role"] = "user",
-        ["parts"] = new JsonArray(new JsonObject { ["text"] = text }),
-        ["__meta"] = new JsonObject { ["seq"] = seq, ["timestamp"] = 1 },
-    };
+    private static JsonObject Message(string text, long seq) =>
+        new()
+        {
+            ["role"] = "user",
+            ["parts"] = new JsonArray(new JsonObject { ["text"] = text }),
+            ["__meta"] = new JsonObject { ["seq"] = seq, ["timestamp"] = 1 },
+        };
 
     private sealed class NoChat : IChatService
     {
-        public Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken cancellationToken) =>
-            throw new InvalidOperationException("unused");
+        public Task<ChatResult> ChatAsync(
+            string sessionId,
+            IReadOnlyList<JsonObject> history,
+            CancellationToken cancellationToken
+        ) => throw new InvalidOperationException("unused");
     }
 }

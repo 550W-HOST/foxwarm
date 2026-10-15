@@ -94,11 +94,15 @@ public sealed class ResponsesClientTests
             var snapshot = entry.Snapshot();
             Assert.Equal(
                 new[] { "user", "model", "tool", "model" },
-                snapshot.History.Materialize().Select(message => message["role"]!.GetValue<string>())
+                snapshot
+                    .History.Materialize()
+                    .Select(message => message["role"]!.GetValue<string>())
             );
             Assert.Equal(
                 new long[] { 1, 2, 3, 4 },
-                snapshot.History.Materialize().Select(message => message["__meta"]!["seq"]!.GetValue<long>())
+                snapshot
+                    .History.Materialize()
+                    .Select(message => message["__meta"]!["seq"]!.GetValue<long>())
             );
             Assert.Equal(5, snapshot.NextMessageSeq);
             Assert.Equal(1, entry.ProcessorClaimCount);
@@ -541,7 +545,10 @@ public sealed class ResponsesClientTests
             Assert.Equal("once", await File.ReadAllTextAsync(Path.Combine(root, "once.txt")));
             Assert.Equal(
                 new[] { "user", "model" },
-                entry.Snapshot().History.Materialize().Select(message => message["role"]!.GetValue<string>())
+                entry
+                    .Snapshot()
+                    .History.Materialize()
+                    .Select(message => message["role"]!.GetValue<string>())
             );
             Assert.Equal(2, store.Archive.ReadMessages().Count);
         }

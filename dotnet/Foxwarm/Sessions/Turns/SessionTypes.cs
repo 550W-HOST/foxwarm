@@ -131,7 +131,6 @@ public sealed class SessionState
             HistoryVersion,
             (JsonObject)AuthorityEnvelope.DeepClone()
         );
-
 }
 
 public sealed record SessionSnapshot(
@@ -158,8 +157,19 @@ public sealed record SessionSnapshot(
         long nextMessageSeq,
         long historyVersion,
         JsonObject authorityEnvelope
-    ) : this(id, SessionHistory.FromJson(history), queue, busy, busyStartedAt, stopping,
-        meta, nextMessageSeq, historyVersion, authorityEnvelope) { }
+    )
+        : this(
+            id,
+            SessionHistory.FromJson(history),
+            queue,
+            busy,
+            busyStartedAt,
+            stopping,
+            meta,
+            nextMessageSeq,
+            historyVersion,
+            authorityEnvelope
+        ) { }
 }
 
 public sealed record DisplayNameChange(bool Changed, string? Previous, string? Current);

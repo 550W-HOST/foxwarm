@@ -350,9 +350,9 @@ public sealed partial class CompactLifecycleTests
                 item.Parts?.Any(part => part.ToJsonString().Contains("retained admitted input"))
                 == true
             )
-                || snapshot.History.Materialize().Any(row =>
-                    row["parts"]!.ToJsonString().Contains("retained admitted input")
-                )
+                || snapshot
+                    .History.Materialize()
+                    .Any(row => row["parts"]!.ToJsonString().Contains("retained admitted input"))
         );
         Assert.IsType<ModelPreparationException>(
             fixture.Owner.Entry.LastBackgroundProcessorFailure

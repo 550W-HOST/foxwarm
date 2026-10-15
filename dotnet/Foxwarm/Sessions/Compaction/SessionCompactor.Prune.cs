@@ -290,8 +290,7 @@ internal sealed partial class SessionCompactor
                         || live.History.Count < snapshot.History.Count
                         || snapshot
                             .History.Where(
-                                (message, index) =>
-                                    !message.ContentEquals(live.History[index])
+                                (message, index) => !message.ContentEquals(live.History[index])
                             )
                             .Any()
                     )
@@ -301,7 +300,10 @@ internal sealed partial class SessionCompactor
                     var nextHistory = snapshot.History;
                     for (var index = 0; index < rewritten.Length; index++)
                         if (snapshot.History[index].Sequence is long seq && affected.Contains(seq))
-                            nextHistory = nextHistory.Replace(index, HistoryMessage.FromJson(rewritten[index]));
+                            nextHistory = nextHistory.Replace(
+                                index,
+                                HistoryMessage.FromJson(rewritten[index])
+                            );
                     nextHistory = nextHistory.Append(live.History.Skip(snapshot.History.Count));
                     if (
                         EstimateHistory(

@@ -8,8 +8,7 @@ internal static class ConcreteRequestHistory
     internal static IReadOnlyList<JsonObject> Prepare(
         IReadOnlyList<JsonObject> history,
         string destinationModelId
-    )
-        => PrepareCore(history, destinationModelId, copyMessages: true);
+    ) => PrepareCore(history, destinationModelId, copyMessages: true);
 
     private static IReadOnlyList<JsonObject> PrepareCore(
         IReadOnlyList<JsonObject> history,
@@ -110,7 +109,12 @@ internal static class ConcreteRequestHistory
     internal static IReadOnlyList<JsonObject> PrepareRequest(
         IReadOnlyList<JsonObject> history,
         string destinationModelId
-    ) => PrepareCore(RequestHistoryRepair.SelectAndRepair(history), destinationModelId, copyMessages: false);
+    ) =>
+        PrepareCore(
+            RequestHistoryRepair.SelectAndRepair(history),
+            destinationModelId,
+            copyMessages: false
+        );
 
     internal sealed class ChatService(IChatService inner, string destinationModelId) : IChatService
     {

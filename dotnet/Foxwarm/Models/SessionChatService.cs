@@ -85,8 +85,10 @@ internal sealed class SessionChatService(
         async Task<string> Prompt(ConcreteHostModel leaf, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
-            var value = hosted.Entry.WithState(state =>
-                SessionWait.Text(state.AuthorityEnvelope["persistentMemorySnapshot"])) ?? "";
+            var value =
+                hosted.Entry.WithState(state =>
+                    SessionWait.Text(state.AuthorityEnvelope["persistentMemorySnapshot"])
+                ) ?? "";
             if (ConditionalMemory.ReadCurrentModelSnapshotId(value) != leaf.Key)
             {
                 value = await memory.BuildAsync(

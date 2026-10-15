@@ -162,9 +162,8 @@ public sealed class RetryInputSafePointTests
             await WaitFor(() =>
                 f
                     .Owner.Entry.Snapshot()
-                    .History.Materialize().Any(row =>
-                        row["__meta"]?["noticeType"]?.GetValue<string>() == "llm-retry"
-                    )
+                    .History.Materialize()
+                    .Any(row => row["__meta"]?["noticeType"]?.GetValue<string>() == "llm-retry")
             );
             Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
             await File.WriteAllTextAsync(marker, "hold");
@@ -192,7 +191,8 @@ public sealed class RetryInputSafePointTests
             Assert.Equal(
                 new[] { "seed", "queued-one", "queued-two", "queued-three", "late-input" },
                 state
-                    .History.Materialize().Where(row => row["role"]?.GetValue<string>() == "user")
+                    .History.Materialize()
+                    .Where(row => row["role"]?.GetValue<string>() == "user")
                     .Select(row => row["parts"]!.ToJsonString())
                     .Select(text =>
                         new[]
@@ -207,10 +207,12 @@ public sealed class RetryInputSafePointTests
             );
             Assert.Equal(
                 2,
-                state.History.Materialize().Count(row =>
-                    row["role"]?.GetValue<string>() == "model"
-                    && row["modelVisible"]?.GetValue<bool>() != false
-                )
+                state
+                    .History.Materialize()
+                    .Count(row =>
+                        row["role"]?.GetValue<string>() == "model"
+                        && row["modelVisible"]?.GetValue<bool>() != false
+                    )
             );
         }
         finally
@@ -257,7 +259,8 @@ public sealed class RetryInputSafePointTests
             6,
             owned
                 .Owner.Entry.Snapshot()
-                .History.Materialize().Count(row => row["role"]?.GetValue<string>() == "user")
+                .History.Materialize()
+                .Count(row => row["role"]?.GetValue<string>() == "user")
         );
         for (var index = 1; index < 6; index++)
             Assert.True(
@@ -342,9 +345,8 @@ public sealed class RetryInputSafePointTests
             await WaitFor(() =>
                 f
                     .Owner.Entry.Snapshot()
-                    .History.Materialize().Any(row =>
-                        row["__meta"]?["noticeType"]?.GetValue<string>() == "llm-retry"
-                    )
+                    .History.Materialize()
+                    .Any(row => row["__meta"]?["noticeType"]?.GetValue<string>() == "llm-retry")
             );
             Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
             await File.WriteAllTextAsync(marker, "hold");
@@ -431,9 +433,8 @@ public sealed class RetryInputSafePointTests
             Assert.Equal(
                 committed,
                 f.Owner.Entry.Snapshot()
-                    .History.Materialize().Any(row =>
-                        row["__meta"]?["clientMessageId"]?.GetValue<string>() == "queued"
-                    )
+                    .History.Materialize()
+                    .Any(row => row["__meta"]?["clientMessageId"]?.GetValue<string>() == "queued")
             );
             Assert.Equal(
                 committed,

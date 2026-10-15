@@ -24,9 +24,7 @@ public sealed partial class SessionSaveLane
                     );
                 var index = prior is null
                     ? -1
-                    : state.History.FindIndex(row =>
-                        row.Sequence == seq
-                    );
+                    : state.History.FindIndex(row => row.Sequence == seq);
                 if (prior is not null && index < 0)
                     throw new InvalidOperationException(
                         "Committed retry notice is no longer in active history."
@@ -50,9 +48,10 @@ public sealed partial class SessionSaveLane
                 message["__meta"]!["retry"] = retry.DeepClone();
                 var snapshot = state.Snapshot();
                 var frozen = HistoryMessage.FromJson(message);
-                var history = index < 0
-                    ? snapshot.History.Append([frozen])
-                    : snapshot.History.Replace(index, frozen);
+                var history =
+                    index < 0
+                        ? snapshot.History.Append([frozen])
+                        : snapshot.History.Replace(index, frozen);
                 var meta = (JsonObject)snapshot.Meta.DeepClone();
                 meta["messageCount"] = history.Count;
                 var staged = snapshot with
@@ -74,9 +73,7 @@ public sealed partial class SessionSaveLane
                     }
                     else
                     {
-                        var actual = current.History.FindIndex(row =>
-                            row.Sequence == seq
-                        );
+                        var actual = current.History.FindIndex(row => row.Sequence == seq);
                         if (actual < 0)
                             throw new InvalidOperationException(
                                 "Retry update sequence disappeared before publication."

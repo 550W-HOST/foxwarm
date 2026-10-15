@@ -70,7 +70,10 @@ public sealed class PersistentSessionTurnTests
             hot.History.Materialize().Select(Seq)
         );
         Assert.Equal(hot.History.Count + 1, hot.NextMessageSeq);
-        Assert.Equal(hot.History.Materialize().Select(MessageText), hot.History.Materialize().Select(MessageText).Distinct());
+        Assert.Equal(
+            hot.History.Materialize().Select(MessageText),
+            hot.History.Materialize().Select(MessageText).Distinct()
+        );
         var combined = string.Join("|", hot.History.Materialize().Select(MessageText));
         Assert.Contains("A", combined);
         Assert.Contains("B", combined);

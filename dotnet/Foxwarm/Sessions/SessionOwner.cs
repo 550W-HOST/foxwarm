@@ -94,12 +94,12 @@ internal sealed partial class SessionOwner
         };
     }
 
-    public IReadOnlyList<JsonObject> History() => Entry.WithState(state => state.History.Snapshot()).Materialize();
+    public IReadOnlyList<JsonObject> History() =>
+        Entry.WithState(state => state.History.Snapshot()).Materialize();
 
     public void EnableCommittedNotifications()
     {
-        lastNotifiedSeq =
-            Entry.WithState(state => state.History.LastOrDefault()?.Sequence ?? 0);
+        lastNotifiedSeq = Entry.WithState(state => state.History.LastOrDefault()?.Sequence ?? 0);
         Entry.Committed = snapshot =>
         {
             foreach (var record in snapshot.History)

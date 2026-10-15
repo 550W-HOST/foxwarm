@@ -9,7 +9,9 @@ public sealed partial class SessionSaveLane
         string? result = null;
         await EnqueueOperationAsync(async () =>
         {
-            var key = entry.WithState(state => SessionWait.Text(state.AuthorityEnvelope["promptCacheKey"]));
+            var key = entry.WithState(state =>
+                SessionWait.Text(state.AuthorityEnvelope["promptCacheKey"])
+            );
             if (!string.IsNullOrWhiteSpace(key))
             {
                 result = key;

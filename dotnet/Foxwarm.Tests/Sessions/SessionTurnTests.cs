@@ -173,7 +173,10 @@ public sealed class SessionTurnTests
         Assert.Equal(3, chat.Calls[0].History.Count);
         var snapshot = entry.Snapshot();
         Assert.Equal(4, snapshot.History.Count);
-        Assert.Equal(new[] { "m1", "m2", "m3" }, snapshot.History.Materialize().Take(3).Select(ClientId));
+        Assert.Equal(
+            new[] { "m1", "m2", "m3" },
+            snapshot.History.Materialize().Take(3).Select(ClientId)
+        );
         Assert.Empty(snapshot.Queue);
         Assert.Equal(
             new[]
@@ -208,7 +211,9 @@ public sealed class SessionTurnTests
         await registry.Runner.ProcessQueueAsync("s");
 
         var snapshot = entry.Snapshot();
-        var later = snapshot.History.Materialize().Last(message => message["role"]?.GetValue<string>() == "user");
+        var later = snapshot
+            .History.Materialize()
+            .Last(message => message["role"]?.GetValue<string>() == "user");
         var laterParts = (JsonArray)later["parts"]!;
         Assert.Equal("later", laterParts[0]?["text"]?.GetValue<string>());
         Assert.DoesNotContain(laterParts, part => part?["system"] is not null);
@@ -229,9 +234,9 @@ public sealed class SessionTurnTests
         await registry.Runner.ProcessQueueAsync("s");
 
         var snapshot = entry.Snapshot();
-        var user = snapshot.History.Materialize().Single(message =>
-            message["role"]?.GetValue<string>() == "user"
-        );
+        var user = snapshot
+            .History.Materialize()
+            .Single(message => message["role"]?.GetValue<string>() == "user");
         Assert.Equal(
             "<foxwarm-system kind=\"session\" currentSessionId=\"s\" />",
             ((JsonArray)user["parts"]!)[0]?["system"]?.GetValue<string>()
@@ -405,7 +410,10 @@ public sealed class SessionTurnTests
         await run;
         var snapshot = entry.Snapshot();
         Assert.Equal(3, snapshot.History.Count);
-        Assert.Equal(new[] { "second", "third" }, snapshot.History.Materialize().Skip(1).Select(ClientId));
+        Assert.Equal(
+            new[] { "second", "third" },
+            snapshot.History.Materialize().Skip(1).Select(ClientId)
+        );
         Assert.Empty(snapshot.Queue);
         Assert.False(snapshot.Busy);
         Assert.False(snapshot.Stopping);
@@ -457,7 +465,10 @@ public sealed class SessionTurnTests
             final.History.Materialize(),
             message => message.ToJsonString().Contains("late", StringComparison.Ordinal)
         );
-        Assert.Contains(final.History.Materialize(), message => message["role"]?.GetValue<string>() == "model");
+        Assert.Contains(
+            final.History.Materialize(),
+            message => message["role"]?.GetValue<string>() == "model"
+        );
     }
 
     [Fact]
@@ -650,9 +661,9 @@ public sealed class SessionTurnTests
         await registry.Runner.ProcessQueueAsync(sessionId);
 
         var initial = entry.Snapshot();
-        var initialUser = initial.History.Materialize().Single(message =>
-            message["role"]?.GetValue<string>() == "user"
-        );
+        var initialUser = initial
+            .History.Materialize()
+            .Single(message => message["role"]?.GetValue<string>() == "user");
         var initialParts = (JsonArray)initialUser["parts"]!;
         Assert.Equal(
             "<foxwarm-system kind=\"session\" currentSessionId=\"alpha &amp; &lt; &gt; &quot; &apos; omega \u0085\" />",
@@ -665,9 +676,9 @@ public sealed class SessionTurnTests
         await registry.Runner.ProcessQueueAsync(sessionId);
 
         var noninitial = entry.Snapshot();
-        var secondUser = noninitial.History.Materialize().Last(message =>
-            message["role"]?.GetValue<string>() == "user"
-        );
+        var secondUser = noninitial
+            .History.Materialize()
+            .Last(message => message["role"]?.GetValue<string>() == "user");
         var secondParts = (JsonArray)secondUser["parts"]!;
         Assert.Equal("second", secondParts[0]?["text"]?.GetValue<string>());
         Assert.DoesNotContain(secondParts, part => part?["system"] is not null);
@@ -694,7 +705,9 @@ public sealed class SessionTurnTests
         await host.FinalizeStoppedAsync();
 
         var snapshot = entry.Snapshot();
-        var later = snapshot.History.Materialize().Last(message => message["role"]?.GetValue<string>() == "user");
+        var later = snapshot
+            .History.Materialize()
+            .Last(message => message["role"]?.GetValue<string>() == "user");
         var laterParts = (JsonArray)later["parts"]!;
         Assert.Equal("later", laterParts[0]?["text"]?.GetValue<string>());
         Assert.DoesNotContain(laterParts, part => part?["system"] is not null);
@@ -718,9 +731,9 @@ public sealed class SessionTurnTests
         await registry.Runner.ProcessQueueAsync("s");
 
         var snapshot = entry.Snapshot();
-        var user = snapshot.History.Materialize().Single(message =>
-            message["role"]?.GetValue<string>() == "user"
-        );
+        var user = snapshot
+            .History.Materialize()
+            .Single(message => message["role"]?.GetValue<string>() == "user");
         Assert.Equal("user", user["role"]?.GetValue<string>());
         Assert.True(JsonNode.DeepEquals(prebuilt["parts"], user["parts"]));
         Assert.Equal(1, user["__meta"]?["seq"]?.GetValue<long>());
@@ -878,7 +891,10 @@ public sealed class SessionTurnTests
 
         Assert.Equal(
             new[] { "user", "model", "tool", "user", "user", "model" },
-            entry.Snapshot().History.Materialize().Select(message => message["role"]!.GetValue<string>())
+            entry
+                .Snapshot()
+                .History.Materialize()
+                .Select(message => message["role"]!.GetValue<string>())
         );
         Assert.Contains("B", entry.Snapshot().History[3].ToJsonString(), StringComparison.Ordinal);
         Assert.Contains("C", entry.Snapshot().History[4].ToJsonString(), StringComparison.Ordinal);
@@ -918,7 +934,8 @@ public sealed class SessionTurnTests
 
         var toolMessage = entry
             .Snapshot()
-            .History.Materialize().Single(message => message["role"]?.GetValue<string>() == "tool");
+            .History.Materialize()
+            .Single(message => message["role"]?.GetValue<string>() == "tool");
         var parts = Assert.IsType<JsonArray>(toolMessage["parts"]);
         Assert.Equal(
             new[] { "bad_args", "unknown" },
@@ -956,7 +973,10 @@ public sealed class SessionTurnTests
         Assert.False(entry.Snapshot().Busy);
         Assert.Equal(
             new[] { "user", "model", "tool", "model", "tool" },
-            entry.Snapshot().History.Materialize().Select(message => message["role"]!.GetValue<string>())
+            entry
+                .Snapshot()
+                .History.Materialize()
+                .Select(message => message["role"]!.GetValue<string>())
         );
     }
 
@@ -983,9 +1003,11 @@ public sealed class SessionTurnTests
         snapshot.Queue.Count(item =>
             item.Parts?.FirstOrDefault()?["text"]?.GetValue<string>() == value
         )
-        + snapshot.History.Materialize().Count(message =>
-            message.ToJsonString().Contains($"\"text\":\"{value}\"", StringComparison.Ordinal)
-        );
+        + snapshot
+            .History.Materialize()
+            .Count(message =>
+                message.ToJsonString().Contains($"\"text\":\"{value}\"", StringComparison.Ordinal)
+            );
 
     private static ChatResult FunctionCalls(params JsonObject[] calls) =>
         new(

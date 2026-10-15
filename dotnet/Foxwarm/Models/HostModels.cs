@@ -83,8 +83,7 @@ internal sealed partial class HostModels
         string? RawModel,
         string? RawEffort,
         string? EffectiveEffort
-    ) Select(SessionSnapshot snapshot)
-        => Select(snapshot.AuthorityEnvelope);
+    ) Select(SessionSnapshot snapshot) => Select(snapshot.AuthorityEnvelope);
 
     public (
         ConcreteHostModel Model,

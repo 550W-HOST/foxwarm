@@ -49,7 +49,11 @@ internal sealed partial class SessionOwner
                 SessionWait.Text(state.AuthorityEnvelope["persistentMemorySnapshot"]) ?? ""
             );
             var images = 0;
-            foreach (var row in state.History.Where(row => row.IsModelVisible).Select(row => row.ToJson()))
+            foreach (
+                var row in state
+                    .History.Where(row => row.IsModelVisible)
+                    .Select(row => row.ToJson())
+            )
             {
                 var summary = Foxwarm.Images.ImageTokenEstimate.Message(row);
                 tokens += summary.Tokens;

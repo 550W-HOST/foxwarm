@@ -20,9 +20,7 @@ internal sealed partial class SessionCompactor
             live.HistoryVersion != original.HistoryVersion
             || live.History.Count < original.History.Count
             || original
-                .History.Where(
-                    (message, index) => !message.ContentEquals(live.History[index])
-                )
+                .History.Where((message, index) => !message.ContentEquals(live.History[index]))
                 .Any()
         )
             throw new CompactionSnapshotIncompatibleException(
@@ -82,10 +80,7 @@ internal sealed partial class SessionCompactor
                     .History.Skip(op.HistoryStart)
                     .Take(op.HistoryEnd - op.HistoryStart + 1)
             )
-                if (
-                    row.Sequence is long seq
-                    && plan.Preserve.Contains(seq)
-                )
+                if (row.Sequence is long seq && plan.Preserve.Contains(seq))
                 {
                     var preserved = row.ToJson();
                     ((JsonObject)preserved["__meta"]!)["preservedFromBlockId"] = record.Id;

@@ -16,20 +16,24 @@ public static class SessionContinuation
 {
     private static JsonElement Property(JsonElement node, string key) =>
         node.ValueKind == JsonValueKind.Object && node.TryGetProperty(key, out var value)
-            ? value : default;
+            ? value
+            : default;
 
-    private static bool Truthy(JsonElement node) => node.ValueKind switch
-    {
-        JsonValueKind.Undefined or JsonValueKind.Null or JsonValueKind.False => false,
-        JsonValueKind.String => node.GetString()!.Length > 0,
-        JsonValueKind.Number => node.GetDouble() != 0 && !double.IsNaN(node.GetDouble()),
-        _ => true,
-    };
+    private static bool Truthy(JsonElement node) =>
+        node.ValueKind switch
+        {
+            JsonValueKind.Undefined or JsonValueKind.Null or JsonValueKind.False => false,
+            JsonValueKind.String => node.GetString()!.Length > 0,
+            JsonValueKind.Number => node.GetDouble() != 0 && !double.IsNaN(node.GetDouble()),
+            _ => true,
+        };
 
     private static string? Text(JsonElement value) =>
         value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+
     private static bool Flag(JsonElement value, bool expected) =>
         value.ValueKind == (expected ? JsonValueKind.True : JsonValueKind.False);
+
     private static bool Meaningful(JsonElement node) =>
         Text(node) is string text && Trim(text).Length > 0;
 
@@ -107,7 +111,8 @@ public static class SessionContinuation
         if (
             Text(Property(message, "role")) == "user"
             && Flag(Property(Property(message, "__meta"), "goalReminder"), true)
-            && Text(Property(Property(message, "__meta"), "goalReminderKind")) == "compact-completion"
+            && Text(Property(Property(message, "__meta"), "goalReminderKind"))
+                == "compact-completion"
             && parts.Length == 2
             && parts[0].EnumerateObject().Count() == 1
             && CompactText(Property(parts[0], "system"))
@@ -129,7 +134,9 @@ public static class SessionContinuation
                 !Truthy(Property(part, "functionCall"))
                 && !Truthy(Property(part, "functionResponse"))
                 && !Meaningful(Property(part, "thinking"))
-                && new[] { Property(part, "text"), Property(part, "system") }.Where(Meaningful).All(CompactText)
+                && new[] { Property(part, "text"), Property(part, "system") }
+                    .Where(Meaningful)
+                    .All(CompactText)
             );
     }
 
@@ -144,13 +151,19 @@ public static class SessionContinuation
             return true;
         if (args.ValueKind != JsonValueKind.Object)
             return false;
-        return args.EnumerateObject().All(pair => pair.Name switch
-        {
-            "reason" => Text(pair.Value) is not null,
-            "timeoutSeconds" => pair.Value.ValueKind == JsonValueKind.Number && pair.Value.GetDouble() == 0,
-            "waitAllSessions" or "waitExecIds" => pair.Value.ValueKind == JsonValueKind.Array && pair.Value.GetArrayLength() == 0,
-            _ => false,
-        });
+        return args.EnumerateObject()
+            .All(pair =>
+                pair.Name switch
+                {
+                    "reason" => Text(pair.Value) is not null,
+                    "timeoutSeconds" => pair.Value.ValueKind == JsonValueKind.Number
+                        && pair.Value.GetDouble() == 0,
+                    "waitAllSessions" or "waitExecIds" => pair.Value.ValueKind
+                        == JsonValueKind.Array
+                        && pair.Value.GetArrayLength() == 0,
+                    _ => false,
+                }
+            );
     }
 
     private static bool TerminalCall(JsonElement call)
@@ -186,7 +199,8 @@ public static class SessionContinuation
         }
         if (
             batchIndex < 0
-            || Parts(messages[batchIndex].Data).Any(part => Truthy(Property(part, "functionResponse")))
+            || Parts(messages[batchIndex].Data)
+                .Any(part => Truthy(Property(part, "functionResponse")))
         )
             return false;
         var callNodes = Parts(messages[batchIndex].Data)
@@ -214,7 +228,10 @@ public static class SessionContinuation
             if (Transparent(message))
                 continue;
             var parts = Parts(message);
-            if (Text(Property(message, "role")) != "tool" || parts.Any(part => Truthy(Property(part, "functionCall"))))
+            if (
+                Text(Property(message, "role")) != "tool"
+                || parts.Any(part => Truthy(Property(part, "functionCall")))
+            )
                 return false;
             var responseNodes = parts
                 .Select(part => Property(part, "functionResponse"))
@@ -240,7 +257,9 @@ public static class SessionContinuation
         return responses.Count == calls.Length
             && byId.Any(pair =>
                 TerminalCall(pair.Value)
-                && Property(Property(responses[pair.Key], "response"), "error").ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
+                && Property(Property(responses[pair.Key], "response"), "error").ValueKind
+                    is JsonValueKind.Undefined
+                        or JsonValueKind.Null
             );
     }
 

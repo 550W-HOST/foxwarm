@@ -14,14 +14,24 @@ internal static class SessionBlockCounter
         long effectiveArchiveMaximum
     )
     {
-        var known = history.Select(row =>
-        {
-            var json = row.Data;
-            return json.TryGetProperty("__meta", out var meta) && meta.ValueKind == JsonValueKind.Object
-                && meta.TryGetProperty("contextBlock", out var block) && block.ValueKind == JsonValueKind.Object
-                && block.TryGetProperty("id", out var id) ? HistoryMessage.Integer(id) ?? 0 : 0;
-        }).DefaultIfEmpty(0).Max();
-        return Math.Max(CompactCandidateBuilder.Number(envelope["nextBlockId"]) ?? 1,
-            checked(Math.Max(known, effectiveArchiveMaximum) + 1));
+        var known = history
+            .Select(row =>
+            {
+                var json = row.Data;
+                return
+                    json.TryGetProperty("__meta", out var meta)
+                    && meta.ValueKind == JsonValueKind.Object
+                    && meta.TryGetProperty("contextBlock", out var block)
+                    && block.ValueKind == JsonValueKind.Object
+                    && block.TryGetProperty("id", out var id)
+                    ? HistoryMessage.Integer(id) ?? 0
+                    : 0;
+            })
+            .DefaultIfEmpty(0)
+            .Max();
+        return Math.Max(
+            CompactCandidateBuilder.Number(envelope["nextBlockId"]) ?? 1,
+            checked(Math.Max(known, effectiveArchiveMaximum) + 1)
+        );
     }
 }
