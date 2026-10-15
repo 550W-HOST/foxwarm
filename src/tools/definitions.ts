@@ -428,12 +428,12 @@ Example:
         {
             name: 'get_session_messages',
             defaultInject: true,
-            description: "Review a Session's conversation to recover context, check evidence, or investigate a specific issue. Returns a page of messages and the current execution state. For delegated work, normally use completion reports or wait rather than repeatedly reading progress. With neither start nor count, returns the latest 10 messages. Filters apply to the selected page; use recall for semantic search or archived context.",
+            description: "Review a Session's live context (its current message list, not archived history) to recover context, check evidence, or investigate a specific issue. Returns a page of messages and the current execution state. For delegated work, normally use completion reports or wait rather than repeatedly reading progress. With neither start nor count, returns the latest 10 messages. Filters apply to the selected page. To open a message referenced as `msg#N` (the archived sequence), or to search by meaning, use `recall`.",
             parameters: {
                 type: 'object',
                 properties: {
                     sessionId: { type: 'string', description: "Session to read." },
-                    start: { type: 'number', description: "Zero-based message offset. Negative values count back from the end; -10 starts at the tenth-last message." },
+                    start: { type: 'number', description: "Zero-based offset into this Session's live context, not the archived `msg#N` sequence. Negative values count back from the end; -10 starts at the tenth-last message." },
                     count: { type: 'number', description: "Number of messages to retrieve." },
                     previewLength: { type: 'number', description: "Total character budget for the response. Omit or use 0 for the default; other values are bounded to 1,000-20,000." },
                     contentFilter: { type: 'string', description: "Keep selected messages whose full text or tool content contains this text, ignoring case. Previews show the matching area when possible." },
@@ -478,7 +478,7 @@ Example:
                 type: 'object',
                 properties: {
                     sessionId: { type: 'string', description: "Session for exact context lookup. Defaults to this session." },
-                    target: { type: 'string', description: "What to open: overview (default), blocks, a block such as B#126, its raw messages with msg:B#126, or messages such as msg#10637 or msg#10637-10680. block#126 is also accepted." },
+                    target: { type: 'string', description: "What to open: overview (default), blocks, a block such as B#126, its raw messages with msg:B#126, or messages such as msg#10637 or msg#10637-10680. block#126 is also accepted. `msg#N` is the archived message sequence shown in logs and user references; it reads archived context and is not an offset into a Session's live context (see `get_session_messages.start`)." },
                     vector_query: { type: 'string', description: "Search earlier context by meaning and return matching messages or block summaries." },
                     limit: { type: 'number', description: "Maximum semantic search results. Defaults to 5, up to 20." },
                     scope: { type: 'string', enum: ['all', 'current-session', 'current-agent'], description: "Scope for semantic search. Searches stay within this agent; legacy isolated agents are further limited to the current session." },

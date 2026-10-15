@@ -119,9 +119,7 @@ export const formatToolLabel = (name: string, args?: any): string => {
 
   if (name === 'search_tools') {
     const sources = Array.isArray(args?.sources) ? args.sources.join(',') : normalizeToolLabelValue(args?.sources)
-    const scope = normalizeToolLabelValue(args?.server) || normalizeToolLabelValue(args?.nodeId)
-    const query = normalizeToolLabelValue(args?.query)
-    return ['search_tools', sources, scope, query].filter(Boolean).join(':')
+    return ['search_tools', sources].filter(Boolean).join(':')
   }
 
   return name
