@@ -87,7 +87,12 @@ const geometry = () => page.evaluate(() => {
   const reference = [...document.querySelectorAll('.foxwarm-assistant-message-card, .foxwarm-conversation-reply')].find(element => element.textContent.includes('Reference answer'))
   return { composer: document.querySelector('.foxwarm-chat-composer').getBoundingClientRect().height, slot: document.querySelector('[data-processing-status-slot]').getBoundingClientRect().height, bodies: document.querySelectorAll('[data-chat-message-anchor-key]').length, top: reference.getBoundingClientRect().top, scrollHeight: scroll.scrollHeight, scrollTop: scroll.scrollTop, distance: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight }
 })
-const clickControl = text => page.$$eval('[data-processing-status-slot] button', (buttons, text) => buttons.find(button => button.textContent === text).click(), text)
+const clickControl = async text => {
+  for (const button of await page.$$('[data-processing-status-slot] button')) {
+    if (await button.evaluate((element, text) => element.textContent === text, text)) return button.click()
+  }
+  throw new Error(`Status control not found: ${text}`)
+}
 const screenshot = async name => {
   if (process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR}/${name}.png` })
 }
@@ -180,7 +185,7 @@ test('status visibility is stable and queue status shares the restored block abo
   await mount(false, 900, 'conversation')
   const baseline = await geometry()
   await page.evaluate(() => window.fixture.queue(1, false))
-  await page.waitForFunction(() => document.querySelector('[data-processing-status-slot]').textContent.includes('1 queued message pending'))
+  await page.waitForFunction(() => document.querySelector('[data-processing-status-slot]').textContent.includes('1 queued'))
   assert.equal(await page.$$eval('[data-processing-status-slot] [role="status"]', blocks => blocks.length), 1)
   await clickControl('Run queued')
   assert.ok(await page.evaluate(() => window.commands.includes('/dequeue')))
@@ -206,17 +211,17 @@ test('status visibility is stable and queue status shares the restored block abo
   const noQueueLayout = await page.evaluate(() => {
     const block = document.querySelector('[data-processing-status-slot] [role="status"]'), form = document.querySelector('.foxwarm-chat-composer-form')
     const css = getComputedStyle(block)
-    return { height: block.getBoundingClientRect().height, gap: form.getBoundingClientRect().top - block.getBoundingClientRect().bottom, horizontal: css.paddingLeft, vertical: css.paddingTop }
+    return { height: block.getBoundingClientRect().height, gap: form.getBoundingClientRect().top - block.getBoundingClientRect().bottom, border: css.borderTopWidth, background: css.backgroundColor }
   })
-  assert.ok(noQueueLayout.height >= 40 && noQueueLayout.gap >= 16 && noQueueLayout.horizontal === '16px' && noQueueLayout.vertical === '8px', JSON.stringify(noQueueLayout))
+  assert.ok(baseline.slot === 56 && noQueueLayout.gap >= 16 && noQueueLayout.border === '0px' && noQueueLayout.background === 'rgba(0, 0, 0, 0)', JSON.stringify(noQueueLayout))
   if (process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR) console.log('no-queue layout', JSON.stringify({ ...noQueueLayout, referenceTop: baseline.top, scrollHeight: baseline.scrollHeight, slot: baseline.slot }))
   await screenshot('status-no-queue')
 
   await page.evaluate(() => window.fixture.queue(2, false))
-  await page.waitForFunction(() => document.querySelector('[data-processing-status-slot]').textContent.includes('2 queued messages'))
+  await page.waitForFunction(() => document.querySelector('[data-processing-status-slot]').textContent.includes('2 queued'))
   assert.equal(await page.$$eval('[data-processing-status-slot] [role="status"]', blocks => blocks.length), 1)
   assert.ok((await page.$eval('[data-processing-status-slot] [role="status"]', element => element.textContent)).includes('Working'))
-  assert.ok((await geometry()).scrollHeight > baseline.scrollHeight)
+  assert.equal((await geometry()).scrollHeight, baseline.scrollHeight)
   await clickControl('Run queued')
   assert.ok(await page.evaluate(() => window.commands.includes('/dequeue')))
   await page.evaluate(() => window.fixture.queue(2))
@@ -243,11 +248,11 @@ test('status visibility is stable and queue status shares the restored block abo
     return { visible: rect.left >= 0 && rect.right <= innerWidth && rect.height > 0, hit: document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) === button }
   }))
   assert.ok(controls.length === 2 && controls.every(control => control.visible && control.hit), JSON.stringify(controls))
-  const primary = await page.$eval('[data-processing-status-slot] [role="status"]', block => { const css = getComputedStyle(block); return { horizontal: css.paddingLeft, vertical: css.paddingTop, bounded: block.scrollWidth <= block.clientWidth + 1 } })
-  assert.deepEqual(primary, { horizontal: '16px', vertical: '8px', bounded: true })
+  const primary = await page.$eval('[data-processing-status-slot] [role="status"]', block => { const css = getComputedStyle(block); return { border: css.borderTopWidth, bounded: block.scrollWidth <= block.clientWidth + 1 } })
+  assert.deepEqual(primary, { border: '0px', bounded: true })
   await screenshot('status-narrow-queue')
   await page.evaluate(() => window.fixture.queue(0))
-  await page.waitForFunction(() => !document.querySelector('[data-queued-preview]') && !document.querySelector('[data-processing-status-slot]').textContent.includes('queued messages'))
+  await page.waitForFunction(() => !document.querySelector('[data-queued-preview]') && !document.querySelector('[data-processing-status-slot]').textContent.includes('queued'))
   await screenshot('status-narrow-no-queue')
   await page.setViewport({ width: 900, height: 800 })
   await wait(120)
@@ -255,13 +260,13 @@ test('status visibility is stable and queue status shares the restored block abo
   await page.evaluate(() => { window.fixture.state('idle'); window.fixture.append('A new direct user input.', 'user') })
   await page.waitForSelector('[data-processing-runtime-state="interrupted"]')
   await page.evaluate(() => window.fixture.queue(1, false))
-  await page.waitForFunction(() => document.querySelector('[data-processing-status-slot]').textContent.includes('1 queued message pending'))
+  await page.waitForFunction(() => document.querySelector('[data-processing-status-slot]').textContent.includes('1 queued'))
   assert.equal(await page.$$eval('[data-processing-status-slot] [role="status"]', blocks => blocks.length), 1)
   assert.equal(await page.$$eval('[data-processing-status-slot] button', buttons => buttons.length), 2)
   await clickControl('Continue')
   assert.ok(await page.evaluate(() => window.commands.includes('/continue')))
   await page.evaluate(() => window.fixture.queue(0))
-  await page.waitForFunction(() => !document.querySelector('[data-processing-status-slot]').textContent.includes('queued message'))
+  await page.waitForFunction(() => !document.querySelector('[data-processing-status-slot]').textContent.includes('queued'))
   const interrupted = await geometry()
   await page.evaluate(() => window.fixture.state('requesting-model'))
   await page.waitForSelector('[data-processing-runtime-state="requesting-model"]')
@@ -269,5 +274,5 @@ test('status visibility is stable and queue status shares the restored block abo
   assert.ok(Math.abs(resumed.top - interrupted.top) <= 1 && resumed.scrollHeight === interrupted.scrollHeight, JSON.stringify({ interrupted, resumed }))
   await page.evaluate(async () => { window.fixture.theme('foxwarm.550a'); await document.fonts.ready; await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame) })
   const consolePadding = await page.$eval('[data-processing-status-slot] [role="status"]', block => { const css = getComputedStyle(block); return [css.paddingLeft, css.paddingTop] })
-  assert.deepEqual(consolePadding, ['16px', '8px'])
+  assert.deepEqual(consolePadding, ['0px', '0px'])
 })

@@ -3110,3 +3110,56 @@ test('cross-window theme changes close a deleted preview and release the backgro
     await second.waitForFunction(() => document.documentElement.dataset.foxwarmThemeMode === 'dark')
   } finally { await first.close(); await second?.close() }
 })
+
+
+test('playful runtime and short right-side queue work in App and Appearance', async () => {
+  const page = await openFixture({ responsiveChat: true, hash: '#tab/chat:e2e-a', themeId: 'foxwarm.default', colorMode: 'dark', width: 1400 })
+  const publish = () => page.evaluate(() => window.__emitRealtime({
+    type: 'session-state', sessionId: 'e2e-a', session: { id: 'e2e-a', busy: true, queueLength: 3, messageCount: 35, historyVersion: 1,
+      runtimeState: { state: 'requesting-model', busy: true, queueLength: 3 } },
+  }))
+  try {
+    await page.waitForSelector('.foxwarm-chat-composer-textarea')
+    await publish()
+    await page.waitForFunction(() => document.querySelector('[data-processing-queue-status]')?.textContent.includes('3 queued'))
+    assert.equal(await page.$eval('[data-fox-thinking-copy] .sr-only', el => el.textContent), 'Thinking...')
+    await page.click('[data-processing-queue-status] button')
+    await page.click('.fw-processing-main > button')
+    await page.waitForFunction(() => window.__sent.length >= 2)
+    assert.deepEqual(await page.evaluate(() => window.__sent.map(item => JSON.parse(item.body).text)), ['/dequeue', '/stop'])
+    await publish()
+    const bottom = await page.$('[aria-label="Scroll to bottom"]')
+    if (bottom) await bottom.click()
+    await page.waitForFunction(() => {
+      const status = document.querySelector('.fw-processing-main')?.getBoundingClientRect()
+      const scroll = document.querySelector('.foxwarm-chat-messages')?.getBoundingClientRect()
+      const form = document.querySelector('.foxwarm-chat-composer-form')?.getBoundingClientRect()
+      return status && scroll && form && status.top >= scroll.top && status.bottom <= form.top
+    })
+    assert.ok(await page.$eval('[data-processing-queue-status]', el => el.getBoundingClientRect().left > document.querySelector('.fw-processing-main').getBoundingClientRect().right))
+    if (process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR}/app-status-wide.png` })
+    await page.setViewport({ width: 390, height: 844 })
+    await page.waitForSelector('.foxwarm-fixed-viewport-shell')
+    await page.waitForSelector('.foxwarm-chat-composer-textarea')
+    await publish()
+    await page.waitForFunction(() => document.querySelector('[data-processing-queue-status]')?.textContent.includes('3 queued'))
+    assert.ok(await page.$$eval('[data-processing-status-slot] button', buttons => buttons.every(button => {
+      const rect = button.getBoundingClientRect()
+      return rect.width > 0 && rect.left >= 0 && rect.right <= innerWidth
+    })))
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
+    if (process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR}/app-status-narrow.png` })
+  } finally { await page.close() }
+  const setup = { id: 'system:setup', type: 'setup', title: 'Setup' }
+  const appearance = await openFixture({ tabs: [setup], activeTabId: setup.id, hash: '#setup', themeId: 'foxwarm.default', colorMode: 'dark' })
+  try {
+    await appearance.waitForSelector('[data-fox-thinking-copy]')
+    assert.deepEqual(await appearance.$eval('[data-fox-thinking-copy]', copy => ({
+      label: copy.querySelector('.sr-only').textContent,
+      font: getComputedStyle(copy).fontSize,
+      fox: copy.parentElement.querySelector('svg')?.getBoundingClientRect().width,
+    })), { label: 'Thinking...', font: '18px', fox: 24 })
+    assert.equal(await appearance.evaluate(() => !!window.foxwarmBoot && !document.querySelector('[data-fox-splash]')), true)
+    if (process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR) await appearance.screenshot({ path: `${process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR}/appearance-playful-status.png` })
+  } finally { await appearance.close() }
+})

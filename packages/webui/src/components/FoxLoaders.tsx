@@ -85,10 +85,10 @@ export function FoxSpinner({ size = 20, className = '' }: { size?: number | stri
 }
 
 /** Inline thinking block: the fox spinner, sized for a status row. */
-export function FoxThinking({ className = '', label }: { className?: string; label?: string }) {
+export function FoxThinking({ className = '', label, size = 20 }: { className?: string; label?: string; size?: number }) {
   return (
     <span className={`fw-fox-thinking inline-flex items-center ${className}`} data-fox-loader="thinking" aria-hidden={label ? undefined : true} role={label ? 'img' : undefined} aria-label={label}>
-      <FoxSpinner size={20} />
+      <FoxSpinner size={size} />
     </span>
   )
 }
