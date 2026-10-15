@@ -15,10 +15,11 @@ Provides native Windows build, background start, restart, status, and stop workf
 - Lifecycle logs are appended under `<data-root>/state/logs/`.
 - A data-root-specific local named pipe reports status and requests shutdown. Shutdown emits `SIGTERM` inside the running Node process so the application executes its existing graceful drain chain.
 - A graceful shutdown that exceeds the bounded timeout falls back to terminating the exact PID returned by the control pipe.
+- Both source installers reject unsupported Node.js versions before dependency installation; their build-time check follows the WebUI package engine range, not a new requirement on prebuilt backend or CLI execution.
 - The Windows installer invokes the same stopped-state guard before dependency installation and uses the same background launcher, so later status, restart, and stop commands manage installer-started processes without installing over a running instance.
 
 ## Integration
 
 - `npm run start:windows`, `restart:windows`, `status:windows`, and `stop:windows` are the shell-independent npm entry points.
 - `scripts/start.ps1`, `restart.ps1`, `status.ps1`, and `stop.ps1` are direct PowerShell equivalents of the existing tmux helpers.
-- `scripts/windowsService.test.js` covers data-root precedence, deterministic pipe naming, lifecycle log placement, guarded installer command routing, and a real control-pipe request/response round trip.
+- `scripts/windowsService.test.js` covers data-root precedence, deterministic pipe naming, lifecycle log placement, guarded installer command routing, both source installers' Node version boundaries, and a real control-pipe request/response round trip.

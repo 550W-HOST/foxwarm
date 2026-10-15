@@ -508,12 +508,12 @@ before(async () => {
   }), 'production WebUI build')
 
   const previewPort = await getFreePort()
-  productionBaseUrl = `http://127.0.0.1:${previewPort}`
-  preview = spawn(viteBin, ['preview', '--host', '127.0.0.1', '--port', String(previewPort), '--strictPort'], {
+  productionBaseUrl = `http://127.0.0.1:${previewPort}/production/foxwarm`
+  preview = spawn(viteBin, ['preview', '--base', '/production/foxwarm/', '--host', '127.0.0.1', '--port', String(previewPort), '--strictPort'], {
     cwd: webuiRoot,
     stdio: ['ignore', 'ignore', 'inherit'],
   })
-  await waitForServer(productionBaseUrl)
+  await waitForServer(`${productionBaseUrl}/`)
 
   vite = spawn(viteBin, ['--host', '127.0.0.1', '--port', String(port)], {
     cwd: webuiRoot,
@@ -1375,6 +1375,8 @@ test('raw model save remains enabled and preserves editor text', async () => {
 
 test('production worker provides real schema markers and current-document completions', async () => {
   const productionPage = await browser.newPage()
+  const workerUrls = []
+  productionPage.on('workercreated', worker => workerUrls.push(worker.url()))
   await productionPage.setBypassServiceWorker(true)
   await attachRequestMocks(productionPage)
   try {
@@ -1387,6 +1389,8 @@ test('production worker provides real schema markers and current-document comple
         && editor?.getAttribute('data-editor-fallback') !== 'true'
         && Number(editor?.getAttribute('data-marker-count') || 0) > 0
     }, { timeout: 20_000 }, modelEditor)
+    assert.ok(workerUrls.some(url => new URL(url).pathname.startsWith('/production/foxwarm/assets/yaml.worker-')))
+    assert.ok(workerUrls.every(url => new URL(url).pathname.startsWith('/production/foxwarm/assets/')))
 
     const saveButton = await productionPage.waitForSelector('button::-p-text(Save models)')
     assert.equal(await saveButton.evaluate((button) => button.disabled), false)

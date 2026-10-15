@@ -4,6 +4,8 @@ Web interface for Foxwarm.
 
 ## Setup
 
+Source builds and the development server require Node.js 20.19+ (20.x) or 22.12+ with npm.
+
 1. Install dependencies:
 ```bash
 cd packages/webui
@@ -47,7 +49,7 @@ npm run preview
 
 ## Architecture
 
-- Frontend: React + Vite + Tailwind CSS
+- Frontend: React 18 + Vite 8 (Rolldown) + Tailwind CSS
 - Backend: Express HTTP API (port 3001)
 - API endpoints:
   - POST /api/auth - Authenticate with token
