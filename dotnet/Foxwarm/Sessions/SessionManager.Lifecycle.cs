@@ -59,7 +59,14 @@ internal sealed partial class SessionManager
         await gate.WaitAsync();
         try
         {
-            return await ForkLockedAsync(parent, suffix, childMode, null, null, userInitiated: true);
+            return await ForkLockedAsync(
+                parent,
+                suffix,
+                childMode,
+                null,
+                null,
+                userInitiated: true
+            );
         }
         finally
         {

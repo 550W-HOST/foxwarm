@@ -84,10 +84,15 @@ internal static class ConcreteRequestHistory
         {
             if (part["functionResponse"] is not JsonObject response)
                 continue;
-            if (response["__meta"] is JsonObject metadata && metadata.ContainsKey("toolScriptSubCalls"))
+            if (
+                response["__meta"] is JsonObject metadata
+                && metadata.ContainsKey("toolScriptSubCalls")
+            )
                 response["response"] = new JsonObject
                 {
-                    ["output"] = Foxwarm.Tools.ToolResponseFormatting.FormatToolScriptExecution(response["response"]),
+                    ["output"] = Foxwarm.Tools.ToolResponseFormatting.FormatToolScriptExecution(
+                        response["response"]
+                    ),
                 };
             response.Remove("__meta");
         }

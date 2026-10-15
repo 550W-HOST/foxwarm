@@ -91,7 +91,11 @@ internal static class ToolOutputGuard
         return guarded;
     }
 
-    private static async Task<JsonNode?> GuardTextAsync(JsonNode? response, string workspace, bool toolScriptExecution)
+    private static async Task<JsonNode?> GuardTextAsync(
+        JsonNode? response,
+        string workspace,
+        bool toolScriptExecution
+    )
     {
         var text = toolScriptExecution
             ? ToolResponseFormatting.FormatToolScriptExecution(response)
