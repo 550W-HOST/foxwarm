@@ -27,7 +27,6 @@ import {
   normalizeProspectiveSessionModelEffortSettings,
 } from './session/modelEffortSettings';
 import type { CompactCancellationResult } from './session/history';
-import { isSessionAuthorityPostCommitError } from './session/stateFile';
 import { buildSessionSelectionNotice, normalizeSessionSettingsActor, type SessionSettingsActor } from './session/selectionSettings';
 
 export type SessionRuntimeTokenTotalsDto = {
@@ -813,74 +812,60 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
         }
       }
       const session = await requireSession(settingsSessionId);
-      return sessionManager.withSessionSettingsMutation(session, async persist => {
-        const previous = settingsFromSession(session);
-        const changed: Array<keyof SessionRuntimeSettingsPatchDto> = [];
-        const hasModelEffortMutation = ['model', 'effort', 'childModelDefault', 'childEffortDefault']
-          .some(key => Object.prototype.hasOwnProperty.call(input.patch, key));
-        if (hasModelEffortMutation) {
-          let normalized;
-          try {
-            normalized = normalizeProspectiveSessionModelEffortSettings(session, {
-              ...(normalizedStrings.has('model') ? { model: normalizedStrings.get('model')! } : {}),
-              ...(normalizedEfforts.has('effort') ? { effort: normalizedEfforts.get('effort')! } : {}),
-              ...(normalizedStrings.has('childModelDefault') ? { childModelDefault: normalizedStrings.get('childModelDefault')! } : {}),
-              ...(normalizedEfforts.has('childEffortDefault') ? { childEffortDefault: normalizedEfforts.get('childEffortDefault')! } : {}),
-            });
-          } catch (error: any) {
-            throw new RpcError('SESSION_RUNTIME_INVALID_SETTING', error?.message || String(error));
-          }
-          changed.push(...applyNormalizedSessionModelEffortSettings(session, normalized));
+      const previous = settingsFromSession(session);
+      const changed: Array<keyof SessionRuntimeSettingsPatchDto> = [];
+      const hasModelEffortMutation = ['model', 'effort', 'childModelDefault', 'childEffortDefault']
+        .some(key => Object.prototype.hasOwnProperty.call(input.patch, key));
+      if (hasModelEffortMutation) {
+        let normalized;
+        try {
+          normalized = normalizeProspectiveSessionModelEffortSettings(session, {
+            ...(normalizedStrings.has('model') ? { model: normalizedStrings.get('model')! } : {}),
+            ...(normalizedEfforts.has('effort') ? { effort: normalizedEfforts.get('effort')! } : {}),
+            ...(normalizedStrings.has('childModelDefault') ? { childModelDefault: normalizedStrings.get('childModelDefault')! } : {}),
+            ...(normalizedEfforts.has('childEffortDefault') ? { childEffortDefault: normalizedEfforts.get('childEffortDefault')! } : {}),
+          });
+        } catch (error: any) {
+          throw new RpcError('SESSION_RUNTIME_INVALID_SETTING', error?.message || String(error));
         }
-        for (const [key, normalized] of normalizedStrings) {
-          if (key === 'model' || key === 'childModelDefault') continue;
-          const prior = settingsFromSession(session)[key];
-          if (prior !== normalized) changed.push(key);
-          if (normalized === null) delete session[key];
-          else session[key] = normalized;
+        changed.push(...applyNormalizedSessionModelEffortSettings(session, normalized));
+      }
+      for (const [key, normalized] of normalizedStrings) {
+        if (key === 'model' || key === 'childModelDefault') continue;
+        const prior = settingsFromSession(session)[key];
+        if (prior !== normalized) changed.push(key);
+        if (normalized === null) delete session[key];
+        else session[key] = normalized;
+      }
+      if (normalizedThreshold !== undefined) {
+        if (settingsFromSession(session).compactThresholdTokens !== normalizedThreshold) changed.push('compactThresholdTokens');
+        if (normalizedThreshold === null) delete session.compactThresholdTokens;
+        else session.compactThresholdTokens = normalizedThreshold;
+      }
+      if (normalizedVerbose !== undefined) {
+        if (!!session.verbose !== normalizedVerbose) changed.push('verbose');
+        session.verbose = normalizedVerbose;
+      }
+      const settingOrder: Array<keyof SessionRuntimeSettingsPatchDto> = [
+        'cwd', 'model', 'effort', 'childModelDefault', 'childEffortDefault',
+        'currentNode', 'displayName', 'compactThresholdTokens', 'verbose',
+      ];
+      changed.sort((left, right) => settingOrder.indexOf(left) - settingOrder.indexOf(right));
+      if (changed.length > 0) {
+        const notice = buildSessionSelectionNotice(previous, settingsFromSession(session), actor);
+        if (notice) {
+          await sessionManager.enqueueSessionItemForLoadedSession(session, notice, { trigger: false },
+            undefined, () => sessionManager.saveSession(session.id));
+        } else {
+          await sessionManager.saveSession(session.id);
         }
-        if (normalizedThreshold !== undefined) {
-          if (settingsFromSession(session).compactThresholdTokens !== normalizedThreshold) changed.push('compactThresholdTokens');
-          if (normalizedThreshold === null) delete session.compactThresholdTokens;
-          else session.compactThresholdTokens = normalizedThreshold;
-        }
-        if (normalizedVerbose !== undefined) {
-          if (!!session.verbose !== normalizedVerbose) changed.push('verbose');
-          session.verbose = normalizedVerbose;
-        }
-        const settingOrder: Array<keyof SessionRuntimeSettingsPatchDto> = [
-          'cwd', 'model', 'effort', 'childModelDefault', 'childEffortDefault',
-          'currentNode', 'displayName', 'compactThresholdTokens', 'verbose',
-        ];
-        changed.sort((left, right) => settingOrder.indexOf(left) - settingOrder.indexOf(right));
-        if (changed.length > 0) {
-          const notice = buildSessionSelectionNotice(previous, settingsFromSession(session), actor);
-          if (notice) {
-            try {
-              await persist(notice);
-            } catch (error) {
-              if (!isSessionAuthorityPostCommitError(error)) {
-                // Settings and ingress mutations share the save owner; restore
-                // this entire normalized write before another mutation can enter.
-                for (const key of changed) {
-                  const value = previous[key];
-                  if (value === null) delete (session as any)[key];
-                  else (session as any)[key] = value;
-                }
-              }
-              throw error;
-            }
-          } else {
-            await persist();
-          }
-        }
-        return {
-          changed,
-          previous,
-          current: settingsFromSession(session),
-          session: buildSessionRuntimeSessionDto(session),
-        };
-      });
+      }
+      return {
+        changed,
+        previous,
+        current: settingsFromSession(session),
+        session: buildSessionRuntimeSessionDto(session),
+      };
     },
     async deleteMessages(input) {
       const sessionId = normalizeSessionId(input.sessionId);
