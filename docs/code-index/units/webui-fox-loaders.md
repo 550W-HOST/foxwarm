@@ -5,7 +5,7 @@ Secondary files: packages/webui/src/main.tsx, packages/webui/src/App.tsx, packag
 
 ## Purpose
 
-Theme-aware inline SVG loaders for full-app startup, lazy workbench views, and ordinary model thinking. The sleeping fox uses the semantic accent rather than a hard-coded theme palette.
+Theme-aware inline SVG loaders for full-app startup, lazy workbench views, and ordinary model thinking. Loader CSS is included by the application stylesheet, so standalone source fixtures can consume that built stylesheet without a separate component-CSS bundle. The sleeping fox uses the semantic accent rather than a hard-coded theme palette.
 
 ## Public symbols
 
@@ -21,7 +21,7 @@ Theme-aware inline SVG loaders for full-app startup, lazy workbench views, and o
 - Effects clear pending timers on teardown; React StrictMode setup/cleanup does not leave stale subscriptions or timers. The readiness store is monotonic during one application load.
 - Reduced motion skips the minimum draw-in wait and disables SVG motion. The leaving screen becomes transparent, hidden, and pointer-inert before removal.
 - The full-app splash is not mounted for popup/embedded roots. Authentication failure also signals readiness so loading cannot obscure the sign-in recovery link.
-- Ordinary requesting-model status uses the 20px fox thinking spinner without increasing the existing status block height. Compaction/tool indicators and static waiting behavior retain their previous runtime semantics. Timeline loading uses an accessible waiting label; lazy view fallback uses a centered status loader.
+- Ordinary requesting-model status uses the 20px fox thinking spinner without increasing the existing status block height. Compaction/tool indicators and static waiting behavior retain their previous runtime semantics. Timeline loading uses the accessible Loading label; lazy view fallback uses a centered status loader.
 - Appearance previews have no live Session operations. They consume the active theme accent; the presentational full-screen preview closes on click or Escape and returns focus to its Full screen control. Its keyboard listener exists only while that manual preview is open; it cannot dismiss the real startup splash or drive the application boot store.
 
 ## Verification

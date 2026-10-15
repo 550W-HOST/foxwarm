@@ -1,3 +1,4 @@
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -14,9 +15,11 @@ async function openSessionList(viewport) {
   const page = await browser.newPage()
   await page.setViewport(viewport)
   await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
   await page.waitForFunction(() => !!localStorage.getItem('foxwarm_token'), { timeout: 15_000 })
   await page.evaluate(() => history.replaceState(null, '', location.pathname))
   await page.reload({ waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
   await page.waitForSelector('[data-session-list-scroll-container]', { timeout: 15_000 })
   await page.waitForSelector('[data-session-id]', { timeout: 15_000 })
   return page

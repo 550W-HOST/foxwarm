@@ -1,5 +1,4 @@
 import { useEffect, useState, useSyncExternalStore, type CSSProperties } from 'react'
-import './FoxLoaders.css'
 
 // A little fox curled up asleep: angular face with tall ears and closed eyes
 // on the left, the back as one big circle, a curled haunch, and the tail

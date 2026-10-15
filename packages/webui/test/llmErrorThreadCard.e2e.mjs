@@ -99,7 +99,7 @@ const groupTags = async (id) => page.$$eval(`#${id} [data-tool-group-card] [data
 test('LLM retry notices render as body-only thread cards and count body lines in tool groups', async () => {
   assert.deepEqual(await groupTags('groupedMessages'), [
     ['LLM error ×5', 'system'],
-    ['exec ×2', 'success'],
+    ['exec ×2', 'neutral'],
   ])
   assert.equal(await page.$$('#groupedMessages [data-system-message-card]').then(nodes => nodes.length), 0, 'collapsed groups hide the member card')
   assert.match(await page.$eval('#groupedMessages', root => root.textContent), /ordinary answer/)
