@@ -1,0 +1,220 @@
+import test, { before, after } from 'node:test'
+import assert from 'node:assert/strict'
+import { createServer } from 'node:http'
+import { readdir, readFile } from 'node:fs/promises'
+import { build } from './browserFixtureBundle.mjs'
+import { webuiReactAliases } from './reactRendererAliases.mjs'
+import puppeteer from 'puppeteer-core'
+
+let browser, server, baseUrl
+before(async () => {
+  const assets = new URL('../dist/assets/', import.meta.url)
+  const cssName = (await readdir(assets)).find(name => /^index-.*\.css$/.test(name))
+  const css = await readFile(new URL(cssName, assets), 'utf8')
+  const bundle = await build({
+    stdin: { contents: `
+      import React, { StrictMode, useState } from 'react'
+      import { createRoot } from 'react-dom/client'
+      import ProcessingStatus from './src/components/ProcessingStatus'
+      import { initializeThemeRuntime } from './src/theme'
+      initializeThemeRuntime()
+      function Fixture() {
+        const [state, setState] = useState('requesting-model')
+        const [queue, setQueue] = useState(0)
+        window.fixture.setQueue = setQueue
+        window.fixture.setState = setState
+        return <ProcessingStatus sessionBusy={state !== 'idle'} sessionQueueLength={queue} turnIncomplete={false}
+          loading={state === 'loading'} isMobile={innerWidth < 768}
+          runtimeState={{state: state === 'compacting' ? 'requesting-model' : state === 'exec' ? 'running-tool' : state,
+            active: {phase: state === 'compacting' ? 'compaction' : 'normal-turn'},
+            tool: {name: state === 'exec' ? 'exec' : 'read', index: 0, total: 2, executionNode: 'fixture-node', argsPreview: 'echo WORK', startedAt: 1}}}
+          onStop={() => window.fixture.stops++} onRunQueued={() => window.fixture.runs++} />
+      }
+      window.fixture = {stops: 0, runs: 0}
+      createRoot(document.getElementById('root')).render(<StrictMode><Fixture /></StrictMode>)
+    `, resolveDir: new URL('..', import.meta.url).pathname, sourcefile: 'thinking-fixture.tsx', loader: 'tsx' },
+    bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false,
+    alias: webuiReactAliases, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent',
+  })
+  server = createServer((_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+    response.end(`<!doctype html><html><head><style>${css}body{padding:16px}</style></head><body><div id="root"></div><script>${bundle.outputFiles[0].text}</script></body></html>`)
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  baseUrl = `http://127.0.0.1:${server.address().port}`
+  browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox'] })
+})
+after(async () => {
+  await browser?.close()
+  if (server) await new Promise(resolve => server.close(resolve))
+})
+
+async function open({ width = 900, reduced = false } = {}) {
+  const page = await browser.newPage()
+  await page.setViewport({ width, height: 500 })
+  await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: reduced ? 'reduce' : 'no-preference' }])
+  await page.evaluateOnNewDocument(() => {
+    Math.random = () => 0
+    const set = window.setTimeout.bind(window), clear = window.clearTimeout.bind(window)
+    window.thinkingTimers = new Set()
+    window.setTimeout = (fn, ms, ...args) => {
+      const id = set(() => { window.thinkingTimers.delete(id); fn(...args) }, ms)
+      if (ms >= 5000 && ms <= 7000 || ms === 450) window.thinkingTimers.add(id)
+      return id
+    }
+    window.clearTimeout = id => { window.thinkingTimers.delete(id); clear(id) }
+  })
+  await page.goto(baseUrl)
+  await page.waitForSelector('[data-thinking-phrase="initial"]')
+  return page
+}
+
+async function geometry(page) {
+  return page.evaluate(() => {
+    const box = selector => {
+      const { x, y, width, height } = document.querySelector(selector).getBoundingClientRect()
+      return { x, y, width, height }
+    }
+    return { badge: box('[data-processing-runtime-state]'), stop: box('button'), slot: box('[data-processing-status-slot]') }
+  })
+}
+
+test('phrases wipe without moving text while Stop smoothly follows the actual caption width', async () => {
+  const page = await open()
+  try {
+    const before = await geometry(page)
+    assert.equal(before.stop.x, before.badge.x + before.badge.width + 12)
+    assert.equal(before.stop.height, before.badge.height)
+    const style = await page.$eval('.fw-processing-badge', element => {
+      const style = getComputedStyle(element)
+      return { border: style.borderTopWidth, background: style.backgroundColor, font: getComputedStyle(element.querySelector('[data-fox-thinking-copy]')).fontSize }
+    })
+    assert.deepEqual(style, { border: '0px', background: 'rgba(0, 0, 0, 0)', font: '18px' })
+    assert.equal(await page.$eval('button', button => getComputedStyle(button).borderTopWidth), '0px')
+    assert.equal(await page.$eval('.fw-fox-thinking-phrases', element => parseFloat(getComputedStyle(element).lineHeight) / parseFloat(getComputedStyle(element).fontSize)), 1.5)
+    assert.equal(await page.$eval('button', button => button.closest('[role="status"]')), null)
+    await page.focus('button')
+    await page.waitForSelector('[data-thinking-phrase="outgoing"]')
+    const layers = await page.evaluate(() => {
+      for (const animation of document.getAnimations()) {
+        if (animation.animationName?.startsWith('fw-fox-copy-')) animation.currentTime = 225
+      }
+      return [...document.querySelectorAll('[data-thinking-phrase]')].map(element => ({
+        text: element.textContent, opacity: Number(getComputedStyle(element).opacity), transform: getComputedStyle(element).transform, clip: getComputedStyle(element).clipPath,
+      }))
+    })
+    assert.equal(layers.length, 2)
+    assert.notEqual(layers[0].text, layers[1].text)
+    assert.ok(layers.every(layer => layer.opacity === 1 && layer.clip.startsWith('inset(')))
+    assert.ok(layers.every(layer => layer.transform === 'none'))
+    assert.notEqual(layers[0].clip, layers[1].clip)
+    const middle = await geometry(page)
+    assert.equal(middle.badge.x, before.badge.x)
+    assert.equal(middle.slot.height, before.slot.height)
+    assert.equal(await page.$eval('[data-fox-thinking-copy]', element => element.getAnimations().some(animation => animation.transitionProperty === 'width')), true)
+    assert.equal(await page.$eval('[data-fox-thinking-copy] .sr-only', element => element.textContent), 'Thinking...')
+    assert.equal(await page.$eval('.fw-fox-thinking-phrases', element => element.getAttribute('aria-hidden')), 'true')
+    await page.waitForFunction(() => {
+      const copy = document.querySelector('[data-fox-thinking-copy]')
+      return !copy.querySelector('[data-thinking-phrase="outgoing"]') && Math.abs(copy.getBoundingClientRect().width - Math.ceil(copy.querySelector('.fw-fox-thinking-measure').getBoundingClientRect().width)) < 0.5
+    })
+    const after = await geometry(page)
+    assert.ok(after.stop.x < before.stop.x, 'shorter phrases bring Stop closer')
+    assert.ok(middle.stop.x <= before.stop.x && middle.stop.x >= after.stop.x)
+    assert.equal(after.stop.width, before.stop.width)
+    assert.equal(after.stop.y, before.stop.y)
+    assert.equal(after.slot.height, before.slot.height)
+    assert.ok(Math.abs(after.stop.x - after.badge.x - after.badge.width - 12) < 1)
+    assert.equal(await page.$eval('button', element => element === document.activeElement), true)
+    await page.click('button')
+    assert.equal(await page.evaluate(() => window.fixture.stops), 1)
+  } finally { await page.close() }
+})
+
+test('reduced motion changes copy without animation or duplicate visible layers', async () => {
+  const page = await open({ reduced: true })
+  try {
+    await page.waitForSelector('[data-thinking-phrase="outgoing"]')
+    assert.equal(await page.$eval('[data-thinking-phrase="outgoing"]', element => getComputedStyle(element).display), 'none')
+    const style = await page.$eval('[data-thinking-phrase="incoming"]', element => {
+      const style = getComputedStyle(element)
+      return { animation: style.animationName, transform: style.transform, opacity: style.opacity }
+    })
+    assert.deepEqual(style, { animation: 'none', transform: 'none', opacity: '1' })
+  } finally { await page.close() }
+})
+
+test('narrow rows preserve Stop, fixed status height, and timer cleanup across real states', async () => {
+  const page = await open({ width: 240 })
+  try {
+    const boxes = await geometry(page)
+    assert.equal(boxes.slot.height, 40)
+    assert.ok(boxes.stop.x + boxes.stop.width <= 240 - 16)
+    assert.ok(Math.abs(boxes.badge.x + boxes.badge.width + 12 - boxes.stop.x) < 1)
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
+    for (const state of ['compacting', 'running-tool', 'waiting', 'loading', 'idle']) {
+      await page.evaluate(state => window.fixture.setState(state), state)
+      await page.waitForFunction(() => !document.querySelector('[data-fox-thinking-copy]') && window.thinkingTimers.size === 0)
+      assert.equal(await page.$eval('[data-processing-status-slot]', element => element.getBoundingClientRect().height), 40)
+      if (state === 'loading' || state === 'idle' || state === 'waiting') assert.equal(await page.$('button'), null)
+    }
+  } finally { await page.close() }
+})
+
+
+test('exec gets borderless action copy, distinct semantic color, and real details without a tag', async () => {
+  const page = await open()
+  try {
+    const thinking = await page.$eval('[data-fox-thinking-copy]', element => getComputedStyle(element).color)
+    await page.evaluate(() => window.fixture.setState('exec'))
+    await page.waitForSelector('[data-fox-copy-mode="exec"]')
+    const exec = await page.$eval('[data-fox-thinking-copy]', element => getComputedStyle(element).color)
+    assert.notEqual(exec, thinking)
+    assert.equal(await page.$eval('[data-processing-runtime-state]', element => getComputedStyle(element).borderTopWidth), '0px')
+    assert.match(await page.$eval('[data-fox-copy-mode="exec"]', element => element.textContent), /Prowling through the pines/)
+    assert.equal(await page.$eval('.fw-processing-exec .fw-fox', element => getComputedStyle(element).stroke), exec)
+    assert.match(await page.$eval('[title*="echo WORK"]', element => element.title), /tool: exec 1\/2.*fixture-node.*echo WORK/)
+    assert.equal(await page.$eval('[data-fox-copy-mode="exec"] .sr-only', element => element.textContent), 'tool: exec 1/2')
+    assert.equal(await page.$('[data-processing-tool-tag]'), null)
+    assert.equal(await page.evaluate(() => window.thinkingTimers.size), 1)
+    await page.click('button')
+    assert.equal(await page.evaluate(() => window.fixture.stops), 1)
+    await page.evaluate(() => window.fixture.setState('idle'))
+    await page.waitForFunction(() => window.thinkingTimers.size === 0)
+  } finally { await page.close() }
+})
+
+
+test('all runtime states and queue copy are borderless, with smaller muted queue metadata', async () => {
+  const page = await open()
+  try {
+    for (const state of ['requesting-model', 'exec', 'compacting', 'running-tool', 'waiting']) {
+      await page.evaluate(state => window.fixture.setState(state), state)
+      await page.waitForFunction(state => document.querySelector('[data-processing-runtime-state]')?.dataset.processingRuntimeState === (state === 'exec' ? 'running-tool' : state === 'compacting' ? 'requesting-model' : state), {}, state)
+      assert.deepEqual(await page.$eval('.fw-processing-badge', element => {
+        const css = getComputedStyle(element)
+        return {border: css.borderTopWidth, background: css.backgroundColor}
+      }), {border: '0px', background: 'rgba(0, 0, 0, 0)'})
+      assert.equal(await page.$$eval('button', buttons => buttons.every(button => getComputedStyle(button).borderTopWidth === '0px')), true)
+    }
+    await page.evaluate(() => window.fixture.setQueue(2))
+    await page.waitForSelector('[data-processing-queue-status]')
+    const metadata = await page.$eval('[data-processing-queue-status] > div', element => {
+      const style = getComputedStyle(element)
+      const expected = document.createElement('span')
+      expected.className = 'text-fw-text-muted'
+      document.body.append(expected)
+      const muted = getComputedStyle(expected).color
+      expected.remove()
+      return {size: style.fontSize, color: style.color, muted, border: style.borderTopWidth, background: style.backgroundColor,
+        below: element.getBoundingClientRect().top >= document.querySelector('[data-processing-status-slot]').getBoundingClientRect().bottom}
+    })
+    assert.equal(metadata.size, '12px')
+    assert.equal(metadata.color, metadata.muted)
+    assert.equal(metadata.border, '0px')
+    assert.equal(metadata.background, 'rgba(0, 0, 0, 0)')
+    assert.equal(metadata.below, true)
+    await page.click('[data-processing-queue-status] button')
+    assert.equal(await page.evaluate(() => window.fixture.runs), 1)
+  } finally { await page.close() }
+})

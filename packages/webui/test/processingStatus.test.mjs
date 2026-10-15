@@ -62,7 +62,7 @@ test('compacting status is blue and animated, with compaction queue continuation
   })
 
   assert.match(html, /data-processing-runtime-state="requesting-model"/)
-  assert.match(html, /bg-fw-accent-surface/)
+  assert.match(html, /text-fw-accent/)
   assert.match(html, /Compacting\.\.\./)
   assert.match(html, /2 queued messages will be inserted when this session resumes after compaction/)
   assert.equal((html.match(/runtime-busy-spinner/g) || []).length, 1)
@@ -72,7 +72,7 @@ test('compacting status is blue and animated, with compaction queue continuation
   assert.doesNotMatch(html, />Continue<\/button>/)
 })
 
-test('running-tool status is purple and uses tool-call queue continuation', () => {
+test('exec status uses a purple action caption and tool-call queue continuation', () => {
   const html = render({
     sessionBusy: true,
     sessionQueueLength: 1,
@@ -82,10 +82,12 @@ test('running-tool status is purple and uses tool-call queue continuation', () =
   })
 
   assert.match(html, /data-processing-runtime-state="running-tool"/)
-  assert.match(html, /bg-fw-special-surface/)
+  assert.match(html, /text-fw-special/)
   assert.match(html, /tool: exec 2\/4/)
   assert.match(html, /1 queued message will be inserted after this tool call/)
-  assert.equal((html.match(/runtime-busy-spinner/g) || []).length, 1)
+  assert.equal((html.match(/runtime-busy-spinner/g) || []).length, 0)
+  assert.match(html, /data-fox-copy-mode="exec"/)
+  assert.doesNotMatch(html, /data-processing-tool-tag/)
   assert.doesNotMatch(html, /animate-bounce/)
   assert.match(html, />Stop<\/button>/)
   assert.match(html, />Run queued<\/button>/)
@@ -101,7 +103,7 @@ test('waiting status is amber with one static dot, resume copy, and no Stop acti
   })
 
   assert.match(html, /data-processing-runtime-state="waiting"/)
-  assert.match(html, /bg-fw-warning-surface/)
+  assert.match(html, /text-fw-warning/)
   assert.match(html, /data-processing-status-dot="static"/)
   assert.match(html, /waiting: sessions 1\/2/)
   assert.doesNotMatch(html, /animate-bounce|runtime-busy-spinner/)
@@ -163,4 +165,40 @@ test('loading indicator still takes precedence over runtime status', () => {
   assert.doesNotMatch(html, /tool: exec|runtime-busy-spinner/)
   assert.equal((html.match(/data-fox-loader="thinking"/g) || []).length, 1)
   assert.match(html, /aria-label="Loading"/)
+  assert.doesNotMatch(html, />Stop<\/button>/)
+})
+
+
+test('thinking captions do not replace other real statuses', () => {
+  for (const timelineView of ['grouped', 'conversation']) {
+    const ordinary = render({ sessionBusy: true, timelineView })
+    assert.match(ordinary, /data-fox-thinking-copy/)
+    assert.match(ordinary, /aria-hidden="true"[^>]*title=/)
+    for (const props of [
+      { runtimeState: activeRuntimeState('requesting-model', { active: { phase: 'compaction' } }) },
+      { runtimeState: activeRuntimeState('running-tool', { tool: { name: 'read', startedAt: 1 } }) },
+      { runtimeState: activeRuntimeState('waiting') },
+      { runtimeState: activeRuntimeState('idle') },
+      { loading: true },
+    ]) assert.doesNotMatch(render({ sessionBusy: true, timelineView, ...props }), /data-fox-thinking-copy/)
+  }
+})
+
+
+test('only actual exec tool names select the distinct action-caption pool', () => {
+  for (const timelineView of ['grouped', 'conversation']) {
+    for (const name of ['exec', 'functions.exec', 'node:fixture/exec']) {
+      const html = render({timelineView, runtimeState: activeRuntimeState('running-tool', {
+        tool: {name, index: 0, total: 2, executionNode: 'fixture-node', argsPreview: 'echo WORK', startedAt: 1},
+      })})
+      assert.match(html, /data-fox-copy-mode="exec"/)
+      assert.doesNotMatch(html, /data-processing-tool-tag/)
+      assert.match(html, /fixture-node/)
+      assert.match(html, /echo WORK/)
+      assert.match(html, /1\/2/)
+    }
+    for (const name of ['read', 'execute', 'exec_file']) assert.doesNotMatch(render({timelineView,
+      runtimeState: activeRuntimeState('running-tool', {tool: {name, startedAt: 1}}),
+    }), /data-fox-copy-mode="exec"/)
+  }
 })

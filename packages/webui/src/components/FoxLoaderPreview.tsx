@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { RotateCcw, Expand } from 'lucide-react'
 import { FoxCub, FoxSplashScreen, FoxSpinner, FoxThinking } from './FoxLoaders'
+import FoxThinkingText from './FoxThinkingText'
 
 function PreviewCard({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
   return (
@@ -53,9 +54,9 @@ export default function FoxLoaderPreview() {
           <FoxCub key={replay} size={120} />
         </PreviewCard>
         <PreviewCard title="Thinking status">
-          <div className="inline-flex items-center gap-2 rounded-lg border border-fw-accent-border bg-fw-accent-surface px-4 py-2 text-sm text-fw-accent dark:bg-fw-accent-surface-strong/20">
-            <FoxThinking />
-            <span>Thinking...</span>
+          <div className="inline-flex min-w-0 max-w-full items-center gap-2.5 text-lg text-fw-accent">
+            <FoxThinking className="shrink-0" size={24} />
+            <FoxThinkingText />
           </div>
         </PreviewCard>
         <PreviewCard title="Spinner">

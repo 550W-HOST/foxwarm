@@ -1,6 +1,7 @@
 import { memo } from 'react'
 import RuntimeBusySpinner from './RuntimeBusySpinner'
 import { FoxThinking } from './FoxLoaders'
+import FoxThinkingText from './FoxThinkingText'
 import type { TimelineView } from '../chatPreferences'
 import { getRuntimeStateSummary, type SessionRuntimeState } from '../sessionRuntimeState'
 
@@ -17,7 +18,7 @@ interface ProcessingStatusProps {
   onContinue?: () => void
 }
 
-const controlButtonClass = 'rounded border border-current px-2 py-0.5 text-[11px] font-medium leading-4 transition-colors hover:bg-fw-overlay/5 focus:outline-none focus:ring-2 focus:ring-fw-focus-ring disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-fw-surface/10 dark:focus:ring-fw-focus-ring'
+const controlButtonClass = 'inline-flex shrink-0 items-center rounded-md px-2 text-fw-text-muted transition-colors hover:bg-fw-hover hover:text-fw-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring disabled:cursor-not-allowed disabled:opacity-50'
 
 const ProcessingStatus = memo(function ProcessingStatus({
   sessionBusy,
@@ -46,25 +47,23 @@ const ProcessingStatus = memo(function ProcessingStatus({
     : runtimeStateName === 'requesting-model'
     ? runtimeSummary.replace(/^thinking\b/, 'Thinking...')
     : runtimeSummary
+  const rotateThinkingCopy = runtimeStateName === 'requesting-model' && !isCompacting
+  const isExec = runtimeStateName === 'running-tool' && /(?:^|[.:/])exec$/.test(runtimeState?.tool?.name || '')
+  const rotateStatusCopy = rotateThinkingCopy || isExec
+  const execDetails = isExec ? [runtimeSummary, runtimeState?.tool?.executionNode, runtimeState?.tool?.argsPreview].filter(Boolean).join(' · ') : undefined
   const isActive = runtimeStateName === 'requesting-model' || runtimeStateName === 'running-tool'
   const tone = runtimeStateName === 'running-tool'
     ? {
-        surface: 'bg-fw-special-surface dark:bg-fw-special-surface/20 border-fw-special-border dark:border-fw-special-border',
         text: 'text-fw-special dark:text-fw-special',
-        controls: 'text-fw-special dark:text-fw-special',
         dot: 'bg-fw-special dark:bg-fw-special',
       }
     : runtimeStateName === 'waiting' || runtimeStateName === 'idle'
       ? {
-          surface: 'bg-fw-warning-surface dark:bg-fw-warning-surface-strong/20 border-fw-warning-border dark:border-fw-warning-border',
           text: 'text-fw-warning dark:text-fw-warning',
-          controls: 'text-fw-warning dark:text-fw-warning',
           dot: 'bg-fw-warning dark:bg-fw-warning',
         }
       : {
-          surface: 'bg-fw-accent-surface dark:bg-fw-accent-surface-strong/20 border-fw-accent-border dark:border-fw-accent-border',
           text: 'text-fw-accent dark:text-fw-accent',
-          controls: 'text-fw-accent dark:text-fw-accent',
           dot: 'bg-fw-accent dark:bg-fw-accent',
         }
   const queuedContinuation = sessionQueueLength > 0
@@ -85,9 +84,9 @@ const ProcessingStatus = memo(function ProcessingStatus({
     <>
       <div data-processing-status-slot className="h-10 pt-2">
         {(loading || showRuntimeStatus || interrupted) && (
-          <div className={`min-w-0 ${rowWidthClass}`}>
+          <div className={`fw-processing-control-group flex min-w-0 items-center gap-3 ${rotateStatusCopy ? `fw-processing-animated ${isExec ? 'fw-processing-exec' : ''}` : ''} ${rowWidthClass}`}>
             <div
-              className={`inline-flex h-8 max-w-full items-center gap-2 rounded-lg border px-3 ${loading ? 'bg-fw-surface border-fw-border' : tone.surface}`}
+              className="fw-processing-badge inline-flex h-8 min-w-0 max-w-full items-center gap-2.5"
               data-processing-runtime-state={loading ? undefined : interrupted ? 'interrupted' : runtimeStateName}
               role="status"
             >
@@ -97,29 +96,32 @@ const ProcessingStatus = memo(function ProcessingStatus({
                 <>
                   {runtimeStateName === 'waiting' || interrupted ? (
                     <span className={`h-2 w-2 shrink-0 rounded-full ${tone.dot}`} data-processing-status-dot="static" />
-                  ) : runtimeStateName === 'requesting-model' && !isCompacting ? (
-                    <FoxThinking className="shrink-0" />
+                  ) : rotateStatusCopy ? (
+                    <FoxThinking className="shrink-0" size={24} />
                   ) : (
-                    <RuntimeBusySpinner className={`h-4 w-4 shrink-0 ${tone.text}`} />
+                    <RuntimeBusySpinner className={`h-5 w-5 shrink-0 ${tone.text}`} />
                   )}
-                  <span className={`min-w-0 truncate text-sm leading-5 ${tone.text}`} title={statusLabel}>{statusLabel}</span>
-                  {(isActive || interrupted) && (
-                    <div className={`ml-auto flex shrink-0 items-center gap-1 ${tone.controls}`}>
-                      {isActive && onStop && <button type="button" onClick={onStop} className={controlButtonClass}>Stop</button>}
-                      {interrupted && onContinue && <button type="button" onClick={onContinue} className={controlButtonClass}>Continue</button>}
+                  {rotateStatusCopy ? <span className={`inline-flex min-w-0 items-baseline gap-2 text-lg leading-7 ${tone.text}`}>
+                    <FoxThinkingText mode={isExec ? 'exec' : 'thinking'} label={isExec ? runtimeSummary : statusLabel} title={execDetails} />
+                  </span>
+                    : <span className={`min-w-0 truncate text-lg leading-7 ${tone.text}`} title={statusLabel}>{statusLabel}</span>}
+                  {interrupted && (
+                    <div className="ml-auto flex shrink-0 items-center gap-1">
+                      {onContinue && <button type="button" onClick={onContinue} className={`${controlButtonClass} text-sm leading-5`}>Continue</button>}
                     </div>
                   )}
                 </>
               )}
             </div>
+            {!loading && isActive && onStop && <button type="button" onClick={onStop} className={`${controlButtonClass} h-8 text-sm`}>Stop</button>}
           </div>
         )}
       </div>
       {sessionQueueLength > 0 && (
-        <div data-processing-queue-status role="status" className={`mt-2 min-w-0 ${rowWidthClass}`}>
-          <div className={`inline-flex max-w-full flex-wrap items-center gap-2 rounded-lg border px-3 py-1 text-sm ${tone.surface} ${tone.text}`}>
+        <div data-processing-queue-status role="status" className={`mt-1.5 min-w-0 ${rowWidthClass}`}>
+          <div className="flex max-w-full flex-wrap items-baseline gap-x-2 gap-y-1 text-xs leading-5 text-fw-text-muted">
             <span className="min-w-0 break-words">{queueLabel}</span>
-            {onRunQueued && <button type="button" onClick={onRunQueued} className={`shrink-0 ${controlButtonClass}`}>Run queued</button>}
+            {onRunQueued && <button type="button" onClick={onRunQueued} className={`${controlButtonClass} text-xs leading-5`}>Run queued</button>}
           </div>
         </div>
       )}
