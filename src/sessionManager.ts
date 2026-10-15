@@ -2446,7 +2446,7 @@ function buildManagedInboxWakeupMessage(managedSessionId: string, pendingCount: 
   return `Managed session \`${managedSessionId}\` has ${pendingCount} pending inbox item(s). Use session_step(...) to process them or release_managed_session(...) to hand control back.`;
 }
 
-async function reclaimManagedSessionIfStale(session: Session): Promise<boolean> {
+async function reclaimManagedSessionIfStale(session: Session, persist = () => saveSession(session.id)): Promise<boolean> {
   const managed = getManagedSessionState(session);
   if (!managed) {
     return false;
@@ -2464,7 +2464,7 @@ async function reclaimManagedSessionIfStale(session: Session): Promise<boolean> 
   const restoredPending = managed.pendingInbox.map(cloneQueueItem);
   setManagedSessionState(session, null);
   session.queue = [...restoredPending, ...(session.queue || [])];
-  await saveSession(session.id);
+  await persist();
   return true;
 }
 
@@ -2478,6 +2478,11 @@ async function maybeWakeManagedSessionOwner(session: Session, managed: ManagedSe
     return;
   }
 
+  // The owner lookup awaited outside the admission lane. Use current inbox
+  // metadata rather than writing an earlier admission's cloned state back.
+  const current = getManagedSessionState(session);
+  if (!current || current.leaseId !== managed.leaseId || !current.pendingInbox.some(item => item.trigger !== false)) return;
+  managed = current;
   const now = Date.now();
   if (managed.lastOwnerWakeupAt && now - managed.lastOwnerWakeupAt < MANAGED_OWNER_WAKEUP_COOLDOWN_MS) {
     return;
@@ -2532,10 +2537,49 @@ async function maybeResumeManagedSessionControllerRun(session: Session, managed:
   }
 }
 
+/** Called only while the existing authority save lane owns this mutation. */
+async function persistLoadedSessionWithinSaveLane(session: Session, strict: boolean): Promise<void> {
+  if (strict) return saveSessionForSessionCriticalUnlocked(session);
+  try { await saveSessionForSessionCriticalUnlocked(session); }
+  catch (error) { logger.error({ err: error, sessionId: session.id }, 'Failed to save session'); }
+}
+
 export async function enqueueSessionItemForLoadedSession(session: Session, item: QueueItem,
   options: SessionEnqueueOptions = {}, assertAdmissionActive?: () => void): Promise<void> {
-  const sessionId = session.id;
   item = (await externalizeQueueItemImages(item)).item;
+  const admitted = await withSessionAuthoritySaveLane(session.id,
+    () => admitAndPersistLoadedSessionItem(session, item, options, assertAdmissionActive));
+  // Owner/controller wake can save this or another Session. It must not await
+  // another save while holding this Session's non-reentrant authority lane.
+  if (admitted?.managed) {
+    const current = getManagedSessionState(session);
+    if (current?.leaseId === admitted.managed.leaseId) {
+      const resumed = await maybeResumeManagedSessionControllerRun(session, current);
+      if (!resumed) await maybeWakeManagedSessionOwner(session, current);
+    }
+  }
+  if (admitted?.triggerDirect) {
+    assertSessionDestructiveMutationAllowed([session.id], 'start queued work');
+    void onSessionTriggered?.(session.id);
+  }
+}
+
+/** Keep a local settings mutation and its optional passive admission under the
+ * existing save owner until success or rollback, before later ingress mutates.
+ */
+export function withSessionSettingsMutation<T>(session: Session,
+  operation: (persist: (notice?: QueueItem) => Promise<void>) => Promise<T>): Promise<T> {
+  return withSessionAuthoritySaveLane(session.id, () => operation(async notice => {
+    if (notice) await admitAndPersistLoadedSessionItem(session, notice, { trigger: false });
+    else await persistLoadedSessionWithinSaveLane(session, false);
+  }));
+}
+
+async function admitAndPersistLoadedSessionItem(session: Session, item: QueueItem,
+  options: SessionEnqueueOptions, assertAdmissionActive?: () => void): Promise<{
+    managed?: ManagedSessionState; triggerDirect?: boolean;
+  } | undefined> {
+  const sessionId = session.id;
   let receiptPlan: AcceptedExternalEventReceiptPlan | undefined;
   if (item.externalEventId) {
     receiptPlan = planAcceptedExternalEventReceipt(session.meta.acceptedExternalEventIds, item.externalEventId);
@@ -2544,13 +2588,13 @@ export async function enqueueSessionItemForLoadedSession(session: Session, item:
       assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
       const metaBeforeNormalization = structuredClone(session.meta);
       applyAcceptedExternalEventReceiptPlan(session.meta, receiptPlan);
-      try { await saveSession(sessionId); }
+      try { await persistLoadedSessionWithinSaveLane(session, false); }
       catch (error) { session.meta = metaBeforeNormalization; throw error; }
       return;
     }
   }
   assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
-  await reclaimManagedSessionIfStale(session);
+  await reclaimManagedSessionIfStale(session, () => persistLoadedSessionWithinSaveLane(session, false));
   assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
   if (item.externalEventId) {
     receiptPlan = planAcceptedExternalEventReceipt(session.meta.acceptedExternalEventIds, item.externalEventId);
@@ -2558,7 +2602,7 @@ export async function enqueueSessionItemForLoadedSession(session: Session, item:
     if (receiptPlan.duplicate) {
       const metaBeforeNormalization = structuredClone(session.meta);
       applyAcceptedExternalEventReceiptPlan(session.meta, receiptPlan);
-      try { await saveSession(sessionId); }
+      try { await persistLoadedSessionWithinSaveLane(session, false); }
       catch (error) { session.meta = metaBeforeNormalization; throw error; }
       return;
     }
@@ -2571,11 +2615,12 @@ export async function enqueueSessionItemForLoadedSession(session: Session, item:
   const persistSession = async (): Promise<void> => {
     // External admission and passive notices require an awaited durable save.
     // Ordinary internal producers retain their existing compatibility writer.
-    if (assertAdmissionActive || options.trigger === false) await saveSessionForSessionCritical(session);
-    else await saveSession(sessionId);
+    await persistLoadedSessionWithinSaveLane(session, !!assertAdmissionActive || options.trigger === false);
     if (item.externalEventId) persistedAfterExternalReceipt = true;
   };
 
+  let admittedManaged: ManagedSessionState | undefined;
+  let triggerDirect = false;
   try {
     // External callers may lose their HTTP context while image preparation,
     // session hydration or managed-owner reclamation awaits. Nothing below
@@ -2618,10 +2663,7 @@ export async function enqueueSessionItemForLoadedSession(session: Session, item:
       managed.revision += 1;
       setManagedSessionState(session, managed);
       await persistSession();
-      if (options.trigger !== false) {
-        const resumedControllerRun = await maybeResumeManagedSessionControllerRun(session, managed);
-        if (!resumedControllerRun) await maybeWakeManagedSessionOwner(session, managed);
-      }
+      if (options.trigger !== false) admittedManaged = managed;
     }
 
     if (directQueueItems.length > 0) {
@@ -2629,10 +2671,7 @@ export async function enqueueSessionItemForLoadedSession(session: Session, item:
       session.queue.push(...directQueueItems);
       await persistSession();
 
-      if (options.trigger !== false && !managedBeforeEnqueue && !session.busy) {
-        assertSessionDestructiveMutationAllowed([sessionId], 'start queued work');
-        void onSessionTriggered?.(sessionId);
-      }
+      triggerDirect = options.trigger !== false && !managedBeforeEnqueue && !session.busy;
     }
   } catch (error) {
     if (rollbackSnapshot && !persistedAfterExternalReceipt && !isSessionAuthorityPostCommitError(error)) {
@@ -2641,6 +2680,7 @@ export async function enqueueSessionItemForLoadedSession(session: Session, item:
     }
     throw error;
   }
+  return { managed: admittedManaged, triggerDirect };
 }
 
 let workerEnqueueSink: ((sessionId: string, item: QueueItem, options?: SessionEnqueueOptions, assertAdmissionActive?: () => void) => Promise<void>) | undefined;

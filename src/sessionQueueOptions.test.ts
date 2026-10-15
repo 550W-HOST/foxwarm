@@ -205,3 +205,108 @@ test('explicit local Run queued clears wait before processing a passive-only sel
     await sessionManager.deleteSession(session.id);
   }
 });
+
+for (const later of ['user', 'selection', 'managed-user']) {
+  test(`failed selection save preserves a later supported ${later} operation`, { timeout: 15_000 }, async () => {
+    const session = await sessionManager.getSession(id(`concurrent_${later}`));
+    const owner = later === 'managed-user' ? await sessionManager.getSession(id('concurrent_owner')) : undefined;
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let entered!: () => void;
+    const writing = new Promise<void>(resolve => { entered = resolve; });
+    let failOnce = true;
+    let resumed = 0;
+    const originalResume = toolscript.resumeBackgroundToolScriptRunForManagedSession;
+    (toolscript as any).resumeBackgroundToolScriptRunForManagedSession = async () => { resumed++; return true; };
+    sessionManager.setSessionTriggerCallback(() => {});
+    let first: Promise<unknown> | undefined;
+    let second: Promise<unknown> | undefined;
+    try {
+      if (owner) await managedSessions.openManagedSession({
+        sessionId: session.id, ownerSessionId: owner.id, controllerRunId: 'fixture-controller',
+      });
+      sessionManager.setSessionPersistenceFaultInjectorForTests(async (phase, target) => {
+        if (phase === 'history' && target === session.id && failOnce) {
+          failOnce = false;
+          entered(); await held;
+          throw new Error('one transient selection write failure');
+        }
+      });
+      first = sessionRuntime.updateSettings(session.id, { model: 'fixture/a', effort: 'low', currentNode: 'node-a' });
+      const rejected = assert.rejects(first, /one transient selection write failure/);
+      await writing;
+      let secondSettled = false;
+      second = (later === 'selection'
+        ? sessionRuntime.updateSettings(session.id, { model: 'fixture/b', effort: 'low', currentNode: 'node-b' })
+        : sessionManager.enqueueSessionItem(session.id, { type: 'user', parts: [{ text: 'later accepted input' }] }))
+        .then(result => { secondSettled = true; return result; });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      assert.equal(secondSettled, false);
+      assert.equal(session.model, 'fixture/a', 'the later settings mutation waits for the current save owner');
+      release();
+      await rejected;
+      await second;
+      sessionManager.setSessionPersistenceFaultInjectorForTests(null);
+      const durable = await metadataStore.readSessionHistorySnapshot(session.id);
+      const queued = owner ? (await managedSessions.getManagedSessionStateForTests(session.id)).pendingInbox : session.queue;
+      const durableQueued = owner ? durable.meta.managedSession.pendingInbox : durable.queue;
+      assert.equal(queued.length, 1);
+      assert.deepEqual(durableQueued, queued);
+      if (later === 'selection') {
+        assert.equal(session.model, 'fixture/b'); assert.equal(session.effort, 'low');
+        assert.equal(durable.model, 'fixture/b'); assert.equal(durable.effort, 'low');
+        assert.equal(session.currentNode, 'node-b'); assert.equal(durable.currentNode, 'node-b');
+        const tag = parseFoxwarmOpeningTag(queued[0].parts![0].system)!;
+        assert.equal(tag.attrs.oldModel, 'default'); assert.equal(tag.attrs.newModel, 'fixture/b');
+        assert.equal(tag.attrs.oldNode, 'master'); assert.equal(tag.attrs.newNode, 'node-b');
+        assert.equal(tag.attrs.newEffort, 'low', 'the later normalized pair is not partially undone by the failed write');
+      } else {
+        assert.equal(queued[0].parts![0].text, 'later accepted input');
+        assert.equal(session.model, undefined); assert.equal(session.effort, undefined);
+        assert.equal(durable.model, undefined); assert.equal(durable.effort, undefined);
+        assert.equal(session.currentNode, 'master'); assert.equal(durable.currentNode, 'master');
+      }
+      assert.equal(JSON.stringify(durableQueued).includes('node-a'), false, 'a failed operation cannot leave a success notice');
+      assert.equal(resumed, owner ? 1 : 0, 'managed wake occurs only for the later triggering input');
+    } finally {
+      release(); await first?.catch(() => {}); await second?.catch(() => {});
+      sessionManager.setSessionPersistenceFaultInjectorForTests(null);
+      (toolscript as any).resumeBackgroundToolScriptRunForManagedSession = originalResume;
+      sessionManager.setSessionTriggerCallback(() => {});
+      await sessionManager.deleteSession(session.id);
+      if (owner) await sessionManager.deleteSession(owner.id);
+    }
+  });
+}
+
+test('a delayed managed-controller wake cannot overwrite a later admitted inbox item', async () => {
+  const owner = await sessionManager.getSession(id('wake_owner'));
+  const session = await sessionManager.getSession(id('wake_inbox'));
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let entered!: () => void;
+  const waking = new Promise<void>(resolve => { entered = resolve; });
+  const originalResume = toolscript.resumeBackgroundToolScriptRunForManagedSession;
+  let calls = 0;
+  (toolscript as any).resumeBackgroundToolScriptRunForManagedSession = async () => {
+    if (++calls > 1) return true;
+    entered(); await held; return false;
+  };
+  let first: Promise<void> | undefined;
+  try {
+    await managedSessions.openManagedSession({ sessionId: session.id, ownerSessionId: owner.id, controllerRunId: 'fixture-controller' });
+    first = sessionManager.enqueueSessionItem(session.id, { type: 'user', parts: [{ text: 'first input' }] });
+    await waking;
+    await sessionManager.enqueueSessionItem(session.id, { type: 'user', parts: [{ text: 'later input' }] });
+    release(); await first;
+    const inbox = (await managedSessions.getManagedSessionStateForTests(session.id)).pendingInbox;
+    assert.deepEqual(inbox.map(item => item.parts[0].text), ['first input', 'later input']);
+    const durable = await metadataStore.readSessionHistorySnapshot(session.id);
+    assert.deepEqual(durable.meta.managedSession.pendingInbox, inbox);
+  } finally {
+    release(); await first?.catch(() => {});
+    (toolscript as any).resumeBackgroundToolScriptRunForManagedSession = originalResume;
+    await sessionManager.deleteSession(session.id);
+    await sessionManager.deleteSession(owner.id);
+  }
+});

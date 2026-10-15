@@ -813,74 +813,74 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
         }
       }
       const session = await requireSession(settingsSessionId);
-      const previous = settingsFromSession(session);
-      const changed: Array<keyof SessionRuntimeSettingsPatchDto> = [];
-      const hasModelEffortMutation = ['model', 'effort', 'childModelDefault', 'childEffortDefault']
-        .some(key => Object.prototype.hasOwnProperty.call(input.patch, key));
-      if (hasModelEffortMutation) {
-        let normalized;
-        try {
-          normalized = normalizeProspectiveSessionModelEffortSettings(session, {
-            ...(normalizedStrings.has('model') ? { model: normalizedStrings.get('model')! } : {}),
-            ...(normalizedEfforts.has('effort') ? { effort: normalizedEfforts.get('effort')! } : {}),
-            ...(normalizedStrings.has('childModelDefault') ? { childModelDefault: normalizedStrings.get('childModelDefault')! } : {}),
-            ...(normalizedEfforts.has('childEffortDefault') ? { childEffortDefault: normalizedEfforts.get('childEffortDefault')! } : {}),
-          });
-        } catch (error: any) {
-          throw new RpcError('SESSION_RUNTIME_INVALID_SETTING', error?.message || String(error));
-        }
-        changed.push(...applyNormalizedSessionModelEffortSettings(session, normalized));
-      }
-      for (const [key, normalized] of normalizedStrings) {
-        if (key === 'model' || key === 'childModelDefault') continue;
-        const prior = settingsFromSession(session)[key];
-        if (prior !== normalized) changed.push(key);
-        if (normalized === null) delete session[key];
-        else session[key] = normalized;
-      }
-      if (normalizedThreshold !== undefined) {
-        if (settingsFromSession(session).compactThresholdTokens !== normalizedThreshold) changed.push('compactThresholdTokens');
-        if (normalizedThreshold === null) delete session.compactThresholdTokens;
-        else session.compactThresholdTokens = normalizedThreshold;
-      }
-      if (normalizedVerbose !== undefined) {
-        if (!!session.verbose !== normalizedVerbose) changed.push('verbose');
-        session.verbose = normalizedVerbose;
-      }
-      const settingOrder: Array<keyof SessionRuntimeSettingsPatchDto> = [
-        'cwd', 'model', 'effort', 'childModelDefault', 'childEffortDefault',
-        'currentNode', 'displayName', 'compactThresholdTokens', 'verbose',
-      ];
-      changed.sort((left, right) => settingOrder.indexOf(left) - settingOrder.indexOf(right));
-      if (changed.length > 0) {
-        const notice = buildSessionSelectionNotice(previous, settingsFromSession(session), actor);
-        if (notice) {
-          const current = settingsFromSession(session);
+      return sessionManager.withSessionSettingsMutation(session, async persist => {
+        const previous = settingsFromSession(session);
+        const changed: Array<keyof SessionRuntimeSettingsPatchDto> = [];
+        const hasModelEffortMutation = ['model', 'effort', 'childModelDefault', 'childEffortDefault']
+          .some(key => Object.prototype.hasOwnProperty.call(input.patch, key));
+        if (hasModelEffortMutation) {
+          let normalized;
           try {
-            await sessionManager.enqueueSessionItemForLoadedSession(session, notice, { trigger: false });
-          } catch (error) {
-            if (!isSessionAuthorityPostCommitError(error)) {
-              // Undo only this settings write, never a concurrently advancing
-              // turn's history. Passive admission owns its own queue rollback.
-              for (const key of changed) {
-                if (settingsFromSession(session)[key] !== current[key]) continue;
-                const value = previous[key];
-                if (value === null) delete (session as any)[key];
-                else (session as any)[key] = value;
-              }
-            }
-            throw error;
+            normalized = normalizeProspectiveSessionModelEffortSettings(session, {
+              ...(normalizedStrings.has('model') ? { model: normalizedStrings.get('model')! } : {}),
+              ...(normalizedEfforts.has('effort') ? { effort: normalizedEfforts.get('effort')! } : {}),
+              ...(normalizedStrings.has('childModelDefault') ? { childModelDefault: normalizedStrings.get('childModelDefault')! } : {}),
+              ...(normalizedEfforts.has('childEffortDefault') ? { childEffortDefault: normalizedEfforts.get('childEffortDefault')! } : {}),
+            });
+          } catch (error: any) {
+            throw new RpcError('SESSION_RUNTIME_INVALID_SETTING', error?.message || String(error));
           }
-        } else {
-          await sessionManager.saveSession(session.id);
+          changed.push(...applyNormalizedSessionModelEffortSettings(session, normalized));
         }
-      }
-      return {
-        changed,
-        previous,
-        current: settingsFromSession(session),
-        session: buildSessionRuntimeSessionDto(session),
-      };
+        for (const [key, normalized] of normalizedStrings) {
+          if (key === 'model' || key === 'childModelDefault') continue;
+          const prior = settingsFromSession(session)[key];
+          if (prior !== normalized) changed.push(key);
+          if (normalized === null) delete session[key];
+          else session[key] = normalized;
+        }
+        if (normalizedThreshold !== undefined) {
+          if (settingsFromSession(session).compactThresholdTokens !== normalizedThreshold) changed.push('compactThresholdTokens');
+          if (normalizedThreshold === null) delete session.compactThresholdTokens;
+          else session.compactThresholdTokens = normalizedThreshold;
+        }
+        if (normalizedVerbose !== undefined) {
+          if (!!session.verbose !== normalizedVerbose) changed.push('verbose');
+          session.verbose = normalizedVerbose;
+        }
+        const settingOrder: Array<keyof SessionRuntimeSettingsPatchDto> = [
+          'cwd', 'model', 'effort', 'childModelDefault', 'childEffortDefault',
+          'currentNode', 'displayName', 'compactThresholdTokens', 'verbose',
+        ];
+        changed.sort((left, right) => settingOrder.indexOf(left) - settingOrder.indexOf(right));
+        if (changed.length > 0) {
+          const notice = buildSessionSelectionNotice(previous, settingsFromSession(session), actor);
+          if (notice) {
+            try {
+              await persist(notice);
+            } catch (error) {
+              if (!isSessionAuthorityPostCommitError(error)) {
+                // Settings and ingress mutations share the save owner; restore
+                // this entire normalized write before another mutation can enter.
+                for (const key of changed) {
+                  const value = previous[key];
+                  if (value === null) delete (session as any)[key];
+                  else (session as any)[key] = value;
+                }
+              }
+              throw error;
+            }
+          } else {
+            await persist();
+          }
+        }
+        return {
+          changed,
+          previous,
+          current: settingsFromSession(session),
+          session: buildSessionRuntimeSessionDto(session),
+        };
+      });
     },
     async deleteMessages(input) {
       const sessionId = normalizeSessionId(input.sessionId);
