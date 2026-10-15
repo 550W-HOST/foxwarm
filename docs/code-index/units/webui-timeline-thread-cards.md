@@ -1,6 +1,6 @@
 # Unit: webui-timeline-thread-cards
 
-Files: packages/webui/src/components/ContextBlockCard.tsx, packages/webui/src/components/ModelThreadCard.tsx, packages/webui/src/components/useThreadCardHeightTransition.ts, packages/webui/src/components/useThreadCardOverflowFade.ts, packages/webui/src/components/WebSearchCard.tsx, packages/webui/src/webSearchAction.ts, packages/webui/test/contextBlockCollapsedSummary.e2e.mjs, packages/webui/test/contextBlockPrecedingParts.e2e.mjs, packages/webui/test/llmErrorThreadCard.e2e.mjs, packages/webui/test/systemMessageCards.e2e.mjs, packages/webui/test/threadCardHeight.e2e.mjs, packages/webui/test/webSearchAction.test.mjs, packages/webui/test/webSearchCard.e2e.mjs
+Files: packages/webui/src/components/ContextBlockCard.tsx, packages/webui/src/components/ModelThreadCard.tsx, packages/webui/src/components/ReasoningTokenBadge.tsx, packages/webui/src/components/useThreadCardHeightTransition.ts, packages/webui/src/components/useThreadCardOverflowFade.ts, packages/webui/src/components/WebSearchCard.tsx, packages/webui/src/webSearchAction.ts, packages/webui/test/contextBlockCollapsedSummary.e2e.mjs, packages/webui/test/contextBlockPrecedingParts.e2e.mjs, packages/webui/test/llmErrorThreadCard.e2e.mjs, packages/webui/test/systemMessageCards.e2e.mjs, packages/webui/test/threadCardHeight.e2e.mjs, packages/webui/test/webSearchAction.test.mjs, packages/webui/test/webSearchCard.e2e.mjs
 Secondary files: packages/webui/src/components/ReasoningCard.tsx, packages/webui/src/components/ThreadLineButton.tsx, packages/webui/src/components/ChatTimeline.tsx
 
 ## Purpose
@@ -12,6 +12,7 @@ Owns the thread-card family used by the chat timeline for CTX-BLOCK, Reasoning, 
 - `ContextBlockCard` — renders CTX-BLOCK model messages as tool/reasoning-style thread cards with local expand/collapse state and the read-only WebUI archive expansion endpoint
 - `useThreadCardOverflowFade(axis, enabled)` — observes one clipped thread-card content surface and exposes a tone-independent text mask only while measured overflow is present
 - `ModelThreadCard` — shared Reasoning/Web Search thread-card chrome and expand/collapse interaction; optional header information follows the shrinkable preview. Reasoning token information stays fixed at the trailing edge even when expanded; WebSearch without information is unchanged.
+- `ReasoningTokenBadge` — compact accessible Brain/token information shared by a tool or assistant-text recipient of an empty reasoning run; does not estimate or aggregate usage.
 - `useThreadCardHeightTransition(expanded)` — one-shot measured height interpolation on local toggles; delegates viewport follow to Chat
 - `WebSearchCard` — narrow renderer for persisted OpenAI Responses search/open-page activity
 - `getContextBlockMetaFromMessage(message)` — pure helper that prefers structured `__meta.contextBlock` metadata and falls back to parsing legacy CTX-BLOCK text only when needed
@@ -21,6 +22,7 @@ Owns the thread-card family used by the chat timeline for CTX-BLOCK, Reasoning, 
 | Function | Lines (approx) | Description |
 |----------|----------------|-------------|
 | `ModelThreadCard` | `ModelThreadCard.tsx` | Shared completed/processing thread-card chrome for Reasoning and Web Search. |
+| `ReasoningTokenBadge` | `ReasoningTokenBadge.tsx` | Renders independently attributed empty-run information without disclosure or usage ownership. |
 | `useThreadCardHeightTransition` | `useThreadCardHeightTransition.ts` | Pins the existing card and its local in-flow parent slot before the toggle, measures the natural target without reducing the scroll range, then interpolates pixels and restores auto. |
 | `getWebSearchAction` | `webSearchAction.ts` | Narrows persisted hosted items to proven search or HTTP(S) open-page display actions. |
 | `WebSearchCard` | `WebSearchCard.tsx` | Renders a normalized hosted action with the shared completed model-thread grammar. |

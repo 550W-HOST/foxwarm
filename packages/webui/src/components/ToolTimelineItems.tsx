@@ -39,6 +39,8 @@ import type { SessionSearchMatch } from './chatSessionSearch'
 import { getLegacyEditLineCounts } from './legacyEditCounts'
 import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
 import { useThreadCardHeightTransition } from './useThreadCardHeightTransition'
+import ReasoningTokenBadge from './ReasoningTokenBadge'
+import type { ReasoningBadgeInfo } from './reasoningParts'
 
 const formatToolResponseText = (resp: FunctionResponse): string => resp.__meta?.toolScriptSubCalls !== undefined
   ? formatToolScriptExecutionResponse(resp.response)
@@ -652,6 +654,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   onExpandedChange,
   hideCollapsedContent = false,
   neutralSuccess = false,
+  reasoningBadges,
 }: {
   call?: FunctionCall
   responses: FunctionResponse[]
@@ -665,6 +668,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   onExpandedChange?: (expanded: boolean) => void
   hideCollapsedContent?: boolean
   neutralSuccess?: boolean
+  reasoningBadges?: readonly ReasoningBadgeInfo[]
 }) {
   const [localExpanded, setLocalExpanded] = useState(false)
   const manualExpanded = controlledExpanded ?? localExpanded
@@ -776,6 +780,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
           {viewButtons}
         </div>
         {invocationDurationMs !== null && <span data-tool-execution-time className="ml-auto inline-flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums text-fw-text-muted" title="Tool call duration"><Timer aria-hidden="true" size={11} />{formatCompactDuration(invocationDurationMs)}</span>}
+        <ReasoningTokenBadge badges={reasoningBadges} />
       </div>
       {includeExpandedCall && expandedCallContent && (
         <div data-search-surface="call" className="foxwarm-tool-call-args min-w-0 max-w-full pt-1 pr-2" onClick={(e) => e.stopPropagation()}>
@@ -921,6 +926,7 @@ export const getGroupedToolEntries = (msg: Message, nextMsg: Message, messageKey
 }
 
 interface ToolDisclosureProps {
+  reasoningBadges?: readonly (readonly ReasoningBadgeInfo[] | undefined)[]
   hideCollapsedContent?: boolean
   neutralSuccess?: boolean
   expandedToolKeys?: ReadonlySet<string>
@@ -931,7 +937,7 @@ const toolCallDisclosureKey = (call: FunctionCall, index: number): string => (
   call.id ? `call-id-${call.id}` : `call-index-${index}`
 )
 
-export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, nextMsg, messageKeyPrefix, runningTool, onOpenCodeFile, searchTarget, expandedToolKeys, onToolToggle, hideCollapsedContent, neutralSuccess }: { msg: Message; runningTool?: boolean; nextMsg: Message; messageKeyPrefix: string; onOpenCodeFile?: OpenCodeFileHandler; searchTarget?: SessionSearchMatch | null } & ToolDisclosureProps) {
+export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, nextMsg, messageKeyPrefix, runningTool, onOpenCodeFile, searchTarget, expandedToolKeys, onToolToggle, hideCollapsedContent, neutralSuccess, reasoningBadges }: { msg: Message; runningTool?: boolean; nextMsg: Message; messageKeyPrefix: string; onOpenCodeFile?: OpenCodeFileHandler; searchTarget?: SessionSearchMatch | null } & ToolDisclosureProps) {
   const entries = useMemo(() => getGroupedToolEntries(msg, nextMsg, messageKeyPrefix), [messageKeyPrefix, msg, nextMsg])
 
   return (
@@ -939,6 +945,7 @@ export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, ne
       {entries.map((entry, index) => (
         <ToolCallResponseItem
           key={entry.key}
+          reasoningBadges={entry.call ? reasoningBadges?.[index] : undefined}
           manualExpanded={expandedToolKeys?.has(entry.call ? toolCallDisclosureKey(entry.call, index) : entry.key)}
           onExpandedChange={onToolToggle ? expanded => onToolToggle(entry.call ? toolCallDisclosureKey(entry.call, index) : entry.key, expanded) : undefined}
           hideCollapsedContent={hideCollapsedContent}
@@ -957,7 +964,7 @@ export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, ne
   )
 })
 
-export const ToolCallsBlock = memo(function ToolCallsBlock({ msg, runningTool, onOpenCodeFile, searchTarget, expandedToolKeys, onToolToggle, hideCollapsedContent, neutralSuccess }: { msg: Message; runningTool?: boolean; onOpenCodeFile?: OpenCodeFileHandler; searchTarget?: SessionSearchMatch | null } & ToolDisclosureProps) {
+export const ToolCallsBlock = memo(function ToolCallsBlock({ msg, runningTool, onOpenCodeFile, searchTarget, expandedToolKeys, onToolToggle, hideCollapsedContent, neutralSuccess, reasoningBadges }: { msg: Message; runningTool?: boolean; onOpenCodeFile?: OpenCodeFileHandler; searchTarget?: SessionSearchMatch | null } & ToolDisclosureProps) {
   const functionCalls = useMemo(() => msg.parts.filter(p => p.functionCall).map(p => p.functionCall!), [msg.parts])
   if (functionCalls.length === 0) return null
 
@@ -966,6 +973,7 @@ export const ToolCallsBlock = memo(function ToolCallsBlock({ msg, runningTool, o
       {functionCalls.map((call, callIdx) => (
         <ToolCallResponseItem
           key={`call-${call.id || callIdx}`}
+          reasoningBadges={reasoningBadges?.[callIdx]}
           manualExpanded={expandedToolKeys?.has(toolCallDisclosureKey(call, callIdx))}
           onExpandedChange={onToolToggle ? expanded => onToolToggle(toolCallDisclosureKey(call, callIdx), expanded) : undefined}
           hideCollapsedContent={hideCollapsedContent}

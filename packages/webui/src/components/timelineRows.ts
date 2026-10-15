@@ -13,7 +13,7 @@ import { readPersistedRequestTiming, deriveRequestTimings, type DerivedRequestTi
 import { getContextScrollbarAnchorKey, getMessageStableKey, getMessageViewportAnchorKey } from '../chatViewportState'
 import { parsePastedTextSegments } from '../pastedText'
 import { deriveTimelineTimeMarkers, selectTimelineTimeMarker, type TimelineTimeMarker } from './timelineTime'
-import { isReasoningPart } from './reasoningParts'
+import { deriveReasoningPresentation, isReasoningPart, sameReasoningPresentation, type ReasoningPartPresentation, type ReasoningPresentation } from './reasoningParts'
 import { getContextBlockMetaFromMessage } from './ContextBlockCard'
 import { isCommittedHistoryMessage } from '../chatHistoryState'
 import { buildConversationActivitySummary } from './conversationActivity'
@@ -88,6 +88,7 @@ export interface ConversationActivityView {
 export interface TimelineRowView {
   readonly key: string
   readonly msg: Message
+  readonly reasoningPresentation: readonly (ReasoningPartPresentation | undefined)[]
   /** Conversation body slice; original indices retain Search and streaming identity. */
   readonly conversationImageOnly?: boolean
   readonly conversationPartIndex?: number
@@ -124,6 +125,8 @@ export interface TimelineRowView {
 
 export interface TimelineRowsInput {
   readonly messages: Message[]
+  /** Original part ownership supplied to the nested Conversation detail timeline. */
+  readonly reasoningPresentation?: ReasoningPresentation
   readonly isRunningTool?: boolean
   readonly isMobile: boolean
   readonly timelineView: TimelineView
@@ -139,6 +142,7 @@ export interface TimelineRowsInput {
 export interface TimelineRowsCache {
   readonly rows: Map<string, TimelineRowView>
   readonly groups: Map<string, TimelineGroupView>
+  readonly reasoningPresentation: ReasoningPresentation
 }
 
 export interface TimelineRowsResult {
@@ -567,6 +571,7 @@ const sameGroupView = (a: TimelineGroupView, b: TimelineGroupView): boolean => (
 const sameRowView = (a: TimelineRowView, b: TimelineRowView): boolean => (
   a.key === b.key
   && a.msg === b.msg
+  && sameReasoningPresentation(a.reasoningPresentation, b.reasoningPresentation)
   && a.conversationPartIndex === b.conversationPartIndex
   && a.conversationImageOnly === b.conversationImageOnly
   && a.literalUserText === b.literalUserText
@@ -689,6 +694,9 @@ const applyConversationTimeMarkers = (
 export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRowsCache | null): TimelineRowsResult => {
   const { messages, isRunningTool = false, isMobile, timelineView, showUsageBadge, showTimeDividers, nestedDepth, expandedGroupKeys, activityDetails, historyMessages } = input
   const grouped = timelineView === 'grouped'
+  const reasoningPresentation = input.reasoningPresentation || deriveReasoningPresentation(messages, message => (
+    !!getContextBlockMetaFromMessage(message) || message.role === 'user' && !isGroupableSystemMessage(message)
+  ))
   const requestTimings = deriveRequestTimings(messages)
   const timeMarkers = showTimeDividers && nestedDepth === 0 && timelineView !== 'conversation' ? deriveTimelineTimeMarkers(messages, isGroupableSystemMessage) : []
   const messageKeys = messages.map((msg, index) => getMessageStableKey(msg, index))
@@ -738,6 +746,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
     const next: TimelineRowView = {
       key,
       msg,
+      reasoningPresentation: msg.parts.map(part => reasoningPresentation.get(part)),
       ...(conversation ? { conversationPartIndex: conversation.partIndex, conversationImageOnly: conversation.imageOnly, literalUserText: conversation.literalUserText, activity: conversation.activity } : {}),
       prevMsg,
       nextMsg,
@@ -877,6 +886,11 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
         const technical = part.system || part.functionCall || part.functionResponse || part.toolUseId || isReasoningPart(part) || getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem) || !hasConversationText(part) && !image && part.text === undefined && Object.keys(part).length > 0
         if (technical || processText) {
           const fragment = textBody || image ? { ...part, text: processText ? part.text : undefined, inlineData: undefined, inlineDataRef: undefined, inlineDataUnavailable: undefined } : part
+          // Mixed-field technical fragments keep the original part's presentation ownership.
+          if (fragment !== part && reasoningPresentation.has(part)) {
+            const info = reasoningPresentation.get(part)!
+            reasoningPresentation.set(fragment, info.target === 'text' ? { hidden: info.hidden } : info)
+          }
           addActivity(index, { ...msg, parts: [fragment] }, partIndex)
         }
         if (textBody || image) {
@@ -945,7 +959,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       rowCache.set(row.key, cached)
       return cached
     }) : rows
-    return { rows: applyConversationTiming(markedRows, historyMessages || messages, boundary, input.timing), cache: { rows: rowCache, groups: groupCache } }
+    return { rows: applyConversationTiming(markedRows, historyMessages || messages, boundary, input.timing), cache: { rows: rowCache, groups: groupCache, reasoningPresentation } }
   }
 
   let cursor = 0
@@ -979,5 +993,5 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
     cursor = scan.contentBreakIdx !== -1 ? scan.contentBreakIdx : scan.end
   }
 
-  return { rows, cache: { rows: rowCache, groups: groupCache } }
+  return { rows, cache: { rows: rowCache, groups: groupCache, reasoningPresentation } }
 }
