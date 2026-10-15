@@ -4128,6 +4128,47 @@ test('unchanged retry preparation preserves logical identity and the existing ph
   } finally { (axios as any).post = originalPost; }
 });
 
+test('an unchanged explicit model keeps its captured virtual snapshot and effort across retry preparation', async () => {
+  const originalPost = axios.post;
+  const originalResolve = configModule.resolveModelConfig;
+  const snapshot = (target: string) => configModule.loadModelsConfigFromObject({ default: 'selected-route', providers: {
+    fixture: { providerType: 'openai-completions', baseUrl: `https://${target}.example.test/v1`,
+      apiKey: 'synthetic-key', models: ['a', 'b'] },
+    'selected-route': { providerType: 'session-hash', targets: [`fixture/${target}`] },
+  } });
+  let active = snapshot('a');
+  let resolutions = 0;
+  (configModule as any).resolveModelConfig = () => {
+    resolutions++;
+    return { modelsConfig: active, defaultKey: active.default, currentKey: active.default,
+      modelEntry: active.models[active.default] };
+  };
+  const session = createOpenAITestSession(makeId('unchanged_selection_snapshot'));
+  session.model = 'selected-route'; session.effort = 'high';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="fixture/a" />\n\noriginal memory';
+  const requests: Array<{ url: string; body: any }> = [];
+  (axios as any).post = async (url: string, body: any) => {
+    requests.push({ url, body });
+    if (requests.length === 1) throw new Error('retry unchanged selection');
+    return { status: 200, statusText: 'OK', headers: {}, data: makeChatCompletionStream('captured selection') };
+  };
+  try {
+    const result = await chat([{ text: 'input' }], session, 0, {
+      toolDefinitions: [], maxRetries: 2, notifySessionEvents: false, registerAbortController: false,
+      appendMessage: async message => { session.history.push(message); },
+      prepareRetry: async () => { active = snapshot('b'); session.effort = 'none'; return false; },
+    });
+    assert.equal(resolutions, 1, 'a config reload or effort-only edit is not a model selection');
+    assert.deepEqual(requests.map(request => [request.url, request.body.model, request.body.reasoning_effort]), [
+      ['https://a.example.test/v1/chat/completions', 'a', 'high'],
+      ['https://a.example.test/v1/chat/completions', 'a', 'high'],
+    ]);
+    assert.equal(result.modelId, 'fixture/a');
+    assert.equal(result.virtualModelKey, 'selected-route');
+    assert.equal(result.llmAttempt, 2);
+  } finally { (axios as any).post = originalPost; (configModule as any).resolveModelConfig = originalResolve; }
+});
+
 test('retry preparation is awaited, propagates local failure, and rechecks cancellation without another provider send', async t => {
   for (const cancelled of [false, true]) {
     await t.test(cancelled ? 'cancel while awaiting owner' : 'strict preparation failure', async () => {
@@ -4238,6 +4279,28 @@ test('changed retry input does not reset the exhausted provider attempt budget',
     }), (error: unknown) => error instanceof LlmRequestError && error.attempt === 2);
     assert.equal(requests, 2);
     assert.equal(prepared, 1, 'terminal exhaustion cannot consume another batch');
+  } finally { (axios as any).post = originalPost; }
+});
+
+test('an explicit model switch does not replenish the remaining physical attempt budget', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession(makeId('retry_selected_model_budget'));
+  let requests = 0;
+  let prepared = 0;
+  (axios as any).post = async () => { requests++; throw new Error('persistent outage after selection'); };
+  try {
+    await assert.rejects(() => chat([{ text: 'input' }], session, 0, {
+      toolDefinitions: [], registerAbortController: false, notifySessionEvents: false, maxRetries: 2,
+      appendMessage: async message => { session.history.push(message); },
+      prepareRetry: async () => {
+        prepared++;
+        session.model = 'anthropic/claude-sonnet-4-5'; session.effort = 'none';
+        return false;
+      },
+      currentSessionEffects: { ...createDefaultCurrentSessionEffects(), persistSession: async () => {} },
+    }), (error: unknown) => error instanceof LlmRequestError && error.attempt === 2);
+    assert.equal(requests, 2);
+    assert.equal(prepared, 1);
   } finally { (axios as any).post = originalPost; }
 });
 

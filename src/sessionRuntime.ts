@@ -1,3 +1,4 @@
+import type { SessionSettingsActor } from './session/selectionSettings';
 import { SESSION_WORKERS_ENABLED } from './config';
 import {
   LocalRpcTransport,
@@ -120,8 +121,9 @@ export async function runBtw(sessionId: string, message: string): Promise<Sessio
 export async function updateSettings(
   sessionId: string,
   patch: SessionRuntimeSettingsPatchDto,
+  actor?: SessionSettingsActor,
 ): Promise<SessionRuntimeSettingsResultDto> {
-  return (await getClient()).call('updateSettings', { sessionId, patch });
+  return (await getClient()).call('updateSettings', { sessionId, patch, ...(actor ? { actor } : {}) });
 }
 
 export async function deleteMessages(sessionId: string, num: number): Promise<SessionRuntimeDeleteMessagesResultDto> {

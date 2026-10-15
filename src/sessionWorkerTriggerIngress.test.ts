@@ -115,7 +115,8 @@ test('timer, wait-timeout, ONBOOT, and node event triggers share the durable Wor
     assert.equal(fixture.catalogSession.queue.length, 0);
 
     // Settings mutation reaches the exact Worker without hydrating/saving Main.
-    const settings = await sessionRuntime.updateSettings(sessionId, { model: 'other-model', effort: 'none', childEffortDefault: 'max' });
+    const settings = await sessionRuntime.updateSettings(sessionId, { model: 'other-model', effort: 'none', childEffortDefault: 'max' },
+      { kind: 'webui', role: 'admin' });
     assert.equal(settings.current.model, 'other-model');
     assert.equal(settings.current.effort, 'none');
     assert.equal(settings.current.childEffortDefault, 'max');
@@ -123,6 +124,11 @@ test('timer, wait-timeout, ONBOOT, and node event triggers share the durable Wor
     assert.equal(projected?.effort, 'none');
     assert.equal(projected?.childEffortDefault, 'max');
     assert.equal(mainLocalSaves, 0);
+    const afterSettings = await fs.readJson(fixture.statePath);
+    assert.equal(afterSettings.history.length, authority.history.length, 'idle selection does not start a provider turn');
+    assert.equal(afterSettings.queue.length, 1);
+    assert.equal(afterSettings.queue[0].trigger, false);
+    assert.match(afterSettings.queue[0].parts[0].system, /actorKind="webui" actorRole="admin"/);
 
     // Managed sessions fail closed at the shared boundary instead of spawning a worker.
     await assert.rejects(

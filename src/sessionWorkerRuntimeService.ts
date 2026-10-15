@@ -1,3 +1,4 @@
+import { normalizeSessionSettingsActor, type SessionSettingsActor } from './session/selectionSettings';
 import { defineRpcService, rpcMethod, RpcError, type RpcServiceHandler } from './rpc';
 import type { SessionWorkerProjection } from './sessionWorkerPersistence';
 import type { SessionWorkerActivationGate } from './sessionWorkerControlService';
@@ -61,7 +62,7 @@ export type SessionWorkerBtwResult = {
   projection: SessionWorkerProjection;
 };
 
-export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 14, {
+export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 15, {
   loadProjection: rpcMethod<Record<string, never>, SessionWorkerProjection>(),
   runPending: rpcMethod<{ limit: number }, SessionWorkerProjection>(),
   retry: rpcMethod<Record<string, never>, SessionWorkerProjection>(),
@@ -70,7 +71,7 @@ export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-w
   compactAwaited: rpcMethod<{ request: CompactionRequest }, { compacted: boolean; projection: SessionWorkerProjection }>(),
   cancelCompaction: rpcMethod<Record<string, never>, CompactCancellationResult>(),
   compactToolMessages: rpcMethod<{ keepPercent?: number }, SessionWorkerToolNoiseCompactionResult>(),
-  updateSettings: rpcMethod<{ patch: SessionWorkerSettingsPatch }, SessionWorkerSettingsResult>(),
+  updateSettings: rpcMethod<{ patch: SessionWorkerSettingsPatch; actor?: SessionSettingsActor }, SessionWorkerSettingsResult>(),
   updateCatalogFields: rpcMethod<{ patch: SessionWorkerCatalogFieldsPatch }, { projection: SessionWorkerProjection }>(),
   deleteMessages: rpcMethod<{ num: number }, SessionWorkerHistoryMutationResult>(),
   clearHistory: rpcMethod<Record<string, never>, SessionWorkerHistoryMutationResult>(),
@@ -148,7 +149,7 @@ export function createSessionWorkerRuntimeServiceHandler(
     async updateSettings(input) {
       gate.assertActive();
       if (!input || typeof input !== 'object' || Array.isArray(input)
-        || Object.keys(input).length !== 1 || !input.patch || typeof input.patch !== 'object' || Array.isArray(input.patch)) {
+        || Object.keys(input).some(key => !['patch', 'actor'].includes(key)) || !input.patch || typeof input.patch !== 'object' || Array.isArray(input.patch)) {
         throw new RpcError('SESSION_WORKER_SETTINGS_INVALID', 'updateSettings takes { patch: object }.');
       }
       const allowed = new Set(['cwd', 'model', 'effort', 'childModelDefault', 'childEffortDefault', 'currentNode', 'compactThresholdTokens', 'verbose']);
@@ -177,7 +178,10 @@ export function createSessionWorkerRuntimeServiceHandler(
       if (Object.prototype.hasOwnProperty.call(input.patch, 'verbose') && typeof input.patch.verbose !== 'boolean') {
         throw new RpcError('SESSION_WORKER_SETTINGS_INVALID', 'verbose must be boolean.');
       }
-      return host.updateSettings(structuredClone(input.patch));
+      let actor: SessionSettingsActor | undefined;
+      try { actor = normalizeSessionSettingsActor(input.actor); }
+      catch (error: any) { throw new RpcError('SESSION_WORKER_SETTINGS_INVALID', error.message); }
+      return host.updateSettings(structuredClone(input.patch), actor);
     },
     async updateCatalogFields(input) {
       gate.assertActive();

@@ -1,3 +1,4 @@
+import type { SessionSettingsActor } from '../session/selectionSettings';
 import { AccessConfigRuntime, type NormalizedAccessIdentity } from '../accessConfig';
 import { configInstaller, type ConfigInstaller } from '../configInstaller';
 import { projectWebUiSessionScope, webUiSessionScopeAllows } from '../webuiSessionScope';
@@ -921,6 +922,14 @@ export class WebUIChannel implements Channel {
 
   private async getAuthContext(req: express.Request): Promise<HttpAuthContext | null> {
     return httpServer.getAuthContext(req);
+  }
+
+  private async settingsActor(req: express.Request): Promise<SessionSettingsActor | undefined> {
+    const auth = await this.getAuthContext(req);
+    if (!auth) return undefined;
+    return auth.role === 'webui'
+      ? { kind: 'webui', role: 'webui', identityId: auth.identityId }
+      : { kind: 'webui', role: 'admin' };
   }
 
   private authSessionPayload(auth: HttpAuthContext) {
@@ -1978,7 +1987,7 @@ export class WebUIChannel implements Channel {
             if (Object.prototype.hasOwnProperty.call(body, 'model')) patch.model = normalizeWebUiModelSelection(body.model) || null;
             if (Object.prototype.hasOwnProperty.call(body, 'effort')) patch.effort = normalizeWebUiEffortSelection(body.effort) || null;
             if (Object.keys(patch).length === 0) throw new Error('model and/or effort is required.');
-            const updated = await sessionRuntime.updateSettings(session.id, patch);
+            const updated = await sessionRuntime.updateSettings(session.id, patch, await this.settingsActor(req));
             this.broadcastSessionListUpdate();
             res.json({ success: true, sessionId: session.id, ...buildWebUiModelStatus(updated.session) });
           } catch (e: any) {
@@ -2066,7 +2075,7 @@ export class WebUIChannel implements Channel {
             if (boundNode) throw new Error(`This agent is bound to node ${boundNode}.`);
             const validated = await validateNodeSelection(session.id, nodeId);
             // Like the user /node command, selection retains the Session cwd.
-            const updated = await sessionRuntime.updateSettings(session.id, { currentNode: validated.nodeId });
+            const updated = await sessionRuntime.updateSettings(session.id, { currentNode: validated.nodeId }, await this.settingsActor(req));
             this.broadcastSessionListUpdate();
             res.json({ session: buildWebUiSessionState(updated.session) });
           } catch (e: any) {

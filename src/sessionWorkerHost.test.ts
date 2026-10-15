@@ -1638,19 +1638,20 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     assert.deepEqual(externalCalls[0].slice(1, 5), ['reverse-node', 'read', { filePath: 'reverse.txt' }, sessionId]);
     assert.equal(externalCalls[1][1], 'reverse-mcp');
     assert.equal(externalCalls[2][1], 'reverse vector query');
-    assert.match(afterWait.history.at(-1).parts[0].text, /"fenceErrors":\["NODE_EXECUTION_SOURCE_MISMATCH","NODE_EXECUTION_SOURCE_MISMATCH","FILE_DELIVERY_SOURCE_MISMATCH","SESSION_TURN_DELIVERY_SOURCE_MISMATCH","MCP_EXTERNAL_SOURCE_MISMATCH"\]/);
-    assert.match(afterWait.history.at(-1).parts[0].text, /"defaultCwd":"node process cwd/);
-    assert.match(afterWait.history.at(-1).parts[0].text, new RegExp(`"sha256":"${'a'.repeat(64)}"`));
-    assert.match(afterWait.history.at(-1).parts[0].text, /ready for WebUI target/);
-    assert.match(afterWait.history.at(-1).parts[0].text, /Delivered: 1/);
-    assert.match(afterWait.history.at(-1).parts[0].text, /telegram:room/);
+    const reverseResult = afterWait.history.find((message: any) => message.parts.some((part: any) => part.text?.includes('fenceErrors'))).parts[0].text;
+    assert.match(reverseResult, /"fenceErrors":\["NODE_EXECUTION_SOURCE_MISMATCH","NODE_EXECUTION_SOURCE_MISMATCH","FILE_DELIVERY_SOURCE_MISMATCH","SESSION_TURN_DELIVERY_SOURCE_MISMATCH","MCP_EXTERNAL_SOURCE_MISMATCH"\]/);
+    assert.match(reverseResult, /"defaultCwd":"node process cwd/);
+    assert.match(reverseResult, new RegExp(`"sha256":"${'a'.repeat(64)}"`));
+    assert.match(reverseResult, /ready for WebUI target/);
+    assert.match(reverseResult, /Delivered: 1/);
+    assert.match(reverseResult, /telegram:room/);
     assert.equal(projectionRegistry.get(sessionId)?.projection?.currentNode, 'reverse-node');
     assert.equal(projectionRegistry.get(sessionId)?.projection?.lastAppliedMailboxId, afterWait.lastAppliedMailboxId);
     assert.equal(projectionRegistry.get(sessionId)?.projection?.queueLength, afterWait.queue.length);
     assert.deepEqual(projectionRegistry.get(sessionId)?.projection?.stats, afterWait.stats);
-    assert.doesNotMatch(afterWait.history.at(-1).parts[0].text, /c2VjcmV0LWJ5dGVz/);
-    assert.match(afterWait.history.at(-1).parts[0].text, /reverse-hit/);
-    assert.match(afterWait.history.at(-1).parts[0].text, /"loadedLocalVectorOwner":false/);
+    assert.doesNotMatch(reverseResult, /c2VjcmV0LWJ5dGVz/);
+    assert.match(reverseResult, /reverse-hit/);
+    assert.match(reverseResult, /"loadedLocalVectorOwner":false/);
     if (waitTimer) await timers.deleteTimer(waitTimer.id, sessionId);
 
     const accessor: Record<string, unknown> = { type: 'user' };
@@ -1663,7 +1664,7 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     const committedBeforeDisconnect = await fs.readJson(statePath);
     assert.equal(committedBeforeDisconnect.lastAppliedMailboxId, ambiguous.id);
     assert.equal(committedBeforeDisconnect.compactThresholdTokens, 4243);
-    assert.equal(committedBeforeDisconnect.history.length, afterWait.history.length + 1);
+    assert.equal(committedBeforeDisconnect.history.length, afterWait.history.length + 2, 'the retained passive selection notice precedes the new input');
     const archiveAfterFailure = new DatabaseSync(path.join(root, 'state', 'archive-store.sqlite'), { readOnly: true });
     const archiveCount = Number((archiveAfterFailure.prepare('SELECT COUNT(*) AS count FROM archive_messages WHERE session_id=?').get(sessionId) as any).count);
     archiveAfterFailure.close();

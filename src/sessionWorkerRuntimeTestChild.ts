@@ -33,7 +33,6 @@ import { createSessionWorkerRuntimeServiceHandler, sessionWorkerRuntimeServiceDe
 import { clearModelStreamDraft, resetModelStreamDraft, updateModelStreamDraft } from './modelStreamDraft';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { tool_set_session_compact_threshold } from './toolsSessionAgent/settings';
-import { tool_wait } from './toolsSessionAgent/interSession';
 import * as vector from './vector';
 import { tool_call_tool } from './tools/unifiedSearch';
 import { shutdownToolScriptRuntime } from './toolscript';
@@ -293,10 +292,10 @@ async function start(): Promise<void> {
       }
     }
     if (process.env.FOXWARM_TEST_WAIT_TOOL === '1' && chatCount === 3) {
-      await tool_wait(
-        { reason: 'reverse wait', wakeIfNoActivityAfterSeconds: 30 },
-        { sessionId: session.id, session, persistCurrentSession: () => options.currentSessionEffects.persistSession(session) } as any,
-      );
+      // Return the actual wait call to the canonical tool executor. A wait
+      // declared inside a fake provider bypasses the real tool-stop boundary.
+      const waitCall = { id: 'reverse-wait', name: 'wait',
+        args: { reason: 'reverse wait', wakeIfNoActivityAfterSeconds: 30 } };
       if (process.env.FOXWARM_TEST_EXTERNAL_REVERSE === '1') {
         const fenceErrors: string[] = [];
         try { await executeNodeTool('wrong-source', 'reverse-node', 'read', {}); }
@@ -323,11 +322,14 @@ async function start(): Promise<void> {
         const mcpResult = await callMcpTool(session.id, 'reverse-mcp', 'echo', { value: 7 });
         const vectorResult = await vector.search('reverse vector query', 2, false, { sessionIds: [session.id] });
         const loadedLocalVectorOwner = Object.keys(require.cache).some(file => /vector(Runtime|ServiceManager)\.js$/.test(file));
-        await options.appendMessage({ role: 'model', parts: [{ text: JSON.stringify({ fenceErrors, nodeResult, topology, selected, copied, sendWebui, sendSession, sendChannel, selectedTool, servers, mcpResult, vectorResult, loadedLocalVectorOwner }) }] });
-        return { text: 'reverse external services complete' };
+        await options.appendMessage({ role: 'model', parts: [
+          { text: JSON.stringify({ fenceErrors, nodeResult, topology, selected, copied, sendWebui, sendSession, sendChannel, selectedTool, servers, mcpResult, vectorResult, loadedLocalVectorOwner }) },
+          { functionCall: waitCall },
+        ] });
+        return { text: 'reverse external services complete', toolCalls: [waitCall] };
       }
-      await options.appendMessage({ role: 'model', parts: [{ text: 'reverse wait scheduled' }] });
-      return { text: 'reverse wait scheduled' };
+      await options.appendMessage({ role: 'model', parts: [{ text: 'reverse wait scheduled' }, { functionCall: waitCall }] });
+      return { text: 'reverse wait scheduled', toolCalls: [waitCall] };
     }
     if (process.env.FOXWARM_TEST_PUBLICATION_TOOL === '1' && chatCount === 4) {
       try {

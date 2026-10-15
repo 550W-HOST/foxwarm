@@ -27,6 +27,8 @@ import {
   normalizeProspectiveSessionModelEffortSettings,
 } from './session/modelEffortSettings';
 import type { CompactCancellationResult } from './session/history';
+import { isSessionAuthorityPostCommitError } from './session/stateFile';
+import { buildSessionSelectionNotice, normalizeSessionSettingsActor, type SessionSettingsActor } from './session/selectionSettings';
 
 export type SessionRuntimeTokenTotalsDto = {
   cachedTokens: number;
@@ -153,7 +155,7 @@ export type SessionListProjectionBatchDto = {
   revision: string;
 };
 
-export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 12, {
+export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 13, {
   getSession: rpcMethod<{ sessionId: string }, { session: SessionRuntimeSessionDto | null }>(),
   listSessions: rpcMethod<{ limit?: number; offset?: number; agent?: string }, { sessions: SessionRuntimeSessionDto[]; total: number }>(),
   getSessionListProjections: rpcMethod<{ sessionIds: string[]; includeVolatile?: boolean; currentOwnersOnly?: boolean }, SessionListProjectionBatchDto>(),
@@ -171,6 +173,7 @@ export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime
   updateSettings: rpcMethod<{
     sessionId: string;
     patch: SessionRuntimeSettingsPatchDto;
+    actor?: SessionSettingsActor;
   }, SessionRuntimeSettingsResultDto>(),
   deleteMessages: rpcMethod<{ sessionId: string; num: number }, SessionRuntimeDeleteMessagesResultDto>(),
   clearHistory: rpcMethod<{ sessionId: string }, SessionRuntimeClearHistoryResultDto>(),
@@ -720,6 +723,9 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
     },
     async updateSettings(input) {
       const settingsSessionId = normalizeSessionId(input.sessionId);
+      let actor: SessionSettingsActor | undefined;
+      try { actor = normalizeSessionSettingsActor(input.actor); }
+      catch (error: any) { throw new RpcError('SESSION_RUNTIME_INVALID_SETTING', error.message); }
       if (!input.patch || typeof input.patch !== 'object' || Array.isArray(input.patch)) {
         throw new RpcError('SESSION_RUNTIME_INVALID_SETTING', 'patch must be an object.');
       }
@@ -793,7 +799,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
           for (const [key, normalized] of normalizedEfforts) patch[key] = normalized;
           if (normalizedThreshold !== undefined) patch.compactThresholdTokens = normalizedThreshold;
           if (normalizedVerbose !== undefined) patch.verbose = normalizedVerbose;
-          const workerResult = await options.worker.ingress.updateSettings(workerSelectionResult.canonicalId, patch);
+          const workerResult = await options.worker.ingress.updateSettings(workerSelectionResult.canonicalId, patch, actor);
           const stub = sessionManager.getAllSessions().get(workerSelectionResult.canonicalId);
           if (!stub) throw new RpcError('SESSION_WORKER_STATE_UNAVAILABLE', `Session \`${workerSelectionResult.canonicalId}\` is unavailable.`, true);
           const previous = { ...settingsFromSession(stub), ...workerResult.previous };
@@ -847,7 +853,27 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       ];
       changed.sort((left, right) => settingOrder.indexOf(left) - settingOrder.indexOf(right));
       if (changed.length > 0) {
-        await sessionManager.saveSession(session.id);
+        const notice = buildSessionSelectionNotice(previous, settingsFromSession(session), actor);
+        if (notice) {
+          const current = settingsFromSession(session);
+          try {
+            await sessionManager.enqueueSessionItemForLoadedSession(session, notice, { trigger: false });
+          } catch (error) {
+            if (!isSessionAuthorityPostCommitError(error)) {
+              // Undo only this settings write, never a concurrently advancing
+              // turn's history. Passive admission owns its own queue rollback.
+              for (const key of changed) {
+                if (settingsFromSession(session)[key] !== current[key]) continue;
+                const value = previous[key];
+                if (value === null) delete (session as any)[key];
+                else (session as any)[key] = value;
+              }
+            }
+            throw error;
+          }
+        } else {
+          await sessionManager.saveSession(session.id);
+        }
       }
       return {
         changed,

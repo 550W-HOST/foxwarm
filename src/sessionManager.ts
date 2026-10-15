@@ -158,11 +158,11 @@ function clearSessionWaitState(session: Session): boolean {
   return true;
 }
 
-function isWaitNeutralMaintenanceQueueItem(item: QueueItem): boolean {
-  // This item represents internal compaction maintenance, not external input.
-  // It may be processed while a session is waiting, but should not consume the
-  // wait token or make a later wait-timeout event stale.
-  return item.type === 'compact-commit';
+function isWaitNeutralQueueItem(item: QueueItem): boolean {
+  // Trusted passive input and internal compaction maintenance may be consumed
+  // at an existing safe point, but cannot satisfy/cancel a wait or stale its
+  // later matching timeout. Ordinary ingress strips untrusted passive flags.
+  return item.trigger === false || item.type === 'compact-commit';
 }
 
 function getWaitAllState(wait: SessionWaitState): SessionWaitAllState | undefined {
@@ -274,8 +274,8 @@ export function applyQueuedItemToWaitState(session: Session, item: QueueItem): W
     return { action: 'enqueue', items: [item] };
   }
 
-  if (isWaitNeutralMaintenanceQueueItem(item)) {
-    logger.debug({ sessionId: session.id, waitId: wait.id, queuedType: item.type }, 'Leaving active wait state unchanged for maintenance queue item');
+  if (isWaitNeutralQueueItem(item)) {
+    logger.debug({ sessionId: session.id, waitId: wait.id, queuedType: item.type }, 'Leaving active wait state unchanged for passive or maintenance queue item');
     return { action: 'enqueue', items: [item] };
   }
 
@@ -869,6 +869,7 @@ export async function requestSessionDequeue(sessionId: string): Promise<{
     return { queuedItems, stoppedCurrent: true, abortedInFlight };
   }
 
+  if (clearSessionWaitForDirectTurn(session, 'run-queued')) await saveSession(sessionId);
   await triggerSessionProcessing(sessionId);
   return { queuedItems, stoppedCurrent: false, abortedInFlight: false };
 }
@@ -2531,7 +2532,7 @@ async function maybeResumeManagedSessionControllerRun(session: Session, managed:
   }
 }
 
-async function enqueueSessionItemForLoadedSession(session: Session, item: QueueItem,
+export async function enqueueSessionItemForLoadedSession(session: Session, item: QueueItem,
   options: SessionEnqueueOptions = {}, assertAdmissionActive?: () => void): Promise<void> {
   const sessionId = session.id;
   item = (await externalizeQueueItemImages(item)).item;

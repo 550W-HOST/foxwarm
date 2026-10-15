@@ -1,3 +1,4 @@
+import type { SessionSettingsActor } from './session/selectionSettings';
 import { ChildProcess, fork } from 'node:child_process';
 import crypto from 'node:crypto';
 import path from 'node:path';
@@ -316,13 +317,14 @@ export class SessionWorkerSupervisor {
     sessionId: string,
     expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,
     patch: SessionWorkerSettingsPatch,
+    actor?: SessionSettingsActor,
   ): Promise<SessionWorkerSettingsResult> {
     this.assertActivatedOwnership(sessionId, expected);
     const entry = this.entries.get(sessionId)!;
     entry.activeCalls += 1; this.clearIdleTimer(entry);
     try {
       const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
-      return await runtime.call('updateSettings', { patch });
+      return await runtime.call('updateSettings', { patch, ...(actor ? { actor } : {}) });
     } finally {
       entry.activeCalls -= 1;
       if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);

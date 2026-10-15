@@ -1,3 +1,4 @@
+import { sessionSettingsActorFromChannel } from './session/selectionSettings';
 import { getChannelId, getConversationId } from './channel';
 import { logger } from './common';
 import { nodesManager } from './nodes/manager';
@@ -430,7 +431,7 @@ export const COMMANDS: Record<string, CommandDef> = {
       }
       try {
         const validated = await validateNodeSelection(sessionId, nodeId)
-        await sessionRuntime.updateSettings(sessionId, { currentNode: validated.nodeId })
+        await sessionRuntime.updateSettings(sessionId, { currentNode: validated.nodeId }, sessionSettingsActorFromChannel(ctx))
         ctx.reply(`✅ Switched to node \`${validated.nodeId}\`\n\nAll file/exec/browser tools will now execute on this node.`)
       } catch (e: any) { ctx.reply(`❌ Failed to switch node: ${e.message}`) }
     }
@@ -511,7 +512,7 @@ export const COMMANDS: Record<string, CommandDef> = {
           patch.model = resolved.key
         }
       }
-      if (Object.keys(patch).length > 0) await sessionRuntime.updateSettings(sessionId, patch)
+      if (Object.keys(patch).length > 0) await sessionRuntime.updateSettings(sessionId, patch, sessionSettingsActorFromChannel(ctx))
       const current = await sessionRuntime.getSession(sessionId)
       if (!current) return
       const view = buildSessionModelEffortPresentation(current)

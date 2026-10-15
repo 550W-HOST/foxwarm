@@ -1323,6 +1323,9 @@ export class SessionTurnRunner {
         await this.finalizeStoppedSession(session);
         return;
       }
+      if (runQueuedAfterStop) {
+        sessionManager.clearSessionWaitForDirectTurn(session, 'run-queued');
+      }
       if (session.stopping) {
         session.stopping = false;
       }
@@ -1391,6 +1394,12 @@ export class SessionTurnRunner {
           session.queue.shift();
         }
         if (session.queue.length === 0) {
+          break;
+        }
+        // A wait ends this action lifecycle. Passive input remains queued for
+        // a real wake or explicit Run queued, not an automatic outer turn.
+        if (session.meta?.wait && !managed?.currentStep
+          && !session.queue.some(item => isQueueItem(item) && item.trigger !== false)) {
           break;
         }
 

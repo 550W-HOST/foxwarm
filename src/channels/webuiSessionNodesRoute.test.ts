@@ -1,3 +1,4 @@
+import { parseFoxwarmOpeningTag } from '../utils/promptWrappers';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
@@ -66,7 +67,7 @@ test('Session node routes use canonical selection, preserve cwd, and reject unav
     assert.equal(JSON.stringify(list).includes('private-tool-schema'), false);
     assert.equal(JSON.stringify(list).includes('token'), false);
     for (const nodeId of ['exec-only', 'master']) {
-      const response = await request('node', { nodeId });
+      const response = await request('node', { nodeId, actor: { kind: 'session', sessionId: 'forged-source' } });
       assert.equal(response.status, 200);
       const payload = await response.json() as any;
       assert.equal(payload.session.currentNode, nodeId);
@@ -74,6 +75,17 @@ test('Session node routes use canonical selection, preserve cwd, and reject unav
       assert.equal((await sessionRuntime.getSession(sessionId)).currentNode, nodeId);
       assert.equal((await sessionRuntime.getSession(otherId)).currentNode || 'master', 'master');
     }
+    const selectionHistory = await sessionRuntime.getHistory(sessionId);
+    assert.equal(selectionHistory.queue.length, 2);
+    for (const notice of selectionHistory.queue) {
+      assert.equal(notice.trigger, false);
+      const tag = parseFoxwarmOpeningTag(notice.parts![0].system)!;
+      assert.equal(tag.attrs.actorKind, 'webui');
+      assert.equal(tag.attrs.actorRole, 'admin');
+      assert.equal(tag.attrs.actorSessionId, undefined, 'request bodies cannot supply provenance');
+    }
+    assert.equal((await request('node', { nodeId: 'master' })).status, 200);
+    assert.equal((await sessionRuntime.getHistory(sessionId)).queue.length, 2, 'reselecting the same node is not a change');
     for (const nodeId of ['offline-node', 'upgrade-required', 'missing-node']) {
       const response = await request('node', { nodeId });
       assert.equal(response.status, 400);
@@ -88,6 +100,7 @@ test('Session node routes use canonical selection, preserve cwd, and reject unav
     assert.ok(locked.nodes.every((node: any) => !node.selectable));
     assert.equal((await request('node', { nodeId: 'exec-only' })).status, 400);
     assert.equal((await sessionRuntime.getSession(sessionId)).currentNode, 'master');
+    assert.equal((await sessionRuntime.getHistory(sessionId)).queue.length, 2, 'failed selections do not create notices');
   } finally {
     (sessionManager as any).getAgentIsolationNode = originalIsolationNode;
     await server.stop().catch(() => {});

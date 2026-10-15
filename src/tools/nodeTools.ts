@@ -1,3 +1,4 @@
+import { buildSessionSelectionNotice } from '../session/selectionSettings';
 import * as fsPromises from 'node:fs/promises';
 import path from 'path';
 import {
@@ -173,7 +174,13 @@ export const tool_change_current_node = async (args: ToolArgs, ctx: ToolContext)
             throw new Error('This session is isolated and cannot switch node via tools. Use /node from the user channel.');
         }
         const validated = await validateNodeSelection(ctx.sessionId, nodeId);
+        const previous = { currentNode: session.currentNode };
         session.currentNode = validated.nodeId; delete session.cwd;
+        const notice = buildSessionSelectionNotice(previous, session, { kind: 'session', sessionId: ctx.sessionId });
+        if (notice) {
+            const transition = sessionManager.applyQueuedItemToWaitState(session, notice);
+            if (transition.action === 'enqueue') session.queue.push(...transition.items);
+        }
         await ctx.persistCurrentSession();
         return `Current node changed to \`${validated.nodeId}\`. Session cwd cleared. Subsequent exec calls will use the node default cwd: \`${validated.defaultCwd}\`.`;
     }
@@ -184,7 +191,7 @@ export const tool_change_current_node = async (args: ToolArgs, ctx: ToolContext)
     }
     
     const validated = await validateNodeSelection(ctx.sessionId, nodeId);
-    await sessionRuntime.updateSettings(ctx.sessionId, { currentNode: nodeId, cwd: null });
+    await sessionRuntime.updateSettings(ctx.sessionId, { currentNode: validated.nodeId, cwd: null }, { kind: 'session', sessionId: ctx.sessionId });
     return `Current node changed to \`${validated.nodeId}\`. Session cwd cleared. Subsequent exec calls will use the node default cwd: \`${validated.defaultCwd}\`.`;
 };
 

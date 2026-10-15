@@ -1,3 +1,4 @@
+import * as sessionRuntime from './sessionRuntime';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -346,6 +347,40 @@ test('resumeBusySessions re-notifies manager when pending managed inbox survived
     const ownerAfterResume = await sessionManager.getSession(parentId);
     assert.match(ownerAfterResume.queue[0]?.parts?.[0]?.system || '', /Managed session/);
   } finally {
+    await sessionManager.deleteSession(childId).catch(() => false);
+    await sessionManager.deleteSession(parentId).catch(() => false);
+  }
+});
+
+
+test('an explicit managed step can process a passive selection notice while the Session was waiting', async () => {
+  const router = new MessageRouter();
+  const originalChat = llm.chat;
+  const parentId = `managed_selection_parent_${Date.now()}`;
+  const childId = `managed_selection_child_${Date.now()}`;
+  let calls = 0;
+  (llm as any).chat = async (_parts: MessagePart[] | null, owner: Session) => {
+    calls++;
+    assert.match(flattenUserHistoryText(owner), /session-settings-changed/);
+    await appendStubModelMessage(owner, 'managed selection received');
+    return { text: 'managed selection received' };
+  };
+  sessionManager.setSessionTriggerCallback(target => router.processSessionQueue(target));
+  try {
+    await sessionManager.createEmptySession(parentId);
+    await sessionManager.createEmptySession(childId);
+    const lease = await managedSessions.openManagedSession({ sessionId: childId, ownerSessionId: parentId });
+    await sessionManager.startSessionWait(childId, { waitForInput: true });
+    await sessionRuntime.updateSettings(childId, { currentNode: 'fixture-node' });
+    assert.equal(calls, 0, 'passive admission cannot start the managed Session');
+    const step = await managedSessions.managedSessionStep({ sessionId: childId, ownerSessionId: parentId, leaseId: lease.leaseId });
+    assert.equal(calls, 1, 'the explicit controller step remains a processing action');
+    assert.equal(step.consumedPendingInboxCount, 1);
+    assert.deepEqual(step.newMessages.map(message => message.role), ['user', 'model']);
+    assert.equal((await sessionManager.getSession(childId)).meta.wait, undefined);
+  } finally {
+    (llm as any).chat = originalChat;
+    sessionManager.setSessionTriggerCallback(() => {});
     await sessionManager.deleteSession(childId).catch(() => false);
     await sessionManager.deleteSession(parentId).catch(() => false);
   }
