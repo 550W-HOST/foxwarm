@@ -16,4 +16,4 @@ const paperDark = derivedVariant(DEFAULT_THEME.variants.dark, {
   }, typography: paperTypography, shape: { radiusSmallPx: 5, radiusMediumPx: 10, radiusLargePx: 18, messageRadiusPx: 4, cardRadiusPx: 2, controlRadiusPx: 4, tagRadiusPx: 5, composerRadiusPx: 6, cardGapPx: 5 }, composition: { density: 'airy', card: 'outlined', header: 'tab', control: 'soft', separator: 'chevron', labels: 'normal', icons: 'standard' }, effects: { shadowColor: '#000000', shadowOpacity: 0.38, shadowBlurPx: 22, glowOpacity: 0.1, transitionMs: 180 }, backgroundPattern: { kind: 'lines', sizePx: 28, opacity: 0.02 },
 })
 
-export const THEME_PAPER = checkedBuiltin({ schemaVersion: 2, id: THEME_PAPER_ID, name: 'Paper', description: 'A warm editorial theme with parchment surfaces and serif reading text.', author: 'Foxwarm', variants: { light: paperLight, dark: paperDark } })
+export const THEME_PAPER = checkedBuiltin({ schemaVersion: 3, id: THEME_PAPER_ID, name: 'Paper', description: 'A warm editorial theme with parchment surfaces and serif reading text.', author: 'Foxwarm', variants: { light: paperLight, dark: paperDark } })

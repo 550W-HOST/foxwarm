@@ -1,3 +1,4 @@
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -55,6 +56,7 @@ test('Sidebar keeps a newly forked child when an older bounded-window response a
   let childSessionId
   try {
     await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'domcontentloaded' })
+    await waitForWebUiReady(page)
     await page.waitForSelector('[data-session-list-scroll-container]', { timeout: 15_000 })
 
     parentSessionId = await page.evaluate(async () => {
@@ -227,6 +229,7 @@ test('Sidebar collapse prunes nested expansion state without clearing unrelated 
 
   try {
     await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'domcontentloaded' })
+    await waitForWebUiReady(page)
     await page.waitForSelector('[data-session-list-scroll-container]', { timeout: 15_000 })
 
     const root = await createSession()
@@ -393,6 +396,7 @@ test('Sidebar auto-expansion acquires child pages and exposes branch loading, fa
 
   try {
     await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'domcontentloaded' })
+    await waitForWebUiReady(page)
     await page.waitForSelector('[data-session-list-scroll-container]', { timeout: 15_000 })
 
     const root = await createSession()
@@ -413,6 +417,7 @@ test('Sidebar auto-expansion acquires child pages and exposes branch loading, fa
       return rows.get(coordinator)?.parentSessionId === root && rows.get(worker)?.parentSessionId === coordinator
     }, { timeout: 10_000, polling: 100 }, { root, coordinator, worker })
     await page.reload({ waitUntil: 'domcontentloaded' })
+    await waitForWebUiReady(page)
     await page.waitForSelector('[data-session-list-scroll-container]', { timeout: 15_000 })
     await page.waitForFunction(id => !!document.querySelector(`[data-session-id="${CSS.escape(id)}"]`), { timeout: 10_000 }, root)
     await clickDisclosure(root)

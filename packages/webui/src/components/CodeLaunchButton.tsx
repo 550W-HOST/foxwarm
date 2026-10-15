@@ -88,7 +88,7 @@ export default function CodeLaunchButton({
         <button
           type="button"
           onClick={() => onOpen(nodeId, path)}
-          className={`inline-flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${baseClass}`}
+          className={`inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-fw-border-strong px-3 py-2 text-sm font-medium transition-colors ${baseClass}`}
           title={`Open code${openInNewWindow ? ' in a new browser tab' : ''}`}
         >
           <Code2 className="h-4 w-4" />
@@ -104,7 +104,7 @@ export default function CodeLaunchButton({
               return !value
             })
           }}
-          className={`inline-flex items-center justify-center rounded-lg px-2 transition-colors ${baseClass}`}
+          className={`inline-flex items-center justify-center rounded-lg border border-fw-border-strong px-2 transition-colors ${baseClass}`}
           title="Code options"
           aria-label="Open code options"
         >
@@ -159,7 +159,7 @@ export default function CodeLaunchButton({
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                className="rounded-lg px-3 py-2 text-sm text-fw-text hover:bg-fw-hover dark:text-fw-text dark:hover:bg-fw-hover"
+                className="rounded-lg border border-fw-border-strong px-3 py-2 text-sm text-fw-text hover:bg-fw-hover dark:text-fw-text dark:hover:bg-fw-hover"
               >
                 Cancel
               </button>
@@ -167,7 +167,7 @@ export default function CodeLaunchButton({
                 type="button"
                 onClick={submit}
                 disabled={!selectedAvailability.available}
-                className="rounded-lg bg-fw-accent px-3 py-2 text-sm text-fw-text-inverse hover:bg-fw-accent disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-lg bg-fw-accent px-3 py-2 text-sm text-fw-accent-text hover:bg-fw-accent disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Open code
               </button>

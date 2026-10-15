@@ -15,6 +15,7 @@ export function useTheme() {
   return {
     ...snapshot,
     setThemeId: (themeId: string) => setThemeSelection({ themeId }),
+    setThemeForMode: (mode: 'light' | 'dark', themeId: string) => setThemeSelection(mode === 'light' ? { lightThemeId: themeId } : { darkThemeId: themeId }),
     setColorMode: (colorMode: typeof snapshot.selection.colorMode) => setThemeSelection({ colorMode }),
     installTheme,
     removeTheme,

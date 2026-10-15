@@ -15,7 +15,7 @@ interface ContentHeaderProps {
 export default function ContentHeader({ icon, title, subtitle, actions, onBack, sticky = false, below }: ContentHeaderProps) {
   const tabHeader = useWorkbenchTabHeader()
   return (
-    <div className={`${sticky ? 'sticky top-0 z-40 ' : ''}border-b border-fw-border bg-fw-surface dark:border-fw-border dark:bg-fw-surface`}>
+    <div className={`${sticky ? 'sticky top-0 z-40 ' : ''}border-b border-fw-border bg-fw-workbench-header-surface dark:border-fw-border dark:bg-fw-workbench-header-surface`}>
       <div className="flex h-16 items-center justify-between gap-3 px-3">
         <div className="flex min-w-0 items-center gap-3">
           {tabHeader ? <WorkbenchTabClose className="rounded-lg p-2 text-fw-text hover:bg-fw-hover dark:text-fw-text dark:hover:bg-fw-hover" /> : onBack && (

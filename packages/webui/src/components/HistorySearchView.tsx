@@ -273,7 +273,7 @@ export default function HistorySearchView({ tabId, isMobile, timelineView, showU
           <label className="block text-sm font-medium" htmlFor={queryInputId}>Search or message reference</label>
           <div className="flex gap-2">
             <input id={queryInputId} data-history-query-input value={query} onChange={event => { const value = event.target.value; setQuery(value); onDraftChange?.({ query: value, agentName, sessionId }) }} placeholder="Search conversations or paste sessionId=… msg#123" className="min-w-0 flex-1 rounded border border-fw-border bg-fw-canvas px-3 py-2 text-fw-text-strong" />
-            <button type="submit" disabled={loading} className="inline-flex items-center gap-1 rounded bg-fw-accent px-3 py-2 text-white disabled:opacity-50"><Search size={16} /> Search</button>
+            <button type="submit" disabled={loading} className="inline-flex items-center gap-1 rounded bg-fw-accent px-3 py-2 text-fw-accent-text disabled:opacity-50"><Search size={16} /> Search</button>
           </div>
           <div className="flex flex-wrap gap-2">
             <label className="min-w-36 flex-1 text-xs">Agent (optional)

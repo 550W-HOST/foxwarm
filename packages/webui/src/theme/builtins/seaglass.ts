@@ -16,4 +16,4 @@ const seaGlassDark = derivedVariant(DEFAULT_THEME.variants.dark, {
   }, typography: seaGlassTypography, shape: { radiusSmallPx: 4, radiusMediumPx: 8, radiusLargePx: 14, messageRadiusPx: 12, cardRadiusPx: 8, controlRadiusPx: 4, tagRadiusPx: 4, composerRadiusPx: 6, cardGapPx: 4 }, composition: { density: 'comfortable', card: 'outlined', header: 'banded', control: 'soft', separator: 'chevron-right', labels: 'uppercase', icons: 'standard' }, effects: { shadowColor: '#000000', shadowOpacity: 0.32, shadowBlurPx: 14, glowOpacity: 0.08, transitionMs: 150 }, backgroundPattern: { kind: 'dots', sizePx: 26, opacity: 0.045 },
 })
 
-export const THEME_SEA_GLASS = checkedBuiltin({ schemaVersion: 2, id: THEME_SEA_GLASS_ID, name: 'Sea Glass', description: 'A calm teal workspace that shifts from sea glass to midnight water.', author: 'Foxwarm', variants: { light: seaGlassLight, dark: seaGlassDark } })
+export const THEME_SEA_GLASS = checkedBuiltin({ schemaVersion: 3, id: THEME_SEA_GLASS_ID, name: 'Sea Glass', description: 'A calm teal workspace that shifts from sea glass to midnight water.', author: 'Foxwarm', variants: { light: seaGlassLight, dark: seaGlassDark } })

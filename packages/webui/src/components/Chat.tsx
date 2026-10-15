@@ -2357,7 +2357,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         {showScrollTopButton && (
           <button
             onClick={scrollToTop}
-            className="absolute right-4 top-4 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-fw-accent text-fw-text-inverse shadow-lg transition-all hover:bg-fw-accent dark:bg-fw-accent dark:hover:bg-fw-accent"
+            className="absolute right-4 top-4 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-fw-accent text-fw-accent-text shadow-lg transition-all hover:bg-fw-accent dark:bg-fw-accent dark:hover:bg-fw-accent"
             aria-label="Scroll to top"
           >
             <svg className="h-[18px] w-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2369,7 +2369,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         {!followingBottom && (
           <button
             onClick={handleBottomNavigation}
-            className="absolute bottom-4 right-4 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-fw-accent text-fw-text-inverse shadow-lg transition-all hover:bg-fw-accent dark:bg-fw-accent dark:hover:bg-fw-accent"
+            className="absolute bottom-4 right-4 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-fw-accent text-fw-accent-text shadow-lg transition-all hover:bg-fw-accent dark:bg-fw-accent dark:hover:bg-fw-accent"
             style={{ bottom: 'calc(var(--chat-composer-offset, 224px) + 1rem)' }}
             aria-label="Scroll to bottom"
           >

@@ -1,3 +1,4 @@
+import { waitForWebUiReady } from '../../packages/webui/test/webuiReadiness.mjs'
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
@@ -64,6 +65,7 @@ before(async () => {
   })
   await page.setViewport({ width: 1440, height: 900 })
   await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
   await page.waitForSelector('button[aria-label="Open UI settings"]')
 })
 
@@ -153,6 +155,7 @@ test('Logs menu, bounded history/live, approximate time jump, restoration, popup
   await waitText('synthetic while browsing')
   await page.screenshot({ path: path.join(artifactDir, 'logs-toolbar-desktop.png') })
   await page.reload({ waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
   await waitText('synthetic while browsing')
   assert.equal(decodeURIComponent(await page.evaluate(() => location.hash)), '#tab/system:logs')
   assert.ok(await page.$('[data-tab-id="system:logs"]'))
@@ -172,6 +175,7 @@ test('Logs menu, bounded history/live, approximate time jump, restoration, popup
 
   const embedded = await browser.newPage()
   await embedded.goto(`${baseUrl}/?foxwarmEmbed=sidebar&foxwarmEmbedNonce=synthetic_logs_embed_nonce`, { waitUntil: 'networkidle2' })
+  await waitForWebUiReady(embedded)
   await openMenu(embedded)
   const embeddedPopupPromise = new Promise(resolve => embedded.once('popup', resolve))
   await button('Open logs', embedded)
@@ -184,6 +188,7 @@ test('Logs menu, bounded history/live, approximate time jump, restoration, popup
 
   await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true })
   await page.goto(`${baseUrl}/`, { waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
   await page.waitForSelector('button[aria-label="Open UI settings"]')
   await openMenu()
   await button('dark')

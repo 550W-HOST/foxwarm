@@ -133,7 +133,7 @@ export default function AgentCreationMenu({
         type="button"
         onClick={openSessionModal}
         className={compact
-          ? 'inline-flex items-center justify-center rounded-lg px-2 transition-colors bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised/60 dark:text-fw-text-strong dark:hover:bg-fw-hover'
+          ? 'inline-flex items-center justify-center rounded-lg border border-fw-border-strong px-2 transition-colors bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised/60 dark:text-fw-text-strong dark:hover:bg-fw-hover'
           : 'inline-flex h-8 w-8 items-center justify-center rounded-lg text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse transition'}
         title="New session"
         aria-label="New session"
@@ -218,7 +218,7 @@ export default function AgentCreationMenu({
 
             <div className="mt-5 flex justify-end gap-2">
               <button type="button" onClick={closeDialog} disabled={loading} className="rounded-lg px-3 py-2 text-sm text-fw-text hover:bg-fw-hover disabled:opacity-50 dark:text-fw-text dark:hover:bg-fw-hover">Cancel</button>
-              <button type="submit" disabled={loading || (mode === 'session' && agents.length === 0)} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-text-inverse hover:bg-fw-accent disabled:cursor-not-allowed disabled:opacity-50">
+              <button type="submit" disabled={loading || (mode === 'session' && agents.length === 0)} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:cursor-not-allowed disabled:opacity-50">
                 {loading ? 'Creating…' : 'Create'}
               </button>
             </div>

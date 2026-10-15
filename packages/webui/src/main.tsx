@@ -6,6 +6,7 @@ import { parseFoxwarmEmbeddedTarget } from './embeddedWebUi'
 import { parseFoxwarmPopupTarget } from './popupWebUi'
 import { initializeThemeRuntime } from './theme/runtime'
 import { API_BASE_PATH } from './config'
+import { BootReadySignal, FoxSplash, markBootReady } from './components/FoxLoaders'
 
 const App = lazy(() => import('./App'))
 const WebUiIdentityApp = lazy(() => import('./WebUiIdentityApp'))
@@ -35,6 +36,8 @@ window.addEventListener('pageshow', syncViewportHeight)
 
 const embeddedTarget = parseFoxwarmEmbeddedTarget(window.location.search)
 const popupTarget = parseFoxwarmPopupTarget(window.location.search)
+// The entry splash only covers the full app, not popups or embedded panes.
+const showBootSplash = !popupTarget && !embeddedTarget
 const content = popupTarget
   ? <PopupWebUiApp target={popupTarget} />
   : embeddedTarget?.kind === 'sidebar'
@@ -66,9 +69,10 @@ function AuthenticatedWebUiRoot() {
     }).catch(() => { if (active) setFailed(true) })
     return () => { active = false }
   }, [])
+  useEffect(() => { if (failed) markBootReady() }, [failed])
   if (failed) return <div className="foxwarm-fixed-viewport-shell flex h-full items-center justify-center text-fw-text"><a href="login.html">Sign in again</a></div>
   if (!auth) return <div className="foxwarm-fixed-viewport-shell h-full bg-fw-canvas" />
-  return auth.role === 'webui' ? <WebUiIdentityApp auth={auth} /> : content
+  return <>{auth.role === 'webui' ? <WebUiIdentityApp auth={auth} /> : content}<BootReadySignal /></>
 }
 
 createRoot(document.getElementById('root')!).render(
@@ -76,6 +80,7 @@ createRoot(document.getElementById('root')!).render(
     <Suspense fallback={<div className="foxwarm-fixed-viewport-shell h-full bg-fw-canvas" />}>
       <AuthenticatedWebUiRoot />
     </Suspense>
+    {showBootSplash && <FoxSplash />}
   </StrictMode>,
 )
 

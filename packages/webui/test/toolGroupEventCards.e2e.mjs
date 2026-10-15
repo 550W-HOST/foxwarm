@@ -103,7 +103,7 @@ const snapshot = async (name) => page.$eval(`#${name}`, element => ({
 
 test('event wrappers between tool calls collapse into counted tags; expanding restores complete cards and paired results in message order', async () => {
   const collapsed = await snapshot('collapsed')
-  assert.deepEqual(collapsed.summaryTags, [['exec ×2', 'success'], ['Event ×2', 'system']])
+  assert.deepEqual(collapsed.summaryTags, [['exec ×2', 'neutral'], ['Event ×2', 'system']])
   assert.equal(collapsed.summaries, 1)
   assert.equal(collapsed.eventCards.length, 0)
   assert.equal(collapsed.toolCards, 0)
@@ -125,7 +125,7 @@ test('event wrappers between tool calls collapse into counted tags; expanding re
 
 test('whole goal reminders join tool runs with their own counted icon/tag and full original cards', async () => {
   const collapsed = await snapshot('goal')
-  assert.deepEqual(collapsed.summaryTags, [['Goal reminder ×3', 'system'], ['exec ×2', 'success']])
+  assert.deepEqual(collapsed.summaryTags, [['Goal reminder ×3', 'system'], ['exec ×2', 'neutral']])
   assert.equal(collapsed.summaries, 1)
   assert.equal(collapsed.goalCards.length, 0)
   assert.equal(collapsed.toolCards, 0)
@@ -158,7 +158,7 @@ test('goal reminders retain the forced-open tail, stay visible with grouping dis
 
   const outside = await snapshot('goalStandalone')
   assert.equal(outside.goalCards.length, 1)
-  assert.deepEqual(outside.summaryTags, [['exec ×1', 'success']])
+  assert.deepEqual(outside.summaryTags, [['exec ×1', 'neutral']])
   const alone = await snapshot('goalNoTools')
   assert.equal(alone.summaries, 0)
   assert.equal(alone.goalCards.length, 2)
@@ -186,7 +186,7 @@ test('standalone events do not claim a following tool run or disappear without a
   const outside = await snapshot('standalone')
   assert.equal(outside.eventCards.length, 1)
   assert.equal(outside.summaries, 1)
-  assert.deepEqual(outside.summaryTags, [['exec ×1', 'success']])
+  assert.deepEqual(outside.summaryTags, [['exec ×1', 'neutral']])
   const alone = await snapshot('noTools')
   assert.equal(alone.eventCards.length, 2)
   assert.equal(alone.summaries, 0)
@@ -205,7 +205,7 @@ test('quoted event text, external input, other system kinds, and a new user turn
   }
   const boundary = await snapshot('userBoundary')
   assert.equal(boundary.summaries, 1)
-  assert.deepEqual(boundary.summaryTags, [['exec ×1', 'success'], ['Event ×1', 'system']])
+  assert.deepEqual(boundary.summaryTags, [['exec ×1', 'neutral'], ['Event ×1', 'system']])
   assert.equal(boundary.eventCards.length, 0)
   assert.ok(boundary.fullText.includes('NEW USER INPUT'))
   assert.ok(boundary.fullText.includes('FINAL ANSWER'))

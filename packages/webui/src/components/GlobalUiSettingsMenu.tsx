@@ -119,7 +119,7 @@ export default function GlobalUiSettingsMenu({ menuAlign = 'end', menuSide = 'bo
                     theme.setColorMode(mode)
                     setOpen(false)
                   }}
-                  className={`flex-1 rounded px-2 py-1 text-xs capitalize ${theme.selection.colorMode === mode ? 'bg-fw-accent text-fw-text-inverse' : 'bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised dark:text-fw-text dark:hover:bg-fw-hover'}`}
+                  className={`flex-1 rounded px-2 py-1 text-xs capitalize ${theme.selection.colorMode === mode ? 'bg-fw-accent text-fw-accent-text' : 'bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised dark:text-fw-text dark:hover:bg-fw-hover'}`}
                 >
                   {mode}
                 </button>

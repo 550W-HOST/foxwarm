@@ -651,7 +651,7 @@ test('busy rings share stepped motion across normal/detailed rows, rail and time
     assert.equal(await page.$(`${railWaiting} [data-runtime-perimeter]`), null)
     for (const id of ['main', 'child', 'legacy']) {
       const selector = `${timeline} [data-activity-case="demo/${id}"]`
-      assert.equal(await page.$$eval(`${selector} .runtime-busy-spinner`, nodes => nodes.length), 1)
+      assert.equal(await page.$$eval(`${selector} ${id === 'legacy' ? '[data-fox-loader=thinking]' : '.runtime-busy-spinner'}`, nodes => nodes.length), 1)
       assert.ok(await page.$(`${selector} button::-p-text(Stop)`))
       assert.equal(await page.$(`${selector} .animate-bounce`), null)
     }
