@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { RotateCcw, Expand } from 'lucide-react'
 import { FoxCub, FoxSplashScreen, FoxSpinner, FoxThinking } from './FoxLoaders'
 
@@ -20,6 +20,22 @@ const iconButtonClass = 'inline-flex items-center gap-1 rounded px-1.5 py-1 text
 export default function FoxLoaderPreview() {
   const [replay, setReplay] = useState(0)
   const [splash, setSplash] = useState(false)
+  const splashButtonRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (!splash) return
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      setSplash(false)
+    }
+    document.addEventListener('keydown', keydown, true)
+    return () => {
+      document.removeEventListener('keydown', keydown, true)
+      splashButtonRef.current?.focus({ preventScroll: true })
+    }
+  }, [splash])
 
   return (
     <section data-fox-loader-preview className="mt-6 border-t border-fw-border pt-5 dark:border-fw-border-muted">
@@ -31,7 +47,7 @@ export default function FoxLoaderPreview() {
           title="Entry splash"
           action={<>
             <button type="button" onClick={() => setReplay(count => count + 1)} className={iconButtonClass} aria-label="Replay entry animation"><RotateCcw className="h-3 w-3" aria-hidden="true" />Replay</button>
-            <button type="button" onClick={() => setSplash(true)} className={iconButtonClass} aria-label="Preview full-screen splash"><Expand className="h-3 w-3" aria-hidden="true" />Full screen</button>
+            <button ref={splashButtonRef} type="button" onClick={() => setSplash(true)} className={iconButtonClass} aria-label="Preview full-screen splash"><Expand className="h-3 w-3" aria-hidden="true" />Full screen</button>
           </>}
         >
           <FoxCub key={replay} size={120} />
