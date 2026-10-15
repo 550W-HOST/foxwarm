@@ -84,7 +84,7 @@ after(async () => {
 
 test('assistant and user cards keep their shared vertical and role-specific horizontal insets in every built-in variant', async () => {
   const cases = await page.evaluate(() => window.themeCases)
-  assert.equal(cases.length, 12)
+  assert.equal(cases.length, 16)
   for (const { themeId, colorMode } of cases) {
     await page.evaluate(({ themeId, colorMode }) => window.selectFixtureTheme(themeId, colorMode), { themeId, colorMode })
     assert.deepEqual(await readPadding('.foxwarm-assistant-message-card'), ['8px', '8px', '8px', '8px'], `${themeId} ${colorMode} assistant`)
