@@ -148,3 +148,5 @@ Per-session versus global stream ownership is canonical in [D-webui-session-stre
 `threadCardHeight.e2e.mjs` covers the shared disclosure branches, explicit wheel/bottom navigation, natural-measurement range preservation and unavoidable collapse clamps. Its completed-worker regression contains one Activity followed by a principal reply: opening the process and a visible native tool preserves the reading position during interpolation and through later content/viewport changes.
 
 Mounted-Chat timing regressions use the current process statistics, completed-request endpoints and native tool disclosures. The context-overview keyboard-focus regression waits for the opacity transition endpoint before asserting its full-opacity state.
+
+Model-picker browser checks wait for published canonical effort state; closing the popup after selection is not a response-completion signal.

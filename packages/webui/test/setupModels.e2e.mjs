@@ -1767,7 +1767,8 @@ test('embedded model filter selects one result and keeps the accessible Setup br
     await chatFrame.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
     assert.equal(await reopenedFilter.evaluate((input) => input.value), '')
     assert.equal(await chatFrame.$$eval('button[title="leaf/model-a"], button[title="leaf/model-b"], button[title="sticky"], button[title="route"]', (buttons) => buttons.length), 4)
-    const currentEffort = await chatFrame.waitForSelector('input[type="range"][aria-label="Current effort"]')
+    // Selection closes the menu before the canonical model response is published.
+    const currentEffort = await chatFrame.waitForSelector('input[type="range"][aria-label="Current effort"][aria-valuetext*="unavailable"]')
     assert.equal(await currentEffort.evaluate(input => input.value), '0')
     assert.match(await currentEffort.evaluate(input => input.getAttribute('aria-valuetext') || ''), /unavailable/)
 
@@ -1794,7 +1795,7 @@ test('embedded model filter selects one result and keeps the accessible Setup br
       return rect.left >= 0 && rect.right <= innerWidth && popup.scrollWidth <= popup.clientWidth
     }))
 
-    const childEffort = await chatFrame.waitForSelector('input[type="range"][aria-label="Child effort"]')
+    const childEffort = await chatFrame.waitForSelector('input[type="range"][aria-label="Child effort"][aria-valuetext*="unavailable"]')
     assert.equal(await childEffort.evaluate(input => input.value), '0')
     assert.match(await childEffort.evaluate(input => input.getAttribute('aria-valuetext') || ''), /unavailable/)
     await childEffort.evaluate((input) => { input.value = '0'; input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new PointerEvent('pointerup', { bubbles: true })) })

@@ -1551,27 +1551,29 @@ test('Timeline, Composer, History and Tasks share the reading column and pane-lo
   const history = { id: 'system:search', type: 'search', title: 'History' }
   const tasks = { id: 'system:tasks', type: 'tasks', title: 'Tasks' }
   const page = await openFixture({ tabs: [chat('e2e-a', false), history, tasks], responsiveChat: true, width: 1800 })
-  const geometry = () => page.evaluate(() => {
+  const alignedGeometry = () => {
     const rect = selector => {
-      const element = document.querySelector(selector)
-      const box = element.getBoundingClientRect()
+      const box = document.querySelector(selector).getBoundingClientRect()
       return { left: box.left, right: box.right, width: box.width }
     }
     const scroller = document.querySelector('.foxwarm-chat-messages')
-    return {
+    const root = document.querySelector('.foxwarm-chat-root')
+    const boxes = {
       timeline: rect('.foxwarm-chat-messages-content'), composer: rect('.foxwarm-chat-composer-inner'),
       root: rect('.foxwarm-chat-root'),
       scrollbar: scroller.offsetWidth - scroller.clientWidth,
       overflow: document.documentElement.scrollWidth > innerWidth,
     }
-  })
+    // Content can gain a native scrollbar before ResizeObserver publishes its gutter.
+    const publishedGutter = parseFloat(getComputedStyle(root).getPropertyValue('--foxwarm-chat-scrollbar-gutter'))
+    if (publishedGutter !== boxes.scrollbar || boxes.timeline.width <= 0) return false
+    if (Math.abs(boxes.timeline.left - boxes.composer.left) >= 1 || Math.abs(boxes.timeline.right - boxes.composer.right) >= 1) return false
+    return boxes
+  }
   const aligned = async () => {
-    await page.waitForFunction(() => {
-      const timeline = document.querySelector('.foxwarm-chat-messages-content').getBoundingClientRect()
-      const composer = document.querySelector('.foxwarm-chat-composer-inner').getBoundingClientRect()
-      return timeline.width > 0 && Math.abs(timeline.left - composer.left) < 1 && Math.abs(timeline.right - composer.right) < 1
-    })
-    const boxes = await geometry()
+    const sample = await page.waitForFunction(alignedGeometry)
+    const boxes = await sample.jsonValue()
+    await sample.dispose()
     for (const edge of ['left', 'right']) assert.ok(Math.abs(boxes.timeline[edge] - boxes.composer[edge]) < 1, `${edge} edge differs: ${JSON.stringify(boxes)}`)
     assert.ok(boxes.composer.width <= 1100)
     assert.equal(boxes.overflow, false)
@@ -1947,7 +1949,8 @@ test('Code retains its iframe/window across split, docking, collapse and desktop
     await assertFrame()
     await page.click('[data-tab-id="vscode-web"]')
     await page.setViewport({ width: 390, height: 844 })
-    await page.click('[data-tab-id="chat:e2e-a"]')
+    await page.waitForSelector('.foxwarm-fixed-viewport-shell')
+    await page.locator('[data-tab-id="chat:e2e-a"]').click()
     await page.waitForSelector('.foxwarm-chat-root button[title="Back"]')
     await page.evaluate(() => { window.__ordinaryChat = document.querySelector('.foxwarm-chat-root') })
     await page.click('.foxwarm-chat-root button[title="Back"]')
