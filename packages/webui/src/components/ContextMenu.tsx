@@ -200,7 +200,7 @@ export default function ContextMenu({
               }}
               className={`mr-3 inline-flex shrink-0 items-center gap-1 text-sm transition-colors ${control.checked ? 'text-fw-accent dark:text-fw-accent' : 'text-fw-text hover:text-fw-accent dark:text-fw-text-strong dark:hover:text-fw-accent'} ${control.disabled ? 'cursor-not-allowed opacity-50' : ''}`}
             >
-              <span aria-hidden="true" className={`inline-flex h-3 w-3 items-center justify-center rounded-[1px] border-2 text-[8px] font-bold leading-none ${control.checked ? 'border-fw-accent-border bg-fw-accent text-fw-text-inverse dark:border-fw-accent-border dark:bg-fw-accent dark:text-fw-text-strong' : 'border-fw-border-strong bg-fw-surface text-transparent dark:border-fw-border-strong dark:bg-fw-canvas'}`}>✓</span>
+              <span aria-hidden="true" className={`inline-flex h-3 w-3 items-center justify-center rounded-[1px] border-2 text-[8px] font-bold leading-none ${control.checked ? 'border-fw-accent-border bg-fw-accent text-fw-accent-text dark:border-fw-accent-border dark:bg-fw-accent dark:text-fw-accent-text' : 'border-fw-border-strong bg-fw-surface text-transparent dark:border-fw-border-strong dark:bg-fw-canvas'}`}>✓</span>
               <span>{control.label}</span>
             </button>
           </div>

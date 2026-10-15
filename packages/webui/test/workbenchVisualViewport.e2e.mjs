@@ -1,3 +1,4 @@
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
@@ -65,6 +66,7 @@ async function openMobileApp({ simulateViewport = true } = {}) {
     }
   }, simulateViewport)
   await page.goto(`${url}#tab/chat:e2e-a`)
+  await waitForWebUiReady(page)
   await page.waitForSelector('[role="textbox"]')
   await page.waitForFunction(() => document.querySelectorAll('[data-chat-message-anchor-key]').length === 20)
   await page.evaluate(() => { window.__originalEditor = document.querySelector('[role="textbox"]'); window.__originalChat = document.querySelector('.foxwarm-chat-root') })

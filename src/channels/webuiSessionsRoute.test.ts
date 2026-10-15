@@ -104,6 +104,23 @@ test('WebUI creation routes create agents and random or custom sessions', async 
     assert.match(randomPayload.sessionId, new RegExp(`^${agentId}/\\d{4}_[a-z0-9]{5}$`));
     createdSessionIds.push(randomPayload.sessionId);
 
+    await sessionManager.appendSessionMessage(randomPayload.sessionId, { role: 'model', parts: [{ text: 'real WebUI fork context' }] });
+    const source = await sessionManager.getSession(randomPayload.sessionId);
+    const inheritedHistory = structuredClone(source.history);
+    res = await request(`/api/sessions/${encodeURIComponent(randomPayload.sessionId)}/fork`, {
+      method: 'POST', body: JSON.stringify({ suffix: 'manual' }),
+    });
+    assert.equal(res.status, 200);
+    const manualForkId = (await res.json() as any).newSessionId;
+    createdSessionIds.push(manualForkId);
+    const manualFork = await sessionManager.getSession(manualForkId);
+    assert.equal(manualFork.parentSessionId, randomPayload.sessionId);
+    assert.deepEqual(manualFork.history.slice(0, inheritedHistory.length), inheritedHistory);
+    assert.deepEqual(manualFork.history.slice(inheritedHistory.length).map(message => message.role), ['user', 'user']);
+    assert.match(manualFork.history.at(-1).parts[0].system, /manually forked by the user/);
+    assert.equal(manualFork.childHandoffState, undefined);
+    assert.equal(manualFork.queue.length, 0);
+
     res = await request('/api/sessions', { method: 'POST', body: JSON.stringify({ agentId, sessionId: 'custom' }) });
     assert.equal(res.status, 200);
     assert.equal((await res.json() as any).sessionId, `${agentId}/custom`);

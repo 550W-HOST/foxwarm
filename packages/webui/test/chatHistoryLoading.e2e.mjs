@@ -1114,7 +1114,8 @@ test('post-request stream state wins over an older history session snapshot', as
 
   assert.equal(await page.$eval('[data-session-header-subtitle]', element => element.getAttribute('title')), '/live/cwd')
   assert.ok(await page.$('[title="live/model"]'))
-  assert.equal(await page.evaluate(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('Thinking... • 3 queued messages will be inserted after this model response')), true)
+  assert.equal(await page.$eval('[data-processing-runtime-state="requesting-model"]', block => block.textContent.includes('Thinking...')), true)
+  assert.equal(await page.$eval('[data-processing-queue-status]', block => block.textContent.includes('3 queued')), true)
   assert.equal(await page.evaluate(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('live streaming text')), true)
   assert.equal(await page.evaluate(() => window.fixtureHistoryRequestCount), 2)
   await page.close()

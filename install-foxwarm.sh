@@ -71,15 +71,11 @@ fail() { printf '\033[1;31m[foxwarm-install]\033[0m %s\n' "$*" >&2; exit 1; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
-node_major_version() { node -p "Number(process.versions.node.split('.')[0])" 2>/dev/null || echo 0; }
-
 ensure_basic_deps() {
   have git || fail "git is required. Please install git and rerun this script."
-  have node || fail "Node.js 20+ is required. Install it from https://nodejs.org/ or your system package manager."
-  have npm || fail "npm is required. Install Node.js 20+ with npm from https://nodejs.org/ or your system package manager."
-  local major
-  major="$(node_major_version)"
-  [ "$major" -ge 20 ] || fail "Node.js 20+ is required; found $(node -v 2>/dev/null || echo unknown). Please upgrade Node.js."
+  have node || fail "Node.js 20.19+ (20.x) or 22.12+ is required. Install it from https://nodejs.org/ or your system package manager."
+  have npm || fail "npm is required. Install Node.js 20.19+ (20.x) or 22.12+ with npm from https://nodejs.org/ or your system package manager."
+  node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit((major === 20 && minor >= 19) || (major === 22 && minor >= 12) || major > 22 ? 0 : 1)' || fail "Node.js 20.19+ (20.x) or 22.12+ is required; found $(node -v 2>/dev/null || echo unknown). Please upgrade Node.js."
   have tmux || fail "tmux is required for Foxwarm's normal install start mode. Install tmux with your system package manager, then rerun this script."
 }
 

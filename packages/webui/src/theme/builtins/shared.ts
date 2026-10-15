@@ -4,9 +4,12 @@ import { validateThemeManifest } from '../manifest'
 export const SYSTEM_FONT = "ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji'"
 export const MONO_FONT = "'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Menlo, Consolas, 'Noto Sans Mono CJK SC', 'Sarasa Mono SC', monospace"
 
+type AddedColor = 'sidebarSurface' | 'tabBarSurface' | 'workbenchHeaderSurface' | 'statusBarSurface' | 'accentText'
+type BuiltinColors = Omit<ThemeVariant['colors'], AddedColor> & Partial<Pick<ThemeVariant['colors'], AddedColor>>
+
 type VariantInput = {
   componentTreatment?: ThemeVariant['componentTreatment']
-  colors: ThemeVariant['colors']
+  colors: BuiltinColors
   typography?: Partial<ThemeVariant['typography']>
   shape?: Partial<ThemeVariant['shape']>
   effects?: Partial<ThemeVariant['effects']>
@@ -22,7 +25,14 @@ type VariantOverrides = Partial<Omit<VariantInput, 'colors'>> & {
 export function variant(input: VariantInput): ThemeVariant {
   return {
     componentTreatment: input.componentTreatment || 'standard',
-    colors: input.colors,
+    colors: {
+      sidebarSurface: input.colors.surface,
+      tabBarSurface: input.colors.neutralSurface,
+      workbenchHeaderSurface: input.colors.surface,
+      statusBarSurface: input.colors.surfaceSunken,
+      accentText: input.colors.textInverse,
+      ...input.colors,
+    },
     typography: {
       uiFontFamily: SYSTEM_FONT,
       messageFontFamily: SYSTEM_FONT,
@@ -79,9 +89,16 @@ export function variant(input: VariantInput): ThemeVariant {
 
 /** Build a complete built-in variant while keeping the semantic token set explicit at the registry boundary. */
 export function derivedVariant(base: ThemeVariant, overrides: VariantOverrides): ThemeVariant {
+  const colors = { ...base.colors, ...overrides.colors }
+  // Built-in authoring defaults follow the overridden palette, not the base theme.
+  colors.sidebarSurface = overrides.colors.sidebarSurface ?? colors.surface
+  colors.tabBarSurface = overrides.colors.tabBarSurface ?? colors.neutralSurface
+  colors.workbenchHeaderSurface = overrides.colors.workbenchHeaderSurface ?? colors.surface
+  colors.statusBarSurface = overrides.colors.statusBarSurface ?? colors.surfaceSunken
+  colors.accentText = overrides.colors.accentText ?? colors.textInverse
   return variant({
     componentTreatment: overrides.componentTreatment || base.componentTreatment,
-    colors: { ...base.colors, ...overrides.colors },
+    colors,
     typography: { ...base.typography, ...overrides.typography },
     shape: { ...base.shape, ...overrides.shape },
     effects: { ...base.effects, ...overrides.effects },

@@ -117,6 +117,7 @@ test('create_child_session taskId assigns or transfers the real child before del
     const child = await sessionManager.getExistingSession(childId);
     assert.match(child.history[0].parts[0].system, /This Session is linked to task task_/);
     assert.match(child.history[0].parts[0].system, /do not send a separate routine completion report/);
+    assert.equal(child.history.some(message => message.role === 'model'), false);
     assert.equal(child.queue.length, 1);
     const assignment = parseFoxwarmWrappedContent(child.queue[0].parts?.[0].system || '');
     assert.equal(assignment.attrs.type, 'task');
@@ -126,12 +127,14 @@ test('create_child_session taskId assigns or transfers the real child before del
     assert.doesNotMatch(assignment.content, /inter-agent/);
     assert.equal(readResult(await task({ action: 'get', taskId }, ctx)).task.ownerSessionId, childId);
     assert.match(readResult(await task({ action: 'get', taskId }, ctx)).notes[0].text, new RegExp(childId));
-    const transferredResult: any = await create_child_session({ suffix: 'replacement', taskId, message: 'Continue the transferred task.' }, ctx);
+    const transferredResult: any = await create_child_session({ suffix: 'replacement', fork: true, taskId, message: 'Continue the transferred task.' }, ctx);
     const transferredId = String(transferredResult.output ?? transferredResult).match(/`([^`]+)`/)![1];
     assert.equal(transferredResult.sentNotifications, 2);
     children.push(transferredId);
     const oldChild = await sessionManager.getExistingSession(childId);
     const replacement = await sessionManager.getExistingSession(transferredId);
+    assert.equal(replacement.history.some(message => message.role === 'model'), false);
+    assert.match(replacement.history.at(-1).parts[0].system, /This Session is linked to task task_/);
     assert.equal(oldChild.queue.length, 2);
     assert.equal(oldChild.queue[1].trigger, false, 'transferred old owner receives passive ingress');
     assert.equal(replacement.queue.length, 1);

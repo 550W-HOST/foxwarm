@@ -1,6 +1,6 @@
 # Unit: shared-node-tools
 
-Files: packages/shared/src/fileOperations.ts, packages/shared/src/fileToolCore.ts, packages/shared/src/fileToolCore.test.ts, packages/shared/src/nodeTools.ts, packages/shared/src/nodeTools.test.ts, packages/shared/src/agentPathVariables.ts, packages/shared/src/agentPathVariables.test.ts, packages/shared/src/resolvedPathMetadata.ts, packages/shared/src/nodeCapabilities.ts, packages/shared/src/nodeFileTransfer.ts, packages/shared/src/execCwd.ts, packages/shared/src/index.ts, packages/shared/src/tokenCount.ts, packages/shared/src/toolResponseFormatting.ts, packages/shared/src/foxwarmMarkup.ts, packages/shared/src/webuiToolRendering.ts, packages/shared/src/webuiToolRendering.test.ts, `packages/shared/src/toolResponseFormatting.test.ts`
+Files: packages/shared/src/fileOperations.ts, packages/shared/src/fileToolCore.ts, packages/shared/src/fileToolCore.test.ts, packages/shared/src/nodeTools.ts, packages/shared/src/nodeTools.test.ts, packages/shared/src/agentPathVariables.ts, packages/shared/src/agentPathVariables.test.ts, packages/shared/src/resolvedPathMetadata.ts, packages/shared/src/nodeCapabilities.ts, packages/shared/src/nodeFileTransfer.ts, packages/shared/src/execCwd.ts, packages/shared/src/index.ts, packages/shared/src/tokenCount.ts, packages/shared/src/toolResponseFormatting.ts, packages/shared/src/toolResponseFormatting.test.ts, packages/shared/src/foxwarmMarkup.ts, packages/shared/src/webuiToolRendering.ts, packages/shared/src/webuiToolRendering.test.ts
 Secondary files: packages/shared/src/outputTruncation.ts, packages/shared/src/outputTruncation.test.ts
 
 Trusted foreground exec signals enter the shared wait and launch fence, not process termination. Interruption uses the existing background-registration and completion path under [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
@@ -27,6 +27,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 - `resolveExecCwd`, `validateResolvedExecCwd`, `resolveValidatedExecCwd` — exec working directory resolution and validation
 - `estimateTokenCount` — lightweight token count estimator
 - `formatStructuredValue`, `formatToolResponsePayload`, `formatCompactObjectPreview` — YAML-based response formatting for model-facing and WebUI display paths
+- `formatToolScriptExecutionResponse` — literal print/return sections and block-YAML metadata at the exact outer execution presentation boundary; [canonical contract](../threads/tool-dispatch-node-execution.md#d-dispatch-toolscript-execution-projection)
 - `escapeFoxwarmAttributeValue`, `escapeFoxwarmTextContent`, `formatFoxwarmAttributes`, `formatFoxwarmAttachmentTag`, `buildFoxwarmAttachmentText` — browser/server parity helpers for safe ordered Foxwarm metadata attributes, explicitly structured nested text, and attachment descriptors
 - Shared patch parsing, line-count, and per-operation summary helpers are re-exported from the package index.
 - `truncateOutputForDisplay` — line-aware excerpt helper used by tool-output guard and persistent exec output formatting
@@ -87,6 +88,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 | `estimateTokenCount(text)` | ~1 | Estimates token count using codepoint heuristics |
 | `formatStructuredValue(value)` | ~20 | Formats a value as YAML or string |
 | `formatToolResponsePayload(response)` | ~32 | Formats tool response, unwrapping single `output` key |
+| `formatToolScriptExecutionResponse(response)` | `toolResponseFormatting.ts` | Formats cleaned outer execution results while preserving native values and guard-summary locators |
 | `formatCompactObjectPreview(response)` | ~42 | Formats compact preview of single-key objects |
 | `parseSessionLinkText(text)` | (webuiToolRendering.ts) | Parses legacy session references plus recognized Session reference fields in XML attributes and JSON/YAML-shaped text into link/text segments |
 | `shouldUseStreamingToolPlaceholder(options)` | (webuiToolRendering.ts) | Detects synthetic streaming tool calls whose args should not be parsed yet |

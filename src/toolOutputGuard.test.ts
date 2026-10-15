@@ -11,7 +11,7 @@ import { nodesManager } from './nodes/manager';
 import * as sessionManager from './sessionManager';
 import { read } from './tools';
 import { guardToolOutputForModel, TOOL_OUTPUT_GUARD_CHAR_LIMIT } from './toolOutputGuard';
-import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
+import { formatToolResponsePayload, formatToolScriptExecutionResponse } from '../packages/shared/dist/toolResponseFormatting';
 
 function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -110,6 +110,25 @@ test('tool output guard stage B truncates oversized non-output fields', async ()
   assert.match(saved, /small output/);
   assert.ok(saved.includes(hugeNestedValue));
   assert.ok(formatToolResponsePayload(result).length < TOOL_OUTPUT_GUARD_CHAR_LIMIT);
+});
+
+test('ToolScript output guard measures and saves the same section text as the model request', async () => {
+  const options = { ...guardOptions(), toolScriptExecution: true };
+  const compact = { status: 'completed', runId: 'tsr_budget', result: '\\path\\n\n'.repeat(4500) };
+  assert.ok(formatToolResponsePayload(compact).length > TOOL_OUTPUT_GUARD_CHAR_LIMIT);
+  assert.ok(formatToolScriptExecutionResponse(compact).length < TOOL_OUTPUT_GUARD_CHAR_LIMIT);
+  assert.equal(await guardToolOutputForModel(compact, options), compact, 'escaping must not consume the native text budget');
+
+  const oversized = { status: 'failed', runId: 'tsr_saved', stdout: 'partial\n',
+    result: { text: 'long return\n'.repeat(5000) }, error: 'ValueError: failed' };
+  const guarded = await guardToolOutputForModel(oversized, options);
+  assert.equal(guarded.truncated, true);
+  assert.equal(guarded.status, 'failed');
+  assert.equal(guarded.runId, 'tsr_saved');
+  assert.equal(guarded.error, oversized.error);
+  assert.equal(await readSaved(guarded.fullOutputPath), formatToolScriptExecutionResponse(oversized));
+  assert.match(formatToolScriptExecutionResponse(guarded), /fullOutputPath:/);
+  assert.ok(formatToolScriptExecutionResponse(guarded).length < TOOL_OUTPUT_GUARD_CHAR_LIMIT);
 });
 
 test('tool output guard keeps top-level error semantics when stage B truncates', async () => {

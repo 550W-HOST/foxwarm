@@ -72,7 +72,7 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, 
         <button
           onClick={handleDefaultCreate}
           disabled={!defaultCreateAvailable}
-          className={`inline-flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${baseClass}`}
+          className={`inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-fw-border-strong px-3 py-2 text-sm font-medium transition-colors ${baseClass}`}
           title={defaultCreateAvailable ? `Create ${label.toLowerCase()} tab` : defaultAvailability.reason}
         >
           <SquareTerminal className="h-4 w-4" />
@@ -85,7 +85,7 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, 
               return !value
             })
           }}
-          className={`inline-flex items-center justify-center rounded-lg px-2 transition-colors ${baseClass}`}
+          className={`inline-flex items-center justify-center rounded-lg border border-fw-border-strong px-2 transition-colors ${baseClass}`}
           title={`Custom ${label.toLowerCase()} tab`}
         >
           <ChevronDown className={`h-4 w-4 transition-transform ${open ? 'rotate-180' : ''}`} />
@@ -121,14 +121,14 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, 
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setOpen(false)}
-                className="rounded-lg px-3 py-2 text-sm text-fw-text hover:bg-fw-hover dark:text-fw-text dark:hover:bg-fw-hover"
+                className="rounded-lg border border-fw-border-strong px-3 py-2 text-sm text-fw-text hover:bg-fw-hover dark:text-fw-text dark:hover:bg-fw-hover"
               >
                 Cancel
               </button>
               <button
                 onClick={handleCustomCreate}
                 disabled={!customCreateAvailable}
-                className="rounded-lg bg-fw-accent px-3 py-2 text-sm text-fw-text-inverse hover:bg-fw-accent disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-lg bg-fw-accent px-3 py-2 text-sm text-fw-accent-text hover:bg-fw-accent disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Create tab
               </button>

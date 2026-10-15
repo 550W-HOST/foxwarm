@@ -9,6 +9,7 @@ import { useChatPreferences } from './chatPreferences'
 import { useTheme } from './theme/useTheme'
 import { makeVscodeWebUrl, type CodeCommitTarget } from './vscodeWeb'
 
+const NodesView = lazy(() => import('./components/NodesView'))
 const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
 const LogsView = lazy(() => import('./components/LogsView'))
 const TasksView = lazy(() => import('./components/TasksView'))
@@ -38,7 +39,7 @@ export default function PopupWebUiApp({ target }: { target: FoxwarmPopupTarget }
   }, [])
 
   useEffect(() => {
-    document.title = `${'title' in target && target.title ? target.title : target.kind === 'agents' ? 'Agents' : target.kind === 'tasks' ? 'Tasks' : target.kind === 'logs' ? 'Logs' : target.kind === 'search' ? 'History' : target.kind === 'setup' ? 'Setup' : target.kind === 'terminal' ? 'Terminal' : 'Chat'} · Foxwarm`
+    document.title = `${'title' in target && target.title ? target.title : target.kind === 'agents' ? 'Agents' : target.kind === 'nodes' ? 'Nodes' : target.kind === 'tasks' ? 'Tasks' : target.kind === 'logs' ? 'Logs' : target.kind === 'search' ? 'History' : target.kind === 'setup' ? 'Setup' : target.kind === 'terminal' ? 'Terminal' : 'Chat'} · Foxwarm`
   }, [target])
 
   useEffect(() => {
@@ -107,6 +108,8 @@ export default function PopupWebUiApp({ target }: { target: FoxwarmPopupTarget }
     )
   } else if (target.kind === 'terminal') {
     content = <TerminalView initialTerminalId={target.terminalId} />
+  } else if (target.kind === 'nodes') {
+    content = <Suspense fallback={<PopupLeafFallback label="Nodes" />}><NodesView /></Suspense>
   } else if (target.kind === 'tasks') {
     content = <Suspense fallback={<PopupLeafFallback label="Tasks" />}><TasksView onOpenSession={(sessionId) => navigate({ kind: 'chat', sessionId })} /></Suspense>
   } else if (target.kind === 'logs') {
@@ -116,7 +119,7 @@ export default function PopupWebUiApp({ target }: { target: FoxwarmPopupTarget }
   } else if (target.kind === 'agents') {
     content = (
       <Suspense fallback={<PopupLeafFallback label="Agents" />}>
-        <ArchitectureView onSelectSession={(sessionId) => navigate({ kind: 'chat', sessionId })} />
+        <ArchitectureView onOpenNodes={() => navigate({ kind: 'nodes' })} onSelectSession={(sessionId) => navigate({ kind: 'chat', sessionId })} />
       </Suspense>
     )
   } else {

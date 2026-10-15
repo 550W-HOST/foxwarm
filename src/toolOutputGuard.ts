@@ -5,7 +5,7 @@ import path from 'path';
 import { getAgentDir } from './config';
 import { logger } from './common';
 import { nodesManager } from './nodes/manager';
-import { formatStructuredValue, formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
+import { formatStructuredValue, formatToolResponsePayload, formatToolScriptExecutionResponse } from '../packages/shared/dist/toolResponseFormatting';
 import { truncateOutputForDisplay, type OutputTruncationResult } from '../packages/shared/dist/outputTruncation';
 import { truncateUnicodeSafe } from './utils/unicode';
 
@@ -53,6 +53,7 @@ type ToolOutputGuardOptions = {
   toolName: string;
   toolUseId: string;
   nodeId?: string;
+  toolScriptExecution?: boolean;
 };
 
 type SavedToolOutput = {
@@ -258,14 +259,15 @@ async function guardOutputFieldIfNeeded(result: Record<string, any>, options: To
  */
 export async function guardToolOutputForModel(rawResult: any, options: ToolOutputGuardOptions): Promise<any> {
   let result = rawResult;
-  const originalFormattedPayload = formatToolResponsePayload(rawResult);
+  const formatPayload = options.toolScriptExecution ? formatToolScriptExecutionResponse : formatToolResponsePayload;
+  const originalFormattedPayload = formatPayload(rawResult);
 
   try {
     if (isPlainObject(result)) {
       result = await guardOutputFieldIfNeeded(result, options);
     }
 
-    const formattedPayload = formatToolResponsePayload(result);
+    const formattedPayload = formatPayload(result);
     if (formattedPayload.length <= TOOL_OUTPUT_GUARD_CHAR_LIMIT) {
       return result;
     }

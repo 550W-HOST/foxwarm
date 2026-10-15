@@ -1,3 +1,4 @@
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
@@ -18,6 +19,7 @@ const tabs = {
   'chat:popup-test': { id: 'chat:popup-test', type: 'chat', sessionId: 'popup-test', title: 'Popup chat' },
   'terminal:term-1': { id: 'terminal:term-1', type: 'terminal', terminalId: 'term-1', nodeId: 'master', cwd: '/tmp', title: 'Terminal /tmp' },
   'vscode-web': { id: 'vscode-web', type: 'vscode', title: 'Code' },
+  'system:nodes': { id: 'system:nodes', type: 'nodes', title: 'Nodes' },
   'system:agents': { id: 'system:agents', type: 'agents', title: 'Agents' },
   'system:setup': { id: 'system:setup', type: 'setup', title: 'Setup' },
   'system:search': { id: 'system:search', type: 'search', title: 'Search history' },
@@ -63,6 +65,7 @@ function installFixture(page, initialTabs = tabs) {
       if (url.pathname.endsWith('/api/setup/status')) return response({ oobe: false, models: { exists: true, rawYaml: 'providers: {}', providerCount: 1, defaultModel: 'test', hasPlaceholderSecrets: false, placeholderProviders: [] }, config: { rawYaml: 'channels: {}', channelsYaml: '', channelCount: 0 }, channels: [] })
       if (url.pathname.endsWith('/api/terminals')) return response({ terminals: initialTabs['terminal:term-1'] ? [{ id: 'term-1', nodeId: 'master', cwd: '/tmp', shell: '/bin/sh', pid: 1, createdAt: 1, cols: 80, rows: 24 }] : [] })
       if (url.pathname.includes('/api/terminals/term-1')) return response({ terminal: { id: 'term-1', nodeId: 'master', cwd: '/tmp', shell: '/bin/sh', pid: 1, createdAt: 1, cols: 80, rows: 24 } })
+      if (url.pathname.endsWith('/api/nodes/onboarding/pending')) return response({ items: [], total: 0, offset: 0, limit: 50 })
       if (url.pathname.endsWith('/api/nodes')) return response({ nodes: [] })
       if (url.pathname.endsWith('/api/agents')) return response({ agents: [] })
       if (url.pathname.endsWith('/api/webui/settings')) return response({ settings: { instanceName: '', tabIcon: '' } })
@@ -90,6 +93,7 @@ async function openFixture() {
   const page = await browser.newPage()
   await installFixture(page)
   await page.goto(`${baseUrl}/prefix/ui/`, { waitUntil: 'domcontentloaded' })
+  await waitForWebUiReady(page)
   await page.waitForSelector('[data-tab-id="chat:popup-test"]')
   return page
 }
@@ -164,6 +168,7 @@ test('moves each supported tab to the expected URL and terminal move never delet
     ['terminal:term-1', 'terminal'],
     ['system:setup', 'setup'],
     ['system:agents', 'agents'],
+    ['system:nodes', 'nodes'],
     ['system:search', 'search'],
     ['vscode-web', 'code'],
   ]
@@ -196,6 +201,7 @@ test('popup Chat restores the existing draft and never rewrites normal workbench
   await installFixture(page)
   try {
     await page.goto(`${baseUrl}/prefix/ui/?foxwarmPopup=chat&foxwarmPopupVersion=1&sessionId=popup-test&title=Popup`, { waitUntil: 'networkidle0' })
+    await waitForWebUiReady(page)
     await page.waitForSelector('[data-foxwarm-popup-root="chat"]')
     assert.equal(await page.$('[data-pane-id]'), null)
     assert.equal(await page.$('[data-workbench-tab-close], [data-workbench-tab-handle]'), null)
@@ -210,6 +216,7 @@ test('History popup uses its short window title and keeps the Search history pag
   try {
     await installFixture(page)
     await page.goto(`${baseUrl}/prefix/ui/?foxwarmPopup=search&foxwarmPopupVersion=1`, { waitUntil: 'domcontentloaded' })
+    await waitForWebUiReady(page)
     await page.waitForSelector('[data-history-search-view]')
     assert.equal(await page.title(), 'History · Foxwarm')
     assert.equal(await page.$eval('[data-history-search-view] h2', heading => heading.textContent), 'Search history')
@@ -226,6 +233,7 @@ test('History popup uses its short window title and keeps the Search history pag
     try {
       await installFixture(destination)
       await destination.goto(url.toString(), { waitUntil: 'domcontentloaded' })
+      await waitForWebUiReady(destination)
       await destination.waitForSelector('[data-foxwarm-popup-root="chat"]')
       assert.ok(await page.$('[data-history-search-view]'), 'the History popup remains open')
       assert.equal(await destination.$('[data-history-search-view]'), null)
@@ -251,6 +259,7 @@ test('a real popup keeps working after its opener closes and after refresh', asy
     await popup.keyboard.type(' after opener close')
     await popup.waitForFunction(() => document.querySelector('.foxwarm-inline-composer-editor')?.textContent?.includes('after opener close'))
     await popup.reload({ waitUntil: 'domcontentloaded' })
+    await waitForWebUiReady(popup)
     await popup.waitForFunction(() => document.querySelector('.foxwarm-inline-composer-editor')?.textContent?.includes('after opener close'))
   } finally {
     if (popup && !popup.isClosed()) await popup.close()
@@ -264,6 +273,7 @@ test('the sole Chat header keeps its existing Move to new window action', async 
   try {
     await installFixture(page, { 'chat:popup-test': tabs['chat:popup-test'] })
     await page.goto(`${baseUrl}/prefix/ui/`, { waitUntil: 'domcontentloaded' })
+    await waitForWebUiReady(page)
     await page.waitForSelector('[data-workbench-tab-handle="chat:popup-test"]')
     assert.equal(await page.$('[data-tab-id]'), null)
     await page.evaluate(() => {
@@ -276,4 +286,35 @@ test('the sole Chat header keeps its existing Move to new window action', async 
     assert.equal(await page.$('[data-workbench-tab-close]'), null)
     assert.equal(await page.evaluate(() => location.hash), '')
   } finally { await page.close() }
+})
+
+
+test('Architecture popup and embedded leaf summary enter Nodes without a Code host editor or main shell', async () => {
+  for (const embedded of [false, true]) {
+    const page = await browser.newPage()
+    await installFixture(page)
+    try {
+      const search = embedded ? '?foxwarmEmbed=agents&foxwarmEmbedNonce=synthetic-nonce-1234567890' : '?foxwarmPopup=agents&foxwarmPopupVersion=1'
+      await page.goto(`${baseUrl}/prefix/ui/${search}`, { waitUntil: 'domcontentloaded' })
+      await page.waitForSelector('.foxwarm-architecture-surface-tab')
+      if (embedded) await page.evaluate(() => { window.__opened = []; window.open = url => { window.__opened.push(String(url)); return {} } })
+      await page.evaluate(() => [...document.querySelectorAll('header button')].find(button => button.textContent.includes('protocol-compatible execution')).click())
+      if (embedded) {
+        const opened = new URL(await page.evaluate(() => window.__opened[0]))
+        assert.equal(opened.pathname, '/prefix/ui/')
+        assert.equal(opened.searchParams.get('foxwarmPopup'), 'nodes')
+        assert.equal(opened.searchParams.has('foxwarmEmbed'), false)
+      } else {
+        await page.waitForSelector('[data-foxwarm-popup-root="nodes"]')
+        await page.waitForSelector('[data-node-surface]')
+        assert.equal(await page.$('[data-pane-id], [data-workbench-status-bar], [data-session-list-scroll-container]'), null)
+        const reads = await page.evaluate(() => window.__fetches.map(request => request.path))
+        assert.ok(reads.some(path => path.endsWith('/nodes/onboarding/pending')))
+        assert.ok(!reads.some(path => path.includes('/session-list/') || path.endsWith('/agents') || path.endsWith('/nodes/onboarding/commands')))
+        await page.reload({ waitUntil: 'domcontentloaded' })
+        await page.waitForSelector('[data-node-surface]')
+        assert.equal(await page.$eval('h1', heading => heading.textContent), 'Nodes')
+      }
+    } finally { await page.close() }
+  }
 })

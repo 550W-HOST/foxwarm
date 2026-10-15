@@ -1,4 +1,4 @@
-import { WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
+import { WorkbenchHeaderDragArea, WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, SquareTerminal } from 'lucide-react'
 import { Terminal } from '@xterm/xterm'
@@ -388,10 +388,10 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-fw-canvas">
-      <div data-terminal-header className="border-b border-fw-border bg-fw-neutral-surface px-2.5 py-1.5 dark:border-fw-border dark:bg-fw-canvas">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-fw-text">
+      <WorkbenchHeaderDragArea data-terminal-header className="border-b border-fw-border bg-fw-neutral-surface px-2.5 py-1.5 dark:border-fw-border dark:bg-fw-canvas">
+        <div data-workbench-pane-drag-blank className="flex items-start justify-between gap-3">
+          <div data-workbench-pane-drag-blank className="min-w-0 flex-1">
+            <div data-workbench-pane-drag-blank className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-fw-text">
               {tabHeader ? (
                 <span className="inline-flex shrink-0 items-center gap-2">
                   <WorkbenchTabClose className="inline-flex items-center justify-center rounded text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong" iconClassName="h-3.5 w-3.5" />
@@ -429,7 +429,7 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
           </div>
           <WorkbenchPaneControls />
         </div>
-      </div>
+      </WorkbenchHeaderDragArea>
 
       <div className="min-h-0 flex-1 overflow-hidden bg-fw-terminal-background">
         <div ref={hostRef} className="h-full w-full" />

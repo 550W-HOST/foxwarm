@@ -136,9 +136,9 @@ export const COMMANDS: Record<string, CommandDef> = {
           return;
         }
 
-        const childSessionId = await sessionManager.createChildSession(sessionId, suffix, true);
+        const childSessionId = await sessionManager.forkSession(sessionId, suffix, true, { userInitiated: true });
         if (initialMessage !== undefined) {
-          await sessionManager.sendToSession(childSessionId, initialMessage, sessionId);
+          await sessionRuntime.enqueue(childSessionId, { type: 'user', parts: [{ text: initialMessage }] });
         }
         await sessionRuntime.notifyManualForkCreated(sessionId, childSessionId, initialMessage);
         ctx.reply(`✅ Forked session \`${sessionId}\` → \`${childSessionId}\`${initialMessage === undefined ? '' : '\nInitial message sent.'}`);

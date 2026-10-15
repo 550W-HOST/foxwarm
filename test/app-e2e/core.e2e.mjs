@@ -1,3 +1,4 @@
+import { waitForWebUiReady } from '../../packages/webui/test/webuiReadiness.mjs'
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
@@ -116,6 +117,7 @@ before(async () => {
   page.on('pageerror', error => browserConsole.push(`pageerror: ${error.stack || error.message}`))
   await page.setViewport({ width: 1440, height: 900 })
   await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
   await page.waitForFunction(() => !!window.foxwarmTest, { timeout: 15_000 })
 })
 
@@ -142,6 +144,7 @@ test('browser send streams incrementally, commits exactly once, and survives rel
   const committed = canonical.messages.filter(message => message.role === 'model' && message.parts?.some(part => part.text === 'streamed answer'))
   assert.equal(committed.length, 1)
   await page.reload({ waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
   await page.waitForFunction(() => document.body.textContent?.includes('streamed answer'), { timeout: 15_000 })
   assert.equal(await page.$$eval('[data-chat-timeline="committed"]', roots => roots.flatMap(root => [...root.querySelectorAll('*')]).filter(node => node.textContent === 'streamed answer').length > 0), true)
   const state = await providerState()
@@ -324,6 +327,7 @@ test('browser attachment upload and long pasted text reach the provider, persist
   assert.deepEqual(blob, Buffer.from(pngBase64, 'base64'))
   assert.equal(crypto.createHash('sha256').update(blob).digest('hex'), imageRef.sha256)
   await page.reload({ waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
   await page.waitForFunction(() => document.body.textContent?.includes('attachment accepted'), { timeout: 15_000 })
 
   const pasteSession = await createSession('core-longpaste')
@@ -345,6 +349,7 @@ test('browser attachment upload and long pasted text reach the provider, persist
   const pasteAuthority = JSON.parse(await fs.readFile(path.join(dataRoot, 'state', 'sessions', `${pasteSession}.json`), 'utf8'))
   assert.match(JSON.stringify(pasteAuthority.history), /<pasted-text>[\s\S]*long paste exact tail/)
   await page.reload({ waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
   await page.waitForFunction(() => document.body.textContent?.includes('long paste accepted'), { timeout: 15_000 })
 }))
 

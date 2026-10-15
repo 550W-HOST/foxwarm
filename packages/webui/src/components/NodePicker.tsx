@@ -20,6 +20,8 @@ export default function NodePicker({ sessionId, currentNode = 'master', disabled
   const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({ position: 'fixed' })
   const buttonRef = useRef<HTMLButtonElement>(null)
   const popupRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  const centeredRef = useRef(false)
   const pendingRef = useRef<AbortController | null>(null)
   const wasOpenRef = useRef(false)
   const remote = currentNode !== 'master'
@@ -42,6 +44,22 @@ export default function NodePicker({ sessionId, currentNode = 'master', disabled
   useLayoutEffect(() => {
     if (open) positionPopup()
   }, [open, currentNode, positionPopup])
+
+  useLayoutEffect(() => {
+    if (!open) {
+      centeredRef.current = false
+      return
+    }
+    if (loading || centeredRef.current) return
+    centeredRef.current = true
+    const list = listRef.current
+    const selected = list?.querySelector<HTMLElement>('[aria-pressed="true"]')
+    if (list && selected) {
+      const rowRect = selected.getBoundingClientRect()
+      const listRect = list.getBoundingClientRect()
+      list.scrollTop += rowRect.top + rowRect.height / 2 - (listRect.top + list.clientTop + list.clientHeight / 2)
+    }
+  })
 
   useEffect(() => () => pendingRef.current?.abort(), [])
 
@@ -156,7 +174,7 @@ export default function NodePicker({ sessionId, currentNode = 'master', disabled
           {loading && <div className="px-3 py-2 text-fw-text-muted">Loading nodes...</div>}
           {lockedReason && <div className="px-3 py-2 text-fw-text-muted">{lockedReason}</div>}
           {error && <div role="alert" className="px-3 py-2 text-fw-danger">{error}</div>}
-          <div className="min-h-0 overflow-y-auto">
+          <div ref={listRef} className="min-h-0 overflow-y-auto">
             {options.map(node => (
               <button
                 key={node.id}

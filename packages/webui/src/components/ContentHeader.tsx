@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { ArrowLeft } from 'lucide-react'
-import { WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
+import { WorkbenchHeaderDragArea, WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 
 interface ContentHeaderProps {
   icon: ReactNode
@@ -15,8 +15,8 @@ interface ContentHeaderProps {
 export default function ContentHeader({ icon, title, subtitle, actions, onBack, sticky = false, below }: ContentHeaderProps) {
   const tabHeader = useWorkbenchTabHeader()
   return (
-    <div className={`${sticky ? 'sticky top-0 z-40 ' : ''}border-b border-fw-border bg-fw-surface dark:border-fw-border dark:bg-fw-surface`}>
-      <div className="flex h-16 items-center justify-between gap-3 px-3">
+    <div className={`${sticky ? 'sticky top-0 z-40 ' : ''}border-b border-fw-border bg-fw-workbench-header-surface dark:border-fw-border dark:bg-fw-workbench-header-surface`}>
+      <WorkbenchHeaderDragArea className="flex h-16 items-center justify-between gap-3 px-3">
         <div className="flex min-w-0 items-center gap-3">
           {tabHeader ? <WorkbenchTabClose className="rounded-lg p-2 text-fw-text hover:bg-fw-hover dark:text-fw-text dark:hover:bg-fw-hover" /> : onBack && (
             <button
@@ -48,7 +48,7 @@ export default function ContentHeader({ icon, title, subtitle, actions, onBack, 
             <WorkbenchPaneControls />
           </div>
         )}
-      </div>
+      </WorkbenchHeaderDragArea>
 
       {below && (
         <div className="px-3 pb-3">

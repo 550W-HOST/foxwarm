@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Bot, CheckCircle2, KeyRound, Palette, RefreshCw, Settings, SlidersHorizontal, XCircle } from 'lucide-react'
+import { Bot, CheckCircle2, Palette, RefreshCw, Settings, SlidersHorizontal, XCircle } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import { buildModelsYaml, makeDefaultProvider } from '../setupModels'
 import { refreshModelOptions } from '../modelOptionsLoader'
@@ -8,8 +8,8 @@ import ContentHeader from './ContentHeader'
 import { useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import SimpleCodeEditor from './SimpleCodeEditor'
 import ThemeManager from './ThemeManager'
+import FoxLoaderPreview from './FoxLoaderPreview'
 import WebUiBrandingSettings, { type WebUiBrandingSettingsValue } from './WebUiBrandingSettings'
-import AuthorizationsPanel from './AuthorizationsPanel'
 
 type SetupStatus = {
   oobe: boolean
@@ -91,8 +91,8 @@ function StatusPill({ ok, label }: { ok: boolean; label: string }) {
 }
 
 type SaveResult = { kind: 'success' | 'error'; message: string }
-type SetupTab = 'appearance' | 'models' | 'config' | 'authorizations'
-const SETUP_TABS: SetupTab[] = ['appearance', 'models', 'config', 'authorizations']
+type SetupTab = 'appearance' | 'models' | 'config'
+const SETUP_TABS: SetupTab[] = ['appearance', 'models', 'config']
 
 function SaveFeedback({ section, result }: { section: 'models' | 'config'; result: SaveResult | null }) {
   if (!result) return null
@@ -152,7 +152,6 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
   const modelsTabRef = useRef<HTMLButtonElement | null>(null)
   const configTabRef = useRef<HTMLButtonElement | null>(null)
   const appearanceTabRef = useRef<HTMLButtonElement | null>(null)
-  const authorizationsTabRef = useRef<HTMLButtonElement | null>(null)
   const rawModelsYamlRef = useRef(rawModelsYaml)
   const configYamlRef = useRef(configYaml)
   const modelsRevisionRef = useRef(0)
@@ -261,7 +260,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
 
   const activateTab = (tab: SetupTab, focus = false) => {
     setActiveTab(tab)
-    if (focus) requestAnimationFrame(() => ({ models: modelsTabRef, config: configTabRef, appearance: appearanceTabRef, authorizations: authorizationsTabRef })[tab].current?.focus())
+    if (focus) requestAnimationFrame(() => ({ models: modelsTabRef, config: configTabRef, appearance: appearanceTabRef })[tab].current?.focus())
   }
 
   const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
@@ -521,28 +520,17 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
                   {configTabStatus === 'attention' && <XCircle data-setup-tab-status="attention" className="h-4 w-4 shrink-0 text-fw-warning dark:text-fw-warning" aria-hidden="true" />}
                   {configTabStatus && <span className="sr-only">{configTabStatus === 'complete' ? 'Channels ready' : 'Channels need attention'}</span>}
                 </button>
-                <button ref={authorizationsTabRef} id="setup-tab-authorizations" type="button" role="tab"
-                  aria-selected={activeTab === 'authorizations'} aria-controls="setup-panel-authorizations"
-                  tabIndex={activeTab === 'authorizations' ? 0 : -1} data-setup-tab="authorizations"
-                  onClick={() => activateTab('authorizations')} onKeyDown={handleTabKeyDown}
-                  className={`inline-flex min-w-0 items-center gap-2 rounded-t-lg border-b-2 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'authorizations' ? 'border-fw-accent-border text-fw-accent' : 'border-transparent text-fw-text hover:bg-fw-hover'}`}>
-                  <KeyRound className="h-4 w-4 shrink-0" aria-hidden="true" /><span>Authorizations</span>
-                </button>
               </div>
             </div>
 
             <section id="setup-panel-appearance" role="tabpanel" aria-labelledby="setup-tab-appearance" data-setup-section="appearance" hidden={activeTab !== 'appearance'} className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
               <div className="mx-auto w-full max-w-5xl">
                 <ThemeManager />
+                <FoxLoaderPreview />
                 {webUiSettings && onInstanceNameChange && onTabIconChange && (
                   <WebUiBrandingSettings value={webUiSettings} onInstanceNameChange={onInstanceNameChange} onTabIconChange={onTabIconChange} />
                 )}
               </div>
-            </section>
-
-            <section id="setup-panel-authorizations" role="tabpanel" aria-labelledby="setup-tab-authorizations" data-setup-section="authorizations"
-              hidden={activeTab !== 'authorizations'} className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
-              {activeTab === 'authorizations' && <AuthorizationsPanel />}
             </section>
 
             <section ref={modelsSectionRef} id="setup-panel-models" role="tabpanel" aria-labelledby="setup-tab-models" data-setup-section="models" hidden={activeTab !== 'models'} className={`${activeTab === 'models' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto scroll-mt-4 p-4 md:p-5`}>
@@ -564,7 +552,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
               </div>
 
               <div className="mt-4 flex shrink-0 flex-wrap items-center gap-2">
-                <button disabled={savingModels} onClick={() => void saveModels()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-text-inverse hover:bg-fw-accent disabled:opacity-60">{savingModels ? 'Saving…' : 'Save models'}</button>
+                <button disabled={savingModels} onClick={() => void saveModels()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:opacity-60">{savingModels ? 'Saving…' : 'Save models'}</button>
                 <SaveFeedback section="models" result={modelsSaveResult} />
                 {forced && !canLeave && <span className="text-sm text-fw-warning dark:text-fw-warning">Save a valid model configuration to continue.</span>}
               </div>
@@ -580,7 +568,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
                 <SimpleCodeEditor value={configYaml} onChange={updateConfigYaml} language="yaml" height="100%" modelUri={APP_CONFIG_YAML_MODEL_URI} ariaLabel="Application config YAML editor" />
               </div>
               <div className="mt-4 flex shrink-0 flex-wrap items-center gap-2">
-                <button disabled={savingConfig} onClick={() => void saveConfig()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-text-inverse hover:bg-fw-accent disabled:opacity-60">{savingConfig ? 'Saving…' : 'Save config'}</button>
+                <button disabled={savingConfig} onClick={() => void saveConfig()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:opacity-60">{savingConfig ? 'Saving…' : 'Save config'}</button>
                 <SaveFeedback section="config" result={configSaveResult} />
               </div>
               {channelRows.length > 0 && (
@@ -608,7 +596,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
                 <h3 className="font-medium text-fw-text-strong">Weixin login</h3>
                 <p className="mt-1 text-sm text-fw-text">Connect Weixin by scanning a QR code.</p>
                 <div className="mt-4 flex flex-wrap items-center gap-2">
-                  <button disabled={weixinBusy} onClick={() => void startWeixinLogin()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-text-inverse hover:bg-fw-accent disabled:opacity-60">{weixinBusy ? 'Working…' : 'Start Weixin login'}</button>
+                  <button disabled={weixinBusy} onClick={() => void startWeixinLogin()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:opacity-60">{weixinBusy ? 'Working…' : 'Start Weixin login'}</button>
                   <button disabled={weixinBusy || !weixinSessionKey} onClick={() => void waitWeixinLogin()} className="rounded-lg border border-fw-border px-4 py-2 text-sm font-medium text-fw-text hover:bg-fw-hover disabled:opacity-60 dark:border-fw-border dark:text-fw-text-strong dark:hover:bg-fw-hover">Check login</button>
                 </div>
                 {weixinMessage && <div className="mt-3 text-sm text-fw-text">{weixinMessage}</div>}

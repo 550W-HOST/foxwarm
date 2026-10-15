@@ -334,7 +334,7 @@ test('dark and mobile 550A retain header continuity and bounded call/result cont
 
 test('every built-in applies its declared full-width or inset tool-header geometry when collapsed and expanded', async () => {
   const cases = await page.evaluate(() => window.fixtureThemeCases)
-  assert.equal(cases.length, 12)
+  assert.equal(cases.length, 16)
   for (const { themeId, colorMode, headerTreatment } of cases) {
     await mountFixture({ width: 900, height: 800, style: themeId, dark: colorMode === 'dark' })
     const collapsed = await readVisualState('exec')

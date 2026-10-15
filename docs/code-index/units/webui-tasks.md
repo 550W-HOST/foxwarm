@@ -1,7 +1,7 @@
 # Unit: WebUI Tasks
 
-Files: packages/webui/src/components/TasksView.tsx, packages/webui/src/components/TasksView.css, packages/webui/src/components/SessionSelector.tsx, packages/webui/test/tasksView.e2e.mjs
-Secondary files: packages/webui/src/App.tsx, packages/webui/src/PopupWebUiApp.tsx, packages/webui/src/EmbeddedWebUiApp.tsx, packages/webui/src/popupWebUi.ts, packages/webui/src/workbench/types.ts, packages/webui/src/workbench/utils.ts, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/CollapsedSidebar.tsx, packages/webui/src/components/SessionList.tsx, packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/test/sessionListAndWorkbenchState.test.mjs, packages/webui/test/popupWebUi.test.mjs
+Files: packages/webui/src/components/StatusBadge.tsx, packages/webui/src/components/TasksView.tsx, packages/webui/src/components/TasksView.css, packages/webui/src/components/SessionSelector.tsx, packages/webui/test/tasksView.e2e.mjs
+Secondary files: packages/webui/src/index.css, packages/webui/src/components/WorkbenchStatusBar.tsx, packages/webui/src/components/NodesView.tsx, packages/webui/src/App.tsx, packages/webui/src/PopupWebUiApp.tsx, packages/webui/src/EmbeddedWebUiApp.tsx, packages/webui/src/popupWebUi.ts, packages/webui/src/workbench/types.ts, packages/webui/src/workbench/utils.ts, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/CollapsedSidebar.tsx, packages/webui/src/components/SessionList.tsx, packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/test/sessionListAndWorkbenchState.test.mjs, packages/webui/test/popupWebUi.test.mjs
 
 ## Purpose
 
@@ -11,6 +11,7 @@ Provides a Tasks singleton workbench tab with Table and Board views, manual Refr
 
 | Symbol | Responsibility |
 |---|---|
+| `StatusBadge` / `TaskStatusBadge` / `NodeStatusBadge` | Share the existing Tasks badge geometry and semantic tones without sharing Task/Node state models |
 | `TasksView` | Own the selected view, bounded task windows, selected task details, loading/error states and manual refresh |
 | `SessionSelector` | Controlled bounded Session search/exact hydration control shared by task creation and owner changes |
 | `readTasks` | Read one deployment-relative JSON endpoint with cancellation and an actionable API error |
@@ -36,9 +37,15 @@ Provides a Tasks singleton workbench tab with Table and Board views, manual Refr
 
 Table/Board and the filter row use the shared centered reading column and outer gutter without reserving minimap space. Desktop filters retain the same main-column clearance as the side inspector, and can wrap when its remaining width is narrow. The pane-wide heading/actions and independently sized modal dialogs keep their existing roles. Geometry is canonical in [D-webui-shared-content-width](../modules/webui.md#d-webui-shared-content-width).
 
+### Shared status badges
+
+Tasks Table, Board, details and the status-bar task preview use the same `TaskStatusBadge`, including normal status labels, the existing five-pixel dot, five-pixel radius and 11px type. Page badges retain 3px/7px padding and an 18px line height; status-bar popup badges use a compact local override with 1px/5px padding and a 16px line height. Open/Cancelled remain muted, Active uses accent, and Completed uses success.
+
+Node status labels reuse that visual component with Online/Offline wording and accent/muted tones. Upgrade required stays a separate warning badge; protocol explanations remain visible. This shares presentation only, not status meanings, counts, availability or permissions. Global `index.css` owns the small shared rules so a first popup has complete styling without importing or previously visiting the lazy Tasks page. Long row titles truncate while badges retain their readable width.
+
 ## Workbench integration
 
-`system:tasks` uses the existing singleton activation, hash restoration, storage normalization, close fallback, split panes, tab menus and top-level popup flow. Navigation placement is defined by [D-webui-tasks-navigation](#d-webui-tasks-navigation). Code's embedded Sidebar opens the same-origin Tasks popup without adding a host bridge or embedded target kind. The sole-tab header uses the ordinary workbench icon/Close controls; popup leaves have no workbench controls.
+`system:tasks` uses the existing singleton activation, hash restoration, storage normalization, close fallback, split panes, tab menus and top-level popup flow. Navigation placement is defined by [D-webui-tasks-navigation](#d-webui-tasks-navigation). Code's embedded Sidebar opens the same-origin Tasks popup without adding a host bridge or embedded target kind. The sole-tab heading uses the ordinary Workbench icon/Close controls and [empty-header pane movement](./webui-workbench.md#d-workbench-pane-drag); popup leaves have no Workbench controls.
 
 ## Design decisions
 
@@ -53,5 +60,5 @@ Table/Board and the filter row use the shared centered reading column and outer 
 ## Tests
 
 - `tasksView.e2e.mjs` owns an HTTP fixture beneath a deployment prefix and mounts the production component. It covers four bounded status reads, Agent relationship filtering, Table/Board switching, all columns and card contents, narrow-viewport overflow containment and fixed detail visibility, detail text and bounded note/child summaries, loading, empty views, errors, Refresh recovery, obsolete detail cancellation, and the create/comment/owner user-action controls.
-- `workbenchPreview.e2e.mjs` mounts the production built App against its existing mock APIs. It covers Tasks route restoration/reload, New task backdrop interception over Sidebar with retained draft and unchanged route, direct expanded/collapsed/mobile singleton activation and footer layout, embedded direct popup activation and blocked-popup feedback, popout URL/leaf behavior and sole-tab header close alongside the existing Chat, Agents, History, Logs, Setup, Terminal and Code behaviors.
+- `workbenchPreview.e2e.mjs` compares actual Task-page, first-popup and Node badges in Default light/dark, including shared type/dot/tone, compact popup sizing with unchanged page geometry, long-title containment, independent upgrade badges and complete directory scrolling. It also mounts the production built App against its existing mock APIs. It covers Tasks route restoration/reload, New task backdrop interception over Sidebar with retained draft and unchanged route, direct expanded/collapsed/mobile singleton activation and footer layout, embedded direct popup activation and blocked-popup feedback, popout URL/leaf behavior and sole-tab header close alongside the existing Chat, Agents, History, Logs, Setup, Terminal and Code behaviors.
 - Existing workbench normalization and popup URL/parser tests preserve old system tabs while accepting Tasks.

@@ -1,23 +1,99 @@
-import type { ThemeVariant } from '../manifest'
-import { checkedBuiltin, derivedVariant, MONO_FONT, SYSTEM_FONT } from './shared'
-import { DEFAULT_THEME } from './default'
+import { checkedBuiltin, variant, MONO_FONT, SYSTEM_FONT } from './shared'
 
+// Palette reference: VS Code theme-defaults Light Modern / Dark Modern and their syntax palettes.
 export const THEME_VECTOR_ID = 'foxwarm.vector'
-const vectorTypography: Partial<ThemeVariant['typography']> = { uiFontFamily: MONO_FONT, messageFontFamily: SYSTEM_FONT, codeFontFamily: MONO_FONT, uiFontSizePx: 13, smallFontSizePx: 11, controlFontSizePx: 12, messageFontSizePx: 15.5, composerFontSizePx: 14, codeFontSizePx: 12, uiLineHeight: 1.45, messageLineHeight: 1.65, codeLineHeight: 1.5 }
-const vectorShape: Partial<ThemeVariant['shape']> = { radiusSmallPx: 4, radiusMediumPx: 8, radiusLargePx: 12, controlHeightPx: 34 }
 
-const vectorLight = derivedVariant(DEFAULT_THEME.variants.light, {
+const vectorLight = variant({
   componentTreatment: 'standard',
   colors: {
-    canvas: '#fbfcfe', canvasEdge: '#d8dde5', surface: '#fbfcfe', surfaceRaised: '#ffffff', surfaceSunken: '#e7ebf1', input: '#f8fafc', hover: '#e4e9f0', selected: '#dbe7ff', borderMuted: '#e1e5eb', border: '#c2c9d3', borderStrong: '#8d98a6', text: '#343b46', textMuted: '#5e6876', textSubtle: '#818b98', textStrong: '#1d232c', accent: '#1d4ed8', accentMuted: '#315fca', accentSurface: '#e8efff', accentSurfaceStrong: '#d7e3ff', accentBorder: '#93b4f5', focusRing: '#1d4ed8', neutral: '#666666', neutralSurface: '#e9e9e9', neutralBorder: '#aaaaaa', info: '#1d4ed8', infoSurface: '#e8efff', infoSurfaceStrong: '#d7e3ff', infoBorder: '#93b4f5', success: '#25633a', successSurface: '#e8f3ea', successSurfaceStrong: '#d0e6d5', successBorder: '#8fbd99', tool: '#0e7490', toolSurface: '#e2f5f7', toolSurfaceStrong: '#c8eaee', toolBorder: '#71c1ca', warning: '#754c18', warningSurface: '#faf0df', warningSurfaceStrong: '#f1d7aa', warningBorder: '#c99b54', danger: '#8b1e1e', dangerSurface: '#fae7e7', dangerSurfaceStrong: '#f0caca', dangerBorder: '#c87878', special: '#55327a', specialSurface: '#f1ebf8', specialBorder: '#b99bd2', userSurface: '#1d4ed8', userText: '#ffffff', assistantSurface: '#fbfcfe', assistantText: '#1d232c', threadText: '#343b46', reasoningSurface: '#e7ebf1', reasoningSurfaceStrong: '#d8dde5', systemSurface: '#fdf4ff', systemSurfaceStrong: '#fae8ff', systemText: '#86198f', systemAccent: '#a21caf', systemBorder: '#f0abfc', codeSurface: '#e7ebf1', codeText: '#111111', assistantCodeSurface: '#e7ebf1', assistantCodeText: '#111111', inlineCodeSurface: '#e0e0e0', inlineCodeText: '#111111', diffAddedSurface: '#e8f3ea', diffAddedSurfaceStrong: '#d0e6d5', diffAddedText: '#25633a', diffRemovedText: '#8b1e1e', syntaxComment: '#8a8a8a', syntaxString: '#0e7490', syntaxNumber: '#111111', syntaxKeyword: '#86198f', syntaxLiteral: '#1d4ed8', syntaxHeading: '#111111', syntaxTag: '#8b1e1e', syntaxAttribute: '#754c18', syntaxProperty: '#0e7490', diffRemovedSurface: '#f1dada', diffRemovedSurfaceStrong: '#e7baba', scrollbarTrack: '#e9e9e9', scrollbarThumb: '#aaaaaa', scrollbarThumbHover: '#777777', contextViewport: '#1d4ed8', terminalBackground: '#111111', terminalForeground: '#f2f2f2', terminalCursor: '#ffffff', terminalSelection: '#88888866',
-  }, typography: vectorTypography, shape: { ...vectorShape, messageRadiusPx: 8, cardRadiusPx: 4, controlRadiusPx: 4, tagRadiusPx: 4, composerRadiusPx: 6, cardGapPx: 3, cardInsetPx: 4 }, composition: { density: 'comfortable', card: 'outlined', header: 'integrated', control: 'plain', separator: 'chevron-right', labels: 'uppercase', icons: 'compact' }, effects: { shadowColor: '#000000', shadowOpacity: 0.12, shadowBlurPx: 6, glowOpacity: 0, pressOffsetPx: 1, transitionMs: 110 }, backgroundPattern: { kind: 'grid', sizePx: 24, opacity: 0.014 },
+    sidebarSurface: '#f8f8f8', tabBarSurface: '#f8f8f8', workbenchHeaderSurface: '#ffffff', statusBarSurface: '#f8f8f8', accentText: '#ffffff',
+    canvas: '#ffffff', canvasEdge: '#eeeeee', surface: '#f8f8f8',
+    surfaceRaised: '#ffffff', surfaceSunken: '#eeeeee', input: '#ffffff',
+    overlay: '#00000066', hover: '#f2f2f2', selected: '#e8e8e8',
+    borderMuted: '#eeeeee', border: '#e5e5e5', borderStrong: '#cecece',
+    text: '#3b3b3b', textMuted: '#616161', textSubtle: '#6e7681',
+    textStrong: '#1f1f1f', textInverse: '#ffffff', accent: '#005fb8',
+    accentMuted: '#005fb8', accentSurface: '#e6eff8', accentSurfaceStrong: '#cfe1f2',
+    accentBorder: '#85b2dd', focusRing: '#005fb8', neutral: '#616161',
+    neutralSurface: '#f8f8f8', neutralBorder: '#e5e5e5', info: '#005fb8',
+    infoSurface: '#ebf2f9', infoSurfaceStrong: '#d9e7f4', infoBorder: '#a6c7e6',
+    success: '#2e7d32', successSurface: '#eef5ef', successSurfaceStrong: '#e0ece0',
+    successBorder: '#b6d2b7', tool: '#005fb8', toolSurface: '#ebf2f9',
+    toolSurfaceStrong: '#d9e7f4', toolBorder: '#a6c7e6', warning: '#895503',
+    warningSurface: '#f6f1eb', warningSurfaceStrong: '#ede6d9', warningBorder: '#d6c4a7',
+    danger: '#c42b1c', dangerSurface: '#faeeed', dangerSurfaceStrong: '#f6dfdd',
+    dangerBorder: '#eab5b0', special: '#7f00ff', specialSurface: '#f3e8ff',
+    specialBorder: '#d2a6ff', userSurface: '#eaf3fb', userText: '#1f1f1f',
+    assistantSurface: '#ffffff', assistantText: '#3b3b3b', threadText: '#3b3b3b',
+    reasoningSurface: '#f8f8f8', reasoningSurfaceStrong: '#f2f2f2', systemSurface: '#edf4fa',
+    systemSurfaceStrong: '#deeaf6', systemText: '#3b3b3b', systemAccent: '#005fb8',
+    systemBorder: '#b8d2eb', codeSurface: '#ffffff', codeText: '#3b3b3b',
+    assistantCodeSurface: '#eeeeee', assistantCodeText: '#3b3b3b', inlineCodeSurface: '#f2f2f2',
+    inlineCodeText: '#a31515', diffAddedSurface: '#eaf2ea', diffAddedSurfaceStrong: '#d9e8da',
+    diffAddedText: '#2e7d32', diffRemovedSurface: '#f9eae8', diffRemovedSurfaceStrong: '#f4d9d6',
+    diffRemovedText: '#c42b1c', syntaxComment: '#008000', syntaxString: '#a31515',
+    syntaxNumber: '#098658', syntaxKeyword: '#0000ff', syntaxLiteral: '#0000ff',
+    syntaxHeading: '#000080', syntaxTag: '#800000', syntaxAttribute: '#e50000',
+    syntaxProperty: '#0451a5', scrollbarTrack: '#f8f8f8', scrollbarThumb: '#cecece',
+    scrollbarThumbHover: '#6e7681', contextViewport: '#005fb8', terminalBackground: '#ffffff',
+    terminalForeground: '#3b3b3b', terminalCursor: '#005fb8', terminalSelection: '#e8e8e8',
+  },
+  typography: { uiFontFamily: SYSTEM_FONT, messageFontFamily: SYSTEM_FONT, codeFontFamily: MONO_FONT, uiFontSizePx: 13, smallFontSizePx: 11, controlFontSizePx: 13, messageFontSizePx: 16, composerFontSizePx: 14, codeFontSizePx: 13, uiLineHeight: 1.5, messageLineHeight: 1.65, codeLineHeight: 1.5 },
+  shape: { radiusSmallPx: 3, radiusMediumPx: 6, radiusLargePx: 8, messageRadiusPx: 6, cardRadiusPx: 4, controlRadiusPx: 4, tagRadiusPx: 3, composerRadiusPx: 6, cardGapPx: 3, cardInsetPx: 6, controlHeightPx: 32 },
+  composition: { density: 'comfortable', card: 'outlined', header: 'integrated', control: 'plain', separator: 'line', labels: 'normal', icons: 'compact' },
+  effects: { shadowColor: '#000000', shadowOpacity: 0.1, shadowBlurPx: 8, glowOpacity: 0, pressOffsetPx: 0, transitionMs: 120 },
+  backgroundPattern: { kind: 'none' },
+  displayEffect: { kind: 'none' },
 })
 
-const vectorDark = derivedVariant(DEFAULT_THEME.variants.dark, {
+const vectorDark = variant({
   componentTreatment: 'standard',
   colors: {
-    canvas: '#171b22', canvasEdge: '#080a0d', surface: '#171b22', surfaceRaised: '#1e242d', surfaceSunken: '#0b0e12', input: '#12161c', hover: '#232a34', selected: '#24395e', borderMuted: '#202630', border: '#343d49', borderStrong: '#596574', text: '#bac3cf', textMuted: '#8b96a4', textSubtle: '#66717e', textStrong: '#e5eaf1', textInverse: '#0b1220', accent: '#82a9e6', accentMuted: '#688bc2', accentSurface: '#172542', accentSurfaceStrong: '#21375e', accentBorder: '#42699f', focusRing: '#82a9e6', neutral: '#9c9c9c', neutralSurface: '#202020', neutralBorder: '#5a5a5a', info: '#93c5fd', infoSurface: '#10244a', infoSurfaceStrong: '#19376a', infoBorder: '#3b82f6', success: '#86d9a0', successSurface: '#10261a', successSurfaceStrong: '#183d27', successBorder: '#317047', tool: '#76c7d2', toolSurface: '#0b3038', toolSurfaceStrong: '#124b56', toolBorder: '#347784', warning: '#f0c27b', warningSurface: '#38260f', warningSurfaceStrong: '#5e421b', warningBorder: '#9b6e31', danger: '#f1a3a3', dangerSurface: '#3a1111', dangerSurfaceStrong: '#641d1d', dangerBorder: '#9c4545', special: '#d0b0ef', specialSurface: '#2b1b3b', specialBorder: '#6e4b8c', userSurface: '#263b60', userText: '#eef3fb', assistantSurface: '#171b22', assistantText: '#e5eaf1', threadText: '#bac3cf', reasoningSurface: '#202630', reasoningSurfaceStrong: '#343d49', systemSurface: '#4a044e', systemSurfaceStrong: '#701a75', systemText: '#eadcf0', systemAccent: '#d9a4df', systemBorder: '#a21caf', codeSurface: '#0b0e12', codeText: '#ffffff', assistantCodeSurface: '#0b0e12', assistantCodeText: '#ffffff', inlineCodeSurface: '#151515', inlineCodeText: '#cfcfcf', diffAddedSurface: '#10261a', diffAddedSurfaceStrong: '#183d27', diffAddedText: '#86d9a0', diffRemovedText: '#f1a3a3', syntaxComment: '#707070', syntaxString: '#76c7d2', syntaxNumber: '#ffffff', syntaxKeyword: '#f0abfc', syntaxLiteral: '#82a9e6', syntaxHeading: '#e5eaf1', syntaxTag: '#f1a3a3', syntaxAttribute: '#f0c27b', syntaxProperty: '#76c7d2', diffRemovedSurface: '#3a1111', diffRemovedSurfaceStrong: '#641d1d', scrollbarTrack: '#080808', scrollbarThumb: '#363636', scrollbarThumbHover: '#5a5a5a', contextViewport: '#82a9e6', terminalBackground: '#000000', terminalForeground: '#cfcfcf', terminalCursor: '#ffffff', terminalSelection: '#aaaaaa66',
-  }, typography: vectorTypography, shape: { ...vectorShape, messageRadiusPx: 8, cardRadiusPx: 4, controlRadiusPx: 4, tagRadiusPx: 4, composerRadiusPx: 6, cardGapPx: 3, cardInsetPx: 4 }, composition: { density: 'comfortable', card: 'outlined', header: 'integrated', control: 'plain', separator: 'chevron-right', labels: 'uppercase', icons: 'compact' }, effects: { shadowColor: '#000000', shadowOpacity: 0.5, shadowBlurPx: 8, glowOpacity: 0, pressOffsetPx: 1, transitionMs: 110 }, backgroundPattern: { kind: 'grid', sizePx: 24, opacity: 0.026 },
+    sidebarSurface: '#181818', tabBarSurface: '#181818', workbenchHeaderSurface: '#1f1f1f', statusBarSurface: '#181818', accentText: '#181818',
+    canvas: '#1f1f1f', canvasEdge: '#141414', surface: '#181818',
+    surfaceRaised: '#252526', surfaceSunken: '#141414', input: '#313131',
+    overlay: '#00000099', hover: '#2a2d2e', selected: '#37373d',
+    borderMuted: '#262626', border: '#2b2b2b', borderStrong: '#454545',
+    text: '#cccccc', textMuted: '#9d9d9d', textSubtle: '#989898',
+    textStrong: '#ffffff', textInverse: '#ffffff', accent: '#4daafc',
+    accentMuted: '#4daafc', accentSurface: '#242d35', accentSurfaceStrong: '#283949',
+    accentBorder: '#356289', focusRing: '#0078d4', neutral: '#9d9d9d',
+    neutralSurface: '#181818', neutralBorder: '#2b2b2b', info: '#4daafc',
+    infoSurface: '#232a31', infoSurfaceStrong: '#263440', infoBorder: '#2f506c',
+    success: '#89d185', successSurface: '#272d27', successSurfaceStrong: '#2f3a2e',
+    successBorder: '#445d43', tool: '#4daafc', toolSurface: '#232a31',
+    toolSurfaceStrong: '#263440', toolBorder: '#2f506c', warning: '#e2c08d',
+    warningSurface: '#2f2c28', warningSurfaceStrong: '#3c3730', warningBorder: '#635746',
+    danger: '#f48771', dangerSurface: '#302726', dangerSurfaceStrong: '#3f2f2b',
+    dangerBorder: '#6a433c', special: '#c586c0', specialSurface: '#2e282d',
+    specialBorder: '#594357', userSurface: '#203b50', userText: '#d9ecff',
+    assistantSurface: '#1f1f1f', assistantText: '#cccccc', threadText: '#cccccc',
+    reasoningSurface: '#181818', reasoningSurfaceStrong: '#2a2d2e', systemSurface: '#22292e',
+    systemSurfaceStrong: '#25313c', systemText: '#cccccc', systemAccent: '#4daafc',
+    systemBorder: '#2c465d', codeSurface: '#1f1f1f', codeText: '#cccccc',
+    assistantCodeSurface: '#141414', assistantCodeText: '#cccccc', inlineCodeSurface: '#2a2d2e',
+    inlineCodeText: '#ce9178', diffAddedSurface: '#2a3129', diffAddedSurfaceStrong: '#323f31',
+    diffAddedText: '#89d185', diffRemovedSurface: '#342927', diffRemovedSurfaceStrong: '#45322e',
+    diffRemovedText: '#f48771', syntaxComment: '#6a9955', syntaxString: '#ce9178',
+    syntaxNumber: '#b5cea8', syntaxKeyword: '#c586c0', syntaxLiteral: '#569cd6',
+    syntaxHeading: '#569cd6', syntaxTag: '#569cd6', syntaxAttribute: '#9cdcfe',
+    syntaxProperty: '#9cdcfe', scrollbarTrack: '#181818', scrollbarThumb: '#454545',
+    scrollbarThumbHover: '#989898', contextViewport: '#4daafc', terminalBackground: '#1f1f1f',
+    terminalForeground: '#cccccc', terminalCursor: '#0078d4', terminalSelection: '#37373d',
+  },
+  typography: { uiFontFamily: SYSTEM_FONT, messageFontFamily: SYSTEM_FONT, codeFontFamily: MONO_FONT, uiFontSizePx: 13, smallFontSizePx: 11, controlFontSizePx: 13, messageFontSizePx: 16, composerFontSizePx: 14, codeFontSizePx: 13, uiLineHeight: 1.5, messageLineHeight: 1.65, codeLineHeight: 1.5 },
+  shape: { radiusSmallPx: 3, radiusMediumPx: 6, radiusLargePx: 8, messageRadiusPx: 6, cardRadiusPx: 4, controlRadiusPx: 4, tagRadiusPx: 3, composerRadiusPx: 6, cardGapPx: 3, cardInsetPx: 6, controlHeightPx: 32 },
+  composition: { density: 'comfortable', card: 'outlined', header: 'integrated', control: 'plain', separator: 'line', labels: 'normal', icons: 'compact' },
+  effects: { shadowColor: '#000000', shadowOpacity: 0.24, shadowBlurPx: 8, glowOpacity: 0, pressOffsetPx: 0, transitionMs: 120 },
+  backgroundPattern: { kind: 'none' },
+  displayEffect: { kind: 'none' },
 })
 
-export const THEME_VECTOR = checkedBuiltin({ schemaVersion: 2, id: THEME_VECTOR_ID, name: 'Vector', description: 'A modern blue-gray workbench with restrained geometry, cyan operations, and magenta system signals.', author: 'Foxwarm', variants: { light: vectorLight, dark: vectorDark } })
+export const THEME_VECTOR = checkedBuiltin({
+  schemaVersion: 3,
+  id: THEME_VECTOR_ID,
+  name: 'Vector',
+  description: 'A neutral editor workbench inspired by VS Code Light Modern and Dark Modern.',
+  author: 'Foxwarm',
+  variants: { light: vectorLight, dark: vectorDark },
+})

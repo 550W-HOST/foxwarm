@@ -1,0 +1,108 @@
+/* Fox loader collection — all strokes derive from the theme accent. */
+.fw-fox {
+  --fw-fox-ink: var(--foxwarm-color-accent, #e27022);
+  --fw-fox-soft: color-mix(in srgb, var(--fw-fox-ink) 55%, transparent);
+  --fw-fox-faint: color-mix(in srgb, var(--fw-fox-ink) 22%, transparent);
+  overflow: visible;
+  fill: none;
+  stroke: var(--fw-fox-ink);
+  stroke-width: 3.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.fw-fox * { transform-box: view-box; }
+.fw-fox .fw-fox-soft { stroke: var(--fw-fox-soft); stroke-width: 2.4; }
+.fw-fox .fw-fox-faint,
+.fw-fox .fw-fox-faint-all,
+.fw-fox .fw-fox-faint-all .fw-fox-soft { stroke: var(--fw-fox-faint); }
+
+/* Pivots shared by every size of the fox. */
+.fw-fox .fw-fox-head { transform-origin: 50px 64px; }
+.fw-fox .fw-fox-body { transform-origin: 74px 94px; }
+.fw-fox .fw-fox-mid { stroke-width: 2.7; }
+.fw-fox .fw-fox-thin { stroke-width: 2.2; }
+.fw-fox .fw-fox-nose { fill: var(--fw-fox-ink); stroke: none; }
+.fw-fox .fw-fox-faint-all .fw-fox-nose { fill: var(--fw-fox-faint); }
+.fw-fox-live .fw-fox-nose { animation: fw-fox-fade-in 0.25s ease-out 0.65s both; }
+
+/* ---- Draw-in ---- */
+.fw-fox-draw {
+  stroke-dasharray: 1 1;
+  animation: fw-fox-draw 0.7s cubic-bezier(0.65, 0, 0.35, 1) var(--fw-fox-delay, 0ms) both;
+}
+@keyframes fw-fox-draw {
+  from { stroke-dashoffset: 1; opacity: 0; }
+  6% { opacity: 1; }
+  to { stroke-dashoffset: 0; opacity: 1; }
+}
+
+/* ---- Idle: dozing ---- */
+.fw-fox-live .fw-fox-body { animation: fw-fox-breathe 3.6s ease-in-out 1.3s infinite; }
+
+@keyframes fw-fox-breathe {
+  0%, 100% { transform: scale(1); }
+  45% { transform: scale(1.018, 1.035); }
+}
+.fw-fox-live .fw-fox-head { animation: fw-fox-nod 3.6s ease-in-out 1.3s infinite; }
+@keyframes fw-fox-nod {
+  0%, 100% { transform: rotate(0deg); }
+  45% { transform: rotate(-2.5deg) translateY(-0.6px); }
+}
+
+/* ---- Spinner ---- */
+.fw-fox-spinner { stroke-width: 5.5; }
+.fw-fox-spinner .fw-fox-faint-all,
+.fw-fox-spinner .fw-fox-faint-all .fw-fox-soft { stroke: color-mix(in srgb, var(--fw-fox-ink) 38%, transparent); }
+.fw-fox-spinner .fw-fox-faint-all .fw-fox-nose { fill: color-mix(in srgb, var(--fw-fox-ink) 38%, transparent); }
+.fw-fox-spinner .fw-fox-comet {
+  stroke-dasharray: 0.38 0.62;
+  animation: fw-fox-trace 1.4s linear infinite;
+}
+@keyframes fw-fox-trace { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -1; } }
+
+/* ---- Thinking block ---- */
+.fw-fox-thinking { line-height: 0; vertical-align: middle; }
+/* At status-row size the spinner needs heavier lines to stay legible. */
+.fw-fox-thinking .fw-fox-spinner { stroke-width: 8; }
+
+/* ---- Boot splash ---- */
+.fw-fox-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--foxwarm-color-canvas, var(--foxwarm-app-background, #f3f4f6));
+  transition: opacity 480ms ease, visibility 480ms ease;
+}
+.fw-fox-splash[data-state='leaving'] { opacity: 0; visibility: hidden; pointer-events: none; }
+@keyframes fw-fox-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* ---- Static / reduced motion ---- */
+.fw-fox-static *,
+.fw-fox-static { animation: none !important; }
+.fw-fox-static .fw-fox-draw { stroke-dashoffset: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .fw-fox *,
+  .fw-fox-splash * { animation: none !important; }
+  .fw-fox .fw-fox-draw { stroke-dashoffset: 0; }
+}
+
+/* Two complementary masks replace old copy from left to right without moving text. */
+.fw-fox-thinking-copy { position: relative; display: inline-flex; min-width: 0; width: var(--fw-fox-copy-width, 24ch); max-width: 100%; vertical-align: middle; }
+.fw-processing-exec .fw-fox { --fw-fox-ink: var(--foxwarm-color-special); }
+.fw-fox-thinking-copy[data-thinking-transition] { transition: width 450ms cubic-bezier(.4, 0, .2, 1); }
+.fw-fox-thinking-measure { position: absolute; width: max-content; visibility: hidden; pointer-events: none; white-space: pre; }
+.fw-fox-thinking-phrases { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; min-width: 0; height: 1.5em; overflow: hidden; line-height: 1.5; }
+.fw-fox-thinking-phrases > span { grid-area: 1 / 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.fw-fox-thinking-phrases > [data-thinking-phrase="incoming"] { animation: fw-fox-copy-in var(--fw-fox-copy-duration) cubic-bezier(.4, 0, .2, 1) both; }
+.fw-fox-thinking-phrases > [data-thinking-phrase="outgoing"] { animation: fw-fox-copy-out var(--fw-fox-copy-duration) cubic-bezier(.4, 0, .2, 1) both; }
+@keyframes fw-fox-copy-in { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+@keyframes fw-fox-copy-out { from { clip-path: inset(0 0 0 0); } to { clip-path: inset(0 0 0 100%); } }
+@media (prefers-reduced-motion: reduce) {
+  .fw-fox-thinking-copy { transition: none !important; }
+  .fw-fox-thinking-phrases > span { animation: none !important; clip-path: none; }
+  .fw-fox-thinking-phrases > [data-thinking-phrase="outgoing"] { display: none; }
+}

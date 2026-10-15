@@ -147,7 +147,7 @@ export default function SessionUiSettingsMenu({
                   key={option.value}
                   type="button"
                   onClick={() => onSendKeyModeChange(option.value)}
-                  className={`flex-1 rounded px-2 py-1 text-xs ${sendKeyMode === option.value ? 'bg-fw-accent text-fw-text-inverse' : 'bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised dark:text-fw-text dark:hover:bg-fw-hover'}`}
+                  className={`flex-1 rounded px-2 py-1 text-xs ${sendKeyMode === option.value ? 'bg-fw-accent text-fw-accent-text' : 'bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised dark:text-fw-text dark:hover:bg-fw-hover'}`}
                   title={`${option.label} sends`}
                 >
                   {option.label}
@@ -165,7 +165,7 @@ export default function SessionUiSettingsMenu({
                   {(['detailed', 'grouped', 'conversation'] as const).map(mode => (
                     <button key={mode} type="button" role="radio" aria-checked={timelineView === mode}
                       onClick={() => onTimelineViewChange(mode)}
-                      className={`flex-1 rounded px-2 py-1 text-xs ${timelineView === mode ? 'bg-fw-accent text-fw-text-inverse' : 'bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised dark:text-fw-text dark:hover:bg-fw-hover'}`}>
+                      className={`flex-1 rounded px-2 py-1 text-xs ${timelineView === mode ? 'bg-fw-accent text-fw-accent-text' : 'bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised dark:text-fw-text dark:hover:bg-fw-hover'}`}>
                       {mode[0].toUpperCase() + mode.slice(1)}
                     </button>
                   ))}

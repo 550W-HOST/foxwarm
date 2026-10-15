@@ -102,7 +102,7 @@ export default function WebUiBrandingSettings({ value, onInstanceNameChange, onT
             >
               Cancel
             </button>
-            <button type="submit" disabled={savingInstanceName} className="rounded-lg bg-fw-accent px-3 py-2 text-sm font-medium text-fw-text-inverse hover:bg-fw-accent disabled:cursor-wait disabled:opacity-70">
+            <button type="submit" disabled={savingInstanceName} className="rounded-lg bg-fw-accent px-3 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:cursor-wait disabled:opacity-70">
               {savingInstanceName ? 'Saving…' : 'Save name'}
             </button>
           </div>
@@ -150,7 +150,7 @@ export default function WebUiBrandingSettings({ value, onInstanceNameChange, onT
             >
               Cancel
             </button>
-            <button type="submit" disabled={savingTabIcon} className="rounded-lg bg-fw-accent px-3 py-2 text-sm font-medium text-fw-text-inverse hover:bg-fw-accent disabled:cursor-wait disabled:opacity-70">
+            <button type="submit" disabled={savingTabIcon} className="rounded-lg bg-fw-accent px-3 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:cursor-wait disabled:opacity-70">
               {savingTabIcon ? 'Saving…' : 'Save icon'}
             </button>
           </div>

@@ -14,7 +14,7 @@ Foxwarm is a self-hosted TypeScript runtime for AI agents. It combines persisten
 
 ## Get started
 
-Install Git and Node.js 20+ with npm. Linux, macOS, and WSL also need tmux.
+Install Git and Node.js 20.19+ (20.x) or 22.12+ with npm. Linux, macOS, and WSL also need tmux.
 
 ### Linux, macOS, or WSL
 

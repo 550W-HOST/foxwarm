@@ -45,6 +45,8 @@ Owns provider request routing, Anthropic conversion/parsing, session prompt snap
 
 Anthropic conversion and both OpenAI serializers use `packages/shared/src/toolResponseFormatting.ts` through the built shared package. Structured tool responses remain structured internally; the shared formatter owns provider-facing text. Image parts are promoted separately and accompanied by image guidance. Canonical decision: [D-llm-shared-response-format](../modules/llm.md#d-llm-shared-response-format).
 
+`stripRequestDisplayMeta` renders exact-target ToolScript execution responses with the shared section formatter before removing their activity metadata. This request-local text is journaled and reaches all provider serializers unchanged; native history and nested script calls retain their objects. The output guard selects the same renderer from the executor's existing exact-target activity signal. See [ToolScript execution projection](../threads/tool-dispatch-node-execution.md#d-dispatch-toolscript-execution-projection).
+
 ## Prompt snapshot behavior
 
 - Framework prompt precedence: top-level agent framework prompt, then documented legacy main-agent framework fallback.

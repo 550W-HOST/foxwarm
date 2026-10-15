@@ -15,6 +15,7 @@ let commandReads = 0
 let delayCommands = false
 const delayed = []
 const component = fileURLToPath(new URL('../src/components/ArchitectureView.tsx', import.meta.url))
+const nodesComponent = fileURLToPath(new URL('../src/components/NodesView.tsx', import.meta.url))
 const theme = fileURLToPath(new URL('../src/theme/index.ts', import.meta.url))
 const packageRoot = fileURLToPath(new URL('..', import.meta.url))
 
@@ -52,9 +53,9 @@ before(async () => {
   await registry.createPendingPairing({ requestedName: 'Synthetic laptop', nodeType: 'cli-node', capabilities: { tools: [] } })
 
   const bundle = await build({ absWorkingDir: packageRoot, stdin: {
-    contents: `import React from 'react'; import {createRoot} from 'react-dom/client'; import ArchitectureView from ${JSON.stringify(component)}; import {initializeThemeRuntime} from ${JSON.stringify(theme)}; initializeThemeRuntime();
+    contents: `import React from 'react'; import {createRoot} from 'react-dom/client'; import ArchitectureView from ${JSON.stringify(component)}; import NodesView from ${JSON.stringify(nodesComponent)}; import {initializeThemeRuntime} from ${JSON.stringify(theme)}; initializeThemeRuntime();
       window.fixtureClipboard=''; Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{window.fixtureClipboard=text}}});
-      createRoot(document.getElementById('root')).render(React.createElement(ArchitectureView,{currentSession:'main/browser-fixture',onSelectSession:()=>{}}));`,
+      const root=createRoot(document.getElementById('root')); function Fixture(){ const [nodes,setNodes]=React.useState(false); window.fixtureShowArchitecture=()=>setNodes(false); return nodes ? React.createElement(NodesView) : React.createElement(ArchitectureView,{currentSession:'main/browser-fixture',onSelectSession:()=>{},onOpenNodes:()=>setNodes(true)}); } root.render(React.createElement(Fixture));`,
     loader: 'tsx', resolveDir: packageRoot, sourcefile: 'node-onboarding-fixture.tsx',
   }, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false, alias: webuiReactAliases,
   define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
@@ -100,12 +101,12 @@ test('Nodes is a real independent surface; pending approval, inline copy and exp
   })
   const counts = await sessionCard()
   const positions = []
-  for (const surface of ['Topology', 'Agents', 'Nodes']) {
+  for (const surface of ['Topology', 'Agents']) {
     await click(surface)
     await page.waitForFunction(name => [...document.querySelectorAll('.foxwarm-architecture-surface-tab')].some(button => button.textContent === name && button.getAttribute('aria-pressed') === 'true'), {}, surface)
     positions.push(await page.$eval('.foxwarm-architecture-surface-tab', button => button.parentElement.getBoundingClientRect().left))
     assert.ok(!(await page.$eval('header', header => header.innerText)).includes('loaded of'))
-    if (surface !== 'Nodes') assert.deepEqual(await sessionCard(), counts, 'summary-card values and loaded counts are retained')
+    assert.deepEqual(await sessionCard(), counts, 'summary-card values and loaded counts are retained')
   }
   assert.ok(Math.max(...positions) - Math.min(...positions) < 1, 'the surface switch retains its horizontal position')
   await click('Topology')
@@ -119,6 +120,10 @@ test('Nodes is a real independent surface; pending approval, inline copy and exp
   assert.ok(!(await page.evaluate(() => document.body.innerText)).includes('loaded of'))
   assert.equal(commandReads, 0)
   await screenshot('nodes-surface.png')
+  await page.setViewport({ width: 390, height: 844 })
+  await screenshot('nodes-surface-narrow.png')
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false)
+  await page.setViewport({ width: 1280, height: 900 })
   const other = await browser.newPage(); await other.bringToFront()
   await page.waitForFunction(() => document.hidden, { polling: 100, timeout: 3000 })
   const pendingReads = requests.filter(url => url.includes('/onboarding/pending')).length
@@ -172,10 +177,10 @@ test('Nodes is a real independent surface; pending approval, inline copy and exp
   await click('Close New nodes')
   await page.waitForSelector('[role="dialog"]', { hidden: true })
   assert.ok(!(await page.evaluate(() => document.body.innerText)).includes('NODE_AUTH_TOKEN'))
-  await click('Topology')
+  await page.evaluate(() => window.fixtureShowArchitecture())
   await page.waitForSelector('input[aria-label="Search sessions, models, tools"]')
   assert.ok((await page.evaluate(() => document.body.innerText)).includes('Execution topology'))
-  await click('Nodes')
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.includes('protocol-compatible execution')).click())
   await page.waitForSelector('[data-node-surface]')
   await click('New nodes')
   await page.waitForSelector('[data-node-command]')
@@ -194,4 +199,34 @@ test('Nodes is a real independent surface; pending approval, inline copy and exp
   assert.equal(await page.$('[role=dialog]'), null, 'a late setup response cannot reopen or publish into the closed modal')
   assert.ok(!(await page.evaluate(() => document.body.innerText)).includes('synthetic-pairing-credential'))
   assert.deepEqual(errors, [])
+})
+
+
+test('direct Nodes leaf loads only directory and visible pending data, and unmount cancels polling', async () => {
+  const bundle = await build({ absWorkingDir: packageRoot, stdin: {
+    contents: `import React from 'react'; import {createRoot} from 'react-dom/client'; import NodesView from ${JSON.stringify(nodesComponent)}; const root=createRoot(document.getElementById('root')); window.unmountFixture=()=>root.unmount(); root.render(React.createElement(NodesView));`,
+    loader: 'tsx', resolveDir: packageRoot,
+  }, bundle: true, format: 'iife', platform: 'browser', write: false, alias: webuiReactAliases, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
+  await page.goto('about:blank')
+  const leaf = await browser.newPage()
+  try {
+    await leaf.setRequestInterception(true)
+    leaf.on('request', request => {
+      if (request.isNavigationRequest()) void request.respond({ status: 200, contentType: 'text/html', body: `<!doctype html><div id="root"></div><script>${bundle.outputFiles[0].text}</script>` })
+      else void request.continue()
+    })
+    const start = requests.length
+    await leaf.goto(fixtureUrl, { waitUntil: 'load' })
+    await leaf.waitForSelector('[data-node-surface]')
+    await leaf.waitForFunction(() => document.body.innerText.includes('master'))
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const reads = requests.slice(start)
+    assert.ok(reads.some(url => url === '/api/nodes'))
+    assert.ok(reads.some(url => url.includes('/onboarding/pending')))
+    assert.ok(!reads.some(url => /session-list|\/agents|onboarding\/commands/.test(url)), reads.join('\n'))
+    await leaf.evaluate(() => window.unmountFixture())
+    const pendingCount = requests.filter(url => url.includes('/onboarding/pending')).length
+    await new Promise(resolve => setTimeout(resolve, 5200))
+    assert.equal(requests.filter(url => url.includes('/onboarding/pending')).length, pendingCount)
+  } finally { await leaf.close() }
 })

@@ -236,7 +236,7 @@ function isSupportedWorkbenchTab(tab: unknown): tab is WorkbenchTab {
     return true
   }
 
-  if (raw.type === 'vscode' || raw.type === 'agents' || raw.type === 'setup' || raw.type === 'search' || raw.type === 'logs' || raw.type === 'tasks') {
+  if (raw.type === 'vscode' || raw.type === 'agents' || raw.type === 'setup' || raw.type === 'search' || raw.type === 'logs' || raw.type === 'tasks' || raw.type === 'nodes') {
     return true
   }
 

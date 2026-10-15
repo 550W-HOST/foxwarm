@@ -1,3 +1,4 @@
+import { waitForWebUiReady } from '../../packages/webui/test/webuiReadiness.mjs'
 // Section 12.2 real-application scenario, part 2: runs after the harness stopped
 // and restarted the Foxwarm application against the same data root. The session,
 // its canonical history, and the generated image blobs must all survive, the
@@ -73,6 +74,7 @@ before(async () => {
   page.on('pageerror', error => browserConsole.push(`pageerror: ${error.stack || error.message}`))
   await page.setViewport({ width: 1440, height: 900 })
   await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
   await page.waitForFunction(() => !!window.foxwarmTest, { timeout: 15_000 })
 })
 

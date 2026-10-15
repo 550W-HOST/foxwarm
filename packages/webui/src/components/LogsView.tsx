@@ -1,4 +1,4 @@
-import { WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
+import { WorkbenchHeaderDragArea, WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ArrowLeft, FileText } from 'lucide-react'
 import { makeApiUrl } from '../config'
@@ -143,8 +143,8 @@ export default function LogsView({ onBack }: { onBack?: () => void }) {
   const buttonClass = 'rounded border border-fw-border px-2 py-1.5 text-xs text-fw-text hover:bg-fw-hover disabled:opacity-40'
 
   return <section data-logs-view aria-busy={busy} className="flex h-full min-h-0 flex-col bg-fw-canvas text-fw-text">
-    <div data-logs-toolbar className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 border-b border-fw-border bg-fw-surface p-3">
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
+    <WorkbenchHeaderDragArea data-logs-toolbar className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 border-b border-fw-border bg-fw-surface p-3">
+      <div data-workbench-pane-drag-blank className="flex min-w-0 flex-wrap items-center gap-2">
         {tabHeader ? <WorkbenchTabClose className={buttonClass} iconClassName="h-4 w-4" /> : onBack && <button type="button" className={buttonClass} onClick={onBack} aria-label="Back"><ArrowLeft className="h-4 w-4" /></button>}
         <h2 className="mr-2 flex items-center gap-2 text-sm font-semibold"><WorkbenchTabIcon className="inline-flex items-center"><FileText className="h-4 w-4" /></WorkbenchTabIcon>Logs</h2>
         <button type="button" className={buttonClass} disabled={busy || !first || first.startOffset === 0} onClick={() => void load('before')}>Older</button>
@@ -159,7 +159,7 @@ export default function LogsView({ onBack }: { onBack?: () => void }) {
         <span data-logs-line-count className="whitespace-nowrap text-right text-xs text-fw-text-muted">{lines} {lines === 1 ? 'line' : 'lines'} shown</span>
         <WorkbenchPaneControls />
       </div>
-    </div>
+    </WorkbenchHeaderDragArea>
     {error && <div role="alert" className="shrink-0 border-b border-fw-border bg-fw-danger-surface px-3 py-2 text-sm text-fw-danger">{error}</div>}
     {locatedTime && <div className="shrink-0 px-3 py-2 text-xs text-fw-text-muted">Located near {new Date(locatedTime).toLocaleString()} (approximate)</div>}
     {first?.missing ? <div className="p-4 text-sm text-fw-text-muted">No log file yet.</div> : !busy && last?.size === 0 ? <div className="p-4 text-sm text-fw-text-muted">The log file is empty.</div> : null}

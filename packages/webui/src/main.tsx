@@ -1,4 +1,4 @@
-import { lazy, StrictMode, Suspense, useEffect, useState } from 'react'
+import { Component, lazy, StrictMode, Suspense, useEffect, useState, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import 'katex/dist/katex.min.css'
 import './index.css'
@@ -6,6 +6,7 @@ import { parseFoxwarmEmbeddedTarget } from './embeddedWebUi'
 import { parseFoxwarmPopupTarget } from './popupWebUi'
 import { initializeThemeRuntime } from './theme/runtime'
 import { API_BASE_PATH } from './config'
+import { BootReadySignal, markBootReady } from './components/FoxLoaders'
 
 const App = lazy(() => import('./App'))
 const WebUiIdentityApp = lazy(() => import('./WebUiIdentityApp'))
@@ -66,16 +67,26 @@ function AuthenticatedWebUiRoot() {
     }).catch(() => { if (active) setFailed(true) })
     return () => { active = false }
   }, [])
+  useEffect(() => { if (failed) markBootReady() }, [failed])
   if (failed) return <div className="foxwarm-fixed-viewport-shell flex h-full items-center justify-center text-fw-text"><a href="login.html">Sign in again</a></div>
   if (!auth) return <div className="foxwarm-fixed-viewport-shell h-full bg-fw-canvas" />
-  return auth.role === 'webui' ? <WebUiIdentityApp auth={auth} /> : content
+  return <>{auth.role === 'webui' ? <WebUiIdentityApp auth={auth} /> : content}<BootReadySignal /></>
+}
+
+class StartupErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError() { return { failed: true } }
+  componentDidCatch(error: Error) { window.foxwarmBoot?.fail(error) }
+  render() { return this.state.failed ? null : this.props.children }
 }
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <Suspense fallback={<div className="foxwarm-fixed-viewport-shell h-full bg-fw-canvas" />}>
-      <AuthenticatedWebUiRoot />
-    </Suspense>
+    <StartupErrorBoundary>
+      <Suspense fallback={<div className="foxwarm-fixed-viewport-shell h-full bg-fw-canvas" />}>
+        <AuthenticatedWebUiRoot />
+      </Suspense>
+    </StartupErrorBoundary>
   </StrictMode>,
 )
 

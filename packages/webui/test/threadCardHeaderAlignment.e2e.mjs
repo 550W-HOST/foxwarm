@@ -27,13 +27,19 @@ async function buildFixtureBundle() {
     import WebSearchCard from ${JSON.stringify(webSearchEntry)}
     import ContextBlockCard from ${JSON.stringify(contextEntry)}
     import { ToolCallsBlock } from ${JSON.stringify(toolEntry)}
+    import { initializeThemeRuntime, setThemeSelection } from './src/theme'
+    const trailing = new URLSearchParams(location.search).has('trailing')
+    if (trailing) { initializeThemeRuntime(); setThemeSelection({ themeId: 'foxwarm.default', colorMode: 'dark' }) }
+    const thinking = 'A long readable reasoning preview remains between the counted Brain icon and the fixed token information. '.repeat(25)
+    const parts = [{ thinking, partIndex: 0 }, { thinking: 'Second reasoning block.', partIndex: 1 }]
 
     const longPath = '/workspace/' + 'aligned-segment/'.repeat(18) + 'read-target.tsx'
     const read = { role: 'model', parts: [{ functionCall: { id: 'read-align', name: 'read', args: { filePath: longPath, startLine: 7, endLine: 19 } } }] }
     const shortRead = { role: 'model', parts: [{ functionCall: { id: 'read-short', name: 'read', args: { filePath: '/workspace/read-target.tsx', startLine: 7, endLine: 19 } } }] }
     createRoot(document.getElementById('read')).render(React.createElement(ToolCallsBlock, { msg: read, onOpenCodeFile: () => {} }))
     createRoot(document.getElementById('read-short')).render(React.createElement(ToolCallsBlock, { msg: shortRead, onOpenCodeFile: () => {} }))
-    createRoot(document.getElementById('reasoning')).render(React.createElement(ReasoningCard, { thinking: 'reasoning preview', tone: 'message', defaultExpanded: false }))
+    createRoot(document.getElementById('reasoning')).render(React.createElement(ReasoningCard, { thinking: trailing ? thinking : 'reasoning preview', ...(trailing ? { parts, reasoningTokens: 123 } : {}), tone: 'message', defaultExpanded: false }))
+    if (trailing) createRoot(document.getElementById('reasoning-processing')).render(React.createElement(ReasoningCard, { thinking, parts, reasoningTokens: 123, tone: 'processing', defaultExpanded: false }))
     createRoot(document.getElementById('web-search')).render(React.createElement(WebSearchCard, { action: { type: 'search', query: 'web search preview', queries: ['web search preview'] } }))
     createRoot(document.getElementById('event')).render(React.createElement(ChatTimeline, { sessionId: 'fixture/main', messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="event" type="wait-timeout">\\nevent preview\\n</foxwarm-system>' }] }], isMobile: window.innerWidth < 768, timelineView: 'detailed', showUsageBadge: false }))
     createRoot(document.getElementById('context')).render(React.createElement(ContextBlockCard, { sessionId: 'fixture/main', messageKey: 'context', block: { id: 1, level: 1, rawStartSeq: 1, rawEndSeq: 2 }, text: 'context summary', nestedDepth: 0, renderNestedMessages: () => null }))
@@ -119,7 +125,7 @@ before(async () => {
   const bundle = await buildFixtureBundle()
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:900px;max-width:100%;min-width:0;margin-bottom:12px}</style></head><body><main>${['read', 'read-short', 'reasoning', 'web-search', 'event', 'context'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
+    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:900px;max-width:100%;min-width:0;margin-bottom:12px}</style></head><body><main><div id="preview-label"></div>${['read', 'read-short', 'reasoning', 'reasoning-processing', 'web-search', 'event', 'context'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -144,5 +150,45 @@ test('collapsed thread-card headers share an aligned tag and one-line preview rh
     assert.equal(layout.read.summaryOverflow, false)
     assert.equal(layout.read.rangeWhiteSpace, 'nowrap')
     assert.ok(layout.documentOverflow <= 1)
+  }
+})
+
+test('Reasoning keeps its existing count and trailing tokens through narrow previews and expansion', async () => {
+  for (const width of [1200, 360]) {
+    await page.setViewport({ width, height: 720 })
+    await page.goto(`${fixtureUrl}?trailing=1`, { waitUntil: 'load' })
+    await page.waitForSelector('#reasoning-processing [data-reasoning-tokens]')
+    await page.evaluate(() => { document.getElementById('preview-label').textContent = 'Mock preview · Reasoning count and trailing tokens'; return document.fonts.ready })
+    for (const id of ['reasoning', 'reasoning-processing']) {
+      const read = () => page.$eval(`#${id} .foxwarm-reasoning-header`, header => {
+        const tag = header.querySelector('.foxwarm-reasoning-tag'), tokens = header.querySelector('[data-reasoning-tokens]'), preview = header.querySelector('.foxwarm-reasoning-preview')
+        const tokenRect = tokens.getBoundingClientRect(), headerRect = header.getBoundingClientRect(), css = getComputedStyle(header)
+        return { count: tag.textContent.trim(), name: tag.getAttribute('aria-label'), tokens: tokens.textContent, rightGap: headerRect.right - parseFloat(css.paddingRight) - tokenRect.right, visible: tokenRect.left >= headerRect.left && tokenRect.right <= headerRect.right, tagHeight: tag.getBoundingClientRect().height, headerHeight: headerRect.height, preview: preview ? { right: preview.getBoundingClientRect().right, clipped: preview.scrollWidth > preview.clientWidth, fade: getComputedStyle(preview).maskImage } : null, tokenLeft: tokenRect.left }
+      })
+      const collapsed = await read()
+      assert.equal(collapsed.count, '×2')
+      assert.ok(collapsed.name.includes('×2'))
+      assert.equal(collapsed.tokens, '123 tokens')
+      assert.equal(collapsed.tagHeight, 18, 'The shared header tag metric is unchanged')
+      assert.ok(Math.abs(collapsed.rightGap) <= 1 && collapsed.visible, JSON.stringify(collapsed))
+      assert.ok(collapsed.preview.clipped && collapsed.preview.right <= collapsed.tokenLeft, JSON.stringify(collapsed))
+      assert.notEqual(collapsed.preview.fade, 'none', 'Only the clipped preview fades; fixed tokens stay visible')
+      await page.$eval(`#${id} [aria-label="Expand reasoning"]`, button => button.click())
+      await page.waitForSelector(`#${id} .foxwarm-reasoning-body`)
+      const expanded = await read()
+      assert.ok(Math.abs(expanded.rightGap) <= 1 && expanded.visible && expanded.preview === null, JSON.stringify(expanded))
+      assert.equal(expanded.headerHeight, collapsed.headerHeight)
+      assert.equal(expanded.tokens, collapsed.tokens)
+      if (process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR) console.log('Reasoning header positions', JSON.stringify({ width, id, collapsed: { tokenLeft: collapsed.tokenLeft, previewRight: collapsed.preview.right, trailingGap: collapsed.rightGap }, expanded: { tokenLeft: expanded.tokenLeft, trailingGap: expanded.rightGap } }))
+      await page.$eval(`#${id} .foxwarm-reasoning-header`, header => header.click())
+      await page.waitForFunction(id => !!document.querySelector(`#${id} .foxwarm-reasoning-preview`), {}, id)
+    }
+    assert.equal(await page.$('#web-search [data-reasoning-tokens]'), null)
+    await page.$eval('#web-search [aria-label="Expand web search"]', button => button.click())
+    await page.waitForSelector('#web-search .foxwarm-web-search-body')
+    assert.ok((await page.$eval('#web-search .foxwarm-web-search-body', body => body.textContent)).includes('web search preview'))
+    await page.$eval('#web-search .foxwarm-web-search-header', header => header.click())
+    await page.waitForFunction(() => [...document.querySelectorAll('[data-model-thread-card]')].every(card => !card.style.height))
+    if (process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR}/reasoning-tokens-${width}.png` })
   }
 })
