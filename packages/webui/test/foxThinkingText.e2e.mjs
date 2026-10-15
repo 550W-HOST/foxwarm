@@ -79,6 +79,29 @@ async function geometry(page) {
   })
 }
 
+test('fox highlight holds between steps without changing loop speed', async () => {
+  const page = await open()
+  try {
+    const progression = await page.$eval('.fw-fox-comet', element => {
+      const animation = element.getAnimations()[0]
+      animation.pause()
+      const offsetAt = time => {
+        animation.currentTime = time
+        return getComputedStyle(element).strokeDashoffset
+      }
+      return {
+        duration: animation.effect.getTiming().duration,
+        start: offsetAt(0),
+        withinStep: offsetAt(35),
+        nextStep: offsetAt(105),
+      }
+    })
+    assert.equal(progression.duration, 1400)
+    assert.equal(progression.start, progression.withinStep)
+    assert.notEqual(progression.start, progression.nextStep)
+  } finally { await page.close() }
+})
+
 test('phrases wipe without moving text while Stop smoothly follows the actual caption width', async () => {
   const page = await open()
   try {
@@ -134,6 +157,7 @@ test('phrases wipe without moving text while Stop smoothly follows the actual ca
 test('reduced motion changes copy without animation or duplicate visible layers', async () => {
   const page = await open({ reduced: true })
   try {
+    assert.equal(await page.$eval('.fw-fox-comet', element => getComputedStyle(element).animationName), 'none')
     await page.waitForSelector('[data-thinking-phrase="outgoing"]')
     assert.equal(await page.$eval('[data-thinking-phrase="outgoing"]', element => getComputedStyle(element).display), 'none')
     const style = await page.$eval('[data-thinking-phrase="incoming"]', element => {
