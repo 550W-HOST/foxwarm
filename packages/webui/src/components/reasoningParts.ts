@@ -1,4 +1,4 @@
-import type { Message, MessagePart } from './chatShared'
+import { getLlmErrorMessageDetails, type Message, type MessagePart } from './chatShared'
 
 export interface ReasoningRunPart {
   partIndex: number
@@ -64,7 +64,7 @@ export function deriveReasoningPresentation(
       pending = []
       continue
     }
-    if (message.role !== 'model') continue
+    if (message.role !== 'model' || getLlmErrorMessageDetails(message)) continue
     const runs = getReasoningRuns(message.parts)
     const runsByStart = new Map(runs.map(run => [run[0].partIndex, run]))
     const tokens = message.__meta?.usage?.reasoningTokens

@@ -11,6 +11,10 @@ const model = (parts, seq, tokens) => ({ role: 'model', parts, __meta: { seq, ..
 const empty = { thinking: '', providerMeta: { encryptedThinking: 'opaque-not-visible' } }
 const call = id => ({ functionCall: { id, name: 'exec', args: { command: `echo ${id}` } } })
 const result = id => ({ role: 'tool', parts: [{ functionResponse: { name: 'exec', tool_use_id: id, response: { output: 'Check complete.' }, executionTiming: { startedAt: 1000, completedAt: 2250, durationMs: 1250 } } }] })
+const retry = (seq, final = false) => ({ role: 'model', modelVisible: false, parts: [{ text: '⚠️ LLM Error: Attempt 1 failed: Service unavailable.' }], __meta: {
+  seq, timestamp: 1700000000000 + seq, noticeType: 'llm-retry',
+  retry: { attempt: 1, maxRetries: 6, ...(final ? { final: true } : { nextAttempt: 2, delayMs: 1000, final: false }), kind: 'http-error', reason: 'Service unavailable', status: '503' },
+} })
 const scenarios = {
   tool: [model([empty, call('first'), call('second')], 1, 42), result('first')],
   text: [model([empty, { text: 'The result is ready. This answer remains readable beside its reasoning information.' }], 2, 128)],
@@ -24,6 +28,9 @@ const scenarios = {
   grouped: [model([empty, call('group')], 15, 64), result('group'), model([{ text: 'Grouped answer.' }], 16)],
   conversation: [model([empty, call('process')], 17, 51), result('process'), model([empty, { text: 'Conversation reply.', phase: 'final_answer' }], 18, 77)],
   mixedConversation: [model([{ ...empty, text: 'Mixed-field reply.', phase: 'final_answer' }], 19, 78)],
+  retryTail: [model([empty], 23, 61), retry(24, true)],
+  retryThenText: [model([empty], 25, 62), retry(26), model([{ text: 'Recovered response.' }], 27)],
+  retryThenTool: [model([empty], 28, 63), retry(29), model([call('recovered')], 30)],
 }
 let browser, page, server
 
@@ -123,6 +130,19 @@ test('handoffs cross model segments but never direct-user or CTX boundaries', as
     assert.equal((await state(id)).cards, 1)
     assert.equal((await state(id)).badges.length, 0)
   }
+})
+
+test('LLM retry notices neither receive reasoning information nor prevent a later real output from receiving it', async () => {
+  assert.deepEqual(await state('retryTail'), { cards: 1, badges: [], tokens: ['61 tokens'] })
+  for (const [id, tokens, target] of [['retryThenText', '62 tokens', 'assistant'], ['retryThenTool', '63 tokens', 'tool']]) {
+    const recovered = await state(id)
+    assert.equal(recovered.cards, 0)
+    assert.deepEqual(recovered.tokens, [tokens])
+    assert.equal(recovered.badges.length, 1)
+    assert.equal(recovered.badges[0][target], true)
+    assert.equal(await page.$eval(`#${id} .foxwarm-system-message-card`, el => el.querySelector('[data-reasoning-handoff]') === null), true)
+  }
+  assert.equal(await page.$eval('#retryTail .foxwarm-system-message-card', el => el.textContent.includes('Service unavailable.')), true)
 })
 
 test('live empty reasoning stays at the tail through stop, then transfers on real draft output and canonical completion', async () => {

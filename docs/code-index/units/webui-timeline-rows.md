@@ -11,7 +11,7 @@ Owns the pure timeline row model. `buildTimelineRows` derives groups, tool-run m
 
 - `buildTimelineRows(input, previousCache)` — pure derivation of the render model; returns the row list plus the identity-reuse cache
 - `isReasoningPart` / `getReasoningText` / `getReasoningRuns` — known-reasoning recognition and original-index, message-local contiguous display runs; only visible summaries become body text.
-- `deriveReasoningPresentation` / `sameReasoningPresentation` — one ordered, boundary-scoped empty-run handoff plan and value equality for row reuse.
+- `deriveReasoningPresentation` / `sameReasoningPresentation` — one ordered, boundary-scoped empty-run handoff plan and value equality for row reuse; existing LLM retry-card classification excludes technical notices as recipients without ending the pending handoff.
 
 ## Function Index
 
