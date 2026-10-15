@@ -3,11 +3,13 @@ import { resolveObjectArgWithJsonFallback } from '../jsonObjectArgs';
 import * as mcpExternal from '../mcpExternalService';
 import { executeNodeTool } from '../nodeExecution';
 import { nodesManager } from '../nodes/manager';
+import * as sessionManager from '../sessionManager';
 import path from 'path';
 import { checkToolPermission, checkToolPermissionForSession } from '../isolatedCheck';
 import { isPermissionNeutralBuiltinDispatcher } from '../permissions';
 import { builtinNodeArgumentSelectsFileSource, builtinNodeArgumentSelectsPlacement, resolveToolScriptSourceNode, NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './placement';
 import type { ToolArgs, ToolContext, UnifiedToolSource } from './helpers';
+import type { Session } from '../types';
 import { RESOLVED_PATH_SIDECAR, type ResolvedToolPath } from '../../packages/shared/dist/resolvedPathMetadata';
 
 export type ResolvedTool = {
@@ -119,8 +121,14 @@ function resolveBuiltin(invocationName: string, name: string, rawArgs: ToolArgs,
   const sourceNode = builtinNodeArgumentSelectsFileSource(name) ? resolveToolScriptSourceNode(args, current) : undefined;
   if (sourceNode !== undefined) args.node = sourceNode;
   const permissionNode = sourceNode ?? (nodeSelectsPlacement ? targetNode : placement.executionNode);
+  let routingSnapshot: ResolvedTool['routingSnapshot'];
+  if (sourceNode !== undefined) {
+    const owner = ctx.session?.id === ctx.sessionId ? ctx.session : ctx.sessionId ? sessionManager.getSessionCatalog(ctx.sessionId) : undefined;
+    const usesOwnerCwd = sourceNode === 'master' || owner?.currentNode === sourceNode;
+    routingSnapshot = { currentNode: sourceNode, ...(usesOwnerCwd && typeof owner?.cwd === 'string' ? { cwd: owner.cwd } : {}) };
+  }
   return validatePlacement({ invocationName, source: 'builtin', name, args, executionNode: placement.executionNode,
-    permissionNode, ...(nodeSelectsPlacement ? { targetNode } : {}) }, ctx);
+    permissionNode, ...(nodeSelectsPlacement ? { targetNode } : {}), ...(routingSnapshot ? { routingSnapshot } : {}) }, ctx);
 }
 
 export function parseUnifiedToolCall(input: ToolArgs) {
@@ -155,14 +163,26 @@ export async function resolveDirectTool(name: string, args: ToolArgs, ctx: ToolC
   return resolveBuiltin(name, name, args, ctx, current);
 }
 
+/** Keep source path facts bound to resolution without rewriting caller arguments. */
+export function resolvedToolAuthorizationSession(resolved: ResolvedTool, session: Session): Session {
+  return resolved.source === 'builtin' && builtinNodeArgumentSelectsFileSource(resolved.name) && resolved.routingSnapshot
+    ? { ...session, cwd: resolved.routingSnapshot.cwd } : session;
+}
+
 async function checkPermission(resolved: ResolvedTool, ctx: ToolContext): Promise<void> {
   if (resolved.source === 'mcp') return;
   if (!ctx.sessionId) throw new Error('Tool execution requires an active source session.');
   const identity = resolved.source === 'node'
     ? { source: 'node' as const, node: resolved.executionNode, tool: resolved.name }
     : { source: 'builtin' as const, tool: resolved.name };
-  if (ctx.session?.id === ctx.sessionId) {
-    await checkToolPermissionForSession(ctx.session, identity, resolved.permissionNode, resolved.args,
+  const sourceRouting = resolved.source === 'builtin' && builtinNodeArgumentSelectsFileSource(resolved.name)
+    ? resolved.routingSnapshot : undefined;
+  const owner = ctx.session?.id === ctx.sessionId ? ctx.session : sourceRouting ? sessionManager.getSessionCatalog(ctx.sessionId) : undefined;
+  if (owner) {
+    // Source facts use the same captured cwd as the later read, without changing
+    // raw arguments or freezing the VM's live owner and nested-tool context.
+    const authorizationSession = resolvedToolAuthorizationSession(resolved, owner);
+    await checkToolPermissionForSession(authorizationSession, identity, resolved.permissionNode, resolved.args,
       ctx.sessionPlacement === 'session-worker');
   } else {
     await checkToolPermission(identity, ctx.sessionId, resolved.permissionNode, resolved.args);
@@ -200,5 +220,7 @@ export async function executeResolvedTool(resolved: ResolvedTool, ctx: ToolConte
       { ...toolCtx, runtimeNodeId: 'master', ...(fileTool && onResolvedPaths ? { onResolvedPaths } : {}) });
   }
   return activeRuntime().dispatchBuiltin(resolved.name, resolved.args,
-    resolved.targetNode ? { ...toolCtx, runtimeNodeId: resolved.targetNode } : toolCtx);
+    resolved.source === 'builtin' && builtinNodeArgumentSelectsFileSource(resolved.name) && resolved.routingSnapshot
+      ? { ...toolCtx, toolScriptSourceRouting: resolved.routingSnapshot }
+      : resolved.targetNode ? { ...toolCtx, runtimeNodeId: resolved.targetNode } : toolCtx);
 }

@@ -25,6 +25,7 @@ type ToolContext = {
   session?: Session;
   broadcast?: (text: string, options?: any) => Promise<void>;
   runtimeNodeId?: string;
+  toolScriptSourceRouting?: { currentNode: string; cwd?: string };
   toolScriptRunId?: string;
   toolUseId?: string;
   onToolScriptSubCalls?: (subCalls: ToolScriptSubCall[]) => void;
@@ -1515,15 +1516,17 @@ async function requireSessionContext(ctx: ToolContext): Promise<{ sessionId: str
 async function readScriptSource(filePath: string, sourceNode: string, ctx: ToolContext, session: Session): Promise<{ scriptPath: string; code: string }> {
   const normalizedPath = filePath.trim();
   const agentName = session.agent || 'main';
-  await checkToolPermissionForSession(session, { source: 'node', node: sourceNode, tool: 'read' }, sourceNode,
+  const routingSnapshot = ctx.toolScriptSourceRouting || {
+    currentNode: sourceNode,
+    ...((sourceNode === 'master' || session.currentNode === sourceNode) && typeof session.cwd === 'string' ? { cwd: session.cwd } : {}),
+  };
+  const scriptPath = sourceNode === 'master' ? resolveAgentPath(normalizedPath, agentName, routingSnapshot.cwd) : normalizedPath;
+  await checkToolPermissionForSession({ ...session, cwd: routingSnapshot.cwd }, { source: 'node', node: sourceNode, tool: 'read' }, sourceNode,
     { filePath: normalizedPath }, ctx.sessionPlacement === 'session-worker');
   if (sourceNode !== 'master') {
-    const routingSnapshot = session.currentNode === sourceNode
-      ? { currentNode: sourceNode, ...(typeof session.cwd === 'string' ? { cwd: session.cwd } : {}) } : undefined;
     const code = await readNodeFile(session.id, sourceNode, normalizedPath, routingSnapshot, ctx.signal);
-    return { scriptPath: normalizedPath, code };
+    return { scriptPath, code };
   }
-  const scriptPath = resolveAgentPath(normalizedPath, agentName, session.cwd);
   if (sessionManager.isSessionEffectivelyIsolated(session)) checkPathAccess(scriptPath, agentName);
   return { scriptPath, code: await fs.readFile(scriptPath, 'utf8') };
 }
@@ -1709,7 +1712,8 @@ export async function tool_run_script(args: ToolArgs, ctx: ToolContext): Promise
 
   const runId = newRunId();
   const record = createRunRecord({ runId, mode, session, filePath: filePath || '<inline>', ...(sourceNode ? { sourceNode } : {}), scriptPath, timeoutSecs });
-  return executeWithTaskCompletion(ctx, context => startRun(record, code, scriptArgs, { ...context, sessionId, session, toolScriptRunId: runId }));
+  const { toolScriptSourceRouting: _sourceRouting, ...executionContext } = ctx;
+  return executeWithTaskCompletion(executionContext, context => startRun(record, code, scriptArgs, { ...context, sessionId, session, toolScriptRunId: runId }));
 }
 
 export async function tool_start_toolscript_run(args: ToolArgs, ctx: ToolContext): Promise<ToolScriptExecutionResult> {

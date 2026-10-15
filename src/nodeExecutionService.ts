@@ -299,8 +299,10 @@ export function createNodeExecutionServiceHandler(options: {
       }
       await requireNodeExecutionAccess(sourceSessionId, nodeId);
       await checkToolPermissionForSession(source, { source: 'node', node: nodeId, tool: 'read' }, nodeId, { filePath });
-      const routing = routingSnapshot || (!options.expectedSourceSessionId && source.currentNode === nodeId
-        ? { currentNode: nodeId, ...(typeof source.cwd === 'string' ? { cwd: source.cwd } : {}) } : undefined);
+      const routing = routingSnapshot || {
+        currentNode: nodeId,
+        ...(!options.expectedSourceSessionId && source.currentNode === nodeId && typeof source.cwd === 'string' ? { cwd: source.cwd } : {}),
+      };
       try {
         const bytes = await providers.readFile({
           sourceSessionId, nodeId, toolName: 'read', args: { filePath },

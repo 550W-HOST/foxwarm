@@ -19,7 +19,7 @@ import { checkGenericToolAuthorizationForSession, checkPathAccess, isToolVisible
 import { isPermissionNeutralBuiltinDispatcher } from './permissions';
 import { builtinHasOptionalFileNode, NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './tools/placement';
 import type { ResolvedTool } from './tools/resolvedTools';
-import { executeResolvedTool, parseUnifiedToolCall, resolveDirectTool } from './tools/resolvedTools';
+import { executeResolvedTool, parseUnifiedToolCall, resolveDirectTool, resolvedToolAuthorizationSession } from './tools/resolvedTools';
 import { expandHomePath } from './utils/pathResolve';
 import {
     collectOpenAIChatCompletionsStream as collectOpenAIChatCompletionsStreamProvider,
@@ -1859,7 +1859,7 @@ async function prepareToolCall(
                     : resolved.source === 'mcp'
                         ? { source: 'mcp' as const, server: resolved.server, tool: resolved.name }
                         : { source: 'builtin' as const, tool: resolved.name };
-                await checkGenericToolAuthorizationForSession(session, permissionIdentity, resolved.permissionNode, resolved.args,
+                await checkGenericToolAuthorizationForSession(resolvedToolAuthorizationSession(resolved, session), permissionIdentity, resolved.permissionNode, resolved.args,
                     toolContext.sessionPlacement === 'session-worker');
             }
         } catch (error) { placementError = error; }

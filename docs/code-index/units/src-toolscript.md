@@ -1,6 +1,6 @@
 # Unit: src-toolscript
 
-Files: src/toolscript.ts, src/toolscript.test.ts, src/toolscriptImageParts.test.ts, src/toolscriptSource.test.ts
+Files: src/toolscript.ts, src/toolscript.test.ts, src/toolscriptImageParts.test.ts, src/toolscriptSource.test.ts, src/toolscriptSourceRouting.test.ts
 Secondary files: src/toolscriptSkills.test.ts, package.json, package-lock.json
 
 ## Purpose
@@ -125,6 +125,8 @@ Unknown external calls are not described as supported host APIs. The runtime lis
 [2026-10-15] `run_script` and the hidden compatibility starter accept `node` plus `filePath`. Omitted, blank, or `current` Node selectors use the Session's selected Node at invocation; explicit `master` reads Main. Source selection does not move the Monty VM, mutate the Session Node/cwd, or alter nested tools' default Node. Nonblank inline code still wins over filePath, but an explicit Node selector with inline code is rejected. Inline execution retains the existing master builtin-policy target without acquiring a fictional file source.
 
 A file-backed starter is authorized as its own builtin against the actual source `targetNode` and source-aware filePath facts, then independently requires that Node's canonical `read` permission and existing structural restrictions before loading any source. Main source paths reuse Agent/cwd/home/token resolution and generic realpath containment; only this source entry trims surrounding path whitespace, identically for authorization and I/O. Remote path facts retain exact Node identity without imposing Main containment on an opaque namespace. Optional-source discovery remains conservative for explicit permitted Nodes.
+
+The resolved starter captures one source-only Node/cwd tuple before outer authorization. Both model preflight and canonical starter checks derive file facts from that tuple without rewriting raw arguments; the loader uses the same tuple for read permission and I/O. A concurrent Session cwd settings update can change the live VM/nested-tool context but cannot retarget an already resolved source. This transient capture is consumed only by source loading and is not persisted as VM routing, a lock, or a filesystem snapshot.
 
 Main reads complete UTF-8 source directly. Non-master reads use the source-fenced `node-execution` readonly file facade. Primitive providers supply complete filesystem bytes. Authenticated CLI source reads first execute canonical `read`, retaining its local approval hook; denial or error never proceeds to transfer. Programmatic content is used only when metadata proves full-file coverage (`selectedBytes == sizeBytes` and `truncated: false`); otherwise the same source is obtained through existing complete-file transfer, using the actual resolved path when available. Display text and partial content are never executed. Read capability, availability, provider restrictions and complete-transfer/primitive-result checks remain authoritative; unsupported backends fail without fallback. There is no new shared source-size limit, distribution cache or remote VM. Snapshot continuation resumes the owner-scoped saved VM state without reopening or reauthorizing historical source; newly executed nested tool calls retain their own current authorization.
 
