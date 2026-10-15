@@ -1,3 +1,4 @@
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -63,6 +64,7 @@ before(async () => {
   })
   await page.setViewport({ width: 1440, height: 900 })
   await page.goto(`${baseUrl}/#token=${encodeURIComponent(authToken)}`, { waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
   await page.waitForFunction(() => !!window.foxwarmTest, { timeout: 15_000 })
   await page.evaluate(() => {
     const token = localStorage.getItem('foxwarm_token')
@@ -70,6 +72,7 @@ before(async () => {
     if (token) localStorage.setItem('foxwarm_token', token)
   })
   await page.reload({ waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
   await page.waitForSelector('[data-session-list-scroll-container]', { timeout: 15_000 })
 })
 
@@ -89,6 +92,7 @@ test('Agents and Setup use persistent workbench tabs without replacing the deskt
   assert.ok(await page.$('[data-session-list-scroll-container]'))
 
   await page.reload({ waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
   await waitForSystemTab('system:setup', 'Foxwarm Setup')
   assert.ok(await page.$('[data-tab-id="system:agents"]'))
 
@@ -165,6 +169,7 @@ test('Close all directly empties a multi-tab pane without route hydration', asyn
 
   try {
     await closeAllPage.goto(`${baseUrl}/#token=${encodeURIComponent(authToken)}`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(closeAllPage)
     await closeAllPage.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4'))?.state?.tabsById?.['system:setup']?.type === 'setup', { timeout: 15_000 })
     await closeAllPage.click('button[title="Open agents overview"]')
     await closeAllPage.waitForSelector('[data-tab-id="system:agents"]', { timeout: 15_000 })
@@ -243,6 +248,7 @@ test('tab context menu survives background scroll and bulk close actions remain 
 test('system tabs remain workbench tabs on a mobile viewport', async () => {
   await page.setViewport({ width: 390, height: 844, isMobile: true })
   await page.reload({ waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
   await page.waitForFunction(() => !!window.foxwarmTest, { timeout: 15_000 })
   await page.evaluate(() => { window.location.hash = 'setup' })
   await page.waitForFunction(() => document.body.textContent?.includes('Foxwarm Setup'), { timeout: 15_000 })
@@ -299,6 +305,7 @@ test('forced OOBE Setup still rejects workbench close requests', async () => {
 
   try {
     await forcedPage.goto(`${baseUrl}/#token=${encodeURIComponent(authToken)}`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(forcedPage)
     const closeSelector = '[data-tab-id="system:setup"] button[title="Close tab"], [data-workbench-tab-close="system:setup"]'
     await forcedPage.waitForSelector(closeSelector, { timeout: 15_000 })
     await forcedPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm first-time setup'), { timeout: 15_000 })

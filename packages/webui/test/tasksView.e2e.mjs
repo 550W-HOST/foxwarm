@@ -393,6 +393,6 @@ test('WebUI creates, comments, and changes task owners through user routes', asy
   await page.setViewport({ width: 390, height: 844 })
   await page.waitForSelector('[data-task-warning="detail"]')
   assert.equal(await page.$eval('[data-task-warning="detail"]', node => node.textContent), 'Task assigned, but the owner notification could not be delivered.')
-  await page.click('[aria-label="Close task details"]')
+  await page.locator('[aria-label="Close task details"]').click()
   await page.setViewport({ width: 1400, height: 900 })
 })

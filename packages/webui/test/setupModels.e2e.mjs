@@ -1,3 +1,4 @@
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -89,11 +90,6 @@ const statusPayload = {
     channelCount: 0,
   },
   channels: [],
-}
-
-async function gotoReady(targetPage, url, options) {
-  await targetPage.goto(url, options)
-  await targetPage.waitForSelector('[data-fox-splash]', { hidden: true })
 }
 
 async function waitForServer(targetBaseUrl = baseUrl) {
@@ -531,7 +527,8 @@ before(async () => {
   await page.setBypassServiceWorker(true)
   await attachRequestMocks(page)
 
-  await gotoReady(page, `${baseUrl}/preview/#setup`, { waitUntil: 'networkidle2' })
+  await page.goto(`${baseUrl}/preview/#setup`, { waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
   await page.waitForFunction(() => document.body.textContent?.includes('Foxwarm Setup'), { timeout: 15_000 })
   await page.waitForSelector('[data-monaco-model-uri][data-editor-ready="true"]', { timeout: 15_000 })
 })
@@ -548,7 +545,8 @@ test('Setup uses accessible Appearance, Models and Config tabs with status icons
   await setupPage.setBypassServiceWorker(true)
   await attachRequestMocks(setupPage)
   try {
-    await gotoReady(setupPage, `${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
+    await setupPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(setupPage)
     await setupPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm Setup'), { timeout: 15_000 })
     await setupPage.waitForSelector('[data-monaco-model-uri][data-editor-ready="true"]', { timeout: 15_000 })
     const bodyText = await setupPage.$eval('body', (body) => body.textContent || '')
@@ -663,7 +661,8 @@ test('Appearance owns browser name and tab icon editing with save, cancel, and s
   await brandingPage.setBypassServiceWorker(true)
   await attachRequestMocks(brandingPage)
   try {
-    await gotoReady(brandingPage, `${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
+    await brandingPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(brandingPage)
     await brandingPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm Setup'), { timeout: 15_000 })
     await brandingPage.click('[data-setup-tab="appearance"]')
     await brandingPage.waitForSelector('[data-webui-branding-settings]')
@@ -702,7 +701,8 @@ test('overlapping browser name and icon saves keep both server and UI fields acr
   webUiSettings = { instanceName: 'Before name', tabIcon: '🔵' }
   await attachRequestMocks(racePage, { heldWebUiSettingsSaves })
   try {
-    await gotoReady(racePage, `${baseUrl}/branding-race/#setup`, { waitUntil: 'networkidle2' })
+    await racePage.goto(`${baseUrl}/branding-race/#setup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(racePage)
     await racePage.waitForSelector('[data-webui-branding-settings]')
     await racePage.$eval('#webui-instance-name', (input, value) => {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
@@ -775,7 +775,8 @@ test('Config tab status reflects enabled channel health and ignores disabled cha
     await statusPage.setBypassServiceWorker(true)
     await attachRequestMocks(statusPage, { channels: fixture.channels, blockEditorChunks: true })
     try {
-      await gotoReady(statusPage, `${baseUrl}/${fixture.path}/#setup`, { waitUntil: 'networkidle2' })
+      await statusPage.goto(`${baseUrl}/${fixture.path}/#setup`, { waitUntil: 'networkidle2' })
+      await waitForWebUiReady(statusPage)
       await statusPage.waitForSelector(`[data-setup-tab="config"] [data-setup-tab-status="${fixture.expected}"]`, { timeout: 15_000 })
       assert.equal(await statusPage.$$eval('[data-setup-tab="config"] [data-setup-tab-status]', (icons) => icons.length), 1)
     } finally {
@@ -806,7 +807,8 @@ test('Setup editors fill available desktop space and remain scroll-reachable on 
   await largePage.setViewport({ width: 2560, height: 1440 })
   await attachRequestMocks(largePage)
   try {
-    await gotoReady(largePage, `${productionBaseUrl}/?case=large#setup`, { waitUntil: 'networkidle2' })
+    await largePage.goto(`${productionBaseUrl}/?case=large#setup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(largePage)
     for (const tab of ['models', 'config']) {
       await largePage.click(`[data-setup-tab="${tab}"]`)
       await largePage.waitForSelector(`[data-setup-section="${tab}"] [data-editor-ready="true"]`, { timeout: 15_000 })
@@ -835,7 +837,8 @@ test('Setup editors fill available desktop space and remain scroll-reachable on 
   await mobilePage.setViewport({ width: 390, height: 700 })
   await attachRequestMocks(mobilePage)
   try {
-    await gotoReady(mobilePage, `${baseUrl}/mobile/#setup`, { waitUntil: 'networkidle2' })
+    await mobilePage.goto(`${baseUrl}/mobile/#setup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(mobilePage)
     for (const tab of ['models', 'config']) {
       await mobilePage.click(`[data-setup-tab="${tab}"]`)
       await mobilePage.waitForSelector(`[data-setup-section="${tab}"] [data-editor-ready="true"]`, { timeout: 15_000 })
@@ -945,7 +948,8 @@ test('Setup editor Ctrl/Cmd+S shortcuts save once, prevent browser Save, and sta
   const readEditorShortcuts = () => shortcutPage.evaluate(() => window.__setupSaveShortcutEvents || [])
 
   try {
-    await gotoReady(shortcutPage, `${baseUrl}/setup-save-shortcuts/#setup`, { waitUntil: 'networkidle2' })
+    await shortcutPage.goto(`${baseUrl}/setup-save-shortcuts/#setup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(shortcutPage)
     await shortcutPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm Setup'), { timeout: 15_000 })
     await shortcutPage.waitForSelector('[data-setup-tab="models"]', { timeout: 15_000 })
     await shortcutPage.click('[data-setup-tab="models"]')
@@ -1059,7 +1063,8 @@ if (selectedBrowser === 'firefox' || selectedBrowser === 'all') test('Firefox re
 
   await attachRequestMocks(firefoxPage, { configRawYaml })
   try {
-    await gotoReady(firefoxPage, `${baseUrl}/firefox-reverse-selection/#setup`, { waitUntil: 'domcontentloaded' })
+    await firefoxPage.goto(`${baseUrl}/firefox-reverse-selection/#setup`, { waitUntil: 'domcontentloaded' })
+    await waitForWebUiReady(firefoxPage)
     await firefoxPage.waitForSelector(`[data-monaco-model-uri="${modelsUri}"][data-editor-ready="true"]`, { timeout: 20_000 })
 
     const scenarios = [
@@ -1141,7 +1146,8 @@ test('local and schema completions replace the current punctuated YAML scalar', 
   await attachRequestMocks(completionPage)
   const modelsUri = 'inmemory://foxwarm/setup/foxwarm-models.yaml'
   try {
-    await gotoReady(completionPage, `${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
+    await completionPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(completionPage)
     await completionPage.bringToFront()
     await completionPage.click('[data-setup-tab="models"]')
     const modelEditor = `[data-monaco-model-uri="${modelsUri}"]`
@@ -1210,7 +1216,8 @@ test('provider model completions request only at the active model-id list and pr
       - 'gpt-5.'
 `
   try {
-    await gotoReady(completionPage, `${baseUrl}/provider-model-completions/#setup`, { waitUntil: 'networkidle2' })
+    await completionPage.goto(`${baseUrl}/provider-model-completions/#setup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(completionPage)
     await completionPage.click('[data-setup-tab="models"]')
     await completionPage.waitForSelector(`[data-monaco-model-uri="${modelsUri}"][data-editor-ready="true"]`, { timeout: 20_000 })
     assert.equal(providerModelListRequests.length, 0)
@@ -1274,7 +1281,8 @@ test('provider model list failure leaves the editor and Save usable', async () =
   const modelsUri = 'inmemory://foxwarm/setup/foxwarm-models.yaml'
   const yaml = 'providers:\n  open:\n    providerType: openai\n    apiKey: transient-secret\n    models:\n      - gpt\n'
   try {
-    await gotoReady(failurePage, `${baseUrl}/provider-model-failure/#setup`, { waitUntil: 'networkidle2' })
+    await failurePage.goto(`${baseUrl}/provider-model-failure/#setup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(failurePage)
     await failurePage.click('[data-setup-tab="models"]')
     await failurePage.waitForSelector(`[data-monaco-model-uri="${modelsUri}"][data-editor-ready="true"]`, { timeout: 20_000 })
     await runMonacoEditorAction(failurePage, modelsUri, 'replace-value', { value: yaml })
@@ -1314,7 +1322,8 @@ test('provider model completion aborts changed connections and canceled lists do
     assert.equal(heldProviderModelLists.length, count)
   }
   try {
-    await gotoReady(cancellationPage, `${baseUrl}/provider-model-cancellation/#setup`, { waitUntil: 'networkidle2' })
+    await cancellationPage.goto(`${baseUrl}/provider-model-cancellation/#setup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(cancellationPage)
     await cancellationPage.click('[data-setup-tab="models"]')
     await cancellationPage.waitForSelector(`[data-monaco-model-uri="${modelsUri}"][data-editor-ready="true"]`, { timeout: 20_000 })
 
@@ -1383,7 +1392,8 @@ test('production worker provides real schema markers and current-document comple
   await productionPage.setBypassServiceWorker(true)
   await attachRequestMocks(productionPage)
   try {
-    await gotoReady(productionPage, `${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
+    await productionPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(productionPage)
     await productionPage.click('[data-setup-tab="models"]')
     const modelEditor = '[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]'
     await productionPage.waitForFunction((selector) => {
@@ -1421,7 +1431,8 @@ test('channel property completions follow each instance type and canonical-key f
     for (const name of excluded) assert.equal(suggestions.some((text) => text.includes(name)), false, `${name} leaked into ${suggestions.join(' | ')}`)
   }
   try {
-    await gotoReady(completionPage, `${baseUrl}/channel-completions/#setup`, { waitUntil: 'networkidle2' })
+    await completionPage.goto(`${baseUrl}/channel-completions/#setup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(completionPage)
     await completionPage.click('[data-setup-tab="config"]')
     await completionPage.waitForSelector(`[data-monaco-model-uri="${configUri}"][data-editor-ready="true"]`, { timeout: 20_000 })
 
@@ -1511,7 +1522,8 @@ test('Config save feedback distinguishes saved changes from pending restart and 
   const options = { configSaveResult: { saved: true, restartRequired: ['bot'], notApplied: [] } }
   await attachRequestMocks(configPage, options)
   try {
-    await gotoReady(configPage, `${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
+    await configPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(configPage)
     await configPage.waitForSelector('[data-setup-tab="config"]')
     await configPage.click('[data-setup-tab="config"]')
     await configPage.click('button::-p-text(Save config)')
@@ -1533,7 +1545,8 @@ test('editing while a models save is held preserves the newer document and suppr
   await attachRequestMocks(racePage, { heldModelsSaves })
   const modelsUri = 'inmemory://foxwarm/setup/foxwarm-models.yaml'
   try {
-    await gotoReady(racePage, `${baseUrl}/save-race/#setup`, { waitUntil: 'networkidle2' })
+    await racePage.goto(`${baseUrl}/save-race/#setup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(racePage)
     await racePage.bringToFront()
     await racePage.click('[data-setup-tab="models"]')
     await racePage.waitForSelector(`[data-monaco-model-uri="${modelsUri}"][data-editor-ready="true"]`, { timeout: 15_000 })
@@ -1574,7 +1587,8 @@ test('OOBE remains editable and savable when lazy Monaco/YAML support import rej
   // The production Monaco chunk also carries bootstrap helpers; reject only the lazy worker import.
   await attachRequestMocks(degradedPage, { blockYamlWorkerImport: true, oobe: true, modelsSaveRequests, configSaveRequests })
   try {
-    await gotoReady(degradedPage, `${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
+    await degradedPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(degradedPage)
     await degradedPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm first-time setup'), { timeout: 15_000 })
     await degradedPage.waitForSelector('[data-setup-tab="models"] [data-setup-tab-status="attention"]')
     const forcedSetupClose = await degradedPage.waitForSelector('[data-workbench-tab-close="system:setup"]')
@@ -1680,7 +1694,7 @@ test('embedded model filter selects one result and keeps the accessible Setup br
   ))
   const nonce = '0123456789abcdef0123456789abcdef'
   try {
-    await gotoReady(hostPage, `${baseUrl}/preview/host`, { waitUntil: 'networkidle2' })
+    await hostPage.goto(`${baseUrl}/preview/host`, { waitUntil: 'networkidle2' })
     await hostPage.bringToFront()
     await hostPage.evaluate(() => {
       document.body.replaceChildren()
@@ -1853,7 +1867,7 @@ test('embedded Setup defaults to Appearance and explicit host focus activates Mo
   await attachRequestMocks(hostPage)
   const nonce = 'abcdef0123456789abcdef0123456789'
   try {
-    await gotoReady(hostPage, `${baseUrl}/preview/host`, { waitUntil: 'networkidle2' })
+    await hostPage.goto(`${baseUrl}/preview/host`, { waitUntil: 'networkidle2' })
     await hostPage.evaluate(({ src }) => {
       document.body.replaceChildren()
       const iframe = document.createElement('iframe')
@@ -1887,7 +1901,8 @@ test('model columns preserve child policy and commit effort only after dragging 
   await desktopPage.setViewport({ width: 900, height: 700 })
   await attachRequestMocks(desktopPage)
   try {
-    await gotoReady(desktopPage, `${baseUrl}/normal/#session/model-effort-default-desktop`, { waitUntil: 'networkidle2' })
+    await desktopPage.goto(`${baseUrl}/normal/#session/model-effort-default-desktop`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(desktopPage)
     const modelButton = await desktopPage.waitForSelector('.foxwarm-model-selector-trigger', { timeout: 15_000 })
     await modelButton.click()
     await desktopPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
@@ -1941,7 +1956,8 @@ test('desktop model popup remains bounded and supports single-selection rows', a
   await desktopPage.setViewport({ width: 1000, height: 700 })
   await attachRequestMocks(desktopPage)
   try {
-    await gotoReady(desktopPage, `${baseUrl}/normal/#session/model-popup-geometry`, { waitUntil: 'networkidle2' })
+    await desktopPage.goto(`${baseUrl}/normal/#session/model-popup-geometry`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(desktopPage)
     await desktopPage.click('.foxwarm-model-selector-trigger')
     await desktopPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
     const bounded = await desktopPage.$eval('[data-model-selector-popup="true"]', (popup) => {
@@ -1984,7 +2000,8 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
         localStorage.setItem('foxwarm_theme_selection_v3', JSON.stringify({ version: 3, themeId: 'foxwarm.550a', lightThemeId: 'foxwarm.550a', darkThemeId: 'foxwarm.550a', colorMode: 'auto' }))
       } catch {}
     })
-    await gotoReady(normalPage, `${baseUrl}/normal/#session/model-filter-normal`, { waitUntil: 'networkidle2' })
+    await normalPage.goto(`${baseUrl}/normal/#session/model-filter-normal`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(normalPage)
     const modelButton = await normalPage.waitForSelector('.foxwarm-model-selector-trigger', { timeout: 15_000 })
     await modelButton.click()
     await normalPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
@@ -2063,7 +2080,8 @@ test('model picker Models focus is one-shot per request; later ordinary Setup op
         localStorage.setItem('foxwarm_theme_selection_v3', JSON.stringify({ version: 3, themeId: 'foxwarm.550a', lightThemeId: 'foxwarm.550a', darkThemeId: 'foxwarm.550a', colorMode: 'auto' }))
       } catch {}
     })
-    await gotoReady(normalPage, `${baseUrl}/normal/#session/model-filter-normal`, { waitUntil: 'networkidle2' })
+    await normalPage.goto(`${baseUrl}/normal/#session/model-filter-normal`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(normalPage)
     await openPickerAndConfigure()
 
     await normalPage.click('[data-tab-id="system:setup"] button[title="Close tab"]')
@@ -2108,7 +2126,8 @@ test('successful Setup save refreshes a mounted split-pane Chat; rejected saves 
   })
   await attachRequestMocks(normalPage, { modelOptions, modelOptionsRequests })
   try {
-    await gotoReady(normalPage, `${productionBaseUrl}/#session/model-cache`, { waitUntil: 'networkidle2' })
+    await normalPage.goto(`${productionBaseUrl}/#session/model-cache`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(normalPage)
     await normalPage.waitForSelector('.foxwarm-model-selector-trigger')
     await normalPage.evaluate(() => { window.fixtureModelTrigger = document.querySelector('.foxwarm-model-selector-trigger') })
     await normalPage.click('.foxwarm-model-selector-trigger')
@@ -2160,7 +2179,8 @@ test('effort dragging saves concrete levels without flashing, and automatic mode
   await p.setViewport({ width: 1000, height: 700 })
   await attachRequestMocks(p, { heldEffortRequests: held })
   try {
-    await gotoReady(p, `${baseUrl}/normal/#session/effort-interaction`, { waitUntil: 'networkidle2' })
+    await p.goto(`${baseUrl}/normal/#session/effort-interaction`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(p)
     await p.click('.foxwarm-model-selector-trigger')
     await p.waitForSelector('button[title="leaf/model-a"]')
     await p.click('button[title="leaf/model-a"]')

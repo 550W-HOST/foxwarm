@@ -1,3 +1,4 @@
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -74,6 +75,7 @@ async function openFixture(shape) {
     void request.continue()
   })
   await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
   await page.waitForFunction(() => !!window.foxwarmTest, { timeout: 15_000 })
   await page.evaluate(sessionId => window.foxwarmTest.switchToSession(sessionId), fixtureSessionId)
   await page.waitForFunction((sessionId) => {

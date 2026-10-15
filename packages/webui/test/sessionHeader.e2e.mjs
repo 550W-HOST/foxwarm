@@ -1,3 +1,4 @@
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -15,9 +16,11 @@ let cwdSession
 async function authenticate(page, viewport) {
   await page.setViewport(viewport)
   await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
   await page.waitForFunction(() => !!localStorage.getItem('foxwarm_token'), { timeout: 15_000 })
   await page.evaluate(() => history.replaceState(null, '', location.pathname))
   await page.reload({ waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
 }
 
 async function expectHeaderSubtitle(page) {
@@ -91,6 +94,7 @@ test('Code embedded sidebar hides cwd and embedded Chat gets cwd without a globa
   try {
     await authenticate(page, { width: 360, height: 800, isMobile: false, hasTouch: false, deviceScaleFactor: 1 })
     await page.goto(`${baseUrl}/?foxwarmEmbed=sidebar&foxwarmEmbedNonce=${embedNonce}`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(page)
     await expectCwdSearchWithoutRowDisplay(page)
 
     let globalListRequests = 0
@@ -98,6 +102,7 @@ test('Code embedded sidebar hides cwd and embedded Chat gets cwd without a globa
       if (new URL(request.url()).pathname.endsWith('/api/sessions')) globalListRequests += 1
     })
     await page.goto(`${baseUrl}/?foxwarmEmbed=chat&foxwarmEmbedNonce=${embedNonce}&sessionId=${encodeURIComponent(cwdSession.id)}&title=Embedded`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(page)
     await expectHeaderSubtitle(page)
     assert.equal(globalListRequests, 0)
   } finally {
