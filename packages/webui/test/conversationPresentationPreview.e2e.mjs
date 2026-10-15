@@ -114,9 +114,9 @@ test('a completed coordination sequence has one process, aggregate usage and ori
     const card = body.closest('.foxwarm-tool-card')
     const header = card.querySelector('.foxwarm-tool-header-toggle')
     const time = header.querySelector('[data-tool-execution-time]')
-    return { trailing: header.lastElementChild === time, timeLeft: time.getBoundingClientRect().left, controlsRight: header.querySelector('.foxwarm-tool-action-buttons').getBoundingClientRect().right }
+    return { timeHidden: time === null, controlsRight: header.querySelector('.foxwarm-tool-action-buttons').getBoundingClientRect().right, headerRight: header.getBoundingClientRect().right }
   })
-  assert.ok(toolGeometry.trailing && toolGeometry.controlsRight <= toolGeometry.timeLeft)
+  assert.ok(toolGeometry.timeHidden && toolGeometry.controlsRight <= toolGeometry.headerRight)
   await page.$eval('.foxwarm-tool-expanded-content', body => body.closest('.foxwarm-tool-card').querySelector('[title="JSON"]').click())
   await page.waitForSelector('[data-json-inspector-dialog] textarea[readonly]')
   assert.match(await page.$eval('[data-json-inspector-dialog] textarea', element => element.value), /TOOL_OUTPUT_VISIBLE_ONLY_AFTER_OPEN/)

@@ -779,7 +779,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
           {includeCallPreview && call && <div ref={headerFade.ref} {...headerFade.overflowFadeProps} className={`foxwarm-tool-call-summary min-w-0 max-w-full ${call.name === 'read' ? 'flex text-[13px] leading-[18px]' : THREAD_CARD_HEADER_PREVIEW_CLASS}`}>{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile, resolvedPaths: primaryResponse?.__meta?.resolvedPaths })}</div>}
           {viewButtons}
         </div>
-        {invocationDurationMs !== null && <span data-tool-execution-time className="ml-auto inline-flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums text-fw-text-muted" title="Tool call duration"><Timer aria-hidden="true" size={11} />{formatCompactDuration(invocationDurationMs)}</span>}
+        {invocationDurationMs !== null && invocationDurationMs >= 1000 && <span data-tool-execution-time className="ml-auto inline-flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums text-fw-text-muted" title="Tool call duration"><Timer aria-hidden="true" size={11} />{formatCompactDuration(invocationDurationMs)}</span>}
         <ReasoningTokenBadge badges={reasoningBadges} />
       </div>
       {includeExpandedCall && expandedCallContent && (
