@@ -86,7 +86,7 @@ internal static class WebUiContract
         string? executionNode = null
     )
     {
-        IReadOnlyList<JsonObject> selected = snapshot.History;
+        IReadOnlyList<HistoryMessage> selected = snapshot.History;
         var prefix = 0;
         var complete = true;
         if (tail is int count)
@@ -99,11 +99,7 @@ internal static class WebUiContract
             selected = selected.Take(size).ToArray();
         else if (afterSeq is long seq)
             selected = selected
-                .Where(message =>
-                    message["__meta"]?["seq"] is JsonValue value
-                    && value.TryGetValue<long>(out var actual)
-                    && actual > seq
-                )
+                .Where(message => message.Sequence is long actual && actual > seq)
                 .ToArray();
         var preview = new JsonArray();
         for (var i = 0; i < snapshot.Queue.Count && preview.Count < 20; i++)
@@ -170,7 +166,7 @@ internal static class WebUiContract
         {
             ["session"] = Session(snapshot, models, toolActive, compacting, executionNode),
             ["messages"] = new JsonArray(
-                selected.Select(message => (JsonNode?)message.DeepClone()).ToArray()
+                selected.Select(message => (JsonNode?)message.ToJson()).ToArray()
             ),
             ["persistentMemorySnapshot"] = "",
             ["queuedMessages"] = preview,

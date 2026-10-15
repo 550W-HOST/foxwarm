@@ -115,7 +115,7 @@ public sealed partial class SessionSaveLane
             meta.Remove("runQueuedAfterStop");
             var staged = snapshot with
             {
-                History = [],
+                History = SessionHistory.Empty,
                 Meta = meta,
                 AuthorityEnvelope = envelope,
                 HistoryVersion = snapshot.HistoryVersion + 1,
@@ -127,7 +127,7 @@ public sealed partial class SessionSaveLane
             void Publish(SessionState state)
             {
                 state.PublishCommittedHistoryRewrite(
-                    [],
+                    SessionHistory.Empty,
                     snapshot.HistoryVersion,
                     snapshot.NextMessageSeq,
                     snapshot.NextMessageSeq,

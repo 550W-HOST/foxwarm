@@ -458,7 +458,7 @@ public sealed class AnthropicStreamingTests
         var entry = registry.Add("s");
         entry.State.Queue.Add(QueueItem.UserText("tools"));
         await registry.Runner.ProcessQueueAsync("s");
-        var history = (await store.LoadAsync("s"))!.History;
+        var history = (await store.LoadAsync("s"))!.History.Materialize();
         Assert.Equal(2, calls);
         Assert.Equal(1, tools.Invocations);
         Assert.Equal(

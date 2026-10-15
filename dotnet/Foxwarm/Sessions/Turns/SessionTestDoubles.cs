@@ -88,7 +88,7 @@ public sealed class InMemorySessionAuthorityStore
     private static SessionSnapshot Clone(SessionSnapshot snapshot) =>
         new(
             snapshot.Id,
-            snapshot.History.Select(m => (JsonObject)m.DeepClone()).ToArray(),
+            snapshot.History,
             snapshot.Queue.Select(i => i.CloneItem()).ToArray(),
             snapshot.Busy,
             snapshot.BusyStartedAt,

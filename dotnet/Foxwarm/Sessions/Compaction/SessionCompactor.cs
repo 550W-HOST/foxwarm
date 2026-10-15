@@ -303,10 +303,10 @@ internal sealed partial class SessionCompactor
         var total = UsageTotal(result);
         if (total <= 0)
             return false;
-        var snapshot = hosted.Entry.Snapshot();
         var catalog = models.Capture();
-        if (total <= SessionModelSettings.EffectiveThreshold(snapshot.AuthorityEnvelope, catalog))
+        if (total <= hosted.Entry.WithState(state => SessionModelSettings.EffectiveThreshold(state.AuthorityEnvelope, catalog)))
             return false;
+        var snapshot = hosted.Entry.Snapshot();
         var background = SupportsBackground(snapshot, catalog);
         var run = Begin(snapshot, catalog, catalog.CompactKeepFraction, background, false);
         if (run is null)
@@ -366,11 +366,10 @@ internal sealed partial class SessionCompactor
         CancellationToken token
     )
     {
-        var snapshot = hosted.Entry.Snapshot();
         var catalog = models.Capture();
-        var limit = catalog
-            .Resolve(SessionWait.Text(snapshot.AuthorityEnvelope["model"]))
-            .ContextLimit;
+        var limit = hosted.Entry.WithState(state => catalog
+            .Resolve(SessionWait.Text(state.AuthorityEnvelope["model"]))
+            .ContextLimit);
         var overLimit = UsageTotal(result) > limit;
         try
         {
@@ -391,10 +390,10 @@ internal sealed partial class SessionCompactor
                 return;
             if (
                 UsageTotal(result)
-                <= SessionModelSettings.EffectiveThreshold(
-                    hosted.Entry.Snapshot().AuthorityEnvelope,
+                <= hosted.Entry.WithState(state => SessionModelSettings.EffectiveThreshold(
+                    state.AuthorityEnvelope,
                     models
-                )
+                ))
             )
                 return;
             var applied = await AutoAfterTurnAsync(result);
@@ -460,14 +459,13 @@ internal sealed partial class SessionCompactor
         token.ThrowIfCancellationRequested();
         run.CacheKey = await hosted.Entry.SaveLane.EnsurePromptCacheKeyAsync();
         token.ThrowIfCancellationRequested();
-        var candidates = CompactCandidateBuilder.Build(run.Snapshot.History, run.Keep);
+        var candidates = CompactCandidateBuilder.Build(run.Snapshot.History.Materialize(), run.Keep);
         run.Candidates = candidates;
         if (
             candidates.Split <= 0
             || candidates.Items.Count == 0
                 && candidates.Preserved.Count == 0
-                && !run
-                    .Snapshot.History.Take(candidates.Split)
+                && !candidates.History.Take(candidates.Split)
                     .Any(row => !CompactCandidateBuilder.Visible(row))
         )
             return;

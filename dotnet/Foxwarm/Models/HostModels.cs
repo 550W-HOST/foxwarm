@@ -84,11 +84,19 @@ internal sealed partial class HostModels
         string? RawEffort,
         string? EffectiveEffort
     ) Select(SessionSnapshot snapshot)
+        => Select(snapshot.AuthorityEnvelope);
+
+    public (
+        ConcreteHostModel Model,
+        string? RawModel,
+        string? RawEffort,
+        string? EffectiveEffort
+    ) Select(JsonObject envelope)
     {
         if (owner is not null)
-            return Capture().Select(snapshot);
-        var rawModel = SessionWait.Text(snapshot.AuthorityEnvelope["model"]);
-        var rawEffort = SessionWait.Text(snapshot.AuthorityEnvelope["effort"]);
+            return Capture().Select(envelope);
+        var rawModel = SessionWait.Text(envelope["model"]);
+        var rawEffort = SessionWait.Text(envelope["effort"]);
         var model = Resolve(rawModel);
         var effective =
             rawEffort is not null && model.AllowedEfforts.Contains(rawEffort)

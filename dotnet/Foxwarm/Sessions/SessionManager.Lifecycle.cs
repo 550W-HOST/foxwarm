@@ -141,7 +141,7 @@ internal sealed partial class SessionManager
                 };
                 var copied = new SessionSnapshot(
                     id,
-                    original.History.Select(row => (JsonObject)row.DeepClone()).ToArray(),
+                    original.History,
                     [],
                     false,
                     null,
@@ -165,7 +165,7 @@ internal sealed partial class SessionManager
                 {
                     var suffixRows = new List<JsonObject>();
                     if (
-                        copied.History.LastOrDefault() is JsonObject tail
+                        copied.History.LastOrDefault()?.ToJson() is JsonObject tail
                         && SessionWait.Text(tail["role"]) == "model"
                     )
                     {
@@ -328,7 +328,7 @@ internal sealed partial class SessionManager
             return new CanonicalAppendPreparation(
                 snapshot with
                 {
-                    History = snapshot.History.Concat(rows).ToArray(),
+                    History = snapshot.History.AppendJson(rows),
                     Meta = meta,
                     NextMessageSeq = next,
                 },

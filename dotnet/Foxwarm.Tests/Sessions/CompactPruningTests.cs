@@ -144,7 +144,7 @@ public sealed partial class CompactLifecycleTests
             Assert.True(
                 JsonNode.DeepEquals(
                     row.Message,
-                    before.History.Single(message =>
+                    before.History.Materialize().Single(message =>
                         message["__meta"]!["seq"]!.ToString() == row.Seq.ToString()
                     )
                 )
@@ -212,7 +212,7 @@ public sealed partial class CompactLifecycleTests
         );
         await fixture.Peer.PlanReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(0, fixture.Owner.Entry.Snapshot().HistoryVersion);
-        Assert.True(JsonNode.DeepEquals(before.History[1], fixture.Owner.History()[1]));
+        Assert.True(JsonNode.DeepEquals(before.History.Materialize()[1], fixture.Owner.History()[1]));
         await fixture.Owner.Compactor.StopAsync();
     }
 }

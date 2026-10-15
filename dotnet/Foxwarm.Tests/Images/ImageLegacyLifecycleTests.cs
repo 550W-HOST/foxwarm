@@ -74,7 +74,7 @@ public sealed class ImageLegacyLifecycleTests
             await manager.LoadAsync();
             var owner = await manager.RequiredAsync("old");
             Assert.NotNull(
-                owner.Entry.Snapshot().History[0]["parts"]![0]!["inlineDataRef"]!["blobId"]
+                owner.Entry.Snapshot().History[0].ToJson()["parts"]![0]!["inlineDataRef"]!["blobId"]
             );
             var fork = await manager.ForkAsync(owner, "fork");
             childId = fork.Id;

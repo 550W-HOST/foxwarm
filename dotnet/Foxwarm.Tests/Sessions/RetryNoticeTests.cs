@@ -72,7 +72,7 @@ public sealed class RetryNoticeTests
             var originalArchive = store.Archive.ReadMessageBySeq(seq)!.MessageJson;
             retry["attempt"] = 3;
             await entry.SaveLane.CommitRetryNoticeAsync(notice, "third", retry);
-            var active = Assert.Single(entry.Snapshot().History);
+            var active = Assert.Single(entry.Snapshot().History.Materialize());
             Assert.Equal(seq, active["__meta"]!["seq"]!.GetValue<long>());
             Assert.False(active["modelVisible"]!.GetValue<bool>());
             Assert.True(active["__meta"]!["updateExisting"]!.GetValue<bool>());
@@ -85,7 +85,7 @@ public sealed class RetryNoticeTests
             Assert.Single(entry.Snapshot().Queue);
             Assert.Equal(
                 active.ToJsonString(),
-                (await store.LoadAsync("s"))!.History.Single().ToJsonString()
+                (await store.LoadAsync("s"))!.History.Materialize().Single().ToJsonString()
             );
         }
         finally
@@ -123,7 +123,7 @@ public sealed class RetryNoticeTests
             )
         );
         Assert.Equal(1, entry.BestEffortFailureCount);
-        Assert.Single(entry.Snapshot().History);
+        Assert.Single(entry.Snapshot().History.Materialize());
         var delivered = 0;
         hosted.Changed += value =>
         {
@@ -146,7 +146,7 @@ public sealed class RetryNoticeTests
             )
         );
         Assert.Equal(1, delivered);
-        Assert.Single(entry.Snapshot().History);
+        Assert.Single(entry.Snapshot().History.Materialize());
         Assert.Equal(2, entry.Snapshot().NextMessageSeq);
     }
 

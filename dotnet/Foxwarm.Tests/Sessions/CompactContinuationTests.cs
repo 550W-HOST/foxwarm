@@ -350,7 +350,7 @@ public sealed partial class CompactLifecycleTests
                 item.Parts?.Any(part => part.ToJsonString().Contains("retained admitted input"))
                 == true
             )
-                || snapshot.History.Any(row =>
+                || snapshot.History.Materialize().Any(row =>
                     row["parts"]!.ToJsonString().Contains("retained admitted input")
                 )
         );
@@ -361,7 +361,7 @@ public sealed partial class CompactLifecycleTests
         {
             Assert.Equal(1, fixture.ToolExecutor.Invocations);
             Assert.Contains(
-                snapshot.History,
+                snapshot.History.Materialize(),
                 row => row["parts"]!.ToJsonString().Contains("completed tool")
             );
         }

@@ -135,7 +135,7 @@ public sealed class ImagePipelineTests
             await File.ReadAllTextAsync(store.AuthorityPath)
         );
         await registry.HostFor("s").AppendQueuedInputsAsync(SessionTurnRunner.DrainLeading(entry));
-        var canonical = entry.Snapshot().History.Single();
+        var canonical = entry.Snapshot().History.Materialize().Single();
         var image = canonical["parts"]!
             .AsArray()
             .OfType<JsonObject>()
@@ -183,7 +183,7 @@ public sealed class ImagePipelineTests
         ]);
         var oldAudit = store.Archive.ReadMessages().Single().MessageJson;
         var loaded = (await store.LoadAsync("s"))!;
-        Assert.NotNull(loaded.History[0]["parts"]![0]!["inlineDataRef"]);
+        Assert.NotNull(loaded.History[0].ToJson()["parts"]![0]!["inlineDataRef"]);
         Assert.Equal(original, await File.ReadAllTextAsync(store.AuthorityPath));
         Assert.Equal(oldAudit, store.Archive.ReadMessages().Single().MessageJson);
         var registry = new SessionRegistry(store, new EmptyChat());

@@ -18,6 +18,8 @@ Callers: `SessionSaveLane`, `SessionRegistry.LoadOrAddAsync`, `SessionManager`, 
 
 ## Contract and failure behavior
 
+Load externalizes history images in an owned mutable ingress document before freezing history records. The in-memory envelope excludes the separately owned `history`, `queue`, and `meta` branches; authority serialization reconstructs those fields from the snapshot and retains the existing full-document validation and durable write. Persisting authority still materializes the complete current history; immutable roots do not bypass schema validation or publication ordering.
+
 The store is bound to one `(sessionId, agent)` lifetime. Archive writes require the exact current identity; historical aliases are read-only. Exact replay is idempotent, conflicting same-sequence payloads fail closed. A projection failure after JSON publication becomes `AuthorityCommittedException`, leaving hot state/newer JSON intact and an older catalog projection for a later retry.
 
 ## Tests

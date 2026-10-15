@@ -9,7 +9,7 @@ internal static partial class RequestHistoryRepair
     internal static IReadOnlyList<JsonObject> SelectAndRepair(IReadOnlyList<JsonObject> history)
     {
         var source = history
-            .Where(row => CanonicalMessage.FromNode(row).IsModelVisible)
+            .Where(row => CanonicalMessage.IsVisible(row))
             .Select(row => (JsonObject)row.DeepClone())
             .ToArray();
         var result = new List<JsonObject>();

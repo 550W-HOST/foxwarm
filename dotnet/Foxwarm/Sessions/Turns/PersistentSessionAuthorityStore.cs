@@ -259,9 +259,10 @@ public sealed class PersistentSessionAuthorityStore
         if (mainFields?.Invoke() is { } main)
             SessionCatalog.OverlayAuthorityContext(normalized, main);
         var document = SessionAuthorityDocument.FromOwned(normalized, sessionId, agent);
-        var loaded = FromAuthority(document.CloneRoot());
-        foreach (var message in loaded.History)
+        var ownedRoot = document.CloneRoot();
+        foreach (var message in ((JsonArray)ownedRoot["history"]!).OfType<JsonObject>())
             await Images.ExternalizeMessageAsync(message, strict: false, cancellationToken);
+        var loaded = FromAuthority(ownedRoot);
         foreach (var item in loaded.Queue)
         {
             if (item.Message is not null)
@@ -323,7 +324,7 @@ public sealed class PersistentSessionAuthorityStore
             goal.Remove("remindOnTurnEnd");
         root["agent"] = agent;
         root["history"] = new JsonArray(
-            snapshot.History.Select(message => (JsonNode)message.DeepClone()).ToArray()
+            snapshot.History.Select(message => (JsonNode)message.ToJson()).ToArray()
         );
         root["persistentMemorySnapshot"] ??= "";
         root["queue"] = new JsonArray(
@@ -353,9 +354,11 @@ public sealed class PersistentSessionAuthorityStore
 
     private SessionSnapshot FromAuthority(JsonObject root)
     {
-        var history = ((JsonArray)root["history"]!)
-            .Select(node => (JsonObject)node!.DeepClone())
-            .ToArray();
+        var history = SessionHistory.FromJson(((JsonArray)root["history"]!).OfType<JsonObject>());
+        var envelope = new JsonObject();
+        foreach (var property in root)
+            if (property.Key is not ("history" or "queue" or "meta"))
+                envelope[property.Key] = property.Value?.DeepClone();
         var queue = ((JsonArray)root["queue"]!)
             .Select(node => FromQueueJson((JsonObject)node!))
             .ToArray();
@@ -374,7 +377,7 @@ public sealed class PersistentSessionAuthorityStore
             (JsonObject)root["meta"]!.DeepClone(),
             ReadInteger(root["nextMessageSeq"], "nextMessageSeq"),
             ReadInteger(root["historyVersion"], "historyVersion"),
-            (JsonObject)root.DeepClone()
+            envelope
         );
     }
 

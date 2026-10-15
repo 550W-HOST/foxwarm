@@ -215,7 +215,7 @@ public sealed class SessionRegistry
 
     private static void Restore(SessionState state, SessionSnapshot snapshot)
     {
-        state.History.AddRange(snapshot.History.Select(m => (JsonObject)m.DeepClone()));
+        state.History.Reset(snapshot.History);
         state.Queue.AddRange(snapshot.Queue.Select(i => i.CloneItem()));
         state.Busy = snapshot.Busy;
         state.BusyStartedAt = snapshot.BusyStartedAt;

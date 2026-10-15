@@ -9,12 +9,19 @@ internal static class ConcreteRequestHistory
         IReadOnlyList<JsonObject> history,
         string destinationModelId
     )
+        => PrepareCore(history, destinationModelId, copyMessages: true);
+
+    private static IReadOnlyList<JsonObject> PrepareCore(
+        IReadOnlyList<JsonObject> history,
+        string destinationModelId,
+        bool copyMessages
+    )
     {
         var prepared = new List<JsonObject>();
         foreach (var original in history)
         {
             // Visibility belongs to canonical admission, before request-only metadata removal.
-            if (!CanonicalMessage.FromNode(original).IsModelVisible)
+            if (!CanonicalMessage.IsVisible(original))
                 continue;
             var source =
                 SessionWait.Text(original["role"]) == "model"
@@ -25,7 +32,7 @@ internal static class ConcreteRequestHistory
                 && (source.Length == 0 || source != OpenAIRequestText.Trim(source))
             )
                 source = null;
-            var message = (JsonObject)original.DeepClone();
+            var message = copyMessages ? (JsonObject)original.DeepClone() : original;
             message.Remove("__meta");
             ProjectDisplayMetadata(message);
             if (source is null || source == destinationModelId)
@@ -36,9 +43,11 @@ internal static class ConcreteRequestHistory
 
             message.Remove("providerMeta");
             var parts = new JsonArray();
-            foreach (var part in (message["parts"] as JsonArray ?? []).OfType<JsonObject>())
+            var originalParts = (message["parts"] as JsonArray ?? []);
+            var ownedParts = originalParts.OfType<JsonObject>().ToArray();
+            originalParts.Clear();
+            foreach (var copy in ownedParts)
             {
-                var copy = (JsonObject)part.DeepClone();
                 copy.Remove("thinking");
                 if (copy["providerMeta"] is JsonObject metadata)
                 {
@@ -101,7 +110,7 @@ internal static class ConcreteRequestHistory
     internal static IReadOnlyList<JsonObject> PrepareRequest(
         IReadOnlyList<JsonObject> history,
         string destinationModelId
-    ) => Prepare(RequestHistoryRepair.SelectAndRepair(history), destinationModelId);
+    ) => PrepareCore(RequestHistoryRepair.SelectAndRepair(history), destinationModelId, copyMessages: false);
 
     internal sealed class ChatService(IChatService inner, string destinationModelId) : IChatService
     {

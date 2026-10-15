@@ -21,7 +21,7 @@ internal sealed partial class SessionCompactor
             || live.History.Count < original.History.Count
             || original
                 .History.Where(
-                    (message, index) => !JsonNode.DeepEquals(message, live.History[index])
+                    (message, index) => !message.ContentEquals(live.History[index])
                 )
                 .Any()
         )
@@ -67,7 +67,7 @@ internal sealed partial class SessionCompactor
             );
             operations.Add((op, record));
         }
-        var history = new List<JsonObject>();
+        var history = new List<HistoryMessage>();
         var cursor = 0;
         foreach (var (op, record) in operations)
         {
@@ -76,21 +76,20 @@ internal sealed partial class SessionCompactor
                 plan.Remove,
                 history
             );
-            history.Add(record.ToMessage());
+            history.Add(HistoryMessage.FromJson(record.ToMessage()));
             foreach (
                 var row in original
                     .History.Skip(op.HistoryStart)
                     .Take(op.HistoryEnd - op.HistoryStart + 1)
             )
                 if (
-                    CompactCandidateBuilder.Number(CompactCandidateBuilder.Meta(row)?["seq"])
-                        is long seq
+                    row.Sequence is long seq
                     && plan.Preserve.Contains(seq)
                 )
                 {
-                    var preserved = (JsonObject)row.DeepClone();
+                    var preserved = row.ToJson();
                     ((JsonObject)preserved["__meta"]!)["preservedFromBlockId"] = record.Id;
-                    history.Add(preserved);
+                    history.Add(HistoryMessage.FromJson(preserved));
                 }
             cursor = op.HistoryEnd + 1;
         }
@@ -110,14 +109,15 @@ internal sealed partial class SessionCompactor
         };
         if (plan.Planner is not null)
             completion["compaction"] = new JsonObject { ["planner"] = plan.Planner.ToJson() };
-        history.Add(completion);
+        history.Add(HistoryMessage.FromJson(completion));
+        var frozenHistory = SessionHistory.FromMessages(history);
         var envelope = (JsonObject)live.AuthorityEnvelope.DeepClone();
         envelope["nextBlockId"] = nextBlockId;
         var meta = (JsonObject)live.Meta.DeepClone();
         meta["messageCount"] = history.Count;
         var staged = live.Snapshot() with
         {
-            History = history,
+            History = frozenHistory,
             Meta = meta,
             NextMessageSeq = live.NextMessageSeq + 1,
             HistoryVersion = live.HistoryVersion + 1,
@@ -128,7 +128,7 @@ internal sealed partial class SessionCompactor
         void Publish(SessionState state)
         {
             state.PublishCommittedHistoryRewrite(
-                history,
+                frozenHistory,
                 previousVersion,
                 previousNext,
                 previousNext + 1,
@@ -144,16 +144,17 @@ internal sealed partial class SessionCompactor
     }
 
     private static void AppendRetained(
-        IEnumerable<JsonObject> source,
+        IEnumerable<HistoryMessage> source,
         IReadOnlySet<long> removed,
-        List<JsonObject> output
+        List<HistoryMessage> output
     )
     {
-        foreach (var row in source)
+        foreach (var record in source)
         {
+            var row = record.ToJson();
             if (!CompactCandidateBuilder.Visible(row) || CompactCandidateBuilder.Completion(row))
                 continue;
-            var seq = CompactCandidateBuilder.Number(CompactCandidateBuilder.Meta(row)?["seq"]);
+            var seq = record.Sequence;
             if (
                 seq is not null
                 && removed.Contains(seq.Value)
@@ -163,7 +164,7 @@ internal sealed partial class SessionCompactor
                     is > 0
             )
                 continue;
-            output.Add((JsonObject)row.DeepClone());
+            output.Add(record);
         }
     }
 

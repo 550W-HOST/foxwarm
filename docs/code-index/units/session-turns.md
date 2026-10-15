@@ -20,6 +20,8 @@ Callers: `MessageRouter`, `SessionManager`, WebUI route handlers, task/timer too
 
 ## Contract and side effects
 
+History snapshots capture the immutable root described in [history ownership](./session-domain.md#history-ownership); they do not clone the complete history. Canonical append stages new owned records and shares existing records. Read-only model selection, prompt/cache lookup, task visibility, and under-threshold continuation use narrow gated reads. The turn host explicitly materializes JSON at the mutable `IChatService` boundary. Committed notifications inspect immutable sequences before projecting only newly delivered records.
+
 One processor claim may run per Session. Busy and stopping are distinct state: restart recovery can clear stale busy ownership, while stopping is an explicit lifecycle/control outcome. Queue admission persists before triggering; passive inter-Session items remain durable without automatically starting a turn. Stop can abort an in-flight request/tool loop but must still await the final authoritative save result.
 
 Tool execution carries source JSON values; ordinary history projection and trusted receipts follow [the tool contract](../threads/tools-permissions-and-exec.md#outbound-mcp-values-and-trusted-control).

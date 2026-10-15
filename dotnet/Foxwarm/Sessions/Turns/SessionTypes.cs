@@ -83,7 +83,7 @@ public sealed record QueueItem(
 public sealed class SessionState
 {
     public string Id { get; internal set; }
-    public List<JsonObject> History { get; } = new();
+    public SessionHistoryBuffer History { get; } = new();
     public List<QueueItem> Queue { get; } = new();
     public bool Busy { get; internal set; }
     public long? BusyStartedAt { get; internal set; }
@@ -99,7 +99,7 @@ public sealed class SessionState
     // SessionEntry owns the short publication gate. Queue/Stop/model metadata
     // are deliberately not replaced by the older compaction snapshot.
     public void PublishCommittedHistoryRewrite(
-        IReadOnlyList<JsonObject> history,
+        SessionHistory history,
         long expectedHistoryVersion,
         long expectedNextSeq,
         long nextSeq,
@@ -110,8 +110,7 @@ public sealed class SessionState
             throw new InvalidOperationException(
                 "History rewrite publication base changed after authority commit."
             );
-        History.Clear();
-        History.AddRange(history.Select(row => (JsonObject)row.DeepClone()));
+        History.Reset(history);
         NextMessageSeq = nextSeq;
         HistoryVersion++;
         Meta["messageCount"] = History.Count;
@@ -119,46 +118,25 @@ public sealed class SessionState
             AuthorityEnvelope["nextBlockId"] = nextBlockId.Value;
     }
 
-    internal SessionState Clone()
-    {
-        var clone = new SessionState(Id)
-        {
-            Busy = Busy,
-            BusyStartedAt = BusyStartedAt,
-            Stopping = Stopping,
-            NextMessageSeq = NextMessageSeq,
-            HistoryVersion = HistoryVersion,
-        };
-        clone.History.AddRange(History.Select(message => (JsonObject)message.DeepClone()));
-        clone.Queue.AddRange(Queue.Select(item => item.CloneItem()));
-        foreach (var property in Meta)
-            clone.Meta[property.Key] = property.Value?.DeepClone();
-        foreach (var property in AuthorityEnvelope)
-            clone.AuthorityEnvelope[property.Key] = property.Value?.DeepClone();
-        return clone;
-    }
-
-    public SessionSnapshot Snapshot()
-    {
-        var clone = Clone();
-        return new SessionSnapshot(
-            clone.Id,
-            clone.History.Select(m => (JsonObject)m.DeepClone()).ToArray(),
-            clone.Queue.Select(i => i.CloneItem()).ToArray(),
-            clone.Busy,
-            clone.BusyStartedAt,
-            clone.Stopping,
-            (JsonObject)clone.Meta.DeepClone(),
-            clone.NextMessageSeq,
-            clone.HistoryVersion,
-            (JsonObject)clone.AuthorityEnvelope.DeepClone()
+    public SessionSnapshot Snapshot() =>
+        new(
+            Id,
+            History.Snapshot(),
+            Queue.Select(item => item.CloneItem()).ToArray(),
+            Busy,
+            BusyStartedAt,
+            Stopping,
+            (JsonObject)Meta.DeepClone(),
+            NextMessageSeq,
+            HistoryVersion,
+            (JsonObject)AuthorityEnvelope.DeepClone()
         );
-    }
+
 }
 
 public sealed record SessionSnapshot(
     string Id,
-    IReadOnlyList<JsonObject> History,
+    SessionHistory History,
     IReadOnlyList<QueueItem> Queue,
     bool Busy,
     long? BusyStartedAt,
@@ -167,7 +145,22 @@ public sealed record SessionSnapshot(
     long NextMessageSeq,
     long HistoryVersion,
     JsonObject AuthorityEnvelope
-);
+)
+{
+    public SessionSnapshot(
+        string id,
+        IReadOnlyList<JsonObject> history,
+        IReadOnlyList<QueueItem> queue,
+        bool busy,
+        long? busyStartedAt,
+        bool stopping,
+        JsonObject meta,
+        long nextMessageSeq,
+        long historyVersion,
+        JsonObject authorityEnvelope
+    ) : this(id, SessionHistory.FromJson(history), queue, busy, busyStartedAt, stopping,
+        meta, nextMessageSeq, historyVersion, authorityEnvelope) { }
+}
 
 public sealed record DisplayNameChange(bool Changed, string? Previous, string? Current);
 

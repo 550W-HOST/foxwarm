@@ -19,6 +19,8 @@ Callers: `LocalSessionTurnHost`, model-specific services, retry preparation, ima
 
 ## Contract and side effects
 
+History-to-request conversion is an explicit mutable JSON projection, not an alias of Session history. Visibility validation reads existing records without cloning them. Retry repair owns its output; concrete preparation can mutate that owned output directly while the standalone preparation API still copies caller input. Cross-model part filtering reuses the already-owned request parts rather than cloning them a second time. Canonical part views share only their private canonical tree, as documented in [history ownership](./session-domain.md#history-ownership).
+
 Provider input is derived from Session state and request scope. The neutral repaired/visibility-filtered manifest precedes concrete leaf filtering and image hydration. Same-model missing-generated-blob and other local preparation/persistence failures happen before provider send and do not enter provider retry/health. The `all-images-fail` condition is produced while processing provider output/generated-image results; it is non-retryable/non-countable but is not a send-preparation failure. Provider transport failures alone enter normal backoff/retry/health handling. Retry repair preserves the safe point, logical request identity, and attempt attribution; canonical Session messages remain owned by Session persistence.
 
 ## Tests

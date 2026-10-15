@@ -110,7 +110,7 @@ public sealed partial class LocalSessionTurnHost
                 await SafePointAsync().ConfigureAwait(false);
                 registered.Token.ThrowIfCancellationRequested();
                 var history = entry.WithState(state =>
-                    state.History.Select(m => (JsonObject)m.DeepClone()).ToArray()
+                    state.History.Snapshot().Materialize()
                 );
                 var result = chat is ISessionChatService ordinary
                     ? await ordinary
@@ -539,12 +539,8 @@ public sealed partial class LocalSessionTurnHost
             canonicalMessages.Add(message);
         }
 
-        var stagedHistory = state
-            .History.Select(message => (JsonObject)message.DeepClone())
-            .ToList();
-        stagedHistory.AddRange(
-            canonicalMessages.Select(message => (JsonObject)message.DeepClone())
-        );
+        var appended = canonicalMessages.Select(HistoryMessage.FromJson).ToArray();
+        var stagedHistory = state.History.Snapshot().Append(appended);
         var selected = new HashSet<QueueItem>(selectedItems, ReferenceEqualityComparer.Instance);
         var stagedQueue = state
             .Queue.Where(item => !selected.Contains(item))
@@ -611,7 +607,7 @@ public sealed partial class LocalSessionTurnHost
                         "Selected queue items disappeared before publish."
                     );
                 live.Queue.RemoveAll(item => selected.Contains(item));
-                live.History.AddRange(canonicalMessages);
+                live.History.AddRange(appended);
                 live.NextMessageSeq = nextSeq;
                 live.HistoryVersion = stagedHistoryVersion;
                 live.Meta["messageCount"] = live.History.Count;

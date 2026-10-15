@@ -217,7 +217,7 @@ internal sealed partial class SessionManager
                         return new CanonicalAppendPreparation(
                             snapshot with
                             {
-                                History = snapshot.History.Append(message).ToArray(),
+                                History = snapshot.History.AppendJson([message]),
                                 NextMessageSeq = snapshot.NextMessageSeq + 1,
                                 Meta = meta,
                             },

@@ -348,7 +348,7 @@ public sealed class ResponsesWsTests
             registry
                 .GetRequired("session")
                 .Snapshot()
-                .History.Count(row => row["role"]!.GetValue<string>() == "model")
+                .History.Materialize().Count(row => row["role"]!.GetValue<string>() == "model")
         );
     }
 

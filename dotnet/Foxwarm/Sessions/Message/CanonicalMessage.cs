@@ -21,12 +21,14 @@ public sealed class CanonicalMessage
         var node =
             JsonNode.Parse(text) as JsonObject
             ?? throw new FormatException("Message must be a JSON object.");
-        return FromNode(node);
+        return FromOwned(node);
     }
 
     public static CanonicalMessage FromNode(JsonObject input)
+        => FromOwned((JsonObject)input.DeepClone());
+
+    private static CanonicalMessage FromOwned(JsonObject owned)
     {
-        var owned = (JsonObject)input.DeepClone();
         var role =
             owned["role"]?.GetValue<string>()
             ?? throw new FormatException("Message role is required.");
@@ -39,9 +41,38 @@ public sealed class CanonicalMessage
         {
             if (part is not JsonObject partObject)
                 throw new FormatException("Message parts must contain objects.");
-            views.Add(new MessagePartView((JsonObject)partObject.DeepClone()));
+            views.Add(new MessagePartView(partObject));
         }
         return new CanonicalMessage(owned, role, views);
+    }
+
+    internal static bool IsVisible(JsonObject input)
+    {
+        var role = input["role"]?.GetValue<string>()
+            ?? throw new FormatException("Message role is required.");
+        if (role is not ("user" or "model" or "tool"))
+            throw new FormatException($"Unsupported message role: {role}");
+        if (input["parts"] is not JsonArray parts)
+            throw new FormatException("Message parts must be an array.");
+        if (parts.Any(part => part is not JsonObject))
+            throw new FormatException("Message parts must contain objects.");
+        return input["modelVisible"] is not JsonValue value
+            || !value.TryGetValue<bool>(out var visible) || visible;
+    }
+
+    internal static bool IsVisible(HistoryMessage input)
+    {
+        var json = input.Data;
+        var role = HistoryMessage.Text(json, "role")
+            ?? throw new FormatException("Message role is required.");
+        if (role is not ("user" or "model" or "tool"))
+            throw new FormatException($"Unsupported message role: {role}");
+        if (!json.TryGetProperty("parts", out var parts) || parts.ValueKind != JsonValueKind.Array)
+            throw new FormatException("Message parts must be an array.");
+        foreach (var part in parts.EnumerateArray())
+            if (part.ValueKind != JsonValueKind.Object)
+                throw new FormatException("Message parts must contain objects.");
+        return input.IsModelVisible;
     }
 
     public JsonObject ToJson() => (JsonObject)json.DeepClone();

@@ -30,7 +30,7 @@ internal sealed partial class SessionOwner
             var rows = state
                 .History.Skip(begin)
                 .Take(Math.Max(0, end - begin))
-                .Select(row => (JsonObject)row.DeepClone())
+                .Select(row => row.ToJson())
                 .ToArray();
             var metadata = Metadata();
             return new SessionMessagePage(
@@ -49,7 +49,7 @@ internal sealed partial class SessionOwner
                 SessionWait.Text(state.AuthorityEnvelope["persistentMemorySnapshot"]) ?? ""
             );
             var images = 0;
-            foreach (var row in state.History.Where(CompactCandidateBuilder.Visible))
+            foreach (var row in state.History.Where(row => row.IsModelVisible).Select(row => row.ToJson()))
             {
                 var summary = Foxwarm.Images.ImageTokenEstimate.Message(row);
                 tokens += summary.Tokens;

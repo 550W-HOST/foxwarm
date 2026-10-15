@@ -25,7 +25,7 @@ public sealed partial class SessionSaveLane
                 var index = prior is null
                     ? -1
                     : state.History.FindIndex(row =>
-                        SessionWait.Number(row["__meta"]?["seq"]) == seq
+                        row.Sequence == seq
                     );
                 if (prior is not null && index < 0)
                     throw new InvalidOperationException(
@@ -39,7 +39,7 @@ public sealed partial class SessionSaveLane
                         ["parts"] = new JsonArray(new JsonObject { ["text"] = chunk }),
                         ["__meta"] = new JsonObject { ["seq"] = seq, ["noticeType"] = "llm-retry" },
                     }
-                    : (JsonObject)state.History[index].DeepClone();
+                    : state.History[index].ToJson();
                 if (prior is not null)
                 {
                     var part = message["parts"]![0]!.AsObject();
@@ -49,11 +49,10 @@ public sealed partial class SessionSaveLane
                 message["__meta"]!["timestamp"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 message["__meta"]!["retry"] = retry.DeepClone();
                 var snapshot = state.Snapshot();
-                var history = snapshot.History.Select(row => (JsonObject)row.DeepClone()).ToList();
-                if (index < 0)
-                    history.Add((JsonObject)message.DeepClone());
-                else
-                    history[index] = (JsonObject)message.DeepClone();
+                var frozen = HistoryMessage.FromJson(message);
+                var history = index < 0
+                    ? snapshot.History.Append([frozen])
+                    : snapshot.History.Replace(index, frozen);
                 var meta = (JsonObject)snapshot.Meta.DeepClone();
                 meta["messageCount"] = history.Count;
                 var staged = snapshot with
@@ -70,19 +69,19 @@ public sealed partial class SessionSaveLane
                             throw new InvalidOperationException(
                                 "Retry append sequence changed before publication."
                             );
-                        current.History.Add((JsonObject)message.DeepClone());
+                        current.History.Add(frozen);
                         current.NextMessageSeq = seq + 1;
                     }
                     else
                     {
                         var actual = current.History.FindIndex(row =>
-                            SessionWait.Number(row["__meta"]?["seq"]) == seq
+                            row.Sequence == seq
                         );
                         if (actual < 0)
                             throw new InvalidOperationException(
                                 "Retry update sequence disappeared before publication."
                             );
-                        current.History[actual] = (JsonObject)message.DeepClone();
+                        current.History.Replace(actual, frozen);
                     }
                     current.Meta["messageCount"] = current.History.Count;
                     notice.Committed = (JsonObject)message.DeepClone();

@@ -196,26 +196,27 @@ internal sealed partial class SessionCompactor
         HostModels catalog
     )
     {
-        var cutoff = CompactCandidateBuilder.Split(snapshot.History, keep);
+        var originalRows = snapshot.History.Materialize();
+        var cutoff = CompactCandidateBuilder.Split(originalRows, keep);
         if (cutoff <= 0)
             return false;
         var bySeq = store
             .Archive.ReadEffectiveMessagesRange(1, 9007199254740991)
             .GroupBy(row => row.Seq)
             .ToDictionary(group => group.Key, group => group.ToArray());
-        var counts = snapshot
-            .History.Select(row =>
+        var counts = originalRows
+            .Select(row =>
                 CompactCandidateBuilder.Number(CompactCandidateBuilder.Meta(row)?["seq"])
             )
             .Where(seq => seq is > 0)
             .GroupBy(seq => seq!.Value)
             .ToDictionary(group => group.Key, group => group.Count());
-        var skillLoads = SkillLoadIds(snapshot.History);
-        var rewritten = snapshot.History.Select(row => (JsonObject)row.DeepClone()).ToArray();
+        var skillLoads = SkillLoadIds(originalRows);
+        var rewritten = originalRows.Select(row => (JsonObject)row.DeepClone()).ToArray();
         var affected = new HashSet<long>();
         for (var index = 0; index < cutoff; index++)
         {
-            var row = snapshot.History[index];
+            var row = originalRows[index];
             var seq = CompactCandidateBuilder.Number(CompactCandidateBuilder.Meta(row)?["seq"]);
             if (
                 seq is not > 0
@@ -252,7 +253,7 @@ internal sealed partial class SessionCompactor
         var after = EstimateHistory(rewritten, persistentSnapshot);
         var maximum = Math.Max(
             0,
-            (int)Math.Ceiling(EstimateHistory(snapshot.History, persistentSnapshot) * .6) - 1
+            (int)Math.Ceiling(EstimateHistory(originalRows, persistentSnapshot) * .6) - 1
         );
         if (after > maximum)
             return false;
@@ -262,8 +263,8 @@ internal sealed partial class SessionCompactor
                 .Archive.ReadEffectiveMessagesRange(1, 9007199254740991)
                 .Where(row => row.Seq == seq)
                 .ToArray();
-            var originals = snapshot
-                .History.Where(row =>
+            var originals = originalRows
+                .Where(row =>
                     CompactCandidateBuilder.Number(CompactCandidateBuilder.Meta(row)?["seq"]) == seq
                 )
                 .ToArray();
@@ -290,20 +291,21 @@ internal sealed partial class SessionCompactor
                         || snapshot
                             .History.Where(
                                 (message, index) =>
-                                    !JsonNode.DeepEquals(message, live.History[index])
+                                    !message.ContentEquals(live.History[index])
                             )
                             .Any()
                     )
                         throw new InvalidOperationException(
                             "Tool-response pruning snapshot changed incompatibly."
                         );
-                    var nextHistory = rewritten
-                        .Concat(live.History.Skip(snapshot.History.Count))
-                        .Select(row => (JsonObject)row.DeepClone())
-                        .ToArray();
+                    var nextHistory = snapshot.History;
+                    for (var index = 0; index < rewritten.Length; index++)
+                        if (snapshot.History[index].Sequence is long seq && affected.Contains(seq))
+                            nextHistory = nextHistory.Replace(index, HistoryMessage.FromJson(rewritten[index]));
+                    nextHistory = nextHistory.Append(live.History.Skip(snapshot.History.Count));
                     if (
                         EstimateHistory(
-                            nextHistory,
+                            nextHistory.Materialize(),
                             SessionWait.Text(live.AuthorityEnvelope["persistentMemorySnapshot"])
                                 ?? ""
                         ) > maximum

@@ -1,51 +1,44 @@
-using System.Text.Json.Nodes;
+using System.Text.Json;
 
 namespace Foxwarm.Sessions;
 
 internal static class TaskProgress
 {
-    internal static bool IsOrdinaryVisible(JsonObject row)
+    internal static long[] Sequences(SessionSnapshot snapshot) => Sequences(snapshot.History);
+
+    internal static long[] Sequences(IEnumerable<HistoryMessage> history) =>
+        history.Where(IsOrdinaryVisible)
+            .Select(row => row.Sequence ?? 0)
+            .Where(seq => seq > 0)
+            .Distinct().OrderBy(seq => seq).TakeLast(30).ToArray();
+
+    internal static bool IsOrdinaryVisible(HistoryMessage row)
     {
-        var meta = row["__meta"] as JsonObject;
-        if (Truthy(meta?["goalReminder"]) || Truthy(meta?["contextBlock"]))
+        var json = row.Data;
+        if (json.TryGetProperty("__meta", out var meta) && meta.ValueKind == JsonValueKind.Object
+            && (Truthy(meta, "goalReminder") || Truthy(meta, "contextBlock")))
             return false;
-        if (!CanonicalMessage.FromNode(row).IsModelVisible)
+        // Preserve canonical validation without creating a mutable copy.
+        if (!CanonicalMessage.IsVisible(row))
             return false;
-        return row["parts"] is JsonArray parts
-            && parts.Any(part =>
-                part is JsonObject value
-                && (
-                    IsText(value["text"])
-                    || value["functionCall"] is not null
-                    || value["functionResponse"] is not null
-                    || value["inlineData"] is not null
-                    || value["inlineDataRef"] is not null
-                )
-            );
+        return json.TryGetProperty("parts", out var parts) && parts.EnumerateArray().Any(part =>
+            part.ValueKind == JsonValueKind.Object
+            && (IsText(part, "text") || Present(part, "functionCall")
+                || Present(part, "functionResponse") || Present(part, "inlineData")
+                || Present(part, "inlineDataRef")));
     }
 
-    internal static long[] Sequences(SessionSnapshot snapshot) =>
-        snapshot
-            .History.Where(IsOrdinaryVisible)
-            .Select(row => row["__meta"]?["seq"])
-            .OfType<JsonValue>()
-            .Select(value => value.TryGetValue<long>(out var seq) ? seq : 0)
-            .Where(seq => seq > 0)
-            .Distinct()
-            .OrderBy(seq => seq)
-            .TakeLast(30)
-            .ToArray();
-
-    private static bool IsText(JsonNode? node) =>
-        node is JsonValue value && value.TryGetValue<string>(out _);
-
-    private static bool Truthy(JsonNode? node) =>
-        node switch
+    private static bool IsText(JsonElement obj, string key) =>
+        obj.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.String;
+    private static bool Present(JsonElement obj, string key) =>
+        obj.TryGetProperty(key, out var value) && value.ValueKind != JsonValueKind.Null;
+    private static bool Truthy(JsonElement obj, string key) =>
+        obj.TryGetProperty(key, out var value) && value.ValueKind switch
         {
-            null => false,
-            JsonValue value when value.TryGetValue<bool>(out var boolean) => boolean,
-            JsonValue value when value.TryGetValue<double>(out var number) => number != 0,
-            JsonValue value when value.TryGetValue<string>(out var text) => text.Length > 0,
+            JsonValueKind.Null or JsonValueKind.False => false,
+            JsonValueKind.Number => value.GetDouble() != 0,
+            JsonValueKind.String => value.GetString()!.Length > 0,
             _ => true,
         };
+
 }

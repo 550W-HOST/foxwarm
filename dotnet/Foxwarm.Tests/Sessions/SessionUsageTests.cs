@@ -88,7 +88,7 @@ public sealed class SessionUsageTests
                 if (
                     postCommit
                     && !fired
-                    && snapshot.History.Any(row => row["role"]?.ToString() == "model")
+                    && snapshot.History.Materialize().Any(row => row["role"]?.ToString() == "model")
                 )
                 {
                     fired = true;

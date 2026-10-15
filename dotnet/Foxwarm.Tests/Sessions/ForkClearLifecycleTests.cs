@@ -51,7 +51,7 @@ public sealed class ForkClearLifecycleTests
             before.AuthorityEnvelope["persistentMemorySnapshot"]!.ToJsonString(),
             fork.AuthorityEnvelope["persistentMemorySnapshot"]!.ToJsonString()
         );
-        var responses = fork.History[before.History.Count]["parts"]!.AsArray();
+        var responses = fork.History[before.History.Count].ToJson()["parts"]!.AsArray();
         Assert.Equal(
             "Child session created: " + child.Id,
             responses[0]!["functionResponse"]!["response"]!["output"]!.GetValue<string>()
@@ -66,7 +66,7 @@ public sealed class ForkClearLifecycleTests
         );
         Assert.Contains("history-inherited", fork.History[before.History.Count + 1].ToJsonString());
         Assert.Contains("afterSend", fork.History[before.History.Count + 2].ToJsonString());
-        Assert.Equal("user", fork.History.Last()["role"]!.GetValue<string>());
+        Assert.Equal("user", fork.History.Materialize().Last()["role"]!.GetValue<string>());
         Assert.Equal(
             before.History.Select(row => row.ToJsonString()),
             parent.Entry.Snapshot().History.Select(row => row.ToJsonString())
@@ -75,7 +75,7 @@ public sealed class ForkClearLifecycleTests
         Assert.Equal(3, child.Archive.ReadMessages().Count);
         var manual = await fixture.Manager.ForkAsync(parent, "copy");
         Assert.All(
-            manual.Entry.Snapshot().History[before.History.Count]["parts"]!.AsArray(),
+            manual.Entry.Snapshot().History[before.History.Count].ToJson()["parts"]!.AsArray(),
             part =>
                 Assert.Equal(
                     "Pending execution in parent session",
@@ -114,7 +114,7 @@ public sealed class ForkClearLifecycleTests
         Assert.Equal(
             new[] { "user", "user" },
             snapshot
-                .History.Skip(before.History.Count)
+                .History.Materialize().Skip(before.History.Count)
                 .Select(row => row["role"]!.GetValue<string>())
         );
         Assert.Null(snapshot.AuthorityEnvelope["childHandoffState"]);
@@ -141,7 +141,7 @@ public sealed class ForkClearLifecycleTests
             Assert.Single(delegated.Entry.Snapshot().Queue).Type
         );
         Assert.Equal(parent.Id, Assert.Single(delegated.Entry.Snapshot().Queue).SourceSessionId);
-        Assert.Equal("user", delegated.Entry.Snapshot().History.Last()["role"]!.GetValue<string>());
+        Assert.Equal("user", delegated.Entry.Snapshot().History.Materialize().Last()["role"]!.GetValue<string>());
         Assert.Contains("afterSend", delegated.Entry.Snapshot().History.Last().ToJsonString());
         var created = await fixture.Manager.Tasks.ExecuteAsync(
             new JsonObject { ["action"] = "create", ["title"] = "linked fork" },
@@ -171,7 +171,7 @@ public sealed class ForkClearLifecycleTests
         Assert.Equal(
             new[] { "user", "user" },
             linked
-                .History.Skip(parent.Entry.Snapshot().History.Count)
+                .History.Materialize().Skip(parent.Entry.Snapshot().History.Count)
                 .Select(row => row["role"]!.GetValue<string>())
         );
         Assert.Contains(taskId, linked.History.Last().ToJsonString());
@@ -463,7 +463,7 @@ public sealed class ForkClearLifecycleTests
             return new CanonicalAppendPreparation(
                 snapshot with
                 {
-                    History = snapshot.History.Concat(rows).ToArray(),
+                    History = snapshot.History.AppendJson(rows),
                     NextMessageSeq = seq,
                     Meta = meta,
                 },

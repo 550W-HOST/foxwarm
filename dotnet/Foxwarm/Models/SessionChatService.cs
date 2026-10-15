@@ -36,9 +36,8 @@ internal sealed class SessionChatService(
         CancellationToken cancellationToken
     )
     {
-        var selectedSnapshot = hosted.Entry.Snapshot();
         var catalog = models.Capture();
-        var selected = catalog.Select(selectedSnapshot);
+        var selected = hosted.Entry.WithState(state => catalog.Select(state.AuthorityEnvelope));
         var routeKey =
             selected.RawModel is not null && catalog.Contains(selected.RawModel)
                 ? selected.RawModel
@@ -52,9 +51,9 @@ internal sealed class SessionChatService(
         var retainedTaskIds = new List<string>();
         async Task<IReadOnlyList<JsonObject>> RequestContext()
         {
-            var visible = TaskProgress.Sequences(hosted.Entry.Snapshot());
             if (tasks is null)
                 return [];
+            var visible = hosted.Entry.WithState(state => TaskProgress.Sequences(state.History));
             var context = tasks.TaskContext(hosted.Id, visible, true, retainedTaskIds);
             var current = context["tasks"]!.AsArray();
             retainedTaskIds = current.Select(item => item!["id"]!.GetValue<string>()).ToList();
@@ -86,10 +85,8 @@ internal sealed class SessionChatService(
         async Task<string> Prompt(ConcreteHostModel leaf, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
-            var value =
-                SessionWait.Text(
-                    hosted.Entry.Snapshot().AuthorityEnvelope["persistentMemorySnapshot"]
-                ) ?? "";
+            var value = hosted.Entry.WithState(state =>
+                SessionWait.Text(state.AuthorityEnvelope["persistentMemorySnapshot"])) ?? "";
             if (ConditionalMemory.ReadCurrentModelSnapshotId(value) != leaf.Key)
             {
                 value = await memory.BuildAsync(
@@ -97,7 +94,7 @@ internal sealed class SessionChatService(
                     hosted.Id,
                     leaf.Key,
                     token,
-                    AgentMemory.Selection(hosted.Entry.Snapshot().AuthorityEnvelope)
+                    hosted.Entry.WithState(state => AgentMemory.Selection(state.AuthorityEnvelope))
                 );
                 await hosted.Entry.SaveLane.CommitMemorySnapshotAsync(value);
             }
@@ -134,9 +131,7 @@ internal sealed class SessionChatService(
                         if (!await prepareRetry(token))
                             return null;
                         return hosted.Entry.WithState(state =>
-                            state
-                                .History.Select(message => (JsonObject)message.DeepClone())
-                                .ToArray()
+                            state.History.Snapshot().Materialize()
                         );
                     },
                 "normal-turn",

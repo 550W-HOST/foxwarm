@@ -162,7 +162,7 @@ public sealed class RetryInputSafePointTests
             await WaitFor(() =>
                 f
                     .Owner.Entry.Snapshot()
-                    .History.Any(row =>
+                    .History.Materialize().Any(row =>
                         row["__meta"]?["noticeType"]?.GetValue<string>() == "llm-retry"
                     )
             );
@@ -192,7 +192,7 @@ public sealed class RetryInputSafePointTests
             Assert.Equal(
                 new[] { "seed", "queued-one", "queued-two", "queued-three", "late-input" },
                 state
-                    .History.Where(row => row["role"]?.GetValue<string>() == "user")
+                    .History.Materialize().Where(row => row["role"]?.GetValue<string>() == "user")
                     .Select(row => row["parts"]!.ToJsonString())
                     .Select(text =>
                         new[]
@@ -207,7 +207,7 @@ public sealed class RetryInputSafePointTests
             );
             Assert.Equal(
                 2,
-                state.History.Count(row =>
+                state.History.Materialize().Count(row =>
                     row["role"]?.GetValue<string>() == "model"
                     && row["modelVisible"]?.GetValue<bool>() != false
                 )
@@ -257,7 +257,7 @@ public sealed class RetryInputSafePointTests
             6,
             owned
                 .Owner.Entry.Snapshot()
-                .History.Count(row => row["role"]?.GetValue<string>() == "user")
+                .History.Materialize().Count(row => row["role"]?.GetValue<string>() == "user")
         );
         for (var index = 1; index < 6; index++)
             Assert.True(
@@ -342,7 +342,7 @@ public sealed class RetryInputSafePointTests
             await WaitFor(() =>
                 f
                     .Owner.Entry.Snapshot()
-                    .History.Any(row =>
+                    .History.Materialize().Any(row =>
                         row["__meta"]?["noticeType"]?.GetValue<string>() == "llm-retry"
                     )
             );
@@ -363,7 +363,7 @@ public sealed class RetryInputSafePointTests
             if (runQueued)
                 Assert.Contains("queued", (await peer.RequestAt(1)).Body);
             Assert.Single(
-                state.History,
+                state.History.Materialize(),
                 row => row["__meta"]?["clientMessageId"]?.GetValue<string>() == "queued"
             );
         }
@@ -431,7 +431,7 @@ public sealed class RetryInputSafePointTests
             Assert.Equal(
                 committed,
                 f.Owner.Entry.Snapshot()
-                    .History.Any(row =>
+                    .History.Materialize().Any(row =>
                         row["__meta"]?["clientMessageId"]?.GetValue<string>() == "queued"
                     )
             );

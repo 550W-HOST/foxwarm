@@ -77,7 +77,7 @@ public sealed class SessionIdentityRecoveryTests
         Assert.Equal(phase == "finishing" ? "new" : "old", ownerAfter.Id);
         Assert.Equal(
             "Original immutable audit",
-            ownerAfter.Entry.Snapshot().History[0]["parts"]![0]!["text"]!.GetValue<string>()
+            ownerAfter.Entry.Snapshot().History[0].ToJson()["parts"]![0]!["text"]!.GetValue<string>()
         );
         Assert.Single(ownerAfter.Archive.ReadMessages());
         Assert.Equal(ownerAfter.Id, ownerAfter.Archive.ReadMessages().Single().SessionId);

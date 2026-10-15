@@ -272,7 +272,7 @@ public sealed partial class CompactLifecycleTests
         Assert.Single(owner.Archive.ReadBlocks());
         Assert.True(owner.Entry.Snapshot().History.Count < before);
         var completion = Assert.Single(
-            owner.Entry.Snapshot().History,
+            owner.Entry.Snapshot().History.Materialize(),
             row => row["compaction"]?["planner"] is JsonObject
         );
         var planner = completion["compaction"]!["planner"]!.AsObject();
@@ -308,7 +308,7 @@ public sealed partial class CompactLifecycleTests
         );
         Assert.Equal(completion.ToJsonString(), archivedCompletion.Message.ToJsonString());
         Assert.DoesNotContain(
-            owner.Entry.Snapshot().History,
+            owner.Entry.Snapshot().History.Materialize(),
             row =>
                 row["compaction"] is null
                 && row.ToJsonString()
@@ -435,7 +435,7 @@ public sealed partial class CompactLifecycleTests
         await using var fixture = await CompactFixture.CreateAsync();
         var bytes = ImageCodecTests.Raster(SkiaSharp.SKEncodedImageFormat.Png);
         await fixture.SeedAsync(bytes);
-        var image = fixture.Owner.Entry.Snapshot().History[0]["parts"]!
+        var image = fixture.Owner.Entry.Snapshot().History[0].ToJson()["parts"]!
             .AsArray()
             .OfType<JsonObject>()
             .Single(part => part["inlineDataRef"] is not null);
@@ -449,7 +449,7 @@ public sealed partial class CompactLifecycleTests
         await fixture.Owner.DrainForegroundAsync();
         Assert.Single(fixture.Store.Archive.ReadBlocks());
         Assert.Contains(
-            fixture.Owner.Entry.Snapshot().History,
+            fixture.Owner.Entry.Snapshot().History.Materialize(),
             row => row["__meta"]?["contextBlock"] is JsonObject
         );
         Assert.Equal(
@@ -505,7 +505,7 @@ public sealed partial class CompactLifecycleTests
         Assert.Equal(visible.Max(), row.GetInt64(0));
         Assert.Equal(visible.Length, row.GetInt32(1));
         Assert.DoesNotContain(
-            fixture.Owner.Entry.Snapshot().History,
+            fixture.Owner.Entry.Snapshot().History.Materialize(),
             message => message["__meta"]?["goalReminder"] is not null
         );
         Assert.Empty(fixture.Owner.Entry.Snapshot().Queue);
@@ -563,7 +563,7 @@ public sealed partial class CompactLifecycleTests
         Assert.Empty(fixture.Store.Archive.ReadBlocks());
         Assert.Empty(fixture.Owner.Entry.Snapshot().Queue);
         Assert.Contains(
-            fixture.Owner.Entry.Snapshot().History,
+            fixture.Owner.Entry.Snapshot().History.Materialize(),
             row => row["parts"]?[0]?["text"]?.GetValue<string>() == "ordinary after failed planner"
         );
         Assert.Equal(0, fixture.Owner.Entry.BackgroundProcessorFailureCount);
@@ -620,7 +620,7 @@ public sealed partial class CompactLifecycleTests
         {
             Assert.Single(fixture.Store.Archive.ReadBlocks());
             Assert.Equal(archive.Length + 1, fixture.Store.Archive.ReadMessages().Count);
-            Assert.Contains(live.History, row => row["__meta"]?["contextBlock"] is JsonObject);
+            Assert.Contains(live.History.Materialize(), row => row["__meta"]?["contextBlock"] is JsonObject);
             Assert.Contains(
                 "refreshed memory",
                 SessionWait.Text(live.AuthorityEnvelope["persistentMemorySnapshot"])
@@ -707,7 +707,7 @@ public sealed partial class CompactLifecycleTests
         fixture.Peer.ReleaseForeground();
         await fixture.Owner.DrainForegroundAsync();
         Assert.Contains(
-            fixture.Owner.Entry.Snapshot().History,
+            fixture.Owner.Entry.Snapshot().History.Materialize(),
             row => row["parts"]?[0]?["text"]?.GetValue<string>() == "ordinary after cancellation"
         );
         Assert.Equal(0, fixture.Owner.Entry.BackgroundProcessorFailureCount);
@@ -928,7 +928,7 @@ public sealed partial class CompactLifecycleTests
             );
             Assert.Equal(2, current.Queue.Count);
             Assert.DoesNotContain(
-                current.History,
+                current.History.Materialize(),
                 row => row["__meta"]?["contextBlock"] is JsonObject
             );
         }
@@ -936,7 +936,7 @@ public sealed partial class CompactLifecycleTests
         {
             Assert.Null(fixture.Owner.Entry.LastBackgroundProcessorFailure);
             Assert.Empty(current.Queue);
-            Assert.Contains(current.History, row => row["__meta"]?["contextBlock"] is JsonObject);
+            Assert.Contains(current.History.Materialize(), row => row["__meta"]?["contextBlock"] is JsonObject);
             var body = fixture.Peer.NormalBodies.Last();
             Assert.Contains("CTX-BLOCK", body);
             Assert.Contains("refreshed system snapshot during retry", body);
@@ -947,7 +947,7 @@ public sealed partial class CompactLifecycleTests
                 Assert.Contains("correction A", body);
                 Assert.Contains("correction B", body);
                 Assert.Single(
-                    current.History,
+                    current.History.Materialize(),
                     row => row["parts"]!.ToJsonString().Contains("correction A")
                 );
             }
@@ -983,7 +983,7 @@ public sealed partial class CompactLifecycleTests
         fixture.Peer.ReleaseForeground();
         await fixture.StageReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.DoesNotContain(
-            fixture.Owner.Entry.Snapshot().History,
+            fixture.Owner.Entry.Snapshot().History.Materialize(),
             row => row["parts"]!.ToJsonString().Contains("cross compact correction")
         );
         var action = runQueued
@@ -995,7 +995,7 @@ public sealed partial class CompactLifecycleTests
         Assert.Equal(runQueued ? 9 : 8, fixture.Peer.NormalRequests);
         Assert.Empty(fixture.Owner.Entry.Snapshot().Queue);
         Assert.Single(
-            fixture.Owner.Entry.Snapshot().History,
+            fixture.Owner.Entry.Snapshot().History.Materialize(),
             row => row["parts"]!.ToJsonString().Contains("cross compact correction")
         );
         Assert.False(fixture.Owner.Compacting);
@@ -1021,7 +1021,7 @@ public sealed partial class CompactLifecycleTests
         while (
             !fixture
                 .Owner.Entry.Snapshot()
-                .History.Any(row => row["__meta"]?["noticeType"]?.GetValue<string>() == "llm-retry")
+                .History.Materialize().Any(row => row["__meta"]?["noticeType"]?.GetValue<string>() == "llm-retry")
         )
             await Task.Delay(5, timeout.Token);
         fixture.HoldIngress = true;
@@ -1042,7 +1042,7 @@ public sealed partial class CompactLifecycleTests
         Assert.Equal(runQueued ? 9 : 8, fixture.Peer.NormalRequests);
         Assert.Empty(fixture.Owner.Entry.Snapshot().Queue);
         Assert.Single(
-            fixture.Owner.Entry.Snapshot().History,
+            fixture.Owner.Entry.Snapshot().History.Materialize(),
             row => row["parts"]!.ToJsonString().Contains("ingress correction")
         );
     }

@@ -20,7 +20,7 @@ internal sealed partial class SessionCompactor
     {
         var detached = snapshot
             .History.Take(Math.Max(0, candidates.Split))
-            .Select(row => (JsonObject)row.DeepClone())
+            .Select(row => row.ToJson())
             .ToList();
         var plannerHistoryStart = detached.Count;
         var plannerToolCalls = new List<string>();

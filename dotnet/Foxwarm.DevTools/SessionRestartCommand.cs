@@ -262,14 +262,14 @@ internal static class SessionRestartCommand
                 ["roles"] = new JsonArray(
                     final
                         .History.Select(message =>
-                            JsonValue.Create(message["role"]!.GetValue<string>())
+                            JsonValue.Create(message.Role)
                         )
                         .ToArray()
                 ),
                 ["seqs"] = new JsonArray(
                     final
                         .History.Select(message =>
-                            JsonValue.Create(message["__meta"]!["seq"]!.GetValue<long>())
+                            JsonValue.Create(message.Sequence)
                         )
                         .ToArray()
                 ),

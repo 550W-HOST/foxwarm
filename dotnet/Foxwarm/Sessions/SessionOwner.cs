@@ -94,20 +94,21 @@ internal sealed partial class SessionOwner
         };
     }
 
-    public IReadOnlyList<JsonObject> History() => Entry.Snapshot().History;
+    public IReadOnlyList<JsonObject> History() => Entry.WithState(state => state.History.Snapshot()).Materialize();
 
     public void EnableCommittedNotifications()
     {
         lastNotifiedSeq =
-            Entry.Snapshot().History.LastOrDefault()?["__meta"]?["seq"]?.GetValue<long>() ?? 0;
+            Entry.WithState(state => state.History.LastOrDefault()?.Sequence ?? 0);
         Entry.Committed = snapshot =>
         {
-            foreach (var message in snapshot.History)
+            foreach (var record in snapshot.History)
             {
-                var seq = message["__meta"]?["seq"]?.GetValue<long>() ?? 0;
+                var seq = record.Sequence ?? 0;
                 if (seq <= lastNotifiedSeq)
                     continue;
                 lastNotifiedSeq = seq;
+                var message = record.ToJson();
                 Emit(SessionEventKind.MessageCommitted, message);
                 ClearCommittedDraft(message);
             }

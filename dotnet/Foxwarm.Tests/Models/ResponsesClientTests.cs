@@ -94,11 +94,11 @@ public sealed class ResponsesClientTests
             var snapshot = entry.Snapshot();
             Assert.Equal(
                 new[] { "user", "model", "tool", "model" },
-                snapshot.History.Select(message => message["role"]!.GetValue<string>())
+                snapshot.History.Materialize().Select(message => message["role"]!.GetValue<string>())
             );
             Assert.Equal(
                 new long[] { 1, 2, 3, 4 },
-                snapshot.History.Select(message => message["__meta"]!["seq"]!.GetValue<long>())
+                snapshot.History.Materialize().Select(message => message["__meta"]!["seq"]!.GetValue<long>())
             );
             Assert.Equal(5, snapshot.NextMessageSeq);
             Assert.Equal(1, entry.ProcessorClaimCount);
@@ -115,7 +115,7 @@ public sealed class ResponsesClientTests
             var archive = store.Archive.ReadMessages();
             Assert.Equal(4, archive.Count);
             Assert.Equal(
-                snapshot.History.Select(EcmaJson.Stringify),
+                snapshot.History.Materialize().Select(EcmaJson.Stringify),
                 archive.Select(record => record.MessageJson)
             );
             var replayResult = Path.Combine(root, "actual-ts-replay.json");
@@ -242,7 +242,7 @@ public sealed class ResponsesClientTests
         Assert.Equal(1, server.RequestCount);
         var snapshot = entry.Snapshot();
         Assert.Equal(2, snapshot.History.Count);
-        var assistant = snapshot.History[1];
+        var assistant = snapshot.History.Materialize()[1];
         Assert.Equal("model", assistant["role"]?.GetValue<string>());
         var parts = Assert.IsType<JsonArray>(assistant["parts"]);
         Assert.Equal(3, parts.Count);
@@ -301,7 +301,7 @@ public sealed class ResponsesClientTests
 
             Assert.Equal(1, server.RequestCount);
             Assert.DoesNotContain(
-                entry.Snapshot().History,
+                entry.Snapshot().History.Materialize(),
                 message => message["role"]?.GetValue<string>() == "model"
             );
             Assert.False(entry.Snapshot().Busy);
@@ -391,10 +391,10 @@ public sealed class ResponsesClientTests
 
         Assert.Equal(1, server.RequestCount);
         Assert.DoesNotContain(
-            entry.Snapshot().History,
+            entry.Snapshot().History.Materialize(),
             message => message["role"]?.GetValue<string>() == "model"
         );
-        Assert.Single(entry.Snapshot().History);
+        Assert.Single(entry.Snapshot().History.Materialize());
     }
 
     [Fact]
@@ -420,8 +420,8 @@ public sealed class ResponsesClientTests
         await registry.Runner.ProcessQueueAsync("s");
 
         Assert.Equal(1, server.RequestCount);
-        Assert.Single(entry.Snapshot().History);
-        Assert.Equal("user", entry.Snapshot().History[0]["role"]?.GetValue<string>());
+        Assert.Single(entry.Snapshot().History.Materialize());
+        Assert.Equal("user", entry.Snapshot().History[0].ToJson()["role"]?.GetValue<string>());
         Assert.Equal(
             1,
             entry.Snapshot().AuthorityEnvelope["stats"]!["totalInputTokens"]!.GetValue<double>()
@@ -473,13 +473,13 @@ public sealed class ResponsesClientTests
 
             Assert.Equal(1, server.RequestCount);
             Assert.DoesNotContain(
-                entry.Snapshot().History,
+                entry.Snapshot().History.Materialize(),
                 message => message["role"]?.GetValue<string>() == "model"
             );
             var stored = await store.LoadAsync("s");
             Assert.NotNull(stored);
             Assert.DoesNotContain(
-                stored!.History,
+                stored!.History.Materialize(),
                 message => message["role"]?.GetValue<string>() == "model"
             );
             Assert.Single(store.Archive.ReadMessages());
@@ -541,7 +541,7 @@ public sealed class ResponsesClientTests
             Assert.Equal("once", await File.ReadAllTextAsync(Path.Combine(root, "once.txt")));
             Assert.Equal(
                 new[] { "user", "model" },
-                entry.Snapshot().History.Select(message => message["role"]!.GetValue<string>())
+                entry.Snapshot().History.Materialize().Select(message => message["role"]!.GetValue<string>())
             );
             Assert.Equal(2, store.Archive.ReadMessages().Count);
         }

@@ -67,11 +67,11 @@ public sealed class PersistentSessionTurnTests
         );
         Assert.Equal(
             Enumerable.Range(1, hot.History.Count).Select(value => (long)value),
-            hot.History.Select(Seq)
+            hot.History.Materialize().Select(Seq)
         );
         Assert.Equal(hot.History.Count + 1, hot.NextMessageSeq);
-        Assert.Equal(hot.History.Select(MessageText), hot.History.Select(MessageText).Distinct());
-        var combined = string.Join("|", hot.History.Select(MessageText));
+        Assert.Equal(hot.History.Materialize().Select(MessageText), hot.History.Materialize().Select(MessageText).Distinct());
+        var combined = string.Join("|", hot.History.Materialize().Select(MessageText));
         Assert.Contains("A", combined);
         Assert.Contains("B", combined);
         Assert.Contains("C", combined);
@@ -114,7 +114,7 @@ public sealed class PersistentSessionTurnTests
         Assert.NotNull(stored);
         Assert.False(hot.Busy);
         Assert.False(hot.Stopping);
-        Assert.Equal(new long[] { 1, 2 }, hot.History.Select(Seq));
+        Assert.Equal(new long[] { 1, 2 }, hot.History.Materialize().Select(Seq));
         Assert.Equal(
             hot.History.Select(message => message.ToJsonString()),
             stored!.History.Select(message => message.ToJsonString())
@@ -315,7 +315,7 @@ public sealed class PersistentSessionTurnTests
         Assert.Equal(9, (await store.LoadAsync("s"))!.HistoryVersion);
         Assert.Equal(
             new double[] { 4242, 4242, 4242, 4242, 7, 4242 },
-            snapshot.History.Select(Timestamp)
+            snapshot.History.Materialize().Select(Timestamp)
         );
     }
 

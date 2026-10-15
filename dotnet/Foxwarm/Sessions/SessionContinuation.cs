@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
@@ -13,29 +14,23 @@ public sealed class SessionContinuationUnavailableException(
 // Direct translation of sessionContinuation.ts; availability is history-derived, never an effect retry ledger.
 public static class SessionContinuation
 {
-    private static JsonNode? Property(JsonNode? node, string key) =>
-        node is JsonObject obj ? obj[key] : null;
+    private static JsonElement Property(JsonElement node, string key) =>
+        node.ValueKind == JsonValueKind.Object && node.TryGetProperty(key, out var value)
+            ? value : default;
 
-    private static bool Truthy(JsonNode? node)
+    private static bool Truthy(JsonElement node) => node.ValueKind switch
     {
-        if (node is null)
-            return false;
-        if (node is not JsonValue value)
-            return true;
-        if (value.TryGetValue<bool>(out var flag))
-            return flag;
-        if (value.TryGetValue<string>(out var text))
-            return text.Length > 0;
-        return SessionWait.Number(node) is not double number
-            || number != 0 && !double.IsNaN(number);
-    }
+        JsonValueKind.Undefined or JsonValueKind.Null or JsonValueKind.False => false,
+        JsonValueKind.String => node.GetString()!.Length > 0,
+        JsonValueKind.Number => node.GetDouble() != 0 && !double.IsNaN(node.GetDouble()),
+        _ => true,
+    };
 
-    private static string? Text(JsonNode? value) => SessionWait.Text(value);
-
-    private static bool Flag(JsonNode? value, bool expected) =>
-        value is JsonValue scalar && scalar.TryGetValue<bool>(out var flag) && flag == expected;
-
-    private static bool Meaningful(JsonNode? node) =>
+    private static string? Text(JsonElement value) =>
+        value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+    private static bool Flag(JsonElement value, bool expected) =>
+        value.ValueKind == (expected ? JsonValueKind.True : JsonValueKind.False);
+    private static bool Meaningful(JsonElement node) =>
         Text(node) is string text && Trim(text).Length > 0;
 
     private static string Trim(string value)
@@ -66,13 +61,18 @@ public static class SessionContinuation
         return value[start..end];
     }
 
-    private static JsonObject[] Parts(JsonObject message) =>
-        message["parts"] is JsonArray parts ? parts.OfType<JsonObject>().ToArray() : [];
+    private static JsonElement[] Parts(JsonElement message)
+    {
+        var parts = Property(message, "parts");
+        return parts.ValueKind == JsonValueKind.Array
+            ? parts.EnumerateArray().Where(part => part.ValueKind == JsonValueKind.Object).ToArray()
+            : [];
+    }
 
-    private static bool Retry(JsonObject message) =>
-        Text(message["__meta"]?["noticeType"]) == "llm-retry";
+    private static bool Retry(JsonElement message) =>
+        Text(Property(Property(message, "__meta"), "noticeType")) == "llm-retry";
 
-    private static bool CompactText(JsonNode? value)
+    private static bool CompactText(JsonElement value)
     {
         if (Text(value) is not string text)
             return false;
@@ -90,7 +90,7 @@ public static class SessionContinuation
             );
     }
 
-    private static bool GoalText(JsonNode? value)
+    private static bool GoalText(JsonElement value)
     {
         if (Text(value) is not string text)
             return false;
@@ -101,86 +101,84 @@ public static class SessionContinuation
         return match.Success && Trim(match.Groups[1].Value).Length > 0;
     }
 
-    private static bool Compact(JsonObject message)
+    private static bool Compact(JsonElement message)
     {
         var parts = Parts(message);
         if (
-            Text(message["role"]) == "user"
-            && Flag(message["__meta"]?["goalReminder"], true)
-            && Text(message["__meta"]?["goalReminderKind"]) == "compact-completion"
+            Text(Property(message, "role")) == "user"
+            && Flag(Property(Property(message, "__meta"), "goalReminder"), true)
+            && Text(Property(Property(message, "__meta"), "goalReminderKind")) == "compact-completion"
             && parts.Length == 2
-            && parts[0].Count == 1
-            && CompactText(parts[0]["system"])
-            && parts[1].Count == 1
-            && GoalText(parts[1]["system"])
+            && parts[0].EnumerateObject().Count() == 1
+            && CompactText(Property(parts[0], "system"))
+            && parts[1].EnumerateObject().Count() == 1
+            && GoalText(Property(parts[1], "system"))
         )
             return true;
         var meaningful = parts
             .Where(part =>
-                Truthy(part["functionCall"])
-                || Truthy(part["functionResponse"])
-                || Meaningful(part["thinking"])
-                || Meaningful(part["text"])
-                || Meaningful(part["system"])
+                Truthy(Property(part, "functionCall"))
+                || Truthy(Property(part, "functionResponse"))
+                || Meaningful(Property(part, "thinking"))
+                || Meaningful(Property(part, "text"))
+                || Meaningful(Property(part, "system"))
             )
             .ToArray();
         return meaningful.Length > 0
             && meaningful.All(part =>
-                !Truthy(part["functionCall"])
-                && !Truthy(part["functionResponse"])
-                && !Meaningful(part["thinking"])
-                && new[] { part["text"], part["system"] }.Where(Meaningful).All(CompactText)
+                !Truthy(Property(part, "functionCall"))
+                && !Truthy(Property(part, "functionResponse"))
+                && !Meaningful(Property(part, "thinking"))
+                && new[] { Property(part, "text"), Property(part, "system") }.Where(Meaningful).All(CompactText)
             );
     }
 
-    private static bool Transparent(JsonObject message) =>
-        Flag(message["__meta"]?["temporary"], true)
-        || Flag(message["__meta"]?["optimistic"], true)
-        || !Retry(message) && (Flag(message["modelVisible"], false) || Compact(message));
+    private static bool Transparent(JsonElement message) =>
+        Flag(Property(Property(message, "__meta"), "temporary"), true)
+        || Flag(Property(Property(message, "__meta"), "optimistic"), true)
+        || !Retry(message) && (Flag(Property(message, "modelVisible"), false) || Compact(message));
 
-    private static bool BareWait(JsonNode? args)
+    private static bool BareWait(JsonElement args)
     {
-        if (args is null)
-            return true; // Omitted historical args.
-        if (args is not JsonObject obj)
+        if (args.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+            return true;
+        if (args.ValueKind != JsonValueKind.Object)
             return false;
-        return obj.All(pair =>
-            pair.Key switch
-            {
-                "reason" => Text(pair.Value) is not null,
-                "timeoutSeconds" => SessionWait.Number(pair.Value) == 0,
-                "waitAllSessions" or "waitExecIds" => pair.Value is JsonArray { Count: 0 },
-                _ => false,
-            }
-        );
+        return args.EnumerateObject().All(pair => pair.Name switch
+        {
+            "reason" => Text(pair.Value) is not null,
+            "timeoutSeconds" => pair.Value.ValueKind == JsonValueKind.Number && pair.Value.GetDouble() == 0,
+            "waitAllSessions" or "waitExecIds" => pair.Value.ValueKind == JsonValueKind.Array && pair.Value.GetArrayLength() == 0,
+            _ => false,
+        });
     }
 
-    private static bool TerminalCall(JsonObject call)
+    private static bool TerminalCall(JsonElement call)
     {
-        var name = Text(call["name"]);
+        var name = Text(Property(call, "name"));
         if (name == "wait")
-            return call.ContainsKey("args") && call["args"] is null
+            return Property(call, "args").ValueKind == JsonValueKind.Null
                 ? false
-                : BareWait(call["args"]);
+                : BareWait(Property(call, "args"));
         return name is "send_to_session" or "create_child_session"
             && (
-                Text(Property(call["args"], "afterSend")) is "wait" or "finish"
-                || Flag(Property(call["args"], "waitAfterHandoff"), true)
-                || Flag(Property(call["args"], "noFurtherAssistantReply"), true)
+                Text(Property(Property(call, "args"), "afterSend")) is "wait" or "finish"
+                || Flag(Property(Property(call, "args"), "waitAfterHandoff"), true)
+                || Flag(Property(Property(call, "args"), "noFurtherAssistantReply"), true)
             );
     }
 
-    private static bool TerminalTools(IReadOnlyList<JsonObject> messages, int last)
+    private static bool TerminalTools(IReadOnlyList<HistoryMessage> messages, int last)
     {
         var batchIndex = -1;
         for (var index = last - 1; index >= 0; index--)
         {
-            var message = messages[index];
-            if (Transparent(message) || Text(message["role"]) == "tool")
+            var message = messages[index].Data;
+            if (Transparent(message) || Text(Property(message, "role")) == "tool")
                 continue;
             if (
-                Text(message["role"]) != "model"
-                || !Parts(message).Any(part => Truthy(part["functionCall"]))
+                Text(Property(message, "role")) != "model"
+                || !Parts(message).Any(part => Truthy(Property(part, "functionCall")))
             )
                 return false;
             batchIndex = index;
@@ -188,52 +186,52 @@ public static class SessionContinuation
         }
         if (
             batchIndex < 0
-            || Parts(messages[batchIndex]).Any(part => Truthy(part["functionResponse"]))
+            || Parts(messages[batchIndex].Data).Any(part => Truthy(Property(part, "functionResponse")))
         )
             return false;
-        var callNodes = Parts(messages[batchIndex])
-            .Select(part => part["functionCall"])
+        var callNodes = Parts(messages[batchIndex].Data)
+            .Select(part => Property(part, "functionCall"))
             .Where(Truthy)
             .ToArray();
-        if (callNodes.Any(node => node is not JsonObject))
+        if (callNodes.Any(node => node.ValueKind != JsonValueKind.Object))
             return false;
-        var calls = callNodes.Cast<JsonObject>().ToArray();
-        var byId = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+        var calls = callNodes;
+        var byId = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         foreach (var call in calls)
         {
-            var id = Text(call["id"]);
+            var id = Text(Property(call, "id"));
             if (
                 string.IsNullOrEmpty(id)
-                || string.IsNullOrEmpty(Text(call["name"]))
+                || string.IsNullOrEmpty(Text(Property(call, "name")))
                 || !byId.TryAdd(id, call)
             )
                 return false;
         }
-        var responses = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+        var responses = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         for (var index = batchIndex + 1; index <= last; index++)
         {
-            var message = messages[index];
+            var message = messages[index].Data;
             if (Transparent(message))
                 continue;
             var parts = Parts(message);
-            if (Text(message["role"]) != "tool" || parts.Any(part => Truthy(part["functionCall"])))
+            if (Text(Property(message, "role")) != "tool" || parts.Any(part => Truthy(Property(part, "functionCall"))))
                 return false;
             var responseNodes = parts
-                .Select(part => part["functionResponse"])
+                .Select(part => Property(part, "functionResponse"))
                 .Where(Truthy)
                 .ToArray();
-            if (responseNodes.Any(node => node is not JsonObject))
+            if (responseNodes.Any(node => node.ValueKind != JsonValueKind.Object))
                 return false;
-            var row = responseNodes.Cast<JsonObject>().ToArray();
+            var row = responseNodes;
             if (row.Length == 0)
                 return false;
             foreach (var response in row)
             {
-                var id = Text(response["tool_use_id"]);
+                var id = Text(Property(response, "tool_use_id"));
                 if (
                     string.IsNullOrEmpty(id)
                     || !byId.TryGetValue(id, out var call)
-                    || Text(response["name"]) != Text(call["name"])
+                    || Text(Property(response, "name")) != Text(Property(call, "name"))
                     || !responses.TryAdd(id, response)
                 )
                     return false;
@@ -242,21 +240,24 @@ public static class SessionContinuation
         return responses.Count == calls.Length
             && byId.Any(pair =>
                 TerminalCall(pair.Value)
-                && Property(responses[pair.Key]["response"], "error") is null
+                && Property(Property(responses[pair.Key], "response"), "error").ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
             );
     }
 
-    public static bool IsIncomplete(IReadOnlyList<JsonObject> messages)
+    public static bool IsIncomplete(IReadOnlyList<JsonObject> messages) =>
+        IsIncomplete(SessionHistory.FromJson(messages));
+
+    public static bool IsIncomplete(IReadOnlyList<HistoryMessage> messages)
     {
         var index = messages.Count - 1;
-        while (index >= 0 && Transparent(messages[index]))
+        while (index >= 0 && Transparent(messages[index].Data))
             index--;
         if (index < 0)
             return false;
-        var message = messages[index];
+        var message = messages[index].Data;
         if (Retry(message))
             return true;
-        var role = Text(message["role"]);
+        var role = Text(Property(message, "role"));
         if (role == "user")
             return true;
         if (role == "tool")
@@ -264,12 +265,12 @@ public static class SessionContinuation
         if (role != "model")
             return true;
         var parts = Parts(message);
-        var calls = parts.Any(part => Truthy(part["functionCall"]));
-        var complete = message["__meta"]?["llmSegment"]?["complete"];
+        var calls = parts.Any(part => Truthy(Property(part, "functionCall")));
+        var complete = Property(Property(Property(message, "__meta"), "llmSegment"), "complete");
         if (Flag(complete, false))
             return true;
         if (Flag(complete, true))
             return calls;
-        return !parts.Any(part => Meaningful(part["text"])) || calls;
+        return !parts.Any(part => Meaningful(Property(part, "text"))) || calls;
     }
 }
