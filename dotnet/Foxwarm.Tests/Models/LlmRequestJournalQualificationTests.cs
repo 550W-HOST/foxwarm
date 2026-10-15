@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
+using Foxwarm.Tools;
 
 namespace Foxwarm.Tests.Models;
 
@@ -128,8 +129,11 @@ public sealed class LlmRequestJournalQualificationTests
         }
     }
 
-    [Fact]
-    public async Task Toolscript_projection_is_shared_by_canonical_journal_and_actual_provider_preparation_without_changing_history()
+    [Theory]
+    [InlineData("normal")]
+    [InlineData("guarded-success")]
+    [InlineData("guarded-error")]
+    public async Task Toolscript_projection_is_shared_by_canonical_journal_and_actual_provider_preparation_without_changing_history(string scenario)
     {
         using var temp = new TempDirectory();
         using var journal = new LlmRequestJournalStore(temp.Path);
@@ -161,6 +165,31 @@ public sealed class LlmRequestJournalQualificationTests
                 )!
                 .AsObject(),
         };
+        var native = history[1]["parts"]![0]!["functionResponse"]!["response"]!.AsObject();
+        string expected;
+        if (scenario != "normal")
+        {
+            native["stdout"] = new string('x', 41000) + "\n";
+            if (scenario == "guarded-error")
+            {
+                native["status"] = "failed";
+                native["error"] = "ValueError: guard-error";
+                native.Remove("result");
+            }
+            var fullText = ToolResponseFormatting.FormatToolScriptExecution(native);
+            var guarded = await ToolOutputGuard.GuardAsync(native, temp.Path, "script", true);
+            Assert.True(guarded!["outputTruncated"]!.GetValue<bool>());
+            Assert.Equal(fullText, await File.ReadAllTextAsync(guarded["outputFullPath"]!.GetValue<string>()));
+            if (scenario == "guarded-error")
+            {
+                Assert.Null(guarded["output"]);
+                Assert.StartsWith("TOOL ERROR OUTPUT TOO LONG\n", guarded["error"]!.GetValue<string>());
+            }
+            history[1]["parts"]![0]!["functionResponse"]!["response"] = guarded;
+            expected = ToolResponseFormatting.Format(guarded);
+        }
+        else
+            expected = ToolResponseFormatting.FormatToolScriptExecution(native);
         var before = history.Select(row => row.ToJsonString()).ToArray();
         await owner.RequestAsync(
             "session",
@@ -182,7 +211,9 @@ public sealed class LlmRequestJournalQualificationTests
         var text = request["messages"]![1]!["parts"]![0]!["functionResponse"]!["response"]![
             "output"
         ]!.GetValue<string>();
-        Assert.StartsWith("--- print ---\nprinted literal\n--- return ---\nfalse\n---\n", text);
+        Assert.Equal(expected, text);
+        if (scenario == "normal")
+            Assert.StartsWith("--- print ---\nprinted literal\n--- return ---\nfalse\n---\n", text);
         var wire = JsonNode.Parse(recorder.LastBody!)!;
         Assert.Equal(text, wire["messages"]![1]!["content"]![0]!["content"]!.GetValue<string>());
         Assert.DoesNotContain("toolScriptSubCalls", request.ToJsonString());

@@ -61,6 +61,9 @@ internal static class ToolResponseFormatting
             || response["truncated"] is JsonValue flag
                 && flag.TryGetValue<bool>(out var truncated)
                 && truncated
+            || response["outputTruncated"] is JsonValue outputFlag
+                && outputFlag.TryGetValue<bool>(out var outputTruncated)
+                && outputTruncated
             || response.ContainsKey("output")
                 && !response.ContainsKey("result")
                 && !response.ContainsKey("stdout")

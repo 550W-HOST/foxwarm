@@ -25,6 +25,8 @@ For concrete remote `read`, `write`, `edit` and `apply_patch`, `SessionToolExecu
 
 `ToolResponseFormatting.FormatToolScriptExecution` formats only cleaned outer execution presentation into literal print/return sections followed by block-YAML metadata. The runtime's `ProjectSlice` emits trusted subcall metadata even for an empty slice; the registry measures that presentation with the existing guard. Neither a tool name nor a result object's metadata key grants this classification. Native Monty values, persisted run/history values, nested tools, typed completion receipts and image carriers retain their existing paths. Request/journal projection is owned by [provider-neutral history](./model-common-wire.md).
 
+Guard summaries use ordinary response formatting, including the existing .NET `outputTruncated: true` envelope whose error branch carries an `error` excerpt without `output`. This preserves both current and persisted summaries without wrapping the excerpt in a new execution metadata section.
+
 ## Tests
 
 `dotnet/Foxwarm.Tests/Tools/MainLocalToolsTests.cs`; `ToolAuthorizationEffectsTests.cs`; `HandoffConfirmationTests.cs`; ToolScript tool tests and `ToolScriptPresentationTests.cs`. `RemoteExecProtocolTests.cs` covers selected-Node exec advertisement, policy hiding, builtin collisions and explicit overrides. `packages/webui/test/experimentHostRemoteExecSchemas.e2e.mjs` checks real provider request schemas before direct and adjacent exec effects through the unchanged official CLI, plus policy-hidden schemas and canonical pairs; its provider refuses undeclared calls.

@@ -107,6 +107,7 @@ public sealed class ToolScriptPresentationTests
             {
                 "{\"output\":\"historical excerpt\",\"runId\":\"old\"}",
                 "{\"truncated\":true,\"output\":\"excerpt\",\"fullOutputPath\":\"saved.txt\"}",
+                "{\"outputTruncated\":true,\"error\":\"TOOL ERROR OUTPUT TOO LONG\\nexcerpt\",\"outputFullPath\":\"saved.txt\"}",
             }
         )
         {
