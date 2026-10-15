@@ -21,6 +21,8 @@ let fixtureUrl
 await writeFile(entryPath, `
   import { useEffect, useLayoutEffect, useRef, useState } from 'react'
   import { createRoot } from 'react-dom/client'
+  import { initializeThemeRuntime } from ${JSON.stringify(path.join(webuiRoot, 'src/theme/runtime.ts'))}
+  window.fixtureInitializeTheme = initializeThemeRuntime
   import ChatComposer from ${JSON.stringify(path.join(webuiRoot, 'src/components/ChatComposer.tsx'))}
   import InlineComposerEditor from ${JSON.stringify(path.join(webuiRoot, 'src/components/InlineComposerEditor.tsx'))}
   import { loadComposerDraft, makePlainComposerDraft, serializeComposerDraft } from ${JSON.stringify(path.join(webuiRoot, 'src/composerDraft.ts'))}
@@ -146,6 +148,13 @@ await writeFile(entryPath, `
   window.fixturePaste = text => {
     const data = new DataTransfer(); data.setData('text/plain', text); data.setData('text/html', '<b>different html</b>')
     const event = new Event('paste', { bubbles: true, cancelable: true }); Object.defineProperty(event, 'clipboardData', { value: data })
+    window.fixtureEditor().dispatchEvent(event)
+  }
+  window.fixturePasteFiles = files => {
+    const data = new DataTransfer()
+    for (const file of files) data.items.add(file)
+    const event = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'clipboardData', { value: data })
     window.fixtureEditor().dispatchEvent(event)
   }
   window.fixtureCaretAtRootOffset = offset => {
@@ -856,11 +865,8 @@ for (const spec of [browsers[0]]) {
     const editor = '[role="textbox"][aria-label="Message"]'
     await page.type(editor, 'before after')
     await page.evaluate(() => window.fixtureSelectText(7, 7))
-    await page.$eval(editor, editorNode => {
-      const transfer = new DataTransfer()
-      transfer.items.add(new File(['one'], 'duplicate.txt', { type: 'text/plain' }))
-      transfer.items.add(new File(['two'], 'duplicate.txt', { type: 'text/plain' }))
-      editorNode.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer }))
+    await page.evaluate(() => {
+      window.fixturePasteFiles([new File(['one'], 'duplicate.txt', { type: 'text/plain' }), new File(['two'], 'duplicate.txt', { type: 'text/plain' })])
     })
     await page.waitForFunction(() => document.querySelectorAll('.foxwarm-composer-attachment-chip').length === 2)
     const refs = await page.$$eval('.foxwarm-composer-attachment-chip', chips => chips.map(chip => chip.dataset.composerAttachmentRef))
@@ -912,11 +918,8 @@ for (const spec of [browsers[0]]) {
     await new Promise(resolve => setTimeout(resolve, 50))
     await page.type(editor, 'line')
     await page.keyboard.press('Enter')
-    await page.$eval(editor, editorNode => {
-      const transfer = new DataTransfer()
-      transfer.items.add(new File(['image'], 'photo.png', { type: 'image/png' }))
-      transfer.items.add(new File(['file'], 'notes.txt', { type: 'text/plain' }))
-      editorNode.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer }))
+    await page.evaluate(() => {
+      window.fixturePasteFiles([new File(['image'], 'photo.png', { type: 'image/png' }), new File(['file'], 'notes.txt', { type: 'text/plain' })])
     })
     await page.waitForFunction(() => document.querySelectorAll('.foxwarm-composer-attachment-chip').length === 2)
     const beforeAttachment = await page.$eval(editor, node => {
@@ -1861,5 +1864,101 @@ for (const spec of browsers) {
     assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('composer_draft_v1_fixture/main')).segments.find(segment => segment.type === 'attachment' && segment.name === 'allowed.pdf')), {
       type: 'attachment', ref: 'attachment4', name: 'allowed.pdf', mimeType: 'application/pdf', size: 3,
     })
+  }))
+}
+
+for (const spec of browsers) {
+  test(`${spec.name} keeps pasted images aligned without losing pointer or atomic caret boundaries`, async () => withBrowser(spec, async page => {
+    await page.evaluate(() => window.fixtureInitializeTheme())
+    const editor = '[role="textbox"][aria-label="Message"]'
+    const pasteImages = count => page.evaluate(count => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 32; canvas.height = 32
+      const context = canvas.getContext('2d')
+      context.fillStyle = '#3978c6'; context.fillRect(0, 0, 32, 32)
+      const bytes = Uint8Array.from(atob(canvas.toDataURL('image/png').split(',')[1]), char => char.charCodeAt(0))
+      window.fixturePasteFiles(Array.from({ length: count }, (_, index) => new File([bytes], `image-${index + 1}.png`, { type: 'image/png' })))
+    }, count)
+    const undo = async () => {
+      await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+    }
+    await page.click(editor)
+    await pasteImages(1)
+    await page.keyboard.press('End')
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('ordinary text')
+    const geometry = await page.$eval(editor, node => {
+      const box = node.getBoundingClientRect()
+      const anchor = node.querySelector('[data-composer-caret-anchor]')
+      const chip = node.querySelector('[data-composer-attachment-ref]')
+      const text = [...node.childNodes].findLast(child => child.nodeType === Node.TEXT_NODE)
+      const range = document.createRange(); range.setStart(text, 1); range.setEnd(text, 2)
+      const toolbar = node.closest('form').querySelector('button[type="submit"]').parentElement
+      return {
+        contentLeft: box.left + parseFloat(getComputedStyle(node).paddingLeft),
+        textLeft: range.getBoundingClientRect().left,
+        chipLeft: chip.getBoundingClientRect().left,
+        chipMargin: parseFloat(getComputedStyle(chip).marginLeft),
+        anchorWidth: anchor.getBoundingClientRect().width,
+        anchorAdvance: anchor.getBoundingClientRect().width + parseFloat(getComputedStyle(anchor).marginInlineStart),
+        editorPadding: getComputedStyle(node).padding,
+        toolbarPadding: getComputedStyle(toolbar).padding,
+      }
+    })
+    assert.equal(geometry.textLeft, geometry.contentLeft)
+    assert.equal(geometry.chipLeft - geometry.contentLeft, geometry.chipMargin, 'only the chip margin remains, not an anchor indent')
+    assert.equal(geometry.anchorAdvance, 0)
+    assert.equal(geometry.anchorWidth, 4, 'the pointer target is retained')
+    assert.equal(geometry.editorPadding, '8px 16px')
+    assert.equal(geometry.toolbarPadding, '0px 8px 4px')
+    const first = '<attachment-ref ref="attachment1" />'
+    const original = first + '\nordinary text'
+    assert.equal(await page.evaluate(() => window.fixtureDraft), original)
+    if (process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR) {
+      console.log(spec.name, 'image geometry', JSON.stringify(geometry))
+      await page.screenshot({ path: path.join(process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR, `${spec.name}-image-after.png`) })
+    }
+    await page.click('.foxwarm-composer-caret-anchor:first-child')
+    await page.keyboard.press('Home')
+    await page.keyboard.press('ArrowRight'); await page.keyboard.press('ArrowLeft')
+    await page.keyboard.type('prefix ')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), 'prefix ' + original)
+    await undo()
+    await page.click('.foxwarm-composer-caret-anchor:first-child')
+    await page.keyboard.press('Delete')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), '\nordinary text')
+    await undo()
+    await page.click('.foxwarm-composer-caret-anchor:first-child')
+    await page.keyboard.press('ArrowRight'); await page.keyboard.press('Backspace')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), '\nordinary text')
+    await undo()
+    assert.equal(await page.evaluate(() => window.fixtureDraft), original)
+
+    await page.evaluate(() => window.fixtureSelectAll())
+    await pasteImages(2)
+    const refs = await page.$$eval('[data-composer-attachment-ref]', chips => chips.map(chip => `<attachment-ref ref="${chip.dataset.composerAttachmentRef}" />`))
+    const exact = refs.join('')
+    await page.click('.foxwarm-composer-caret-anchor:not(:first-child):not(:last-child)')
+    await page.evaluate(() => window.fixturePaste(' '))
+    assert.equal(await page.evaluate(() => window.fixtureDraft), refs.join(' '), 'literal clipboard spaces survive between adjacent images')
+    await undo()
+    await page.click('.foxwarm-composer-caret-anchor:not(:first-child):not(:last-child)')
+    await page.keyboard.press('Backspace')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), refs[1])
+    await undo()
+    await page.click('.foxwarm-composer-caret-anchor:not(:first-child):not(:last-child)')
+    await page.keyboard.press('Delete')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), refs[0])
+    await undo()
+    assert.equal(await page.evaluate(() => window.fixtureDraft), exact)
+    await page.click('.foxwarm-composer-caret-anchor:not(:first-child):not(:last-child)')
+    await page.keyboard.press('Enter')
+    await page.click('.foxwarm-composer-caret-anchor:not(:first-child):not(:last-child)')
+    await page.keyboard.press('Home')
+    await page.keyboard.type('line ')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), refs[0] + '\nline ' + refs[1])
+    await undo()
+    assert.equal(await page.evaluate(() => window.fixtureDraft), refs[0] + '\n' + refs[1])
+    assert.equal((await page.evaluate(() => window.fixtureDraft)).includes('\u200B'), false)
   }))
 }
