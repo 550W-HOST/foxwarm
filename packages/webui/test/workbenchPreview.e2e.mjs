@@ -1,3 +1,4 @@
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
@@ -157,6 +158,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
     window.WebSocket = FixtureWebSocket
   }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal })
   await page.goto(`${baseUrl}${hash}`, { waitUntil: 'domcontentloaded' })
+  await waitForWebUiReady(page)
   await page.bringToFront()
   await page.waitForFunction(() => !!window.foxwarmTest || !!document.querySelector('[data-foxwarm-popup-root="chat"]'), { timeout: 8_000 }).catch(async error => {
     const body = await page.evaluate(() => document.body.innerText).catch(() => '')
@@ -278,6 +280,7 @@ test('vertical split collapse remains a horizontal tab bar after reload and expo
     assert.ok(collapsedHeight < 70, `up/down split collapses to a horizontal strip: ${collapsedHeight}px`)
     assert.ok(beforeHeight - collapsedHeight > 200, 'the lower pane receives the released height')
     await page.reload({ waitUntil: 'domcontentloaded' })
+    await waitForWebUiReady(page)
     await page.waitForSelector('[data-workbench-collapsed-pane="true"] [data-workbench-collapsed-tab="chat:e2e-a"]')
     assert.equal(await page.$('[role="textbox"][aria-label="Message"]'), null, 'persisted collapse reloads without mounting pane content')
     await page.click('[data-workbench-collapsed-pane="true"] button[title="Expand pane"]')
@@ -511,6 +514,7 @@ test('preview ID follows Session; drafts and sending never Keep, direct links re
     await page.goForward()
     await page.waitForSelector('[data-tab-id="chat:e2e-b"][title$="(preview)"]')
     await page.reload({ waitUntil: 'domcontentloaded' })
+    await waitForWebUiReady(page)
     await page.waitForSelector('[data-tab-id="chat:e2e-b"][title$="(preview)"]')
     assert.equal((await state(page)).tabsById['chat:e2e-b'].preview, true)
   } finally { await page.close() }
@@ -754,6 +758,7 @@ test('old preview records disappear without removing kept or system tabs; canoni
     assert.deepEqual(Object.keys(snapshot.tabsById).sort(), ['chat:e2e-a', 'chat:e2e-c', 'system:agents'])
     assert.deepEqual(snapshot.root.tabIds, ['system:agents', 'chat:e2e-c', 'chat:e2e-a'])
     await page.reload({ waitUntil: 'domcontentloaded' })
+    await waitForWebUiReady(page)
     await page.waitForSelector('[data-tab-id="chat:e2e-a"][title$="(preview)"]')
     assert.equal((await state(page)).tabsById['chat:e2e-c'].preview, false)
   } finally { await page.close() }
@@ -894,7 +899,7 @@ test('persisted search tabs keep their identity while showing the current Histor
       assert.equal(await page.$eval('[data-tab-id="system:search"]', element => element.title), 'History')
       assert.equal((await state(page)).tabsById['system:search'].type, 'search')
       assert.equal((await state(page)).root.activeTabId, 'system:search')
-      if (!refresh) await page.reload({ waitUntil: 'domcontentloaded' })
+      if (!refresh) { await page.reload({ waitUntil: 'domcontentloaded' }); await waitForWebUiReady(page) }
       await page.waitForSelector('[data-history-search-view]')
     }
   } finally { await page.close() }
@@ -1212,6 +1217,7 @@ test('Chat follows each pane through real divider dragging without changing desk
     for (const query of ['foxwarmEmbed=chat&foxwarmEmbedNonce=container-fixture-nonce&sessionId=e2e-a', 'foxwarmPopup=chat&foxwarmPopupVersion=1&sessionId=e2e-a']) {
       await page.setViewport({ width: 410, height: 900 })
       await page.goto(baseUrl + '?' + query, { waitUntil: 'domcontentloaded' })
+      await waitForWebUiReady(page)
       await page.waitForSelector('.foxwarm-chat-root [data-search-row]')
       const leaf = await paneLayout('')
       assert.equal(leaf.sm, false); assert.equal(leaf.md, false); assert.equal(leaf.minimap, false); assert.equal(leaf.childLabel, false); assert.equal(leaf.overflow, false)
@@ -1428,6 +1434,7 @@ test('direct Tasks navigation opens one singleton from expanded, collapsed, and 
       assert.equal((await state(page)).root.activeTabId, 'system:tasks')
       if (surface === 'mobile') {
         await page.goto(baseUrl, { waitUntil: 'domcontentloaded' })
+        await waitForWebUiReady(page)
         await page.waitForSelector(entry)
       } else {
         await page.click('[data-tab-id="system:agents"]')
@@ -1444,6 +1451,7 @@ test('Code-embedded sidebar keeps a direct Tasks popup entry next to settings', 
   const page = await openFixture()
   try {
     await page.goto(`${baseUrl}?foxwarmEmbed=sidebar&foxwarmEmbedNonce=fixture-nonce-123456`, { waitUntil: 'domcontentloaded' })
+    await waitForWebUiReady(page)
     const entry = 'button[aria-label="Open tasks"]'
     await page.waitForSelector(entry)
     assert.equal(await page.$('[data-pane-id]'), null)
@@ -1488,6 +1496,7 @@ test('Tasks restores from its deployment-relative route, stays singleton, and mo
     await page.waitForSelector('[data-tasks-view]')
     assert.equal((await state(page)).tabsById['system:tasks'].type, 'tasks')
     await page.reload({ waitUntil: 'domcontentloaded' })
+    await waitForWebUiReady(page)
     await page.waitForSelector('[data-tasks-view]')
     await page.click('[data-sidebar-footer] button[aria-label="Open tasks"]')
     assert.equal(Object.values((await state(page)).tabsById).filter(tab => tab.type === 'tasks').length, 1)
@@ -1500,6 +1509,7 @@ test('Tasks restores from its deployment-relative route, stays singleton, and mo
     assert.equal(url.pathname, '/prefix/ui/')
     assert.equal(url.searchParams.get('foxwarmPopup'), 'tasks')
     await page.goto(url.href, { waitUntil: 'domcontentloaded' })
+    await waitForWebUiReady(page)
     await page.waitForSelector('[data-tasks-view]')
     assert.equal(await page.$('[data-pane-id]'), null, 'popup mounts only the Tasks leaf')
     assert.equal(await page.$('[data-workbench-tab-close]'), null)
@@ -1524,6 +1534,7 @@ test('Full width defaults on, remembers its toggle, and bounds only the message 
     assert.ok(await readWidth() <= 1100)
     assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_chat_full_width_v1')), 'false')
     await page.reload({ waitUntil: 'networkidle0' })
+    await waitForWebUiReady(page)
     await page.waitForSelector(column)
     assert.equal(await page.$eval(column, element => element.dataset.fullWidth), 'false')
     assert.ok(await readWidth() <= 1100)
@@ -2274,6 +2285,7 @@ test('Appearance Auto keeps independent choices and previews require explicit ap
     await page.waitForFunction(() => document.documentElement.dataset.foxwarmTheme === 'foxwarm.vector')
     assert.equal(await page.$$eval('[data-theme-mode-panel]', panels => panels.length), 1)
     await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForSelector('[data-theme-manager]')
+    await waitForWebUiReady(page)
     assert.equal(await page.evaluate(() => document.documentElement.dataset.foxwarmTheme), 'foxwarm.vector')
     await clickReadyControl(page, '[data-theme-color-mode="auto"]')
     await page.waitForFunction(() => document.documentElement.dataset.foxwarmTheme === 'foxwarm.catppuccin')
@@ -2511,3 +2523,30 @@ for (const deltaY of [-160, -3]) {
     } finally { await page.close() }
   })
 }
+
+test('cross-window theme changes close a deleted preview and release the background', async () => {
+  const setup = { id: 'system:setup', type: 'setup', title: 'Setup' }
+  const first = await openFixture({ tabs: [setup], activeTabId: setup.id, hash: '#setup' })
+  let second
+  try {
+    await clickReadyControl(first, '[data-theme-color-mode="light"]')
+    const exported = await themePackageFromPreview(first, 'foxwarm.default', 'light')
+    exported.id = 'custom.cross-window'; exported.name = 'Cross-window fixture'
+    await importThemePackage(first, exported)
+    second = await openFixture({ tabs: [setup], activeTabId: setup.id, hash: '#setup' })
+    await clickReadyControl(second, '[data-theme-option-mode="light"][data-theme-option="custom.cross-window"]')
+    await first.bringToFront()
+    await first.waitForFunction(() => document.documentElement.dataset.foxwarmTheme === 'custom.cross-window')
+    await second.bringToFront()
+    await clickReadyControl(second, '[data-theme-preview-mode="light"][data-theme-preview="custom.cross-window"]')
+    second.once('dialog', dialog => dialog.accept())
+    await second.click('[aria-label="Delete theme"]')
+    await first.bringToFront()
+    await first.waitForFunction(() => !document.querySelector('[data-theme-preview-dialog]') && !document.getElementById('root').inert)
+    assert.notEqual(await first.evaluate(() => document.body.style.overflow), 'hidden')
+    assert.equal(await first.evaluate(() => document.documentElement.dataset.foxwarmTheme), 'foxwarm.default')
+    await clickReadyControl(first, '[data-theme-color-mode="dark"]')
+    await second.bringToFront()
+    await second.waitForFunction(() => document.documentElement.dataset.foxwarmThemeMode === 'dark')
+  } finally { await first.close(); await second?.close() }
+})

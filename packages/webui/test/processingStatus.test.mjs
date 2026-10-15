@@ -162,5 +162,5 @@ test('loading indicator still takes precedence over runtime status', () => {
   assert.doesNotMatch(html, /data-processing-runtime-state/)
   assert.doesNotMatch(html, /tool: exec|runtime-busy-spinner/)
   assert.equal((html.match(/data-fox-loader="thinking"/g) || []).length, 1)
-  assert.match(html, /aria-label="Waiting for response"/)
+  assert.match(html, /aria-label="Loading"/)
 })

@@ -1,11 +1,11 @@
 # Unit: WebUI fox loaders
 
 Files: packages/webui/src/components/FoxLoaders.tsx, packages/webui/src/components/FoxLoaders.css, packages/webui/src/components/FoxLoaderPreview.tsx
-Secondary files: packages/webui/src/main.tsx, packages/webui/src/App.tsx, packages/webui/src/components/ProcessingStatus.tsx, packages/webui/test/processingStatus.test.mjs
+Secondary files: packages/webui/src/main.tsx, packages/webui/src/App.tsx, packages/webui/src/components/ProcessingStatus.tsx, packages/webui/test/processingStatus.test.mjs, packages/webui/test/foxLoaderPreview.e2e.mjs
 
 ## Purpose
 
-Theme-aware inline SVG loaders for full-app startup, lazy workbench views, and ordinary model thinking. The sleeping fox uses the semantic accent rather than a hard-coded theme palette.
+Theme-aware inline SVG loaders for full-app startup, lazy workbench views, and ordinary model thinking. Loader CSS is included by the application stylesheet, so standalone source fixtures can consume that built stylesheet without a separate component-CSS bundle. The sleeping fox uses the semantic accent rather than a hard-coded theme palette.
 
 ## Public symbols
 
@@ -21,9 +21,9 @@ Theme-aware inline SVG loaders for full-app startup, lazy workbench views, and o
 - Effects clear pending timers on teardown; React StrictMode setup/cleanup does not leave stale subscriptions or timers. The readiness store is monotonic during one application load.
 - Reduced motion skips the minimum draw-in wait and disables SVG motion. The leaving screen becomes transparent, hidden, and pointer-inert before removal.
 - The full-app splash is not mounted for popup/embedded roots. Authentication failure also signals readiness so loading cannot obscure the sign-in recovery link.
-- Ordinary requesting-model status uses the fox thinking spinner. Compaction/tool indicators and static waiting behavior retain their previous runtime semantics. Timeline loading uses an accessible waiting label; lazy view fallback uses a centered status loader.
-- Appearance previews have no live Session operations. They consume the active theme accent; the presentational full-screen preview can be dismissed without driving the application boot store.
+- Ordinary requesting-model status uses a 20px fox thinking spinner. Compaction/tool indicators and static waiting behavior retain their previous runtime semantics. Timeline loading uses an accessible waiting label; lazy view fallback uses a centered status loader.
+- Appearance previews have no live Session operations. They consume the active theme accent; the presentational full-screen preview closes on click or Escape and returns focus to its Full screen control. Its listener exists only while that manual preview is open and cannot dismiss the real startup splash or drive the application boot store.
 
 ## Verification
 
-`processingStatus.test.mjs` checks thinking/loading wiring without altering runtime action semantics. Production and development browser probes verify ordinary/reduced-motion splash timer completion, DOM removal, and pointer access to the application beneath the screen.
+`foxLoaderPreview.e2e.mjs` covers keyboard opening, Escape and pointer dismissal, focus return, and the real startup readiness gate. `processingStatus.test.mjs` checks thinking/loading wiring without altering runtime action semantics. Production and development browser probes verify ordinary/reduced-motion splash timer completion, DOM removal, and pointer access to the application beneath the screen.

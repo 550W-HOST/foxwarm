@@ -1,3 +1,4 @@
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
@@ -90,6 +91,7 @@ async function openFixture() {
   const page = await browser.newPage()
   await installFixture(page)
   await page.goto(`${baseUrl}/prefix/ui/`, { waitUntil: 'domcontentloaded' })
+  await waitForWebUiReady(page)
   await page.waitForSelector('[data-tab-id="chat:popup-test"]')
   return page
 }
@@ -196,6 +198,7 @@ test('popup Chat restores the existing draft and never rewrites normal workbench
   await installFixture(page)
   try {
     await page.goto(`${baseUrl}/prefix/ui/?foxwarmPopup=chat&foxwarmPopupVersion=1&sessionId=popup-test&title=Popup`, { waitUntil: 'networkidle0' })
+    await waitForWebUiReady(page)
     await page.waitForSelector('[data-foxwarm-popup-root="chat"]')
     assert.equal(await page.$('[data-pane-id]'), null)
     assert.equal(await page.$('[data-workbench-tab-close], [data-workbench-tab-handle]'), null)
@@ -210,6 +213,7 @@ test('History popup uses its short window title and keeps the Search history pag
   try {
     await installFixture(page)
     await page.goto(`${baseUrl}/prefix/ui/?foxwarmPopup=search&foxwarmPopupVersion=1`, { waitUntil: 'domcontentloaded' })
+    await waitForWebUiReady(page)
     await page.waitForSelector('[data-history-search-view]')
     assert.equal(await page.title(), 'History · Foxwarm')
     assert.equal(await page.$eval('[data-history-search-view] h2', heading => heading.textContent), 'Search history')
@@ -226,6 +230,7 @@ test('History popup uses its short window title and keeps the Search history pag
     try {
       await installFixture(destination)
       await destination.goto(url.toString(), { waitUntil: 'domcontentloaded' })
+      await waitForWebUiReady(destination)
       await destination.waitForSelector('[data-foxwarm-popup-root="chat"]')
       assert.ok(await page.$('[data-history-search-view]'), 'the History popup remains open')
       assert.equal(await destination.$('[data-history-search-view]'), null)
@@ -251,6 +256,7 @@ test('a real popup keeps working after its opener closes and after refresh', asy
     await popup.keyboard.type(' after opener close')
     await popup.waitForFunction(() => document.querySelector('.foxwarm-inline-composer-editor')?.textContent?.includes('after opener close'))
     await popup.reload({ waitUntil: 'domcontentloaded' })
+    await waitForWebUiReady(popup)
     await popup.waitForFunction(() => document.querySelector('.foxwarm-inline-composer-editor')?.textContent?.includes('after opener close'))
   } finally {
     if (popup && !popup.isClosed()) await popup.close()
@@ -264,6 +270,7 @@ test('the sole Chat header keeps its existing Move to new window action', async 
   try {
     await installFixture(page, { 'chat:popup-test': tabs['chat:popup-test'] })
     await page.goto(`${baseUrl}/prefix/ui/`, { waitUntil: 'domcontentloaded' })
+    await waitForWebUiReady(page)
     await page.waitForSelector('[data-workbench-tab-handle="chat:popup-test"]')
     assert.equal(await page.$('[data-tab-id]'), null)
     await page.evaluate(() => {

@@ -51,6 +51,10 @@ export default function ThemeManager() {
   const closePreview = () => { setPreview(null) }
 
   useEffect(() => {
+    if (preview && !previewTheme) setPreview(null)
+  }, [preview, previewTheme])
+
+  useEffect(() => {
     if (!preview) return
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'

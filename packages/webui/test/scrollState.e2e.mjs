@@ -1,3 +1,4 @@
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -88,6 +89,7 @@ before(async () => {
   page = await browser.newPage()
   await page.setViewport({ width: 1440, height: 900 })
   await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
   await page.waitForFunction(() => !!window.foxwarmTest, { timeout: 15_000 })
 
   await page.evaluate(() => {
@@ -96,6 +98,7 @@ before(async () => {
     if (token) localStorage.setItem('foxwarm_token', token)
   })
   await page.reload({ waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
   await page.waitForFunction(() => !!window.foxwarmTest, { timeout: 15_000 })
   await page.waitForSelector('[data-session-list-scroll-container]', { timeout: 15_000 })
 
@@ -230,6 +233,7 @@ test('full timeline prepend preserves a stable row while content below resizes',
 
 test('continued user scrolling cancels the stale prepend restore target', async () => {
   await page.reload({ waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
   await page.waitForFunction(() => !!window.foxwarmTest, { timeout: 15_000 })
   await openPersistentChat(primarySessionId)
   await page.waitForFunction(() => document.body.textContent?.includes('Scroll upward to load'), { timeout: 15_000 })

@@ -92,7 +92,7 @@ const ProcessingStatus = memo(function ProcessingStatus({
               role="status"
             >
               {loading ? (
-                <FoxThinking label="Waiting for response" />
+                <FoxThinking label="Loading" />
               ) : (
                 <>
                   {runtimeStateName === 'waiting' || interrupted ? (

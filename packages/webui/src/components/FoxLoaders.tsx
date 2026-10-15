@@ -1,5 +1,4 @@
 import { useEffect, useState, useSyncExternalStore, type CSSProperties } from 'react'
-import './FoxLoaders.css'
 
 // A little fox curled up asleep: angular face with tall ears and closed eyes
 // on the left, the back as one big circle, a curled haunch, and the tail
@@ -101,7 +100,7 @@ export function FoxSpinner({ size = 20, className = '' }: { size?: number | stri
 export function FoxThinking({ className = '', label }: { className?: string; label?: string }) {
   return (
     <span className={`fw-fox-thinking inline-flex items-center ${className}`} data-fox-loader="thinking" aria-hidden={label ? undefined : true} role={label ? 'img' : undefined} aria-label={label}>
-      <FoxSpinner size={24} />
+      <FoxSpinner size={20} />
     </span>
   )
 }

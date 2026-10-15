@@ -1,3 +1,4 @@
+import { waitForWebUiReady } from '../../packages/webui/test/webuiReadiness.mjs'
 // Section 12.2 real-application scenario, part 1: a hosted image generation turn
 // through the built WebUI against the scripted provider, then a follow-up edit
 // that must receive the original image bytes. The restart half of the scenario
@@ -94,6 +95,7 @@ before(async () => {
   page.on('pageerror', error => browserConsole.push(`pageerror: ${error.stack || error.message}`))
   await page.setViewport({ width: 1440, height: 900 })
   await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
   await page.waitForFunction(() => !!window.foxwarmTest, { timeout: 15_000 })
 })
 
@@ -147,6 +149,7 @@ test('a hosted image reply renders in the WebUI, reloads, and replays its bytes 
 
   // A reload still shows the same image.
   await page.reload({ waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
   await openSession(sessionId)
   const reloaded = await waitForRenderedImages(1)
   assert.equal(reloaded[0].loaded, true)
