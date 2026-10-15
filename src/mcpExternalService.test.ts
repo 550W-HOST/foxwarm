@@ -86,7 +86,7 @@ test('MCP external service clones secret-bearing config and returns only redacte
     const summaries = await listMcpServers(sourceId);
     assert.deepEqual(summaries, [{
       name: 'private', enabled: true, transport: 'stdio', command: 'node', argsCount: 2,
-      envKeys: ['API_KEY'], headerKeys: ['Authorization'], hasToken: true, timeoutSeconds: 240,
+      envKeys: ['API_KEY'], headerKeys: ['Authorization'], hasToken: true, authentication: 'static', timeoutSeconds: 240,
     }]);
     assert.equal(JSON.stringify(summaries).includes(sensitiveValue), false);
     assert.equal((await mcpClient.getServers()).private.env?.API_KEY, sensitiveValue);

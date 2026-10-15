@@ -2,7 +2,7 @@ import { waitForWebUiReady } from './webuiReadiness.mjs'
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { readFile, stat } from 'node:fs/promises'
+import { mkdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import puppeteer from 'puppeteer-core'
 
@@ -14,6 +14,7 @@ let server
 let baseUrl
 
 const chat = (id, preview = true) => ({ id: `chat:${id}`, type: 'chat', sessionId: id, title: id, preview })
+const nodesTab = { id: 'system:nodes', type: 'nodes', title: 'Nodes' }
 const system = { id: 'system:agents', type: 'agents', title: 'Agents' }
 
 async function serve(request, response) {
@@ -48,12 +49,14 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, codeNewWindow, responsiveChat = false, chatMessages = null, timelineView = 'grouped', showScrollbar, terminal = null, width = 1400, height = 900 } = {}) {
+async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, colorMode = 'light', nodeDirectory = [], taskRows = null, codeNewWindow, responsiveChat = false, chatMessages = null, timelineView = 'grouped', showScrollbar, terminal = null, width = 1400, height = 900, reducedMotion = false, waitForSplash = true } = {}) {
   const page = await browser.newPage()
+  if (reducedMotion) await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }])
   const pageErrors = []
   page.on('pageerror', error => pageErrors.push(error.message))
-  await page.setViewport({ width, height })
-  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat, splitDirection, initialLayout, themeId, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal }) => {
+  // Firefox ESR retains its native viewport; Puppeteer orientation emulation is unsupported.
+  if (!firefox) await page.setViewport({ width, height })
+  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat, splitDirection, initialLayout, themeId, colorMode, nodeDirectory, taskRows, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal }) => {
     if (window !== window.top) return
     const tabsById = Object.fromEntries(initialTabs.map(tab => [tab.id, tab]))
     const root = initialLayout || (splitPanes
@@ -70,9 +73,10 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
     }
     if (chatMessages) localStorage.setItem('foxwarm_timeline_view_v1', timelineView)
     if (showScrollbar !== undefined) localStorage.setItem('foxwarm.contextScrollbar.showScrollbar', String(showScrollbar))
-    if (themeId) localStorage.setItem('foxwarm_theme_selection_v3', JSON.stringify({ version: 3, themeId, lightThemeId: themeId, darkThemeId: themeId, colorMode: 'light' }))
+    if (themeId) localStorage.setItem('foxwarm_theme_selection_v3', JSON.stringify({ version: 3, themeId, lightThemeId: themeId, darkThemeId: themeId, colorMode }))
     if (codeNewWindow !== undefined) localStorage.setItem('foxwarm_code_open_new_window_v1', String(codeNewWindow))
     const json = body => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    window.__fetches = []
     window.__sent = []
     window.__historyReads = []
     window.__historySearchReads = []
@@ -84,11 +88,16 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
     window.fetch = (input, options = {}) => {
       const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.href)
       const pathname = url.pathname
+      window.__fetches.push({ path: pathname, search: url.search })
+      if (pathname.endsWith('/api/nodes/onboarding/pending')) return json({ items: [], total: 0, offset: 0, limit: 50 })
+      if (pathname.endsWith('/api/tasks') && window.__failTaskPreview && url.searchParams.get('limit') === '3') return Promise.resolve(new Response('{}', { status: 503 }))
       if (pathname.endsWith('/api/auth/session')) return json({ role: 'admin' })
       if (pathname.endsWith('/api/tasks')) {
         const status = url.searchParams.get('status')
-        const total = status === 'open' ? 3 : status === 'active' ? 2 : 0
-        return json({ tasks: [], total, omitted: total })
+        const matching = taskRows?.filter(task => task.status === status)
+        const total = matching ? matching.length : status === 'open' ? 3 : status === 'active' ? 2 : 0
+        const tasks = matching?.slice(0, Number(url.searchParams.get('limit') || 50)) || []
+        return json({ tasks, total, omitted: total - tasks.length })
       }
       if (pathname.endsWith('/api/setup/status')) return json({ oobe: false, models: { exists: true, hasPlaceholderSecrets: false }, channels: [] })
       if (pathname.endsWith('/api/terminals') && options.method === 'POST' && terminalTemplate) {
@@ -105,7 +114,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       if (pathname.includes('/api/terminals/') && terminal) return json({ terminal })
       if (pathname.endsWith('/api/terminals')) return json({ terminals: terminal ? [terminal] : [] })
       if (pathname.endsWith('/api/tasks')) return json({ tasks: [], omitted: 0 })
-      if (pathname.endsWith('/api/nodes')) return json({ nodes: [] })
+      if (pathname.endsWith('/api/nodes')) return json({ nodes: nodeDirectory })
       if (pathname.endsWith('/api/agents')) return json({ agents: [] })
       if (pathname.endsWith('/api/webui/settings')) return json({ settings: {} })
       if (pathname.endsWith('/api/models')) return json({ models: responsiveChat ? [{ key: 'fixture/model', label: 'Fixture model', contextLimit: 128000 }] : [] })
@@ -155,16 +164,16 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       }
       close() { this.readyState = 3; this.onclose?.({}) }
     }
+    window.__emitRealtime = data => { for (const socket of FixtureWebSocket.instances) socket.onmessage?.({ data: JSON.stringify(data) }) }
     window.WebSocket = FixtureWebSocket
-  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal })
+  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, colorMode, nodeDirectory, taskRows, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal })
   await page.goto(`${baseUrl}${hash}`, { waitUntil: 'domcontentloaded' })
-  await waitForWebUiReady(page)
   await page.bringToFront()
   await page.waitForFunction(() => !!window.foxwarmTest || !!document.querySelector('[data-foxwarm-popup-root="chat"]'), { timeout: 8_000 }).catch(async error => {
     const body = await page.evaluate(() => document.body.innerText).catch(() => '')
     throw new Error(`${error.message}; page errors: ${pageErrors.join(' | ')}; body: ${body.slice(0, 500)}`)
   })
-  await page.waitForSelector('[data-fox-splash]', { hidden: true })
+  if (waitForSplash) await waitForWebUiReady(page)
   return page
 }
 
@@ -307,7 +316,7 @@ test('vertical split collapse remains a horizontal tab bar after reload and expo
     await page.waitForSelector('[data-workbench-collapsed-tab="chat:e2e-a"]')
     await page.click(':is([data-pane-id="pane-other"], [data-workbench-content-pane="pane-other"]) button[title="Close pane"]')
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.kind === 'pane')
-    assert.equal(await page.$('[data-workbench-pane-drag-handle]'), null, 'closing the other pane removes the whole-pane drag control')
+    assert.equal(await page.$('[data-workbench-pane-drag-area]'), null, 'closing the other pane removes the whole-pane drag control')
     assert.equal(await page.$('button[title="Collapse pane"]'), null)
     assert.equal((await state(page)).root.collapsed, false, 'moving the closed pane tab into the remaining pane activates and expands it')
     await page.waitForSelector('[data-tab-id="system:agents"]')
@@ -322,7 +331,7 @@ test('a persisted lone collapsed pane keeps its tab expansion entry without pane
   const page = await openFixture({ tabs: [chat('e2e-a', false)], layout })
   try {
     await page.waitForSelector('[data-workbench-collapsed-tab="chat:e2e-a"]')
-    assert.equal(await page.$('[data-workbench-pane-drag-handle]'), null)
+    assert.equal(await page.$('[data-workbench-pane-drag-area]'), null)
     assert.equal(await page.$('button[title="Collapse pane"]'), null)
     assert.ok(await page.$('button[title="Expand pane"]'))
     assert.equal(await page.$('[role="textbox"][aria-label="Message"]'), null)
@@ -407,13 +416,27 @@ function findFixturePane(root, paneId) {
   return root.children.map(child => findFixturePane(child, paneId)).find(Boolean) || null
 }
 
+async function paneDragPoint(page, paneId) {
+  return page.evaluate(paneId => {
+    const area = document.querySelector(`[data-workbench-pane-drag-area="${paneId}"]`)
+    if (!area) throw new Error(`Expected a pane header drag area: ${paneId}`)
+    const rect = area.getBoundingClientRect()
+    for (const y of [rect.top + rect.height / 2, rect.top + 8, rect.bottom - 8]) {
+      for (const x of [rect.left + rect.width / 2, rect.left + 8, rect.right - 8, rect.left + rect.width / 4]) {
+        const hit = document.elementFromPoint(x, y)
+        if (hit?.matches('[data-workbench-pane-drag-area], [data-workbench-pane-drag-blank]') && hit.closest('[data-workbench-pane-drag-area]') === area) return { x, y }
+      }
+    }
+    throw new Error(`Expected actual empty space in the pane header: ${paneId}`)
+  }, paneId)
+}
+
 async function dragPane(page, sourcePaneId, targetPaneId, edge, { cancel = false, duringDrag } = {}) {
-  const source = await page.$(`[data-workbench-pane-drag-handle="${sourcePaneId}"]`)
-  const sourceBox = await source.boundingBox()
-  assert.ok(sourceBox)
-  await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2)
+  await waitForTabPaint(page)
+  const start = await paneDragPoint(page, sourcePaneId)
+  await page.mouse.move(start.x, start.y)
   await page.mouse.down()
-  await page.mouse.move(sourceBox.x + sourceBox.width / 2 + 12, sourceBox.y + sourceBox.height / 2, { steps: 4 })
+  await page.mouse.move(start.x + 12, start.y, { steps: 4 })
   await page.waitForSelector('[data-pane-drag-overlay]')
   if (duringDrag) await duringDrag()
   const target = await page.$(`:is([data-pane-id="${targetPaneId}"], [data-workbench-content-pane="${targetPaneId}"]) [data-workbench-pane-drop="${edge}"]`)
@@ -440,7 +463,7 @@ test('whole-pane dragging preserves its tabs and selection across splits, includ
   }
   const page = await openFixture({ tabs: [system, chat('e2e-a'), chat('e2e-b', false), { id: 'system:setup', type: 'setup', title: 'Setup' }], layout, responsiveChat: true })
   try {
-    await page.waitForSelector('[data-workbench-pane-drag-handle="pane-main"]')
+    await page.waitForSelector('[data-workbench-pane-drag-area="pane-main"]')
     await page.waitForSelector('[data-workbench-content-tab="chat:e2e-b"] [data-chat-message-anchor-key]')
     await page.evaluate(() => {
       window.__paneMoveChats = [...document.querySelectorAll('.foxwarm-chat-root')]
@@ -650,7 +673,7 @@ test('single pane with one tab omits its strip without leaving header height; Si
     await page.waitForSelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [role="textbox"][aria-label="Message"]')
     assert.equal(await page.$(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-tab-id]'), null)
     assert.equal(await page.$(paneButtons), null)
-    assert.equal(await page.$('[data-workbench-pane-drag-handle], [data-workbench-pane-collapse]'), null, 'a lone single-tab pane omits whole-pane drag and collapse controls')
+    assert.equal(await page.$('[data-workbench-pane-drag-area], [data-workbench-pane-collapse]'), null, 'a lone single-tab pane omits whole-pane drag and collapse controls')
     assert.ok(await page.$('[data-workbench-tab-handle="chat:e2e-a"]'), 'ordinary tab drag remains available')
     assert.ok(await page.$('[data-workbench-tab-close="chat:e2e-a"]'), 'ordinary tab Close remains available')
     const geometry = await page.$eval('[data-pane-id="pane-main"]', pane => {
@@ -671,7 +694,7 @@ test('single pane with one tab omits its strip without leaving header height; Si
     await page.waitForSelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-tab-id="chat:e2e-b"]')
     assert.equal(await page.$$eval(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-tab-id]', nodes => nodes.length), 2)
     assert.equal(await page.$$eval(paneButtons, nodes => nodes.length), 2, 'a single-pane workbench omits Close pane rather than disabling it')
-    assert.equal(await page.$('[data-workbench-pane-drag-handle], [data-workbench-pane-collapse]'), null, 'adding another tab does not enable pane drag or collapse')
+    assert.equal(await page.$('[data-workbench-pane-drag-area], [data-workbench-pane-collapse]'), null, 'adding another tab does not enable pane drag or collapse')
     assert.equal((await state(page)).tabsById['chat:e2e-b'].preview, false)
     // Wait for the drag's document-level click guard to clear before a real Close click.
     await page.waitForFunction(() => {
@@ -720,6 +743,183 @@ test('Close tab owns a small pointer move inside its button instead of starting 
   } finally { await page.close() }
 })
 
+async function waitForTabPaint(page) {
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+}
+
+async function openOverflowFixture(activeIndex = 0) {
+  const groups = ['a', 'b'].map(group => Array.from({ length: 12 }, (_, index) => chat(index ? `scroll-${group}-${index}` : `e2e-${group}`, false)))
+  const layout = { id: 'split-main', kind: 'split', direction: 'row', sizes: [50, 50], children: groups.map((tabs, index) => ({
+    id: index ? 'pane-other' : 'pane-main', kind: 'pane', tabIds: tabs.map(tab => tab.id), activeTabId: tabs[activeIndex].id,
+  })) }
+  const page = await openFixture({ tabs: groups.flat(), activeTabId: groups[0][activeIndex].id, layout, responsiveChat: true })
+  await page.waitForSelector('[data-pane-id="pane-other"] .foxwarm-workbench-tab-row')
+  await waitForTabPaint(page)
+  return page
+}
+
+async function tabScrollPositions(page) {
+  return page.$$eval('.foxwarm-workbench-tab-row', rows => rows.map(row => row.scrollLeft))
+}
+
+async function scrollTabRow(page, paneId, deltaY = 750) {
+  const box = await (await page.$(`[data-pane-id="${paneId}"] .foxwarm-workbench-tab-row`)).boundingBox()
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.wheel({ deltaY })
+  await waitForTabPaint(page)
+}
+
+async function visibleTabControl(page, paneId, close = true) {
+  return page.evaluate(({ paneId, close }) => {
+    const row = document.querySelector(`[data-pane-id="${paneId}"] .foxwarm-workbench-tab-row`)
+    const bounds = row.getBoundingClientRect()
+    for (const tab of row.children) {
+      if (tab.dataset.tabActive) continue
+      const control = tab.querySelector(close ? 'button' : 'span')
+      const rect = control.getBoundingClientRect()
+      const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2
+      if (rect.left > bounds.left + 8 && rect.right < bounds.right - 8 && control.contains(document.elementFromPoint(x, y))) return { id: tab.dataset.tabId, x, y }
+    }
+    throw new Error('Expected an inactive visible tab control')
+  }, { paneId, close })
+}
+
+async function mousePressAt(page, point, button = 'left') {
+  await page.mouse.move(point.x, point.y)
+  await page.mouse.down({ button })
+  await new Promise(resolve => setTimeout(resolve, 100))
+  await page.mouse.up({ button })
+  await waitForTabPaint(page)
+}
+
+async function tabToControl(page, selector) {
+  for (let index = 0; index < 120; index++) {
+    if (await page.evaluate(selector => document.activeElement?.matches(selector), selector)) return
+    await page.keyboard.press('Tab')
+  }
+  assert.fail(`Keyboard navigation did not reach ${selector}`)
+}
+
+async function assertTabVisible(page, tabId) {
+  await page.waitForFunction(tabId => {
+    const tab = document.querySelector(`[data-tab-id="${tabId}"]`)
+    if (!tab) return false
+    const rect = tab.getBoundingClientRect(), row = tab.parentElement.getBoundingClientRect()
+    return rect.left >= row.left - 1 && rect.right <= row.right + 1
+  }, {}, tabId)
+}
+
+test('Workbench tab scroll respects metadata, pane focus and split resizing but reveals explicit navigation', async () => {
+  const page = await openOverflowFixture()
+  try {
+    await scrollTabRow(page, 'pane-main')
+    await scrollTabRow(page, 'pane-other')
+    const before = await tabScrollPositions(page)
+    assert.ok(before.every(left => left >= 700))
+    await page.evaluate(() => window.__emitRealtime({ type: 'session-list-delta', sessions: [{ id: 'e2e-a', aliases: [], archived: false, parentSessionId: null, childTotal: 0, messageCount: 0, lastMessageTime: 2, busy: true }] }))
+    await page.waitForSelector('[data-session-id="e2e-a"] .runtime-busy-spinner')
+    await waitForTabPaint(page)
+    assert.deepEqual(await tabScrollPositions(page), before, 'a normal busy delta must not reveal either old active tab')
+
+    const divider = await (await page.$('[role="separator"][aria-orientation="vertical"]')).boundingBox()
+    await page.mouse.move(divider.x + divider.width / 2, divider.y + divider.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(divider.x - 45, divider.y + divider.height / 2, { steps: 5 })
+    await page.mouse.up()
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.sizes[0] < 49)
+    await waitForTabPaint(page)
+    assert.deepEqual(await tabScrollPositions(page), before, 'publishing split sizes must preserve manual tab scrolling')
+
+    const composer = await (await page.$('[data-workbench-content-tab="chat:e2e-b"] [role="textbox"][aria-label="Message"]')).boundingBox()
+    await mousePressAt(page, { x: composer.x + composer.width / 2, y: composer.y + composer.height / 2 })
+    assert.equal((await page.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.focusedPaneId)), 'pane-other')
+    assert.deepEqual(await tabScrollPositions(page), before, 'pane focus is not a tab reveal request')
+
+    await page.evaluate(() => window.foxwarmTest.switchToSession('e2e-b'))
+    await assertTabVisible(page, 'chat:e2e-b')
+    assert.equal((await tabScrollPositions(page))[0], before[0], 'same-ID navigation reveals only its target pane')
+    await page.evaluate(() => window.foxwarmTest.switchToSession('scroll-b-11'))
+    await assertTabVisible(page, 'chat:scroll-b-11')
+    assert.equal((await state(page)).root.children[1].activeTabId, 'chat:scroll-b-11')
+
+    const range = await (await page.$('[data-pane-id="pane-other"] input[aria-label="Scroll tabs"]')).boundingBox()
+    await page.mouse.move(range.x + range.width * .35, range.y + range.height / 2)
+    await page.mouse.down()
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const rangeDown = (await tabScrollPositions(page))[1]
+    assert.ok(rangeDown > 0 && rangeDown < 650, 'the overflow range is not pulled back to the active tab during its press')
+    await page.mouse.move(range.x + range.width * .65, range.y + range.height / 2, { steps: 5 })
+    await page.mouse.up()
+    assert.ok((await tabScrollPositions(page))[1] > rangeDown + 100)
+  } finally { await page.close() }
+})
+
+test('Workbench tab Close and middle gestures keep their pressed target while the strip is scrolled', async () => {
+  const page = await openOverflowFixture()
+  try {
+    await scrollTabRow(page, 'pane-other')
+    const target = await visibleTabControl(page, 'pane-other')
+    await mousePressAt(page, target)
+    let snapshot = await state(page)
+    assert.equal(snapshot.tabsById[target.id], undefined, 'X closes its original inactive target')
+    assert.equal(snapshot.root.children[1].activeTabId, 'chat:e2e-b')
+    assert.ok((await tabScrollPositions(page))[1] >= 700)
+    assert.equal(await page.$('[data-workbench-pane-drop-overlay]'), null, 'Close never starts a drag')
+
+    const middleTarget = await visibleTabControl(page, 'pane-other', false)
+    await mousePressAt(page, middleTarget, 'middle')
+    snapshot = await state(page)
+    assert.equal(snapshot.tabsById[middleTarget.id], undefined, 'middle Close retains the pressed tab identity')
+    assert.ok(snapshot.tabsById['chat:e2e-b'])
+
+    const canceledTarget = await visibleTabControl(page, 'pane-other', false)
+    const beforeCancel = Object.keys(snapshot.tabsById)
+    await page.mouse.move(canceledTarget.x, canceledTarget.y)
+    await page.mouse.down({ button: 'middle' })
+    await page.mouse.wheel({ deltaY: -200 })
+    await waitForTabPaint(page)
+    assert.notEqual(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-tab-id]')?.dataset.tabId, canceledTarget), canceledTarget.id)
+    await page.mouse.up({ button: 'middle' })
+    await waitForTabPaint(page)
+    assert.deepEqual(Object.keys((await state(page)).tabsById), beforeCancel, 'releasing over a different tab must not close that tab')
+
+    const releaseTarget = await visibleTabControl(page, 'pane-other', false)
+    const toolbar = await (await page.$('[data-pane-id="pane-other"] button[title="Split right with active tab"]')).boundingBox()
+    await page.mouse.move(toolbar.x + toolbar.width / 2, toolbar.y + toolbar.height / 2)
+    await page.mouse.down({ button: 'middle' })
+    await page.mouse.move(releaseTarget.x, releaseTarget.y)
+    await page.mouse.up({ button: 'middle' })
+    await waitForTabPaint(page)
+    assert.deepEqual(Object.keys((await state(page)).tabsById), beforeCancel, 'a mouseup without a tab press cannot independently close it')
+  } finally { await page.close() }
+})
+
+test('Workbench tab restore, keyboard Close and active-close fallback retain normal navigation', async () => {
+  const page = await openOverflowFixture(11)
+  try {
+    await assertTabVisible(page, 'chat:scroll-a-11')
+    await assertTabVisible(page, 'chat:scroll-b-11')
+    assert.ok((await tabScrollPositions(page)).every(left => left > 700), 'initial restored tabs are revealed in both panes')
+    for (const [tabId, key] of [['chat:scroll-b-6', 'Enter'], ['chat:scroll-b-7', ' ']]) {
+      await tabToControl(page, `[data-tab-id="${tabId}"] button[title="Close tab"]`)
+      await page.keyboard.press(key)
+      await page.waitForFunction(tabId => !document.querySelector(`[data-tab-id="${tabId}"]`), {}, tabId)
+      assert.equal((await state(page)).root.children[1].activeTabId, 'chat:scroll-b-11', 'keyboard Close does not select its inactive parent tab')
+    }
+    await tabToControl(page, '[data-tab-id="chat:scroll-b-9"]')
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(() => document.querySelector('[data-tab-id="chat:scroll-b-9"]')?.dataset.tabActive === 'true')
+    await assertTabVisible(page, 'chat:scroll-b-9')
+    const close = await (await page.$('[data-tab-id="chat:scroll-b-9"] button[title="Close tab"]')).boundingBox()
+    await mousePressAt(page, { x: close.x + close.width / 2, y: close.y + close.height / 2 })
+    await assertTabVisible(page, 'chat:scroll-b-10')
+    const snapshot = await state(page)
+    assert.equal(snapshot.root.children[1].activeTabId, 'chat:scroll-b-10')
+    assert.equal(snapshot.hash, '#tab/chat:scroll-b-10')
+    assert.equal(snapshot.tabsById['chat:scroll-b-9'], undefined)
+  } finally { await page.close() }
+})
+
 test('each single-tab pane uses its header while multi-tab panes retain their strips and controls', async () => {
   const page = await openFixture({ split: true })
   try {
@@ -732,7 +932,7 @@ test('each single-tab pane uses its header while multi-tab panes retain their st
     await page.evaluate(() => window.foxwarmTest.switchToSession('e2e-b'))
     await page.waitForSelector('[data-workbench-tab-handle="chat:e2e-b"]')
     assert.equal(await page.$$eval('button[title="Close pane"]', nodes => nodes.length), 2, 'replacing the preview keeps both panes and their Close actions')
-    await page.click('[data-workbench-tab-handle="chat:e2e-b"]', { clickCount: 2 })
+    await page.click('[data-workbench-tab-handle="chat:e2e-b"]', { count: 2 })
     await page.evaluate(() => window.foxwarmTest.switchToSession('e2e-c'))
     await page.waitForSelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-tab-id="chat:e2e-c"]')
     assert.equal(await page.$$eval(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-tab-id]', nodes => nodes.length), 2)
@@ -744,6 +944,70 @@ test('each single-tab pane uses its header while multi-tab panes retain their st
     assert.ok(await page.$('[data-workbench-tab-handle="chat:e2e-b"]'))
     assert.equal(await page.$$eval('button[title="Close pane"]', nodes => nodes.length), 2)
   } finally { await page.close() }
+})
+
+test('sole-tab header whitespace moves its pane without a Move control or dragging header content', async () => {
+  const terminal = { id: 'term-blank-header', nodeId: 'master', cwd: '/workspace', pid: 42, cols: 80, rows: 24 }
+  const tabs = [chat('e2e-a', false), system,
+    { id: 'system:search', type: 'search', title: 'History' },
+    { id: 'system:logs', type: 'logs', title: 'Logs' },
+    { id: 'system:tasks', type: 'tasks', title: 'Tasks' },
+    { id: 'terminal:term-blank-header', type: 'terminal', title: 'Terminal', terminalId: terminal.id, cwd: terminal.cwd, nodeId: terminal.nodeId }]
+  tabs.push(nodesTab)
+  for (const tab of tabs) {
+    const layout = { id: 'split-main', kind: 'split', direction: 'row', sizes: [50, 50], children: [
+      { id: 'pane-main', kind: 'pane', tabIds: [tab.id], activeTabId: tab.id },
+      { id: 'pane-other', kind: 'pane', tabIds: ['chat:e2e-b'], activeTabId: 'chat:e2e-b' },
+    ] }
+    const page = await openFixture({ tabs: [tab, chat('e2e-b', false)], activeTabId: tab.id, layout, responsiveChat: true, terminal: tab.type === 'terminal' ? terminal : null })
+    try {
+      await page.waitForSelector('[data-workbench-pane-drag-area="pane-main"]')
+      assert.equal(await page.$('[data-workbench-pane-drag-handle], button[title="Drag pane"]'), null)
+      assert.equal(await page.$$eval('[data-workbench-content-pane="pane-main"] [data-workbench-pane-controls] button', buttons => buttons.length), 2, 'only Collapse and Close occupy the pane toolbar')
+      const before = await state(page)
+      await dragPane(page, 'pane-main', 'pane-other', 'right', { cancel: true })
+      assert.deepEqual((await state(page)).root, before.root)
+      assert.deepEqual((await state(page)).tabsById, before.tabsById)
+
+      if (tab.type === 'logs') {
+        const input = await (await page.$('[data-workbench-content-pane="pane-main"] input[aria-label="Log date and time"]')).boundingBox()
+        await page.mouse.move(input.x + input.width / 2, input.y + input.height / 2)
+        await page.mouse.down()
+        await page.mouse.move(input.x + input.width / 2 + 12, input.y + input.height / 2, { steps: 4 })
+        assert.equal(await page.$('[data-pane-drag-overlay]'), null, 'header input remains an input rather than a pane drag activator')
+        await page.mouse.up()
+      }
+      if (tab.type === 'chat') {
+        const title = await page.evaluate(() => {
+          const area = document.querySelector('[data-workbench-pane-drag-area="pane-main"]')
+          const text = area.querySelector('.truncate.text-lg')
+          const rect = text.getBoundingClientRect()
+          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+        })
+        await page.mouse.move(title.x, title.y)
+        await page.mouse.down()
+        await page.mouse.move(title.x + 12, title.y, { steps: 4 })
+        assert.equal(await page.$('[data-pane-drag-overlay]'), null, 'header title text is not blank drag space')
+        await page.mouse.up()
+        const body = await (await page.$('[data-workbench-content-pane="pane-main"] .foxwarm-chat-messages')).boundingBox()
+        await page.mouse.move(body.x + body.width / 2, body.y + body.height / 2)
+        await page.mouse.down()
+        await page.mouse.move(body.x + body.width / 2 + 12, body.y + body.height / 2, { steps: 4 })
+        assert.equal(await page.$('[data-pane-drag-overlay]'), null, 'body content does not start whole-pane dragging')
+        await page.mouse.up()
+        const collapse = await page.$('[data-workbench-pane-collapse="pane-main"]')
+        assert.ok(await collapse.$('svg.lucide-minus'))
+        const box = await collapse.boundingBox()
+        await page.mouse.move(box.x + box.width / 2 - 4, box.y + box.height / 2)
+        await page.mouse.down()
+        await page.mouse.move(box.x + box.width / 2 + 4, box.y + box.height / 2, { steps: 4 })
+        assert.equal(await page.$('[data-pane-drag-overlay]'), null, 'Collapse remains an ordinary button across the drag threshold')
+        await page.mouse.up()
+        await page.waitForSelector('[data-workbench-collapsed-pane="true"]')
+        assert.equal(await page.$('[data-workbench-pane-collapse="pane-main"] svg.lucide-minus'), null, 'Expand keeps its distinct icon')
+      }
+    } finally { await page.close() }
+  }
 })
 
 test('old preview records disappear without removing kept or system tabs; canonical previews survive reload', async () => {
@@ -1389,11 +1653,55 @@ test('Chat composer uses a smaller empty editor below 600px content height in De
           await page.waitForFunction((selector, height) => getComputedStyle(document.querySelector(selector)).minHeight === height + 'px', {}, editor, minHeight)
           const actual = await geometry()
           assert.deepEqual(await page.$eval(root, el => ({ width: el.getBoundingClientRect().width, height: el.getBoundingClientRect().height })), { width, height })
-          assert.equal(actual.height, minHeight, themeId + ' empty editor at ' + width + ' × ' + height)
+          assert.ok(actual.height >= minHeight, themeId + ' empty editor respects its minimum at ' + width + ' × ' + height)
           assert.equal(actual.marginBottom, '0px')
           assert.equal(actual.lineHeight, original.lineHeight)
           assert.equal(actual.padding, original.padding)
         }
+      }
+      for (const width of [360, 800]) {
+        await page.$eval(root, (el, width) => { el.style.width = width + 'px'; el.style.height = '600px' }, width)
+        await page.waitForFunction(selector => document.querySelector(selector)?.dataset.empty === 'true', {}, editor)
+        const empty = await page.$eval(editor, el => {
+          const form = el.closest('form')
+          const box = el.getBoundingClientRect()
+          const placeholder = getComputedStyle(el, '::before')
+          const toolbar = form.querySelector('button[type="submit"]').parentElement
+          const toolbarBox = toolbar.getBoundingClientRect()
+          const formBox = form.getBoundingClientRect()
+          return {
+            placeholderX: box.left + parseFloat(placeholder.insetInlineStart),
+            paddingX: box.left + parseFloat(getComputedStyle(el).paddingLeft),
+            editorInset: parseFloat(getComputedStyle(el).paddingLeft),
+            placeholderTop: parseFloat(placeholder.top),
+            paddingTop: parseFloat(getComputedStyle(el).paddingTop),
+            clickX: box.left + 6, clickY: box.top + 12,
+            editorTop: box.top - formBox.top,
+            toolbarInset: toolbarBox.left + parseFloat(getComputedStyle(toolbar).paddingLeft) - formBox.left,
+            toolbarOverflow: toolbar.scrollWidth - toolbar.clientWidth,
+          }
+        })
+        assert.equal(empty.placeholderX, empty.paddingX, themeId + ' placeholder follows the editor inset')
+        assert.equal(empty.editorInset, 16, themeId + ' text has more horizontal breathing room')
+        assert.equal(empty.placeholderTop, empty.paddingTop, themeId + ' placeholder follows the vertical inset')
+        assert.equal(empty.paddingTop, 8)
+        assert.equal(empty.editorTop, 1, themeId + ' editor reaches the form border without outer padding')
+        assert.equal(empty.toolbarInset, 9, themeId + ' toolbar owns its horizontal inset')
+        assert.ok(empty.toolbarOverflow <= 1, themeId + ' toolbar fits the narrow section')
+        if (process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR) await page.screenshot({ path: path.join(process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR, `composer-${themeId}-${width}-empty.png`), fromSurface: false })
+        await page.mouse.click(empty.clickX, empty.clickY)
+        assert.equal(await page.$eval(editor, el => el === document.activeElement), true, 'editor padding is clickable')
+        await page.keyboard.type('First line')
+        const textX = await page.$eval(editor, el => {
+          const range = document.createRange()
+          range.setStart(el.firstChild, 0); range.setEnd(el.firstChild, 1)
+          return range.getBoundingClientRect().left
+        })
+        assert.ok(Math.abs(textX - empty.placeholderX) <= 0.5, themeId + ' ordinary text starts at the placeholder')
+        if (process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR) await page.screenshot({ path: path.join(process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR, `composer-${themeId}-${width}-text.png`), fromSurface: false })
+        await page.focus(editor)
+        await page.keyboard.down('Control'); await page.keyboard.press('a'); await page.keyboard.up('Control')
+        await page.keyboard.press('Backspace')
       }
       await page.click(editor)
       await page.keyboard.type('First line')
@@ -1675,6 +1983,109 @@ test('Sidebar and tab scrollbars reveal without changing usable width or tab-con
   } finally { await page.close() }
 })
 
+async function workbenchScreenshot(page, name) {
+  if (!process.env.FOXWARM_E2E_SCREENSHOT_DIR) return
+  await mkdir(process.env.FOXWARM_E2E_SCREENSHOT_DIR, { recursive: true })
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  await page.screenshot({ path: path.join(process.env.FOXWARM_E2E_SCREENSHOT_DIR, name), fullPage: true })
+}
+
+async function clickStatusPageEntry(page, section) {
+  const popup = '[data-workbench-status-popup]'
+  await page.click(`[data-workbench-status-bar] button[aria-label^="${section === 'Tasks' ? 'Tasks:' : 'Nodes:'}"]`)
+  await page.waitForSelector(popup, { visible: true })
+  const entry = await page.evaluateHandle(label => [...document.querySelectorAll('[data-workbench-status-popup] button')].find(button => button.textContent === label), `Open ${section}`)
+  await entry.asElement().click()
+  await entry.dispose()
+  await page.waitForSelector(popup, { hidden: true })
+}
+
+test('Tasks and Nodes popup entries close the preview and activate singleton pages, including collapsed panes', async () => {
+  const page = await openFixture({ tabs: [system, chat('e2e-a', false)] })
+  try {
+    await page.waitForSelector('[data-workbench-status-bar] button[aria-label^="Tasks:"]')
+    await page.click('[data-workbench-status-bar] button[aria-label^="Tasks:"]')
+    await page.waitForSelector('[data-workbench-status-popup]', { visible: true })
+    await workbenchScreenshot(page, 'status-tasks-popup.png')
+    await page.keyboard.press('Escape')
+    await clickStatusPageEntry(page, 'Tasks')
+    await page.waitForFunction(() => location.hash.includes('system%3Atasks'))
+    await page.waitForSelector('[data-tab-id="system:tasks"]')
+    assert.equal((await state(page)).tabsById['system:tasks'].type, 'tasks')
+    await page.evaluate(() => { window.__failTaskPreview = true })
+    await page.click('[data-workbench-status-bar] button[aria-label^="Tasks:"]')
+    await page.waitForFunction(() => document.querySelector('[data-workbench-status-popup]')?.textContent.includes('Unable to load tasks'))
+    await page.evaluate(() => [...document.querySelectorAll('[data-workbench-status-popup] button')].find(button => button.textContent === 'Open Tasks').click())
+    await page.waitForSelector('[data-workbench-status-popup]', { hidden: true })
+    assert.equal(Object.keys((await state(page)).tabsById).filter(id => id === 'system:tasks').length, 1)
+    await page.click('[data-workbench-status-bar] button[aria-label^="Nodes:"]')
+    await page.waitForSelector('[data-workbench-status-popup]', { visible: true })
+    await page.waitForFunction(() => document.querySelector('[data-workbench-status-popup]')?.textContent.includes('Open Nodes'))
+    await workbenchScreenshot(page, 'status-nodes-popup.png')
+    await page.keyboard.press('Escape')
+    await clickStatusPageEntry(page, 'Nodes')
+    await page.waitForSelector('[data-node-surface]')
+    await workbenchScreenshot(page, 'nodes-workbench-wide.png')
+    assert.equal((await state(page)).tabsById['system:nodes'].type, 'nodes')
+    assert.equal((await state(page)).hash, '#tab/system:nodes')
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('[data-node-surface]')
+    assert.equal((await state(page)).tabsById['system:nodes'].title, 'Nodes')
+    await clickReadyControl(page, '[data-tab-id="system:nodes"] button[title="Close tab"]')
+    await page.waitForFunction(() => !JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById['system:nodes'])
+    assert.notEqual((await state(page)).hash, '#tab/system:nodes')
+    await page.click('[data-tab-id="system:agents"]')
+    await page.waitForSelector('.foxwarm-architecture-surface-tab')
+    assert.deepEqual(await page.$$eval('.foxwarm-architecture-surface-tab', buttons => buttons.map(button => button.textContent)), ['Topology', 'Agents'])
+    await workbenchScreenshot(page, 'architecture-two-modes.png')
+    await page.evaluate(() => [...document.querySelectorAll('header button')].find(button => button.textContent.includes('protocol-compatible execution')).click())
+    await page.waitForSelector('[data-node-surface]')
+    await page.setViewport({ width: 390, height: 844 })
+    await page.waitForSelector('[data-workbench-status-bar]', { hidden: true })
+    await workbenchScreenshot(page, 'nodes-workbench-narrow.png')
+    assert.equal(await page.$('[data-workbench-status-bar]'), null)
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false)
+    assert.ok(await page.$('[data-node-surface]'))
+    await page.evaluate(() => document.querySelector('[data-tab-id="system:agents"]').click())
+    await page.waitForSelector('.foxwarm-architecture-surface-tab')
+    await page.evaluate(() => [...document.querySelectorAll('header button')].find(button => button.textContent.includes('protocol-compatible execution')).click())
+    await page.waitForSelector('[data-node-surface]')
+    assert.equal((await state(page)).hash, '#tab/system:nodes')
+  } finally { await page.close() }
+
+  const tasksTab = { id: 'system:tasks', type: 'tasks', title: 'Tasks' }
+  for (const tab of [nodesTab, tasksTab]) {
+    const layout = { id: 'split-main', kind: 'split', direction: 'row', sizes: [50, 50], children: [
+      { id: 'pane-main', kind: 'pane', tabIds: ['chat:e2e-a'], activeTabId: 'chat:e2e-a' },
+      { id: 'pane-other', kind: 'pane', tabIds: [tab.id], activeTabId: tab.id, collapsed: true },
+    ] }
+    const collapsed = await openFixture({ tabs: [chat('e2e-a', false), tab], layout })
+    try {
+      await clickStatusPageEntry(collapsed, tab.title)
+      await collapsed.waitForFunction(id => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.focusedPaneId === 'pane-other' && location.hash === `#tab/${encodeURIComponent(id)}`, {}, tab.id)
+      const snapshot = await state(collapsed)
+      assert.equal(snapshot.root.children[1].collapsed, false)
+      assert.equal(snapshot.root.children[1].activeTabId, tab.id)
+      assert.equal(Object.keys(snapshot.tabsById).filter(id => id === tab.id).length, 1)
+    } finally { await collapsed.close() }
+  }
+})
+
+test('Nodes route creates a sole-tab header without Architecture data or setup credentials', async () => {
+  const page = await openFixture({ tabs: [], activeTabId: 'system:nodes', hash: '#tab/system%3Anodes' })
+  try {
+    await page.waitForSelector('[data-node-surface]')
+    await page.waitForSelector('[data-workbench-tab-handle="system:nodes"]')
+    assert.equal(await page.$('[data-tab-id]'), null)
+    const reads = await page.evaluate(() => window.__fetches)
+    assert.ok(reads.some(request => request.path.endsWith('/nodes/onboarding/pending')))
+    assert.ok(!reads.some(request => request.path.endsWith('/session-list/architecture') && new URLSearchParams(request.search).get('limit') !== '1' || request.path.endsWith('/nodes/onboarding/commands')), 'App keeps its global summary read, but Nodes never mounts the Architecture tree or credentials')
+    await page.click('[data-workbench-tab-close="system:nodes"]')
+    await page.waitForFunction(() => location.hash === '')
+    assert.deepEqual((await state(page)).tabsById, {})
+  } finally { await page.close() }
+})
+
 test('Desktop status bar opens upward details without navigation and stays outside Sidebar height', async () => {
   const page = await openFixture()
   try {
@@ -1696,7 +2107,7 @@ test('Desktop status bar opens upward details without navigation and stays outsi
     assert.equal(await page.$eval(tasks, element => document.activeElement === element), true)
     await page.evaluate(() => window.dispatchEvent(new CustomEvent('foxwarm-task-counts', { detail: { open: 1, active: 1 } })))
     await page.waitForSelector(`${bar} button[aria-label="Tasks: 1 active, 2 unfinished"]`)
-    await page.click(`${bar} button[aria-label="Ready nodes: 1"]`)
+    await page.click(`${bar} button[aria-label="Nodes: 1 online, 1 total"]`)
     await page.waitForSelector('[data-workbench-status-popup]', { visible: true })
     assert.match(await page.$eval('[data-workbench-status-popup]', element => element.textContent), /master/)
     assert.equal(await page.evaluate(() => location.hash), hash)
@@ -1802,7 +2213,7 @@ test('Footer Terminal is a reusable bottom pane that collapses without PTY delet
     assert.ok(await page.evaluate(() => window.__terminalRoot.isConnected), 'whole-pane docking retains Terminal DOM')
     assert.equal(await page.evaluate(() => window.__terminalConnections.length), await page.evaluate(() => window.__terminalConnectionsBefore), 'layout movement does not reconnect the PTY')
     assert.equal((await state(page)).root.direction, 'row')
-    assert.ok(await page.$(`[data-workbench-pane-drag-handle="${terminalPane.id}"]`))
+    assert.ok(await page.$(`[data-workbench-pane-drag-area="${terminalPane.id}"]`))
     await clickReadyControl(page, control)
     await page.waitForSelector(`[data-pane-id="${terminalPane.id}"][data-workbench-collapsed-pane="true"]`)
     await clickReadyControl(page, control)
@@ -1833,6 +2244,14 @@ test('visible Chat keeps its DOM and initialization across split and normalizati
   chatMessages[24] = { role: 'model', parts: [{ functionCall: { id: 'retained-call', name: 'read', args: { filePath: 'fixture.txt' } } }], __meta: { seq: 25, timestamp: 1700000000024 } }
   chatMessages[25] = { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'retained-call', name: 'read', response: { output: 'Retained tool response' } } }], __meta: { seq: 26, timestamp: 1700000000025 } }
   const page = await openFixture({ responsiveChat: true, chatMessages, hash: '#tab/chat:e2e-a' })
+  const assertUniformClip = async () => {
+    const radii = await page.$$eval('[data-workbench-content-tab]', hosts => hosts.filter(host => !host.inert).map(host => {
+      const slot = document.querySelector(`[data-workbench-content-slot="${host.dataset.workbenchContentPane}"]`)
+      return [slot, host, host.firstElementChild].map(element => getComputedStyle(element).borderRadius)
+    }))
+    assert.ok(radii.length > 0)
+    for (const corners of radii) assert.deepEqual(corners, ['9px', '9px', '9px'])
+  }
   const waitForAnchor = () => page.waitForFunction(() => {
     const viewport = document.querySelector('.foxwarm-chat-messages').getBoundingClientRect()
     const anchor = document.querySelector('[data-chat-message-anchor-key="' + window.__originalScrollAnchor + '"]')
@@ -1840,6 +2259,7 @@ test('visible Chat keeps its DOM and initialization across split and normalizati
   })
   try {
     await page.waitForSelector('.foxwarm-chat-root [data-chat-message-anchor-key]')
+    await assertUniformClip()
     await page.click('[role="textbox"][aria-label="Message"]')
     await page.keyboard.down('Control'); await page.keyboard.press('A'); await page.keyboard.up('Control'); await page.keyboard.press('Backspace')
     await page.keyboard.type('retained draft')
@@ -1869,6 +2289,7 @@ test('visible Chat keeps its DOM and initialization across split and normalizati
     await clickReadyControl(page, 'button[title="Split right with active tab"]')
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.kind === 'split')
     await page.waitForSelector('.foxwarm-chat-root [data-chat-message-anchor-key]')
+    await assertUniformClip()
     console.info('split lifecycle', await page.evaluate(() => ({ sameRoot: document.querySelector('.foxwarm-chat-root') === window.__originalChat, historyBefore: window.__originalHistoryCount, historyAfter: window.__historyReads.length, subscriptionsBefore: window.__originalSubscriptions, subscriptionsAfter: window.__subscriptions.length })))
     assert.equal(await page.evaluate(() => document.querySelector('.foxwarm-chat-root') === window.__originalChat), true, 'split retains the same Chat root')
     assert.equal(await page.evaluate(() => document.querySelector('[data-chat-timeline="committed"]') === window.__originalTimeline), true)
@@ -1882,6 +2303,7 @@ test('visible Chat keeps its DOM and initialization across split and normalizati
     assert.ok(await page.$eval('.foxwarm-chat-messages', element => element.scrollHeight - element.scrollTop - element.clientHeight > 200), 'layout does not discard upward scroll intent')
     await page.click('[data-workbench-tab-close="system:agents"]')
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.kind === 'pane')
+    await assertUniformClip()
     assert.equal(await page.evaluate(() => document.querySelector('.foxwarm-chat-root') === window.__originalChat), true, 'normalizing the last sibling retains Chat')
     assert.equal(await page.evaluate(() => window.__historyReads.length), await page.evaluate(() => window.__originalHistoryCount))
     await waitForAnchor()
@@ -2527,6 +2949,141 @@ for (const deltaY of [-160, -3]) {
   })
 }
 
+
+async function badgePresentation(page, selector) {
+  return page.$eval(selector, badge => {
+    const style = getComputedStyle(badge)
+    const dot = getComputedStyle(badge.firstElementChild)
+    return { font: style.fontSize, line: style.lineHeight, padding: style.padding, radius: style.borderRadius, gap: style.gap, color: style.color, background: style.backgroundColor, dot: [dot.width, dot.height, dot.borderRadius, dot.backgroundColor] }
+  })
+}
+
+test('status popups keep full Node connectivity counts and compact theme-visible sections', async () => {
+  const nodeDirectory = Array.from({ length: 14 }, (_, index) => ({
+    id: `fixture-node-${String(index + 1).padStart(2, '0')}`,
+    displayName: `Fixture node ${index + 1}${[0, 2, 8].includes(index) ? ' — a long display name that must truncate inside the popup' : ''}`,
+    type: 'cli-node', online: index < 8,
+    services: { 'vscode-fs': 1 },
+    ...(index === 2 ? { protocolCompatibility: { status: 'upgrade-required' } } : {}),
+  }))
+  const taskRows = [
+    { id: 'fixture-active', title: 'Review Node status — a long task title that must truncate without hiding the badge', status: 'active', updatedAt: 1700000000000, ownerSessionId: null },
+    { id: 'fixture-open', title: 'Check pending setup', status: 'open', updatedAt: 1700000000000, ownerSessionId: null },
+  ]
+  for (const [themeId, colorMode] of [['foxwarm.default', 'dark'], ['foxwarm.default', 'light'], ['foxwarm.550a', 'dark']]) {
+    const page = await openFixture({ tabs: [nodesTab], activeTabId: nodesTab.id, themeId, colorMode, nodeDirectory, taskRows, width: 1280, height: 760 })
+    try {
+      const label = `${themeId.split('.').at(-1)}-${colorMode}`
+      const nodesTrigger = '[data-workbench-status-bar] button[aria-label^="Nodes:"]'
+      const popup = '[data-workbench-status-popup]'
+      await page.waitForSelector('[data-node-surface]')
+      await page.waitForSelector('[data-workbench-status-bar] button[aria-label="Tasks: 1 active, 2 unfinished"]')
+      await page.waitForSelector(`${nodesTrigger}[title="Nodes: 9 online, 15 total"]`)
+      assert.equal(await page.$eval(`${nodesTrigger} span:last-child`, element => element.textContent), '9/15')
+      assert.match(await page.$eval('[data-node-surface]', element => element.textContent), /Online 9 · Total 15/)
+      assert.equal(await page.$$eval('[data-node-surface] article', cards => cards.length), 15)
+      assert.match(await page.$eval('[data-node-surface] article:nth-child(4)', card => card.textContent), /Online.*Upgrade required/)
+      await workbenchScreenshot(page, `nodes-page-${label}.png`)
+      const nodePageBadge = await badgePresentation(page, '[data-node-surface] [data-status="online"]')
+      assert.deepEqual({ font: nodePageBadge.font, line: nodePageBadge.line, padding: nodePageBadge.padding, radius: nodePageBadge.radius, gap: nodePageBadge.gap, dot: nodePageBadge.dot.slice(0, 3) }, { font: '11px', line: '18px', padding: '3px 7px', radius: '5px', gap: '5px', dot: ['5px', '5px', '50%'] })
+      const directoryReads = await page.evaluate(() => window.__fetches.filter(request => request.path.endsWith('/api/nodes')).length)
+      await page.click(nodesTrigger)
+      await page.waitForSelector(popup, { visible: true })
+      await workbenchScreenshot(page, `nodes-popup-${label}.png`)
+      const summary = await page.$eval(popup, element => element.textContent)
+      assert.match(summary, /Online9Total15/)
+      const list = `${popup} [role="list"]`
+      assert.deepEqual(await badgePresentation(page, `${list} [data-status="online"]`), { ...nodePageBadge, padding: '1px 5px', line: '16px' })
+      assert.equal(await page.$$eval(`${list} .status-badge`, badges => badges.every(badge => { const style = getComputedStyle(badge); return style.padding === '1px 5px' && style.lineHeight === '16px' })), true)
+      const rowOverflow = await page.$$eval(`${list} [role="listitem"]`, rows => rows.some(row => row.scrollWidth > row.clientWidth))
+      assert.equal(rowOverflow, false)
+      assert.equal(await page.$eval(`${list} [role="listitem"]:nth-child(2) > span:first-child`, name => name.scrollWidth > name.clientWidth), true)
+      assert.equal(await page.$$eval(`${list} [role="listitem"]`, rows => rows.length), 15)
+      assert.deepEqual(await page.$$eval(`${list} [role="listitem"] > span:first-child`, names => names.map(name => name.title)), ['master', ...nodeDirectory.map(node => node.id)])
+      assert.match(await page.$eval(`${list} [role="listitem"]:nth-child(4)`, row => row.textContent), /Online.*Upgrade required/)
+      const initial = await page.$eval(popup, element => {
+        const rect = element.getBoundingClientRect()
+        const list = element.querySelector('[role=list]')
+        return { top: rect.top, bottom: rect.bottom, viewport: innerHeight, body: document.body.scrollHeight, bodyClient: document.body.clientHeight, popupScroll: element.scrollTop, listHeight: list.clientHeight, listScrollHeight: list.scrollHeight }
+      })
+      assert.ok(initial.top >= 8 && initial.bottom <= initial.viewport - 8, JSON.stringify(initial))
+      assert.ok(initial.listScrollHeight > initial.listHeight)
+      const listBounds = await (await page.$(list)).boundingBox()
+      await page.mouse.move(listBounds.x + listBounds.width / 2, listBounds.y + listBounds.height / 2)
+      await page.mouse.wheel({ deltaY: 100 })
+      await page.waitForFunction(() => document.querySelector('[aria-label="Node directory"]').scrollTop > 0)
+      const seventhVisible = await page.$eval(`${list} [role="listitem"]:nth-child(7)`, row => { const rect = row.getBoundingClientRect(); const parent = row.parentElement.getBoundingClientRect(); return rect.top >= parent.top && rect.bottom <= parent.bottom })
+      assert.equal(seventhVisible, true)
+      await page.focus(list)
+      await page.keyboard.press('End')
+      await page.waitForFunction(() => { const list = document.querySelector('[aria-label="Node directory"]'); return list.scrollTop + list.clientHeight >= list.scrollHeight - 1 })
+      const scroll = await page.$eval(popup, element => {
+        const list = element.querySelector('[role=list]'); const last = list.lastElementChild.getBoundingClientRect(); const rect = list.getBoundingClientRect()
+        return { listScroll: list.scrollTop, popupScroll: element.scrollTop, windowScroll: scrollY, bodyScroll: document.body.scrollTop, pageScroll: document.querySelector('[data-node-surface]').parentElement.parentElement.scrollTop, lastVisible: last.top >= rect.top && last.bottom <= rect.bottom + 1 }
+      })
+      await workbenchScreenshot(page, `nodes-popup-last-${label}.png`)
+      assert.equal(scroll.lastVisible, true); assert.equal(scroll.popupScroll, 0); assert.equal(scroll.windowScroll, 0); assert.equal(scroll.bodyScroll, 0); assert.equal(scroll.pageScroll, 0)
+      assert.equal(await page.evaluate(() => window.__fetches.filter(request => request.path.endsWith('/api/nodes')).length), directoryReads)
+      console.info('status popup geometry', label, { initial, scroll })
+      console.info('status popup styles', label, await page.$eval(popup, element => {
+        const style = getComputedStyle(element)
+        const section = element.querySelector('.foxwarm-status-popup-section')
+        const sectionStyle = getComputedStyle(section)
+        return { surface: style.backgroundColor, divider: sectionStyle.borderTopColor, dividerWidth: sectionStyle.borderTopWidth, marginTop: sectionStyle.marginTop, paddingTop: sectionStyle.paddingTop, height: element.getBoundingClientRect().height }
+      }))
+      assert.equal(await page.$eval(`${popup} .foxwarm-status-popup-section`, element => getComputedStyle(element).borderTopColor !== getComputedStyle(element.parentElement).backgroundColor), true)
+      await page.evaluate(() => [...document.querySelectorAll('[data-workbench-status-popup] button')].find(button => button.textContent === 'Open Nodes').focus())
+      await page.keyboard.press('Enter')
+      await page.waitForSelector(popup, { hidden: true })
+      assert.equal((await state(page)).hash, '#tab/system:nodes')
+      await page.click('[data-workbench-status-bar] button[aria-label="Tasks: 1 active, 2 unfinished"]')
+      await page.waitForFunction(() => document.querySelector('[data-workbench-status-popup]')?.textContent.includes('Review Node status'))
+      await workbenchScreenshot(page, `tasks-popup-${label}.png`)
+      const taskPopupBadge = await badgePresentation(page, `${popup} .task-status[data-status="active"]`)
+      assert.deepEqual(taskPopupBadge, { ...nodePageBadge, padding: '1px 5px', line: '16px' })
+      console.info('badge sizes', label, { page: { padding: nodePageBadge.padding, line: nodePageBadge.line }, popup: { padding: taskPopupBadge.padding, line: taskPopupBadge.line }, font: taskPopupBadge.font, dot: taskPopupBadge.dot.slice(0, 2) })
+      assert.equal(await page.evaluate(() => performance.getEntriesByType('resource').some(resource => /TasksView-.*\.css/.test(resource.name))), false, 'first popup is styled before the lazy Tasks page/CSS is loaded')
+      assert.equal(await page.$eval(`${popup} .task-status`, badge => badge.textContent), 'Active')
+      assert.equal(await page.$eval(`${popup} .task-status`, badge => badge.parentElement.scrollWidth > badge.parentElement.clientWidth), false)
+      assert.equal(await page.$eval(`${popup} .task-status`, badge => { const name = badge.previousElementSibling; return name.scrollWidth > name.clientWidth }), true)
+      const tasksGeometry = await page.$eval(popup, element => {
+        const sections = [...element.querySelectorAll('.foxwarm-status-popup-section')].map(section => { const style = getComputedStyle(section); return { border: style.borderTopColor, margin: parseFloat(style.marginTop), padding: parseFloat(style.paddingTop) } })
+        return { height: element.getBoundingClientRect().height, surface: getComputedStyle(element).backgroundColor, sections }
+      })
+      assert.ok(tasksGeometry.height < 230, JSON.stringify(tasksGeometry))
+      assert.ok(tasksGeometry.sections.every(section => section.border !== tasksGeometry.surface && section.margin + section.padding <= 12))
+      console.info('task popup geometry', label, tasksGeometry)
+      assert.ok((await page.evaluate(() => window.__fetches.filter(request => request.path.endsWith('/tasks') && new URLSearchParams(request.search).get('limit') === '3'))).length === 2)
+      if (themeId === 'foxwarm.default') {
+        await page.evaluate(() => [...document.querySelectorAll('[data-workbench-status-popup] button')].find(button => button.textContent === 'Open Tasks').focus())
+        await page.keyboard.press('Enter')
+        await page.waitForSelector('.tasks-table .task-status[data-status="active"]')
+        assert.deepEqual(await badgePresentation(page, '.tasks-table .task-status[data-status="active"]'), { ...taskPopupBadge, padding: '3px 7px', line: '18px' })
+        await workbenchScreenshot(page, `tasks-page-${label}.png`)
+        await page.click('[data-workbench-status-bar] button[aria-label="Tasks: 1 active, 2 unfinished"]')
+        await page.waitForFunction(() => document.querySelector('[data-workbench-status-popup] .task-status')?.textContent === 'Active')
+        await workbenchScreenshot(page, `tasks-page-popup-${label}.png`)
+      }
+
+    } finally { await page.close() }
+  }
+})
+
+for (const reducedMotion of [false, true]) {
+  test(`startup splash unmounts and releases pointer input with reduced motion ${reducedMotion}`, async () => {
+    const page = await openFixture({ tabs: [chat('e2e-a', false)], activeTabId: 'chat:e2e-a', reducedMotion, waitForSplash: false })
+    try {
+      if (reducedMotion) {
+        const animations = await page.$$eval('[data-fox-splash] svg path', paths => paths.map(path => getComputedStyle(path).animationName))
+        assert.ok(animations.every(name => name === 'none'))
+      }
+      await page.waitForFunction(() => !document.querySelector('[data-fox-splash]'), { timeout: 8_000 })
+      await clickReadyControl(page, '.foxwarm-chat-composer-textarea')
+      assert.equal(await page.$eval('.foxwarm-chat-composer-textarea', editor => document.activeElement === editor), true)
+    } finally { await page.close() }
+  })
+}
+
 test('cross-window theme changes close a deleted preview and release the background', async () => {
   const setup = { id: 'system:setup', type: 'setup', title: 'Setup' }
   const first = await openFixture({ tabs: [setup], activeTabId: setup.id, hash: '#setup' })
@@ -2552,4 +3109,57 @@ test('cross-window theme changes close a deleted preview and release the backgro
     await second.bringToFront()
     await second.waitForFunction(() => document.documentElement.dataset.foxwarmThemeMode === 'dark')
   } finally { await first.close(); await second?.close() }
+})
+
+
+test('playful runtime and short right-side queue work in App and Appearance', async () => {
+  const page = await openFixture({ responsiveChat: true, hash: '#tab/chat:e2e-a', themeId: 'foxwarm.default', colorMode: 'dark', width: 1400 })
+  const publish = () => page.evaluate(() => window.__emitRealtime({
+    type: 'session-state', sessionId: 'e2e-a', session: { id: 'e2e-a', busy: true, queueLength: 3, messageCount: 35, historyVersion: 1,
+      runtimeState: { state: 'requesting-model', busy: true, queueLength: 3 } },
+  }))
+  try {
+    await page.waitForSelector('.foxwarm-chat-composer-textarea')
+    await publish()
+    await page.waitForFunction(() => document.querySelector('[data-processing-queue-status]')?.textContent.includes('3 queued'))
+    assert.equal(await page.$eval('[data-fox-thinking-copy] .sr-only', el => el.textContent), 'Thinking...')
+    await page.click('[data-processing-queue-status] button')
+    await page.click('.fw-processing-main > button')
+    await page.waitForFunction(() => window.__sent.length >= 2)
+    assert.deepEqual(await page.evaluate(() => window.__sent.map(item => JSON.parse(item.body).text)), ['/dequeue', '/stop'])
+    await publish()
+    const bottom = await page.$('[aria-label="Scroll to bottom"]')
+    if (bottom) await bottom.click()
+    await page.waitForFunction(() => {
+      const status = document.querySelector('.fw-processing-main')?.getBoundingClientRect()
+      const scroll = document.querySelector('.foxwarm-chat-messages')?.getBoundingClientRect()
+      const form = document.querySelector('.foxwarm-chat-composer-form')?.getBoundingClientRect()
+      return status && scroll && form && status.top >= scroll.top && status.bottom <= form.top
+    })
+    assert.ok(await page.$eval('[data-processing-queue-status]', el => el.getBoundingClientRect().left > document.querySelector('.fw-processing-main').getBoundingClientRect().right))
+    if (process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR}/app-status-wide.png` })
+    await page.setViewport({ width: 390, height: 844 })
+    await page.waitForSelector('.foxwarm-fixed-viewport-shell')
+    await page.waitForSelector('.foxwarm-chat-composer-textarea')
+    await publish()
+    await page.waitForFunction(() => document.querySelector('[data-processing-queue-status]')?.textContent.includes('3 queued'))
+    assert.ok(await page.$$eval('[data-processing-status-slot] button', buttons => buttons.every(button => {
+      const rect = button.getBoundingClientRect()
+      return rect.width > 0 && rect.left >= 0 && rect.right <= innerWidth
+    })))
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
+    if (process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR}/app-status-narrow.png` })
+  } finally { await page.close() }
+  const setup = { id: 'system:setup', type: 'setup', title: 'Setup' }
+  const appearance = await openFixture({ tabs: [setup], activeTabId: setup.id, hash: '#setup', themeId: 'foxwarm.default', colorMode: 'dark' })
+  try {
+    await appearance.waitForSelector('[data-fox-thinking-copy]')
+    assert.deepEqual(await appearance.$eval('[data-fox-thinking-copy]', copy => ({
+      label: copy.querySelector('.sr-only').textContent,
+      font: getComputedStyle(copy).fontSize,
+      fox: copy.parentElement.querySelector('svg')?.getBoundingClientRect().width,
+    })), { label: 'Thinking...', font: '18px', fox: 24 })
+    assert.equal(await appearance.evaluate(() => !!window.foxwarmBoot && !document.querySelector('[data-fox-splash]')), true)
+    if (process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR) await appearance.screenshot({ path: `${process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR}/appearance-playful-status.png` })
+  } finally { await appearance.close() }
 })

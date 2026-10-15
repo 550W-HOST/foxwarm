@@ -19,6 +19,7 @@ export type WorkbenchTab =
     })
   | (WorkbenchTabBase & { type: 'logs' })
   | (WorkbenchTabBase & { type: 'tasks' })
+  | (WorkbenchTabBase & { type: 'nodes' })
   | (WorkbenchTabBase & { type: 'setup' })
 
 export type WorkbenchPaneNode = {

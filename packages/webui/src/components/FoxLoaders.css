@@ -89,3 +89,20 @@
   .fw-fox-splash * { animation: none !important; }
   .fw-fox .fw-fox-draw { stroke-dashoffset: 0; }
 }
+
+/* Two complementary masks replace old copy from left to right without moving text. */
+.fw-fox-thinking-copy { position: relative; display: inline-flex; min-width: 0; width: var(--fw-fox-copy-width, 24ch); max-width: 100%; vertical-align: middle; }
+.fw-processing-exec .fw-fox { --fw-fox-ink: var(--foxwarm-color-special); }
+.fw-fox-thinking-copy[data-thinking-transition] { transition: width 450ms cubic-bezier(.4, 0, .2, 1); }
+.fw-fox-thinking-measure { position: absolute; width: max-content; visibility: hidden; pointer-events: none; white-space: pre; }
+.fw-fox-thinking-phrases { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; min-width: 0; height: 1.5em; overflow: hidden; line-height: 1.5; }
+.fw-fox-thinking-phrases > span { grid-area: 1 / 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.fw-fox-thinking-phrases > [data-thinking-phrase="incoming"] { animation: fw-fox-copy-in var(--fw-fox-copy-duration) cubic-bezier(.4, 0, .2, 1) both; }
+.fw-fox-thinking-phrases > [data-thinking-phrase="outgoing"] { animation: fw-fox-copy-out var(--fw-fox-copy-duration) cubic-bezier(.4, 0, .2, 1) both; }
+@keyframes fw-fox-copy-in { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+@keyframes fw-fox-copy-out { from { clip-path: inset(0 0 0 0); } to { clip-path: inset(0 0 0 100%); } }
+@media (prefers-reduced-motion: reduce) {
+  .fw-fox-thinking-copy { transition: none !important; }
+  .fw-fox-thinking-phrases > span { animation: none !important; clip-path: none; }
+  .fw-fox-thinking-phrases > [data-thinking-phrase="outgoing"] { display: none; }
+}

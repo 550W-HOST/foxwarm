@@ -902,6 +902,7 @@ test('persisted child-handoff state exclusively drives reminder boundaries, reso
     for (const relation of ['parent', 'other'] as const) {
       const result = await runCase({
         name: relation,
+        initialState: { boundary: 'direct-user', resolved: true },
         queue: [{ type: 'intersession', sourceSessionId: `${relation}-source`, sourceSessionRelation: relation, parts: [{ text: 'assignment' }] }],
       });
       assert.deepEqual(result.session.childHandoffState, { boundary: 'report-required', resolved: false });

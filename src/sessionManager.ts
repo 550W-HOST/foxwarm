@@ -1722,11 +1722,11 @@ export function getChannelBySession(sessionId: string): { channelId: string; con
  * @param isChildSession Whether this is a child session (for multi-agent)
  * @returns New session ID
  */
-export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { displayName?: string; node?: string; model?: string; effort?: ModelEffort; taskId?: string; sourceOverride?: Session }): Promise<string> {
+export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { userInitiated?: boolean; displayName?: string; node?: string; model?: string; effort?: ModelEffort; taskId?: string; sourceOverride?: Session }): Promise<string> {
   return withSessionIdentityLock(() => forkSessionUnlocked(sourceSessionId, suffix, isChildSession, options));
 }
 
-async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { displayName?: string; node?: string; model?: string; effort?: ModelEffort; taskId?: string; sourceOverride?: Session }): Promise<string> {
+async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { userInitiated?: boolean; displayName?: string; node?: string; model?: string; effort?: ModelEffort; taskId?: string; sourceOverride?: Session }): Promise<string> {
   if (suffix !== undefined) validateSessionName(suffix);
   assertSessionDestructiveMutationAllowed([sourceSessionId], 'receive a new fork session');
   // sourceOverride lets a trusted caller (e.g. the Main management facade)
@@ -1821,24 +1821,15 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
     __meta: { timestamp: Date.now() }
   });
 
-  const systemMessage = isChildSession
-    ? `You are a child session forked from parent session \`${realSourceSessionId}\`. Your current session ID is \`${newSessionId}\`. ${options?.taskId ? buildTaskChildCompletionInstruction(options.taskId) : buildChildCompletionInstruction(realSourceSessionId)}`
-    : `Session forked from ${realSourceSessionId} by user command. Your current session ID is \`${newSessionId}\`.`;
+  const systemMessage = options?.userInitiated || !isChildSession
+    ? `This session was manually forked by the user from session \`${realSourceSessionId}\`. Your current session ID is \`${newSessionId}\`. The parent relationship records the source of the inherited context; it does not itself assign work or require a completion report. Follow the user's instructions in this session.`
+    : `You are a child session forked from parent session \`${realSourceSessionId}\`. Your current session ID is \`${newSessionId}\`. ${options?.taskId ? buildTaskChildCompletionInstruction(options.taskId) : buildChildCompletionInstruction(realSourceSessionId)}`;
 
   appendedForkMessages.push({
     role: 'user',
     parts: [systemPart(systemMessage)],
     __meta: { timestamp: Date.now() }
   });
-
-  // Add a model acknowledgment to prevent LLM from re-processing inherited history
-  if (isChildSession) {
-    appendedForkMessages.push({
-      role: 'model',
-      parts: [{ text: 'Understood. I am a child session. Waiting for task from parent session.' }],
-      __meta: { timestamp: Date.now() }
-    });
-  }
 
   assertSessionDestructiveMutationAllowed([realSourceSessionId], 'receive a new fork session');
   sessions.set(newSessionId, forkedSession);

@@ -1011,7 +1011,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
         suppressContentEditableWarning
         spellCheck
         data-placeholder={placeholder}
-        className="foxwarm-chat-composer-textarea foxwarm-inline-composer-editor relative min-h-[60px] max-h-[200px] w-full overflow-y-auto whitespace-pre-wrap break-words border-0 bg-transparent px-3 py-1 text-[16px] leading-6 text-fw-text-strong outline-none focus:ring-0 dark:text-fw-text-strong"
+        className="foxwarm-chat-composer-textarea foxwarm-inline-composer-editor relative min-h-[60px] max-h-[200px] w-full overflow-y-auto whitespace-pre-wrap break-words border-0 bg-transparent px-4 py-2 text-[16px] leading-6 text-fw-text-strong outline-none focus:ring-0 dark:text-fw-text-strong"
         onBeforeInput={(event) => {
           if (disabled) { event.preventDefault(); return }
           const nativeEvent = event.nativeEvent as InputEvent

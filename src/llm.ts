@@ -44,7 +44,7 @@ import {
 } from './llmProviders/openaiImages';
 import { parseFunctionCallArgs } from './toolCallArgs';
 import { createDisplayOnlyModelMessage } from './session/messageVisibility';
-import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
+import { formatToolResponsePayload, formatToolScriptExecutionResponse } from '../packages/shared/dist/toolResponseFormatting';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 import { formatFoxwarmSystemTag, formatSystemPartForModel, isFoxwarmMetadataLine } from './utils/promptWrappers';
 import { formatLocalTimestamp } from './utils/localTime';
@@ -1501,14 +1501,19 @@ function getHistoricalConcreteModelId(message: Message): string | undefined {
         : undefined;
 }
 
-/** Keep persisted presentation metadata out of canonical request journals and provider input. */
+/** Project model-facing execution text and remove presentation metadata without changing history. */
 function stripRequestDisplayMeta(contents: Message[]): Message[] {
     return contents.map(({ compaction: _compaction, ...message }) => ({
         ...message,
         parts: message.parts.map(part => {
             if (!part.functionResponse?.__meta) return part;
-            const { __meta: _displayMeta, ...functionResponse } = part.functionResponse;
-            return { ...part, functionResponse };
+            const { __meta: displayMeta, ...functionResponse } = part.functionResponse;
+            return { ...part, functionResponse: {
+                ...functionResponse,
+                ...(displayMeta.toolScriptSubCalls !== undefined ? {
+                    response: { output: formatToolScriptExecutionResponse(functionResponse.response) },
+                } : {}),
+            } };
         }),
     }));
 }
@@ -2311,6 +2316,7 @@ async function executeToolBatch(
                 toolName: execution.call.name,
                 toolUseId: execution.toolId,
                 nodeId: execution.executionNode,
+                toolScriptExecution: execution.toolScriptSubCalls !== undefined,
             });
         } catch (error: any) {
             result = { error: error?.message || String(error) };

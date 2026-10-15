@@ -2,16 +2,23 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import { useDroppable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
 import { SortableContext, horizontalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
-import { ClipboardList, Code2, FileText, MessageSquareText, History, Settings, SquareTerminal, Users, X } from 'lucide-react'
+import { Server, ClipboardList, Code2, FileText, MessageSquareText, History, Settings, SquareTerminal, Users, X } from 'lucide-react'
 import { useWorkbenchTabMenu, type WorkbenchTabMenuOptions } from './useWorkbenchTabMenu'
 import type { WorkbenchTab } from '../workbench/types'
+import WorkbenchPaneDragArea from './WorkbenchPaneDragArea'
+
+export interface WorkbenchTabRevealRequest {
+  tabId: string
+}
 
 interface WorkbenchTabsProps extends WorkbenchTabMenuOptions {
   paneId: string
   activeTabId: string | null
+  revealRequest?: WorkbenchTabRevealRequest | null
   focused?: boolean
   toolbar?: ReactNode
   dragEnabled?: boolean
+  paneDragEnabled?: boolean
   onSelectTab: (tabId: string) => void
 }
 
@@ -19,6 +26,7 @@ function TabIcon({ type }: { type: WorkbenchTab['type'] }) {
   if (type === 'chat') return <MessageSquareText className="h-4 w-4 shrink-0" />
   if (type === 'vscode') return <Code2 className="h-4 w-4 shrink-0" />
   if (type === 'agents') return <Users className="h-4 w-4 shrink-0" />
+  if (type === 'nodes') return <Server className="h-4 w-4 shrink-0" />
   if (type === 'tasks') return <ClipboardList className="h-4 w-4 shrink-0" />
   if (type === 'logs') return <FileText className="h-4 w-4 shrink-0" />
   if (type === 'search') return <History className="h-4 w-4 shrink-0" />
@@ -50,6 +58,7 @@ function TabStripRow({
   dragEnabled,
   tabs,
   activeTabId,
+  revealRequest,
   onSelectTab,
   onCloseTab,
   onKeepTab,
@@ -59,6 +68,7 @@ function TabStripRow({
   dragEnabled: boolean
   tabs: WorkbenchTab[]
   activeTabId: string | null
+  revealRequest?: WorkbenchTabRevealRequest | null
   onSelectTab: (tabId: string) => void
   onCloseTab: (tabId: string) => void
   onKeepTab: (tabId: string) => void
@@ -82,6 +92,18 @@ function TabStripRow({
     return () => observer.disconnect()
   }, [tabs])
   const tabRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
+  const middlePressedTab = useRef<string | null>(null)
+  useEffect(() => {
+    const clearMiddlePress = () => { middlePressedTab.current = null }
+    document.addEventListener('mouseup', clearMiddlePress)
+    document.addEventListener('pointercancel', clearMiddlePress)
+    window.addEventListener('blur', clearMiddlePress)
+    return () => {
+      document.removeEventListener('mouseup', clearMiddlePress)
+      document.removeEventListener('pointercancel', clearMiddlePress)
+      window.removeEventListener('blur', clearMiddlePress)
+    }
+  }, [])
   const { setNodeRef, isOver } = useDroppable({
     id: `tab-row:${paneId}`,
     data: {
@@ -90,8 +112,16 @@ function TabStripRow({
     },
   })
 
+  const activeTabAvailable = !!activeTabId && tabs.some((tab) => tab.id === activeTabId)
+  const activeRevealRequest = revealRequest?.tabId === activeTabId ? revealRequest : null
+  const lastReveal = useRef<{ tabId: string; request: WorkbenchTabRevealRequest | null } | null>(null)
   useEffect(() => {
-    if (!activeTabId || !tabs.some((tab) => tab.id === activeTabId)) return
+    if (!activeTabId || !activeTabAvailable) {
+      lastReveal.current = null
+      return
+    }
+    if (lastReveal.current?.tabId === activeTabId
+      && (!activeRevealRequest || lastReveal.current.request === activeRevealRequest)) return
 
     const container = containerRef.current
     const activeTabElement = tabRefs.current.get(activeTabId)
@@ -99,13 +129,15 @@ function TabStripRow({
     if (!container || !activeTabElement) return
 
     const frame = window.requestAnimationFrame(() => {
+      // Consume only a completed reveal, so effect cleanup/StrictMode cannot lose it.
+      lastReveal.current = { tabId: activeTabId, request: activeRevealRequest }
       if (!isHorizontallyFullyVisible(activeTabElement, container)) {
         activeTabElement.scrollIntoView({ block: 'nearest', inline: 'nearest' })
       }
     })
 
     return () => window.cancelAnimationFrame(frame)
-  }, [activeTabId, tabs])
+  }, [activeTabId, activeTabAvailable, activeRevealRequest])
 
   const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     const container = containerRef.current
@@ -131,13 +163,24 @@ function TabStripRow({
   return (
     <div
       ref={setNodeRef}
+      data-workbench-pane-drag-blank
       className={`foxwarm-workbench-tab-drop-row relative pb-px ${isOver ? 'rounded-lg bg-fw-accent/5 dark:bg-fw-accent/10' : ''}`}
     >
       <SortableContext items={tabs.map((tab) => tab.id)} strategy={horizontalListSortingStrategy}>
         <div
           ref={containerRef}
+          data-workbench-pane-drag-blank
           onWheel={handleWheel}
           onScroll={updateScrollMetrics}
+          onMouseDownCapture={(event) => {
+            middlePressedTab.current = event.button === 1
+              ? (event.target as HTMLElement).closest<HTMLElement>('[data-tab-id]')?.dataset.tabId || null
+              : null
+            if (event.button === 1) event.preventDefault()
+          }}
+          onMouseDown={(event) => {
+            if (event.button === 1) event.stopPropagation()
+          }}
           className="foxwarm-workbench-tab-row flex min-w-0 items-end gap-1 overflow-x-auto overflow-y-hidden overscroll-x-contain"
         >
           {tabs.map((tab) => (
@@ -158,6 +201,11 @@ function TabStripRow({
               onKeepTab={onKeepTab}
               onOpenContextMenu={onOpenContextMenu}
               onCloseTab={onCloseTab}
+              onMiddleCloseTab={(tabId) => {
+                const pressedTabId = middlePressedTab.current
+                middlePressedTab.current = null
+                if (pressedTabId === tabId) onCloseTab(tabId)
+              }}
             />
           ))}
         </div>
@@ -167,6 +215,7 @@ function TabStripRow({
         aria-label="Scroll tabs" className="foxwarm-tab-overflow"
         style={{ '--foxwarm-tab-scroll-thumb': `${scrollMetrics.thumb}px` } as CSSProperties}
         onPointerDown={event => event.stopPropagation()}
+        onMouseDown={event => event.stopPropagation()}
         onKeyDown={event => event.stopPropagation()}
         onChange={event => {
           if (containerRef.current) containerRef.current.scrollLeft = Number(event.target.value)
@@ -187,6 +236,7 @@ function SortableTab({
   onKeepTab,
   onOpenContextMenu,
   onCloseTab,
+  onMiddleCloseTab,
 }: {
   paneId: string
   dragEnabled: boolean
@@ -197,6 +247,7 @@ function SortableTab({
   onKeepTab: (tabId: string) => void
   onOpenContextMenu: (tabId: string, event: React.MouseEvent<HTMLDivElement>) => void
   onCloseTab: (tabId: string) => void
+  onMiddleCloseTab: (tabId: string) => void
 }) {
   const isPreview = tab.type === 'chat' && tab.preview
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -228,7 +279,7 @@ function SortableTab({
       onMouseUp={(event) => {
         if (event.button === 1) {
           event.preventDefault()
-          onCloseTab(tab.id)
+          onMiddleCloseTab(tab.id)
         }
       }}
       onAuxClick={(event) => {
@@ -237,6 +288,7 @@ function SortableTab({
         }
       }}
       onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault()
           onSelectTab(tab.id)
@@ -251,6 +303,7 @@ function SortableTab({
       <span className={`min-w-0 flex-1 truncate text-left [direction:rtl] ${isPreview ? 'italic' : ''}`}>{tab.title}</span>
       <button
         onPointerDown={(event) => event.stopPropagation()}
+        onMouseDown={(event) => event.stopPropagation()}
         onClick={(event) => {
           event.stopPropagation()
           onCloseTab(tab.id)
@@ -268,9 +321,11 @@ export default function WorkbenchTabs({
   paneId,
   tabs,
   activeTabId,
+  revealRequest,
   focused: _focused = false,
   toolbar,
   dragEnabled = true,
+  paneDragEnabled = false,
   onSelectTab,
   onCloseTab,
   onKeepTab,
@@ -282,14 +337,15 @@ export default function WorkbenchTabs({
   const { openContextMenu, menu } = useWorkbenchTabMenu({ tabs, onCloseTab, onKeepTab, onMoveTabToNewWindow, canMoveTabToNewWindow, onCloseOtherTabs, onCloseAllTabs })
 
   return (
-    <div className="foxwarm-workbench-tab-strip overflow-hidden border-b border-fw-border bg-fw-neutral-surface px-3 pt-2 dark:border-fw-border dark:bg-fw-canvas">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
+    <WorkbenchPaneDragArea paneId={paneId} enabled={paneDragEnabled} className="foxwarm-workbench-tab-strip overflow-hidden border-b border-fw-border bg-fw-neutral-surface px-3 pt-2 dark:border-fw-border dark:bg-fw-canvas">
+      <div data-workbench-pane-drag-blank className="flex items-start justify-between gap-3">
+        <div data-workbench-pane-drag-blank className="min-w-0 flex-1">
           <TabStripRow
             paneId={paneId}
             dragEnabled={dragEnabled}
             tabs={tabs}
             activeTabId={activeTabId}
+            revealRequest={revealRequest}
             onSelectTab={onSelectTab}
             onCloseTab={onCloseTab}
             onKeepTab={onKeepTab}
@@ -297,13 +353,13 @@ export default function WorkbenchTabs({
           />
         </div>
         {toolbar && (
-          <div className="foxwarm-workbench-tab-toolbar flex shrink-0 items-center gap-1">
+          <div data-workbench-pane-drag-blank className="foxwarm-workbench-tab-toolbar flex shrink-0 items-center gap-1">
             {toolbar}
           </div>
         )}
       </div>
       {menu}
-    </div>
+    </WorkbenchPaneDragArea>
   )
 }
 

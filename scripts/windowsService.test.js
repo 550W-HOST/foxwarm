@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const net = require('node:net');
 const test = require('node:test');
+const { runInNewContext } = require('node:vm');
 const { getControlPath, requestControl, resolveDataRoot, servicePaths } = require('./windowsService');
 
 test('resolveDataRoot follows environment, pointer, then checkout precedence', t => {
@@ -42,6 +43,25 @@ test('Windows installer uses the guarded start lifecycle before dependency insta
   assert.ok(guardIndex < buildIndex, 'service-state check must precede dependency installation');
   assert.ok(buildIndex < startIndex, 'service start must follow a successful build');
   assert.match(installer.slice(guardIndex, buildIndex), /if \(\$LASTEXITCODE -ne 0\)/);
+});
+
+test('source installers accept the WebUI build Node range before installing dependencies', () => {
+  const root = path.resolve(__dirname, '..');
+  const versions = [
+    ['18.20.0', false], ['20.18.3', false], ['20.19.0', true], ['20.20.0', true],
+    ['21.7.3', false], ['22.11.0', false], ['22.12.0', true], ['24.0.0', true],
+  ];
+  for (const name of ['install-foxwarm.sh', 'install-foxwarm.ps1']) {
+    const installer = fs.readFileSync(path.join(root, name), 'utf8');
+    const guard = installer.match(/node -e (?:"([^"]+)"|'([^']+)')/);
+    assert.ok(guard, `${name} checks Node before cloning or building`);
+    assert.ok(installer.indexOf(guard[0]) < installer.indexOf('git clone'));
+    for (const [version, supported] of versions) {
+      let exitCode;
+      runInNewContext(guard[1] || guard[2], { process: { versions: { node: version }, exit(code) { exitCode = code; } } });
+      assert.equal(exitCode, supported ? 0 : 1, `${name}: ${version}`);
+    }
+  }
 });
 
 test('requestControl keeps the pipe open for the server response', async t => {

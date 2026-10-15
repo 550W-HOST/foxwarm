@@ -6,6 +6,7 @@ import { PaneDropTargets, WorkbenchPaneToolbar, type WorkbenchPaneProps } from '
 import { useWorkbenchTabMenu } from './useWorkbenchTabMenu'
 import { ContentBeforeResizeContext } from '../contentResize'
 import type { WorkbenchTab } from '../workbench/types'
+import { isWorkbenchPaneDragBlankTarget } from './WorkbenchPaneDragArea'
 
 type PositionedHost = { element: HTMLElement; paneId: string; visible: boolean; onFocus: () => void; beforeResize: () => void }
 
@@ -175,9 +176,9 @@ export default function WorkbenchContentHost(props: ContentHostProps) {
   }, [positions])
   const { openContextMenu, openMenuAtElement, menu } = useWorkbenchTabMenu(props)
   const header = visible && hideTabStrip && tabs.length === 1 ? {
-    tab, paneId, dragEnabled, onCloseTab, onKeepTab: props.onKeepTab, openContextMenu, openMenuAtElement,
+    tab, paneId, dragEnabled, canMovePane: props.canClosePane, onCloseTab, onKeepTab: props.onKeepTab, openContextMenu, openMenuAtElement,
     paneControls: <WorkbenchPaneToolbar paneId={paneId} collapsed={false}
-      verticalRail={props.collapseDirection === 'row'} canClosePane={props.canClosePane} dragEnabled={dragEnabled}
+      verticalRail={props.collapseDirection === 'row'} canClosePane={props.canClosePane}
       onSetCollapsed={props.onSetCollapsed} onClosePane={props.onClosePane} />,
   } : null
 
@@ -196,7 +197,7 @@ export default function WorkbenchContentHost(props: ContentHostProps) {
     const target = event.target as HTMLElement
     // Pane/Close/menu controls own their navigation and must not queue an
     // activation that can reopen a pane immediately after collapsing it.
-    if (target.closest('[data-workbench-pane-controls], [data-workbench-tab-close], [role="menu"]')) return
+    if (isWorkbenchPaneDragBlankTarget(target) || target.closest('[data-workbench-pane-controls], [data-workbench-tab-close], [role="menu"]')) return
     onFocusPane(paneId)
   }
   return <div ref={elementRef} className="absolute bg-fw-canvas"

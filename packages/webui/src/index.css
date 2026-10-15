@@ -1020,6 +1020,7 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-tool-header[data-tool-
 /* A nested card may share its ancestor's hover, but only its own controls
  * should react. Keep the card's direct control/rail ownership explicit. */
 .foxwarm-assistant-message-card:is(:hover, :focus-within) > .foxwarm-assistant-action-buttons,
+.foxwarm-assistant-message-card:is(:hover, :focus-within) > .foxwarm-assistant-message-header > .foxwarm-assistant-action-buttons,
 .foxwarm-tool-card:is(:hover, :focus-within) > .foxwarm-tool-action-buttons {
   opacity: 1;
 }
@@ -1335,8 +1336,6 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-textarea
   font-variant-ligatures: none;
   letter-spacing: 0;
   line-height: var(--foxwarm-console-line-ui) !important;
-  padding-left: 0 !important;
-  padding-right: 0 !important;
 }
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-textarea::placeholder {
@@ -1349,13 +1348,14 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-textarea
   content: attr(data-placeholder);
   pointer-events: none;
   position: absolute;
-  inset-inline-start: 0.75rem;
-  top: 0.25rem;
+  inset-inline-start: 1rem;
+  top: 0.5rem;
 }
 
 .foxwarm-composer-caret-anchor {
   display: inline-block;
   width: 0.25rem;
+  margin-inline-start: -0.25rem;
   min-height: 1em;
   overflow: hidden;
   vertical-align: text-bottom;
@@ -1364,7 +1364,6 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-textarea
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-inline-composer-editor[data-empty="true"]:not([data-composition-visible="true"])::before {
   color: var(--foxwarm-console-text-dim) !important;
-  inset-inline-start: 0;
   opacity: 0.8;
 }
 
@@ -2148,9 +2147,6 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
   background: var(--foxwarm-color-canvas);
 }
 .foxwarm-desktop-workbench-shell .foxwarm-workbench-content-slot {
-  border-radius: 0 0 9px 9px;
-}
-.foxwarm-desktop-workbench-shell .foxwarm-workbench-content-slot[data-workbench-sole-content] {
   border-radius: 9px;
 }
 .foxwarm-desktop-workbench-shell .foxwarm-sidebar-resize { right: -6px; }
@@ -2284,6 +2280,12 @@ html[data-foxwarm-theme] .foxwarm-chat-composer-textarea {
 }
 
 .foxwarm-sidebar-frame { z-index: 40; }
+.status-badge { display: inline-flex; align-items: center; flex-shrink: 0; gap: 5px; border-radius: 5px; padding: 3px 7px; font-size: 11px; line-height: 18px; white-space: nowrap; color: var(--foxwarm-color-text-muted); background: var(--foxwarm-color-canvas); }
+.status-badge > span { display: inline-block; width: 5px; height: 5px; border-radius: 50%; flex: none; background: currentColor; }
+.status-badge[data-tone="accent"] { background: var(--foxwarm-color-accent-surface); color: var(--foxwarm-color-accent); }
+.status-badge[data-tone="success"] { background: var(--foxwarm-color-success-surface); color: var(--foxwarm-color-success); }
+.status-badge[data-tone="warning"] { background: var(--foxwarm-color-warning-surface); color: var(--foxwarm-color-warning); }
+
 .foxwarm-status-bar {
   background: transparent;
   display: flex; align-items: center; justify-content: space-between;
@@ -2314,6 +2316,16 @@ html[data-foxwarm-theme] .foxwarm-chat-composer-textarea {
   box-shadow: var(--foxwarm-panel-shadow); font-size: 12px;
 }
 .foxwarm-status-popup:focus { outline: none; }
+.foxwarm-status-popup .status-badge { padding: 1px 5px; line-height: 16px; }
+.foxwarm-status-popup-section {
+  margin-top: 6px; padding-top: 6px;
+  border-top: 1px solid var(--foxwarm-color-border);
+}
+.foxwarm-status-popup-node-directory { display: flex; flex-direction: column; overflow: hidden; }
+.foxwarm-status-node-list {
+  min-height: 0; max-height: 200px; overflow-y: auto; overscroll-behavior: contain;
+}
+.foxwarm-status-node-list:focus-visible { outline: 1px solid var(--foxwarm-color-focus-ring); outline-offset: -1px; }
 /* Tab overflow is an overlay, not a second strip between tab and content. */
 .foxwarm-workbench-tab-row { scrollbar-width: none; }
 .foxwarm-workbench-tab-row::-webkit-scrollbar { display: none; }

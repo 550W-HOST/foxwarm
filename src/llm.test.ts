@@ -4313,14 +4313,24 @@ test('requestLlmOnce excludes presentation paths, ToolScript activity and planne
   const displayPath = '/display-only/agent-file.txt';
   const displayCall = 'display-only-nested-tool';
   const plannerText = 'display-only-planner-instruction';
+  const scriptStdout = 'printed "quotes" and \\path\n';
+  const scriptResult = 'returned "quotes"\n---\n\\literal';
+  const expectedScriptText = `--- print ---\n${scriptStdout}--- return ---\n${scriptResult}\n---\nstatus: completed\nrunId: tsr_fixture`;
+  const historicalExcerpt = 'retained head\n[historical response pruned; recall msg#3]\nretained tail';
   const contents: Message[] = [
     { role: 'model', parts: [{ functionCall: { id: 'read-file', name: 'read', args: { filePath: 'file.txt' } } }] },
     { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'read-file', name: 'read', response: { output: 'contents' },
       __meta: { resolvedPaths: [{ raw: 'file.txt', resolved: displayPath, nodeId: 'master' }] } } }] },
     { role: 'model', parts: [{ functionCall: { id: 'script', name: 'run_script', args: { code: 'def main(args):\n    return 0' } } }] },
     { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'script', name: 'run_script',
-      response: { status: 'completed', runId: 'tsr_fixture', result: 0 },
+      response: { status: 'completed', runId: 'tsr_fixture', stdout: scriptStdout, result: scriptResult },
       __meta: { toolScriptSubCalls: [{ id: 'tss_1', name: displayCall, status: 'completed', startedAt: 1 }] } } }] },
+    { role: 'model', parts: [{ functionCall: { id: 'unified-script', name: 'call_tool', args: { toolId: 'builtin:run_script', args: { code: 'return 0' } } } }] },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'unified-script', name: 'call_tool',
+      response: { status: 'completed', runId: 'tsr_unified', result: 0 }, __meta: { toolScriptSubCalls: [] } } }] },
+    { role: 'model', parts: [{ functionCall: { id: 'historical-script', name: 'run_script', args: { code: 'return args' } } }] },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'historical-script', name: 'run_script',
+      response: { output: historicalExcerpt, status: 'completed', runId: 'tsr_historical' }, __meta: { toolScriptSubCalls: [] } } }] },
     { role: 'user', parts: [{ text: 'next request' }], compaction: { planner: {
       steps: 1, toolCalls: ['submit_compact_plan'],
       usage: { cachedTokens: 2, inputTokens: 3, outputTokens: 4 },
@@ -4349,12 +4359,23 @@ test('requestLlmOnce excludes presentation paths, ToolScript activity and planne
       assert.equal(request.includes(plannerText), false, providerType);
       assert.equal(request.includes('compaction'), false, providerType);
       assert.ok(request.includes('tsr_fixture'), providerType);
+      const toolOutputs = providerType === 'openai-completions'
+        ? capturedBody.messages.filter((message: any) => message.role === 'tool').map((message: any) => message.content)
+        : providerType === 'openai-responses'
+          ? capturedBody.input.filter((item: any) => item.type === 'function_call_output').map((item: any) => item.output)
+          : capturedBody.messages.flatMap((message: any) => message.content.filter((part: any) => part.type === 'tool_result').map((part: any) => part.content));
+      assert.ok(toolOutputs.includes(expectedScriptText), providerType);
+      assert.ok(toolOutputs.includes('--- return ---\n0\n---\nstatus: completed\nrunId: tsr_unified'), providerType);
+      assert.ok(toolOutputs.some((text: string) => text.includes('retained head') && text.includes('recall msg#3') && text.includes('retained tail')), providerType);
       const journal = await reconstructLlmRequest(result.llmRequestId!);
       assert.equal(journal.completeness, 'complete');
       assert.equal(JSON.stringify(journal).includes(displayPath), false, providerType);
       assert.equal(JSON.stringify(journal).includes(displayCall), false, providerType);
       assert.equal(JSON.stringify(journal).includes(plannerText), false, providerType);
-      if (journal.completeness === 'complete') assert(journal.messages.every(message => !message.compaction));
+      if (journal.completeness === 'complete') {
+        assert(journal.messages.every(message => !message.compaction));
+        assert.deepEqual(journal.messages.flatMap(message => message.parts).find(part => part.functionResponse?.tool_use_id === 'script')?.functionResponse?.response, { output: expectedScriptText });
+      }
       assert.deepEqual(contents, original, 'request preparation must not rewrite persisted/UI history');
     }
   } finally { (axios as any).post = originalPost; }

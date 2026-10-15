@@ -292,6 +292,7 @@ function ModelSelector({
   const popupRef = useRef<HTMLDivElement | null>(null)
   const filterInputRef = useRef<HTMLInputElement | null>(null)
   const childFilterInputRef = useRef<HTMLInputElement | null>(null)
+  const centeredListsRef = useRef<Partial<Record<ModelSelectorScope, HTMLElement>>>({})
   const effortDescriptionId = useId()
   const filterComposingRef = useRef(false)
   const wasOpenRef = useRef(false)
@@ -385,6 +386,30 @@ function ModelSelector({
   useLayoutEffect(() => {
     if (open) updatePopupPosition()
   }, [open, updatePopupPosition])
+
+  useLayoutEffect(() => {
+    if (!open) {
+      centeredListsRef.current = {}
+      return
+    }
+    for (const scope of ['current', 'child'] as const) {
+      const list = popupRef.current?.querySelector<HTMLElement>(`[data-model-column="${scope}"] [data-model-selector-scroll]`)
+      if (!list) {
+        delete centeredListsRef.current[scope]
+        continue
+      }
+      if (centeredListsRef.current[scope] === list) continue
+      const selected = list.querySelector<HTMLElement>('[data-model-option-selected="true"]')
+      // Wait for the initial options, but do not retry a missing selection on later refreshes.
+      if (!selected && options.length === 0) continue
+      centeredListsRef.current[scope] = list
+      if (selected) {
+        const rowRect = selected.getBoundingClientRect()
+        const listRect = list.getBoundingClientRect()
+        list.scrollTop += rowRect.top + rowRect.height / 2 - (listRect.top + list.clientTop + list.clientHeight / 2)
+      }
+    }
+  })
 
   useEffect(() => {
     if (!open) return
@@ -1413,7 +1438,7 @@ const ChatComposer = memo(function ChatComposer({
 
           <form
             onSubmit={handleSubmit}
-            className={`foxwarm-chat-composer-form rounded-[30px] border border-fw-border/90 bg-fw-surface-sunken/75 px-3.5 py-2 shadow-[var(--foxwarm-panel-shadow)] backdrop-blur-[5px] transition focus-within:border-fw-border-strong focus-within:bg-fw-surface/92 dark:border-fw-border/90 dark:bg-fw-surface/70 dark:focus-within:border-fw-border-strong dark:focus-within:bg-fw-surface/92 ${
+            className={`foxwarm-chat-composer-form rounded-[30px] border border-fw-border/90 bg-fw-surface-sunken/75 shadow-[var(--foxwarm-panel-shadow)] backdrop-blur-[5px] transition focus-within:border-fw-border-strong focus-within:bg-fw-surface/92 dark:border-fw-border/90 dark:bg-fw-surface/70 dark:focus-within:border-fw-border-strong dark:focus-within:bg-fw-surface/92 ${
               isDragging ? 'border-fw-accent-border dark:border-fw-accent-border' : ''
             }`}
           >
@@ -1454,7 +1479,7 @@ const ChatComposer = memo(function ChatComposer({
           onCommandKeyDown={handleCommandKeyDownBridge}
         />
         {draftPersistenceError && <div className="px-3 pb-1 text-xs text-fw-danger" role="alert">{draftPersistenceError}</div>}
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center justify-between gap-2 px-2 pb-1">
           <div className="flex min-w-0 flex-1 items-center gap-1">
             <div className="flex min-w-0 shrink-0 items-center gap-1 overflow-x-auto pb-0.5">
               <label

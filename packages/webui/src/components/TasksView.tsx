@@ -2,14 +2,14 @@ import { createPortal } from 'react-dom'
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, Check, ClipboardList, Copy, X, Plus, RefreshCw, List, Columns3, SlidersHorizontal, Search, ChevronDown } from 'lucide-react'
 import { makeApiUrl } from '../config'
-import { WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
+import { WorkbenchHeaderDragArea, WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import SessionSelector from './SessionSelector'
+import { TaskStatusBadge, TASK_STATUS_LABELS as STATUS_LABELS } from './StatusBadge'
 import './TasksView.css'
 import { copyTextToClipboard } from './chatShared'
 
 const STATUSES = ['open', 'active', 'completed', 'cancelled'] as const
 type TaskStatus = typeof STATUSES[number]
-const STATUS_LABELS = { open: 'Open', active: 'Active', completed: 'Completed', cancelled: 'Cancelled' }
 const LIST_LIMIT = 50
 const TASK_SCOPES = ['work', 'all', 'history'] as const
 const TASK_SCOPE_LABELS = { work: 'Work', all: 'All', history: 'History' } as const
@@ -94,11 +94,6 @@ const relativeTime = (value: number) => {
   if (minutes < 10080) return `${Math.floor(minutes / 1440)}d ago`
   return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
-function TaskStatusBadge({ status }: { status: TaskStatus }) {
-  return <span className="task-status" data-status={status}><span aria-hidden="true" />{STATUS_LABELS[status]}</span>
-}
-
-
 const compactSessionLabel = (sessionId: string, agent?: string | null) => {
   const parts = sessionId.split('/').filter(Boolean)
   const leaf = parts[parts.length - 1] || sessionId
@@ -440,7 +435,7 @@ export default function TasksView({ onBack, onOpenSession }: { onBack?: () => vo
     }
   }} data-tasks-view data-task-narrow={isNarrow || undefined} aria-busy={loading} className="tasks-workbench flex h-full min-h-0 min-w-0 flex-col bg-fw-canvas text-fw-text">
     <header className="tasks-header">
-      <div className="tasks-heading-row">
+      <WorkbenchHeaderDragArea className="tasks-heading-row">
         {tabHeader ? <WorkbenchTabClose className={buttonClass} iconClassName="h-4 w-4" /> : onBack && <button type="button" className={buttonClass} onClick={onBack} aria-label="Back"><ArrowLeft className="h-4 w-4" /></button>}
         <div className="tasks-heading"><WorkbenchTabIcon className="tasks-heading-icon"><ClipboardList size={18} /></WorkbenchTabIcon><h2>Tasks</h2></div>
         <div className="tasks-heading-actions">
@@ -448,7 +443,7 @@ export default function TasksView({ onBack, onOpenSession }: { onBack?: () => vo
           <button type="button" data-task-new className="task-button task-primary bg-fw-accent" onClick={() => { setCreateError(''); setTaskWarning(''); setCreateOwner(readLastTaskOwner()); setCreateOpen(true) }}><Plus size={15} />New task</button>
           <WorkbenchPaneControls />
         </div>
-      </div>
+      </WorkbenchHeaderDragArea>
       <div className="tasks-toolbar-region foxwarm-content-gutter">
         <div className="tasks-toolbar foxwarm-content-column">
           <div role="group" aria-label="Task scope" className="tasks-scope-tabs" data-task-scopes>

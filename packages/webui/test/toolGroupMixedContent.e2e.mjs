@@ -389,6 +389,7 @@ test('empty reasoning cards count real parts and display zero usage without inve
 test('folded tool-group summary counts empty reasoning members and expands one original contiguous card', async () => {
   const collapsed = await snapshot('reasoningGrouped')
   assert.equal(collapsed.groups[0].header, 'Reasoning ×3exec ×1')
+  assert.equal(await page.$eval('#reasoningGrouped .foxwarm-tool-group-header [role="img"]', tag => tag.textContent.trim()), '×3')
   assert.equal(collapsed.reasoning.length, 0)
   await toggle('reasoningGrouped', 0, true)
   assert.deepEqual(await page.$$eval('#reasoningGrouped .foxwarm-reasoning-tag', elements => elements.map(el => el.getAttribute('aria-label'))), ['Reasoning ×3'])

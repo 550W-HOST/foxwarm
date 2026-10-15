@@ -13,7 +13,7 @@ interface SidebarProps {
   sessions: Session[]
   agents: AgentSummary[]
   currentSession: string
-  currentView: 'session' | 'agents' | 'setup' | 'logs' | 'tasks'
+  currentView: 'session' | 'agents' | 'setup' | 'logs' | 'tasks' | 'nodes'
   currentSessionRecord?: Session
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void

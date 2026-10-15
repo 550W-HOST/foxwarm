@@ -18,7 +18,7 @@ before(async () => {
     import Chat from './src/components/Chat'
     import { initializeThemeRuntime, setThemeSelection } from './src/theme'
     initializeThemeRuntime()
-    setThemeSelection({ themeId: 'foxwarm.550a', colorMode: 'dark' })
+    setThemeSelection({ themeId: new URLSearchParams(location.search).get('theme') || 'foxwarm.default', colorMode: 'dark' })
     const short = new URLSearchParams(location.search).has('short')
     const messages = Array.from({ length: short ? 0 : 24 }, (_, index) => ({ role: 'model', parts: [{ text: 'Earlier answer ' + index + '\\n\\nA supported reading position.' }], __meta: { seq: index + 1, timestamp: 1700000000000 + index } }))
     messages.push({ role: 'user', parts: [{ system: '<foxwarm-system kind="event">\\n' + 'Long event detail.\\n'.repeat(75) + '</foxwarm-system>' }], __meta: { seq: messages.length + 1, timestamp: 1700000000025 } })
@@ -59,9 +59,10 @@ before(async () => {
         emit({ type: 'session-state', session: session() })
       },
       releaseSend() { pendingPost?.(); pendingPost = null },
+      theme(themeId) { setThemeSelection({ themeId, colorMode: 'dark' }) },
       append(text, role = 'model') { const message = { role, parts: [{ text }], __meta: { seq: messages.length + 1, timestamp: 1700000000100 + messages.length } }; messages.push(message); emit({ type: 'message', message }) }
     }
-    createRoot(document.getElementById('root')).render(<Chat sessionId="fixture/status" canonicalSessionId="fixture/status" sessionDisplayName="Mock preview · status and queue" timelineView="detailed" />)
+    createRoot(document.getElementById('root')).render(<Chat sessionId="fixture/status" canonicalSessionId="fixture/status" sessionDisplayName="Mock preview · status and queue" timelineView={new URLSearchParams(location.search).get('view') || 'detailed'} />)
   `
   const bundle = await build({ stdin: { contents: source, resolveDir: webui, sourcefile: 'chat-bottom-status-fixture.tsx', loader: 'tsx' }, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
   server = createServer((_request, response) => {
@@ -74,19 +75,24 @@ before(async () => {
   page = await browser.newPage()
 })
 after(async () => { await browser?.close(); if (server) await new Promise(resolve => server.close(resolve)) })
-async function mount(short = false, width = 900) {
+async function mount(short = false, width = 900, view = 'detailed') {
   await page.setViewport({ width, height: 800 })
-  await page.goto(`${fixtureUrl}/${short ? '?short' : ''}`, { waitUntil: 'load' })
+  await page.goto(`${fixtureUrl}/?view=${view}${short ? '&short' : ''}`, { waitUntil: 'load' })
   await page.waitForFunction(() => document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('Reference answer'))
   await page.evaluate(() => document.fonts.ready)
   await wait(120)
 }
 const geometry = () => page.evaluate(() => {
   const scroll = document.querySelector('.foxwarm-chat-messages')
-  const reference = [...document.querySelectorAll('.foxwarm-assistant-message-card')].find(element => element.textContent.includes('Reference answer'))
+  const reference = [...document.querySelectorAll('.foxwarm-assistant-message-card, .foxwarm-conversation-reply')].find(element => element.textContent.includes('Reference answer'))
   return { composer: document.querySelector('.foxwarm-chat-composer').getBoundingClientRect().height, slot: document.querySelector('[data-processing-status-slot]').getBoundingClientRect().height, bodies: document.querySelectorAll('[data-chat-message-anchor-key]').length, top: reference.getBoundingClientRect().top, scrollHeight: scroll.scrollHeight, scrollTop: scroll.scrollTop, distance: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight }
 })
-const clickControl = text => page.$$eval('[data-processing-status-slot] button, [data-processing-queue-status] button', (buttons, text) => buttons.find(button => button.textContent === text).click(), text)
+const clickControl = async text => {
+  for (const button of await page.$$('[data-processing-status-slot] button')) {
+    if (await button.evaluate((element, text) => element.textContent === text, text)) return button.click()
+  }
+  throw new Error(`Status control not found: ${text}`)
+}
 const screenshot = async name => {
   if (process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR}/${name}.png` })
 }
@@ -175,9 +181,16 @@ test('a tall manual expansion exposes rejoin immediately and the bottom action w
   assert.equal(await page.$('[aria-label="Scroll to bottom"]'), null)
 })
 
-test('status visibility and loading reuse a constant slot while queue content adds its own height', async () => {
-  await mount()
+test('status visibility is stable and queue status shares the restored block above preview content', async () => {
+  await mount(false, 900, 'conversation')
   const baseline = await geometry()
+  await page.evaluate(() => window.fixture.queue(1, false))
+  await page.waitForFunction(() => document.querySelector('[data-processing-status-slot]').textContent.includes('1 queued'))
+  assert.equal(await page.$$eval('[data-processing-status-slot] [role="status"]', blocks => blocks.length), 1)
+  await clickControl('Run queued')
+  assert.ok(await page.evaluate(() => window.commands.includes('/dequeue')))
+  await page.evaluate(() => window.fixture.queue(0))
+  await page.waitForFunction(() => !document.querySelector('[data-processing-status-slot] [role="status"]'))
   for (const state of ['requesting-model', 'running-tool', 'waiting', 'idle']) {
     await page.evaluate(state => window.fixture.state(state, { tool: { name: 'exec', startedAt: 1 }, waiting: { waitId: 'input', waitingFor: 'input' } }), state)
     await wait(80)
@@ -195,49 +208,71 @@ test('status visibility and loading reuse a constant slot while queue content ad
   await page.waitForFunction(() => !document.querySelector('[aria-label="Loading"]'))
   await clickControl('Stop')
   assert.ok(await page.evaluate(() => window.commands.includes('/stop')))
+  const noQueueLayout = await page.evaluate(() => {
+    const block = document.querySelector('[data-processing-status-slot] [role="status"]'), form = document.querySelector('.foxwarm-chat-composer-form')
+    const css = getComputedStyle(block)
+    return { height: block.getBoundingClientRect().height, gap: form.getBoundingClientRect().top - block.getBoundingClientRect().bottom, border: css.borderTopWidth, background: css.backgroundColor }
+  })
+  assert.ok(baseline.slot === 56 && noQueueLayout.gap >= 16 && noQueueLayout.border === '0px' && noQueueLayout.background === 'rgba(0, 0, 0, 0)', JSON.stringify(noQueueLayout))
+  if (process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR) console.log('no-queue layout', JSON.stringify({ ...noQueueLayout, referenceTop: baseline.top, scrollHeight: baseline.scrollHeight, slot: baseline.slot }))
   await screenshot('status-no-queue')
 
   await page.evaluate(() => window.fixture.queue(2, false))
-  await page.waitForSelector('[data-processing-queue-status]')
-  assert.ok((await page.$eval('[data-processing-queue-status]', element => element.textContent)).includes('2 queued messages'))
-  assert.ok((await geometry()).scrollHeight > baseline.scrollHeight)
+  await page.waitForFunction(() => document.querySelector('[data-processing-status-slot]').textContent.includes('2 queued'))
+  assert.equal(await page.$$eval('[data-processing-status-slot] [role="status"]', blocks => blocks.length), 1)
+  assert.ok((await page.$eval('[data-processing-status-slot] [role="status"]', element => element.textContent)).includes('Working'))
+  assert.equal((await geometry()).scrollHeight, baseline.scrollHeight)
   await clickControl('Run queued')
   assert.ok(await page.evaluate(() => window.commands.includes('/dequeue')))
   await page.evaluate(() => window.fixture.queue(2))
   await page.waitForSelector('[data-queued-preview]')
   const queueLayout = await page.evaluate(() => {
-    const slot = document.querySelector('[data-processing-status-slot]').getBoundingClientRect()
-    const note = document.querySelector('[data-processing-queue-status]').getBoundingClientRect()
+    const slot = document.querySelector('[data-processing-status-slot]'), block = slot.querySelector('[role="status"]')
     const preview = document.querySelector('[data-queued-preview]').getBoundingClientRect()
     const spacer = document.querySelector('[data-chat-composer-spacer]').getBoundingClientRect()
-    const composer = document.querySelector('.foxwarm-chat-composer-inner').getBoundingClientRect()
-    return { slot: slot.height, ordered: slot.bottom <= note.top && note.bottom <= preview.top && preview.bottom <= spacer.top, clear: preview.bottom <= composer.top }
+    const form = document.querySelector('.foxwarm-chat-composer-form').getBoundingClientRect()
+    const controls = [...slot.querySelectorAll('button')]
+    return { blocks: slot.querySelectorAll('[role="status"]').length, sameBlock: controls.length === 2 && controls.every(button => button.closest('[role="status"]') === block), ordered: block.getBoundingClientRect().bottom <= preview.top && preview.bottom <= spacer.top, clear: preview.bottom < form.top }
   })
-  assert.deepEqual(queueLayout, { slot: 40, ordered: true, clear: true })
+  assert.deepEqual(queueLayout, { blocks: 1, sameBlock: true, ordered: true, clear: true })
+  if (process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR) console.log('queue geometry', JSON.stringify(await page.evaluate(() => {
+    const block = document.querySelector('[data-processing-status-slot] [role="status"]').getBoundingClientRect(), preview = document.querySelector('[data-queued-preview]').getBoundingClientRect(), form = document.querySelector('.foxwarm-chat-composer-form').getBoundingClientRect()
+    return { statusBottom: block.bottom, previewBottom: preview.bottom, formTop: form.top, previewGap: form.top - preview.bottom }
+  })))
   await screenshot('status-with-queue')
   await page.evaluate(() => window.fixture.state('running-tool', { tool: { name: 'long_tool_name_'.repeat(30), startedAt: 1 } }))
   await page.setViewport({ width: 360, height: 800 })
   await wait(100)
-  const controls = await page.$$eval('[data-processing-status-slot] button, [data-processing-queue-status] button', buttons => buttons.map(button => {
+  const controls = await page.$$eval('[data-processing-status-slot] button', buttons => buttons.map(button => {
     const rect = button.getBoundingClientRect()
     return { visible: rect.left >= 0 && rect.right <= innerWidth && rect.height > 0, hit: document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) === button }
   }))
   assert.ok(controls.length === 2 && controls.every(control => control.visible && control.hit), JSON.stringify(controls))
-  const primary = await page.$eval('[data-processing-status-slot]', slot => { const row = slot.querySelector('[role="status"]'), label = row.querySelector('[title]'); return { height: row.getBoundingClientRect().height, slot: slot.getBoundingClientRect().height, clipped: label.scrollWidth > label.clientWidth, title: label.title } })
-  assert.ok(primary.height === 32 && primary.slot === 40 && primary.clipped && primary.title.includes('long_tool_name_'), JSON.stringify(primary))
+  const primary = await page.$eval('[data-processing-status-slot] [role="status"]', block => { const css = getComputedStyle(block); return { border: css.borderTopWidth, bounded: block.scrollWidth <= block.clientWidth + 1 } })
+  assert.deepEqual(primary, { border: '0px', bounded: true })
   await screenshot('status-narrow-queue')
   await page.evaluate(() => window.fixture.queue(0))
-  await page.waitForFunction(() => !document.querySelector('[data-processing-queue-status]') && !document.querySelector('[data-queued-preview]'))
+  await page.waitForFunction(() => !document.querySelector('[data-queued-preview]') && !document.querySelector('[data-processing-status-slot]').textContent.includes('queued'))
+  await screenshot('status-narrow-no-queue')
   await page.setViewport({ width: 900, height: 800 })
   await wait(120)
   assert.equal((await geometry()).scrollHeight, baseline.scrollHeight)
   await page.evaluate(() => { window.fixture.state('idle'); window.fixture.append('A new direct user input.', 'user') })
   await page.waitForSelector('[data-processing-runtime-state="interrupted"]')
+  await page.evaluate(() => window.fixture.queue(1, false))
+  await page.waitForFunction(() => document.querySelector('[data-processing-status-slot]').textContent.includes('1 queued'))
+  assert.equal(await page.$$eval('[data-processing-status-slot] [role="status"]', blocks => blocks.length), 1)
+  assert.equal(await page.$$eval('[data-processing-status-slot] button', buttons => buttons.length), 2)
   await clickControl('Continue')
   assert.ok(await page.evaluate(() => window.commands.includes('/continue')))
+  await page.evaluate(() => window.fixture.queue(0))
+  await page.waitForFunction(() => !document.querySelector('[data-processing-status-slot]').textContent.includes('queued'))
   const interrupted = await geometry()
   await page.evaluate(() => window.fixture.state('requesting-model'))
   await page.waitForSelector('[data-processing-runtime-state="requesting-model"]')
   const resumed = await geometry()
   assert.ok(Math.abs(resumed.top - interrupted.top) <= 1 && resumed.scrollHeight === interrupted.scrollHeight, JSON.stringify({ interrupted, resumed }))
+  await page.evaluate(async () => { window.fixture.theme('foxwarm.550a'); await document.fonts.ready; await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame) })
+  const consolePadding = await page.$eval('[data-processing-status-slot] [role="status"]', block => { const css = getComputedStyle(block); return [css.paddingLeft, css.paddingTop] })
+  assert.deepEqual(consolePadding, ['0px', '0px'])
 })

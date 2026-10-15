@@ -6,7 +6,7 @@ Foxwarm 开发指南，覆盖本地运行、目录结构、调试方式，以及
 
 ### 依赖
 
-- Node.js 20+
+- Node.js 20.19+ (20.x) or 22.12+
 - npm
 - TypeScript 5.x
 - （可选）Ollama，用于 embeddings

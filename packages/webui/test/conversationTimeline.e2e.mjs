@@ -367,8 +367,9 @@ const setRecords = async (records, runtime = {state:'idle',busy:false,queueLengt
 test('Activity elapsed uses adjacent visible boundaries, retaining leading idle and empty final processing evidence', async () => {
   const records = boundaryRecords()
   await setRecords(records)
-  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Waited 1m28s'))
-  assert.deepEqual(await headers(), ['Worked 10s', 'Worked 22s · Waited 1m28s · 2 received'])
+  // The displayed divider at the first 70s input excludes the earlier idle minute.
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Waited 28s'))
+  assert.deepEqual(await headers(), ['Worked 10s', 'Worked 22s · Waited 28s · 2 received'])
   assert.deepEqual(await page.$$eval('#timeline .foxwarm-assistant-message-markdown', bodies => bodies.map(body => body.textContent.trim())), ['ARRANGED_BODY','DONE_BODY'])
   assert.equal(await page.$eval('#timeline', root => root.querySelectorAll('[data-timeline-activity]').length), 2)
   await page.$eval('#timeline', root => [...root.querySelectorAll('[aria-label="Expand activity"]')][1].click())
@@ -417,7 +418,7 @@ test('Open Activity clocks update from actual runtime and canonical endpoints, n
   const records = boundaryRecords()
   await setRecords(records.slice(0,-1), {state:'requesting-model',since:epoch+100000,busy:true,queueLength:0}, epoch+110000)
   await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Worked 12s'))
-  assert.deepEqual(await headers(), ['Worked 10s','Worked 12s · Waited 1m28s · 2 received'])
+  assert.deepEqual(await headers(), ['Worked 10s','Worked 12s · Waited 28s · 2 received'])
   await page.evaluate(() => window.fixture.setDraft({role:'model',parts:[{text:'DONE_BODY'}],__meta:{temporary:true,synthetic:'draft',llmRequestId:'request-3',llmSegment:{outputStart:1,outputEndExclusive:2,complete:false}}}))
   await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('DONE_BODY'))
   await page.evaluate(() => window.fixture.setNow(1700000120000))
@@ -427,13 +428,13 @@ test('Open Activity clocks update from actual runtime and canonical endpoints, n
   assert.equal(await page.$$eval('#timeline .foxwarm-assistant-message-markdown', bodies => bodies.filter(body => body.textContent.includes('DONE_BODY')).length), 1, 'canonical reply replaces the provisional process preview without duplicating its text')
   await page.evaluate(() => window.fixture.setNow(1700000600000))
   await new Promise(resolve => setTimeout(resolve,1100))
-  assert.deepEqual(await headers(), ['Worked 10s','Worked 22s · Waited 1m28s · 2 received'], 'closed boundaries do not grow with wall time')
+  assert.deepEqual(await headers(), ['Worked 10s','Worked 22s · Waited 28s · 2 received'], 'closed boundaries do not grow with wall time')
   await setRecords(records.slice(0,6), {state:'idle',busy:false,queueLength:0}, epoch+110000)
-  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Worked 2s · Waited 1m'))
-  assert.deepEqual(await headers(), ['Worked 10s','Worked 2s · Waited 1m · 1 received'], 'a completed commentary-only request fixes its persisted endpoint while idle')
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Worked 2s · 1 received'))
+  assert.deepEqual(await headers(), ['Worked 10s','Worked 2s · 1 received'], 'a completed commentary-only request fixes its persisted endpoint while idle')
   await page.evaluate(() => { window.fixture.setNow(1700000120000); window.fixture.setRuntime({state:'idle',busy:false,queueLength:0,since:1700000120000}) })
   await page.waitForFunction(() => window.fixture.runtime.since === 1700000120000)
-  assert.deepEqual(await headers(), ['Worked 10s','Worked 2s · Waited 1m · 1 received'])
+  assert.deepEqual(await headers(), ['Worked 10s','Worked 2s · 1 received'])
   await setRecords(records.slice(0,3), undefined, epoch+200000)
   await page.waitForFunction(() => document.querySelector('#timeline').querySelectorAll('[data-timeline-activity]').length === 1)
   assert.deepEqual(await headers(), ['Worked 10s'], 'no forever-growing empty waiting row after the last visible model text')
@@ -456,7 +457,7 @@ test('Terminal LLM errors close at their stored timestamp; CTX and missing Stop 
   const block = ctx(80); block.__meta.timestamp=epoch+90000
   await setRecords([...records.slice(0,6),block,...records.slice(7)])
   await page.waitForSelector('[aria-label="Expand CTX-BLOCK B#80"]')
-  assert.deepEqual(await headers(), ['Worked 10s','Elapsed 1m20s · 1 received','Worked 20s · Waited 10s · 1 received'])
+  assert.deepEqual(await headers(), ['Worked 10s','Elapsed 1m20s · 1 received','Worked 20s · 1 received'])
 })
 
 test('Direct Task notifications and hosted web search count actual effects; scripts remain ordinary top-level calls', async () => {
@@ -501,7 +502,7 @@ test('Conversation keeps the 08:11 processing disclosure and 08:15 body under on
   await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('UNIT_DONE'))
   const expected = [new Date(base).toISOString(),new Date(base+660000).toISOString()]
   assert.deepEqual(await dividerTimes(), expected, 'the later request start is not a divider inside the processing/body unit')
-  assert.deepEqual(await headers(), ['Worked 1m15s · Waited 13m50s · 1 call · 1 received'], 'the text accounting boundary and counts are unchanged')
+  assert.deepEqual(await headers(), ['Worked 1m15s · Waited 2m50s · 1 call · 1 received'], 'the text accounting boundary and counts are unchanged')
   assert.deepEqual(await page.$eval('#timeline', root => [...root.querySelectorAll('[data-timeline-time-separator], [data-timeline-activity], .foxwarm-assistant-message-card')].map(node => node.matches('[data-timeline-time-separator]') ? node.querySelector('time').dateTime : node.matches('[data-timeline-activity]') ? 'activity' : node.querySelector('.foxwarm-assistant-message-markdown').textContent.trim())), [...expected,'activity','UNIT_DONE'])
   assert.equal(await countMatches('UNIT_DONE'),1)
   await page.evaluate(() => { window.unitBody=document.querySelector('#timeline .foxwarm-assistant-message-card') })

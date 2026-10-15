@@ -607,7 +607,7 @@ test('requesting-model counts first-response work before any provider part, with
   await page.evaluate((records, now, runtime, start) => window.fixture.showCompactTiming(records, now, runtime, start), [user], base + 70000, runtime, base + 60000)
   await page.waitForFunction(() => document.querySelector('[data-search-surface="user"]')?.textContent === 'FIRST_RESPONSE_PUBLIC')
   await page.waitForFunction(() => document.querySelector('[data-timeline-activity]')?.textContent.includes('Worked 10s'))
-  assert.match(await page.$eval('[data-timeline-activity]', node => node.textContent), /Waited 1m/)
+  assert.doesNotMatch(await page.$eval('[data-timeline-activity]', node => node.textContent), /Waited/, 'the displayed busy-start divider excludes the preceding idle minute')
   assert.equal(await page.$('[data-timeline-activity] button'), null)
   assert.deepEqual(await page.$$eval('[data-timeline-time-separator] time', nodes => nodes.map(node => node.dateTime)), [base, base + 60000].map(date => new Date(date).toISOString()))
   const anchorCount = await page.$$eval('[data-chat-message-anchor-key]', nodes => nodes.length)
@@ -624,7 +624,8 @@ test('requesting-model counts first-response work before any provider part, with
   await page.evaluate((records, now) => window.fixture.updateCompactTiming(records, now, { state: 'idle', busy: false, queueLength: 0 }), [user, thinking, final], base + 100000)
   await page.waitForFunction(() => [...document.querySelectorAll('[data-search-surface="model"]')].some(node => node.textContent.includes('FIRST_RESPONSE_FINAL_PUBLIC')))
   assert.equal(await page.$$eval('[data-timeline-activity]', nodes => nodes.length), 1)
-  assert.match(await page.$eval('[data-timeline-activity]', node => node.textContent), /Worked 20s · Waited 1m/)
+  assert.match(await page.$eval('[data-timeline-activity]', node => node.textContent), /Worked 20s/)
+  assert.doesNotMatch(await page.$eval('[data-timeline-activity]', node => node.textContent), /Waited|Elapsed/, 'the committed process retains the same displayed waiting floor')
   for (const state of [
     { state: 'idle', busy: false, queueLength: 1 },
     { state: 'waiting', since: base + 60000, busy: false, queueLength: 1, waiting: { waitId: 'public-wait', waitingFor: 'input', waitForInput: true } },

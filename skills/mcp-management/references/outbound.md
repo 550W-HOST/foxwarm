@@ -4,7 +4,7 @@ This reference covers Foxwarm connecting to another tool server. It does not con
 
 ## Outbound configuration lifecycle
 
-- Change MCP configuration only through the hidden `mcp_config` builtin, invoked with `call_tool`.
+- Use the hidden `mcp_config` builtin, invoked with `call_tool`, for connection settings. The former Setup Authorizations entry is not available; existing OAuth grants and administrator APIs remain intact.
 - A successful `mcp_config` call updates the live runtime configuration immediately. Existing HTTP caller connections are closed after the update, and subsequent discovery/calls use the change; **no Foxwarm restart is required**.
 - Do **not** manually edit the MCP state/config file. Manual file edits do not update the live cached configuration immediately and can leave disk and runtime behavior inconsistent.
 - Never print, copy into chat, or commit real tokens, environment secrets, private headers, or credentials. Use values supplied through an approved secret-handling path and keep diagnostic output redacted.
@@ -77,6 +77,14 @@ Provider schemas may hide free-form objects. In that case, use the documented `e
 ### Tool-call timeout
 
 `timeoutSeconds` is optional and applies only to tool calls for that server. Acceptable overrides are finite values from 1 through 3600 seconds. Omitting it preserves the installed MCP SDK default (currently 60 seconds). To remove an existing override without changing the connection settings, invoke `mcp_config` with the server name and `timeoutSeconds: 0`; the canonical persisted configuration removes the field. Connection setup and tool listing do not use this override.
+
+## Administrator-managed OAuth
+
+The former **Setup → Authorizations** entry has been removed. No replacement MCP management page is currently exposed. Existing OAuth configuration, persisted grants, administrator management APIs and browser callback flow remain intact; authorized connections can continue using their stored grants. Do not direct users to a deleted button or claim that a new MCP page exists.
+
+New or replacement browser consent must be arranged by the administrator through the retained administrator APIs, using an approved credential-handling path rather than asking for tokens or client secrets in chat. OAuth still uses startup app Config `url` as its public HTTPS callback/client-metadata prefix; localhost HTTP remains available for development. Static Authorization and OAuth remain mutually exclusive, and ordinary resource headers are not forwarded to authorization-server requests.
+
+The selected account is deliberately shared by the instance. Existing tool permissions still apply and each caller retains a separate remote MCP context. Same-grant refresh preserves those contexts; explicit reauthorization may select another account and replaces them. Disconnect removes local account authorization without promising upstream revocation or rollback of running effects. Stdio continues to use environment credentials.
 
 ## Disable or re-enable
 

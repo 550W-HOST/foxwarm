@@ -52,6 +52,7 @@ Row derivation, timing, and thread-card families are documented in [webui-timeli
 - `./timelineTime` — next request-start/timestamp comparisons against the preceding persisted timestamp, strict structured CTX range-start metadata, and English local clock/date formatting; never parses message content.
 - `./ImageParts` — renders image content parts
 - `./ReasoningCard` — collapsible reasoning/thinking display
+- `./ReasoningTokenBadge` — shared compact empty-reasoning handoff information; row derivation owns its recipient, while assistant headers keep their controls in flow beside it and tools retain their duration slot.
 - `./ToolTimelineItems` — `InterleavedToolGroup`, `ToolCallsBlock`, `ToolResponsesBlock`, `ToolGroupSummaryCard`
 - `./ContextBlockCard` — CTX-BLOCK thread card for model messages; see [webui-timeline-thread-cards](./webui-timeline-thread-cards.md).
 - `./ModelThreadCard` — shared Reasoning/Web Search thread-card chrome; see [webui-timeline-thread-cards](./webui-timeline-thread-cards.md).

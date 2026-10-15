@@ -25,7 +25,7 @@ IDs beginning with `foxwarm.` are reserved. A custom theme ID must contain 3–6
 
 ## Portable file contract
 
-The conventional suffix is `.foxwarm-theme.json`. A version-2 file has this top-level shape:
+The conventional suffix is `.foxwarm-theme.json`. A version-3 file has this top-level shape:
 
 ```json
 {

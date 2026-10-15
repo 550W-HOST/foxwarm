@@ -1,6 +1,6 @@
 # Unit: webui-timeline-usage-timing
 
-Files: packages/webui/src/components/conversationTiming.ts, packages/webui/src/components/timelineTime.ts, packages/webui/src/usageTiming.ts, packages/webui/test/usageBadgeDetails.e2e.mjs, packages/webui/test/usageTiming.test.mjs, packages/webui/test/timelineTime.test.mjs, packages/webui/test/timelineTimeDividers.e2e.mjs
+Files: packages/webui/src/components/conversationTiming.ts, packages/webui/src/components/timelineTime.ts, packages/webui/src/usageTiming.ts, packages/webui/test/usageBadgeDetails.e2e.mjs, packages/webui/test/usageTiming.test.mjs, packages/webui/test/timelineTime.test.mjs, packages/webui/test/timelineTimeDividers.e2e.mjs, packages/webui/test/conversationWaitingDividers.e2e.mjs
 Secondary files: packages/webui/src/components/ChatTimeline.tsx, packages/webui/src/components/timelineRows.ts
 
 ## Purpose
@@ -22,7 +22,7 @@ Owns the timing and usage presentation rules for timeline rows: persisted reques
 | `readConversationWorkInterval` | `conversationTiming.ts` | Existing finite execution endpoints shared by duration union and standalone tool clocks. |
 | `getConversationActivityStart` / `getConversationLiveRequestStart` | `conversationTiming.ts` | CTX-local leading input/execution origins and authoritative requesting-model starts; exclude creation/maintenance and unknown earlier work. |
 | `selectTimelineTimeMarker` | `timelineTime.ts` | Reuses the minute/date comparison for committed units and a presentation-only live request. |
-| `applyConversationTiming` | `conversationTiming.ts` | Projected reply/user/display-cut elapsed ranges with reliable leading origins and pre-first-part live work, clipped/unioned measured and live busy evidence with per-gap waiting noise filtering, runtime-confirmed pending batch receipts with conservative missing-data fallback, untimed canonical compact maintenance, and final error/CTX cuts. |
+| `applyConversationTiming` | `conversationTiming.ts` | Projected reply/user/display-cut elapsed ranges with reliable leading origins and pre-first-part live work, clipped/unioned measured and live busy evidence with a displayed-divider waiting floor and per-gap noise filtering, runtime-confirmed pending batch receipts with conservative missing-data fallback, untimed canonical compact maintenance, and final error/CTX cuts. |
 | `isCompactCompletionMaintenanceMessage` | `../sessionContinuation.ts` | Shares exact canonical marker/generated reminder recognition for timing without changing the continuation classifier's legacy/read behavior. |
 
 ## Dependencies
@@ -39,7 +39,7 @@ Owns the timing and usage presentation rules for timeline rows: persisted reques
 - A collapsed tool-group badge aggregates token counts and each contributing model request’s API duration. Expanded attribution retains all unique routes, a local-time range, and explicit missing/invalid metadata so mixed calls are never presented as one route or one inferred request.
 - Expanded usage details add one `Seq` value derived from each usage-bearing model message’s persisted sequence: one message displays its value, a grouped badge displays one inclusive range, and missing/invalid attribution remains unavailable. Its independent copy action uses the actual current session ID and does not change canonical data. Collapsed token/API presentation, badge setting gate, and nested CTX badge suppression remain unchanged.
 
-Conversation's request-aware process statistics include each logical request's actual usage once, including completion suffixes and the final reply. Missing complete usage and active pending usage remain distinct in details. Pending alone never adds a partial label; a process with no actual usage has no trigger or placeholder. Commentary-only conservative cuts use recorded completion endpoints; unknown/idle unfinished tails do not grow a guessed clock. Existing unioned Worked/Waited, per-gap noise suppression, compact-maintenance exclusion and Elapsed/counts-only fallback remain unchanged.
+Conversation's request-aware process statistics include each logical request's actual usage once, including completion suffixes and the final reply. Missing complete usage and active pending usage remain distinct in details. Pending alone never adds a partial label; a process with no actual usage has no trigger or placeholder. Commentary-only conservative cuts use recorded completion endpoints; unknown/idle unfinished tails do not grow a guessed clock. Worked retains its full measured range; Waited clips gaps to an actually displayed Activity divider before per-gap noise suppression, while an unmarked Activity retains leading idle. The canonical waiting-floor contract is [Activity timing: display-boundary scope](../modules/webui.md#activity-timing-display-boundary-scope). Compact-maintenance exclusion and Elapsed/counts-only fallback remain unchanged. `conversationWaitingDividers.e2e.mjs` exercises real row/marker derivation and rendered Conversation for overnight Task/inter-agent input, exact gap cutoffs, unmarked leading idle, pre-divider busy work, runtime-only/committed output, missing evidence and CTX.
 
 ## Design Decisions
 

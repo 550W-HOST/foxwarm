@@ -15,19 +15,19 @@ export const readConversationWorkInterval = (value: any): Span | undefined => {
   return start !== undefined && end !== undefined && end >= start && Number.isFinite(value?.durationMs) && value.durationMs >= 0 ? { start, end } : undefined
 }
 const MIN_WAITING_GAP_MS = 2000
-const measureIntervals = (spans: readonly Span[], start: number, end: number): { busy: number; waiting: number } => {
+const measureIntervals = (spans: readonly Span[], start: number, end: number, waitingStart = start): { busy: number; waiting: number } => {
   const clipped = spans.map(span => ({ start: Math.max(start, span.start), end: Math.min(end, span.end) }))
     .filter(span => span.end > span.start).sort((a, b) => a.start - b.start)
   let busy = 0
   let waiting = 0
   let previousEnd = start
   for (const span of clipped) {
-    const gap = span.start - previousEnd
+    const gap = span.start - Math.max(previousEnd, waitingStart)
     if (gap >= MIN_WAITING_GAP_MS) waiting += gap
     busy += Math.max(0, span.end - Math.max(span.start, previousEnd))
     previousEnd = Math.max(previousEnd, span.end)
   }
-  const tailGap = end - previousEnd
+  const tailGap = end - Math.max(previousEnd, waitingStart)
   if (tailGap >= MIN_WAITING_GAP_MS) waiting += tailGap
   return { busy, waiting }
 }
@@ -172,11 +172,13 @@ export function applyConversationTiming(
         const nextTime = timestamp(inputs[index + 1]?.__meta?.timestamp) ?? end
         if (time === undefined || !covers(time) && !spans.some(span => span.start >= time && span.start < nextTime)) complete = false
       }
-      const { busy, waiting } = measureIntervals(spans, start, end)
+      const row = result[timedRowIndex]
+      // A displayed divider bounds waiting only; work and evidence retain the full visible range.
+      const waitingStart = Math.max(start, row.timeMarker?.timestamp ?? start)
+      const { busy, waiting } = measureIntervals(spans, start, end, waitingStart)
       const labels = complete
         ? [busy > 0 || dynamic && liveRequestStart !== undefined ? `Worked ${formatCompactDuration(busy)}` : '', waiting > 0 ? `Waited ${formatCompactDuration(waiting)}` : ''].filter(Boolean)
         : [`Elapsed ${formatCompactDuration(end - start)}`]
-      const row = result[timedRowIndex]
       const counts = row.activity!.summary === 'Activity' ? '' : row.activity!.summary
       result[timedRowIndex] = { ...row, activity: { ...row.activity!, summary: [...labels, counts].filter(Boolean).join(' · ') || 'Activity', dynamic } }
     }

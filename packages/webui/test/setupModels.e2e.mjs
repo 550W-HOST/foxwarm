@@ -3,6 +3,7 @@ import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { mkdir } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -504,12 +505,12 @@ before(async () => {
   }), 'production WebUI build')
 
   const previewPort = await getFreePort()
-  productionBaseUrl = `http://127.0.0.1:${previewPort}`
-  preview = spawn(viteBin, ['preview', '--host', '127.0.0.1', '--port', String(previewPort), '--strictPort'], {
+  productionBaseUrl = `http://127.0.0.1:${previewPort}/production/foxwarm`
+  preview = spawn(viteBin, ['preview', '--base', '/production/foxwarm/', '--host', '127.0.0.1', '--port', String(previewPort), '--strictPort'], {
     cwd: webuiRoot,
     stdio: ['ignore', 'ignore', 'inherit'],
   })
-  await waitForServer(productionBaseUrl)
+  await waitForServer(`${productionBaseUrl}/`)
 
   vite = spawn(viteBin, ['--host', '127.0.0.1', '--port', String(port)], {
     cwd: webuiRoot,
@@ -538,8 +539,9 @@ after(async () => {
   preview?.kill('SIGTERM')
 })
 
-test('Setup uses accessible Models, Config, and Appearance tabs with status icons and product copy', async () => {
+test('Setup uses accessible Appearance, Models and Config tabs with status icons and product copy', async () => {
   const setupPage = await browser.newPage()
+  const requestStart = requestPaths.length
   await setupPage.setBypassServiceWorker(true)
   await attachRequestMocks(setupPage)
   try {
@@ -639,9 +641,16 @@ test('Setup uses accessible Models, Config, and Appearance tabs with status icon
     await setupPage.focus('[data-setup-tab="appearance"]')
     await setupPage.keyboard.press('Home')
     await setupPage.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]')
+    await setupPage.keyboard.press('ArrowLeft')
+    await setupPage.waitForSelector('[data-setup-tab="config"][aria-selected="true"]')
+    await setupPage.keyboard.press('Home')
+    await setupPage.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]')
+    await setupPage.keyboard.press('End')
+    await setupPage.waitForSelector('[data-setup-tab="config"][aria-selected="true"]')
     await setupPage.click('[data-setup-tab="models"]')
     await setupPage.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"][data-editor-ready="true"]', { timeout: 15_000 })
     assert.ok(requestPaths.includes('/preview/api/setup/status'))
+    assert.equal(requestPaths.slice(requestStart).some(path => path.endsWith('/api/setup/authorizations')), false)
   } finally {
     await setupPage.close()
   }
@@ -1001,6 +1010,8 @@ test('Setup editor Ctrl/Cmd+S shortcuts save once, prevent browser Save, and sta
     await pressSaveShortcut(shortcutPage, 'Meta')
     await waitForItems(heldConfigSaves, 1)
     assert.deepEqual(configSaveRequests, [{ yaml: configYaml }])
+    await degradedPage.click('#foxwarm-boot-dismiss')
+    assert.equal(await degradedPage.$('#foxwarm-boot'), null)
     assert.deepEqual((await readEditorShortcuts()).map(event => ({ metaKey: event.metaKey, defaultPrevented: event.defaultPrevented })), [
       { metaKey: true, defaultPrevented: true },
     ])
@@ -1376,6 +1387,8 @@ test('raw model save remains enabled and preserves editor text', async () => {
 
 test('production worker provides real schema markers and current-document completions', async () => {
   const productionPage = await browser.newPage()
+  const workerUrls = []
+  productionPage.on('workercreated', worker => workerUrls.push(worker.url()))
   await productionPage.setBypassServiceWorker(true)
   await attachRequestMocks(productionPage)
   try {
@@ -1389,6 +1402,8 @@ test('production worker provides real schema markers and current-document comple
         && editor?.getAttribute('data-editor-fallback') !== 'true'
         && Number(editor?.getAttribute('data-marker-count') || 0) > 0
     }, { timeout: 20_000 }, modelEditor)
+    assert.ok(workerUrls.some(url => new URL(url).pathname.startsWith('/production/foxwarm/assets/yaml.worker-')))
+    assert.ok(workerUrls.every(url => new URL(url).pathname.startsWith('/production/foxwarm/assets/')))
 
     const saveButton = await productionPage.waitForSelector('button::-p-text(Save models)')
     assert.equal(await saveButton.evaluate((button) => button.disabled), false)
@@ -1585,6 +1600,12 @@ test('OOBE remains editable and savable when lazy Monaco/YAML support import rej
     assert.equal(await degradedPage.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.activeTabId), 'system:setup')
     const fallback = await degradedPage.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"][data-editor-fallback="true"] textarea', { timeout: 15_000 })
     assert.ok((await degradedPage.$eval('body', (body) => body.textContent || '')).includes('Advanced editor features are unavailable. You can still edit and save this YAML.'))
+    await degradedPage.waitForSelector('#foxwarm-boot[data-state="notice"]', { visible: true })
+    assert.equal(await degradedPage.$('[data-fox-splash]'), null)
+    if (process.env.FOXWARM_BOOT_ARTIFACT_DIR) {
+      await mkdir(process.env.FOXWARM_BOOT_ARTIFACT_DIR, { recursive: true })
+      await degradedPage.screenshot({ path: path.join(process.env.FOXWARM_BOOT_ARTIFACT_DIR, 'savable-editor-fallback.png') })
+    }
     const fallbackHeight = await degradedPage.$eval('[data-editor-fallback="true"]', (editor) => ({
       height: Number.parseFloat(getComputedStyle(editor).height),
       authoredHeight: editor.style.height,
@@ -1652,6 +1673,8 @@ test('OOBE remains editable and savable when lazy Monaco/YAML support import rej
     await pressSaveShortcut(degradedPage, 'Meta')
     await degradedPage.waitForFunction(() => document.body.textContent?.includes('Config saved. Active channels refreshed: telegram.'))
     assert.deepEqual(configSaveRequests, [{ yaml: configYaml }])
+    await degradedPage.click('#foxwarm-boot-dismiss')
+    assert.equal(await degradedPage.$('#foxwarm-boot'), null)
     assert.deepEqual(await degradedPage.evaluate(() => window.__fallbackSaveShortcutEvents), [
       { ctrlKey: false, metaKey: true, defaultPrevented: true },
     ])

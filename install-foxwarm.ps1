@@ -52,19 +52,18 @@ function Require-Command($Name, $Hint) {
   }
 }
 
-function Require-Node20() {
-  Require-Command node 'Install Node.js 20+ from https://nodejs.org/, then rerun this script.'
-  Require-Command npm 'Install Node.js 20+ with npm from https://nodejs.org/, then rerun this script.'
-  $majorText = node -p "process.versions.node.split('.')[0]"
-  $major = [int]$majorText
-  if ($major -lt 20) {
+function Require-BuildNode() {
+  Require-Command node 'Install Node.js 20.19+ (20.x) or 22.12+ from https://nodejs.org/, then rerun this script.'
+  Require-Command npm 'Install Node.js 20.19+ (20.x) or 22.12+ with npm from https://nodejs.org/, then rerun this script.'
+  node -e "const [major, minor] = process.versions.node.split('.').map(Number); process.exit((major === 20 && minor >= 19) || (major === 22 && minor >= 12) || major > 22 ? 0 : 1)"
+  if ($LASTEXITCODE -ne 0) {
     $version = node -v
-    throw "Node.js 20+ is required; found $version. Please upgrade Node.js and rerun this script."
+    throw "Node.js 20.19+ (20.x) or 22.12+ is required; found $version. Please upgrade Node.js and rerun this script."
   }
 }
 
 Require-Command git 'Install Git for Windows, then rerun this script: https://git-scm.com/download/win'
-Require-Node20
+Require-BuildNode
 
 if (Test-Path (Join-Path $Dir '.git')) {
   Write-Step "Using existing checkout: $Dir"
