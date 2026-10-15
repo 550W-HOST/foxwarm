@@ -21,7 +21,9 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - `BUILTIN_TOOL_PLACEMENTS` — Exhaustive ownership metadata for every registered builtin, independent of schemas and permission rules.
 - `NODE_ENVIRONMENT_BUILTIN_NAMES` — Intentional current-node environment primitive names.
 - `resolveBuiltinToolPlacement(name, args, currentNode)` — Resolves action-aware ownership and the current execution node.
-- `builtinNodeArgumentSelectsPlacement(name)` — Reports the explicit root-`node` placement classification used only by file source/target builtins.
+- `builtinNodeArgumentSelectsPlacement(name)` — Reports root-`node` placement selection for file delivery/image operations.
+- `builtinNodeArgumentSelectsFileSource(name)` / `resolveToolScriptSourceNode(args, currentNode)` — Classifies and resolves ToolScript source-only selectors without relocating execution; inline rejects an explicit selector.
+- `builtinHasOptionalFileNode(name)` — Marks unsupplied placement/source selectors for conservative authorization discovery.
 - `isToolDirectlyExposedToModel(toolName)` — Check if a tool has `defaultInject: true`
 - `getToolPermissionNode(toolName, executionNode, targetNode)` — Determine which node governs permission for a tool call
 - `resolveMemorySearchOptions` — Scope/lineage helper used by `recall({ vector_query })` to constrain semantic retrieval before archive back-resolution; an exact trusted current owner supplies source identity/aliases directly.
@@ -122,6 +124,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 | `resolveDirectTool` | Resolves direct provider invocations into one builtin or Node operation |
 | `resolveUnifiedTool` | Resolves `call_tool` IDs/descriptors; omitted Node IDs use the current target and builtin aliases for Node capabilities are rejected |
 | `executeResolvedTool` | Authorizes the resolved concrete target and dispatches through local, Node, or MCP owners; `call_tool` itself is permission-neutral |
+| `resolvedToolAuthorizationSession` | Applies only the resolved ToolScript source cwd to read-only authorization facts, shared by model preflight and canonical dispatch; raw args and the live execution owner remain unchanged |
 | `buildUnifiedToolId` | Constructs the source-qualified identifier used by discovery |
 | `parseUnifiedToolId` | Canonical source-qualified ID parser reused by internal and inbound MCP invocation |
 | `parseUnifiedToolCall` | Parses the canonical unified target reference and object/JSON-fallback arguments before placement resolution; reused for failed Node-selection batch classification |

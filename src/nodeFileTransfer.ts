@@ -114,3 +114,18 @@ export async function writeNodeTransferFile(filePath: string, agentName: string,
     overwritten: exists,
   };
 }
+
+/** Decode the existing authenticated transfer payload without accepting partial data. */
+export function decodeNodeTransferFile(file: Pick<NodeTransferFilePayload, 'dataBase64' | 'sizeBytes' | 'sha256'>): Buffer {
+  if (!file || typeof file.dataBase64 !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(file.dataBase64)) {
+    throw new Error('Node file source returned invalid base64 data.');
+  }
+  const decoded = Buffer.from(file.dataBase64, 'base64');
+  if (decoded.toString('base64') !== file.dataBase64) throw new Error('Node file source returned non-canonical base64 data.');
+  if (!Number.isSafeInteger(file.sizeBytes) || file.sizeBytes < 0 || file.sizeBytes !== decoded.length) throw new Error('Node file source returned an invalid sizeBytes.');
+  if (typeof file.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(file.sha256)
+    || crypto.createHash('sha256').update(decoded).digest('hex').toLowerCase() !== file.sha256.toLowerCase()) {
+    throw new Error('Node file source returned an invalid sha256.');
+  }
+  return decoded;
+}

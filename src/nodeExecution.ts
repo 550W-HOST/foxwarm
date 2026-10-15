@@ -93,6 +93,23 @@ export async function executeNodeTool(
   return response.result;
 }
 
+/** Read complete UTF-8 source from one explicitly resolved non-master Node. */
+export async function readNodeFile(
+  sourceSessionId: string,
+  nodeId: string,
+  filePath: string,
+  routingSnapshot?: NodeExecutionRoutingSnapshot,
+  signal?: AbortSignal,
+): Promise<string> {
+  const executionClient = await getClient();
+  throwIfToolStopped(signal);
+  const response = await executionClient.call('readFile', {
+    sourceSessionId, nodeId, filePath, ...(routingSnapshot ? { routingSnapshot } : {}),
+  }, { signal });
+  if (typeof response.content !== 'string') throw new RpcError('NODE_EXECUTION_INVALID_RESPONSE', 'Node file read did not return complete text.');
+  return response.content;
+}
+
 export async function listNodeTopology(sourceSessionId: string, nodeId?: string, currentNode?: string) {
   return (await (await getClient()).call('list', { sourceSessionId, ...(nodeId ? { nodeId } : {}), ...(currentNode ? { currentNode } : {}) })).nodes;
 }

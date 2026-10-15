@@ -740,7 +740,8 @@ Example:
             parameters: {
                 type: 'object',
                 properties: {
-                    filePath: { type: 'string', description: "Script path. Relative paths use the session working directory, or the agent directory if unset." },
+                    node: { type: 'string', description: "Node containing filePath. Omit or use current for this Session's current Node, or use master for Main. Source selection does not change script execution or nested tools' default Node." },
+                    filePath: { type: 'string', description: "Script path on the source Node. Relative paths follow that Node's file-tool path rules; surrounding whitespace is trimmed. Omit when using inline code." },
                     code: { type: 'string', description: "Inline ToolScript. Top-level code can read args and return a result; a defined main(args) is called automatically. When supplied, filePath is not required." },
                     args: { type: 'object', description: "Input object available to the script as args.", additionalProperties: true },
                     argsJson: { type: 'string', description: "Input encoded as a JSON object string when args cannot be supplied." },
@@ -756,7 +757,8 @@ Example:
             parameters: {
                 type: 'object',
                 properties: {
-                    filePath: { type: 'string', description: "Script path. Relative paths use the session working directory, or the agent directory if unset." },
+                    node: { type: 'string', description: "Node containing filePath. Omit or use current for this Session's current Node, or use master for Main. Source selection does not change script execution or nested tools' default Node." },
+                    filePath: { type: 'string', description: "Script path on the source Node. Relative paths follow that Node's file-tool path rules; surrounding whitespace is trimmed. Omit when using inline code." },
                     code: { type: 'string', description: "Inline ToolScript. Top-level code can read args and return a result; a defined main(args) is called automatically. When supplied, filePath is not required." },
                     args: { type: 'object', description: "Input object available to the script as args.", additionalProperties: true },
                     argsJson: { type: 'string', description: "Input encoded as a JSON object string when args cannot be supplied." },
