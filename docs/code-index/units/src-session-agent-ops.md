@@ -97,6 +97,7 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 
 - `createSessionInAgent` chooses the target Agent's isolation binding first, then a supplied `currentNode`, then the non-`master` Node returned by looking up `<agentName>/main`, then `master`. An explicit `master` overrides the main-session default but not isolation. The main-session lookup runs only without the first two choices and excludes the `main` Agent.
 - The lookup uses `getExistingSession`, not an allocating getter. Missing or deleted main lifetimes do not get created or restored; an archived-but-live main remains readable. This getter resolves historical aliases, so a renamed or moved main can currently supply the default even when the exact main ID is no longer live. It also hydrates catalog placeholders; Worker-owned authority must respect the existing [exact-owner boundary](../threads/process-topology-and-rpc.md#d-process-topology-stable-operation-ownership).
+- **Known issue under Session Worker placement:** this lookup hydrates the Worker-owned main lifetime in Main. After the Worker changes its Node, a later creation can reuse Main's stale `currentNode` and inherit the old Node. An owner-safe lookup is needed; this is not an intended caching contract.
 - This changes initial execution routing, not Agent isolation, Node availability validation, or a Session's working directory. Child/fork and new-Agent creation retain their separate source-inheritance paths rather than calling this default lookup.
 
 ## Integration
