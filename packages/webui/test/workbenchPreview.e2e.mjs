@@ -2244,6 +2244,14 @@ test('visible Chat keeps its DOM and initialization across split and normalizati
   chatMessages[24] = { role: 'model', parts: [{ functionCall: { id: 'retained-call', name: 'read', args: { filePath: 'fixture.txt' } } }], __meta: { seq: 25, timestamp: 1700000000024 } }
   chatMessages[25] = { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'retained-call', name: 'read', response: { output: 'Retained tool response' } } }], __meta: { seq: 26, timestamp: 1700000000025 } }
   const page = await openFixture({ responsiveChat: true, chatMessages, hash: '#tab/chat:e2e-a' })
+  const assertUniformClip = async () => {
+    const radii = await page.$$eval('[data-workbench-content-tab]', hosts => hosts.filter(host => !host.inert).map(host => {
+      const slot = document.querySelector(`[data-workbench-content-slot="${host.dataset.workbenchContentPane}"]`)
+      return [slot, host, host.firstElementChild].map(element => getComputedStyle(element).borderRadius)
+    }))
+    assert.ok(radii.length > 0)
+    for (const corners of radii) assert.deepEqual(corners, ['9px', '9px', '9px'])
+  }
   const waitForAnchor = () => page.waitForFunction(() => {
     const viewport = document.querySelector('.foxwarm-chat-messages').getBoundingClientRect()
     const anchor = document.querySelector('[data-chat-message-anchor-key="' + window.__originalScrollAnchor + '"]')
@@ -2251,6 +2259,7 @@ test('visible Chat keeps its DOM and initialization across split and normalizati
   })
   try {
     await page.waitForSelector('.foxwarm-chat-root [data-chat-message-anchor-key]')
+    await assertUniformClip()
     await page.click('[role="textbox"][aria-label="Message"]')
     await page.keyboard.down('Control'); await page.keyboard.press('A'); await page.keyboard.up('Control'); await page.keyboard.press('Backspace')
     await page.keyboard.type('retained draft')
@@ -2280,6 +2289,7 @@ test('visible Chat keeps its DOM and initialization across split and normalizati
     await clickReadyControl(page, 'button[title="Split right with active tab"]')
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.kind === 'split')
     await page.waitForSelector('.foxwarm-chat-root [data-chat-message-anchor-key]')
+    await assertUniformClip()
     console.info('split lifecycle', await page.evaluate(() => ({ sameRoot: document.querySelector('.foxwarm-chat-root') === window.__originalChat, historyBefore: window.__originalHistoryCount, historyAfter: window.__historyReads.length, subscriptionsBefore: window.__originalSubscriptions, subscriptionsAfter: window.__subscriptions.length })))
     assert.equal(await page.evaluate(() => document.querySelector('.foxwarm-chat-root') === window.__originalChat), true, 'split retains the same Chat root')
     assert.equal(await page.evaluate(() => document.querySelector('[data-chat-timeline="committed"]') === window.__originalTimeline), true)
@@ -2293,6 +2303,7 @@ test('visible Chat keeps its DOM and initialization across split and normalizati
     assert.ok(await page.$eval('.foxwarm-chat-messages', element => element.scrollHeight - element.scrollTop - element.clientHeight > 200), 'layout does not discard upward scroll intent')
     await page.click('[data-workbench-tab-close="system:agents"]')
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.kind === 'pane')
+    await assertUniformClip()
     assert.equal(await page.evaluate(() => document.querySelector('.foxwarm-chat-root') === window.__originalChat), true, 'normalizing the last sibling retains Chat')
     assert.equal(await page.evaluate(() => window.__historyReads.length), await page.evaluate(() => window.__originalHistoryCount))
     await waitForAnchor()

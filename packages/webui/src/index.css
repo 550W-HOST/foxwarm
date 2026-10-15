@@ -2147,9 +2147,6 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
   background: var(--foxwarm-color-canvas);
 }
 .foxwarm-desktop-workbench-shell .foxwarm-workbench-content-slot {
-  border-radius: 0 0 9px 9px;
-}
-.foxwarm-desktop-workbench-shell .foxwarm-workbench-content-slot[data-workbench-sole-content] {
   border-radius: 9px;
 }
 .foxwarm-desktop-workbench-shell .foxwarm-sidebar-resize { right: -6px; }
