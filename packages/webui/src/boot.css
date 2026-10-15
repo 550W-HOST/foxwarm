@@ -15,3 +15,10 @@ html:not([data-foxwarm-boot-ready]) #root { visibility: hidden; }
 #foxwarm-boot button { appearance: none; background: var(--foxwarm-color-accent, #e27022); color: var(--foxwarm-color-accent-text, #fff); border: 0; border-radius: 6px; padding: 10px 24px; font: inherit; cursor: pointer; }
 #foxwarm-boot button:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }
 @media (prefers-reduced-motion: reduce) { #foxwarm-boot { transition: none; } }
+
+/* Later module failures must not cover an already usable app or local fallback. */
+#foxwarm-boot[data-state='notice'] { inset: auto 16px 16px auto; width: min(520px, calc(100vw - 32px)); align-items: stretch; padding: 16px; border: 1px solid currentColor; border-radius: 10px; box-shadow: 0 4px 24px #0002; }
+#foxwarm-boot[data-state='notice'] > svg { display: none; }
+#foxwarm-boot[data-state='notice'] h1 { margin: 0 0 8px; font-size: 18px; }
+#foxwarm-boot[data-state='notice'] pre { max-height: 100px; }
+#foxwarm-boot-dismiss { margin-left: 8px; }

@@ -2,6 +2,7 @@ import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { mkdir } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -1005,6 +1006,8 @@ test('Setup editor Ctrl/Cmd+S shortcuts save once, prevent browser Save, and sta
     await pressSaveShortcut(shortcutPage, 'Meta')
     await waitForItems(heldConfigSaves, 1)
     assert.deepEqual(configSaveRequests, [{ yaml: configYaml }])
+    await degradedPage.click('#foxwarm-boot-dismiss')
+    assert.equal(await degradedPage.$('#foxwarm-boot'), null)
     assert.deepEqual((await readEditorShortcuts()).map(event => ({ metaKey: event.metaKey, defaultPrevented: event.defaultPrevented })), [
       { metaKey: true, defaultPrevented: true },
     ])
@@ -1583,6 +1586,12 @@ test('OOBE remains editable and savable when lazy Monaco/YAML support import rej
     assert.equal(await degradedPage.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.activeTabId), 'system:setup')
     const fallback = await degradedPage.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"][data-editor-fallback="true"] textarea', { timeout: 15_000 })
     assert.ok((await degradedPage.$eval('body', (body) => body.textContent || '')).includes('Advanced editor features are unavailable. You can still edit and save this YAML.'))
+    await degradedPage.waitForSelector('#foxwarm-boot[data-state="notice"]', { visible: true })
+    assert.equal(await degradedPage.$('[data-fox-splash]'), null)
+    if (process.env.FOXWARM_BOOT_ARTIFACT_DIR) {
+      await mkdir(process.env.FOXWARM_BOOT_ARTIFACT_DIR, { recursive: true })
+      await degradedPage.screenshot({ path: path.join(process.env.FOXWARM_BOOT_ARTIFACT_DIR, 'savable-editor-fallback.png') })
+    }
     const fallbackHeight = await degradedPage.$eval('[data-editor-fallback="true"]', (editor) => ({
       height: Number.parseFloat(getComputedStyle(editor).height),
       authoredHeight: editor.style.height,
@@ -1650,6 +1659,8 @@ test('OOBE remains editable and savable when lazy Monaco/YAML support import rej
     await pressSaveShortcut(degradedPage, 'Meta')
     await degradedPage.waitForFunction(() => document.body.textContent?.includes('Config saved. Active channels refreshed: telegram.'))
     assert.deepEqual(configSaveRequests, [{ yaml: configYaml }])
+    await degradedPage.click('#foxwarm-boot-dismiss')
+    assert.equal(await degradedPage.$('#foxwarm-boot'), null)
     assert.deepEqual(await degradedPage.evaluate(() => window.__fallbackSaveShortcutEvents), [
       { ctrlKey: false, metaKey: true, defaultPrevented: true },
     ])

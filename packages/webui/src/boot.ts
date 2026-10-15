@@ -30,32 +30,66 @@ const startedAt = performance.now()
 let contentReady = false
 let ready = false
 let failure: string | null = null
+let resourceFailure: string | null = null
 let leaveTimer: number | undefined
 let removeTimer: number | undefined
 let screen: HTMLElement | null = null
 
-function showFailure() {
-  if (failure === null) return
-  screen = document.getElementById('foxwarm-boot')
+function errorMessage(error: unknown): string {
+  return (error instanceof Error ? error.message : typeof error === 'string' ? error : '')
+    || 'An unexpected startup error occurred.'
+}
+
+function showRecovery(message: string, state: 'error' | 'notice') {
+  screen ||= document.getElementById('foxwarm-boot')
   if (!screen) return
+  if (!screen.isConnected) document.body.append(screen)
   screen.hidden = false
-  screen.dataset.state = 'error'
+  screen.dataset.state = state
+  screen.toggleAttribute('data-fox-splash', state === 'error')
   screen.setAttribute('role', 'alert')
   screen.removeAttribute('aria-label')
-  const message = document.getElementById('foxwarm-boot-error')!
-  message.textContent = failure
+  document.getElementById('foxwarm-boot-title')!.textContent = state === 'error' ? 'Foxwarm couldn’t load' : 'Some features couldn’t load'
+  document.getElementById('foxwarm-boot-description')!.textContent = state === 'error'
+    ? 'Check your connection, then reload to try again.'
+    : 'You can keep working, or reload to try again.'
+  document.getElementById('foxwarm-boot-error')!.textContent = message
   document.getElementById('foxwarm-boot-recovery')!.hidden = false
   document.getElementById('foxwarm-boot-reload')!.onclick = () => location.reload()
+  const dismiss = document.getElementById('foxwarm-boot-dismiss')!
+  dismiss.hidden = state !== 'notice'
+  dismiss.onclick = () => {
+    resourceFailure = null
+    screen!.remove()
+  }
+}
+
+function showFailure() {
+  if (failure !== null) showRecovery(failure, 'error')
+}
+
+function finishSplash() {
+  screen!.remove()
+  if (resourceFailure !== null) showRecovery(resourceFailure, 'notice')
+}
+
+function reportResourceFailure(error: unknown) {
+  if (!contentReady) {
+    fail(error)
+    return
+  }
+  if (failure !== null) return
+  resourceFailure ||= errorMessage(error)
+  // Mounted content may already have a supported local fallback. Keep it usable;
+  // the specific module-load error remains visible without taking over the app.
+  if (ready && screen && !screen.isConnected) showRecovery(resourceFailure, 'notice')
 }
 
 function fail(error: unknown) {
   if (failure !== null) return
-  failure = error instanceof Error ? error.message : typeof error === 'string' ? error : 'An unexpected startup error occurred.'
-  if (!failure) failure = 'An unexpected startup error occurred.'
+  failure = errorMessage(error)
   window.clearTimeout(leaveTimer)
   window.clearTimeout(removeTimer)
-  // Keep the detached screen for a later async-chunk failure.
-  if (screen && !screen.isConnected) document.body.append(screen)
   showFailure()
 }
 
@@ -71,12 +105,12 @@ function markReady() {
   if (!screen) return
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches
   if (leaf || reduced) {
-    screen.remove()
+    finishSplash()
     return
   }
   leaveTimer = window.setTimeout(() => {
     screen!.dataset.state = 'leaving'
-    removeTimer = window.setTimeout(() => screen!.remove(), 480)
+    removeTimer = window.setTimeout(finishSplash, 480)
   }, Math.max(0, 1500 - (performance.now() - startedAt)))
 }
 
@@ -105,7 +139,7 @@ function onStyleLoad(event: Event) {
 document.addEventListener('load', onStyleLoad, true)
 window.addEventListener('error', onStartupError, true)
 window.addEventListener('vite:preloadError', event => {
-  fail((event as Event & { payload: unknown }).payload)
+  reportResourceFailure((event as Event & { payload: unknown }).payload)
   // Preserve Vite's throw/console diagnostics. No automatic reload or data reset.
 })
 document.addEventListener('DOMContentLoaded', showFailure, { once: true })

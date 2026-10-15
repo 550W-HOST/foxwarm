@@ -31,10 +31,11 @@ export async function renderBootHtml(html: string): Promise<string> {
       <g class="fw-fox-head">${path('head', 0)}${path('chest', 410, 'fw-fox-mid')}${path('eyeLeft', 575, 'fw-fox-mid')}${path('eyeRight', 600, 'fw-fox-mid')}<ellipse cx="51" cy="64.5" rx="4.6" ry="3.4" transform="rotate(-20 51 64.5)" class="fw-fox-nose"/></g>
     </svg>
     <div id="foxwarm-boot-recovery" hidden>
-      <h1>Foxwarm couldn’t load</h1>
-      <p>Check your connection, then reload to try again.</p>
+      <h1 id="foxwarm-boot-title">Foxwarm couldn’t load</h1>
+      <p id="foxwarm-boot-description">Check your connection, then reload to try again.</p>
       <pre id="foxwarm-boot-error"></pre>
       <button id="foxwarm-boot-reload" type="button">Reload</button>
+      <button id="foxwarm-boot-dismiss" type="button" hidden>Dismiss</button>
     </div>
   </div>`
   // Escape the HTML parser's script terminator, including in bundled theme data.
