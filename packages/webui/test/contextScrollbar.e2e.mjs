@@ -196,7 +196,10 @@ test('overview dims as a whole at rest, strengthens its thumb on hover, and keep
   assert.equal(initial.thumbRadius, '0px')
 
   await page.hover('.foxwarm-context-scrollbar-viewport')
-  await new Promise(resolve => setTimeout(resolve, 150))
+  await page.waitForFunction(() =>
+    getComputedStyle(document.querySelector('.foxwarm-context-scrollbar-shell')).opacity === '1'
+    && getComputedStyle(document.querySelector('.foxwarm-context-scrollbar-viewport')).backgroundColor === 'rgba(0, 0, 0, 0.56)'
+  )
   const hovered = await page.evaluate(() => ({
     shellOpacity: getComputedStyle(document.querySelector('.foxwarm-context-scrollbar-shell')).opacity,
     thumb: getComputedStyle(document.querySelector('.foxwarm-context-scrollbar-viewport')).backgroundColor,
@@ -209,23 +212,23 @@ test('overview dims as a whole at rest, strengthens its thumb on hover, and keep
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
   await page.mouse.down()
   await page.mouse.move(box.x - 40, box.y + box.height / 2)
-  await new Promise(resolve => setTimeout(resolve, 150))
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.foxwarm-context-scrollbar-viewport')).backgroundColor === 'rgba(0, 0, 0, 0.47)')
   const pressed = await page.$eval('.foxwarm-context-scrollbar-shell', shell => ({ opacity: getComputedStyle(shell).opacity, dragging: shell.getAttribute('data-context-scrollbar-dragging'), thumb: getComputedStyle(shell.querySelector('.foxwarm-context-scrollbar-viewport')).backgroundColor }))
   assert.equal(pressed.dragging, 'true')
   assert.equal(pressed.opacity, '1')
   assert.equal(pressed.thumb, 'rgba(0, 0, 0, 0.47)', 'pressed thumb stays between resting and hover fills without dimming the overview itself')
   await page.mouse.up()
-  await new Promise(resolve => setTimeout(resolve, 150))
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.foxwarm-context-scrollbar-shell')).opacity === '0.5')
   assert.equal(await page.$eval('.foxwarm-context-scrollbar-shell', shell => getComputedStyle(shell).opacity), '0.5', 'pointer focus must settle back to the non-hover opacity after release')
   await page.focus('.foxwarm-context-scrollbar')
-  await new Promise(resolve => setTimeout(resolve, 150))
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.foxwarm-context-scrollbar-shell')).opacity === '1')
   assert.equal(await page.$eval('.foxwarm-context-scrollbar-shell', shell => getComputedStyle(shell).opacity), '1', 'keyboard-visible focus retains an accessible full-opacity state')
   await page.evaluate(() => window.setFixtureTheme('dark'))
   await page.mouse.move(1, 1)
-  await new Promise(resolve => setTimeout(resolve, 150))
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.foxwarm-context-scrollbar-viewport')).backgroundColor === 'rgba(255, 255, 255, 0.38)')
   assert.equal(await page.$eval('.foxwarm-context-scrollbar-viewport', element => getComputedStyle(element).backgroundColor), 'rgba(255, 255, 255, 0.38)', 'dark color mode keeps the approved white resting thumb')
   await page.hover('.foxwarm-context-scrollbar-viewport')
-  await new Promise(resolve => setTimeout(resolve, 150))
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.foxwarm-context-scrollbar-viewport')).backgroundColor === 'rgba(255, 255, 255, 0.56)')
   assert.equal(await page.$eval('.foxwarm-context-scrollbar-viewport', element => getComputedStyle(element).backgroundColor), 'rgba(255, 255, 255, 0.56)', 'dark color mode keeps the approved white hover thumb')
 })
 
