@@ -2452,7 +2452,9 @@ async function reclaimManagedSessionIfStale(session: Session, persist = () => sa
     return false;
   }
 
-  const ownerSession = await getExistingSession(managed.ownerSessionId);
+  // Reclaim needs catalog existence only. Do not acquire the identity lock
+  // while holding the authority save lane: identity moves save child Sessions.
+  const ownerSession = getSessionCatalog(managed.ownerSessionId);
   const ownerMissing = !ownerSession;
   const expired = isManagedSessionLeaseExpired(managed);
 
@@ -2609,8 +2611,13 @@ async function admitAndPersistLoadedSessionItem(session: Session, item: QueueIte
   }
   const managedBeforeEnqueue = !!getManagedSessionState(session);
   const rollbackSnapshot = (item.externalEventId || options.trigger === false)
-    ? { meta: structuredClone(session.meta), queue: structuredClone(session.queue) }
+    ? { meta: options.trigger === false ? undefined : structuredClone(session.meta), queue: structuredClone(session.queue) }
     : undefined;
+  // Passive admission does not own wait/history metadata. Its rollback must
+  // leave a real foreground wait created during persistence untouched.
+  const passiveReceiptBefore = options.trigger === false && receiptPlan
+    ? { value: session.meta.acceptedExternalEventIds } : undefined;
+  let passiveManagedBefore: { value: Session['meta']['managedSession'] } | undefined;
   let persistedAfterExternalReceipt = false;
   const persistSession = async (): Promise<void> => {
     // External admission and passive notices require an awaited durable save.
@@ -2657,6 +2664,7 @@ async function admitAndPersistLoadedSessionItem(session: Session, item: QueueIte
       }
 
       assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
+      if (options.trigger === false) passiveManagedBefore = { value: session.meta.managedSession };
       managed.pendingInbox.push(...managedInboxItems.map(cloneQueueItem));
       managed.lastInboxAt = Date.now();
       managed.leaseTouchedAt = managed.lastInboxAt;
@@ -2675,7 +2683,12 @@ async function admitAndPersistLoadedSessionItem(session: Session, item: QueueIte
     }
   } catch (error) {
     if (rollbackSnapshot && !persistedAfterExternalReceipt && !isSessionAuthorityPostCommitError(error)) {
-      session.meta = rollbackSnapshot.meta;
+      if (rollbackSnapshot.meta) session.meta = rollbackSnapshot.meta;
+      if (passiveReceiptBefore) {
+        if (passiveReceiptBefore.value === undefined) delete session.meta.acceptedExternalEventIds;
+        else session.meta.acceptedExternalEventIds = passiveReceiptBefore.value;
+      }
+      if (passiveManagedBefore) session.meta.managedSession = passiveManagedBefore.value;
       session.queue = rollbackSnapshot.queue;
     }
     throw error;

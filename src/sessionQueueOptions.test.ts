@@ -1,3 +1,6 @@
+import * as llm from './llm';
+import { LocalSessionTurnHost, SessionTurnRunner } from './sessionTurnRunner';
+import type { Message, Session } from './types';
 import * as sessionRuntime from './sessionRuntime';
 import { parseFoxwarmOpeningTag } from './utils/promptWrappers';
 import test from 'node:test';
@@ -307,6 +310,127 @@ test('a delayed managed-controller wake cannot overwrite a later admitted inbox 
     release(); await first?.catch(() => {});
     (toolscript as any).resumeBackgroundToolScriptRunForManagedSession = originalResume;
     await sessionManager.deleteSession(session.id);
+    await sessionManager.deleteSession(owner.id);
+  }
+});
+
+test('failed passive selection admission preserves a real wait created by executeTools during its save', { timeout: 15_000 }, async () => {
+  const session = await sessionManager.getSession(id('real_wait_overlap'));
+  const gate = () => {
+    let resolve!: () => void;
+    const promise = new Promise<void>(accept => { resolve = accept; });
+    return { promise, resolve };
+  };
+  const toolsReady = gate(); const toolsRelease = gate();
+  const writing = gate(); const writeRelease = gate(); const waitEntered = gate();
+  const originalChat = llm.chat;
+  const originalTools = llm.executeTools;
+  const originalWait = sessionManager.startSessionWaitForSession;
+  let calls = 0;
+  (llm as any).chat = async (_parts: unknown, _owner: Session, _iteration: number, options: any) => {
+    calls++;
+    const call = { id: 'real-wait', name: 'wait', args: { waitForInput: true, reason: 'real wait after selection' } };
+    await options.appendMessage({ role: 'model', parts: [{ functionCall: call }] });
+    return { toolCalls: [call] };
+  };
+  (llm as any).executeTools = async (...args: Parameters<typeof llm.executeTools>) => {
+    toolsReady.resolve(); await toolsRelease.promise;
+    return originalTools(...args);
+  };
+  (sessionManager as any).startSessionWaitForSession = (...args: Parameters<typeof originalWait>) => {
+    const result = originalWait(...args); waitEntered.resolve(); return result;
+  };
+  const runner = new SessionTurnRunner(new LocalSessionTurnHost());
+  let activeTurn: Promise<void> | undefined;
+  let selection: Promise<unknown> | undefined;
+  sessionManager.setSessionTriggerCallback(target => { activeTurn = runner.processSessionQueue(target); return activeTurn; });
+  try {
+    await sessionManager.enqueueSessionItem(session.id, { type: 'user', parts: [{ text: 'please wait for input' }] });
+    await toolsReady.promise;
+    let once = true;
+    sessionManager.setSessionPersistenceFaultInjectorForTests(async (phase, target) => {
+      if (phase === 'history' && target === session.id && once) {
+        once = false; writing.resolve(); await writeRelease.promise;
+        throw new Error('one passive selection write failure');
+      }
+    });
+    selection = sessionRuntime.updateSettings(session.id, { currentNode: 'node-a' });
+    const rejected = assert.rejects(selection, /one passive selection write failure/);
+    await writing.promise;
+    toolsRelease.resolve(); await waitEntered.promise;
+    const waitId = session.meta.wait.id;
+    writeRelease.resolve(); await rejected; await activeTurn;
+    sessionManager.setSessionPersistenceFaultInjectorForTests(null);
+    const durable = await metadataStore.readSessionHistorySnapshot(session.id);
+    assert.equal(calls, 1);
+    assert.equal(session.busy, false);
+    assert.equal(session.meta.wait.id, waitId);
+    assert.equal(durable.meta.wait.id, waitId);
+    assert.equal(durable.meta.wait.reason, 'real wait after selection');
+    assert.deepEqual(durable.history.map((message: Message) => message.role), ['user', 'model', 'tool']);
+    assert.equal(durable.history[2].parts[0].functionResponse.response.output, 'ok');
+    assert.deepEqual(durable.queue, []);
+    assert.equal(durable.currentNode, 'master');
+  } finally {
+    toolsRelease.resolve(); writeRelease.resolve();
+    await selection?.catch(() => {}); await activeTurn?.catch(() => {});
+    sessionManager.setSessionPersistenceFaultInjectorForTests(null);
+    sessionManager.setSessionTriggerCallback(() => {});
+    (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalTools;
+    (sessionManager as any).startSessionWaitForSession = originalWait;
+    await sessionManager.deleteSession(session.id);
+  }
+});
+
+test('managed selection admission does not acquire identity while a parent move waits for its save lane', { timeout: 15_000 }, async () => {
+  const parent = await sessionManager.getSession(id('move_parent'));
+  const parentId = parent.id;
+  const movedId = id('moved_parent');
+  const childId = await sessionManager.createChildSession(parentId, 'child');
+  const child = await sessionManager.getSession(childId);
+  const owner = await sessionManager.getSession(id('move_owner'));
+  const lease = await managedSessions.openManagedSession({ sessionId: child.id, ownerSessionId: owner.id });
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let entered!: () => void;
+  const writing = new Promise<void>(resolve => { entered = resolve; });
+  let once = true;
+  let earlier: Promise<void> | undefined;
+  let selection: Promise<unknown> | undefined;
+  let moving: Promise<unknown> | undefined;
+  try {
+    sessionManager.setSessionPersistenceFaultInjectorForTests(async (phase, target) => {
+      if (phase === 'history' && target === child.id && once) {
+        once = false; entered(); await held;
+      }
+    });
+    earlier = sessionManager.saveSession(child.id);
+    await writing;
+    selection = sessionRuntime.updateSettings(child.id, { currentNode: 'node-a' });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    moving = sessionManager.moveSessionToTarget({ sourceSessionId: parentId, newSessionId: movedId });
+    for (let checks = 0; checks < 100 && child.parentSessionId !== movedId; checks++) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(child.parentSessionId, movedId, 'the real move reached child persistence while holding identity');
+    release(); await earlier;
+    const read = sessionManager.getExistingSession(owner.id);
+    await Promise.all([selection, moving, read]);
+    assert.equal((await read).id, owner.id);
+    const managed = await managedSessions.getManagedSessionStateForTests(child.id);
+    assert.equal(managed.leaseId, lease.leaseId, 'catalog existence prevents reclaiming the live owner');
+    assert.equal(managed.ownerSessionId, owner.id);
+    const durable = await metadataStore.readSessionHistorySnapshot(child.id);
+    assert.equal(durable.parentSessionId, movedId);
+    assert.equal(durable.currentNode, 'node-a');
+    assert.equal(durable.meta.managedSession.leaseId, lease.leaseId);
+  } finally {
+    release(); await earlier?.catch(() => {}); await selection?.catch(() => {}); await moving?.catch(() => {});
+    sessionManager.setSessionPersistenceFaultInjectorForTests(null);
+    await sessionManager.deleteSession(child.id);
+    await sessionManager.deleteSession(movedId).catch(() => false);
+    await sessionManager.deleteSession(parentId).catch(() => false);
     await sessionManager.deleteSession(owner.id);
   }
 });
