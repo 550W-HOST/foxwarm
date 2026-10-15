@@ -834,7 +834,7 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
   }, [text])
 
   const actionButtons = (
-    <div className={`foxwarm-assistant-action-buttons ${conversation ? 'order-last mt-1 self-start' : reasoningBadges?.length ? '' : 'absolute right-1 top-1'} flex shrink-0 gap-0.5 opacity-0 transition-opacity`}>
+    <div className={`foxwarm-assistant-action-buttons ${conversation ? 'order-last mt-1 self-start' : 'absolute right-1 top-1 z-10'} flex shrink-0 gap-0.5 opacity-0 transition-opacity`}>
       <IconToggleButton onClick={() => setViewMode('rendered')} active={displayedViewMode === 'rendered'} title="Rendered (Markdown)">
         <Eye size={12} />
       </IconToggleButton>
@@ -853,32 +853,33 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
   return (
     <div className={`foxwarm-assistant-message-card ${conversation ? 'foxwarm-conversation-reply flex flex-col' : ''} min-w-0 max-w-full bg-fw-assistant-surface text-fw-assistant-text border border-fw-border px-2 py-2 rounded-lg cursor-text relative group`}
       style={message.__meta?.streaming ? { overflowAnchor: 'none' } : undefined}>
-      {reasoningBadges?.length ? <div data-search-exclude className="foxwarm-assistant-message-header flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1">
-        {!conversation && actionButtons}
-        <ReasoningTokenBadge badges={reasoningBadges} />
-      </div> : null}
-      {(!reasoningBadges?.length || conversation) && actionButtons}
+      {actionButtons}
+      <div className="flow-root min-w-0 max-w-full">
+        {reasoningBadges?.length ? <div data-search-exclude className="float-right ml-2">
+          <ReasoningTokenBadge badges={reasoningBadges} />
+        </div> : null}
 
-      {displayedViewMode === 'rendered' ? (
-        <div data-search-surface="model" data-search-part-index={searchPartIndex} className="foxwarm-assistant-message-markdown">
-          {renderedSegments.map((segment, index) => segment.kind === 'markdown' ? (
-            <MarkdownContent
-              key={`markdown-${index}`}
-              text={segment.text}
-              className="foxwarm-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-fw-assistant-code-surface prose-pre:text-fw-assistant-code-text prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0"
-            />
-          ) : segment.kind === 'commit' ? (
-            <div key={`commit-${index}-${segment.target.commitId}`} data-search-exclude className="contents"><CommitMarkerCard target={segment.target} onOpen={onOpenCodeCommit} /></div>
-          ) : (
-            <pre key={`invalid-commit-${index}`} className="my-2 whitespace-pre-wrap rounded border border-fw-warning-border bg-fw-warning-surface px-2 py-1.5 font-mono text-xs text-fw-warning dark:border-fw-warning-border dark:bg-fw-warning-surface-strong/30 dark:text-fw-warning" title="Invalid Foxwarm commit marker">
-              {segment.raw}
-            </pre>
-          ))}
-          <div data-search-exclude className="contents"><WebSearchCitationLinks annotations={annotations} /></div>
-        </div>
-      ) : (
-        <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-fw-text-strong">{text}</pre>
-      )}
+        {displayedViewMode === 'rendered' ? (
+          <div data-search-surface="model" data-search-part-index={searchPartIndex} className="foxwarm-assistant-message-markdown">
+            {renderedSegments.map((segment, index) => segment.kind === 'markdown' ? (
+              <MarkdownContent
+                key={`markdown-${index}`}
+                text={segment.text}
+                className="foxwarm-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-fw-assistant-code-surface prose-pre:text-fw-assistant-code-text prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0"
+              />
+            ) : segment.kind === 'commit' ? (
+              <div key={`commit-${index}-${segment.target.commitId}`} data-search-exclude className="contents"><CommitMarkerCard target={segment.target} onOpen={onOpenCodeCommit} /></div>
+            ) : (
+              <pre key={`invalid-commit-${index}`} className="my-2 whitespace-pre-wrap rounded border border-fw-warning-border bg-fw-warning-surface px-2 py-1.5 font-mono text-xs text-fw-warning dark:border-fw-warning-border dark:bg-fw-warning-surface-strong/30 dark:text-fw-warning" title="Invalid Foxwarm commit marker">
+                {segment.raw}
+              </pre>
+            ))}
+            <div data-search-exclude className="contents"><WebSearchCitationLinks annotations={annotations} /></div>
+          </div>
+        ) : (
+          <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-fw-text-strong">{text}</pre>
+        )}
+      </div>
       {jsonSnapshot !== null && <JsonInspectorDialog text={jsonSnapshot} onClose={() => setJsonSnapshot(null)} />}
     </div>
   )
