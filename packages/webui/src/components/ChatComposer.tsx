@@ -773,6 +773,7 @@ const ChatComposer = memo(function ChatComposer({
   } | null>(null)
   const lastReportedHeightRef = useRef<number | null>(null)
   const submitInFlightRef = useRef(false)
+  const sendFocusRef = useRef<{ origin: Element; accepted: boolean } | null>(null)
   const activeSessionIdRef = useRef(sessionId)
   activeSessionIdRef.current = sessionId
   const recordingGenerationRef = useRef(0)
@@ -855,11 +856,41 @@ const ChatComposer = memo(function ChatComposer({
     setTranscribeError(null)
     setDismissedSlashQuery(null)
     submitInFlightRef.current = false
+    sendFocusRef.current = null
     const frame = requestAnimationFrame(() => {
       if (activeSessionIdRef.current === sessionId && draftRef.current === savedDraft) editorRef.current?.replaceDraft(savedDraft)
     })
     return () => cancelAnimationFrame(frame)
   }, [loadedDraft, sessionId])
+
+  useEffect(() => {
+    // Disabling the editor/Send can blur it to body. Only an actual departure
+    // cancels the send's focus intent, including a click on a nonfocusable pane.
+    const abandonSendFocus = (event: Event) => {
+      const request = sendFocusRef.current
+      if (request && (!(event.target instanceof Node) || !request.origin.contains(event.target))) {
+        sendFocusRef.current = null
+      }
+    }
+    const abandonOnWindowBlur = () => { sendFocusRef.current = null }
+    document.addEventListener('pointerdown', abandonSendFocus, true)
+    document.addEventListener('focusin', abandonSendFocus, true)
+    window.addEventListener('blur', abandonOnWindowBlur)
+    return () => {
+      sendFocusRef.current = null
+      document.removeEventListener('pointerdown', abandonSendFocus, true)
+      document.removeEventListener('focusin', abandonSendFocus, true)
+      window.removeEventListener('blur', abandonOnWindowBlur)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!sendFocusRef.current?.accepted || loading || sessionMissing || recordingLocked) return
+    // Follow the committed editable state, not a frame that can precede React's
+    // loading=false commit and try to focus a still-noneditable element.
+    sendFocusRef.current = null
+    editorRef.current?.focus()
+  }, [draft, loading, recordingLocked, sessionId, sessionMissing])
 
   const cleanupRecording = useCallback(async () => {
     recordingActiveRef.current = false
@@ -991,14 +1022,19 @@ const ChatComposer = memo(function ChatComposer({
     }
 
     const targetSessionId = sessionId
+    const origin = (e?.nativeEvent as SubmitEvent | undefined)?.submitter || document.activeElement
+    const focusRequest = origin && rootRef.current?.contains(origin) ? { origin, accepted: false } : null
+    sendFocusRef.current = focusRequest
     submitInFlightRef.current = true
     let accepted = false
     try {
       accepted = await onSend({ text: submittedInput.trim(), attachments: availableAttachments })
     } finally {
       submitInFlightRef.current = false
+      if (!accepted && sendFocusRef.current === focusRequest) sendFocusRef.current = null
     }
     if (!accepted) return
+    if (focusRequest) focusRequest.accepted = true
 
     clearMessageAttachmentDraft(targetSessionId)
     if (activeSessionIdRef.current === targetSessionId) {
@@ -1017,11 +1053,6 @@ const ChatComposer = memo(function ChatComposer({
         setDraftPersistenceError('The sent draft could not be cleared from browser storage.')
       }
     }
-
-    requestAnimationFrame(() => {
-      if (activeSessionIdRef.current !== targetSessionId) return
-      editorRef.current?.focus()
-    })
   }, [attachmentSegments.length, availableAttachments, hasMissingAttachments, loading, onSend, sessionId, sessionMissing])
 
   const handleCommandKeyDown = useCallback((e: KeyboardEvent): boolean => {
