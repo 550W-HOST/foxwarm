@@ -1,0 +1,17 @@
+/* Inline in the HTML: no application stylesheet or font is needed. */
+html { background: var(--foxwarm-color-canvas, #f3f4f6); }
+body { margin: 0; }
+html:not([data-foxwarm-boot-ready]) #root { visibility: hidden; }
+#foxwarm-boot { color: var(--foxwarm-color-text, #111827); font: 15px/1.5 system-ui, sans-serif; padding: 24px; box-sizing: border-box; }
+#foxwarm-boot > svg { width: min(40vmin, 200px); height: min(40vmin, 200px); flex-shrink: 0; }
+#foxwarm-boot [hidden] { display: none; }
+[data-foxwarm-boot-leaf] #foxwarm-boot[data-state='shown'] { display: none; }
+#foxwarm-boot[data-state='error'] { opacity: 1; visibility: visible; pointer-events: auto; overflow: auto; }
+#foxwarm-boot[data-state='error'] .fw-fox * { animation: none; stroke-dashoffset: 0; }
+#foxwarm-boot-recovery { max-width: 560px; width: 100%; text-align: center; }
+#foxwarm-boot h1 { font: inherit; font-size: 22px; font-weight: 600; margin: 20px 0 8px; }
+#foxwarm-boot p { margin: 0 0 16px; }
+#foxwarm-boot-error { font: 13px/1.5 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 25vh; overflow: auto; text-align: left; }
+#foxwarm-boot button { appearance: none; background: var(--foxwarm-color-accent, #e27022); color: var(--foxwarm-color-accent-text, #fff); border: 0; border-radius: 6px; padding: 10px 24px; font: inherit; cursor: pointer; }
+#foxwarm-boot button:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }
+@media (prefers-reduced-motion: reduce) { #foxwarm-boot { transition: none; } }

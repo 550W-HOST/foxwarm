@@ -1,8 +1,9 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { bootHtmlPlugin } from './build/bootHtml'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), bootHtmlPlugin()],
   base: './', // Use relative paths for assets
   build: {
     rollupOptions: {

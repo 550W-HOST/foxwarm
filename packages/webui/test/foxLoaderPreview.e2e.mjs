@@ -18,16 +18,14 @@ before(async () => {
         import React, { StrictMode } from 'react'
         import { createRoot } from 'react-dom/client'
         import FoxLoaderPreview from './src/components/FoxLoaderPreview'
-        import { FoxSplash, markBootReady } from './src/components/FoxLoaders'
         import { initializeThemeRuntime } from './src/theme'
         initializeThemeRuntime()
-        window.fixture = { ready: markBootReady, actions: 0 }
-        const boot = new URLSearchParams(location.search).has('boot')
+        window.fixture = { actions: 0 }
         createRoot(document.getElementById('root')).render(
-          <StrictMode>{boot ? <FoxSplash /> : <>
+          <StrictMode><>
             <FoxLoaderPreview />
             <button data-after-preview onClick={() => window.fixture.actions++}>After preview</button>
-          </>}</StrictMode>
+          </></StrictMode>
         )
       `,
       resolveDir: webui,
@@ -81,18 +79,5 @@ test('manual splash opens by keyboard, closes with Escape or pointer, and return
     await page.mouse.click(10, 10)
     await page.waitForSelector('[data-fox-splash]', { hidden: true })
     assert.equal(await page.$eval(trigger, button => button === document.activeElement), true)
-  } finally { await page.close() }
-})
-
-test('Escape does not bypass the real startup splash readiness gate', async () => {
-  const page = await browser.newPage()
-  try {
-    await page.goto(baseUrl + '/?boot')
-    await page.waitForSelector('[data-fox-splash]', { visible: true })
-    await page.keyboard.press('Escape')
-    await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 1600)))
-    assert.equal(await page.$eval('[data-fox-splash]', splash => splash.dataset.state), 'shown')
-    await page.evaluate(() => window.fixture.ready())
-    await page.waitForFunction(() => !document.querySelector('[data-fox-splash]'))
   } finally { await page.close() }
 })
