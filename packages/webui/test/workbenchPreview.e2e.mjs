@@ -1679,7 +1679,7 @@ test('Chat composer uses a smaller empty editor below 600px content height in De
         assert.equal(empty.placeholderTop, empty.paddingTop, themeId + ' placeholder follows the vertical inset')
         assert.equal(empty.paddingTop, 8)
         assert.equal(empty.editorTop, 1, themeId + ' editor reaches the form border without outer padding')
-        assert.equal(empty.toolbarInset, 13, themeId + ' toolbar owns the matching horizontal inset')
+        assert.equal(empty.toolbarInset, 9, themeId + ' toolbar owns its horizontal inset')
         assert.ok(empty.toolbarOverflow <= 1, themeId + ' toolbar fits the narrow section')
         if (process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR) await page.screenshot({ path: path.join(process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR, `composer-${themeId}-${width}-empty.png`), fromSurface: false })
         await page.mouse.click(empty.clickX, empty.clickY)

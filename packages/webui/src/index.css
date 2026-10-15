@@ -1352,6 +1352,7 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-textarea
 .foxwarm-composer-caret-anchor {
   display: inline-block;
   width: 0.25rem;
+  margin-inline-start: -0.25rem;
   min-height: 1em;
   overflow: hidden;
   vertical-align: text-bottom;
