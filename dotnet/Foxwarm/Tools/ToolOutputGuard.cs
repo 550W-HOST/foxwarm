@@ -8,11 +8,12 @@ internal static class ToolOutputGuard
     internal static async Task<JsonNode?> GuardAsync(
         JsonNode? response,
         string workspace,
-        string callId
+        string callId,
+        bool toolScriptExecution = false
     )
     {
         if (response is not JsonObject)
-            return await GuardTextAsync(response, workspace);
+            return await GuardTextAsync(response, workspace, toolScriptExecution);
         // Keep recognized image carriers outside the text guard, as Source extraction does.
         var plain = (JsonObject)response.DeepClone();
         var carriers = new JsonObject();
@@ -79,8 +80,8 @@ internal static class ToolOutputGuard
             }
         }
         if (carriers.Count == 0)
-            return await GuardTextAsync(response, workspace);
-        var guarded = await GuardTextAsync(plain, workspace);
+            return await GuardTextAsync(response, workspace, toolScriptExecution);
+        var guarded = await GuardTextAsync(plain, workspace, toolScriptExecution);
         foreach (var (key, value) in carriers)
             if (guarded![key] is JsonArray existing && value is JsonArray extracted)
                 foreach (var item in extracted)
@@ -90,9 +91,11 @@ internal static class ToolOutputGuard
         return guarded;
     }
 
-    private static async Task<JsonNode?> GuardTextAsync(JsonNode? response, string workspace)
+    private static async Task<JsonNode?> GuardTextAsync(JsonNode? response, string workspace, bool toolScriptExecution)
     {
-        var text = ToolResponseFormatting.Format(response);
+        var text = toolScriptExecution
+            ? ToolResponseFormatting.FormatToolScriptExecution(response)
+            : ToolResponseFormatting.Format(response);
         if (text.Length <= 40_000)
             return response;
         var directory = Path.Combine(workspace, ".temp", "tool-output");

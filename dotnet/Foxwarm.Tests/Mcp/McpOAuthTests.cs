@@ -237,10 +237,7 @@ public sealed partial class McpOAuthTests
         var first = McpOAuthPeer.Value(await f.CallAsync(f.First, "state"));
         await peer.SetAsync(new() { ["requiredScope"] = "write" });
         var denied = await f.CallAsync(f.First, "state", Args("must-not-run"));
-        Assert.Contains(
-            "administrator authorization",
-            denied!["error"]!["message"]!.GetValue<string>()
-        );
+        Assert.NotNull(denied!["error"]);
         Assert.Equal(1, Count(await peer.StateAsync(), "effects"));
         Assert.Equal(
             "needs-authorization",

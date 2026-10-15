@@ -212,7 +212,8 @@ internal sealed class ToolRegistry(
         return await ToolOutputGuard.GuardAsync(
             result,
             workspace(owner.Hosted),
-            owner.CurrentCallId
+            owner.CurrentCallId,
+            owner.ToolScriptExecution
         );
     }
 

@@ -41,17 +41,25 @@ internal sealed partial class SessionManager
         }
     }
 
-    public async Task<SessionOwner> ForkAsync(SessionOwner parent, string? suffix = null)
+    public async Task<SessionOwner> ForkAsync(
+        SessionOwner parent,
+        string? suffix = null,
+        bool childMode = false
+    )
     {
         suffix = string.IsNullOrEmpty(suffix) ? "fork" : suffix;
         ValidateForkSuffix(suffix);
         using var operation = TrackCreation();
         using var mutation = BeginOwnerMutation(parent);
-        var gate = CreationKey(parent.Id + "_" + suffix);
+        var gate = CreationKey(
+            childMode && parent.Id.Split('/').Last() == "main"
+                ? SessionIdentity.Build(parent.Agent, suffix)
+                : parent.Id + "_" + suffix
+        );
         await gate.WaitAsync();
         try
         {
-            return await ForkLockedAsync(parent, suffix, false, null, null);
+            return await ForkLockedAsync(parent, suffix, childMode, null, null, userInitiated: true);
         }
         finally
         {
@@ -73,7 +81,8 @@ internal sealed partial class SessionManager
         bool childMode,
         string? displayName,
         JsonObject? forceModel,
-        string? taskId = null
+        string? taskId = null,
+        bool userInitiated = false
     )
     {
         if (!Accepting)
@@ -206,30 +215,16 @@ internal sealed partial class SessionManager
                     );
                     suffixRows.Add(
                         SystemRow(
-                            childMode
-                                ? $"You are a child session forked from parent session `{parent.Id}`. Your current session ID is `{id}`. "
+                            userInitiated || !childMode
+                                ? $"This session was manually forked by the user from session `{parent.Id}`. Your current session ID is `{id}`. The parent relationship records the source of the inherited context; it does not itself assign work or require a completion report. Follow the user's instructions in this session."
+                                : $"You are a child session forked from parent session `{parent.Id}`. Your current session ID is `{id}`. "
                                     + SessionBoundary.Completion(
                                         parent.Id,
                                         HandoffConfirmationEnabled,
                                         taskId
                                     )
-                                : $"Session forked from {parent.Id} by user command. Your current session ID is `{id}`."
                         )
                     );
-                    if (childMode)
-                        suffixRows.Add(
-                            new JsonObject
-                            {
-                                ["role"] = "model",
-                                ["parts"] = new JsonArray(
-                                    new JsonObject
-                                    {
-                                        ["text"] =
-                                            "Understood. I am a child session. Waiting for task from parent session.",
-                                    }
-                                ),
-                            }
-                        );
                     await AppendOwnedRowsAsync(owner, suffixRows);
                     committed = true;
                     await PublishCreatedAsync(owner);

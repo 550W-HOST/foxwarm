@@ -6,6 +6,7 @@ import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 export const sleep = milliseconds => new Promise(done => setTimeout(done, milliseconds))
 export async function until(check, label, timeout = 22000) {
@@ -71,7 +72,7 @@ export async function createHostFixture(name, options = {}) {
     browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', ...(options.chromeArgs || [])], userDataDir: join(root, 'browser') })
     page = await browser.newPage(); options.onPage?.(page); await page.goto(options.publicRoot || origin, { waitUntil: 'networkidle0' })
     await page.waitForSelector('input[type="password"]'); await page.type('input[type="password"]', token); await page.click('button[type="submit"]')
-    await page.waitForSelector('.foxwarm-chat-root'); return page
+    await page.waitForSelector('.foxwarm-chat-root'); await waitForWebUiReady(page); return page
   }
   async function save(config) {
     const raw = typeof config === 'string' ? config : JSON.stringify(config, null, 2) + '\n'

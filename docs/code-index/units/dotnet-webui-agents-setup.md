@@ -14,7 +14,7 @@ Agent routes delegate catalog/AgentMemory/SessionManager Agent operations; setup
 
 Setup/Agent changes are authenticated and explicit. Setup save success means the validated file was installed, not that deferred access identities or external channels are active; the forwarded outcome preserves that distinction. Model/settings updates are staged through manager/save-lane boundaries where they affect a Session. Agent memory selection can affect later prompts but does not rewrite active history. Unsupported remote/managed/child fields return explicit validation errors rather than being stored as accepted consumers.
 
-The merged Setup Authorizations panel uses [outbound OAuth routes](./dotnet-mcp-oauth.md), registered by the normal host rather than this setup file. Its shared third-party accounts remain administrator-managed, and existing caller tool permissions still control MCP use.
+The current Setup does not expose Authorizations. The normal host retains [outbound OAuth administrator routes](./dotnet-mcp-oauth.md), saved grants and the narrow public callback/client documents independently of this setup file; existing caller tool permissions still control MCP use.
 
 ## Tests
 

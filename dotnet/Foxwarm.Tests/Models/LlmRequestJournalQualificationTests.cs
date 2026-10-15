@@ -129,6 +129,35 @@ public sealed class LlmRequestJournalQualificationTests
     }
 
     [Fact]
+    public async Task Toolscript_projection_is_shared_by_canonical_journal_and_actual_provider_preparation_without_changing_history()
+    {
+        using var temp = new TempDirectory();
+        using var journal = new LlmRequestJournalStore(temp.Path);
+        var recorder = new RecordingHandler();
+        using var client = new HttpClient(recorder);
+        var owner = new ModelRequestOwner(client,
+            new ResponsesClientOptions(new Uri("http://localhost"), "model", "model", "token", "", 50),
+            new ModelRouting(), journal: journal);
+        var history = new[]
+        {
+            JsonNode.Parse("""{"role":"model","parts":[{"functionCall":{"id":"script","name":"run_script","args":{}}}]}""")!.AsObject(),
+            JsonNode.Parse("""{"role":"tool","parts":[{"functionResponse":{"tool_use_id":"script","name":"run_script","response":{"status":"completed","stdout":"printed literal\n","result":false},"__meta":{"toolScriptSubCalls":[]}}}]}""")!.AsObject(),
+        };
+        var before = history.Select(row => row.ToJsonString()).ToArray();
+        await owner.RequestAsync("session", Catalog("anthropic"), "model", null, "cache", "turn", history,
+            (_, _) => Task.FromResult("prompt"), null, null, null, null, CancellationToken.None);
+        var listed = await journal.ListAsync("session", "low-level", null, null, 10);
+        var request = await journal.ReconstructAsync(listed[0]!["requestId"]!.GetValue<string>());
+        var text = request["messages"]![1]!["parts"]![0]!["functionResponse"]!["response"]!["output"]!.GetValue<string>();
+        Assert.StartsWith("--- print ---\nprinted literal\n--- return ---\nfalse\n---\n", text);
+        var wire = JsonNode.Parse(recorder.LastBody!)!;
+        Assert.Equal(text, wire["messages"]![1]!["content"]![0]!["content"]!.GetValue<string>());
+        Assert.DoesNotContain("toolScriptSubCalls", request.ToJsonString());
+        Assert.DoesNotContain("toolScriptSubCalls", recorder.LastBody!);
+        Assert.Equal(before, history.Select(row => row.ToJsonString()));
+    }
+
+    [Fact]
     public async Task Owner_journals_repaired_visible_history_and_source_result_shape()
     {
         var root = Path.Combine(

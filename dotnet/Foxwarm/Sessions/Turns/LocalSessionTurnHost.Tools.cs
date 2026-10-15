@@ -117,7 +117,7 @@ public sealed partial class LocalSessionTurnHost
                 && result.ResolvedPaths is { Count: > 0 } paths
             )
                 response["__meta"] = new JsonObject { ["resolvedPaths"] = paths.DeepClone() };
-            if (result.ToolScriptSubCalls is { Count: > 0 } scriptCalls)
+            if (result.ToolScriptSubCalls is { } scriptCalls)
             {
                 var meta = response["__meta"] as JsonObject ?? new JsonObject();
                 meta["toolScriptSubCalls"] = scriptCalls.DeepClone();

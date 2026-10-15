@@ -7,11 +7,17 @@ import { mkdir, readFile, writeFile, stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import WebSocket from 'ws'
 import { createHostFixture, until } from './experimentHostFixture.mjs'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 const env = { FOXWARM_EXPERIMENT_MONTY_BINARY: process.env.FOXWARM_EXPERIMENT_MONTY_BINARY }
-const fixture = await createHostFixture('node-consumers', { env })
+const options = { env, normalStartup: true }
+const fixture = await createHostFixture('node-consumers', options)
+options.cwd = fixture.root
+env.FOXWARM_CONFIG_PATH = join(fixture.data, 'state/config.yaml')
+await writeFile(env.FOXWARM_CONFIG_PATH, `bot:\n  httpPort: ${fixture.port}\nllm:\n  maxOutput: 713\n`)
 const prefix = '/consumer-proof'
 env.FOXWARM_PUBLIC_BASE_URL = fixture.origin + prefix
+options.publicRoot = fixture.origin + prefix + '/'
 const host = fixture.origin + prefix, plans = new Map(), requests = [], failures = [], clients = [], sockets = [], secrets = []
 let releaseHeld
 const route = id => '/api/sessions/' + encodeURIComponent(id)
@@ -107,6 +113,24 @@ try {
   assert.equal(await page.$eval('[data-node-option="offline-node"]', el => el.title), 'Offline')
   assert.equal(await page.$eval('[data-node-option="upgrade-node"]', el => el.title), 'Update this node to connect.')
   await page.keyboard.press('Escape')
+  // The new production Nodes tab consumes the existing directory and onboarding services.
+  await page.click('[data-workbench-status-bar] button[aria-label^="Nodes:"]')
+  await page.waitForSelector('[data-workbench-status-popup] [aria-label="Node directory"]')
+  await page.evaluate(() => [...document.querySelectorAll('[data-workbench-status-popup] button')].find(button => button.textContent === 'Open Nodes').click())
+  await page.waitForSelector('[data-node-surface]')
+  await page.waitForFunction(() => document.querySelector('[data-node-surface]')?.textContent.includes('offline-node'))
+  const cards = await page.$$eval('[data-node-surface] article', rows => rows.map(row => row.textContent))
+  assert(cards.some(text => text.includes('owned-cli') && text.includes('Online')))
+  assert(cards.some(text => text.includes('offline-node') && text.includes('Offline')))
+  assert(cards.some(text => text.includes('upgrade-node') && text.includes('Upgrade required')))
+  assert(cards.some(text => text.includes('master')))
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent === 'New nodes').click())
+  await page.waitForSelector('[role="dialog"][aria-labelledby="node-onboarding-title"]')
+  assert((await page.$eval('[role="dialog"][aria-labelledby="node-onboarding-title"]', node => node.textContent)).includes('Shell'))
+  await page.waitForFunction(expected => document.querySelector('[aria-label="Reachable address"]')?.value === expected, {}, host)
+  await page.keyboard.press('Escape')
+  await page.evaluate(id => window.foxwarmTest.switchToSession(id), actor)
+  await page.waitForSelector('.foxwarm-node-picker-trigger[aria-label="Execution node: owned-cli"]')
   assert.equal((await fixture.api('POST', route(actor) + '/node', { nodeId: 'offline-node' })).status, 400)
   assert.equal((await fixture.api('POST', route(actor) + '/node', { nodeId: 'upgrade-node' })).status, 400)
   assert.equal((await fixture.api('POST', route(actor) + '/node', { nodeId: '' })).status, 400)

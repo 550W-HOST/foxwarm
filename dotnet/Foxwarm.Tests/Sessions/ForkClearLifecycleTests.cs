@@ -66,13 +66,13 @@ public sealed class ForkClearLifecycleTests
         );
         Assert.Contains("history-inherited", fork.History[before.History.Count + 1].ToJsonString());
         Assert.Contains("afterSend", fork.History[before.History.Count + 2].ToJsonString());
-        Assert.Equal("model", fork.History.Last()["role"]!.GetValue<string>());
+        Assert.Equal("user", fork.History.Last()["role"]!.GetValue<string>());
         Assert.Equal(
             before.History.Select(row => row.ToJsonString()),
             parent.Entry.Snapshot().History.Select(row => row.ToJsonString())
         );
         Assert.Equal(2, child.Archive.ReadBranch()!.MessageCap);
-        Assert.Equal(4, child.Archive.ReadMessages().Count);
+        Assert.Equal(3, child.Archive.ReadMessages().Count);
         var manual = await fixture.Manager.ForkAsync(parent, "copy");
         Assert.All(
             manual.Entry.Snapshot().History[before.History.Count]["parts"]!.AsArray(),
@@ -83,6 +83,52 @@ public sealed class ForkClearLifecycleTests
                 )
         );
         Assert.Equal(3, manual.Archive.ReadMessages().Count);
+    }
+
+    [Fact]
+    public async Task Manual_command_keeps_parent_lineage_but_initial_instructions_use_user_ingress_while_delegated_children_keep_handoff()
+    {
+        await using var fixture = new LifecycleFixture();
+        var parent = await fixture.Manager.CreateNamedAsync("main", "main", null, null);
+        parent.Registry.TriggerOverride = _ => Task.CompletedTask;
+        await AppendAsync(parent, Text("inherited input"), new JsonObject
+        {
+            ["role"] = "model",
+            ["parts"] = new JsonArray(new JsonObject { ["text"] = "real inherited reply" }),
+        });
+        var before = parent.Entry.Snapshot();
+        var runtime = new SessionRuntime(fixture.Manager);
+        var initial = "Ordinary user instructions.\nSecond line.\n";
+        var manual = await runtime.ForkCommandAsync(parent.Id, "manual", initial);
+        var snapshot = manual.Entry.Snapshot();
+        Assert.Equal(SessionIdentity.Build(parent.Agent, "manual"), manual.Id);
+        Assert.Equal(parent.Id, snapshot.AuthorityEnvelope["parentSessionId"]!.GetValue<string>());
+        Assert.Equal(before.History.Select(row => row.ToJsonString()), snapshot.History.Take(before.History.Count).Select(row => row.ToJsonString()));
+        Assert.Equal(new[] { "user", "user" }, snapshot.History.Skip(before.History.Count).Select(row => row["role"]!.GetValue<string>()));
+        Assert.Null(snapshot.AuthorityEnvelope["childHandoffState"]);
+        var input = Assert.Single(snapshot.Queue);
+        Assert.Equal(QueueItemType.User, input.Type);
+        Assert.Equal(initial, Assert.Single(input.Parts! )["text"]!.GetValue<string>());
+        Assert.Null(input.SourceSessionId);
+        Assert.Contains("manual-fork-created", parent.Entry.Snapshot().History.Last().ToJsonString());
+        var (delegated, delivered) = await fixture.Manager.CreateChildAsync(parent, "delegated", null, null, initial, null, fork: true);
+        Assert.True(delivered);
+        Assert.Equal(QueueItemType.Intersession, Assert.Single(delegated.Entry.Snapshot().Queue).Type);
+        Assert.Equal(parent.Id, Assert.Single(delegated.Entry.Snapshot().Queue).SourceSessionId);
+        Assert.Equal("user", delegated.Entry.Snapshot().History.Last()["role"]!.GetValue<string>());
+        Assert.Contains("afterSend", delegated.Entry.Snapshot().History.Last().ToJsonString());
+        var created = await fixture.Manager.Tasks.ExecuteAsync(
+            new JsonObject { ["action"] = "create", ["title"] = "linked fork" }, parent.Id);
+        var taskId = created.Payload["task"]!["id"]!.GetValue<string>();
+        var attached = await fixture.Manager.Tasks.CreateAttachedChildAsync(taskId, parent.Id,
+            async () => (await fixture.Manager.CreateChildAsync(parent, "linked", null, null, null, null,
+                fork: true, taskId: taskId)).Child, "Assigned instructions");
+        Assert.True(attached.AssignmentDelivered);
+        var linked = attached.Child.Entry.Snapshot();
+        Assert.Equal(new[] { "user", "user" }, linked.History.Skip(parent.Entry.Snapshot().History.Count).Select(row => row["role"]!.GetValue<string>()));
+        Assert.Contains(taskId, linked.History.Last().ToJsonString());
+        Assert.DoesNotContain("send_to_session(", linked.History.Last().ToJsonString());
+        Assert.Contains(taskId, Assert.Single(linked.Queue).Parts![0].ToJsonString());
     }
 
     [Fact]

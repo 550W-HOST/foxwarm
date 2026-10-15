@@ -84,6 +84,7 @@ internal sealed partial class SessionToolExecutor(
         };
     }
 
+    internal bool ToolScriptExecution => invocation.Value?.ToolScriptSubCalls is not null;
     internal string CurrentCallId => invocation.Value?.CallId ?? "";
     internal string? DirectExecWorkspace => execSnapshot.Value?.Cwd;
     private WorkspaceTools ExecFiles =>

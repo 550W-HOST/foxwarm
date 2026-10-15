@@ -5,11 +5,13 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import WebSocket from 'ws'
 import { createHostFixture, until } from './experimentHostFixture.mjs'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 const options = { normalStartup: true, env: {} }
 const fixture = await createHostFixture('legacy-node-projection', options)
 options.cwd = fixture.root
-options.publicRoot = fixture.origin + '/#session/legacy-absent'
+options.publicRoot = fixture.origin + '/preview/#session/legacy-absent'
+options.env.FOXWARM_PUBLIC_BASE_URL = fixture.origin + '/preview'
 await writeFile(fixture.modelPath, JSON.stringify({ default: 'local', providers: { local: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:1', models: ['wire'] } } }))
 options.env.FOXWARM_CONFIG_PATH = join(fixture.data, 'state/config.yaml')
 await writeFile(options.env.FOXWARM_CONFIG_PATH, `bot:\n  httpPort: ${fixture.port}\nllm:\n  maxOutput: 713\n`)
@@ -53,6 +55,7 @@ async function observe(page, id, expected, revision) {
   const realtime = frames.filter(frame => frame.type === 'session-state' && frame.sessionId === id).at(-1)
   assert(realtime)
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), id)
+  await waitForWebUiReady(page)
   await page.waitForSelector('.foxwarm-node-picker-trigger')
   await page.waitForFunction(() => document.body.innerText.includes('Retained historical reply'))
   await page.click('.foxwarm-node-picker-trigger')
@@ -91,6 +94,28 @@ try {
     await page.waitForFunction(() => window.foxwarmTest?.switchToSession)
     await observe(page, id, id === 'explicit-remote' ? 'retained-remote' : 'master', ++revision)
   }
+  // A missing built root chunk is a browser deployment fault, not a backend mode.
+  const recovery = await page.browser().newPage()
+  try {
+    await recovery.setCacheEnabled(false)
+    await recovery.setRequestInterception(true)
+    let fail = true, blocked = ''
+    recovery.on('request', request => {
+      if (fail && /\/assets\/App-[^/]+\.js$/.test(new URL(request.url()).pathname)) {
+        blocked = new URL(request.url()).pathname
+        void request.respond({ status: 404, contentType: 'text/plain', body: 'Missing deployment chunk' })
+      } else void request.continue()
+    })
+    await recovery.goto(options.publicRoot, { waitUntil: 'domcontentloaded' })
+    await recovery.waitForSelector('#foxwarm-boot[data-state="error"]')
+    assert(blocked.startsWith('/preview/assets/'), blocked)
+    assert.match(await recovery.$eval('#foxwarm-boot-error', node => node.textContent), /import|fetch|load/i)
+    fail = false
+    await Promise.all([recovery.waitForNavigation({ waitUntil: 'domcontentloaded' }), recovery.click('#foxwarm-boot-reload')])
+    await waitForWebUiReady(recovery)
+    await recovery.waitForFunction(() => document.body.innerText.includes('Retained historical reply'))
+    assert.equal(await recovery.evaluate(() => document.querySelector('meta[name="foxwarm-host"]')?.content), 'dotnet')
+  } finally { await recovery.close() }
   socket.terminate(); socket = undefined
   await fixture.stop()
   for (const [id] of variants) await assertRetained(id)

@@ -11,6 +11,7 @@ import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import puppeteer from 'puppeteer-core'
 import { writeModelFixture } from './experimentModelFixture.mjs'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 const require = createRequire(import.meta.url)
 const { createMcpOAuthFixture } = require(resolve('lib/mcpOAuthTestFixture.js'))
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK')
@@ -59,43 +60,34 @@ async function pageApi(page, path, body, method = 'POST', headers = {}) {
     return { status: response.status, body: await response.json().catch(() => ({})) }
   }, { path, body, method, headers })
 }
-async function articleButton(page, text) {
-  for (const button of await page.$$('article button'))
-    if (await button.evaluate((element, label) => element.textContent.trim() === label, text)) { await button.click(); return }
-  throw new Error('Missing authorization button: ' + text)
-}
 async function login(page) {
   await page.goto(url, { waitUntil: 'networkidle0' })
   await page.waitForSelector('#token'); await page.type('#token', token)
   await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('#loginForm button')])
+  await waitForWebUiReady(page)
   await page.evaluate(() => { location.hash = '#setup' })
-  await page.waitForSelector('[data-setup-tab="authorizations"]')
-  await page.click('[data-setup-tab="authorizations"]'); await page.waitForSelector('article')
+  await page.waitForSelector('#setup-tab-models')
+  assert.equal(await page.$('[data-setup-tab="authorizations"]'), null, 'Setup no longer exposes the MCP panel')
   assert.equal(await page.evaluate(() => document.querySelector('meta[name="foxwarm-host"]')?.content), 'dotnet')
 }
 async function configure(page, mode, clientId = '', secret = '') {
-  await articleButton(page, 'Configure'); await page.waitForSelector('article form select')
-  await page.select('article form select', mode)
-  if (mode === 'oauth') {
-    const inputs = await page.$$('article form input:not([type="checkbox"])')
-    for (const [index, value] of [[0, 'read'], [1, clientId], [2, secret]]) {
-      await inputs[index].click({ clickCount: 3 }); await inputs[index].press('Backspace')
-      if (value) await inputs[index].type(value)
-    }
-  }
-  await page.click('article form button[type="submit"]')
-  await page.waitForFunction(() => !document.querySelector('article form'))
+  const changed = await pageApi(page, 'setup/authorizations/Fixture%20MCP', {
+    authentication: mode, ...(mode === 'oauth' ? { scope: 'read', ...(clientId ? { clientId } : {}), ...(secret ? { clientSecret: secret } : {}) } : {}),
+  }, 'PUT')
+  assert.equal(changed.status, 200, JSON.stringify(changed))
 }
 async function authorize(page) {
-  const existing = new Set(browser.targets())
-  const target = browser.waitForTarget(target => target.type() === 'page' && !existing.has(target))
-  const article = await page.$eval('article', element => element.textContent)
-  await articleButton(page, article.includes('Not authorized') ? 'Authorize' : 'Reauthorize')
-  const popup = await (await target).page()
-  await popup.waitForSelector('#consent')
-  assert(new URL(popup.url()).hostname === '127.0.0.1', 'real cross-site AS page, not a callback-only navigation')
-  await popup.click('#consent')
-  await page.waitForFunction(() => document.querySelector('article')?.textContent.includes('Authorized'))
+  const admitted = await pageApi(page, 'setup/authorizations/Fixture%20MCP/authorize', {})
+  assert.equal(admitted.status, 200)
+  const consent = await browser.newPage()
+  try {
+    await consent.goto(admitted.body.authorizationUrl); await consent.waitForSelector('#consent')
+    assert.equal(new URL(consent.url()).hostname, '127.0.0.1', 'real cross-site AS page')
+    await Promise.all([consent.waitForNavigation({ waitUntil: 'domcontentloaded' }), consent.click('#consent')])
+    await consent.waitForNetworkIdle({ idleTime: 300 })
+    assert.equal(await consent.title(), 'Authorization complete')
+    await until(async () => (await pageApi(page, 'setup/authorizations')).body.servers[0].state === 'authorized', 'administrator status published')
+  } finally { await consent.close() }
 }
 const fn = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
 async function toolTurn(owner, calls) {
@@ -170,12 +162,13 @@ try {
     const page = await browser.newPage(); await login(page)
     const cookie = (await page.cookies()).find(cookie => cookie.name === 'foxwarm_token')
     assert.equal(cookie.path, '/preview/'); assert.equal(cookie.sameSite, 'Strict'); assert.equal(cookie.secure, true)
-    assert((await page.$eval('[data-setup-section="authorizations"]', element => element.textContent)).includes('/preview/api/mcp/oauth/callback'))
+    assert((await pageApi(page, 'setup/authorizations')).body.callbackUrl.includes('/preview/api/mcp/oauth/callback'))
     await configure(page, 'static'); peer.state.registration = 'dcr'
     await configure(page, 'oauth'); await authorize(page)
     const registrations = peer.state.registrations
     assert(!JSON.stringify((await pageApi(page, 'setup/authorizations')).body).includes('fixture-client-secret'))
-    await articleButton(page, 'Disconnect'); await page.waitForFunction(() => document.querySelector('article')?.textContent.includes('Not authorized'))
+    assert.equal((await pageApi(page, 'setup/authorizations/Fixture%20MCP/disconnect', {})).status, 200)
+    assert.equal((await pageApi(page, 'setup/authorizations')).body.servers[0].state, 'not-authorized')
     await configure(page, 'static'); peer.state.registration = 'cimd'
     await configure(page, 'oauth'); await authorize(page)
     assert.equal(peer.state.registrations, registrations, 'CIMD fetches real public metadata without DCR')
@@ -184,7 +177,7 @@ try {
     await configure(page, 'static'); peer.state.registration = 'none'
     await configure(page, 'oauth', 'pre-registered', 'pre-registered-secret'); await authorize(page)
     assert.equal((await pageApi(page, 'setup/authorizations')).body.servers[0].hasClientSecret, true)
-    assert(!(await page.$eval('article', element => element.textContent)).includes('pre-registered-secret'))
+    assert(!JSON.stringify((await pageApi(page, 'setup/authorizations')).body).includes('pre-registered-secret'))
     const standalone = await browser.newPage()
     const admitted = await pageApi(page, 'setup/authorizations/Fixture%20MCP/authorize', {})
     assert.equal(admitted.status, 200)

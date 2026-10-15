@@ -85,7 +85,7 @@ async function create(model) { const result = await fixture.api('POST', '/api/se
 async function send(id, scenario, extra = '') {
   const count = records.length; assert.equal((await command(id, 'CASE:' + scenario + ' ' + extra)).status, 202)
   await until(async () => { const live = await history(id); return !live.session.busy && live.messages.some(row => row.parts?.some(part => part.text === 'DONE-' + scenario)) }, 'completed ' + scenario)
-  assert.deepEqual(errors, []); return records.slice(count)
+  assert.deepEqual(errors, []); return records.slice(count).filter(row => row.scenario === scenario)
 }
 async function seed(id, label, count = 7) { for (let index = 0; index < count; index++) await send(id, 'seed-' + label + '-' + index, ('ordered-' + label + '-' + index + '-').repeat(750)) }
 async function compact(id) {
@@ -155,6 +155,10 @@ try {
   const beforeManual = records.length, idleFork = await command(parent, '/fork instructed ' + manualInstruction)
   assert.equal(idleFork.status, 200); const instructed = idleFork.body.newSessionId
   await until(async () => !(await history(instructed)).session.busy && (await history(instructed)).messages.some(row => row.parts?.some(part => part.text === 'DONE-manual-task')), 'manual initial task')
+  const instructedState = await authority(instructed)
+  assert(instructedState.history.some(row => row.role === 'user' && row.parts?.some(part => part.text === manualInstruction)))
+  assert(!instructedState.history.some(row => row.parts?.some(part => part.system?.includes('type="inter-session"') && part.system.includes(manualInstruction))))
+  assert.equal(instructedState.childHandoffState?.boundary, 'direct-user')
   const notice = (await history(parent)).messages.at(-1).parts[0].system
   assert(notice.includes('event="manual-fork-created"')); assert(notice.includes('currentSessionId="' + parent + '"')); assert(notice.includes('childSessionId="' + instructed + '"')); assert(notice.includes('time="')); assert(notice.includes(manualInstruction))
   assert.equal(records.slice(beforeManual).filter(row => row.body.prompt_cache_key === sha(parent)).length, 0, 'idle parent notice did not trigger provider')

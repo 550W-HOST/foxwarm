@@ -12,7 +12,7 @@ internal sealed partial class McpOAuthService
         if (!Matches(grant, config) || grant?["tokens"] is not JsonObject)
             throw Error(
                 "needs-authorization",
-                "This MCP server needs administrator authorization in Setup → Authorizations."
+                "This MCP server needs administrator OAuth authorization."
             );
         return grant!;
     }
@@ -316,7 +316,7 @@ internal sealed partial class McpOAuthService
                     }
                     throw Error(
                         "scope",
-                        "Additional MCP access requires administrator authorization in Setup → Authorizations."
+                        "Additional MCP access requires administrator review and reauthorization."
                     );
                 }
                 throw Error(

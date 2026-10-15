@@ -793,7 +793,7 @@ async function mousePressAt(page, point, button = 'left') {
 }
 
 async function tabToControl(page, selector) {
-  for (let index = 0; index < 120; index++) {
+  for (let index = 0; index < 256; index++) {
     if (await page.evaluate(selector => document.activeElement?.matches(selector), selector)) return
     await page.keyboard.press('Tab')
   }
@@ -1994,9 +1994,7 @@ async function clickStatusPageEntry(page, section) {
   const popup = '[data-workbench-status-popup]'
   await page.click(`[data-workbench-status-bar] button[aria-label^="${section === 'Tasks' ? 'Tasks:' : 'Nodes:'}"]`)
   await page.waitForSelector(popup, { visible: true })
-  const entry = await page.evaluateHandle(label => [...document.querySelectorAll('[data-workbench-status-popup] button')].find(button => button.textContent === label), `Open ${section}`)
-  await entry.asElement().click()
-  await entry.dispose()
+  await page.locator('[data-workbench-status-popup] button').click()
   await page.waitForSelector(popup, { hidden: true })
 }
 

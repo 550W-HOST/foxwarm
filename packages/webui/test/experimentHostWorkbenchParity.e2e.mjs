@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 assert(process.env.FOXWARM_VSCODE_WEB_ASSET_DIR, 'Set the separately prepared Code-OSS asset directory.')
 const options = { normalStartup: true, env: {} }
@@ -46,8 +47,8 @@ const route = suffix => '/api/sessions/' + encodeURIComponent(sessionId) + suffi
 const state = async () => (await host.api('GET', route('/history'))).body
 const savedLayout = () => page.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state)
 const panes = root => root.kind === 'pane' ? [root] : root.children.flatMap(panes)
-const click = async selector => { await page.waitForSelector(selector, { visible: true }); await page.locator(selector).click() }
-const chat = async () => { await page.evaluate(id => window.foxwarmTest.switchToSession(id), sessionId); await page.waitForSelector('.foxwarm-chat-root', { visible: true }) }
+const click = async selector => { await waitForWebUiReady(page); await page.waitForSelector(selector, { visible: true }); await page.locator(selector).click() }
+const chat = async () => { await waitForWebUiReady(page); await page.evaluate(id => window.foxwarmTest.switchToSession(id), sessionId); await page.waitForSelector('.foxwarm-chat-root', { visible: true }) }
 const codeFrame = () => until(() => page.frames().find(frame => new URL(frame.url() || 'about:blank').pathname.endsWith('/vscode-web/') && frame.parentFrame() === page.mainFrame()), 'official Code iframe')
 async function palette(frame, command) {
   await frame.click('.monaco-workbench'); await page.keyboard.down('Control'); await page.keyboard.down('Shift'); await page.keyboard.press('P'); await page.keyboard.up('Shift'); await page.keyboard.up('Control')

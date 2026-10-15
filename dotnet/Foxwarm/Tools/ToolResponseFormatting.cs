@@ -1,6 +1,10 @@
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text;
+using YamlDotNet.Serialization;
+using YamlDotNet.Serialization.EventEmitters;
+using YamlDotNet.Core;
 using System.Text.RegularExpressions;
 
 namespace Foxwarm.Tools;
@@ -29,6 +33,64 @@ internal static class ToolResponseFormatting
             );
         return Flow(value);
     }
+
+    private static readonly ISerializer BlockYaml = new SerializerBuilder()
+        .DisableAliases()
+        .WithIndentedSequences()
+        .WithEventEmitter(next => new LiteralBlockEmitter(next))
+        .WithQuotingNecessaryStrings()
+        .WithNewLine("\n")
+        .Build();
+
+    private sealed class LiteralBlockEmitter(IEventEmitter next) : ChainedEventEmitter(next)
+    {
+        public override void Emit(ScalarEventInfo info, IEmitter emitter)
+        {
+            if (info.Source.Value is string text && text.Contains('\n'))
+                info.Style = ScalarStyle.Literal;
+            else if (info.Source.Value is null)
+                info.RenderedValue = "null";
+            base.Emit(info, emitter);
+        }
+    }
+
+    internal static string FormatToolScriptExecution(JsonNode? value)
+    {
+        if (value is not JsonObject response
+            || response["truncated"] is JsonValue flag && flag.TryGetValue<bool>(out var truncated) && truncated
+            || response.ContainsKey("output") && !response.ContainsKey("result") && !response.ContainsKey("stdout"))
+            return Format(value);
+        var metadata = (JsonObject)response.DeepClone();
+        metadata.Remove("stdout");
+        metadata.Remove("result");
+        metadata.Remove("output");
+        var sections = new StringBuilder();
+        void AppendSection(string label, string text)
+        {
+            sections.Append("--- ").Append(label).Append(" ---\n").Append(text);
+            if (!text.EndsWith('\n'))
+                sections.Append('\n');
+        }
+        if (response["stdout"] is JsonValue stdout && stdout.TryGetValue<string>(out var printed) && printed.Length > 0)
+            AppendSection("print", printed);
+        if (response.ContainsKey("result"))
+            AppendSection("return", response["result"] is JsonValue result && result.TryGetValue<string>(out var returned)
+                ? returned : DumpBlock(response["result"]));
+        return sections.Append("---\n").Append(DumpBlock(metadata)).ToString();
+    }
+
+    private static string DumpBlock(JsonNode? value) => value is null ? "null" : BlockYaml.Serialize(Native(value)).TrimEnd();
+
+    private static object? Native(JsonNode? value) => value switch
+    {
+        null => null,
+        JsonObject obj => obj.ToDictionary(pair => pair.Key, pair => Native(pair.Value)),
+        JsonArray array => array.Select(Native).ToArray(),
+        JsonValue leaf when leaf.TryGetValue<string>(out var text) => text,
+        JsonValue leaf when leaf.TryGetValue<bool>(out var flag) => flag,
+        JsonValue leaf when leaf.TryGetValue<long>(out var integer) => integer,
+        _ => JsonSerializer.Deserialize<JsonElement>(value.ToJsonString()).GetDouble(),
+    };
 
     private static string Flow(JsonNode? value) =>
         value switch

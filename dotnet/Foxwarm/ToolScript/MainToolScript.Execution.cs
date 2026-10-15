@@ -43,6 +43,11 @@ internal sealed partial class MainToolScript
         record["hostCallCount"] = 0;
         record["subCalls"] = new JsonArray();
         record.Remove("lastHostCall");
+        JsonObject ProjectSlice()
+        {
+            context.Progress?.Invoke((JsonArray)record["subCalls"]!.DeepClone());
+            return Project(record, true, stdout.Delta(offset));
+        }
         async Task CommitAsync()
         {
             var budget = Budget();
@@ -158,7 +163,7 @@ internal sealed partial class MainToolScript
                     record.Remove("waiting");
                     record.Remove("snapshotBase64");
                     await CommitAsync();
-                    return Project(record, true, stdout.Delta(offset));
+                    return ProjectSlice();
                 }
                 if (progress.KindCase == ChildEvent.KindOneofCase.Error)
                     throw new InvalidDataException(
@@ -235,7 +240,7 @@ internal sealed partial class MainToolScript
                         ["durationMs"] = 0,
                     };
                     await WaitAsync("agent", new JsonObject { ["question"] = text }, null);
-                    return Project(record, true, stdout.Delta(offset));
+                    return ProjectSlice();
                 }
                 JsonObject outcome;
                 try
@@ -266,7 +271,7 @@ internal sealed partial class MainToolScript
                 if (slice.Elapsed.TotalSeconds >= Number(record["timeoutSecs"], 30))
                 {
                     await WaitAsync("timeout", null, outcome);
-                    return Project(record, true, stdout.Delta(offset));
+                    return ProjectSlice();
                 }
                 progressBudget = Budget();
                 progress = await ResumeAsync(
@@ -328,7 +333,7 @@ internal sealed partial class MainToolScript
             if (error is ToolScriptHostFatalException)
                 throw;
             record["status"] = run.CommittedStatus ?? "failed";
-            var result = Project(record, true, stdout.Delta(offset));
+            var result = ProjectSlice();
             result["error"] = error.Message;
             if (persistenceFailure)
                 result["recordPersistenceFailed"] = true;

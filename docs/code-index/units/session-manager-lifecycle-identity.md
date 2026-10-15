@@ -14,6 +14,8 @@ Lifecycle methods claim exact identity/deletion gates before changing owner/stor
 
 Concurrent create/delete/move/queue/busy races resolve through manager claims, not catalog guesses. Pending/ambiguous identity evidence fails startup or operation closed; historical aliases remain read-only. A post-rename/post-authority failure is reported as committed/partial, never silently compensated by deleting pre-existing Archive rows.
 
+Manual `ForkAsync` and `/fork` share inherited context and exact parent lineage, but do not create a delegated completion duty. The command retains child-style name allocation and sends its initial instruction through ordinary `QueueItem.UserText` ingress before the existing passive parent notice. `CreateChildAsync` retains delegated/task completion contracts. Fork suffixes no longer append a synthetic assistant acknowledgment; copied historical rows, including old acknowledgments, remain unchanged. Fork capture, Archive caps, publication and partial-create receipts still use their original owner/save-lane paths.
+
 ## Tests
 
 `SessionIdentityMoveTests.cs`; `SessionIdentityRecoveryTests.cs`; `SessionDeletionTests.cs`; `ForkClearLifecycleTests.cs`; identity interleaving tests.

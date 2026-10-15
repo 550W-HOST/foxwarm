@@ -1667,11 +1667,8 @@ public sealed class LlmRequestJournalStore : IDisposable
         }
         else
             clone.Remove("__meta");
-        if (clone["parts"] is JsonArray parts)
-            foreach (var part in parts.OfType<JsonObject>())
-                (part["functionResponse"] as JsonObject)?.Remove("__meta");
+        ConcreteRequestHistory.ProjectDisplayMetadata(clone);
         clone.Remove("modelVisible");
-        clone.Remove("compaction");
         return clone;
     }
 

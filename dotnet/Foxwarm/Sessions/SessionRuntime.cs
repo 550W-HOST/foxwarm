@@ -144,15 +144,25 @@ internal sealed class SessionRuntime(SessionManager manager)
     public async Task<SessionOwner> ForkCommandAsync(string id, string suffix, string? message)
     {
         var parent = await manager.RequiredAsync(id);
-        var (child, delivered) = await manager.CreateChildAsync(
-            parent,
-            suffix,
-            null,
-            null,
-            message,
-            null,
-            fork: true
-        );
+        var child = await manager.ForkAsync(parent, suffix, childMode: true);
+        var delivered = false;
+        if (message is not null)
+        {
+            try
+            {
+                await SubmitAndRunAsync(child, QueueItem.UserText(message));
+                delivered = true;
+            }
+            catch (Exception error)
+            {
+                throw new CommittedSessionCreationException(
+                    child.Id,
+                    $"Forked Session '{child.Id}' was committed but its initial message delivery failed.",
+                    error,
+                    error is AuthorityCommittedException
+                );
+            }
+        }
         try
         {
             await manager.NotifyManualForkAsync(parent, child, message);

@@ -27,10 +27,7 @@ internal static class ConcreteRequestHistory
                 source = null;
             var message = (JsonObject)original.DeepClone();
             message.Remove("__meta");
-            message.Remove("compaction");
-            foreach (var part in (message["parts"] as JsonArray ?? []).OfType<JsonObject>())
-                if (part["functionResponse"] is JsonObject response)
-                    response.Remove("__meta");
+            ProjectDisplayMetadata(message);
             if (source is null || source == destinationModelId)
             {
                 prepared.Add(message);
@@ -78,6 +75,22 @@ internal static class ConcreteRequestHistory
             prepared.Add(message);
         }
         return prepared;
+    }
+
+    internal static void ProjectDisplayMetadata(JsonObject message)
+    {
+        message.Remove("compaction");
+        foreach (var part in (message["parts"] as JsonArray ?? []).OfType<JsonObject>())
+        {
+            if (part["functionResponse"] is not JsonObject response)
+                continue;
+            if (response["__meta"] is JsonObject metadata && metadata.ContainsKey("toolScriptSubCalls"))
+                response["response"] = new JsonObject
+                {
+                    ["output"] = Foxwarm.Tools.ToolResponseFormatting.FormatToolScriptExecution(response["response"]),
+                };
+            response.Remove("__meta");
+        }
     }
 
     internal static IReadOnlyList<JsonObject> PrepareRequest(
