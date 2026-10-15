@@ -78,6 +78,13 @@ Tasks is a lazy singleton `system:tasks` tab with the shared restoration, close 
 
 Nodes is a lazy singleton `system:nodes` tab with ordinary activation, restore, close and popup behavior. Its independent directory/onboarding ownership and Architecture summary entry are documented in [WebUI Nodes](./webui-nodes.md).
 
+## Build and browser fixtures
+
+- The WebUI builds with Vite 8's native Rolldown/Oxc pipeline and `@vitejs/plugin-react` 6. React 18 remains unchanged; optional React Compiler peers are neither installed nor enabled. The explicit `esbuild` development dependency is available to build helpers and standalone browser fixtures, not selected as Vite's bundler or minifier.
+- Source builds require Node.js `^20.19.0 || >=22.12.0`. The explicit `build.target` retains Vite 5's syntax targets (`es2020`, Edge 88, Firefox 78, Chrome 87, Safari 14); it is not a polyfill or a promise that every application API works in those browser versions.
+- `base: './'` keeps emitted HTML, dynamic imports, styles, and worker URLs deployment-relative. Rolldown owns automatic code splitting; the old Monaco manual group is removed so shared preload helpers cannot drag Monaco into the initial entry graph. YAML/JSON/editor worker constructors remain Vite `?worker` imports in the lazy editor loader.
+- Setup's real-browser fixture serves the unmodified relative production build through Vite preview mounted at `/production/foxwarm/`, alongside the development `/preview/` path. It exercises actual YAML worker diagnostics/completions and the savable import-failure fallback. The JSON inspector fixture exercises the development worker pipeline in Chromium and Firefox.
+
 ## Dependencies
 
 Workbench store/layout, Sidebar, Chat, Architecture, Setup, terminal view, WebUI settings, and [Code integration](../threads/code-integration.md).

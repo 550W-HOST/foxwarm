@@ -9,7 +9,7 @@ The installer creates `./foxwarm` for the program and `./foxwarm-data` for runti
 
 ## Linux, macOS, or WSL
 
-Install Git, Node.js 20 or newer with npm, and tmux. The installer checks for these prerequisites but does not install system packages.
+Install Git, Node.js 20.19+ (20.x) or 22.12+ with npm, and tmux. The installer checks for these prerequisites but does not install system packages.
 
 ```bash
 curl -fsSL https://foxwarm.550w.host/install-foxwarm.sh | bash
@@ -27,7 +27,7 @@ You can inspect the [Bash installer](https://github.com/550W-HOST/foxwarm/blob/m
 
 ## Windows PowerShell
 
-Install Git for Windows and Node.js 20 or newer with npm, then open PowerShell:
+Install Git for Windows and Node.js 20.19+ (20.x) or 22.12+ with npm, then open PowerShell:
 
 ```powershell
 irm https://foxwarm.550w.host/install-foxwarm.ps1 | iex

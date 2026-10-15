@@ -5,13 +5,8 @@ export default defineConfig({
   plugins: [react()],
   base: './', // Use relative paths for assets
   build: {
-    rollupOptions: {
-      output: {
-        manualChunks(id) {
-          if (id.includes('node_modules/monaco-editor')) return 'monaco-editor'
-        }
-      }
-    }
+    // Keep the pre-upgrade syntax target instead of adopting Vite's newer default.
+    target: ['es2020', 'edge88', 'firefox78', 'chrome87', 'safari14']
   },
   resolve: {
     dedupe: ['react', 'react-dom']
