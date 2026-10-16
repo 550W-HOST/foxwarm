@@ -1,6 +1,6 @@
 # Unit: shared SQLite writer mechanics
 
-Files: `dotnet/Foxwarm/Persistence/SqliteBatchWriter.cs`, `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveWriter.cs`
+Files: `dotnet/Foxwarm/Persistence/SqliteBatchWriter.cs`
 
 ## Purpose and scope
 
