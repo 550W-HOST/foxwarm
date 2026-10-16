@@ -19,7 +19,7 @@ import TerminalVirtualKeyboard, { TerminalKeyboardHeaderControl } from './Termin
 import { terminalThemeFromSnapshot } from '../theme/integrations'
 import { getThemeSnapshot, THEME_CHANGED_EVENT } from '../theme/runtime'
 
-type TerminalStatus = 'connecting' | 'ready' | 'closed' | 'error'
+type TerminalStatus = 'connecting' | 'ready' | 'disconnected' | 'closed' | 'error'
 
 type TerminalInfo = {
   id: string
@@ -55,10 +55,10 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
   const onSessionsChangedRef = useRef(onSessionsChanged)
   const onTerminalReadyRef = useRef(onTerminalReady)
   const onTerminalClosedRef = useRef(onTerminalClosed)
-  const suppressCloseCallbackRef = useRef(false)
   const suppressInputForwardRef = useRef(false)
 
   const [status, setStatus] = useState<TerminalStatus>('connecting')
+  const [connectionAttempt, setConnectionAttempt] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [terminalInfo, setTerminalInfo] = useState<TerminalInfo | null>(null)
   const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null)
@@ -204,8 +204,9 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
       window.removeEventListener(THEME_CHANGED_EVENT, syncTheme)
       resizeObserverRef.current?.disconnect()
       resizeObserverRef.current = null
-      wsRef.current?.close()
+      const ws = wsRef.current
       wsRef.current = null
+      ws?.close()
       term.dispose()
       xtermRef.current = null
       fitAddonRef.current = null
@@ -218,22 +219,20 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
     if (!term) return
 
     let disposed = false
+    let exited = false
     let inputDisposable: { dispose: () => void } | null = null
     let binaryDisposable: { dispose: () => void } | null = null
 
     setStatus('connecting')
     setKeyboardResetVersion(version => version + 1)
     setError(null)
-    setTerminalInfo(null)
-    terminalIdRef.current = null
-    term.reset()
 
     const start = async () => {
       try {
         const cols = term.cols || 100
         const rows = term.rows || 30
 
-        let terminalId = initialTerminalIdRef.current || null
+        let terminalId = terminalIdRef.current || initialTerminalIdRef.current || null
 
         if (terminalId) {
           const lookupRes = await fetch(`${API_BASE_PATH}/terminals/${encodeURIComponent(terminalId)}`)
@@ -286,9 +285,10 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
         wsUrl.searchParams.set('terminalId', terminalId)
         const ws = new WebSocket(wsUrl)
         wsRef.current = ws
+        const isCurrentConnection = () => !disposed && !exited && wsRef.current === ws
 
         const forwardInput = (input: string) => {
-          if (suppressInputForwardRef.current) {
+          if (!isCurrentConnection() || suppressInputForwardRef.current) {
             return
           }
           if (ws.readyState === WebSocket.OPEN) {
@@ -304,21 +304,23 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
         })
 
         ws.onopen = () => {
+          if (!isCurrentConnection()) return
           fitAndNotifyResizeRef.current?.()
         }
 
         ws.onmessage = (event) => {
+          if (!isCurrentConnection()) return
           try {
             const payload = JSON.parse(event.data)
             if (payload.type === 'ready') {
               term.reset()
               setKeyboardResetVersion(version => version + 1)
-              suppressCloseCallbackRef.current = false
               setTerminalInfo(payload.terminal)
               setStatus('ready')
               onTerminalReadyRef.current?.(payload.terminal)
               suppressInputForwardRef.current = true
               const finishReadyReplay = () => {
+                if (!isCurrentConnection()) return
                 suppressInputForwardRef.current = false
                 fitAndNotifyResizeRef.current?.()
               }
@@ -336,11 +338,12 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
             }
 
             if (payload.type === 'exit') {
+              exited = true
               setStatus('closed')
               setTerminalInfo((current) => current ? { ...current, cwd: payload.cwd || current.cwd } : current)
               term.writeln('')
               term.writeln(`[terminal exited: code=${payload.exitCode ?? 'unknown'}]`)
-              if (terminalIdRef.current && !suppressCloseCallbackRef.current) {
+              if (terminalIdRef.current) {
                 onTerminalClosedRef.current?.(terminalIdRef.current)
               }
               onSessionsChangedRef.current?.()
@@ -358,15 +361,19 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
         }
 
         ws.onerror = () => {
+          if (!isCurrentConnection()) return
           setStatus('error')
           setError('Terminal websocket error')
         }
 
         ws.onclose = () => {
+          if (disposed || wsRef.current !== ws) return
           wsRef.current = null
           setKeyboardResetVersion(version => version + 1)
+          if (!exited) setStatus('disconnected')
         }
       } catch (err) {
+        if (disposed) return
         const message = err instanceof Error ? err.message : String(err)
         setError(message)
         setStatus('error')
@@ -381,10 +388,13 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
       suppressInputForwardRef.current = false
       inputDisposable?.dispose()
       binaryDisposable?.dispose()
-      wsRef.current?.close()
+      const ws = wsRef.current
       wsRef.current = null
+      ws?.close()
     }
-  }, [])
+  }, [connectionAttempt])
+
+  const showReconnect = status === 'disconnected' || status === 'error' || (status === 'connecting' && connectionAttempt > 0)
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-fw-canvas">
@@ -419,6 +429,19 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
                   <span>node {terminalInfo.nodeId}</span>
                   <span>pid {terminalInfo.pid}</span>
                 </>
+              )}
+              {showReconnect && (
+                <span className="inline-flex items-center gap-2">
+                  <span className="text-fw-danger" role="status">Disconnected</span>
+                  <button
+                    type="button"
+                    disabled={status === 'connecting'}
+                    onClick={() => setConnectionAttempt(attempt => attempt + 1)}
+                    className="rounded border border-fw-border px-1.5 py-0.5 text-[11px] leading-none text-fw-text hover:bg-fw-hover disabled:opacity-50"
+                  >
+                    {status === 'connecting' ? 'Reconnecting…' : 'Reconnect'}
+                  </button>
+                </span>
               )}
             </div>
             {error && (
