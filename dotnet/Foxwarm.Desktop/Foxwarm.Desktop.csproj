@@ -17,6 +17,11 @@
       Version="1.0.4258.31"
       GeneratePathProperty="true"
     />
+    <PackageReference
+      Include="SkiaSharp.NativeAssets.Win32"
+      Version="4.153.1"
+      GeneratePathProperty="true"
+    />
     <EmbeddedResource Include="Foxwarm.ico" />
     <Content
       Include="../../packages/webui/dist/**/*"
@@ -40,6 +45,14 @@
     <Copy
       SourceFiles="$(PkgMicrosoft_Web_WebView2)/NOTICE.txt"
       DestinationFiles="$(PublishDir)WebView2-NOTICE.txt"
+    />
+    <Copy
+      SourceFiles="$(PkgSkiaSharp_NativeAssets_Win32)/LICENSE.txt"
+      DestinationFiles="$(PublishDir)SkiaSharp-LICENSE.txt"
+    />
+    <Copy
+      SourceFiles="$(PkgSkiaSharp_NativeAssets_Win32)/THIRD-PARTY-NOTICES.txt"
+      DestinationFiles="$(PublishDir)SkiaSharp-THIRD-PARTY-NOTICES.txt"
     />
   </Target>
   <!-- The SDK also adds WPF references; this host uses only WinForms. -->
