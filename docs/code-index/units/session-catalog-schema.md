@@ -9,6 +9,7 @@ Creates and upgrades the Main-owned `state/catalog.sqlite`, defines its normaliz
 ## Stable methods and callers
 
 - `Initialize`/`Open` migrate schema version 1 to 2, enable WAL/full sync/foreign keys, and reject unsupported versions.
+- Ordinary `Get`/`Resolve` reads lease separate provider-pooled read-only connections only after initialization finishes. The writer connection remains monitor-owned; disposal clears this catalog's reader pool and later access retains the existing reopen behavior.
 - `ImportDotNetV1` and migration helpers freeze/validate source inputs, build normalized rows, and publish only after the declared source set remains unchanged.
 - `NormalizeAuthority` transfers only compatibility fields from legacy catalog input, validates identity/agent/version, and leaves unsupported semantic shapes for `SessionAuthorityDocument` to reject.
 - Schema helpers define alias, parent, projection, count, and presentation-root indexes used by bounded queries.

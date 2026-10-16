@@ -8,6 +8,7 @@ internal sealed partial class SessionCatalog : IDisposable
     private readonly object gate = new();
     private readonly string root;
     private SqliteConnection? db;
+    private string? readerConnectionString;
     private long revision = 1;
     private readonly string instance = Guid.NewGuid().ToString("N");
     internal string FilePath => Path.Combine(root, "state", "catalog.sqlite");
@@ -62,6 +63,16 @@ internal sealed partial class SessionCatalog : IDisposable
             );
             Execute(connection, WaitPresenceIndexSql);
             db = connection;
+            Volatile.Write(
+                ref readerConnectionString,
+                new SqliteConnectionStringBuilder
+                {
+                    DataSource = FilePath,
+                    Mode = SqliteOpenMode.ReadOnly,
+                    Pooling = true,
+                    DefaultTimeout = 5,
+                }.ToString()
+            );
         }
         catch
         {
@@ -102,7 +113,12 @@ internal sealed partial class SessionCatalog : IDisposable
     private List<JsonObject> Rows(string sql, params object?[] args)
     {
         EnsureInitialized();
-        using var command = Command(db!, sql, args);
+        return Rows(db!, sql, args);
+    }
+
+    private List<JsonObject> Rows(SqliteConnection connection, string sql, params object?[] args)
+    {
+        using var command = Command(connection, sql, args);
         using var reader = command.ExecuteReader();
         var rows = new List<JsonObject>();
         while (reader.Read())
@@ -122,11 +138,40 @@ internal sealed partial class SessionCatalog : IDisposable
 
     private const string Columns = "metadata_json,busy,queue_length,managed_pending_count";
 
+    // Each ordinary exact read leases its own provider-pooled connection. The writer's
+    // connection and transaction remain exclusively owned by gate, including nested reads.
+    private SqliteConnection OpenReader()
+    {
+        var connectionString = Volatile.Read(ref readerConnectionString);
+        if (connectionString is null)
+        {
+            lock (gate)
+            {
+                EnsureInitialized();
+                connectionString = readerConnectionString!;
+            }
+        }
+        var connection = new SqliteConnection(connectionString);
+        try
+        {
+            connection.Open();
+            return connection;
+        }
+        catch
+        {
+            connection.Dispose();
+            throw;
+        }
+    }
+
     internal JsonObject? Get(string id)
     {
-        lock (gate)
+        if (Monitor.IsEntered(gate))
             return Rows($"SELECT {Columns} FROM session_catalog WHERE session_id=$p0", id)
                 .FirstOrDefault();
+        using var connection = OpenReader();
+        return Rows(connection, $"SELECT {Columns} FROM session_catalog WHERE session_id=$p0", id)
+            .FirstOrDefault();
     }
 
     internal JsonObject[] GetMany(IEnumerable<string> requested)
@@ -160,30 +205,39 @@ internal sealed partial class SessionCatalog : IDisposable
 
     internal JsonObject Resolve(string requested)
     {
-        lock (gate)
+        if (Monitor.IsEntered(gate))
         {
             EnsureInitialized();
-            if (
-                Scalar(db!, "SELECT 1 FROM session_catalog WHERE session_id=$p0", requested)
-                is not null
-            )
-                return new JsonObject { ["kind"] = "exact", ["sessionId"] = requested };
-            using var command = Command(
-                db!,
-                "SELECT session_id FROM session_alias WHERE alias=$p0 ORDER BY session_id LIMIT 2",
-                requested
-            );
-            using var reader = command.ExecuteReader();
-            var ids = new JsonArray();
-            while (reader.Read())
-                ids.Add(reader.GetString(0));
-            return ids.Count switch
-            {
-                0 => new JsonObject { ["kind"] = "missing" },
-                1 => new JsonObject { ["kind"] = "alias", ["sessionId"] = ids[0]!.DeepClone() },
-                _ => new JsonObject { ["kind"] = "ambiguous", ["sessionIds"] = ids },
-            };
+            return Resolve(db!, requested);
         }
+        using var connection = OpenReader();
+        return Resolve(connection, requested);
+    }
+
+    private static JsonObject Resolve(SqliteConnection connection, string requested)
+    {
+        // One statement gives exact precedence and alias ambiguity one SQLite snapshot.
+        using var command = Command(
+            connection,
+            "SELECT session_id,1 AS exact FROM session_catalog WHERE session_id=$p0 "
+                + "UNION ALL SELECT session_id,0 FROM session_alias WHERE alias=$p0 "
+                + "AND NOT EXISTS(SELECT 1 FROM session_catalog WHERE session_id=$p0) "
+                + "ORDER BY exact DESC,session_id LIMIT 2",
+            requested
+        );
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+            return new JsonObject { ["kind"] = "missing" };
+        var first = reader.GetString(0);
+        if (reader.GetInt64(1) == 1)
+            return new JsonObject { ["kind"] = "exact", ["sessionId"] = first };
+        return reader.Read()
+            ? new JsonObject
+            {
+                ["kind"] = "ambiguous",
+                ["sessionIds"] = new JsonArray(first, reader.GetString(0)),
+            }
+            : new JsonObject { ["kind"] = "alias", ["sessionId"] = first };
     }
 
     internal JsonObject? Presentation(string id)
@@ -461,8 +515,15 @@ internal sealed partial class SessionCatalog : IDisposable
     {
         lock (gate)
         {
+            var connectionString = readerConnectionString;
+            Volatile.Write(ref readerConnectionString, null);
             db?.Dispose();
             db = null;
+            if (connectionString is not null)
+            {
+                using var reader = new SqliteConnection(connectionString);
+                SqliteConnection.ClearPool(reader);
+            }
         }
     }
 }

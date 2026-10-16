@@ -19,6 +19,9 @@ Callers: `SessionListQueries`, `WebUIChannel` session/list/architecture routes, 
 
 Queries are read-only SQL operations with maintained count/index boundaries. `PublishAuthority` is the publication edge: it overlays current Main-owned fields, rejects stale catalog membership unless insertion is explicitly allowed, writes one projection transaction, and raises its change event afterward. A newer JSON authority can coexist with an older projection until a later publication succeeds.
 
+Ordinary `Get` and `Resolve` calls no longer acquire the writer monitor after initialization: each owns a short-lived pooled read-only connection and one SQLite statement snapshot. `Resolve` selects exact precedence and up to two alias owners in the same statement. They may observe the last committed state while a writer is in progress, and subsequent calls see its commit. Reentrant calls while the catalog monitor is already held, including mutation-admission callbacks, use the writer connection and its current transaction. Other query methods retain their existing monitor ownership, including multi-statement rows/counts, presentation/parent navigation, and activity summaries; no row or revision cache is added.
+
 ## Tests
 
 `dotnet/Foxwarm.Tests/Sessions/SessionCatalogTests.cs`; `SessionCatalogPublicationTests.cs`; `SessionCatalogSourceTests.cs`; `SessionIdentityBoundaryTests.cs`.
+`SessionCatalogConcurrencyTests.cs` covers held-writer exact/resolution reads, retained children rows/count exclusion, concurrent first reads, identity/parent transitions, and disposal/reopen.
