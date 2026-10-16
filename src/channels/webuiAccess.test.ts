@@ -2,6 +2,9 @@ import { getAgentDir } from '../config';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'fs-extra';
+import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 import { once } from 'node:events';
 import { WebSocket } from 'ws';
 import { HttpServer, setHttpServer } from '../httpServer';
@@ -153,6 +156,73 @@ function socketFrame(socket: WebSocket, type: string): Promise<any> {
     socket.on('message', listener);
   });
 }
+
+test('authenticated multipart uploads preserve files and clean rejected or interrupted uploads', { timeout: 15_000 }, async () => {
+  await sessionManager.loadSessions();
+  await initializeSessionRuntime();
+  const bound = `upload_bound_${Math.random().toString(36).slice(2, 9)}`;
+  await sessionManager.createEmptySession(bound);
+  const accessConfig = normalizeAccessConfig({ identities: {
+    webui: { token: 'synthetic-webui-token', surfaces: { webui: { sessions: [bound] } } },
+  } });
+  const uploadDir = path.join(os.tmpdir(), 'foxwarm-uploads');
+  await fs.ensureDir(uploadDir);
+  const originalFiles = (await fs.readdir(uploadDir)).sort();
+  const waitForFiles = async (check: (files: string[]) => boolean): Promise<void> => {
+    for (let attempt = 0; attempt < 200; attempt++) {
+      if (check(await fs.readdir(uploadDir))) return;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.fail('Upload files did not settle');
+  };
+  try {
+    await withWebUiServer(accessConfig, async (baseUrl, _adminToken, webUiToken) => {
+      const upload = (token: string | undefined, sessionId: string, field = 'file') => {
+        const form = new FormData();
+        form.append('sessionId', sessionId);
+        form.append(field, new Blob(['attachment contents']), '中文附件.txt');
+        return fetch(`${baseUrl}/api/upload`, {
+          method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {}, body: form,
+        });
+      };
+      assert.equal((await upload(undefined, bound)).status, 401);
+      assert.equal((await upload(webUiToken, 'unbound-session')).status, 403);
+      assert.equal((await upload(webUiToken, bound, 'unexpected')).status, 400);
+      assert.deepEqual((await fs.readdir(uploadDir)).sort(), originalFiles);
+
+      const accepted = await upload(webUiToken, bound);
+      assert.equal(accepted.status, 200);
+      const file = await accepted.json() as { path: string; filename: string; size: number };
+      try {
+        assert.equal(file.filename, '中文附件.txt');
+        assert.equal(file.size, Buffer.byteLength('attachment contents'));
+        assert.equal(await fs.readFile(file.path, 'utf8'), 'attachment contents');
+      } finally {
+        await fs.remove(file.path);
+      }
+
+      const request = http.request(`${baseUrl}/api/upload`, {
+        method: 'POST', headers: {
+          Authorization: `Bearer ${webUiToken}`,
+          'Content-Type': 'multipart/form-data; boundary=upload-test-boundary',
+        },
+      });
+      request.on('error', () => {});
+      try {
+        request.write('--upload-test-boundary\r\nContent-Disposition: form-data; name="file"; filename="partial.txt"\r\nContent-Type: text/plain\r\n\r\n');
+        request.write(Buffer.alloc(64 * 1024, 'a'));
+        await waitForFiles(files => files.length > originalFiles.length);
+      } finally {
+        request.destroy();
+      }
+      await waitForFiles(files => files.length === originalFiles.length);
+      assert.deepEqual((await fs.readdir(uploadDir)).sort(), originalFiles);
+    });
+  } finally {
+    await sessionManager.deleteSession(bound).catch(() => {});
+    await shutdownSessionRuntime().catch(() => {});
+  }
+});
 
 async function subscribeSocket(baseUrl: string, token: string, sessionId: string): Promise<WebSocket> {
   const socket = new WebSocket(`${baseUrl.replace('http:', 'ws:')}/api/webui/stream`, {
