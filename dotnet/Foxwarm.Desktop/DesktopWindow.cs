@@ -30,7 +30,10 @@ internal sealed class DesktopWindow : Form
     {
         Text = "Foxwarm";
         MinimumSize = new Size(800, 600);
-        Size = new Size(1280, 860);
+        Size = new Size(
+            Math.Min(1280, SystemInformation.WorkingArea.Width),
+            Math.Min(860, SystemInformation.WorkingArea.Height)
+        );
         StartPosition = FormStartPosition.CenterScreen;
         using var iconStream = typeof(DesktopWindow).Assembly.GetManifestResourceStream(
             "Foxwarm.Desktop.Foxwarm.ico"
