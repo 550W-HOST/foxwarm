@@ -14,7 +14,7 @@ npm --prefix packages/shared run build
 npm --prefix packages/cli-node run build
 npm --prefix packages/webui run build
 dotnet publish dotnet/Foxwarm.Desktop -c Release -r win-x64 --self-contained false \
-  -p:EnableWindowsTargeting=true -o "$output"
+  -p:EnableWindowsTargeting=true -p:DebugType=None -p:DebugSymbols=false -o "$output"
 # Symbols and XML API reference files are build/debug artifacts, not runtime assets.
 find "$output" -type f \( -name '*.pdb' -o -name '*.xml' \) -delete
 # The desktop references the host assembly; it does not launch the console apphost.

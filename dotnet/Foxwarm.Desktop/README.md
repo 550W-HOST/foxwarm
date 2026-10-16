@@ -62,7 +62,7 @@ Build the current WebUI first (`npm ci`, `npm --prefix packages/webui ci`,
 `npm --prefix packages/webui run build`), then use the .NET 10 SDK:
 
 ```sh
-dotnet publish dotnet/Foxwarm.Desktop -c Release -r win-x64 --self-contained false -p:EnableWindowsTargeting=true -o desktop-publish
+dotnet publish dotnet/Foxwarm.Desktop -c Release -r win-x64 --self-contained false -p:EnableWindowsTargeting=true -p:DebugType=None -p:DebugSymbols=false -o desktop-publish
 ```
 
 The repository's normal Shared/CLI builds supply the optional Node bootstrap

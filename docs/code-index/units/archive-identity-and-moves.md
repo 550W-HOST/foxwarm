@@ -21,6 +21,10 @@ Reservation mirror inserts/removals and proven SQLite identity renames join the 
 
 Completed SQLite-only migration evidence must have matching database authority markers. Missing databases, wrong markers, pending unsupported moves, ledger/SQLite conflicts, cycles, foreign ownership, and ambiguous catalog proof fail before fresh catalog/Main publication. Historical aliases remain read-only; writes bind to the exact current canonical identity.
 
+## Platform durability
+
+Ledger writes retain flush-to-disk, atomic replacement and the committed-failure callback boundary on Windows as well as Linux. Unix private modes are applied only where supported; the existing `LinuxDirectorySync` reports `Unsupported` on non-Linux systems. Normal desktop shutdown/restart persistence does not establish Windows power-loss durability or add a new recovery mechanism.
+
 ## Tests
 
 `dotnet/Foxwarm.Tests/Sessions/SessionIdentityRecoveryTests.cs`; `SessionIdentityMoveTests.cs`; `dotnet/Foxwarm.Tests/Sessions/CommittedArchiveBoundaryTests.cs`; `dotnet/Foxwarm.Tests/Storage/ArchiveLineageTests.cs`.
