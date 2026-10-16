@@ -76,13 +76,18 @@ internal sealed partial class CommittedArchiveIdentity
                     reserved = graph.Keys.Concat(graph.Values).ToHashSet(StringComparer.Ordinal);
                     throw new ArchiveIdentityCommittedException(error);
                 }
-                using var db = Open(DatabasePath, SqliteOpenMode.ReadWrite);
+                var receipt = await SqliteArchiveMessageStore.EnqueueWriteAsync(DatabasePath, (db, transaction) =>
+                {
                 using var command = db.CreateCommand();
+                command.Transaction = transaction;
                 command.CommandText =
                     "DELETE FROM archive_session_id_reservations WHERE session_id=$id AND canonical_session_id=$new";
                 command.Parameters.AddWithValue("$id", oldId);
                 command.Parameters.AddWithValue("$new", newId);
                 command.ExecuteNonQuery();
+                return true;
+                }).ConfigureAwait(false);
+                await receipt.Completion.ConfigureAwait(false);
                 throw;
             }
             reserved = graph.Keys.Concat(graph.Values).ToHashSet(StringComparer.Ordinal);

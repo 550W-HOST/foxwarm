@@ -12,6 +12,8 @@ Builds the Main Session manager, initializes identity/catalog/archive services, 
 
 ## Contract and side effects
 
+The constructed manager pins independent journal and Archive data-root writers without opening their connections before startup evidence validation. Shutdown stops/drains producers and ordered Session saves before releasing those owners; accepted work resolves before connection closure. Disposal also awaits the idempotent shutdown path.
+
 Stale busy recovery clears busy fields and stopping, adds one deduplicated resume event, saves strictly, and only then publishes. Stopping-only admission rejects. The catalog cannot reconstruct semantic JSON history or authorize a missing registered lifetime.
 
 Admitted owners publish bounded local list projections on owner state/message events. Agent binding clear also recaptures affected admitted owners before topology invalidation, because effective placement can change without a Session authority mutation. It does not admit cold catalog members or rewrite retained selection/cwd.

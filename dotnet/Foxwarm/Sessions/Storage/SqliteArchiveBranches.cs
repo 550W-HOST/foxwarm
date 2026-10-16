@@ -63,10 +63,16 @@ public sealed partial class SqliteArchiveMessageStore
         if (!File.Exists(databasePath))
             return null;
         using var connection = OpenExistingReadOnly();
+        return ReadBranch(connection, null);
+    }
+
+    private ArchiveBranch? ReadBranch(SqliteConnection connection, SqliteTransaction? transaction)
+    {
         var canonical = ResolveReadOnly(connection, sessionId);
         if (!TableExists(connection, "archive_branches"))
             return null;
         using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText =
             "SELECT parent_session_id,fork_message_seq,fork_block_id,created_at,updated_at FROM archive_branches WHERE session_id=$s";
         command.Parameters.AddWithValue("$s", canonical);
@@ -98,49 +104,48 @@ public sealed partial class SqliteArchiveMessageStore
         long blockCap = 0
     )
     {
-        var existing = ReadBranch();
-        if (existing is not null)
+        return Write((connection, transaction) =>
         {
-            if (
-                existing.ParentSessionId != parent
-                || existing.MessageCap != messageCap
-                || existing.BlockCap != blockCap
-            )
-                throw new InvalidDataException("Archive branch lineage is immutable.");
-            return null;
-        }
-        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        using var connection = OpenConfigured();
-        RequireWriteIdentity(connection, sessionId);
-        using var command = connection.CreateCommand();
-        command.CommandText =
-            "INSERT INTO archive_branches(session_id,parent_session_id,fork_message_seq,fork_block_id,created_at,updated_at) VALUES($s,$p,$m,$b,$at,$at)";
-        command.Parameters.AddWithValue("$s", sessionId);
-        command.Parameters.AddWithValue("$p", (object?)parent ?? DBNull.Value);
-        command.Parameters.AddWithValue("$m", messageCap);
-        command.Parameters.AddWithValue("$b", blockCap);
-        command.Parameters.AddWithValue("$at", now);
-        command.ExecuteNonQuery();
-        return new(sessionId, parent, messageCap, blockCap, now, now);
+            RequireWriteIdentity(connection, sessionId);
+            var existing = ReadBranch(connection, transaction);
+            if (existing is not null)
+            {
+                if (existing.ParentSessionId != parent || existing.MessageCap != messageCap || existing.BlockCap != blockCap)
+                    throw new InvalidDataException("Archive branch lineage is immutable.");
+                return (ArchiveBranch?)null;
+            }
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = "INSERT INTO archive_branches(session_id,parent_session_id,fork_message_seq,fork_block_id,created_at,updated_at) VALUES($s,$p,$m,$b,$at,$at)";
+            command.Parameters.AddWithValue("$s", sessionId);
+            command.Parameters.AddWithValue("$p", (object?)parent ?? DBNull.Value);
+            command.Parameters.AddWithValue("$m", messageCap);
+            command.Parameters.AddWithValue("$b", blockCap);
+            command.Parameters.AddWithValue("$at", now);
+            command.ExecuteNonQuery();
+            return new ArchiveBranch(sessionId, parent, messageCap, blockCap, now, now);
+        });
     }
 
     internal void RollbackInsertedBranch(ArchiveBranch? branch)
     {
-        if (branch is null)
-            return;
-        using var connection = OpenConfigured();
-        RequireWriteIdentity(connection, sessionId);
-        using var command = connection.CreateCommand();
-        command.CommandText =
-            "DELETE FROM archive_branches WHERE session_id=$s AND parent_session_id IS $p AND fork_message_seq=$m AND fork_block_id=$b AND created_at=$at AND updated_at=$updated";
-        command.Parameters.AddWithValue("$s", branch.SessionId);
-        command.Parameters.AddWithValue("$p", (object?)branch.ParentSessionId ?? DBNull.Value);
-        command.Parameters.AddWithValue("$m", branch.MessageCap);
-        command.Parameters.AddWithValue("$b", branch.BlockCap);
-        command.Parameters.AddWithValue("$at", branch.CreatedAt);
-        command.Parameters.AddWithValue("$updated", branch.UpdatedAt);
-        if (command.ExecuteNonQuery() != 1)
-            throw new IOException("Owned Archive branch rollback conflict.");
+        if (branch is null) return;
+        Write((connection, transaction) =>
+        {
+            RequireWriteIdentity(connection, sessionId);
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = "DELETE FROM archive_branches WHERE session_id=$s AND parent_session_id IS $p AND fork_message_seq=$m AND fork_block_id=$b AND created_at=$at AND updated_at=$updated";
+            command.Parameters.AddWithValue("$s", branch.SessionId);
+            command.Parameters.AddWithValue("$p", (object?)branch.ParentSessionId ?? DBNull.Value);
+            command.Parameters.AddWithValue("$m", branch.MessageCap);
+            command.Parameters.AddWithValue("$b", branch.BlockCap);
+            command.Parameters.AddWithValue("$at", branch.CreatedAt);
+            command.Parameters.AddWithValue("$updated", branch.UpdatedAt);
+            if (command.ExecuteNonQuery() != 1) throw new IOException("Owned Archive branch rollback conflict.");
+            return true;
+        });
     }
 
     private IEnumerable<(SqliteArchiveMessageStore Store, long Messages, long Blocks)> Lineage()

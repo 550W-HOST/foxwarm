@@ -117,11 +117,14 @@ internal sealed class ModelRequestOwner(
         long? requestStarted = null;
         string? journalRequestId = null;
         var journalAttempt = 0;
+        Task manifestCompletion = Task.CompletedTask;
         var baseHistory = history;
         var retainedContext = requestContext is null
             ? Array.Empty<JsonObject>()
             : (await requestContext().ConfigureAwait(false)).ToArray();
         history = baseHistory.Concat(retainedContext).ToArray();
+        try
+        {
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -165,7 +168,7 @@ internal sealed class ModelRequestOwner(
             options = options with { Images = images };
             if (journal is not null && journalRequestId is null)
             {
-                journalRequestId = await journal.BeginRequestAsync(
+                var admission = await journal.EnqueueRequestAsync(
                     sessionId,
                     journalPurpose,
                     journalIteration,
@@ -176,6 +179,8 @@ internal sealed class ModelRequestOwner(
                     cacheKey,
                     cancellationToken
                 );
+                journalRequestId = admission.RequestId;
+                manifestCompletion = admission.Completion;
                 journalAttempt = 0;
             }
             var currentJournalRequestId = journalRequestId;
@@ -195,6 +200,7 @@ internal sealed class ModelRequestOwner(
                             leaf.ProviderType,
                             payload,
                             instructions,
+                            manifestCompletion,
                             cancellationToken
                         ),
                 };
@@ -456,6 +462,17 @@ internal sealed class ModelRequestOwner(
             }
         }
         throw new InvalidOperationException("Unreachable attempt limit.");
+        }
+        catch (Exception preparationOrRequestError)
+        {
+            // Local preparation can fail before the accepted manifest settles. Resolve it before returning.
+            try { await manifestCompletion.ConfigureAwait(false); }
+            catch (Exception persistenceError) when (!ReferenceEquals(preparationOrRequestError, persistenceError))
+            {
+                throw new LlmJournalPreparationException("LLM request preparation and its pending journal write failed.", new AggregateException(preparationOrRequestError, persistenceError));
+            }
+            throw;
+        }
     }
 
     private static async Task JournalAttemptStartAsync(
@@ -467,13 +484,14 @@ internal sealed class ModelRequestOwner(
         string providerType,
         JsonNode payload,
         string effectivePrompt,
+        Task manifestCompletion,
         CancellationToken token
     )
     {
         try
         {
-            await store
-                .AppendAttemptStartAsync(
+            var receipt = await store
+                .EnqueueAttemptStartAsync(
                     requestId,
                     attempt,
                     concreteModelId,
@@ -484,6 +502,7 @@ internal sealed class ModelRequestOwner(
                     token
                 )
                 .ConfigureAwait(false);
+            await Task.WhenAll(manifestCompletion, receipt.Completion).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {

@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Persistence;
 using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Models;
@@ -24,35 +25,39 @@ internal sealed record LlmJournalRequest(
     string PromptCacheKeyHash
 );
 
-public sealed class LlmRequestJournalStore : IDisposable
+internal readonly record struct JournalRequestAdmission(string RequestId, Task Completion);
+
+public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
 {
     internal const string MigrationId = "sqlite-only-large-archives-v1";
     private const int MaxDeltaDepth = 8;
     private readonly string root;
     private readonly string path;
-    private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly SqliteWriterOwners.Lease owner;
+    internal SqliteBatchWriter Writer => owner.Writer;
     private bool disposed;
 
     public LlmRequestJournalStore(string root)
     {
         this.root = Path.GetFullPath(root);
         path = Path.Combine(this.root, "state", "llm-request-journal.sqlite");
+        owner = SqliteWriterOwners.Acquire(path, () =>
+        {
+            var connection = Open();
+            try { EnsureSchema(connection); return connection; }
+            catch { connection.Dispose(); throw; }
+        });
     }
 
     public string FilePath => path;
 
+    private void CheckOpen() => ObjectDisposedException.ThrowIf(disposed, this);
+
     public async Task InitializeAsync(CancellationToken token = default)
     {
-        await gate.WaitAsync(token).ConfigureAwait(false);
-        try
-        {
-            using var connection = Open();
-            EnsureSchema(connection);
-        }
-        finally
-        {
-            gate.Release();
-        }
+        CheckOpen();
+        var receipt = await Writer.ExclusiveAsync(_ => Task.FromResult(true), token).ConfigureAwait(false);
+        await receipt.Completion.ConfigureAwait(false);
     }
 
     public async Task<string> BeginRequestAsync(
@@ -67,9 +72,27 @@ public sealed class LlmRequestJournalStore : IDisposable
         CancellationToken token = default
     )
     {
+        var admission = await EnqueueRequestAsync(sessionId, purpose, iteration, systemPrompt, toolDefinitions, messages, requestedModelKey, promptCacheKey, token).ConfigureAwait(false);
+        await admission.Completion.ConfigureAwait(false);
+        return admission.RequestId;
+    }
+
+    internal async ValueTask<JournalRequestAdmission> EnqueueRequestAsync(
+        string? sessionId,
+        string purpose,
+        int iteration,
+        string systemPrompt,
+        JsonArray toolDefinitions,
+        IReadOnlyList<JsonObject> messages,
+        string requestedModelKey,
+        string promptCacheKey,
+        CancellationToken token = default
+    )
+    {
+        CheckOpen();
         token.ThrowIfCancellationRequested();
         var requestId = Guid.NewGuid().ToString();
-        // Consume request-owned JSON before waiting; only immutable encoded values cross the gate.
+        // Consume request-owned JSON before admission; only immutable encoded values cross the queue.
         var prompt = PrepareObject("prompt", JsonValue.Create(systemPrompt)!);
         var tools = PrepareObject("tool-schema", toolDefinitions);
         var preparedMessages = messages
@@ -82,12 +105,8 @@ public sealed class LlmRequestJournalStore : IDisposable
             .ToArray();
         var messageIds = preparedMessages.Select(message => message.Id).ToArray();
         var cacheHash = Sha256(promptCacheKey);
-        await gate.WaitAsync(token).ConfigureAwait(false);
-        try
+        var receipt = await Writer.EnqueueAsync((connection, transaction) =>
         {
-            using var connection = Open();
-            EnsureSchema(connection);
-            using var transaction = connection.BeginTransaction(deferred: false);
             var promptId = PutObject(connection, transaction, prompt);
             var toolId = PutObject(connection, transaction, tools);
             foreach (var message in preparedMessages)
@@ -142,13 +161,9 @@ public sealed class LlmRequestJournalStore : IDisposable
             Add(command, "$appended", appended);
             Add(command, "$depth", deltaDepth);
             command.ExecuteNonQuery();
-            transaction.Commit();
-            return requestId;
-        }
-        finally
-        {
-            gate.Release();
-        }
+            return true;
+        }, token).ConfigureAwait(false);
+        return new(requestId, receipt.Completion);
     }
 
     public async Task AppendAttemptStartAsync(
@@ -162,15 +177,27 @@ public sealed class LlmRequestJournalStore : IDisposable
         CancellationToken token = default
     )
     {
+        var receipt = await EnqueueAttemptStartAsync(requestId, attempt, concreteModelId, virtualModelKey, providerType, semanticPayload, effectivePrompt, token).ConfigureAwait(false);
+        await receipt.Completion.ConfigureAwait(false);
+    }
+
+    internal async ValueTask<WriteReceipt<bool>> EnqueueAttemptStartAsync(
+        string requestId,
+        int attempt,
+        string concreteModelId,
+        string? virtualModelKey,
+        string providerType,
+        JsonNode semanticPayload,
+        string effectivePrompt,
+        CancellationToken token = default
+    )
+    {
+        CheckOpen();
         token.ThrowIfCancellationRequested();
         var prompt = PrepareObject("prompt", JsonValue.Create(effectivePrompt)!);
         var payloadHash = HashValue(semanticPayload);
-        await gate.WaitAsync(token).ConfigureAwait(false);
-        try
+        return await Writer.EnqueueAsync((connection, transaction) =>
         {
-            using var connection = Open();
-            EnsureSchema(connection);
-            using var transaction = connection.BeginTransaction(deferred: false);
             var promptId =
                 ReadScalar(
                     connection,
@@ -203,12 +230,8 @@ public sealed class LlmRequestJournalStore : IDisposable
             Add(command, "$hash", payloadHash);
             Add(command, "$prompt", overrideId);
             command.ExecuteNonQuery();
-            transaction.Commit();
-        }
-        finally
-        {
-            gate.Release();
-        }
+            return true;
+        }, token).ConfigureAwait(false);
     }
 
     public async Task AppendAttemptResultAsync(
@@ -220,15 +243,27 @@ public sealed class LlmRequestJournalStore : IDisposable
         CancellationToken token = default
     )
     {
+        var receipt = await EnqueueAttemptResultAsync(requestId, attempt, outcome, result, error, token).ConfigureAwait(false);
+        await receipt.Completion.ConfigureAwait(false);
+    }
+
+    internal async ValueTask<WriteReceipt<bool>> EnqueueAttemptResultAsync(
+        string requestId,
+        int attempt,
+        string outcome,
+        JsonNode? result,
+        JsonObject? error,
+        CancellationToken token = default
+    )
+    {
+        CheckOpen();
         token.ThrowIfCancellationRequested();
         var resultJson = result is null ? null : Codec.Write(result);
         var errorJson = error is null ? null : Codec.Write(error);
-        await gate.WaitAsync(token).ConfigureAwait(false);
-        try
+        return await Writer.EnqueueAsync((connection, transaction) =>
         {
-            using var connection = Open();
-            EnsureSchema(connection);
-            using var transaction = connection.BeginTransaction(deferred: false);
+            if (ReadScalar(connection, transaction, "SELECT 1 FROM llm_journal_attempt_starts WHERE request_id=$id AND attempt=$attempt ORDER BY rowid DESC LIMIT 1", ("$id", requestId), ("$attempt", attempt)) is null)
+                throw new InvalidDataException("LLM journal attempt is missing before its result.");
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText =
@@ -241,12 +276,8 @@ public sealed class LlmRequestJournalStore : IDisposable
             Add(command, "$result", resultJson);
             Add(command, "$error", errorJson);
             command.ExecuteNonQuery();
-            transaction.Commit();
-        }
-        finally
-        {
-            gate.Release();
-        }
+            return true;
+        }, token).ConfigureAwait(false);
     }
 
     public Task AppendChatResultAsync(
@@ -269,11 +300,8 @@ public sealed class LlmRequestJournalStore : IDisposable
         CancellationToken token = default
     )
     {
-        await gate.WaitAsync(token).ConfigureAwait(false);
-        try
-        {
-            using var connection = Open();
-            EnsureSchema(connection);
+        await InitializeAsync(token).ConfigureAwait(false);
+        using var connection = OpenReadOnly();
             try
             {
                 return Reconstruct(connection, requestId);
@@ -287,11 +315,6 @@ public sealed class LlmRequestJournalStore : IDisposable
                     ["errors"] = new JsonArray(error.Message),
                 };
             }
-        }
-        finally
-        {
-            gate.Release();
-        }
     }
 
     public static string EncodeCli(JsonNode node) => Codec.Write(node);
@@ -305,11 +328,8 @@ public sealed class LlmRequestJournalStore : IDisposable
         CancellationToken token = default
     )
     {
-        await gate.WaitAsync(token).ConfigureAwait(false);
-        try
-        {
-            using var connection = Open();
-            EnsureSchema(connection);
+        await InitializeAsync(token).ConfigureAwait(false);
+        using var connection = OpenReadOnly();
             using var command = connection.CreateCommand();
             command.CommandText =
                 "SELECT request_id,session_id,purpose,iteration,created_at,requested_model_key,message_count FROM llm_journal_requests WHERE ($session IS NULL OR session_id=$session) AND ($purpose IS NULL OR purpose=$purpose) AND ($created IS NULL OR created_at<$created OR (created_at=$created AND request_id<$request)) ORDER BY created_at DESC,request_id DESC LIMIT $limit";
@@ -334,24 +354,19 @@ public sealed class LlmRequestJournalStore : IDisposable
                     }
                 );
             return result;
-        }
-        finally
-        {
-            gate.Release();
-        }
     }
 
     public async Task<bool> MigrateLegacyAsync(string sourcePath, CancellationToken token = default)
     {
         var fullPath = Path.GetFullPath(sourcePath);
+        CheckOpen();
+        var receipt = await Writer.ExclusiveAsync(async connection =>
+        {
         SqliteTransaction? transaction = null;
-        await gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
             if (!File.Exists(fullPath))
                 return false;
-            using var connection = Open();
-            EnsureSchema(connection);
             var sourceLength = new FileInfo(fullPath).Length;
             var imported = ReadImportOffset(connection, fullPath);
             if (imported > sourceLength)
@@ -438,10 +453,8 @@ public sealed class LlmRequestJournalStore : IDisposable
             transaction?.Dispose();
             throw;
         }
-        finally
-        {
-            gate.Release();
-        }
+        }, token).ConfigureAwait(false);
+        return await receipt.Completion.ConfigureAwait(false);
     }
 
     public async Task MarkSqliteAuthorityAsync(
@@ -449,21 +462,18 @@ public sealed class LlmRequestJournalStore : IDisposable
         CancellationToken token = default
     )
     {
-        await gate.WaitAsync(token).ConfigureAwait(false);
-        try
+        CheckOpen();
+        var receipt = await Writer.EnqueueAsync((connection, transaction) =>
         {
-            using var connection = Open();
-            EnsureSchema(connection);
             using var command = connection.CreateCommand();
+            command.Transaction = transaction;
             command.CommandText =
                 "INSERT OR REPLACE INTO llm_journal_metadata(key,value) VALUES('sqlite_authority_migration',$value)";
             Add(command, "$value", migrationId);
             command.ExecuteNonQuery();
-        }
-        finally
-        {
-            gate.Release();
-        }
+            return true;
+        }, token).ConfigureAwait(false);
+        await receipt.Completion.ConfigureAwait(false);
     }
 
     public async Task<bool> HasSqliteAuthorityAsync(
@@ -471,11 +481,8 @@ public sealed class LlmRequestJournalStore : IDisposable
         CancellationToken token = default
     )
     {
-        await gate.WaitAsync(token).ConfigureAwait(false);
-        try
-        {
-            using var connection = Open();
-            EnsureSchema(connection);
+        await InitializeAsync(token).ConfigureAwait(false);
+        using var connection = OpenReadOnly();
             using var command = connection.CreateCommand();
             command.CommandText =
                 "SELECT value FROM llm_journal_metadata WHERE key='sqlite_authority_migration'";
@@ -484,20 +491,12 @@ public sealed class LlmRequestJournalStore : IDisposable
                 migrationId,
                 StringComparison.Ordinal
             );
-        }
-        finally
-        {
-            gate.Release();
-        }
     }
 
     public async Task ExportJsonlAsync(string outputPath, CancellationToken token = default)
     {
-        await gate.WaitAsync(token).ConfigureAwait(false);
-        try
-        {
-            using var connection = Open();
-            EnsureSchema(connection);
+        await InitializeAsync(token).ConfigureAwait(false);
+        using var connection = OpenReadOnly();
             using var snapshot = connection.BeginTransaction(deferred: true);
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
             var temp = outputPath + ".tmp-" + Guid.NewGuid().ToString("N");
@@ -561,20 +560,25 @@ public sealed class LlmRequestJournalStore : IDisposable
             snapshot.Commit();
             File.Move(temp, outputPath, true);
             SyncDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
-        }
-        finally
-        {
-            gate.Release();
-        }
     }
 
-    public void Dispose()
+    public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+    public async ValueTask DisposeAsync()
     {
-        if (!disposed)
+        if (disposed) return;
+        disposed = true;
+        await owner.DisposeAsync().ConfigureAwait(false);
+    }
+
+    private SqliteConnection OpenReadOnly()
+    {
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            disposed = true;
-            gate.Dispose();
-        }
+            DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false, DefaultTimeout = 5,
+        }.ToString());
+        try { connection.Open(); return connection; }
+        catch { connection.Dispose(); throw; }
     }
 
     private static void SyncDirectory(string directory)

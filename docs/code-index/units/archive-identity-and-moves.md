@@ -17,6 +17,8 @@ Callers: `SessionManager.IdentityMove`, startup bootstrap, `SqliteArchiveMessage
 
 ## Failure behavior and compatibility
 
+Reservation mirror inserts/removals and proven SQLite identity renames join the same Archive queue as ordinary writes and compensation. Their receipts wait for outer commit; manager identity claims and save-lane ordering remain the lifecycle authority. Startup evidence validation still precedes writer-driven schema initialization or identity repair.
+
 Completed SQLite-only migration evidence must have matching database authority markers. Missing databases, wrong markers, pending unsupported moves, ledger/SQLite conflicts, cycles, foreign ownership, and ambiguous catalog proof fail before fresh catalog/Main publication. Historical aliases remain read-only; writes bind to the exact current canonical identity.
 
 ## Tests

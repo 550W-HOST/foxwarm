@@ -32,6 +32,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     internal Foxwarm.Nodes.NodeBootstrap? Bootstrap { get; set; }
     private readonly ModelRouting modelRouting = new();
     internal LlmRequestJournalStore Journal { get; }
+    private readonly Foxwarm.Persistence.SqliteWriterOwners.Lease archiveWriter;
     internal TaskService Tasks { get; }
     private readonly ResponsesWsTransport websockets = new();
     private readonly ToolRegistry tools;
@@ -58,7 +59,6 @@ internal sealed partial class SessionManager : IAsyncDisposable
         ToolScript = new(root);
         HandoffConfirmationEnabled = models.HandoffConfirmationEnabled;
         this.root = Path.GetFullPath(root);
-        Journal = new LlmRequestJournalStore(this.root);
         Nodes = new(this.root);
         Nodes.Changed += () => TopologyChanged?.Invoke();
         var workspaceRoot = Path.GetFullPath(workspace);
@@ -225,6 +225,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         timers = new(this.root, DeliverTimerAsync);
         waitTimeouts = new SessionWaitTimeouts(this);
         waitLiveness = new WaitLiveness(this);
+        Journal = new LlmRequestJournalStore(this.root);
+        archiveWriter = SqliteArchiveMessageStore.AcquireWriter(ArchiveDatabase);
     }
 
     internal string? ResolveTaskSessionId(string requested)
@@ -562,7 +564,14 @@ internal sealed partial class SessionManager : IAsyncDisposable
         return hosted;
     }
 
-    public async Task ShutdownAsync()
+    private Task? shutdown;
+
+    public Task ShutdownAsync()
+    {
+        lock (lifecycle) return shutdown ??= ShutdownCoreAsync();
+    }
+
+    private async Task ShutdownCoreAsync()
     {
         SessionOwner[] current;
         timers.StopFuture();
@@ -613,6 +622,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         BeginShutdown();
+        try { await ShutdownAsync(); }
+        finally
+        {
         await timers.DisposeAsync();
         await DrainPublicationsAsync();
         await waitTimeouts.DisposeAsync();
@@ -622,11 +634,13 @@ internal sealed partial class SessionManager : IAsyncDisposable
         await mcp.DisposeAsync();
         Nodes.Dispose();
         await websockets.DisposeAsync();
-        Journal.Dispose();
+        await Journal.DisposeAsync();
+        await archiveWriter.DisposeAsync();
         Tasks.Dispose();
         admissionStop.Dispose();
         Catalog.Dispose();
         http.Dispose();
+        }
     }
 
     internal static bool IsOwnedId(string id) => SessionIdentity.IsValid(id);

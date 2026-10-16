@@ -411,21 +411,16 @@ public sealed class ForkClearLifecycleTests
     [Fact]
     public async Task First_creation_adds_branch_schema_to_an_empty_predecessor_archive()
     {
-        await using var fixture = new LifecycleFixture();
-        var legacy = new SqliteArchiveMessageStore(fixture.Database, "fixture");
-        legacy.Initialize();
-        // This fixture retains the predecessor's message/block schema, before branches existed.
-        await using (
-            var connection = new Microsoft.Data.Sqlite.SqliteConnection(
-                "Data Source=" + fixture.Database
-            )
-        )
+        await using var fixture = new LifecycleFixture(database =>
         {
-            await connection.OpenAsync();
-            await using var command = connection.CreateCommand();
+            new SqliteArchiveMessageStore(database, "fixture").Initialize();
+            // Establish the predecessor before the Main data-root writer starts.
+            using var connection = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=" + database);
+            connection.Open();
+            using var command = connection.CreateCommand();
             command.CommandText = "DROP TABLE archive_branches";
-            await command.ExecuteNonQueryAsync();
-        }
+            command.ExecuteNonQuery();
+        });
         var owner = await fixture.Manager.CreateAsync();
         Assert.Empty(owner.Archive.ReadMessages());
         Assert.NotNull(owner.Archive.ReadBranch());
@@ -489,10 +484,11 @@ public sealed class ForkClearLifecycleTests
             Database;
         internal readonly SessionManager Manager;
 
-        internal LifecycleFixture()
+        internal LifecycleFixture(Action<string>? prepareArchive = null)
         {
             Data = Path.Combine(temp.Path, "data");
             Database = Path.Combine(Data, "state", "archive-store.sqlite");
+            prepareArchive?.Invoke(Database);
             var work = Path.Combine(temp.Path, "work");
             Directory.CreateDirectory(work);
             var options = new ResponsesClientOptions(

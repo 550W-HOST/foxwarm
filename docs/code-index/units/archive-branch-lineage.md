@@ -16,6 +16,8 @@ Callers: `SessionSaveLane.CommitCompactionAsync`, `SessionManager.ForkAsync`, `A
 
 ## Contract and side effects
 
+Branch existence/replay decisions and branch/block mutations run in the shared Archive writer transaction, including exact compensation. Block JSON strings are prepared once outside the writer; queued records own their values.
+
 Nested effective reads apply cumulative fork caps: late parent/child rows do not leak into a descendant after its fork point. Parent rows are never copied or deleted when a child branch is compensated. Block pruning in a compaction operation concerns active context selection; it does not rewrite immutable Archive rows or alter committed branch identity.
 
 `ArchiveBlockRecord.FrictionScore` is nullable and part of immutable block identity, duplicate-write comparison, and compensation. Initialization adds the nullable `friction_score` column to an otherwise valid old block schema; read-only old-schema readers project a missing column as null without migrating it. Owned/effective reads preserve scores, including zero, through cumulative fork caps and restart. Context metadata and rendered summaries expose a score only when present.

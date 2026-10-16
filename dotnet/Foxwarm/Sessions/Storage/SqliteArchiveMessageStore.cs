@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Data.Sqlite;
+using Foxwarm.Persistence;
 
 namespace Foxwarm.Sessions;
 
@@ -233,23 +234,9 @@ public sealed partial class SqliteArchiveMessageStore
         }
     }
 
-    public void Initialize()
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
-        using var connection = Open();
-        RequireWriteIdentity(connection, sessionId);
-        InitializeSchema(connection);
-    }
+    public void Initialize() => OrderedMaintenance(databasePath, connection => RequireWriteIdentity(connection, sessionId));
 
-    internal static void InitializeDatabase(string path)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        using var connection = new SqliteConnection(
-            new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString()
-        );
-        connection.Open();
-        InitializeSchema(connection);
-    }
+    internal static void InitializeDatabase(string path) => OrderedMaintenance(path, _ => { });
 
     private static void InitializeSchema(SqliteConnection connection)
     {
@@ -277,19 +264,24 @@ public sealed partial class SqliteArchiveMessageStore
         InitializeReservations(connection);
     }
 
-    public IReadOnlyList<ArchiveMessageRecord> WriteMessages(
-        IReadOnlyList<ArchiveMessageRecord> records
-    )
+    public IReadOnlyList<ArchiveMessageRecord> WriteMessages(IReadOnlyList<ArchiveMessageRecord> records)
     {
-        if (records.Count == 0)
-            return [];
-        if (records.Any(record => record.SessionId != sessionId))
-            throw new InvalidOperationException(
-                "Archive message batches must contain the bound Session ID only."
-            );
-        using var connection = OpenConfigured();
+        var inserted = EnqueueMessagesAsync(records).AsTask().GetAwaiter().GetResult().Completion.GetAwaiter().GetResult();
+        var sequences = inserted.Select(row => row.Seq).ToHashSet();
+        return records.Where(record => sequences.Remove(record.Seq)).ToArray();
+    }
+
+    internal ValueTask<WriteReceipt<IReadOnlyList<ArchiveMessageRecord>>> EnqueueMessagesAsync(IReadOnlyList<ArchiveMessageRecord> records)
+    {
+        var prepared = records.Select(ValidateRecord).ToArray();
+        if (prepared.Length == 0)
+            return ValueTask.FromResult(new WriteReceipt<IReadOnlyList<ArchiveMessageRecord>>(Task.FromResult<IReadOnlyList<ArchiveMessageRecord>>([])));
+        return EnqueueWriteAsync<IReadOnlyList<ArchiveMessageRecord>>(databasePath, (connection, transaction) => WriteMessages(connection, transaction, prepared));
+    }
+
+    private IReadOnlyList<ArchiveMessageRecord> WriteMessages(SqliteConnection connection, SqliteTransaction transaction, IReadOnlyList<ArchiveMessageRecord> records)
+    {
         RequireWriteIdentity(connection, sessionId);
-        using var transaction = connection.BeginTransaction(deferred: false);
         using var select = connection.CreateCommand();
         select.Transaction = transaction;
         select.CommandText =
@@ -309,7 +301,6 @@ public sealed partial class SqliteArchiveMessageStore
         var inserted = new List<ArchiveMessageRecord>();
         foreach (var record in records)
         {
-            ValidateRecord(record);
             selectSession.Value = record.SessionId;
             selectSeq.Value = record.Seq;
             using var reader = select.ExecuteReader();
@@ -338,17 +329,23 @@ public sealed partial class SqliteArchiveMessageStore
                 throw new IOException("Archive message insert did not affect one row.");
             inserted.Add(record);
         }
-        transaction.Commit();
         return inserted;
     }
 
     public void RollbackInsertedMessages(IReadOnlyList<ArchiveMessageRecord> records)
     {
-        if (records.Count == 0)
-            return;
-        using var connection = OpenConfigured();
+        if (records.Count == 0) return;
+        var prepared = records.Select(ValidateRecord).ToArray();
+        Write((connection, transaction) =>
+        {
+            RollbackInsertedMessages(connection, transaction, prepared);
+            return true;
+        });
+    }
+
+    private void RollbackInsertedMessages(SqliteConnection connection, SqliteTransaction transaction, IReadOnlyList<ArchiveMessageRecord> records)
+    {
         RequireWriteIdentity(connection, sessionId);
-        using var transaction = connection.BeginTransaction(deferred: false);
         using var remove = connection.CreateCommand();
         remove.Transaction = transaction;
         remove.CommandText = """
@@ -364,7 +361,6 @@ public sealed partial class SqliteArchiveMessageStore
         var json = remove.Parameters.Add("$json", SqliteType.Text);
         foreach (var record in records)
         {
-            ValidateRecord(record);
             session.Value = record.SessionId;
             seq.Value = record.Seq;
             agent.Value = record.Agent;
@@ -376,7 +372,6 @@ public sealed partial class SqliteArchiveMessageStore
                     $"Unable to roll back uncommitted archive message {record.SessionId}#{record.Seq}."
                 );
         }
-        transaction.Commit();
     }
 
     public IReadOnlyList<ArchiveMessageRecord> ReadMessages()
@@ -542,24 +537,6 @@ public sealed partial class SqliteArchiveMessageStore
             : null;
     }
 
-    private SqliteConnection OpenConfigured()
-    {
-        var connection = Open();
-        try
-        {
-            // Install the existing native busy handler before any database-dependent setup.
-            Execute(connection, "PRAGMA busy_timeout=5000");
-            Execute(connection, "PRAGMA synchronous=FULL");
-            Execute(connection, "PRAGMA foreign_keys=ON");
-            return connection;
-        }
-        catch
-        {
-            connection.Dispose();
-            throw;
-        }
-    }
-
     private SqliteConnection OpenExistingReadOnly()
     {
         var connection = new SqliteConnection(
@@ -583,22 +560,7 @@ public sealed partial class SqliteArchiveMessageStore
         }
     }
 
-    private SqliteConnection Open()
-    {
-        var connection = new SqliteConnection(
-            new SqliteConnectionStringBuilder
-            {
-                DataSource = databasePath,
-                Mode = SqliteOpenMode.ReadWriteCreate,
-                Pooling = false,
-                DefaultTimeout = 5,
-            }.ToString()
-        );
-        connection.Open();
-        return connection;
-    }
-
-    private void ValidateRecord(ArchiveMessageRecord record)
+    private ArchiveMessageRecord ValidateRecord(ArchiveMessageRecord record)
     {
         if (
             record.SessionId != sessionId
@@ -622,6 +584,7 @@ public sealed partial class SqliteArchiveMessageStore
             throw new InvalidDataException(
                 "Archive message object does not match its raw message_json."
             );
+        return parsed;
     }
 
     private static void ValidateSchema(SqliteConnection connection)

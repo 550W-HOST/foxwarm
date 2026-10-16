@@ -125,7 +125,7 @@ public sealed class PersistencePrimitiveTests
     }
 
     [Fact]
-    public async Task IndependentArchiveCallersShareDatabaseWithoutSharingConnectionsOrRollbackTargets()
+    public async Task IndependentArchiveCallersShareWriterWithoutSharingRollbackTargets()
     {
         using var temp = new TempDirectory();
         var database = Path.Combine(temp.Path, "archive-store.sqlite");

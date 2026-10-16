@@ -8,16 +8,8 @@ internal static class SqliteArchiveIdentityMove
     {
         if (!File.Exists(path))
             return;
-        using var db = new SqliteConnection(
-            new SqliteConnectionStringBuilder
-            {
-                DataSource = path,
-                Mode = SqliteOpenMode.ReadWrite,
-                Pooling = false,
-            }.ToString()
-        );
-        db.Open();
-        using var transaction = db.BeginTransaction();
+        var receipt = SqliteArchiveMessageStore.EnqueueWriteAsync(path, (db, transaction) =>
+        {
         void Execute(string sql)
         {
             using var command = db.CreateCommand();
@@ -60,6 +52,8 @@ internal static class SqliteArchiveIdentityMove
                 "UPDATE archive_branches SET parent_session_id=$to WHERE parent_session_id=$from"
             );
         // Reservation edges are independent committed identity authority, not mutable audit ownership.
-        transaction.Commit();
+        return true;
+        }).AsTask().GetAwaiter().GetResult();
+        receipt.Completion.GetAwaiter().GetResult();
     }
 }

@@ -8,6 +8,8 @@ This module documents current .NET source behavior. Cross-module contracts belon
 
 ## Units
 
+- [Shared SQLite writer mechanics](../units/dotnet-sqlite-writers.md)
+
 - [Model configuration and routing](../units/model-configuration.md)
 - [Provider-neutral request history and OpenAI wire helpers](../units/model-common-wire.md)
 - [Anthropic and Chat Completions adapters](../units/model-anthropic-completions.md)

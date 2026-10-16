@@ -138,16 +138,20 @@ public sealed class PersistentSessionAuthorityStore
         cancellationToken.ThrowIfCancellationRequested();
         ValidateBoundSnapshot(stagedSnapshot);
         var records = appendedMessages.Select(ToArchiveRecord).ToArray();
-        var inserted = archive.WriteMessages(records);
+        var receipt = await archive.EnqueueMessagesAsync(records).ConfigureAwait(false);
+        IReadOnlyList<ArchiveMessageRecord> inserted = [];
         try
         {
+            // Build, validate and serialize the owned snapshot while Archive persistence is pending.
+            var payload = ToAuthority(stagedSnapshot).ToJson(indented: true);
             if (canonicalCommitBarrier is not null)
                 await canonicalCommitBarrier(
                         Interlocked.Increment(ref canonicalCommitCount),
                         cancellationToken
                     )
                     .ConfigureAwait(false);
-            authorityFile.Write(ToAuthority(stagedSnapshot));
+            inserted = await receipt.Completion.ConfigureAwait(false);
+            authorityFile.WriteTextPayload(payload, default);
         }
         catch (AuthorityCommittedException)
         {
@@ -157,10 +161,13 @@ public sealed class PersistentSessionAuthorityStore
         {
             try
             {
+                // Preparation can fail before the receipt settles. Resolve it before exact compensation.
+                inserted = await receipt.Completion.ConfigureAwait(false);
                 archive.RollbackInsertedMessages(inserted);
             }
             catch (Exception rollbackError)
             {
+                if (ReferenceEquals(writeError, rollbackError)) throw;
                 throw new AggregateException(
                     "Authority precommit failed and exact Archive rollback also failed.",
                     writeError,
@@ -172,7 +179,7 @@ public sealed class PersistentSessionAuthorityStore
         PublishProjection(stagedSnapshot);
     }
 
-    public Task CommitCompactionAsync(
+    public async Task CommitCompactionAsync(
         SessionSnapshot stagedSnapshot,
         IReadOnlyList<ArchiveBlockRecord> blocks,
         IReadOnlyList<JsonObject> messages,
@@ -181,14 +188,15 @@ public sealed class PersistentSessionAuthorityStore
     {
         cancellationToken.ThrowIfCancellationRequested();
         ValidateBoundSnapshot(stagedSnapshot);
+        var receipt = await archive.EnqueueCompactionAsync(blocks, messages.Select(ToArchiveRecord).ToArray()).ConfigureAwait(false);
         IReadOnlyList<ArchiveBlockRecord> newBlocks = [];
         IReadOnlyList<ArchiveMessageRecord> newMessages = [];
         try
         {
-            newBlocks = archive.WriteBlocks(blocks);
-            newMessages = archive.WriteMessages(messages.Select(ToArchiveRecord).ToArray());
+            var payload = ToAuthority(stagedSnapshot).ToJson(indented: true);
+            (newBlocks, newMessages) = await receipt.Completion.ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
-            authorityFile.Write(ToAuthority(stagedSnapshot), cancellationToken);
+            authorityFile.WriteTextPayload(payload, cancellationToken);
         }
         catch (AuthorityCommittedException)
         {
@@ -198,17 +206,18 @@ public sealed class PersistentSessionAuthorityStore
         {
             try
             {
+                (newBlocks, newMessages) = await receipt.Completion.ConfigureAwait(false);
                 archive.RollbackInsertedMessages(newMessages);
                 archive.RollbackInsertedBlocks(newBlocks);
             }
             catch (Exception rollback)
             {
+                if (ReferenceEquals(error, rollback)) throw;
                 throw new AggregateException("Compact precommit rollback failed.", error, rollback);
             }
             throw;
         }
         PublishProjection(stagedSnapshot);
-        return Task.CompletedTask;
     }
 
     private void PublishProjection(SessionSnapshot snapshot)

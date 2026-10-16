@@ -195,11 +195,9 @@ internal sealed partial class CommittedArchiveIdentity(string root)
 
     private void Mirror(Dictionary<string, string> mappings)
     {
-        if (!File.Exists(DatabasePath))
-            SqliteArchiveMessageStore.InitializeDatabase(DatabasePath);
-        using var connection = Open(DatabasePath, SqliteOpenMode.ReadWrite);
-        SqliteArchiveMessageStore.InitializeReservations(connection);
-        using var transaction = connection.BeginTransaction(deferred: false);
+        var ownedMappings = mappings.ToArray();
+        var receipt = SqliteArchiveMessageStore.EnqueueWriteAsync(DatabasePath, (connection, transaction) =>
+        {
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
@@ -211,7 +209,7 @@ internal sealed partial class CommittedArchiveIdentity(string root)
         command.Parameters.Add("$id", SqliteType.Text);
         command.Parameters.Add("$canonical", SqliteType.Text);
         command.Parameters.AddWithValue("$at", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        foreach (var (id, canonical) in mappings)
+        foreach (var (id, canonical) in ownedMappings)
         {
             command.Parameters["$id"].Value = id;
             command.Parameters["$canonical"].Value = canonical;
@@ -220,7 +218,9 @@ internal sealed partial class CommittedArchiveIdentity(string root)
                     "Archive identity mirror changed during initialization."
                 );
         }
-        transaction.Commit();
+        return true;
+        }).AsTask().GetAwaiter().GetResult();
+        receipt.Completion.GetAwaiter().GetResult();
     }
 
     internal static string Resolve(IReadOnlyDictionary<string, string> mappings, string id)
