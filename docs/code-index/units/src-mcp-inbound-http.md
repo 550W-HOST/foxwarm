@@ -26,7 +26,7 @@ Owns inbound MCP Streamable HTTP lifecycle on the existing Main HTTP listener. I
 
 ## Tests
 
-Pinned SDK clients cover owner isolation, request-level authentication, SSE reconnect/expiry, allowed 70 KiB tool output, larger result rejection without a second invocation, 8 MiB body cap, timeout/abort and 32-context capacity. An actual Main startup fixture checks headless `/mcp`, Node bootstrap/WS, five registered inbound wrappers and graceful process exit. A real running-Main fixture checks first MCP activation and last removal through Setup without restart; a transport fixture checks selective SSE revocation. [Inbound integration](./src-mcp-inbound-catalog.md) uses a real second SDK server and 20 repeated POSTs; it verifies response listeners do not accumulate.
+Pinned SDK clients cover owner isolation, request-level authentication, SSE reconnect/expiry, allowed 70 KiB tool output, larger result rejection without a second invocation, 8 MiB body cap, timeout/abort and 32-context capacity. An actual Main startup fixture checks headless `/mcp`, Node bootstrap/WS, five registered inbound wrappers and graceful process exit. A real running-Main fixture checks first MCP activation and last removal through Setup without restart; a transport fixture checks selective SSE revocation. [Inbound integration](./src-mcp-inbound-catalog.md) uses a real second SDK server and exactly 20 repeated POSTs. After each response's close dispatch and promise cleanup, it checks normal completion, removal of one-shot cancellation/race callbacks, and return to the middleware baseline plus the pinned SDK's one ordinary close callback. GET SSE responses are not POST listener samples; these checks do not inspect all SDK resource retention.
 
 ## Design decisions
 
