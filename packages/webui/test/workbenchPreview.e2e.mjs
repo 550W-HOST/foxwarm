@@ -923,6 +923,8 @@ async function mousePressAt(page, point, button = 'left') {
 }
 
 async function tabToControl(page, selector) {
+  // Enter the target strip before walking native Tab order, not every Chat's controls.
+  await page.$eval(selector, element => element.closest('.foxwarm-workbench-tab-row').querySelector('[data-tab-id]').focus())
   for (let index = 0; index < 120; index++) {
     if (await page.evaluate(selector => document.activeElement?.matches(selector), selector)) return
     await page.keyboard.press('Tab')
@@ -2124,9 +2126,8 @@ async function clickStatusPageEntry(page, section) {
   const popup = '[data-workbench-status-popup]'
   await page.click(`[data-workbench-status-bar] button[aria-label^="${section === 'Tasks' ? 'Tasks:' : 'Nodes:'}"]`)
   await page.waitForSelector(popup, { visible: true })
-  const entry = await page.evaluateHandle(label => [...document.querySelectorAll('[data-workbench-status-popup] button')].find(button => button.textContent === label), `Open ${section}`)
-  await entry.asElement().click()
-  await entry.dispose()
+  // Loading preview rows can move the action after the popup first appears.
+  await page.locator(`${popup} button::-p-text(Open ${section})`).click()
   await page.waitForSelector(popup, { hidden: true })
 }
 
@@ -2138,6 +2139,7 @@ test('Tasks and Nodes popup entries close the preview and activate singleton pag
     await page.waitForSelector('[data-workbench-status-popup]', { visible: true })
     await workbenchScreenshot(page, 'status-tasks-popup.png')
     await page.keyboard.press('Escape')
+    await page.waitForSelector('[data-workbench-status-popup]', { hidden: true })
     await clickStatusPageEntry(page, 'Tasks')
     await page.waitForFunction(() => location.hash.includes('system%3Atasks'))
     await page.waitForSelector('[data-tab-id="system:tasks"]')
@@ -2153,6 +2155,7 @@ test('Tasks and Nodes popup entries close the preview and activate singleton pag
     await page.waitForFunction(() => document.querySelector('[data-workbench-status-popup]')?.textContent.includes('Open Nodes'))
     await workbenchScreenshot(page, 'status-nodes-popup.png')
     await page.keyboard.press('Escape')
+    await page.waitForSelector('[data-workbench-status-popup]', { hidden: true })
     await clickStatusPageEntry(page, 'Nodes')
     await page.waitForSelector('[data-node-surface]')
     await workbenchScreenshot(page, 'nodes-workbench-wide.png')
