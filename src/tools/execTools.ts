@@ -1,4 +1,4 @@
-import { throwIfToolStopped } from '../toolCallControls';
+import { throwIfToolStopped, toolCancellationSource } from '../toolCallControls';
 import {
     ToolArgs,
     ToolContext,
@@ -118,7 +118,7 @@ export async function tool_exec(args: ToolArgs, ctx: ToolContext) {
     });
 
     const status = await runtime.waitForExecCompletion(execEntry.id, timeoutSeconds * 1000, ctx.signal);
-    const waitEndedBy = !status && ctx.signal?.aborted ? 'Stop or Run queued' : undefined;
+    const waitEndedBy = !status && ctx.signal?.aborted ? toolCancellationSource(ctx.signal) : undefined;
     if (status) {
         try {
             const nextCwd = await runtime.readFinishedExecWorkingDirectory(execEntry);

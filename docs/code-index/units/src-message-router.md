@@ -29,6 +29,7 @@ Owns channel ingress around the canonical turn runner: authorization, slash-comm
 | `MessageRouter.handleMessage(ctx, message)` | Replies to `/whoami` before authorization/Session work; otherwise authorizes and handles commands, then materializes deferred channel media only for canonically authorized ingress before enqueueing and triggering the local runner. |
 | `MessageRouter.processSessionQueue(sessionId, options)` | Delegates directly to `SessionTurnRunner.processSessionQueue`. |
 | `MessageRouter.processSessionRetry(sessionId)` | Delegates directly to `SessionTurnRunner.processSessionRetry`. |
+| `MessageRouter.shutdownLocalTurns()` | Closes the owned local runner and supplies the existing foreground-abort primitive for bounded drain. |
 
 ## Dependencies
 
@@ -56,6 +57,7 @@ Owns channel ingress around the canonical turn runner: authorization, slash-comm
 - With an injected `SessionWorkerSubmitHandler` (Session-worker placement), ordinary busy and idle input both go through one durable mailbox submission; the local enqueue/runner path is not used, a failure never falls back locally, and a post-append ambiguous outcome remains durable retryable work. Managed-session input keeps the existing local enqueue/ack path. Local placement (no handler injected) is unchanged.
 - Guest provisioning and concurrent first-message resolution retain the existing keyed session/channel creation contract. A persisted attachment whose target no longer has a live catalog entry fails closed with an actionable channel reply instead of recreating that ID.
 - `MessageRouter` owns one `SessionTurnRunner(new LocalSessionTurnHost())`; public queue/retry methods are thin real-path delegates rather than a second state machine.
+- Main bootstrap invokes `shutdownLocalTurns` only for local placement; the owner boundary and restart semantics are canonical in [local shutdown](../threads/session-lifecycle.md#d-lifecycle-main-local-shutdown).
 
 ## Integration
 

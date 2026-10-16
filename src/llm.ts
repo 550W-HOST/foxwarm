@@ -1,5 +1,5 @@
 import { buildEffectiveSelectionNotice, readEffectiveRequestSelection } from './session/effectiveSelection';
-import { STOPPED_TOOL_NOT_STARTED_MESSAGE } from './toolCallControls';
+import { STOPPED_TOOL_NOT_STARTED_MESSAGE, toolNotStartedMessage } from './toolCallControls';
 import axios, { AxiosResponse } from 'axios';
 import crypto, { randomUUID } from 'crypto';
 import fs from 'fs-extra';
@@ -1843,7 +1843,7 @@ async function prepareToolCall(
     presetResult?: any,
 ): Promise<PreparedToolCall> {
     if (presetResult === undefined && (toolContext.signal?.aborted || session.stopping)) {
-        presetResult = { error: STOPPED_TOOL_NOT_STARTED_MESSAGE };
+        presetResult = { error: toolNotStartedMessage(toolContext.signal) };
     }
     const toolId = call.id || `tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const argsPreview = buildToolArgsPreview(call);
@@ -1866,7 +1866,7 @@ async function prepareToolCall(
         } catch (error) { placementError = error; }
     }
     if (presetResult === undefined && (toolContext.signal?.aborted || session.stopping)) {
-        presetResult = { error: STOPPED_TOOL_NOT_STARTED_MESSAGE };
+        presetResult = { error: toolNotStartedMessage(toolContext.signal) };
     }
     const toolArgs = resolved?.args || { ...(call.args || {}) };
     const executionNode = resolved?.executionNode || snapshot?.currentNode || session.currentNode || 'master';
@@ -1966,7 +1966,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
     try {
         if (prepared.placementError) throw prepared.placementError;
         if (result === undefined && (toolContext.signal?.aborted || toolContext.session?.stopping)) {
-            return buildSkippedToolCall(prepared, STOPPED_TOOL_NOT_STARTED_MESSAGE);
+            return buildSkippedToolCall(prepared, toolNotStartedMessage(toolContext.signal));
         }
         if (result === undefined && prepared.resolved) {
             const runtimeContext = { ...toolContext, toolUseId: prepared.toolId };
@@ -2232,10 +2232,10 @@ async function executeToolBatch(
         if (session?.stopping || toolContext.signal.aborted) {
             for (; cursor < plannedCalls.length; cursor++) {
                 const planned = plannedCalls[cursor];
-                const prepared = await prepareToolCall(planned.call, cursor, plannedCalls.length, toolContext, session, undefined, false, planned.presetResult ?? { error: STOPPED_TOOL_NOT_STARTED_MESSAGE });
+                const prepared = await prepareToolCall(planned.call, cursor, plannedCalls.length, toolContext, session, undefined, false, planned.presetResult ?? { error: toolNotStartedMessage(toolContext.signal) });
                 executions.push(planned.presetResult !== undefined
                     ? await runPreparedToolCall(prepared, toolContext)
-                    : buildSkippedToolCall(prepared));
+                    : buildSkippedToolCall(prepared, toolNotStartedMessage(toolContext.signal)));
             }
             break;
         }

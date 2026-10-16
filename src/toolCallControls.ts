@@ -4,15 +4,23 @@ export const CANCEL_TOOL_ARGUMENT = '__cancelTool';
 export const CANCEL_ALL_TOOLS_ARGUMENT = '__cancelAllToolsThisTurn';
 export const STOPPED_TOOL_NOT_STARTED_MESSAGE = 'Tool call was not started because Stop or Run queued cancelled it; it was not executed.';
 
+export function toolCancellationSource(signal?: AbortSignal): string {
+  return signal?.reason?.code === 'SESSION_TURN_SHUTTING_DOWN' ? 'process shutdown' : 'Stop or Run queued';
+}
+
+export function toolNotStartedMessage(signal?: AbortSignal): string {
+  return `Tool call was not started because ${toolCancellationSource(signal)} cancelled it; it was not executed.`;
+}
+
 export function throwIfToolStopped(signal?: AbortSignal): void {
-  if (signal?.aborted) throw new Error(STOPPED_TOOL_NOT_STARTED_MESSAGE);
+  if (signal?.aborted) throw new Error(toolNotStartedMessage(signal));
 }
 
 export function toolFailureMessage(error: any, signal?: AbortSignal): string {
   const cancelled = signal?.aborted && (error === signal.reason || error?.name === 'AbortError'
     || error?.code === 'ABORT_ERR' || error?.code === 'RPC_CANCELLED');
   return cancelled
-    ? 'Tool call was cancelled by Stop or Run queued after dispatch. No result was received; it may already have executed or caused side effects.'
+    ? `Tool call was cancelled by ${toolCancellationSource(signal)} after dispatch. No result was received; it may already have executed or caused side effects.`
     : error?.message || String(error);
 }
 

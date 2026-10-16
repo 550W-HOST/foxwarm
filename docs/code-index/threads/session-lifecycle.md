@@ -37,6 +37,14 @@ Canonical data authority: [D-session-core-authoritative-history](../modules/sess
 
 Canonical turn flow: [message processing pipeline](./message-processing-pipeline.md).
 
+### D-lifecycle-main-local-shutdown
+
+[2026-10-16] Main closes admission on its actual local turn runner synchronously when termination begins. Channel triggers, manual continuation and finish-window reentry share this boundary. Already-selected input commits before an interrupted owner yields; unselected input remains in the existing durable queue. Accepted provider/tool work may settle while its dependencies remain available, but shutdown starts no further provider retry, tool dispatch or turn continuation at the runner's safe points.
+
+A genuinely completed final, terminal handoff/wait or user Stop retains ordinary idle finalization. A shutdown-owned cancellation or unfinished safe-point yield instead keeps the exact owner's existing busy checkpoint, without a synthetic terminal model error. Startup uses the existing busy/queue recovery mechanism; there is no persisted shutdown marker, history-text classifier or second recovery loop. Foreground cancellation receipts distinguish process shutdown from user Stop without changing persistent exec lifetime.
+
+Dependency teardown waits for local owner drain. If accepted work does not settle within the bounded grace and cancellation phases, Main kills only its own process rather than claiming a successful drain or closing dependencies beneath an advancing runner. Native work can prevent `process.exit()` from completing. Service children retain existing IPC-loss cleanup; independent persistent user execs are not killed. Forced exit has crash-like service semantics, not a cross-Main child-exit acknowledgement: an immediate restart can overlap an old Vector child's final derived-index commit. See [Vector ownership](../units/src-vector.md#process-placement). Session-worker placement keeps its existing generation fences and supervisor drain/handback path and does not receive the Main-local runner shutdown hook.
+
 ## Context, archive, and recall
 
 - Final usage may trigger `checkAndCompactIfNeeded`.

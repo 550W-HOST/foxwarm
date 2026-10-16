@@ -66,7 +66,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 
 ### tools/execTools.ts — Shell command execution
 
-`toolCallControls` supplies `throwIfToolStopped`, `toolFailureMessage`, and the shared unstarted receipt text; model-requested cancellation planning is unchanged. The trusted ToolContext carries a foreground signal. Dispatch checks it after permission/preparation; exec passes it to the shared wait and uses the normal background receipt on interruption. Result settlement is not aborted. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
+`toolCallControls` supplies `throwIfToolStopped`, `toolFailureMessage`, `toolCancellationSource`, `toolNotStartedMessage`, and the shared default unstarted receipt; model-requested cancellation planning is unchanged. The trusted ToolContext carries a foreground signal. Dispatch checks it after permission/preparation; exec passes it to the shared wait and uses the normal background receipt on interruption. Result settlement is not aborted. A declared process-shutdown reason changes cancellation attribution without treating it as user Stop or killing persistent execs. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands) and [local shutdown](../threads/session-lifecycle.md#d-lifecycle-main-local-shutdown).
 | Function | Description |
 |----------|-------------|
 | `tool_exec` | Executes shell commands with timeout and background support |

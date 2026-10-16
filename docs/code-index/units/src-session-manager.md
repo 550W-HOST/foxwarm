@@ -40,7 +40,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 - `requestSessionCompaction`, `cancelSessionCompaction` — manual compaction and compact-only cancellation. Duplicate admission checks pending jobs or existing operation phase. Compact wake signals alone neither block a new request nor count as ordinary queued input for idle awaited admission. Idle local sync compaction owns the transient ingress admission through staged durable release; the shared live owner remains busy until committed idle state is adopted.
 - `requestSessionStop`, `requestSessionDequeue`, `retrySession` — current run/queue controls; ordinary Stop rejects the standalone compact owner before hydration, while other controls retain their normal busy-based semantics because staged finalization never exposes precommit live idle. Retry delegates directly to the router without queue persistence.
 - `setSessionTriggerCallback`, `setSessionRetryCallback`, `triggerSessionProcessing`, `resumeBusySessions` — router/scheduler integration and restart recovery.
-- `registerSessionAbortController`, `clearSessionAbortController`, `abortSessionInFlight` — active provider-request cancellation.
+- `registerSessionAbortController`, `clearSessionAbortController`, `abortSessionInFlight` — active foreground cancellation; the abort primitive accepts an optional reason so process shutdown does not masquerade as user Stop. Shutdown ownership remains in the [turn runner](./src-session-turn-runner.md).
 
 ### Relations, agents, and inter-session delivery
 

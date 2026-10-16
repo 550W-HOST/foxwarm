@@ -809,14 +809,14 @@ export function clearSessionAbortController(sessionId: string, controller?: Abor
   sessionAbortControllers.delete(sessionId);
 }
 
-export function abortSessionInFlight(sessionId: string): boolean {
+export function abortSessionInFlight(sessionId: string, reason?: unknown): boolean {
   const controller = sessionAbortControllers.get(sessionId);
   if (!controller) {
     return false;
   }
 
   sessionAbortControllers.delete(sessionId);
-  controller.abort();
+  controller.abort(reason);
   return true;
 }
 

@@ -465,6 +465,10 @@ export class MessageRouter {
     await this.turnRunner.processSessionRetry(sessionId);
   }
 
+  shutdownLocalTurns(): Promise<void> {
+    return this.turnRunner.shutdown(sessionManager.abortSessionInFlight);
+  }
+
   async processSessionQueue(sessionId: string, options: { retry?: boolean } = {}): Promise<void> {
     await this.turnRunner.processSessionQueue(sessionId, options);
   }

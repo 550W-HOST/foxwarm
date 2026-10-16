@@ -49,6 +49,20 @@ async function makeSession(id: string, cwd?: string): Promise<Session> {
   return session;
 }
 
+test('shutdown cancellation prevents a tool effect without labelling it a user Stop', async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'tool-shutdown-'));
+  try {
+    const session = await makeSession(unique('tool_shutdown'), cwd);
+    const controller = new AbortController();
+    controller.abort(Object.assign(new Error('shutdown'), { code: 'SESSION_TURN_SHUTTING_DOWN' }));
+    const message = await executeTools([{ id: 'write', name: 'write', args: { filePath: 'not-created.txt', content: 'unstarted' } }],
+      { sessionId: session.id, signal: controller.signal }, session);
+    assert.equal(await fs.pathExists(path.join(cwd, 'not-created.txt')), false);
+    assert.match(responses(message)[0].error, /process shutdown/);
+    assert.doesNotMatch(responses(message)[0].error, /Stop|Run queued/);
+  } finally { await fs.remove(cwd); }
+});
+
 test('default model-facing schemas omit handoff confirmation while always appending cancellation controls', () => {
   const modelFacingDefinitions = buildToolDefinitions(false).map(addToolCancellationSchema);
   const compact = modelFacingDefinitions.find(definition => definition.name === 'submit_compact_plan')!;
