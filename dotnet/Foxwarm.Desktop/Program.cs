@@ -8,7 +8,10 @@ internal static class Program
     private static void Main()
     {
         ApplicationConfiguration.Initialize();
-        using var instance = new Mutex(false, @"Local\Foxwarm.Desktop." + WindowsIdentity.GetCurrent().User!.Value);
+        using var instance = new Mutex(
+            false,
+            @"Local\Foxwarm.Desktop." + WindowsIdentity.GetCurrent().User!.Value
+        );
         bool acquired;
         try
         {
@@ -20,7 +23,12 @@ internal static class Program
         }
         if (!acquired)
         {
-            MessageBox.Show("Foxwarm is already running. Open it from the tray icon.", "Foxwarm", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(
+                "Foxwarm is already running. Open it from the tray icon.",
+                "Foxwarm",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information
+            );
             return;
         }
         try

@@ -166,7 +166,10 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
     )
     {
         if (!IsSupported)
-            return Error("exec_unavailable", "Local shell execution is not supported on this platform. Select a supported Node.");
+            return Error(
+                "exec_unavailable",
+                "Local shell execution is not supported on this platform. Select a supported Node."
+            );
         if (closing)
             return Error("exec_unavailable", "Host is shutting down.");
         if (

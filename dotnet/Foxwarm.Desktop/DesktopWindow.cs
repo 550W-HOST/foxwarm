@@ -32,13 +32,21 @@ internal sealed class DesktopWindow : Form
         MinimumSize = new Size(800, 600);
         Size = new Size(1280, 860);
         StartPosition = FormStartPosition.CenterScreen;
-        using var iconStream = typeof(DesktopWindow).Assembly.GetManifestResourceStream("Foxwarm.Desktop.Foxwarm.ico")!;
+        using var iconStream = typeof(DesktopWindow).Assembly.GetManifestResourceStream(
+            "Foxwarm.Desktop.Foxwarm.ico"
+        )!;
         Icon = new Icon(iconStream);
         Controls.Add(status);
         Controls.Add(view);
         trayMenu.Items.Add("Open", null, (_, _) => OpenWindow());
         trayMenu.Items.Add("Exit", null, (_, _) => ExitApplication());
-        tray = new NotifyIcon { Text = "Foxwarm", Icon = Icon, ContextMenuStrip = trayMenu, Visible = true };
+        tray = new NotifyIcon
+        {
+            Text = "Foxwarm",
+            Icon = Icon,
+            ContextMenuStrip = trayMenu,
+            Visible = true,
+        };
         tray.DoubleClick += (_, _) => OpenWindow();
         Shown += (_, _) => startup = StartAsync();
     }
@@ -47,18 +55,38 @@ internal sealed class DesktopWindow : Form
     {
         try
         {
-            var data = Path.GetFullPath(Environment.GetEnvironmentVariable("FOXWARM_DATA_DIR")
-                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Foxwarm", "Desktop"));
-            var work = Path.GetFullPath(Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_TOOL_ROOT")
-                ?? Path.Combine(data, "workspace"));
+            var data = Path.GetFullPath(
+                Environment.GetEnvironmentVariable("FOXWARM_DATA_DIR")
+                    ?? Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "Foxwarm",
+                        "Desktop"
+                    )
+            );
+            var work = Path.GetFullPath(
+                Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_TOOL_ROOT")
+                    ?? Path.Combine(data, "workspace")
+            );
             var dist = Path.Combine(AppContext.BaseDirectory, "webui");
-            if (!File.Exists(Path.Combine(dist, "index.html")) || !Directory.Exists(Path.Combine(dist, "assets")))
-                throw new InvalidDataException("The WebUI is missing. Extract the complete Foxwarm ZIP and try again.");
+            if (
+                !File.Exists(Path.Combine(dist, "index.html"))
+                || !Directory.Exists(Path.Combine(dist, "assets"))
+            )
+                throw new InvalidDataException(
+                    "The WebUI is missing. Extract the complete Foxwarm ZIP and try again."
+                );
             Directory.CreateDirectory(work);
             var http = await HttpServerSettings.CaptureDesktopAsync(data);
             host = await Task.Run(async () =>
             {
-                var embedded = await MainHost.CreateAsync([], data, work, new ModelConfiguration(data), http, dist);
+                var embedded = await MainHost.CreateAsync(
+                    [],
+                    data,
+                    work,
+                    new ModelConfiguration(data),
+                    http,
+                    dist
+                );
                 try
                 {
                     await embedded.App.StartAsync();
@@ -74,7 +102,9 @@ internal sealed class DesktopWindow : Form
             if (exiting)
                 return;
             status.Text = "Opening Foxwarm…";
-            var environment = await CoreWebView2Environment.CreateAsync(userDataFolder: Path.Combine(data, "webview2"));
+            var environment = await CoreWebView2Environment.CreateAsync(
+                userDataFolder: Path.Combine(data, "webview2")
+            );
             if (exiting)
                 return;
             await view.EnsureCoreWebView2Async(environment);
@@ -100,8 +130,11 @@ internal sealed class DesktopWindow : Form
             core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All);
             core.WebResourceRequested += (_, e) =>
             {
-                if (Uri.TryCreate(e.Request.Uri, UriKind.Absolute, out var uri)
-                    && uri.Scheme is "http" or "https" && !IsAppUri(e.Request.Uri))
+                if (
+                    Uri.TryCreate(e.Request.Uri, UriKind.Absolute, out var uri)
+                    && uri.Scheme is "http" or "https"
+                    && !IsAppUri(e.Request.Uri)
+                )
                     e.Response = environment.CreateWebResourceResponse(null, 403, "Forbidden", "");
             };
             core.NavigationCompleted += (_, e) =>
@@ -131,9 +164,12 @@ internal sealed class DesktopWindow : Form
             {
                 view.Visible = false;
                 status.Visible = true;
-                status.Text = error is WebView2RuntimeNotFoundException
-                    ? "Microsoft Edge WebView2 Runtime is required. Install the Evergreen x64 Runtime, then restart Foxwarm."
-                    : "Foxwarm could not start.\n\n" + error.Message + "\n\nExit from the tray before trying again.";
+                status.Text =
+                    error is WebView2RuntimeNotFoundException
+                        ? "Microsoft Edge WebView2 Runtime is required. Install the Evergreen x64 Runtime, then restart Foxwarm."
+                        : "Foxwarm could not start.\n\n"
+                            + error.Message
+                            + "\n\nExit from the tray before trying again.";
             }
             if (host is not null)
             {
@@ -146,13 +182,24 @@ internal sealed class DesktopWindow : Form
     private async Task AuthenticateAsync(CoreWebView2 core, string token)
     {
         var cookies = new CookieContainer();
-        using var handler = new HttpClientHandler { CookieContainer = cookies, AllowAutoRedirect = false, UseProxy = false };
+        using var handler = new HttpClientHandler
+        {
+            CookieContainer = cookies,
+            AllowAutoRedirect = false,
+            UseProxy = false,
+        };
         using var client = new HttpClient(handler) { BaseAddress = endpoint };
         using var response = await client.PostAsJsonAsync("api/auth", new { token });
         response.EnsureSuccessStatusCode();
-        var authenticated = cookies.GetCookies(endpoint!)["foxwarm_token"]
+        var authenticated =
+            cookies.GetCookies(endpoint!)["foxwarm_token"]
             ?? throw new InvalidOperationException("Foxwarm sign-in did not complete.");
-        var cookie = core.CookieManager.CreateCookie(authenticated.Name, authenticated.Value, endpoint!.Host, authenticated.Path);
+        var cookie = core.CookieManager.CreateCookie(
+            authenticated.Name,
+            authenticated.Value,
+            endpoint!.Host,
+            authenticated.Path
+        );
         cookie.IsHttpOnly = true;
         cookie.IsSecure = false;
         cookie.SameSite = CoreWebView2CookieSameSiteKind.Strict;
@@ -160,20 +207,33 @@ internal sealed class DesktopWindow : Form
         core.CookieManager.AddOrUpdateCookie(cookie);
     }
 
-    private bool IsAppUri(string text) => Uri.TryCreate(text, UriKind.Absolute, out var uri)
-        && endpoint is not null && uri.Scheme == endpoint.Scheme && uri.Host == endpoint.Host && uri.Port == endpoint.Port;
+    private bool IsAppUri(string text) =>
+        Uri.TryCreate(text, UriKind.Absolute, out var uri)
+        && endpoint is not null
+        && uri.Scheme == endpoint.Scheme
+        && uri.Host == endpoint.Host
+        && uri.Port == endpoint.Port;
 
     private static void OpenExternal(string text)
     {
-        if (!Uri.TryCreate(text, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+        if (
+            !Uri.TryCreate(text, UriKind.Absolute, out var uri)
+            || uri.Scheme is not ("http" or "https")
+        )
             return;
         try
         {
             Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
         }
-        catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException)
+        catch (Exception error)
+            when (error is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
-            MessageBox.Show("The link could not be opened in your browser.", "Foxwarm", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(
+                "The link could not be opened in your browser.",
+                "Foxwarm",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information
+            );
         }
     }
 

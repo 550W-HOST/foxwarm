@@ -76,8 +76,13 @@ internal sealed record HttpServerSettings(
         var token = await LoadOrCreateTokenAsync(dataRoot);
         if (string.IsNullOrWhiteSpace(token))
             throw new InvalidDataException("HTTP access token must not be blank.");
-        return new(0, token, "127.0.0.1",
-            new PublicWebAddress("http://127.0.0.1:0", PathString.Empty, "/", false), true);
+        return new(
+            0,
+            token,
+            "127.0.0.1",
+            new PublicWebAddress("http://127.0.0.1:0", PathString.Empty, "/", false),
+            true
+        );
     }
 
     private static async Task<string> LoadOrCreateTokenAsync(string dataRoot)

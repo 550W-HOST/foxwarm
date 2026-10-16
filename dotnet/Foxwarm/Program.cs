@@ -32,7 +32,12 @@ if (http.WebUiEnabled && distRoot is not null)
         );
 }
 await using var host = await MainHost.CreateAsync(
-    args, dataRoot, workspaceRoot, configuration, http, distRoot
+    args,
+    dataRoot,
+    workspaceRoot,
+    configuration,
+    http,
+    distRoot
 );
 host.App.Lifetime.ApplicationStarted.Register(() =>
 {

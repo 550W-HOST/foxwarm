@@ -127,7 +127,11 @@
       CopyToPublishDirectory="PreserveNewest"
     />
     <PackageReference Include="SkiaSharp" Version="4.153.1" />
-    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.153.1" Condition="'$(RuntimeIdentifier)' == '' or $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-'))" />
+    <PackageReference
+      Include="SkiaSharp.NativeAssets.Linux.NoDependencies"
+      Version="4.153.1"
+      Condition="'$(RuntimeIdentifier)' == '' or $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-'))"
+    />
     <Content
       Include="../../templates/agents/00_SYSTEM.md"
       Link="templates/agents/00_SYSTEM.md"
@@ -156,17 +160,29 @@
       CopyToPublishDirectory="PreserveNewest"
     />
   </ItemGroup>
-  <Target Name="BuildFoxwarmPty" AfterTargets="Build" Condition="'$(OS)' != 'Windows_NT' and ('$(RuntimeIdentifier)' == '' or $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-')))">
+  <Target
+    Name="BuildFoxwarmPty"
+    AfterTargets="Build"
+    Condition="'$(OS)' != 'Windows_NT' and ('$(RuntimeIdentifier)' == '' or $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-')))"
+  >
     <Exec Command="gcc -std=c11 -O2 -Wall -Wextra -Werror -fPIC -shared -Wl,-z,relro,-z,now -o &quot;$(TargetDir)libfoxwarm-pty.so&quot; &quot;$(MSBuildProjectDirectory)/Terminal/native/foxwarm-pty.c&quot; -lutil" />
   </Target>
-  <Target Name="PublishFoxwarmPty" AfterTargets="Publish" Condition="'$(OS)' != 'Windows_NT' and ('$(RuntimeIdentifier)' == '' or $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-')))">
+  <Target
+    Name="PublishFoxwarmPty"
+    AfterTargets="Publish"
+    Condition="'$(OS)' != 'Windows_NT' and ('$(RuntimeIdentifier)' == '' or $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-')))"
+  >
     <Copy
       SourceFiles="$(TargetDir)libfoxwarm-pty.so"
       DestinationFolder="$(PublishDir)"
       SkipUnchangedFiles="true"
     />
   </Target>
-  <Target Name="CleanFoxwarmPty" AfterTargets="Clean" Condition="'$(OS)' != 'Windows_NT' and ('$(RuntimeIdentifier)' == '' or $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-')))">
+  <Target
+    Name="CleanFoxwarmPty"
+    AfterTargets="Clean"
+    Condition="'$(OS)' != 'Windows_NT' and ('$(RuntimeIdentifier)' == '' or $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-')))"
+  >
     <Delete Files="$(TargetDir)libfoxwarm-pty.so" />
   </Target>
 </Project>

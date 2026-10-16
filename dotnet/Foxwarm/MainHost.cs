@@ -29,12 +29,18 @@ internal sealed class MainHost : IAsyncDisposable
     )
     {
         var options = new ResponsesClientOptions(
-            new Uri("http://127.0.0.1:1/v1"), "", "", "",
+            new Uri("http://127.0.0.1:1/v1"),
+            "",
+            "",
+            "",
             Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_INSTRUCTIONS") ?? "",
             configuration.MaxOutput
         );
         var sessions = new SessionManager(
-            dataRoot, workspaceRoot, options, configuration.Models,
+            dataRoot,
+            workspaceRoot,
+            options,
+            configuration.Models,
             Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_SKILLS_ROOT")
         );
         TerminalRegistry? terminals = null;
@@ -46,8 +52,15 @@ internal sealed class MainHost : IAsyncDisposable
             var runtime = new SessionRuntime(sessions);
             var router = new MessageRouter(runtime);
             server = new HttpServer(
-                args, http.Port, http.Token, distRoot, sessions, terminals,
-                http.Address, http.WebUiEnabled, http.BindAddress
+                args,
+                http.Port,
+                http.Token,
+                distRoot,
+                sessions,
+                terminals,
+                http.Address,
+                http.WebUiEnabled,
+                http.BindAddress
             );
             if (server.WebUiEnabled)
                 new WebUIChannel(sessions, runtime, router, terminals).Register(server.App);
