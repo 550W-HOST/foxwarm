@@ -15,6 +15,7 @@ Defines the core TypeScript interfaces and type aliases used throughout the syst
 - `Message` — Role-tagged message with parts and metadata, including optional persisted logical LLM request timing and half-open `llmSegment` output range/complete flag on normal Responses assistant rows; see [early commentary commit](../threads/streaming-pipeline.md#d-streaming-early-commentary-commit)
 - `CompactionPlannerDebug` — Invocation-local steps, ordered tool-name strings, optional usage and complete newly appended messages stored at top-level `Message.compaction.planner`; see [planner diagnostics](../threads/context-compaction.md#d-context-compact-planner-debug)
 - `LlmRequestTiming` — Persisted wall-clock start/completion boundaries plus monotonic logical-request duration
+- `EffectiveRequestSelection` / `SessionMeta.lastEffectiveRequest` — small persisted normal-adoption baseline; see [effective selection](../threads/model-routing.md#d-model-routing-live-session-selection).
 - `Session` — Full session state including authoritative history, queue, stats, raw `model`/`effort`, and future-child defaults
 - `QueueItem` / `QueueSource` — Current inbound content/event work plus the `compact-commit` safe-point item and origin metadata. Source metadata can retain WeWork stream IDs and QQ Bot passive-reply message IDs without persisting callbacks; retry and compact planning are not queue types
 - `CompactionRequest` — Planning request options kept separate from queue-item state

@@ -100,16 +100,16 @@ providers:
       'https://second-leaf.test/v1/messages',
       'https://second-leaf.test/v1/messages',
     ]);
-    assert.deepEqual(history.map(message => message.role), ['user', 'model', 'tool', 'model']);
+    assert.deepEqual(history.map(message => message.role), ['user', 'user', 'model', 'tool', 'model']);
     const assistantMessages = history.filter(message => message.role === 'model');
     assert.equal(assistantMessages[0].__meta?.modelId, 'second/second-model');
     assert.equal(assistantMessages[0].__meta?.virtualModelKey, 'fallback');
     assert.equal(assistantMessages[1].__meta?.modelId, 'second/second-model');
     assert.equal(assistantMessages[1].__meta?.virtualModelKey, 'fallback');
-    assert.equal(history[0].__meta?.modelId, undefined);
-    assert.equal(history[0].__meta?.virtualModelKey, undefined);
-    assert.equal(history[2].__meta?.modelId, undefined);
-    assert.equal(history[2].__meta?.virtualModelKey, undefined);
+    for (const message of history.filter(message => message.role !== 'model')) {
+      assert.equal(message.__meta?.modelId, undefined);
+      assert.equal(message.__meta?.virtualModelKey, undefined);
+    }
     assert.equal(JSON.stringify(assistantMessages).includes('first/first-model'), false);
   } finally {
     (axios as any).post = originalPost;

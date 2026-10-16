@@ -1664,7 +1664,7 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     const committedBeforeDisconnect = await fs.readJson(statePath);
     assert.equal(committedBeforeDisconnect.lastAppliedMailboxId, ambiguous.id);
     assert.equal(committedBeforeDisconnect.compactThresholdTokens, 4243);
-    assert.equal(committedBeforeDisconnect.history.length, afterWait.history.length + 2, 'the retained passive selection notice precedes the new input');
+    assert.equal(committedBeforeDisconnect.history.length, afterWait.history.length + 1, 'the new input is the only appended row; settings do not queue raw notices');
     const archiveAfterFailure = new DatabaseSync(path.join(root, 'state', 'archive-store.sqlite'), { readOnly: true });
     const archiveCount = Number((archiveAfterFailure.prepare('SELECT COUNT(*) AS count FROM archive_messages WHERE session_id=?').get(sessionId) as any).count);
     archiveAfterFailure.close();

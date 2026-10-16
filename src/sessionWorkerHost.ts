@@ -1,4 +1,3 @@
-import { buildSessionSelectionNotice, type SessionSettingsActor } from './session/selectionSettings';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { buildBtwDisplayResult, cloneSessionForBtw, ensureBtwPromptCacheKey, executeBtwRequest } from './btw';
@@ -298,7 +297,7 @@ export class SessionWorkerHost {
     return { ...committed, toolDenied: result.toolDenied };
   }
 
-  async updateSettings(patch: SessionWorkerSettingsPatch, actor?: SessionSettingsActor): Promise<SessionWorkerSettingsResult> {
+  async updateSettings(patch: SessionWorkerSettingsPatch): Promise<SessionWorkerSettingsResult> {
     return this.serialize(async () => {
       await this.ensureLoaded(); await this.ensureHealthy(); await this.fenceMutation();
       const session = this.session!;
@@ -344,11 +343,6 @@ export class SessionWorkerHost {
         const settingOrder = ['cwd', 'model', 'effort', 'childModelDefault', 'childEffortDefault', 'currentNode', 'compactThresholdTokens', 'verbose'];
         changed.sort((left, right) => settingOrder.indexOf(left) - settingOrder.indexOf(right));
         if (changed.length > 0) {
-          const notice = buildSessionSelectionNotice(previous, this.settingsSnapshot(session), actor);
-          if (notice) {
-            const transition = applyQueuedItemToWaitState(session, notice);
-            if (transition.action === 'enqueue') session.queue.push(...transition.items);
-          }
           await this.persistOwner();
         }
         return { changed, previous, current: this.settingsSnapshot(session), projection: buildSessionWorkerProjection(session) };

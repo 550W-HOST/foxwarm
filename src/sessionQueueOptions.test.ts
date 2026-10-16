@@ -1,11 +1,4 @@
-import axios from 'axios';
-import { Readable } from 'node:stream';
-import * as config from './config';
-import * as llm from './llm';
-import { LocalSessionTurnHost, SessionTurnRunner } from './sessionTurnRunner';
-import type { Message, Session } from './types';
 import * as sessionRuntime from './sessionRuntime';
-import { parseFoxwarmOpeningTag } from './utils/promptWrappers';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as sessionManager from './sessionManager';
@@ -95,7 +88,7 @@ test('generic passive ingress keeps Worker sink ownership and rolls local queue 
 });
 
 
-test('selection settings record changes passively, preserve waits, and exclude no-op, effort-only and invalid updates', async () => {
+test('idle and waiting setters save settings without raw notices or wakeups', async () => {
   const session = await sessionManager.getSession(id('selection'));
   const triggers: string[] = [];
   sessionManager.setSessionTriggerCallback(target => { triggers.push(target); });
@@ -105,42 +98,14 @@ test('selection settings record changes passively, preserve waits, and exclude n
     sessionManager.setSessionPersistenceFaultInjectorForTests((phase, target) => {
       if (phase === 'history' && target === session.id) saves++;
     });
-    await sessionRuntime.updateSettings(session.id, { model: 'fixture/a', effort: 'none', currentNode: 'node-a' },
-      { kind: 'channel', channelType: 'fixture', channelId: 'fixture-channel', senderId: 'user-"<one>', username: 'Example & User' });
-    assert.equal(saves, 1, 'a normal settings change includes its notice in the original save');
-    sessionManager.setSessionPersistenceFaultInjectorForTests(null);
-    assert.equal(session.queue.length, 1);
-    assert.equal(session.queue[0].trigger, false);
-    const tag = parseFoxwarmOpeningTag(session.queue[0].parts![0].system)!;
-    assert.equal(tag.attrs.kind, 'session-settings-changed');
-    assert.equal(tag.attrs.oldModel, 'default'); assert.equal(tag.attrs.newModel, 'fixture/a');
-    assert.equal(tag.attrs.oldNode, 'master'); assert.equal(tag.attrs.newNode, 'node-a');
-    assert.equal(tag.attrs.newEffort, 'none');
-    assert.equal(tag.attrs.actorSenderId, 'user-"<one>');
-    assert.equal(tag.attrs.actorUsername, 'Example & User');
-    assert.equal(session.meta.wait.id, wait.id);
-    assert.equal((await metadataStore.readSessionHistorySnapshot(session.id)).queue.length, 1);
-    await sessionRuntime.updateSettings(session.id, { model: 'fixture/a', currentNode: 'node-a' });
-    await sessionRuntime.updateSettings(session.id, { effort: 'low', childModelDefault: 'fixture/child' });
-    assert.equal(session.queue.length, 1);
-    await assert.rejects(() => sessionRuntime.updateSettings(session.id, { model: 'fixture/b', effort: 'invalid' as any }));
-    assert.equal(session.model, 'fixture/a');
-    assert.equal(session.queue.length, 1);
-    sessionManager.setSessionPersistenceFaultInjectorForTests((phase, target) => {
-      if (phase === 'history' && target === session.id) throw new Error('selection precommit failure');
-    });
-    await sessionRuntime.updateSettings(session.id, { currentNode: 'node-b' });
-    assert.equal(session.currentNode, 'node-b', 'the original settings writer logs IO failure without undoing the hot selection');
-    assert.equal(session.queue.length, 2);
-    assert.equal(parseFoxwarmOpeningTag(session.queue[1].parts![0].system)!.attrs.newNode, 'node-b');
+    await sessionRuntime.updateSettings(session.id, { model: 'fixture/a', effort: 'none', currentNode: 'node-a' });
+    assert.equal(saves, 1);
+    assert.equal(session.queue.length, 0);
+    assert.equal(session.meta.lastEffectiveRequest, undefined);
+    await sessionRuntime.updateSettings(session.id, { model: 'fixture/b', currentNode: 'node-b' });
     assert.equal(session.meta.wait.id, wait.id);
     assert.deepEqual(triggers, []);
-    sessionManager.setSessionPersistenceFaultInjectorForTests(null);
-    await sessionManager.queueSessionWaitTimeoutEvent(session.id, wait.id, 'matching timeout');
-    assert.equal(session.meta.wait, undefined, 'the original timeout remains valid after a passive notice');
-    assert.deepEqual(triggers, [session.id]);
-    assert.equal(session.queue.length, 3);
-    assert.equal(session.queue[2].waitTimeoutId, wait.id);
+    assert.equal((await metadataStore.readSessionHistorySnapshot(session.id)).queue.length, 0);
   } finally {
     sessionManager.setSessionPersistenceFaultInjectorForTests(null);
     sessionManager.setSessionTriggerCallback(() => {});
@@ -148,7 +113,7 @@ test('selection settings record changes passively, preserve waits, and exclude n
   }
 });
 
-test('selection notices use managed passive admission without waking the controller or its owner', async () => {
+test('managed selection setters leave no inbox notice and do not wake the controller or owner', async () => {
   const owner = await sessionManager.getSession(id('selection_owner'));
   const session = await sessionManager.getSession(id('selection_managed'));
   const originalResume = toolscript.resumeBackgroundToolScriptRunForManagedSession;
@@ -158,13 +123,12 @@ test('selection notices use managed passive admission without waking the control
     await managedSessions.openManagedSession({ sessionId: session.id, ownerSessionId: owner.id, controllerRunId: 'fixture-controller' });
     await sessionRuntime.updateSettings(session.id, { currentNode: 'fixture-node' });
     const managed = await managedSessions.getManagedSessionStateForTests(session.id);
-    assert.equal(managed.pendingInbox.length, 1);
-    assert.equal(managed.pendingInbox[0].trigger, false);
+    assert.equal(managed.pendingInbox.length, 0);
     assert.equal(session.queue.length, 0);
     assert.equal(owner.queue.length, 0);
     const persisted = await metadataStore.readSessionHistorySnapshot(session.id);
     assert.equal(persisted.currentNode, 'fixture-node');
-    assert.equal(persisted.meta.managedSession.pendingInbox[0].trigger, false);
+    assert.equal(persisted.meta.managedSession.pendingInbox.length, 0);
     await sessionManager.resumeBusySessions();
     assert.equal(resumes, 0);
   } finally {
@@ -199,7 +163,7 @@ test('passive input cannot satisfy waitAll, while the ordinary completion from t
 });
 
 
-test('explicit local Run queued clears wait before processing a passive-only selection notice', async () => {
+test('explicit local Run queued clears wait before processing passive-only input', async () => {
   const session = await sessionManager.getSession(id('selection_run_queued'));
   let processed = 0;
   sessionManager.setSessionTriggerCallback(target => {
@@ -209,239 +173,12 @@ test('explicit local Run queued clears wait before processing a passive-only sel
   });
   try {
     await sessionManager.startSessionWait(session.id, { waitForInput: true });
-    await sessionRuntime.updateSettings(session.id, { currentNode: 'fixture-node' });
+    await sessionManager.enqueueSessionItem(session.id, notice, { trigger: false });
     await sessionManager.requestSessionDequeue(session.id);
     assert.equal(processed, 1);
     assert.equal((await metadataStore.readSessionHistorySnapshot(session.id)).meta.wait, undefined);
   } finally {
     sessionManager.setSessionTriggerCallback(() => {});
-    await sessionManager.deleteSession(session.id);
-  }
-});
-
-test('settings IO failure preserves a real wait and the applied selection notice', { timeout: 15_000 }, async () => {
-  const session = await sessionManager.getSession(id('real_wait_overlap'));
-  const gate = () => {
-    let resolve!: () => void;
-    const promise = new Promise<void>(accept => { resolve = accept; });
-    return { promise, resolve };
-  };
-  const toolsReady = gate(); const toolsRelease = gate();
-  const writing = gate(); const writeRelease = gate(); const waitEntered = gate();
-  const originalChat = llm.chat;
-  const originalTools = llm.executeTools;
-  const originalWait = sessionManager.startSessionWaitForSession;
-  let calls = 0;
-  (llm as any).chat = async (_parts: unknown, _owner: Session, _iteration: number, options: any) => {
-    calls++;
-    const call = { id: 'real-wait', name: 'wait', args: { waitForInput: true, reason: 'real wait after selection' } };
-    await options.appendMessage({ role: 'model', parts: [{ functionCall: call }] });
-    return { toolCalls: [call] };
-  };
-  (llm as any).executeTools = async (...args: Parameters<typeof llm.executeTools>) => {
-    toolsReady.resolve(); await toolsRelease.promise;
-    return originalTools(...args);
-  };
-  (sessionManager as any).startSessionWaitForSession = (...args: Parameters<typeof originalWait>) => {
-    const result = originalWait(...args); waitEntered.resolve(); return result;
-  };
-  const runner = new SessionTurnRunner(new LocalSessionTurnHost());
-  let activeTurn: Promise<void> | undefined;
-  let selection: Promise<unknown> | undefined;
-  sessionManager.setSessionTriggerCallback(target => { activeTurn = runner.processSessionQueue(target); return activeTurn; });
-  try {
-    await sessionManager.enqueueSessionItem(session.id, { type: 'user', parts: [{ text: 'please wait for input' }] });
-    await toolsReady.promise;
-    let once = true;
-    sessionManager.setSessionPersistenceFaultInjectorForTests(async (phase, target) => {
-      if (phase === 'history' && target === session.id && once) {
-        once = false; writing.resolve(); await writeRelease.promise;
-        throw new Error('one passive selection write failure');
-      }
-    });
-    selection = sessionRuntime.updateSettings(session.id, { currentNode: 'node-a' });
-    await writing.promise;
-    toolsRelease.resolve(); await waitEntered.promise;
-    const waitId = session.meta.wait.id;
-    writeRelease.resolve(); await selection; await activeTurn;
-    sessionManager.setSessionPersistenceFaultInjectorForTests(null);
-    const durable = await metadataStore.readSessionHistorySnapshot(session.id);
-    assert.equal(calls, 1);
-    assert.equal(session.busy, false);
-    assert.equal(session.meta.wait.id, waitId);
-    assert.equal(durable.meta.wait.id, waitId);
-    assert.equal(durable.meta.wait.reason, 'real wait after selection');
-    assert.deepEqual(durable.history.map((message: Message) => message.role), ['user', 'model', 'tool']);
-    assert.equal(durable.history[2].parts[0].functionResponse.response.output, 'ok');
-    assert.equal(durable.queue.length, 1);
-    assert.equal(parseFoxwarmOpeningTag(durable.queue[0].parts![0].system)!.attrs.newNode, 'node-a');
-    assert.equal(durable.currentNode, 'node-a');
-  } finally {
-    toolsRelease.resolve(); writeRelease.resolve();
-    await selection?.catch(() => {}); await activeTurn?.catch(() => {});
-    sessionManager.setSessionPersistenceFaultInjectorForTests(null);
-    sessionManager.setSessionTriggerCallback(() => {});
-    (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalTools;
-    (sessionManager as any).startSessionWaitForSession = originalWait;
-    await sessionManager.deleteSession(session.id);
-  }
-});
-
-
-test('settings IO failure does not replay accepted input consumed by real chat or contradict its notice', { timeout: 15_000 }, async () => {
-  const gate = () => {
-    let resolve!: () => void;
-    const promise = new Promise<void>(accept => { resolve = accept; });
-    return { promise, resolve };
-  };
-  const firstSent = gate(); const providerRelease = gate();
-  const modelSaving = gate(); const modelRelease = gate();
-  const selectionSaving = gate(); const selectionRelease = gate(); const consumed = gate();
-  const originals = { post: axios.post, load: config.loadModelsConfig, resolve: config.resolveModelConfig,
-    append: sessionManager.appendQueuedSessionMessages };
-  const models = config.loadModelsConfigFromObject({ default: 'fixture/a', providers: {
-    fixture: { providerType: 'openai-completions', baseUrl: 'https://synthetic.invalid/v1', apiKey: 'synthetic', models: ['a'] },
-  } });
-  (config as any).loadModelsConfig = () => models;
-  (config as any).resolveModelConfig = (key?: string) => ({ modelsConfig: models, defaultKey: models.default,
-    currentKey: key || models.default, modelEntry: models.models[key || models.default] });
-  let calls = 0;
-  (axios as any).post = async () => {
-    const call = ++calls;
-    if (call === 1) { firstSent.resolve(); await providerRelease.promise; }
-    return { status: 200, statusText: 'OK', headers: {}, data: Readable.from([
-      `data: ${JSON.stringify({ choices: [{ delta: { content: `provider answer ${call}` }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`,
-    ]) };
-  };
-  const session = await sessionManager.getSession(id('real_consumption'));
-  let activeTurn: Promise<void> | undefined;
-  let selection: Promise<unknown> | undefined;
-  try {
-    sessionManager.setSessionTriggerCallback(() => {});
-    await sessionRuntime.updateSettings(session.id, { model: 'fixture/a' });
-    const runner = new SessionTurnRunner(new LocalSessionTurnHost());
-    sessionManager.setSessionTriggerCallback(target => { activeTurn = runner.processSessionQueue(target); return activeTurn; });
-    let stage = 0;
-    sessionManager.setSessionPersistenceFaultInjectorForTests(async (phase, target, owner) => {
-      if (phase !== 'history' || target !== session.id) return;
-      if (stage === 0 && owner?.history.at(-1)?.role === 'model') {
-        stage = 1; modelSaving.resolve(); await modelRelease.promise;
-      } else if (stage === 1 && owner?.currentNode === 'node-a') {
-        stage = 2; selectionSaving.resolve(); await selectionRelease.promise;
-        throw new Error('one settings write failure');
-      }
-    });
-    await sessionManager.enqueueSessionItem(session.id, { type: 'user', parts: [{ text: 'initial input' }] });
-    await firstSent.promise;
-    await sessionManager.enqueueSessionItem(session.id, { type: 'user', parts: [{ text: 'accepted correction' }] });
-    providerRelease.resolve(); await modelSaving.promise;
-    selection = sessionRuntime.updateSettings(session.id, { currentNode: 'node-a' });
-    await new Promise<void>(resolve => setImmediate(resolve));
-    (sessionManager as any).appendQueuedSessionMessages = (...args: Parameters<typeof originals.append>) => {
-      const result = originals.append(...args);
-      if (args[1].some(message => message.parts.some(part => part.text === 'accepted correction'))) consumed.resolve();
-      return result;
-    };
-    modelRelease.resolve(); await selectionSaving.promise; await consumed.promise;
-    assert.deepEqual(session.queue, []);
-    selectionRelease.resolve(); await selection; await activeTurn;
-    const durable = await metadataStore.readSessionHistorySnapshot(session.id);
-    assert.equal(calls, 2);
-    assert.equal(durable.history.filter((message: Message) => message.parts.some(part => part.text === 'accepted correction')).length, 1);
-    assert.equal(durable.history.filter((message: Message) => message.parts.some(part => part.system?.includes('newNode="node-a"'))).length, 1);
-    assert.equal(session.currentNode, 'node-a'); assert.equal(durable.currentNode, 'node-a');
-    assert.deepEqual(durable.queue, []);
-  } finally {
-    providerRelease.resolve(); modelRelease.resolve(); selectionRelease.resolve();
-    await selection?.catch(() => {}); await activeTurn?.catch(() => {});
-    sessionManager.setSessionPersistenceFaultInjectorForTests(null);
-    sessionManager.setSessionTriggerCallback(() => {});
-    (axios as any).post = originals.post;
-    (config as any).loadModelsConfig = originals.load; (config as any).resolveModelConfig = originals.resolve;
-    (sessionManager as any).appendQueuedSessionMessages = originals.append;
-    await sessionManager.deleteSession(session.id);
-  }
-});
-
-test('settings IO failure does not undo an owned managed release', { timeout: 15_000 }, async () => {
-  const owner = await sessionManager.getSession(id('release_owner'));
-  const session = await sessionManager.getSession(id('release_target'));
-  let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });
-  let entered!: () => void; const writing = new Promise<void>(resolve => { entered = resolve; });
-  let releasing!: () => void; const releasedMutation = new Promise<void>(resolve => { releasing = resolve; });
-  const originalSave = sessionManager.saveSession;
-  let selection: Promise<unknown> | undefined;
-  let released: ReturnType<typeof managedSessions.releaseManagedSession> | undefined;
-  sessionManager.setSessionTriggerCallback(() => {});
-  try {
-    const lease = await managedSessions.openManagedSession({ sessionId: session.id, ownerSessionId: owner.id });
-    await sessionManager.enqueueSessionItem(session.id, { type: 'user', parts: [{ text: 'original input' }] });
-    let once = true;
-    sessionManager.setSessionPersistenceFaultInjectorForTests(async (phase, target) => {
-      if (phase === 'history' && target === session.id && once) {
-        once = false; entered(); await held; throw new Error('one settings write failure');
-      }
-    });
-    selection = sessionRuntime.updateSettings(session.id, { currentNode: 'node-a' });
-    await writing;
-    (sessionManager as any).saveSession = (...args: Parameters<typeof originalSave>) => {
-      const result = originalSave(...args);
-      if (args[0] === session.id) releasing();
-      return result;
-    };
-    released = managedSessions.releaseManagedSession({ sessionId: session.id, ownerSessionId: owner.id, leaseId: lease.leaseId });
-    await releasedMutation;
-    assert.equal(session.meta.managedSession, undefined);
-    assert.equal(session.queue.length, 2);
-    release(); await selection;
-    assert.equal((await released).releasedPendingInboxCount, 2);
-    const durable = await metadataStore.readSessionHistorySnapshot(session.id);
-    assert.equal(durable.meta.managedSession, undefined);
-    assert.equal(await managedSessions.getManagedSessionStateForTests(session.id), undefined);
-    assert.equal(durable.queue.length, 2);
-    assert.equal(durable.queue[0].parts[0].text, 'original input');
-    assert.equal(parseFoxwarmOpeningTag(durable.queue[1].parts[0].system)!.attrs.newNode, 'node-a');
-    assert.equal(durable.currentNode, 'node-a');
-    const next = await managedSessions.openManagedSession({ sessionId: session.id, ownerSessionId: owner.id });
-    assert.notEqual(next.leaseId, lease.leaseId);
-  } finally {
-    release(); await selection?.catch(() => {}); await released?.catch(() => {});
-    sessionManager.setSessionPersistenceFaultInjectorForTests(null);
-    (sessionManager as any).saveSession = originalSave;
-    await sessionManager.deleteSession(session.id); await sessionManager.deleteSession(owner.id);
-  }
-});
-
-test('a later selection keeps its normalized pair and both actual change records after settings IO error', async () => {
-  const session = await sessionManager.getSession(id('later_selection'));
-  let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });
-  let entered!: () => void; const writing = new Promise<void>(resolve => { entered = resolve; });
-  let first: Promise<unknown> | undefined; let second: Promise<unknown> | undefined;
-  try {
-    let once = true;
-    sessionManager.setSessionPersistenceFaultInjectorForTests(async (phase, target) => {
-      if (phase === 'history' && target === session.id && once) {
-        once = false; entered(); await held; throw new Error('one settings write failure');
-      }
-    });
-    first = sessionRuntime.updateSettings(session.id, { model: 'fixture/a', effort: 'low', currentNode: 'node-a' });
-    await writing;
-    second = sessionRuntime.updateSettings(session.id, { model: 'fixture/b', effort: 'low', currentNode: 'node-b' });
-    await new Promise<void>(resolve => setImmediate(resolve));
-    assert.equal(session.model, 'fixture/b', 'the original settings path applies hot state before awaiting its save');
-    release(); await Promise.all([first, second]);
-    const durable = await metadataStore.readSessionHistorySnapshot(session.id);
-    assert.equal(durable.model, 'fixture/b'); assert.equal(durable.effort, 'low');
-    assert.equal(durable.currentNode, 'node-b');
-    assert.equal(durable.queue.length, 2);
-    const changes = durable.queue.map((item: any) => parseFoxwarmOpeningTag(item.parts[0].system)!.attrs);
-    assert.deepEqual(changes.map((change: any) => [change.oldModel, change.newModel, change.newEffort]), [
-      ['default', 'fixture/a', 'low'], ['fixture/a', 'fixture/b', 'low'],
-    ]);
-  } finally {
-    release(); await first?.catch(() => {}); await second?.catch(() => {});
-    sessionManager.setSessionPersistenceFaultInjectorForTests(null);
     await sessionManager.deleteSession(session.id);
   }
 });

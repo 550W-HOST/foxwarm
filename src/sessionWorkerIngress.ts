@@ -1,4 +1,3 @@
-import type { SessionSettingsActor } from './session/selectionSettings';
 import crypto from 'node:crypto';
 import fs from 'fs-extra';
 import { logger } from './common';
@@ -280,8 +279,8 @@ export class SessionWorkerIngressCoordinator {
     return admitted.completion;
   }
 
-  async updateSettings(requestedSessionId: string, patch: SessionWorkerSettingsPatch, actor?: SessionSettingsActor): Promise<SessionWorkerSettingsResult> {
-    return this.invokeEnsuringWorker(requestedSessionId, 'change Session settings', (sessionId, expected) => this.supervisor.updateSettingsActivated(sessionId, expected, patch, actor));
+  async updateSettings(requestedSessionId: string, patch: SessionWorkerSettingsPatch): Promise<SessionWorkerSettingsResult> {
+    return this.invokeEnsuringWorker(requestedSessionId, 'change Session settings', (sessionId, expected) => this.supervisor.updateSettingsActivated(sessionId, expected, patch));
   }
 
   async updateCatalogFieldsWithinExistingAdmission(requestedSessionId: string, patch: SessionWorkerCatalogFieldsPatch): Promise<void> {

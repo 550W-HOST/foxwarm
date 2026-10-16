@@ -2532,9 +2532,8 @@ async function maybeResumeManagedSessionControllerRun(session: Session, managed:
   }
 }
 
-export async function enqueueSessionItemForLoadedSession(session: Session, item: QueueItem,
-  options: SessionEnqueueOptions = {}, assertAdmissionActive?: () => void,
-  settingsWriter?: () => Promise<void>): Promise<void> {
+async function enqueueSessionItemForLoadedSession(session: Session, item: QueueItem,
+  options: SessionEnqueueOptions = {}, assertAdmissionActive?: () => void): Promise<void> {
   const sessionId = session.id;
   item = (await externalizeQueueItemImages(item)).item;
   let receiptPlan: AcceptedExternalEventReceiptPlan | undefined;
@@ -2565,17 +2564,14 @@ export async function enqueueSessionItemForLoadedSession(session: Session, item:
     }
   }
   const managedBeforeEnqueue = !!getManagedSessionState(session);
-  // Owner settings already changed the hot selection. Their notice records
-  // that fact under the original settings writer, not a new undo transaction.
-  const rollbackSnapshot = !settingsWriter && (item.externalEventId || options.trigger === false)
+  const rollbackSnapshot = (item.externalEventId || options.trigger === false)
     ? { meta: structuredClone(session.meta), queue: structuredClone(session.queue) }
     : undefined;
   let persistedAfterExternalReceipt = false;
   const persistSession = async (): Promise<void> => {
-    // Settings keep their original writer. Other external/passive admission
-    // retains strict durability; ordinary internal producers keep compatibility.
-    if (settingsWriter) await settingsWriter();
-    else if (assertAdmissionActive || options.trigger === false) await saveSessionForSessionCritical(session);
+    // External admission and passive notices require an awaited durable save.
+    // Ordinary internal producers retain their existing compatibility writer.
+    if (assertAdmissionActive || options.trigger === false) await saveSessionForSessionCritical(session);
     else await saveSession(sessionId);
     if (item.externalEventId) persistedAfterExternalReceipt = true;
   };

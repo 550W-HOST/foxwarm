@@ -3219,7 +3219,8 @@ test('LocalSessionTurnHost runs detached normal chat through explicit current-se
     });
     assert.equal(result.text, 'detached answer');
     assert.deepEqual(appended.map(message => message.role), ['user', 'model']);
-    assert.equal(persistCount, 1);
+    assert.ok(persistCount > 0);
+    assert.equal(session.meta.lastEffectiveRequest?.modelId, result.modelId);
     assert.equal(events.some(event => event.type === 'model-stream-reset'), true);
     assert.equal(events.some(event => event.type === 'model-stream-update'), true);
     assert.equal(registered.length, 1);

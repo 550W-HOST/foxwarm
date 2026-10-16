@@ -1,4 +1,3 @@
-import { parseFoxwarmOpeningTag } from '../utils/promptWrappers';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { COMMANDS } from '../commands';
@@ -48,12 +47,7 @@ test('model and child-model commands parse effort-only and atomic default clears
     const cleared = await sessionManager.getSession(sessionId);
     assert.equal(cleared.model, undefined);
     assert.equal(cleared.effort, undefined);
-    assert.equal(cleared.queue.length, 1);
-    const selectionTag = parseFoxwarmOpeningTag(cleared.queue[0].parts![0].system)!;
-    assert.equal(selectionTag.attrs.actorKind, 'channel');
-    assert.equal(selectionTag.attrs.actorSenderId, 'fixture-user');
-    assert.equal(selectionTag.attrs.actorChannelType, 'fixture');
-    assert.equal(selectionTag.attrs.newModel, 'default');
+    assert.equal(cleared.queue.length, 0);
 
     await handleSessionCommand(ctx, ['child-model', '--effort', 'max'], sessionId, cleared as any);
     assert.equal((await sessionManager.getSession(sessionId)).childEffortDefault, 'max');

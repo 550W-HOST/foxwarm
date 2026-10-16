@@ -140,16 +140,16 @@ test('local SessionRuntime DTO seam clones projections and preserves event order
 
     const historyBefore = await client.call('getHistory', { sessionId });
     assert.ok(historyBefore);
-    assert.equal(historyBefore!.queue.length, 2);
-    historyBefore!.queue[1].parts![0].text = 'caller-mutated-queue';
+    assert.equal(historyBefore!.queue.length, 1);
+    historyBefore!.queue[0].parts![0].text = 'caller-mutated-queue';
     const historyAfter = await client.call('getHistory', { sessionId });
-    assert.equal(historyAfter!.queue[1].parts![0].text, 'queued-through-runtime');
+    assert.equal(historyAfter!.queue[0].parts![0].text, 'queued-through-runtime');
 
     session.busy = true;
     await sessionManager.saveSession(sessionId);
     assert.deepEqual(await client.call('control', { sessionId, action: 'dequeue' }), {
       action: 'dequeue',
-      queuedItems: 2,
+      queuedItems: 1,
       stoppedCurrent: true,
       abortedInFlight: false,
     });

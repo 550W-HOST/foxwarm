@@ -319,7 +319,16 @@ export interface TokenUsage {
   outputTokens: number;
 }
 
+/** Last configuration adopted by a normal authoritative LLM attempt, not a delivery receipt. */
+export interface EffectiveRequestSelection {
+  modelId: string;
+  nodeId: string;
+  effort: ModelEffort;
+  missingModelKey?: string;
+}
+
 export interface SessionMeta {
+  lastEffectiveRequest?: EffectiveRequestSelection;
   lastMessageTime: number;
   messageCount?: number; // Cached message count for quick access
   /** Newest 32 authoritative receipts for externally acknowledged session events. */
