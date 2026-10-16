@@ -10,12 +10,14 @@ internal sealed class SqliteBatchWriter : IAsyncDisposable
 {
     internal const int QueueCapacity = 256;
     internal const int BatchLimit = 64;
-    private readonly Channel<Command> queue = Channel.CreateBounded<Command>(new BoundedChannelOptions(QueueCapacity)
-    {
-        SingleReader = true,
-        FullMode = BoundedChannelFullMode.Wait,
-        AllowSynchronousContinuations = false,
-    });
+    private readonly Channel<Command> queue = Channel.CreateBounded<Command>(
+        new BoundedChannelOptions(QueueCapacity)
+        {
+            SingleReader = true,
+            FullMode = BoundedChannelFullMode.Wait,
+            AllowSynchronousContinuations = false,
+        }
+    );
     private readonly Func<SqliteConnection> open;
     private readonly Task loop;
     internal Action<SqliteConnection, SqliteTransaction, int>? BeforeCommit { get; set; }
@@ -41,7 +43,10 @@ internal sealed class SqliteBatchWriter : IAsyncDisposable
         CancellationToken token = default
     ) => AdmitAsync(new Exclusive<T>(execute, token), token);
 
-    private async ValueTask<WriteReceipt<T>> AdmitAsync<T>(ResultCommand<T> command, CancellationToken token)
+    private async ValueTask<WriteReceipt<T>> AdmitAsync<T>(
+        ResultCommand<T> command,
+        CancellationToken token
+    )
     {
         await queue.Writer.WriteAsync(command, token).ConfigureAwait(false);
         return new(command.Completion.Task);
@@ -54,7 +59,9 @@ internal sealed class SqliteBatchWriter : IAsyncDisposable
         Command? current = null;
         try
         {
-            while (pending is not null || await queue.Reader.WaitToReadAsync().ConfigureAwait(false))
+            while (
+                pending is not null || await queue.Reader.WaitToReadAsync().ConfigureAwait(false)
+            )
             {
                 var first = pending ?? await queue.Reader.ReadAsync().ConfigureAwait(false);
                 pending = null;
@@ -146,6 +153,7 @@ internal sealed class SqliteBatchWriter : IAsyncDisposable
     {
         internal Exception? Error;
         internal virtual bool IsExclusive => false;
+
         internal bool CancelBeforeExecution()
         {
             if (!token.IsCancellationRequested)
@@ -153,6 +161,7 @@ internal sealed class SqliteBatchWriter : IAsyncDisposable
             Error = new OperationCanceledException(token);
             return true;
         }
+
         internal abstract void Execute(SqliteConnection connection, SqliteTransaction transaction);
         internal abstract Task RunExclusiveAsync(SqliteConnection connection);
         internal abstract void Complete();
@@ -161,8 +170,11 @@ internal sealed class SqliteBatchWriter : IAsyncDisposable
 
     private abstract class ResultCommand<T>(CancellationToken token) : Command(token)
     {
-        internal readonly TaskCompletionSource<T> Completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal readonly TaskCompletionSource<T> Completion = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         protected T result = default!;
+
         internal override void Complete()
         {
             if (Error is { } error)
@@ -170,6 +182,7 @@ internal sealed class SqliteBatchWriter : IAsyncDisposable
             else
                 Completion.TrySetResult(result);
         }
+
         internal override void Fail(Exception error)
         {
             if (error is OperationCanceledException cancelled)
@@ -179,18 +192,32 @@ internal sealed class SqliteBatchWriter : IAsyncDisposable
         }
     }
 
-    private sealed class Work<T>(Func<SqliteConnection, SqliteTransaction, T> execute, CancellationToken token)
-        : ResultCommand<T>(token)
+    private sealed class Work<T>(
+        Func<SqliteConnection, SqliteTransaction, T> execute,
+        CancellationToken token
+    ) : ResultCommand<T>(token)
     {
-        internal override void Execute(SqliteConnection connection, SqliteTransaction transaction) => result = execute(connection, transaction);
-        internal override Task RunExclusiveAsync(SqliteConnection connection) => throw new InvalidOperationException();
+        internal override void Execute(
+            SqliteConnection connection,
+            SqliteTransaction transaction
+        ) => result = execute(connection, transaction);
+
+        internal override Task RunExclusiveAsync(SqliteConnection connection) =>
+            throw new InvalidOperationException();
     }
 
-    private sealed class Exclusive<T>(Func<SqliteConnection, Task<T>> execute, CancellationToken token)
-        : ResultCommand<T>(token)
+    private sealed class Exclusive<T>(
+        Func<SqliteConnection, Task<T>> execute,
+        CancellationToken token
+    ) : ResultCommand<T>(token)
     {
         internal override bool IsExclusive => true;
-        internal override void Execute(SqliteConnection connection, SqliteTransaction transaction) => throw new InvalidOperationException();
+
+        internal override void Execute(
+            SqliteConnection connection,
+            SqliteTransaction transaction
+        ) => throw new InvalidOperationException();
+
         internal override async Task RunExclusiveAsync(SqliteConnection connection)
         {
             try
@@ -251,7 +278,9 @@ internal static class SqliteWriterOwners
     {
         private bool released;
         internal SqliteBatchWriter Writer => entry.Writer;
+
         public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
+
         public ValueTask DisposeAsync()
         {
             lock (sync)

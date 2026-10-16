@@ -196,30 +196,40 @@ internal sealed partial class CommittedArchiveIdentity(string root)
     private void Mirror(Dictionary<string, string> mappings)
     {
         var ownedMappings = mappings.ToArray();
-        var receipt = SqliteArchiveMessageStore.EnqueueWriteAsync(DatabasePath, (connection, transaction) =>
-        {
-        using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = """
-            INSERT INTO archive_session_id_reservations(session_id,canonical_session_id,created_at,updated_at)
-            VALUES($id,$canonical,$at,$at)
-            ON CONFLICT(session_id) DO UPDATE SET updated_at=excluded.updated_at
-            WHERE archive_session_id_reservations.canonical_session_id=excluded.canonical_session_id
-            """;
-        command.Parameters.Add("$id", SqliteType.Text);
-        command.Parameters.Add("$canonical", SqliteType.Text);
-        command.Parameters.AddWithValue("$at", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        foreach (var (id, canonical) in ownedMappings)
-        {
-            command.Parameters["$id"].Value = id;
-            command.Parameters["$canonical"].Value = canonical;
-            if (command.ExecuteNonQuery() != 1)
-                throw new InvalidDataException(
-                    "Archive identity mirror changed during initialization."
-                );
-        }
-        return true;
-        }).AsTask().GetAwaiter().GetResult();
+        var receipt = SqliteArchiveMessageStore
+            .EnqueueWriteAsync(
+                DatabasePath,
+                (connection, transaction) =>
+                {
+                    using var command = connection.CreateCommand();
+                    command.Transaction = transaction;
+                    command.CommandText = """
+                        INSERT INTO archive_session_id_reservations(session_id,canonical_session_id,created_at,updated_at)
+                        VALUES($id,$canonical,$at,$at)
+                        ON CONFLICT(session_id) DO UPDATE SET updated_at=excluded.updated_at
+                        WHERE archive_session_id_reservations.canonical_session_id=excluded.canonical_session_id
+                        """;
+                    command.Parameters.Add("$id", SqliteType.Text);
+                    command.Parameters.Add("$canonical", SqliteType.Text);
+                    command.Parameters.AddWithValue(
+                        "$at",
+                        DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    );
+                    foreach (var (id, canonical) in ownedMappings)
+                    {
+                        command.Parameters["$id"].Value = id;
+                        command.Parameters["$canonical"].Value = canonical;
+                        if (command.ExecuteNonQuery() != 1)
+                            throw new InvalidDataException(
+                                "Archive identity mirror changed during initialization."
+                            );
+                    }
+                    return true;
+                }
+            )
+            .AsTask()
+            .GetAwaiter()
+            .GetResult();
         receipt.Completion.GetAwaiter().GetResult();
     }
 

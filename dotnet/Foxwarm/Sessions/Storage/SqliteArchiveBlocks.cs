@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
-using Microsoft.Data.Sqlite;
 using Foxwarm.Persistence;
+using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Sessions;
 
@@ -199,25 +199,38 @@ public sealed partial class SqliteArchiveMessageStore
             throw new InvalidDataException("Archive block is outside supported current shape.");
     }
 
-    private sealed record PreparedBlock(ArchiveBlockRecord Record, string? SourceIds, string? Facts);
+    private sealed record PreparedBlock(
+        ArchiveBlockRecord Record,
+        string? SourceIds,
+        string? Facts
+    );
 
     private PreparedBlock PrepareBlock(ArchiveBlockRecord block)
     {
         ValidateBlock(block);
-        var owned = block with { SourceBlockIds = block.SourceBlockIds?.DeepClone() as JsonArray, MemoryFacts = block.MemoryFacts?.DeepClone() as JsonArray };
+        var owned = block with
+        {
+            SourceBlockIds = block.SourceBlockIds?.DeepClone() as JsonArray,
+            MemoryFacts = block.MemoryFacts?.DeepClone() as JsonArray,
+        };
         return new(owned, owned.SourceBlockIdsJson, owned.MemoryFactsJson);
     }
 
     public IReadOnlyList<ArchiveBlockRecord> WriteBlocks(IReadOnlyList<ArchiveBlockRecord> records)
     {
-        if (records.Count == 0) return [];
+        if (records.Count == 0)
+            return [];
         var prepared = records.Select(PrepareBlock).ToArray();
         var inserted = Write((connection, tx) => WriteBlocks(connection, tx, prepared));
         var ids = inserted.Select(block => block.Id).ToHashSet();
         return records.Where(block => ids.Remove(block.Id)).ToArray();
     }
 
-    private IReadOnlyList<ArchiveBlockRecord> WriteBlocks(SqliteConnection connection, SqliteTransaction tx, IReadOnlyList<PreparedBlock> records)
+    private IReadOnlyList<ArchiveBlockRecord> WriteBlocks(
+        SqliteConnection connection,
+        SqliteTransaction tx,
+        IReadOnlyList<PreparedBlock> records
+    )
     {
         RequireWriteIdentity(connection, sessionId);
         var inserted = new List<ArchiveBlockRecord>();
@@ -271,10 +284,7 @@ public sealed partial class SqliteArchiveMessageStore
             insert.Parameters.AddWithValue("$kind", block.SourceKind);
             insert.Parameters.AddWithValue("$first", block.SourceStart);
             insert.Parameters.AddWithValue("$last", block.SourceEnd);
-            insert.Parameters.AddWithValue(
-                "$ids",
-                (object?)prepared.SourceIds ?? DBNull.Value
-            );
+            insert.Parameters.AddWithValue("$ids", (object?)prepared.SourceIds ?? DBNull.Value);
             insert.Parameters.AddWithValue("$rawFirst", block.RawStartSeq);
             insert.Parameters.AddWithValue("$rawLast", block.RawEndSeq);
             insert.Parameters.AddWithValue(
@@ -283,10 +293,7 @@ public sealed partial class SqliteArchiveMessageStore
             );
             insert.Parameters.AddWithValue("$end", (object?)block.RawEndTimestamp ?? DBNull.Value);
             insert.Parameters.AddWithValue("$summary", block.Summary);
-            insert.Parameters.AddWithValue(
-                "$facts",
-                (object?)prepared.Facts ?? DBNull.Value
-            );
+            insert.Parameters.AddWithValue("$facts", (object?)prepared.Facts ?? DBNull.Value);
             insert.Parameters.AddWithValue("$at", block.CreatedAt);
             insert.Parameters.AddWithValue(
                 "$friction",
@@ -389,12 +396,23 @@ public sealed partial class SqliteArchiveMessageStore
 
     public void RollbackInsertedBlocks(IReadOnlyList<ArchiveBlockRecord> blocks)
     {
-        if (blocks.Count == 0) return;
+        if (blocks.Count == 0)
+            return;
         var prepared = blocks.Select(PrepareBlock).ToArray();
-        Write((connection, tx) => { RollbackInsertedBlocks(connection, tx, prepared); return true; });
+        Write(
+            (connection, tx) =>
+            {
+                RollbackInsertedBlocks(connection, tx, prepared);
+                return true;
+            }
+        );
     }
 
-    private void RollbackInsertedBlocks(SqliteConnection connection, SqliteTransaction tx, IReadOnlyList<PreparedBlock> blocks)
+    private void RollbackInsertedBlocks(
+        SqliteConnection connection,
+        SqliteTransaction tx,
+        IReadOnlyList<PreparedBlock> blocks
+    )
     {
         RequireWriteIdentity(connection, sessionId);
         foreach (var prepared in blocks)
@@ -415,10 +433,7 @@ public sealed partial class SqliteArchiveMessageStore
             command.Parameters.AddWithValue("$kind", block.SourceKind);
             command.Parameters.AddWithValue("$first", block.SourceStart);
             command.Parameters.AddWithValue("$last", block.SourceEnd);
-            command.Parameters.AddWithValue(
-                "$ids",
-                (object?)prepared.SourceIds ?? DBNull.Value
-            );
+            command.Parameters.AddWithValue("$ids", (object?)prepared.SourceIds ?? DBNull.Value);
             command.Parameters.AddWithValue("$rawFirst", block.RawStartSeq);
             command.Parameters.AddWithValue("$rawLast", block.RawEndSeq);
             command.Parameters.AddWithValue(
@@ -427,10 +442,7 @@ public sealed partial class SqliteArchiveMessageStore
             );
             command.Parameters.AddWithValue("$end", (object?)block.RawEndTimestamp ?? DBNull.Value);
             command.Parameters.AddWithValue("$summary", block.Summary);
-            command.Parameters.AddWithValue(
-                "$facts",
-                (object?)prepared.Facts ?? DBNull.Value
-            );
+            command.Parameters.AddWithValue("$facts", (object?)prepared.Facts ?? DBNull.Value);
             command.Parameters.AddWithValue("$at", block.CreatedAt);
             command.Parameters.AddWithValue(
                 "$friction",
@@ -443,11 +455,27 @@ public sealed partial class SqliteArchiveMessageStore
         }
     }
 
-    internal async ValueTask<WriteReceipt<(IReadOnlyList<ArchiveBlockRecord> Blocks, IReadOnlyList<ArchiveMessageRecord> Messages)>> EnqueueCompactionAsync(IReadOnlyList<ArchiveBlockRecord> blocks, IReadOnlyList<ArchiveMessageRecord> messages)
+    internal async ValueTask<
+        WriteReceipt<(
+            IReadOnlyList<ArchiveBlockRecord> Blocks,
+            IReadOnlyList<ArchiveMessageRecord> Messages
+        )>
+    > EnqueueCompactionAsync(
+        IReadOnlyList<ArchiveBlockRecord> blocks,
+        IReadOnlyList<ArchiveMessageRecord> messages
+    )
     {
         var preparedBlocks = blocks.Select(PrepareBlock).ToArray();
         var preparedMessages = messages.Select(ValidateRecord).ToArray();
-        return await EnqueueWriteAsync(databasePath, (connection, tx) => (WriteBlocks(connection, tx, preparedBlocks), WriteMessages(connection, tx, preparedMessages))).ConfigureAwait(false);
+        return await EnqueueWriteAsync(
+                databasePath,
+                (connection, tx) =>
+                    (
+                        WriteBlocks(connection, tx, preparedBlocks),
+                        WriteMessages(connection, tx, preparedMessages)
+                    )
+            )
+            .ConfigureAwait(false);
     }
 
     private static bool HasFrictionColumn(SqliteConnection connection)

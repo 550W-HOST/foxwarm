@@ -13,21 +13,33 @@ public sealed class SqliteBatchWriterTests
         var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var writer = Create(path);
-        writer.BeforeBatch = () => { held.TrySetResult(); return release.Task; };
+        writer.BeforeBatch = () =>
+        {
+            held.TrySetResult();
+            return release.Task;
+        };
         var first = await writer.EnqueueAsync((db, tx) => Insert(db, tx, 1));
         await held.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var rejected = await writer.EnqueueAsync<int>((db, tx) =>
-        {
-            Insert(db, tx, 2);
-            throw new InvalidDataException("Reject this command, including its partial insert.");
-        });
-        var dependent = await writer.EnqueueAsync<int>((db, tx) =>
-        {
-            Assert.Equal(1, Count(db, tx));
-            Insert(db, tx, 3);
-            return 3;
-        });
-        var reachedCommit = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var rejected = await writer.EnqueueAsync<int>(
+            (db, tx) =>
+            {
+                Insert(db, tx, 2);
+                throw new InvalidDataException(
+                    "Reject this command, including its partial insert."
+                );
+            }
+        );
+        var dependent = await writer.EnqueueAsync<int>(
+            (db, tx) =>
+            {
+                Assert.Equal(1, Count(db, tx));
+                Insert(db, tx, 3);
+                return 3;
+            }
+        );
+        var reachedCommit = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         using var commit = new ManualResetEventSlim();
         writer.BeforeCommit = (_, _, size) =>
         {
@@ -43,7 +55,10 @@ public sealed class SqliteBatchWriterTests
             Assert.False(dependent.Completion.IsCompleted);
             Assert.Equal(0, ReadCount(path));
         }
-        finally { commit.Set(); }
+        finally
+        {
+            commit.Set();
+        }
         Assert.Equal(1, await first.Completion);
         await Assert.ThrowsAsync<InvalidDataException>(() => rejected.Completion);
         Assert.Equal(3, await dependent.Completion);
@@ -92,12 +107,15 @@ public sealed class SqliteBatchWriterTests
         using var before = new CancellationTokenSource();
         using var after = new CancellationTokenSource();
         var skipped = await writer.EnqueueAsync((db, tx) => Insert(db, tx, 1), before.Token);
-        var executed = await writer.EnqueueAsync((db, tx) =>
-        {
-            var value = Insert(db, tx, 2);
-            after.Cancel();
-            return value;
-        }, after.Token);
+        var executed = await writer.EnqueueAsync(
+            (db, tx) =>
+            {
+                var value = Insert(db, tx, 2);
+                after.Cancel();
+                return value;
+            },
+            after.Token
+        );
         var unrelated = await writer.EnqueueAsync((db, tx) => Insert(db, tx, 3));
         before.Cancel();
         release.SetResult();
@@ -115,8 +133,15 @@ public sealed class SqliteBatchWriterTests
         var writer = Create(path);
         var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        writer.BeforeBatch = () => { held.TrySetResult(); return release.Task; };
-        var receipts = new List<WriteReceipt<int>> { await writer.EnqueueAsync((db, tx) => Insert(db, tx, 1)) };
+        writer.BeforeBatch = () =>
+        {
+            held.TrySetResult();
+            return release.Task;
+        };
+        var receipts = new List<WriteReceipt<int>>
+        {
+            await writer.EnqueueAsync((db, tx) => Insert(db, tx, 1)),
+        };
         await held.Task.WaitAsync(TimeSpan.FromSeconds(5));
         for (var id = 2; id <= SqliteBatchWriter.QueueCapacity + 1; id++)
         {
@@ -131,7 +156,8 @@ public sealed class SqliteBatchWriterTests
         var shutdown = writer.DisposeAsync().AsTask();
         Assert.False(shutdown.IsCompleted);
         await Assert.ThrowsAsync<System.Threading.Channels.ChannelClosedException>(async () =>
-            await writer.EnqueueAsync((db, tx) => Insert(db, tx, 1000)));
+            await writer.EnqueueAsync((db, tx) => Insert(db, tx, 1000))
+        );
         release.SetResult();
         await shutdown.WaitAsync(TimeSpan.FromSeconds(10));
         await Task.WhenAll(receipts.Select(receipt => receipt.Completion));
@@ -142,11 +168,16 @@ public sealed class SqliteBatchWriterTests
     [Fact]
     public async Task Connection_startup_failure_resolves_first_and_all_other_accepted_receipts()
     {
-        await using var writer = new SqliteBatchWriter(() => throw new IOException("Cannot open writer."));
+        await using var writer = new SqliteBatchWriter(() =>
+            throw new IOException("Cannot open writer.")
+        );
         var receipt = await writer.EnqueueAsync((_, _) => 1);
-        await Assert.ThrowsAsync<IOException>(() => receipt.Completion.WaitAsync(TimeSpan.FromSeconds(5)));
+        await Assert.ThrowsAsync<IOException>(() =>
+            receipt.Completion.WaitAsync(TimeSpan.FromSeconds(5))
+        );
         await Assert.ThrowsAsync<System.Threading.Channels.ChannelClosedException>(async () =>
-            await writer.EnqueueAsync((_, _) => 2));
+            await writer.EnqueueAsync((_, _) => 2)
+        );
     }
 
     [Fact]
@@ -174,28 +205,32 @@ public sealed class SqliteBatchWriterTests
             Assert.False(later.Completion.IsCompleted);
             Assert.Equal(1, ReadCount(path));
         }
-        finally { release.TrySetResult(); }
+        finally
+        {
+            release.TrySetResult();
+        }
         await Task.WhenAll(maintenance.Completion, later.Completion);
         Assert.Equal(2, ReadCount(path));
         Assert.Equal(2, writer.CommittedBatches);
     }
 
-    private static SqliteBatchWriter Create(string path) => new(() =>
-    {
-        var db = new SqliteConnection($"Data Source={path};Pooling=False");
-        db.Open();
-        using var command = db.CreateCommand();
-        command.CommandText = """
-            PRAGMA journal_mode=WAL;
-            PRAGMA synchronous=FULL;
-            PRAGMA foreign_keys=ON;
-            CREATE TABLE rows(id INTEGER PRIMARY KEY);
-            CREATE TABLE parent(id INTEGER PRIMARY KEY);
-            CREATE TABLE child(parent_id INTEGER REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED);
-            """;
-        command.ExecuteNonQuery();
-        return db;
-    });
+    private static SqliteBatchWriter Create(string path) =>
+        new(() =>
+        {
+            var db = new SqliteConnection($"Data Source={path};Pooling=False");
+            db.Open();
+            using var command = db.CreateCommand();
+            command.CommandText = """
+                PRAGMA journal_mode=WAL;
+                PRAGMA synchronous=FULL;
+                PRAGMA foreign_keys=ON;
+                CREATE TABLE rows(id INTEGER PRIMARY KEY);
+                CREATE TABLE parent(id INTEGER PRIMARY KEY);
+                CREATE TABLE child(parent_id INTEGER REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED);
+                """;
+            command.ExecuteNonQuery();
+            return db;
+        });
 
     private static int Insert(SqliteConnection db, SqliteTransaction tx, int id)
     {

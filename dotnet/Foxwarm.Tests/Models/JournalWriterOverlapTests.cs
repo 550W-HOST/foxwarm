@@ -16,15 +16,32 @@ public sealed class JournalWriterOverlapTests
         var prepared = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var sends = 0;
         using var http = new HttpClient(new Handler(() => Interlocked.Increment(ref sends)));
-        var request = Owner(http, journal).RequestAsync("s", Catalog(), "model", null, "cache", "turn", History(),
-            (_, _) => Task.FromResult("prompt"), null, () => prepared.SetResult(), null, null, CancellationToken.None);
+        var request = Owner(http, journal)
+            .RequestAsync(
+                "s",
+                Catalog(),
+                "model",
+                null,
+                "cache",
+                "turn",
+                History(),
+                (_, _) => Task.FromResult("prompt"),
+                null,
+                () => prepared.SetResult(),
+                null,
+                null,
+                CancellationToken.None
+            );
         try
         {
             await prepared.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.False(request.IsCompleted);
             Assert.Equal(0, Volatile.Read(ref sends));
         }
-        finally { release.TrySetResult(); }
+        finally
+        {
+            release.TrySetResult();
+        }
         var result = await request.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(1, sends);
         Assert.NotNull(result.JournalRequestId);
@@ -40,10 +57,41 @@ public sealed class JournalWriterOverlapTests
         await using var journal = new LlmRequestJournalStore(temp.Path);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         journal.Writer.BeforeBatch = () => release.Task;
-        var request = await journal.EnqueueRequestAsync("s", "test", 0, "prompt", new(), History(), "model", "cache");
-        var badStart = await journal.EnqueueAttemptStartAsync(request.RequestId, 1, "model", null, "anthropic", new JsonObject(), "wrong prompt");
-        var goodStart = await journal.EnqueueAttemptStartAsync(request.RequestId, 1, "model", null, "anthropic", new JsonObject(), "prompt");
-        var result = await journal.EnqueueAttemptResultAsync(request.RequestId, 1, "success", new JsonObject { ["text"] = "done" }, null);
+        var request = await journal.EnqueueRequestAsync(
+            "s",
+            "test",
+            0,
+            "prompt",
+            new(),
+            History(),
+            "model",
+            "cache"
+        );
+        var badStart = await journal.EnqueueAttemptStartAsync(
+            request.RequestId,
+            1,
+            "model",
+            null,
+            "anthropic",
+            new JsonObject(),
+            "wrong prompt"
+        );
+        var goodStart = await journal.EnqueueAttemptStartAsync(
+            request.RequestId,
+            1,
+            "model",
+            null,
+            "anthropic",
+            new JsonObject(),
+            "prompt"
+        );
+        var result = await journal.EnqueueAttemptResultAsync(
+            request.RequestId,
+            1,
+            "success",
+            new JsonObject { ["text"] = "done" },
+            null
+        );
         Assert.False(request.Completion.IsCompleted);
         release.SetResult();
         await request.Completion;
@@ -64,9 +112,33 @@ public sealed class JournalWriterOverlapTests
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         journal.Writer.BeforeBatch = () => release.Task;
         using var cancel = new CancellationTokenSource();
-        var request = await journal.EnqueueRequestAsync("s", "test", 0, "prompt", new(), History(), "model", "cache", cancel.Token);
-        var start = await journal.EnqueueAttemptStartAsync(request.RequestId, 1, "model", null, "anthropic", new JsonObject(), "prompt");
-        var result = await journal.EnqueueAttemptResultAsync(request.RequestId, 1, "success", new JsonObject(), null);
+        var request = await journal.EnqueueRequestAsync(
+            "s",
+            "test",
+            0,
+            "prompt",
+            new(),
+            History(),
+            "model",
+            "cache",
+            cancel.Token
+        );
+        var start = await journal.EnqueueAttemptStartAsync(
+            request.RequestId,
+            1,
+            "model",
+            null,
+            "anthropic",
+            new JsonObject(),
+            "prompt"
+        );
+        var result = await journal.EnqueueAttemptResultAsync(
+            request.RequestId,
+            1,
+            "success",
+            new JsonObject(),
+            null
+        );
         cancel.Cancel();
         release.SetResult();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request.Completion);
@@ -82,25 +154,50 @@ public sealed class JournalWriterOverlapTests
         await using var journal = new LlmRequestJournalStore(temp.Path);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         journal.Writer.BeforeBatch = () => release.Task;
-        var failedPreparation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failedPreparation = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var sends = 0;
         using var http = new HttpClient(new Handler(() => Interlocked.Increment(ref sends)));
-        var request = Owner(http, journal).RequestAsync("s", Catalog(), "model", null, "cache", "turn", History(),
-            (_, _) => Task.FromResult("prompt"), null, null, null, null, CancellationToken.None,
-            journalRequestStarted: _ =>
-            {
-                failedPreparation.SetResult();
-                throw new InvalidOperationException("Local preparation failed.");
-            });
+        var request = Owner(http, journal)
+            .RequestAsync(
+                "s",
+                Catalog(),
+                "model",
+                null,
+                "cache",
+                "turn",
+                History(),
+                (_, _) => Task.FromResult("prompt"),
+                null,
+                null,
+                null,
+                null,
+                CancellationToken.None,
+                journalRequestStarted: _ =>
+                {
+                    failedPreparation.SetResult();
+                    throw new InvalidOperationException("Local preparation failed.");
+                }
+            );
         try
         {
             await failedPreparation.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.False(request.IsCompleted);
             Assert.Equal(0, sends);
         }
-        finally { release.TrySetResult(); }
-        await Assert.ThrowsAsync<InvalidOperationException>(() => request.WaitAsync(TimeSpan.FromSeconds(5)));
-        var restored = await journal.ReconstructAsync(Assert.Single(await journal.ListAsync("s", null, null, null, 10))!["requestId"]!.GetValue<string>());
+        finally
+        {
+            release.TrySetResult();
+        }
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            request.WaitAsync(TimeSpan.FromSeconds(5))
+        );
+        var restored = await journal.ReconstructAsync(
+            Assert.Single(await journal.ListAsync("s", null, null, null, 10))![
+                "requestId"
+            ]!.GetValue<string>()
+        );
         Assert.Empty(restored["attempts"]!.AsArray());
     }
 
@@ -112,9 +209,23 @@ public sealed class JournalWriterOverlapTests
         await using var second = new LlmRequestJournalStore(temp.Path);
         Assert.Same(first.Writer, second.Writer);
         await first.DisposeAsync();
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => first.BeginRequestAsync("s", "test", 0, "prompt", new(), History(), "model", "cache"));
-        var id = await second.BeginRequestAsync("s", "test", 0, "prompt", new(), History(), "model", "cache");
-        Assert.Equal("complete", (await second.ReconstructAsync(id))["completeness"]!.GetValue<string>());
+        await Assert.ThrowsAsync<ObjectDisposedException>(() =>
+            first.BeginRequestAsync("s", "test", 0, "prompt", new(), History(), "model", "cache")
+        );
+        var id = await second.BeginRequestAsync(
+            "s",
+            "test",
+            0,
+            "prompt",
+            new(),
+            History(),
+            "model",
+            "cache"
+        );
+        Assert.Equal(
+            "complete",
+            (await second.ReconstructAsync(id))["completeness"]!.GetValue<string>()
+        );
     }
 
     [Fact]
@@ -125,8 +236,21 @@ public sealed class JournalWriterOverlapTests
         var oldWriter = first.Writer;
         var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        oldWriter.BeforeBatch = () => { held.TrySetResult(); return release.Task; };
-        var admitted = await first.EnqueueRequestAsync("s", "test", 0, "prompt", new(), History(), "model", "cache");
+        oldWriter.BeforeBatch = () =>
+        {
+            held.TrySetResult();
+            return release.Task;
+        };
+        var admitted = await first.EnqueueRequestAsync(
+            "s",
+            "test",
+            0,
+            "prompt",
+            new(),
+            History(),
+            "model",
+            "cache"
+        );
         await held.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var disposal = first.DisposeAsync().AsTask();
         var reopening = Task.Run(() => new LlmRequestJournalStore(temp.Path));
@@ -135,32 +259,74 @@ public sealed class JournalWriterOverlapTests
             Assert.False(disposal.IsCompleted);
             Assert.False(admitted.Completion.IsCompleted);
         }
-        finally { release.TrySetResult(); }
+        finally
+        {
+            release.TrySetResult();
+        }
         await disposal.WaitAsync(TimeSpan.FromSeconds(5));
         await admitted.Completion;
         await using var reopened = await reopening.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.NotSame(oldWriter, reopened.Writer);
-        Assert.Equal("complete", (await reopened.ReconstructAsync(admitted.RequestId))["completeness"]!.GetValue<string>());
+        Assert.Equal(
+            "complete",
+            (await reopened.ReconstructAsync(admitted.RequestId))[
+                "completeness"
+            ]!.GetValue<string>()
+        );
     }
 
-    private static ModelRequestOwner Owner(HttpClient http, LlmRequestJournalStore journal) => new(http,
-        new ResponsesClientOptions(new Uri("http://localhost"), "model", "model", "token", "", 50), new ModelRouting(), journal: journal);
+    private static ModelRequestOwner Owner(HttpClient http, LlmRequestJournalStore journal) =>
+        new(
+            http,
+            new ResponsesClientOptions(
+                new Uri("http://localhost"),
+                "model",
+                "model",
+                "token",
+                "",
+                50
+            ),
+            new ModelRouting(),
+            journal: journal
+        );
 
-    private static IReadOnlyList<JsonObject> History() => [new JsonObject { ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["text"] = "hello" }) }];
+    private static IReadOnlyList<JsonObject> History() =>
+        [
+            new JsonObject
+            {
+                ["role"] = "user",
+                ["parts"] = new JsonArray(new JsonObject { ["text"] = "hello" }),
+            },
+        ];
 
-    private static HostModels Catalog() => HostModels.Parse(JsonNode.Parse("""
-        {"default":"model","providers":{"model":{"providerType":"anthropic","extraFields":{"stream":false},"baseUrl":"http://localhost","apiKey":"token","models":["model"]}}}
-        """)!.AsObject(), new JsonObject());
+    private static HostModels Catalog() =>
+        HostModels.Parse(
+            JsonNode
+                .Parse(
+                    """
+                    {"default":"model","providers":{"model":{"providerType":"anthropic","extraFields":{"stream":false},"baseUrl":"http://localhost","apiKey":"token","models":["model"]}}}
+                    """
+                )!
+                .AsObject(),
+            new JsonObject()
+        );
 
     private sealed class Handler(Action send) : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
         {
             send();
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent("{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}"),
-            });
+            return Task.FromResult(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        "{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}"
+                    ),
+                }
+            );
         }
     }
 }

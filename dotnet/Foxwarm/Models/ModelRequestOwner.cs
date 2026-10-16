@@ -125,351 +125,358 @@ internal sealed class ModelRequestOwner(
         history = baseHistory.Concat(retainedContext).ToArray();
         try
         {
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var selection = request is null ? null : routing.Select(request, cacheKey);
-            var leaf =
-                selection is null ? route
-                : catalog.Contains(selection.TargetKey) ? catalog.Resolve(selection.TargetKey)
-                : throw new ModelPreparationException(
-                    "Virtual target is missing from the captured catalog."
-                );
-            if (leaf.IsVirtual)
-                throw new ModelPreparationException("Virtual targets must be concrete models.");
-            var effort =
-                rawEffort is not null && leaf.AllowedEfforts.Contains(rawEffort)
-                    ? rawEffort
-                    : leaf.DefaultEffort!;
-            // Local canonical/snapshot/cache/plan preparation is deliberately outside provider retry handling.
-            var instructions = await prompt(leaf, cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            var providerCache = ProviderPromptCache.Resolve(
-                leaf.ProviderType,
-                sessionId,
-                cacheKey,
-                scope
-            );
-            var requestDefaults = definitions is null
-                ? defaults
-                : defaults with
-                {
-                    Tools = definitions(),
-                };
-            var options = ConfiguredModelRequests.Plan(
-                leaf,
-                requestDefaults,
-                effort,
-                instructions,
-                providerCache,
-                turnId,
-                journalPurpose
-            );
-            options = options with { Images = images };
-            if (journal is not null && journalRequestId is null)
+            for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
-                var admission = await journal.EnqueueRequestAsync(
+                cancellationToken.ThrowIfCancellationRequested();
+                var selection = request is null ? null : routing.Select(request, cacheKey);
+                var leaf =
+                    selection is null ? route
+                    : catalog.Contains(selection.TargetKey) ? catalog.Resolve(selection.TargetKey)
+                    : throw new ModelPreparationException(
+                        "Virtual target is missing from the captured catalog."
+                    );
+                if (leaf.IsVirtual)
+                    throw new ModelPreparationException("Virtual targets must be concrete models.");
+                var effort =
+                    rawEffort is not null && leaf.AllowedEfforts.Contains(rawEffort)
+                        ? rawEffort
+                        : leaf.DefaultEffort!;
+                // Local canonical/snapshot/cache/plan preparation is deliberately outside provider retry handling.
+                var instructions = await prompt(leaf, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                var providerCache = ProviderPromptCache.Resolve(
+                    leaf.ProviderType,
                     sessionId,
-                    journalPurpose,
-                    journalIteration,
-                    instructions,
-                    requestDefaults.Tools ?? new JsonArray(),
-                    RequestHistoryRepair.SelectAndRepair(history),
-                    captured.RouteKey,
                     cacheKey,
-                    cancellationToken
+                    scope
                 );
-                journalRequestId = admission.RequestId;
-                manifestCompletion = admission.Completion;
-                journalAttempt = 0;
-            }
-            var currentJournalRequestId = journalRequestId;
-            var currentJournalAttempt = journal is null ? 0 : ++journalAttempt;
-            if (journal is not null && currentJournalRequestId is not null)
-            {
-                journalRequestStarted?.Invoke(currentJournalRequestId);
-                options = options with
+                var requestDefaults = definitions is null
+                    ? defaults
+                    : defaults with
+                    {
+                        Tools = definitions(),
+                    };
+                var options = ConfiguredModelRequests.Plan(
+                    leaf,
+                    requestDefaults,
+                    effort,
+                    instructions,
+                    providerCache,
+                    turnId,
+                    journalPurpose
+                );
+                options = options with { Images = images };
+                if (journal is not null && journalRequestId is null)
                 {
-                    JournalAttemptStart = payload =>
-                        JournalAttemptStartAsync(
-                            journal,
-                            currentJournalRequestId,
-                            currentJournalAttempt,
-                            leaf.Key,
-                            request is null ? null : route.Key,
-                            leaf.ProviderType,
-                            payload,
-                            instructions,
-                            manifestCompletion,
-                            cancellationToken
-                        ),
-                };
-            }
-            var prepared = ConcreteRequestHistory.PrepareRequest(history, leaf.Key);
-            if (images is not null)
-            {
+                    var admission = await journal.EnqueueRequestAsync(
+                        sessionId,
+                        journalPurpose,
+                        journalIteration,
+                        instructions,
+                        requestDefaults.Tools ?? new JsonArray(),
+                        RequestHistoryRepair.SelectAndRepair(history),
+                        captured.RouteKey,
+                        cacheKey,
+                        cancellationToken
+                    );
+                    journalRequestId = admission.RequestId;
+                    manifestCompletion = admission.Completion;
+                    journalAttempt = 0;
+                }
+                var currentJournalRequestId = journalRequestId;
+                var currentJournalAttempt = journal is null ? 0 : ++journalAttempt;
+                if (journal is not null && currentJournalRequestId is not null)
+                {
+                    journalRequestStarted?.Invoke(currentJournalRequestId);
+                    options = options with
+                    {
+                        JournalAttemptStart = payload =>
+                            JournalAttemptStartAsync(
+                                journal,
+                                currentJournalRequestId,
+                                currentJournalAttempt,
+                                leaf.Key,
+                                request is null ? null : route.Key,
+                                leaf.ProviderType,
+                                payload,
+                                instructions,
+                                manifestCompletion,
+                                cancellationToken
+                            ),
+                    };
+                }
+                var prepared = ConcreteRequestHistory.PrepareRequest(history, leaf.Key);
+                if (images is not null)
+                {
+                    try
+                    {
+                        prepared = await images.HydrateAsync(
+                            prepared,
+                            leaf.ProviderType == "openai-completions" ? "completions"
+                                : leaf.ProviderType is "openai" or "openai-responses" or "openai-ws"
+                                    ? "responses"
+                                : "anthropic",
+                            outputFormat: leaf.ProviderImageOutputFormat,
+                            token: cancellationToken,
+                            concreteModelId: leaf.Key
+                        );
+                    }
+                    catch (Foxwarm.Images.ImageInputException error)
+                    {
+                        throw new ModelPreparationException(error.Message, error);
+                    }
+                }
+                var service = ConfiguredModelRequests.CreatePreparedService(
+                    http,
+                    leaf,
+                    options,
+                    providerCache,
+                    progress,
+                    websockets,
+                    scope
+                );
+                beginAttempt?.Invoke();
+                ModelAttemptFailure failure;
+                ChatResult? result = null;
+                var succeeded = false;
                 try
                 {
-                    prepared = await images.HydrateAsync(
-                        prepared,
-                        leaf.ProviderType == "openai-completions" ? "completions"
-                            : leaf.ProviderType is "openai" or "openai-responses" or "openai-ws"
-                                ? "responses"
-                            : "anthropic",
-                        outputFormat: leaf.ProviderImageOutputFormat,
-                        token: cancellationToken,
-                        concreteModelId: leaf.Key
+                    requestStarted ??= Stopwatch.GetTimestamp();
+                    result = await service.ChatAsync(sessionId, prepared, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var completedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    var duration = Stopwatch.GetElapsedTime(requestStarted.Value).TotalMilliseconds;
+                    if (result.AssistantMessage is JsonObject message)
+                    {
+                        var meta = message["__meta"] as JsonObject ?? new JsonObject();
+                        meta["timestamp"] = completedAt;
+                        meta["llmRequestTiming"] = new JsonObject
+                        {
+                            ["startedAt"] = completedAt - duration,
+                            ["completedAt"] = completedAt,
+                            ["durationMs"] = duration,
+                        };
+                        meta["modelId"] = leaf.Key;
+                        if (request is null)
+                            meta.Remove("virtualModelKey");
+                        else
+                            meta["virtualModelKey"] = route.Key;
+                        if (meta.Parent is null)
+                            message["__meta"] = meta;
+                    }
+                    if (journal is not null && currentJournalRequestId is not null)
+                    {
+                        result = result with
+                        {
+                            JournalRequestId = currentJournalRequestId,
+                            JournalAttempt = currentJournalAttempt,
+                        };
+                        try
+                        {
+                            await journal
+                                .AppendChatResultAsync(
+                                    currentJournalRequestId,
+                                    currentJournalAttempt,
+                                    result,
+                                    cancellationToken
+                                )
+                                .ConfigureAwait(false);
+                        }
+                        catch (Exception journalError)
+                        {
+                            warning?.Invoke(journalError);
+                        }
+                    }
+                    if (request is not null)
+                        routing.Success(request, leaf.Key);
+                    succeeded = true;
+                    return result;
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    if (journal is not null && currentJournalRequestId is not null)
+                        try
+                        {
+                            await journal
+                                .AppendAttemptResultAsync(
+                                    currentJournalRequestId,
+                                    currentJournalAttempt,
+                                    "abort",
+                                    null,
+                                    new JsonObject
+                                    {
+                                        ["message"] = "Request cancelled.",
+                                        ["kind"] = "abort",
+                                    }
+                                )
+                                .ConfigureAwait(false);
+                        }
+                        catch (Exception journalError)
+                        {
+                            warning?.Invoke(journalError);
+                        }
+                    throw;
+                }
+                catch (ModelPreparationException error)
+                {
+                    throw new ModelPreparationException(
+                        ConfiguredModelRequests.SafeReason(error.Message, leaf),
+                        error
                     );
                 }
-                catch (Foxwarm.Images.ImageInputException error)
+                catch (UnsupportedResponsesFeatureException)
                 {
-                    throw new ModelPreparationException(error.Message, error);
+                    throw;
                 }
-            }
-            var service = ConfiguredModelRequests.CreatePreparedService(
-                http,
-                leaf,
-                options,
-                providerCache,
-                progress,
-                websockets,
-                scope
-            );
-            beginAttempt?.Invoke();
-            ModelAttemptFailure failure;
-            ChatResult? result = null;
-            var succeeded = false;
-            try
-            {
-                requestStarted ??= Stopwatch.GetTimestamp();
-                result = await service.ChatAsync(sessionId, prepared, cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                var completedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                var duration = Stopwatch.GetElapsedTime(requestStarted.Value).TotalMilliseconds;
-                if (result.AssistantMessage is JsonObject message)
+                catch (LlmJournalPreparationException)
                 {
-                    var meta = message["__meta"] as JsonObject ?? new JsonObject();
-                    meta["timestamp"] = completedAt;
-                    meta["llmRequestTiming"] = new JsonObject
-                    {
-                        ["startedAt"] = completedAt - duration,
-                        ["completedAt"] = completedAt,
-                        ["durationMs"] = duration,
-                    };
-                    meta["modelId"] = leaf.Key;
-                    if (request is null)
-                        meta.Remove("virtualModelKey");
-                    else
-                        meta["virtualModelKey"] = route.Key;
-                    if (meta.Parent is null)
-                        message["__meta"] = meta;
-                }
-                if (journal is not null && currentJournalRequestId is not null)
-                {
-                    result = result with
-                    {
-                        JournalRequestId = currentJournalRequestId,
-                        JournalAttempt = currentJournalAttempt,
-                    };
-                    try
-                    {
-                        await journal
-                            .AppendChatResultAsync(
-                                currentJournalRequestId,
-                                currentJournalAttempt,
-                                result,
-                                cancellationToken
-                            )
-                            .ConfigureAwait(false);
-                    }
-                    catch (Exception journalError)
-                    {
-                        warning?.Invoke(journalError);
-                    }
-                }
-                if (request is not null)
-                    routing.Success(request, leaf.Key);
-                succeeded = true;
-                return result;
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                if (journal is not null && currentJournalRequestId is not null)
-                    try
-                    {
-                        await journal
-                            .AppendAttemptResultAsync(
-                                currentJournalRequestId,
-                                currentJournalAttempt,
-                                "abort",
-                                null,
-                                new JsonObject
-                                {
-                                    ["message"] = "Request cancelled.",
-                                    ["kind"] = "abort",
-                                }
-                            )
-                            .ConfigureAwait(false);
-                    }
-                    catch (Exception journalError)
-                    {
-                        warning?.Invoke(journalError);
-                    }
-                throw;
-            }
-            catch (ModelPreparationException error)
-            {
-                throw new ModelPreparationException(
-                    ConfiguredModelRequests.SafeReason(error.Message, leaf),
-                    error
-                );
-            }
-            catch (UnsupportedResponsesFeatureException)
-            {
-                throw;
-            }
-            catch (LlmJournalPreparationException)
-            {
-                throw;
-            }
-            catch (Exception error)
-            {
-                failure = error switch
-                {
-                    ModelAttemptFailure known => known,
-                    ResponsesHttpException response => ModelAttemptFailure.Http(
-                        (int)response.StatusCode!,
-                        response.ResponseBody
-                    ),
-                    OperationCanceledException or TimeoutException => new ModelAttemptFailure(
-                        "Configured provider request timed out.",
-                        "request-error",
-                        true,
-                        true
-                    ),
-                    _ => new ModelAttemptFailure(error.Message, "request-error", true, true),
-                };
-                if (journal is not null && currentJournalRequestId is not null)
-                    try
-                    {
-                        await journal
-                            .AppendAttemptResultAsync(
-                                currentJournalRequestId,
-                                currentJournalAttempt,
-                                "failure",
-                                null,
-                                new JsonObject
-                                {
-                                    ["kind"] = failure.Kind,
-                                    ["message"] = failure.Message,
-                                    ["retryable"] = failure.Retryable,
-                                    ["countable"] = failure.Countable,
-                                }
-                            )
-                            .ConfigureAwait(false);
-                    }
-                    catch (Exception journalError)
-                    {
-                        warning?.Invoke(journalError);
-                    }
-            }
-            finally
-            {
-                if (!succeeded)
-                    result?.FinalizeHistory(null, warning);
-            }
-            cancellationToken.ThrowIfCancellationRequested();
-            var terminalTarget =
-                failure.Countable
-                && request is not null
-                && selection is not null
-                && routing.Failed(request, selection).Terminal;
-            var final = !failure.Retryable || terminalTarget || attempt == maxAttempts;
-            var reason = ModelAttemptFailure.Summary(
-                ConfiguredModelRequests.SafeReason(failure.Message, leaf)
-            );
-            var value = new ModelRetryEvent(
-                attempt,
-                maxAttempts,
-                failure.Kind,
-                reason,
-                leaf.Key,
-                request is null ? null : route.Key,
-                failure.Status,
-                final ? null : attempt + 1,
-                final ? null : RetryDelay(attempt),
-                final
-            );
-            var delivered = false;
-            if (retry is not null)
-            {
-                try
-                {
-                    delivered = await retry(value);
+                    throw;
                 }
                 catch (Exception error)
                 {
+                    failure = error switch
+                    {
+                        ModelAttemptFailure known => known,
+                        ResponsesHttpException response => ModelAttemptFailure.Http(
+                            (int)response.StatusCode!,
+                            response.ResponseBody
+                        ),
+                        OperationCanceledException or TimeoutException => new ModelAttemptFailure(
+                            "Configured provider request timed out.",
+                            "request-error",
+                            true,
+                            true
+                        ),
+                        _ => new ModelAttemptFailure(error.Message, "request-error", true, true),
+                    };
+                    if (journal is not null && currentJournalRequestId is not null)
+                        try
+                        {
+                            await journal
+                                .AppendAttemptResultAsync(
+                                    currentJournalRequestId,
+                                    currentJournalAttempt,
+                                    "failure",
+                                    null,
+                                    new JsonObject
+                                    {
+                                        ["kind"] = failure.Kind,
+                                        ["message"] = failure.Message,
+                                        ["retryable"] = failure.Retryable,
+                                        ["countable"] = failure.Countable,
+                                    }
+                                )
+                                .ConfigureAwait(false);
+                        }
+                        catch (Exception journalError)
+                        {
+                            warning?.Invoke(journalError);
+                        }
+                }
+                finally
+                {
+                    if (!succeeded)
+                        result?.FinalizeHistory(null, warning);
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+                var terminalTarget =
+                    failure.Countable
+                    && request is not null
+                    && selection is not null
+                    && routing.Failed(request, selection).Terminal;
+                var final = !failure.Retryable || terminalTarget || attempt == maxAttempts;
+                var reason = ModelAttemptFailure.Summary(
+                    ConfiguredModelRequests.SafeReason(failure.Message, leaf)
+                );
+                var value = new ModelRetryEvent(
+                    attempt,
+                    maxAttempts,
+                    failure.Kind,
+                    reason,
+                    leaf.Key,
+                    request is null ? null : route.Key,
+                    failure.Status,
+                    final ? null : attempt + 1,
+                    final ? null : RetryDelay(attempt),
+                    final
+                );
+                var delivered = false;
+                if (retry is not null)
+                {
                     try
                     {
-                        warning?.Invoke(error);
+                        delivered = await retry(value);
                     }
-                    catch { }
-                }
-            }
-            if (final)
-                throw new ModelRequestException(
-                    $"API request failed after {attempt} attempts: {reason}",
-                    value
-                )
-                {
-                    TerminalNoticeDelivered = delivered,
-                };
-            if (delay is null)
-                await Task.Delay(RetryDelay(attempt), cancellationToken);
-            else
-                await delay(RetryDelay(attempt), cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            // Semantic owner preparation is awaited outside provider failure/health handling.
-            if (scope == ModelRequestScope.Canonical && prepareRetry is not null)
-            {
-                var updated = await prepareRetry(cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                if (updated is not null)
-                {
-                    baseHistory = updated;
-                    history = baseHistory.Concat(retainedContext).ToArray();
-                    requestStarted = null;
-                    journalRequestId = null;
-                    journalAttempt = 0;
-                }
-                if (requestContext is not null)
-                {
-                    var nextContext = (await requestContext().ConfigureAwait(false)).ToArray();
-                    var changed =
-                        retainedContext.Length != nextContext.Length
-                        || retainedContext
-                            .Zip(nextContext)
-                            .Any(pair => !JsonNode.DeepEquals(pair.First, pair.Second));
-                    if (changed)
+                    catch (Exception error)
                     {
-                        retainedContext = nextContext;
+                        try
+                        {
+                            warning?.Invoke(error);
+                        }
+                        catch { }
+                    }
+                }
+                if (final)
+                    throw new ModelRequestException(
+                        $"API request failed after {attempt} attempts: {reason}",
+                        value
+                    )
+                    {
+                        TerminalNoticeDelivered = delivered,
+                    };
+                if (delay is null)
+                    await Task.Delay(RetryDelay(attempt), cancellationToken);
+                else
+                    await delay(RetryDelay(attempt), cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                // Semantic owner preparation is awaited outside provider failure/health handling.
+                if (scope == ModelRequestScope.Canonical && prepareRetry is not null)
+                {
+                    var updated = await prepareRetry(cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (updated is not null)
+                    {
+                        baseHistory = updated;
                         history = baseHistory.Concat(retainedContext).ToArray();
                         requestStarted = null;
                         journalRequestId = null;
                         journalAttempt = 0;
                     }
+                    if (requestContext is not null)
+                    {
+                        var nextContext = (await requestContext().ConfigureAwait(false)).ToArray();
+                        var changed =
+                            retainedContext.Length != nextContext.Length
+                            || retainedContext
+                                .Zip(nextContext)
+                                .Any(pair => !JsonNode.DeepEquals(pair.First, pair.Second));
+                        if (changed)
+                        {
+                            retainedContext = nextContext;
+                            history = baseHistory.Concat(retainedContext).ToArray();
+                            requestStarted = null;
+                            journalRequestId = null;
+                            journalAttempt = 0;
+                        }
+                    }
                 }
             }
-        }
-        throw new InvalidOperationException("Unreachable attempt limit.");
+            throw new InvalidOperationException("Unreachable attempt limit.");
         }
         catch (Exception preparationOrRequestError)
         {
             // Local preparation can fail before the accepted manifest settles. Resolve it before returning.
-            try { await manifestCompletion.ConfigureAwait(false); }
-            catch (Exception persistenceError) when (!ReferenceEquals(preparationOrRequestError, persistenceError))
+            try
             {
-                throw new LlmJournalPreparationException("LLM request preparation and its pending journal write failed.", new AggregateException(preparationOrRequestError, persistenceError));
+                await manifestCompletion.ConfigureAwait(false);
+            }
+            catch (Exception persistenceError)
+                when (!ReferenceEquals(preparationOrRequestError, persistenceError))
+            {
+                throw new LlmJournalPreparationException(
+                    "LLM request preparation and its pending journal write failed.",
+                    new AggregateException(preparationOrRequestError, persistenceError)
+                );
             }
             throw;
         }

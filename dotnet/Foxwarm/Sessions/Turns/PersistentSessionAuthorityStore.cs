@@ -167,7 +167,8 @@ public sealed class PersistentSessionAuthorityStore
             }
             catch (Exception rollbackError)
             {
-                if (ReferenceEquals(writeError, rollbackError)) throw;
+                if (ReferenceEquals(writeError, rollbackError))
+                    throw;
                 throw new AggregateException(
                     "Authority precommit failed and exact Archive rollback also failed.",
                     writeError,
@@ -188,7 +189,9 @@ public sealed class PersistentSessionAuthorityStore
     {
         cancellationToken.ThrowIfCancellationRequested();
         ValidateBoundSnapshot(stagedSnapshot);
-        var receipt = await archive.EnqueueCompactionAsync(blocks, messages.Select(ToArchiveRecord).ToArray()).ConfigureAwait(false);
+        var receipt = await archive
+            .EnqueueCompactionAsync(blocks, messages.Select(ToArchiveRecord).ToArray())
+            .ConfigureAwait(false);
         IReadOnlyList<ArchiveBlockRecord> newBlocks = [];
         IReadOnlyList<ArchiveMessageRecord> newMessages = [];
         try
@@ -212,7 +215,8 @@ public sealed class PersistentSessionAuthorityStore
             }
             catch (Exception rollback)
             {
-                if (ReferenceEquals(error, rollback)) throw;
+                if (ReferenceEquals(error, rollback))
+                    throw;
                 throw new AggregateException("Compact precommit rollback failed.", error, rollback);
             }
             throw;

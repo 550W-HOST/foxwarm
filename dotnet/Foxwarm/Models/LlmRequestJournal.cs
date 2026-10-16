@@ -4,8 +4,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Foxwarm.Sessions;
 using Foxwarm.Persistence;
+using Foxwarm.Sessions;
 using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Models;
@@ -41,12 +41,23 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
     {
         this.root = Path.GetFullPath(root);
         path = Path.Combine(this.root, "state", "llm-request-journal.sqlite");
-        owner = SqliteWriterOwners.Acquire(path, () =>
-        {
-            var connection = Open();
-            try { EnsureSchema(connection); return connection; }
-            catch { connection.Dispose(); throw; }
-        });
+        owner = SqliteWriterOwners.Acquire(
+            path,
+            () =>
+            {
+                var connection = Open();
+                try
+                {
+                    EnsureSchema(connection);
+                    return connection;
+                }
+                catch
+                {
+                    connection.Dispose();
+                    throw;
+                }
+            }
+        );
     }
 
     public string FilePath => path;
@@ -56,7 +67,9 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
     public async Task InitializeAsync(CancellationToken token = default)
     {
         CheckOpen();
-        var receipt = await Writer.ExclusiveAsync(_ => Task.FromResult(true), token).ConfigureAwait(false);
+        var receipt = await Writer
+            .ExclusiveAsync(_ => Task.FromResult(true), token)
+            .ConfigureAwait(false);
         await receipt.Completion.ConfigureAwait(false);
     }
 
@@ -72,7 +85,18 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
         CancellationToken token = default
     )
     {
-        var admission = await EnqueueRequestAsync(sessionId, purpose, iteration, systemPrompt, toolDefinitions, messages, requestedModelKey, promptCacheKey, token).ConfigureAwait(false);
+        var admission = await EnqueueRequestAsync(
+                sessionId,
+                purpose,
+                iteration,
+                systemPrompt,
+                toolDefinitions,
+                messages,
+                requestedModelKey,
+                promptCacheKey,
+                token
+            )
+            .ConfigureAwait(false);
         await admission.Completion.ConfigureAwait(false);
         return admission.RequestId;
     }
@@ -105,64 +129,75 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
             .ToArray();
         var messageIds = preparedMessages.Select(message => message.Id).ToArray();
         var cacheHash = Sha256(promptCacheKey);
-        var receipt = await Writer.EnqueueAsync((connection, transaction) =>
-        {
-            var promptId = PutObject(connection, transaction, prompt);
-            var toolId = PutObject(connection, transaction, tools);
-            foreach (var message in preparedMessages)
-                PutObject(connection, transaction, message);
-            string? baseRequest = null;
-            int? commonPrefix = null;
-            var deltaDepth = 0;
-            if (!string.IsNullOrEmpty(sessionId))
-            {
-                var prior = ReadLatestRequest(connection, transaction, sessionId!);
-                if (prior is not null && prior.Value.Depth < MaxDeltaDepth)
+        var receipt = await Writer
+            .EnqueueAsync(
+                (connection, transaction) =>
                 {
-                    var priorIds = ReconstructIds(connection, transaction, prior.Value.RequestId);
-                    var prefix = 0;
-                    while (
-                        prefix < priorIds.Count
-                        && prefix < messageIds.Length
-                        && priorIds[prefix] == messageIds[prefix]
-                    )
-                        prefix++;
-                    baseRequest = prior.Value.RequestId;
-                    commonPrefix = prefix;
-                    deltaDepth = prior.Value.Depth + 1;
-                }
-            }
-            var checkpoint = baseRequest is null ? JsonSerializer.Serialize(messageIds) : null;
-            var appended = baseRequest is null
-                ? null
-                : JsonSerializer.Serialize(messageIds[(commonPrefix ?? 0)..]);
-            using var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandText = """
-                INSERT INTO llm_journal_requests(
-                    request_id,session_id,purpose,iteration,created_at,prompt_object_id,tool_schema_object_id,
-                    requested_model_key,prompt_cache_key_hash,message_count,checkpoint_message_ids_json,
-                    base_request_id,common_prefix_length,appended_message_ids_json,delta_depth
-                ) VALUES($id,$session,$purpose,$iteration,$created,$prompt,$schema,$model,$cache,$count,$checkpoint,$base,$prefix,$appended,$depth)
-                """;
-            Add(command, "$id", requestId);
-            Add(command, "$session", sessionId);
-            Add(command, "$purpose", purpose);
-            Add(command, "$iteration", iteration);
-            Add(command, "$created", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-            Add(command, "$prompt", promptId);
-            Add(command, "$schema", toolId);
-            Add(command, "$model", requestedModelKey);
-            Add(command, "$cache", cacheHash);
-            Add(command, "$count", messageIds.Length);
-            Add(command, "$checkpoint", checkpoint);
-            Add(command, "$base", baseRequest);
-            Add(command, "$prefix", commonPrefix);
-            Add(command, "$appended", appended);
-            Add(command, "$depth", deltaDepth);
-            command.ExecuteNonQuery();
-            return true;
-        }, token).ConfigureAwait(false);
+                    var promptId = PutObject(connection, transaction, prompt);
+                    var toolId = PutObject(connection, transaction, tools);
+                    foreach (var message in preparedMessages)
+                        PutObject(connection, transaction, message);
+                    string? baseRequest = null;
+                    int? commonPrefix = null;
+                    var deltaDepth = 0;
+                    if (!string.IsNullOrEmpty(sessionId))
+                    {
+                        var prior = ReadLatestRequest(connection, transaction, sessionId!);
+                        if (prior is not null && prior.Value.Depth < MaxDeltaDepth)
+                        {
+                            var priorIds = ReconstructIds(
+                                connection,
+                                transaction,
+                                prior.Value.RequestId
+                            );
+                            var prefix = 0;
+                            while (
+                                prefix < priorIds.Count
+                                && prefix < messageIds.Length
+                                && priorIds[prefix] == messageIds[prefix]
+                            )
+                                prefix++;
+                            baseRequest = prior.Value.RequestId;
+                            commonPrefix = prefix;
+                            deltaDepth = prior.Value.Depth + 1;
+                        }
+                    }
+                    var checkpoint = baseRequest is null
+                        ? JsonSerializer.Serialize(messageIds)
+                        : null;
+                    var appended = baseRequest is null
+                        ? null
+                        : JsonSerializer.Serialize(messageIds[(commonPrefix ?? 0)..]);
+                    using var command = connection.CreateCommand();
+                    command.Transaction = transaction;
+                    command.CommandText = """
+                        INSERT INTO llm_journal_requests(
+                            request_id,session_id,purpose,iteration,created_at,prompt_object_id,tool_schema_object_id,
+                            requested_model_key,prompt_cache_key_hash,message_count,checkpoint_message_ids_json,
+                            base_request_id,common_prefix_length,appended_message_ids_json,delta_depth
+                        ) VALUES($id,$session,$purpose,$iteration,$created,$prompt,$schema,$model,$cache,$count,$checkpoint,$base,$prefix,$appended,$depth)
+                        """;
+                    Add(command, "$id", requestId);
+                    Add(command, "$session", sessionId);
+                    Add(command, "$purpose", purpose);
+                    Add(command, "$iteration", iteration);
+                    Add(command, "$created", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                    Add(command, "$prompt", promptId);
+                    Add(command, "$schema", toolId);
+                    Add(command, "$model", requestedModelKey);
+                    Add(command, "$cache", cacheHash);
+                    Add(command, "$count", messageIds.Length);
+                    Add(command, "$checkpoint", checkpoint);
+                    Add(command, "$base", baseRequest);
+                    Add(command, "$prefix", commonPrefix);
+                    Add(command, "$appended", appended);
+                    Add(command, "$depth", deltaDepth);
+                    command.ExecuteNonQuery();
+                    return true;
+                },
+                token
+            )
+            .ConfigureAwait(false);
         return new(requestId, receipt.Completion);
     }
 
@@ -177,7 +212,17 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
         CancellationToken token = default
     )
     {
-        var receipt = await EnqueueAttemptStartAsync(requestId, attempt, concreteModelId, virtualModelKey, providerType, semanticPayload, effectivePrompt, token).ConfigureAwait(false);
+        var receipt = await EnqueueAttemptStartAsync(
+                requestId,
+                attempt,
+                concreteModelId,
+                virtualModelKey,
+                providerType,
+                semanticPayload,
+                effectivePrompt,
+                token
+            )
+            .ConfigureAwait(false);
         await receipt.Completion.ConfigureAwait(false);
     }
 
@@ -196,42 +241,47 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
         token.ThrowIfCancellationRequested();
         var prompt = PrepareObject("prompt", JsonValue.Create(effectivePrompt)!);
         var payloadHash = HashValue(semanticPayload);
-        return await Writer.EnqueueAsync((connection, transaction) =>
-        {
-            var promptId =
-                ReadScalar(
-                    connection,
-                    transaction,
-                    "SELECT prompt_object_id FROM llm_journal_requests WHERE request_id=$id",
-                    ("$id", requestId)
-                ) as string
-                ?? throw new InvalidDataException(
-                    "LLM journal request is missing before attempt start."
-                );
-            var effectiveId = prompt.Id;
-            string? overrideId = null;
-            if (attempt == 1 && effectiveId != promptId)
-                throw new InvalidDataException(
-                    "First LLM journal attempt must use the request prompt."
-                );
-            if (effectiveId != promptId)
-                overrideId = PutObject(connection, transaction, prompt);
-            using var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandText =
-                "INSERT INTO llm_journal_attempt_starts(event_id,request_id,attempt,started_at,concrete_model_id,virtual_model_key,provider_type,semantic_payload_sha256,prompt_object_id) VALUES($event,$request,$attempt,$started,$model,$virtual,$provider,$hash,$prompt)";
-            Add(command, "$event", Guid.NewGuid().ToString());
-            Add(command, "$request", requestId);
-            Add(command, "$attempt", attempt);
-            Add(command, "$started", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-            Add(command, "$model", concreteModelId);
-            Add(command, "$virtual", virtualModelKey);
-            Add(command, "$provider", providerType);
-            Add(command, "$hash", payloadHash);
-            Add(command, "$prompt", overrideId);
-            command.ExecuteNonQuery();
-            return true;
-        }, token).ConfigureAwait(false);
+        return await Writer
+            .EnqueueAsync(
+                (connection, transaction) =>
+                {
+                    var promptId =
+                        ReadScalar(
+                            connection,
+                            transaction,
+                            "SELECT prompt_object_id FROM llm_journal_requests WHERE request_id=$id",
+                            ("$id", requestId)
+                        ) as string
+                        ?? throw new InvalidDataException(
+                            "LLM journal request is missing before attempt start."
+                        );
+                    var effectiveId = prompt.Id;
+                    string? overrideId = null;
+                    if (attempt == 1 && effectiveId != promptId)
+                        throw new InvalidDataException(
+                            "First LLM journal attempt must use the request prompt."
+                        );
+                    if (effectiveId != promptId)
+                        overrideId = PutObject(connection, transaction, prompt);
+                    using var command = connection.CreateCommand();
+                    command.Transaction = transaction;
+                    command.CommandText =
+                        "INSERT INTO llm_journal_attempt_starts(event_id,request_id,attempt,started_at,concrete_model_id,virtual_model_key,provider_type,semantic_payload_sha256,prompt_object_id) VALUES($event,$request,$attempt,$started,$model,$virtual,$provider,$hash,$prompt)";
+                    Add(command, "$event", Guid.NewGuid().ToString());
+                    Add(command, "$request", requestId);
+                    Add(command, "$attempt", attempt);
+                    Add(command, "$started", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                    Add(command, "$model", concreteModelId);
+                    Add(command, "$virtual", virtualModelKey);
+                    Add(command, "$provider", providerType);
+                    Add(command, "$hash", payloadHash);
+                    Add(command, "$prompt", overrideId);
+                    command.ExecuteNonQuery();
+                    return true;
+                },
+                token
+            )
+            .ConfigureAwait(false);
     }
 
     public async Task AppendAttemptResultAsync(
@@ -243,7 +293,15 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
         CancellationToken token = default
     )
     {
-        var receipt = await EnqueueAttemptResultAsync(requestId, attempt, outcome, result, error, token).ConfigureAwait(false);
+        var receipt = await EnqueueAttemptResultAsync(
+                requestId,
+                attempt,
+                outcome,
+                result,
+                error,
+                token
+            )
+            .ConfigureAwait(false);
         await receipt.Completion.ConfigureAwait(false);
     }
 
@@ -260,24 +318,40 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
         token.ThrowIfCancellationRequested();
         var resultJson = result is null ? null : Codec.Write(result);
         var errorJson = error is null ? null : Codec.Write(error);
-        return await Writer.EnqueueAsync((connection, transaction) =>
-        {
-            if (ReadScalar(connection, transaction, "SELECT 1 FROM llm_journal_attempt_starts WHERE request_id=$id AND attempt=$attempt ORDER BY rowid DESC LIMIT 1", ("$id", requestId), ("$attempt", attempt)) is null)
-                throw new InvalidDataException("LLM journal attempt is missing before its result.");
-            using var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandText =
-                "INSERT INTO llm_journal_attempt_results(event_id,request_id,attempt,completed_at,outcome,result_json,error_json) VALUES($event,$request,$attempt,$completed,$outcome,$result,$error)";
-            Add(command, "$event", Guid.NewGuid().ToString());
-            Add(command, "$request", requestId);
-            Add(command, "$attempt", attempt);
-            Add(command, "$completed", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-            Add(command, "$outcome", outcome);
-            Add(command, "$result", resultJson);
-            Add(command, "$error", errorJson);
-            command.ExecuteNonQuery();
-            return true;
-        }, token).ConfigureAwait(false);
+        return await Writer
+            .EnqueueAsync(
+                (connection, transaction) =>
+                {
+                    if (
+                        ReadScalar(
+                            connection,
+                            transaction,
+                            "SELECT 1 FROM llm_journal_attempt_starts WHERE request_id=$id AND attempt=$attempt ORDER BY rowid DESC LIMIT 1",
+                            ("$id", requestId),
+                            ("$attempt", attempt)
+                        )
+                        is null
+                    )
+                        throw new InvalidDataException(
+                            "LLM journal attempt is missing before its result."
+                        );
+                    using var command = connection.CreateCommand();
+                    command.Transaction = transaction;
+                    command.CommandText =
+                        "INSERT INTO llm_journal_attempt_results(event_id,request_id,attempt,completed_at,outcome,result_json,error_json) VALUES($event,$request,$attempt,$completed,$outcome,$result,$error)";
+                    Add(command, "$event", Guid.NewGuid().ToString());
+                    Add(command, "$request", requestId);
+                    Add(command, "$attempt", attempt);
+                    Add(command, "$completed", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                    Add(command, "$outcome", outcome);
+                    Add(command, "$result", resultJson);
+                    Add(command, "$error", errorJson);
+                    command.ExecuteNonQuery();
+                    return true;
+                },
+                token
+            )
+            .ConfigureAwait(false);
     }
 
     public Task AppendChatResultAsync(
@@ -302,19 +376,19 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
     {
         await InitializeAsync(token).ConfigureAwait(false);
         using var connection = OpenReadOnly();
-            try
+        try
+        {
+            return Reconstruct(connection, requestId);
+        }
+        catch (Exception error)
+        {
+            return new JsonObject
             {
-                return Reconstruct(connection, requestId);
-            }
-            catch (Exception error)
-            {
-                return new JsonObject
-                {
-                    ["requestId"] = requestId,
-                    ["completeness"] = "corrupt",
-                    ["errors"] = new JsonArray(error.Message),
-                };
-            }
+                ["requestId"] = requestId,
+                ["completeness"] = "corrupt",
+                ["errors"] = new JsonArray(error.Message),
+            };
+        }
     }
 
     public static string EncodeCli(JsonNode node) => Codec.Write(node);
@@ -330,130 +404,140 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
     {
         await InitializeAsync(token).ConfigureAwait(false);
         using var connection = OpenReadOnly();
-            using var command = connection.CreateCommand();
-            command.CommandText =
-                "SELECT request_id,session_id,purpose,iteration,created_at,requested_model_key,message_count FROM llm_journal_requests WHERE ($session IS NULL OR session_id=$session) AND ($purpose IS NULL OR purpose=$purpose) AND ($created IS NULL OR created_at<$created OR (created_at=$created AND request_id<$request)) ORDER BY created_at DESC,request_id DESC LIMIT $limit";
-            Add(command, "$session", sessionId);
-            Add(command, "$purpose", purpose);
-            Add(command, "$created", createdAt);
-            Add(command, "$request", requestId ?? "~");
-            Add(command, "$limit", Math.Clamp(limit, 1, 1000));
-            using var reader = command.ExecuteReader();
-            var result = new JsonArray();
-            while (reader.Read())
-                result.Add(
-                    new JsonObject
-                    {
-                        ["requestId"] = reader.GetString(0),
-                        ["sessionId"] = reader.IsDBNull(1) ? null : reader.GetString(1),
-                        ["purpose"] = reader.GetString(2),
-                        ["iteration"] = reader.GetInt32(3),
-                        ["createdAt"] = reader.GetInt64(4),
-                        ["requestedModelKey"] = reader.GetString(5),
-                        ["messageCount"] = reader.GetInt32(6),
-                    }
-                );
-            return result;
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT request_id,session_id,purpose,iteration,created_at,requested_model_key,message_count FROM llm_journal_requests WHERE ($session IS NULL OR session_id=$session) AND ($purpose IS NULL OR purpose=$purpose) AND ($created IS NULL OR created_at<$created OR (created_at=$created AND request_id<$request)) ORDER BY created_at DESC,request_id DESC LIMIT $limit";
+        Add(command, "$session", sessionId);
+        Add(command, "$purpose", purpose);
+        Add(command, "$created", createdAt);
+        Add(command, "$request", requestId ?? "~");
+        Add(command, "$limit", Math.Clamp(limit, 1, 1000));
+        using var reader = command.ExecuteReader();
+        var result = new JsonArray();
+        while (reader.Read())
+            result.Add(
+                new JsonObject
+                {
+                    ["requestId"] = reader.GetString(0),
+                    ["sessionId"] = reader.IsDBNull(1) ? null : reader.GetString(1),
+                    ["purpose"] = reader.GetString(2),
+                    ["iteration"] = reader.GetInt32(3),
+                    ["createdAt"] = reader.GetInt64(4),
+                    ["requestedModelKey"] = reader.GetString(5),
+                    ["messageCount"] = reader.GetInt32(6),
+                }
+            );
+        return result;
     }
 
     public async Task<bool> MigrateLegacyAsync(string sourcePath, CancellationToken token = default)
     {
         var fullPath = Path.GetFullPath(sourcePath);
         CheckOpen();
-        var receipt = await Writer.ExclusiveAsync(async connection =>
-        {
-        SqliteTransaction? transaction = null;
-        try
-        {
-            if (!File.Exists(fullPath))
-                return false;
-            var sourceLength = new FileInfo(fullPath).Length;
-            var imported = ReadImportOffset(connection, fullPath);
-            if (imported > sourceLength)
-                imported = 0;
-            long completeOffset = imported;
-            transaction = connection.BeginTransaction(deferred: false);
-            var requestIds = new HashSet<string>(StringComparer.Ordinal);
-            var recordsInBatch = 0;
-            await foreach (var item in ReadJsonlLinesAsync(fullPath, imported, token))
-            {
-                token.ThrowIfCancellationRequested();
-                var line = item.Line;
-                completeOffset = item.EndOffset;
-                if (line.Length == 0)
-                    continue;
-                using var document = JsonDocument.Parse(line);
-                InsertLegacyRecord(connection, transaction, document.RootElement, requestIds);
-                if (++recordsInBatch == 200)
+        var receipt = await Writer
+            .ExclusiveAsync(
+                async connection =>
                 {
-                    transaction.Commit();
-                    transaction.Dispose();
-                    transaction = connection.BeginTransaction(deferred: false);
-                    recordsInBatch = 0;
-                }
-            }
-            foreach (var requestId in requestIds)
-                ValidateRequestManifest(connection, transaction, requestId);
-            var verificationRequestIds = new HashSet<string>(StringComparer.Ordinal);
-            await foreach (var item in ReadJsonlLinesAsync(fullPath, 0, token))
-            {
-                token.ThrowIfCancellationRequested();
-                if (item.Line.Length == 0)
-                    continue;
-                using var document = JsonDocument.Parse(item.Line);
-                VerifyLegacyRecord(connection, transaction, document.RootElement);
-                if (
-                    document.RootElement.GetProperty("kind").GetString()
-                    is "request"
-                        or "attempt-start"
-                        or "attempt-result"
-                )
-                    verificationRequestIds.Add(
-                        document.RootElement.GetProperty("requestId").GetString()!
-                    );
-            }
-            foreach (var requestId in verificationRequestIds)
-            {
-                ValidateRequestManifest(connection, transaction, requestId);
-                var reconstructed = Reconstruct(connection, requestId);
-                if (reconstructed["completeness"]?.GetValue<string>() != "complete")
-                    throw new InvalidDataException(
-                        $"Legacy LLM request {requestId} failed reconstruction verification."
-                    );
-            }
-            using (var state = connection.CreateCommand())
-            {
-                state.Transaction = transaction;
-                state.CommandText =
-                    "INSERT INTO llm_journal_import_state(source_path,imported_size,updated_at) VALUES($path,$size,$updated) ON CONFLICT(source_path) DO UPDATE SET imported_size=excluded.imported_size,updated_at=excluded.updated_at";
-                Add(state, "$path", fullPath);
-                Add(state, "$size", completeOffset);
-                Add(state, "$updated", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-                state.ExecuteNonQuery();
-            }
-            transaction.Commit();
-            transaction.Dispose();
-            var stateRoot = Path.Combine(root, "state");
-            var relative = Path.GetRelativePath(stateRoot, fullPath);
-            if (relative.StartsWith("..", StringComparison.Ordinal))
-                relative = Path.GetFileName(fullPath);
-            var backupPath = Path.Combine(
-                stateRoot,
-                "migration-backup",
-                MigrationId,
-                relative + "." + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-            );
-            Directory.CreateDirectory(Path.GetDirectoryName(backupPath)!);
-            File.Move(fullPath, backupPath);
-            SyncDirectory(Path.GetDirectoryName(backupPath)!);
-            return true;
-        }
-        catch
-        {
-            transaction?.Dispose();
-            throw;
-        }
-        }, token).ConfigureAwait(false);
+                    SqliteTransaction? transaction = null;
+                    try
+                    {
+                        if (!File.Exists(fullPath))
+                            return false;
+                        var sourceLength = new FileInfo(fullPath).Length;
+                        var imported = ReadImportOffset(connection, fullPath);
+                        if (imported > sourceLength)
+                            imported = 0;
+                        long completeOffset = imported;
+                        transaction = connection.BeginTransaction(deferred: false);
+                        var requestIds = new HashSet<string>(StringComparer.Ordinal);
+                        var recordsInBatch = 0;
+                        await foreach (var item in ReadJsonlLinesAsync(fullPath, imported, token))
+                        {
+                            token.ThrowIfCancellationRequested();
+                            var line = item.Line;
+                            completeOffset = item.EndOffset;
+                            if (line.Length == 0)
+                                continue;
+                            using var document = JsonDocument.Parse(line);
+                            InsertLegacyRecord(
+                                connection,
+                                transaction,
+                                document.RootElement,
+                                requestIds
+                            );
+                            if (++recordsInBatch == 200)
+                            {
+                                transaction.Commit();
+                                transaction.Dispose();
+                                transaction = connection.BeginTransaction(deferred: false);
+                                recordsInBatch = 0;
+                            }
+                        }
+                        foreach (var requestId in requestIds)
+                            ValidateRequestManifest(connection, transaction, requestId);
+                        var verificationRequestIds = new HashSet<string>(StringComparer.Ordinal);
+                        await foreach (var item in ReadJsonlLinesAsync(fullPath, 0, token))
+                        {
+                            token.ThrowIfCancellationRequested();
+                            if (item.Line.Length == 0)
+                                continue;
+                            using var document = JsonDocument.Parse(item.Line);
+                            VerifyLegacyRecord(connection, transaction, document.RootElement);
+                            if (
+                                document.RootElement.GetProperty("kind").GetString()
+                                is "request"
+                                    or "attempt-start"
+                                    or "attempt-result"
+                            )
+                                verificationRequestIds.Add(
+                                    document.RootElement.GetProperty("requestId").GetString()!
+                                );
+                        }
+                        foreach (var requestId in verificationRequestIds)
+                        {
+                            ValidateRequestManifest(connection, transaction, requestId);
+                            var reconstructed = Reconstruct(connection, requestId);
+                            if (reconstructed["completeness"]?.GetValue<string>() != "complete")
+                                throw new InvalidDataException(
+                                    $"Legacy LLM request {requestId} failed reconstruction verification."
+                                );
+                        }
+                        using (var state = connection.CreateCommand())
+                        {
+                            state.Transaction = transaction;
+                            state.CommandText =
+                                "INSERT INTO llm_journal_import_state(source_path,imported_size,updated_at) VALUES($path,$size,$updated) ON CONFLICT(source_path) DO UPDATE SET imported_size=excluded.imported_size,updated_at=excluded.updated_at";
+                            Add(state, "$path", fullPath);
+                            Add(state, "$size", completeOffset);
+                            Add(state, "$updated", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                            state.ExecuteNonQuery();
+                        }
+                        transaction.Commit();
+                        transaction.Dispose();
+                        var stateRoot = Path.Combine(root, "state");
+                        var relative = Path.GetRelativePath(stateRoot, fullPath);
+                        if (relative.StartsWith("..", StringComparison.Ordinal))
+                            relative = Path.GetFileName(fullPath);
+                        var backupPath = Path.Combine(
+                            stateRoot,
+                            "migration-backup",
+                            MigrationId,
+                            relative + "." + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                        );
+                        Directory.CreateDirectory(Path.GetDirectoryName(backupPath)!);
+                        File.Move(fullPath, backupPath);
+                        SyncDirectory(Path.GetDirectoryName(backupPath)!);
+                        return true;
+                    }
+                    catch
+                    {
+                        transaction?.Dispose();
+                        throw;
+                    }
+                },
+                token
+            )
+            .ConfigureAwait(false);
         return await receipt.Completion.ConfigureAwait(false);
     }
 
@@ -463,16 +547,21 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
     )
     {
         CheckOpen();
-        var receipt = await Writer.EnqueueAsync((connection, transaction) =>
-        {
-            using var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandText =
-                "INSERT OR REPLACE INTO llm_journal_metadata(key,value) VALUES('sqlite_authority_migration',$value)";
-            Add(command, "$value", migrationId);
-            command.ExecuteNonQuery();
-            return true;
-        }, token).ConfigureAwait(false);
+        var receipt = await Writer
+            .EnqueueAsync(
+                (connection, transaction) =>
+                {
+                    using var command = connection.CreateCommand();
+                    command.Transaction = transaction;
+                    command.CommandText =
+                        "INSERT OR REPLACE INTO llm_journal_metadata(key,value) VALUES('sqlite_authority_migration',$value)";
+                    Add(command, "$value", migrationId);
+                    command.ExecuteNonQuery();
+                    return true;
+                },
+                token
+            )
+            .ConfigureAwait(false);
         await receipt.Completion.ConfigureAwait(false);
     }
 
@@ -483,102 +572,116 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
     {
         await InitializeAsync(token).ConfigureAwait(false);
         using var connection = OpenReadOnly();
-            using var command = connection.CreateCommand();
-            command.CommandText =
-                "SELECT value FROM llm_journal_metadata WHERE key='sqlite_authority_migration'";
-            return string.Equals(
-                command.ExecuteScalar() as string,
-                migrationId,
-                StringComparison.Ordinal
-            );
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT value FROM llm_journal_metadata WHERE key='sqlite_authority_migration'";
+        return string.Equals(
+            command.ExecuteScalar() as string,
+            migrationId,
+            StringComparison.Ordinal
+        );
     }
 
     public async Task ExportJsonlAsync(string outputPath, CancellationToken token = default)
     {
         await InitializeAsync(token).ConfigureAwait(false);
         using var connection = OpenReadOnly();
-            using var snapshot = connection.BeginTransaction(deferred: true);
-            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
-            var temp = outputPath + ".tmp-" + Guid.NewGuid().ToString("N");
-            await using var stream = new FileStream(
-                temp,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                8192,
-                true
-            );
-            using var writer = new StreamWriter(stream, new UTF8Encoding(false));
-            foreach (
-                var table in new[]
-                {
-                    "llm_journal_objects",
-                    "llm_journal_requests",
-                    "llm_journal_attempt_starts",
-                    "llm_journal_attempt_results",
-                }
-            )
+        using var snapshot = connection.BeginTransaction(deferred: true);
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
+        var temp = outputPath + ".tmp-" + Guid.NewGuid().ToString("N");
+        await using var stream = new FileStream(
+            temp,
+            FileMode.CreateNew,
+            FileAccess.Write,
+            FileShare.None,
+            8192,
+            true
+        );
+        using var writer = new StreamWriter(stream, new UTF8Encoding(false));
+        foreach (
+            var table in new[]
             {
-                using var command = connection.CreateCommand();
-                command.Transaction = snapshot;
-                command.CommandText = table switch
-                {
-                    "llm_journal_objects" =>
-                        "SELECT object_id,object_kind,payload,created_at FROM llm_journal_objects ORDER BY rowid",
-                    "llm_journal_requests" =>
-                        "SELECT request_id,session_id,purpose,iteration,created_at,prompt_object_id,tool_schema_object_id,requested_model_key,prompt_cache_key_hash,message_count,checkpoint_message_ids_json,base_request_id,common_prefix_length,appended_message_ids_json,delta_depth FROM llm_journal_requests ORDER BY rowid",
-                    "llm_journal_attempt_starts" =>
-                        "SELECT event_id,request_id,attempt,started_at,concrete_model_id,virtual_model_key,provider_type,semantic_payload_sha256,prompt_object_id FROM llm_journal_attempt_starts ORDER BY rowid",
-                    _ =>
-                        "SELECT event_id,request_id,attempt,completed_at,outcome,result_json,error_json FROM llm_journal_attempt_results ORDER BY rowid",
-                };
-                using var reader = command.ExecuteReader();
-                while (reader.Read())
-                {
-                    JsonObject record = table switch
-                    {
-                        "llm_journal_objects" => new()
-                        {
-                            ["v"] = 1,
-                            ["kind"] = "object",
-                            ["objectId"] = reader.GetString(0),
-                            ["objectKind"] = reader.GetString(1),
-                            ["payload"] = reader.GetString(2),
-                            ["createdAt"] = reader.GetInt64(3),
-                        },
-                        "llm_journal_requests" => RequestJson(reader),
-                        "llm_journal_attempt_starts" => AttemptStartJson(reader),
-                        _ => AttemptResultJson(reader),
-                    };
-                    await writer.WriteLineAsync(Codec.Write(record));
-                }
+                "llm_journal_objects",
+                "llm_journal_requests",
+                "llm_journal_attempt_starts",
+                "llm_journal_attempt_results",
             }
-            await writer.FlushAsync(token);
-            await stream.FlushAsync(token);
-            stream.Flush(true);
-            writer.Dispose();
-            snapshot.Commit();
-            File.Move(temp, outputPath, true);
-            SyncDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
+        )
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = snapshot;
+            command.CommandText = table switch
+            {
+                "llm_journal_objects" =>
+                    "SELECT object_id,object_kind,payload,created_at FROM llm_journal_objects ORDER BY rowid",
+                "llm_journal_requests" =>
+                    "SELECT request_id,session_id,purpose,iteration,created_at,prompt_object_id,tool_schema_object_id,requested_model_key,prompt_cache_key_hash,message_count,checkpoint_message_ids_json,base_request_id,common_prefix_length,appended_message_ids_json,delta_depth FROM llm_journal_requests ORDER BY rowid",
+                "llm_journal_attempt_starts" =>
+                    "SELECT event_id,request_id,attempt,started_at,concrete_model_id,virtual_model_key,provider_type,semantic_payload_sha256,prompt_object_id FROM llm_journal_attempt_starts ORDER BY rowid",
+                _ =>
+                    "SELECT event_id,request_id,attempt,completed_at,outcome,result_json,error_json FROM llm_journal_attempt_results ORDER BY rowid",
+            };
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                JsonObject record = table switch
+                {
+                    "llm_journal_objects" => new()
+                    {
+                        ["v"] = 1,
+                        ["kind"] = "object",
+                        ["objectId"] = reader.GetString(0),
+                        ["objectKind"] = reader.GetString(1),
+                        ["payload"] = reader.GetString(2),
+                        ["createdAt"] = reader.GetInt64(3),
+                    },
+                    "llm_journal_requests" => RequestJson(reader),
+                    "llm_journal_attempt_starts" => AttemptStartJson(reader),
+                    _ => AttemptResultJson(reader),
+                };
+                await writer.WriteLineAsync(Codec.Write(record));
+            }
+        }
+        await writer.FlushAsync(token);
+        await stream.FlushAsync(token);
+        stream.Flush(true);
+        writer.Dispose();
+        snapshot.Commit();
+        File.Move(temp, outputPath, true);
+        SyncDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
     }
 
     public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
 
     public async ValueTask DisposeAsync()
     {
-        if (disposed) return;
+        if (disposed)
+            return;
         disposed = true;
         await owner.DisposeAsync().ConfigureAwait(false);
     }
 
     private SqliteConnection OpenReadOnly()
     {
-        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder
+            {
+                DataSource = path,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+                DefaultTimeout = 5,
+            }.ToString()
+        );
+        try
         {
-            DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false, DefaultTimeout = 5,
-        }.ToString());
-        try { connection.Open(); return connection; }
-        catch { connection.Dispose(); throw; }
+            connection.Open();
+            return connection;
+        }
+        catch
+        {
+            connection.Dispose();
+            throw;
+        }
     }
 
     private static void SyncDirectory(string directory)

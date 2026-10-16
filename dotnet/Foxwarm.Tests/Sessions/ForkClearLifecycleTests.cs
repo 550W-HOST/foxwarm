@@ -415,7 +415,9 @@ public sealed class ForkClearLifecycleTests
         {
             new SqliteArchiveMessageStore(database, "fixture").Initialize();
             // Establish the predecessor before the Main data-root writer starts.
-            using var connection = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=" + database);
+            using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+                "Data Source=" + database
+            );
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = "DROP TABLE archive_branches";

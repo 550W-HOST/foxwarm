@@ -568,7 +568,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     public Task ShutdownAsync()
     {
-        lock (lifecycle) return shutdown ??= ShutdownCoreAsync();
+        lock (lifecycle)
+            return shutdown ??= ShutdownCoreAsync();
     }
 
     private async Task ShutdownCoreAsync()
@@ -622,24 +623,27 @@ internal sealed partial class SessionManager : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         BeginShutdown();
-        try { await ShutdownAsync(); }
+        try
+        {
+            await ShutdownAsync();
+        }
         finally
         {
-        await timers.DisposeAsync();
-        await DrainPublicationsAsync();
-        await waitTimeouts.DisposeAsync();
-        await waitLiveness.DisposeAsync();
-        await ToolScript.DisposeAsync();
-        await executor.DisposeAsync();
-        await mcp.DisposeAsync();
-        Nodes.Dispose();
-        await websockets.DisposeAsync();
-        await Journal.DisposeAsync();
-        await archiveWriter.DisposeAsync();
-        Tasks.Dispose();
-        admissionStop.Dispose();
-        Catalog.Dispose();
-        http.Dispose();
+            await timers.DisposeAsync();
+            await DrainPublicationsAsync();
+            await waitTimeouts.DisposeAsync();
+            await waitLiveness.DisposeAsync();
+            await ToolScript.DisposeAsync();
+            await executor.DisposeAsync();
+            await mcp.DisposeAsync();
+            Nodes.Dispose();
+            await websockets.DisposeAsync();
+            await Journal.DisposeAsync();
+            await archiveWriter.DisposeAsync();
+            Tasks.Dispose();
+            admissionStop.Dispose();
+            Catalog.Dispose();
+            http.Dispose();
         }
     }
 

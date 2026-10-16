@@ -1,8 +1,8 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Microsoft.Data.Sqlite;
 using Foxwarm.Persistence;
+using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Sessions;
 
@@ -234,7 +234,8 @@ public sealed partial class SqliteArchiveMessageStore
         }
     }
 
-    public void Initialize() => OrderedMaintenance(databasePath, connection => RequireWriteIdentity(connection, sessionId));
+    public void Initialize() =>
+        OrderedMaintenance(databasePath, connection => RequireWriteIdentity(connection, sessionId));
 
     internal static void InitializeDatabase(string path) => OrderedMaintenance(path, _ => { });
 
@@ -264,22 +265,42 @@ public sealed partial class SqliteArchiveMessageStore
         InitializeReservations(connection);
     }
 
-    public IReadOnlyList<ArchiveMessageRecord> WriteMessages(IReadOnlyList<ArchiveMessageRecord> records)
+    public IReadOnlyList<ArchiveMessageRecord> WriteMessages(
+        IReadOnlyList<ArchiveMessageRecord> records
+    )
     {
-        var inserted = EnqueueMessagesAsync(records).AsTask().GetAwaiter().GetResult().Completion.GetAwaiter().GetResult();
+        var inserted = EnqueueMessagesAsync(records)
+            .AsTask()
+            .GetAwaiter()
+            .GetResult()
+            .Completion.GetAwaiter()
+            .GetResult();
         var sequences = inserted.Select(row => row.Seq).ToHashSet();
         return records.Where(record => sequences.Remove(record.Seq)).ToArray();
     }
 
-    internal ValueTask<WriteReceipt<IReadOnlyList<ArchiveMessageRecord>>> EnqueueMessagesAsync(IReadOnlyList<ArchiveMessageRecord> records)
+    internal ValueTask<WriteReceipt<IReadOnlyList<ArchiveMessageRecord>>> EnqueueMessagesAsync(
+        IReadOnlyList<ArchiveMessageRecord> records
+    )
     {
         var prepared = records.Select(ValidateRecord).ToArray();
         if (prepared.Length == 0)
-            return ValueTask.FromResult(new WriteReceipt<IReadOnlyList<ArchiveMessageRecord>>(Task.FromResult<IReadOnlyList<ArchiveMessageRecord>>([])));
-        return EnqueueWriteAsync<IReadOnlyList<ArchiveMessageRecord>>(databasePath, (connection, transaction) => WriteMessages(connection, transaction, prepared));
+            return ValueTask.FromResult(
+                new WriteReceipt<IReadOnlyList<ArchiveMessageRecord>>(
+                    Task.FromResult<IReadOnlyList<ArchiveMessageRecord>>([])
+                )
+            );
+        return EnqueueWriteAsync<IReadOnlyList<ArchiveMessageRecord>>(
+            databasePath,
+            (connection, transaction) => WriteMessages(connection, transaction, prepared)
+        );
     }
 
-    private IReadOnlyList<ArchiveMessageRecord> WriteMessages(SqliteConnection connection, SqliteTransaction transaction, IReadOnlyList<ArchiveMessageRecord> records)
+    private IReadOnlyList<ArchiveMessageRecord> WriteMessages(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        IReadOnlyList<ArchiveMessageRecord> records
+    )
     {
         RequireWriteIdentity(connection, sessionId);
         using var select = connection.CreateCommand();
@@ -334,16 +355,23 @@ public sealed partial class SqliteArchiveMessageStore
 
     public void RollbackInsertedMessages(IReadOnlyList<ArchiveMessageRecord> records)
     {
-        if (records.Count == 0) return;
+        if (records.Count == 0)
+            return;
         var prepared = records.Select(ValidateRecord).ToArray();
-        Write((connection, transaction) =>
-        {
-            RollbackInsertedMessages(connection, transaction, prepared);
-            return true;
-        });
+        Write(
+            (connection, transaction) =>
+            {
+                RollbackInsertedMessages(connection, transaction, prepared);
+                return true;
+            }
+        );
     }
 
-    private void RollbackInsertedMessages(SqliteConnection connection, SqliteTransaction transaction, IReadOnlyList<ArchiveMessageRecord> records)
+    private void RollbackInsertedMessages(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        IReadOnlyList<ArchiveMessageRecord> records
+    )
     {
         RequireWriteIdentity(connection, sessionId);
         using var remove = connection.CreateCommand();

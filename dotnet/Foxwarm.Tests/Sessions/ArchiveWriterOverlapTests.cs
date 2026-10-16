@@ -9,14 +9,20 @@ public sealed class ArchiveWriterOverlapTests
     public async Task Authority_validation_and_serialization_run_while_archive_is_pending_but_publication_waits()
     {
         using var temp = new TempDirectory();
-        using var owner = SqliteArchiveMessageStore.AcquireWriter(Path.Combine(temp.Path, "state", "archive-store.sqlite"));
+        using var owner = SqliteArchiveMessageStore.AcquireWriter(
+            Path.Combine(temp.Path, "state", "archive-store.sqlite")
+        );
         var prepared = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var store = new PersistentSessionAuthorityStore(temp.Path, "s", canonicalCommitBarrier: (_, _) =>
-        {
-            prepared.SetResult();
-            return Task.CompletedTask;
-        });
+        var store = new PersistentSessionAuthorityStore(
+            temp.Path,
+            "s",
+            canonicalCommitBarrier: (_, _) =>
+            {
+                prepared.SetResult();
+                return Task.CompletedTask;
+            }
+        );
         await store.CommitAsync(Snapshot([]), SaveKind.Strict);
         var previous = await File.ReadAllTextAsync(store.AuthorityPath);
         owner.Writer.BeforeBatch = () => release.Task;
@@ -29,7 +35,10 @@ public sealed class ArchiveWriterOverlapTests
             Assert.Equal(previous, await File.ReadAllTextAsync(store.AuthorityPath));
             Assert.Empty(store.Archive.ReadMessages());
         }
-        finally { release.TrySetResult(); }
+        finally
+        {
+            release.TrySetResult();
+        }
         await commit.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Single((await store.LoadAsync("s"))!.History);
         Assert.Single(store.Archive.ReadMessages());
@@ -39,14 +48,20 @@ public sealed class ArchiveWriterOverlapTests
     public async Task Failed_authority_preparation_waits_for_accepted_archive_work_then_compensates_only_new_rows()
     {
         using var temp = new TempDirectory();
-        using var owner = SqliteArchiveMessageStore.AcquireWriter(Path.Combine(temp.Path, "state", "archive-store.sqlite"));
+        using var owner = SqliteArchiveMessageStore.AcquireWriter(
+            Path.Combine(temp.Path, "state", "archive-store.sqlite")
+        );
         var store = new PersistentSessionAuthorityStore(temp.Path, "s");
         var existing = Fixture.Message(1, "existing", 1000);
         await store.CommitCanonicalAppendAsync(Snapshot([existing]), [existing]);
         var previous = await File.ReadAllTextAsync(store.AuthorityPath);
         var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        owner.Writer.BeforeBatch = () => { held.TrySetResult(); return release.Task; };
+        owner.Writer.BeforeBatch = () =>
+        {
+            held.TrySetResult();
+            return release.Task;
+        };
         var added = Fixture.Message(2, "new row", 2000);
         var bad = Snapshot([existing, added]);
         bad.AuthorityEnvelope["childHandoffState"] = new JsonObject();
@@ -56,10 +71,20 @@ public sealed class ArchiveWriterOverlapTests
             await held.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.False(commit.IsCompleted);
         }
-        finally { release.TrySetResult(); }
-        await Assert.ThrowsAsync<InvalidDataException>(() => commit.WaitAsync(TimeSpan.FromSeconds(5)));
+        finally
+        {
+            release.TrySetResult();
+        }
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            commit.WaitAsync(TimeSpan.FromSeconds(5))
+        );
         Assert.Equal(previous, await File.ReadAllTextAsync(store.AuthorityPath));
-        Assert.Equal("existing", Assert.Single(store.Archive.ReadMessages()).Message["parts"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(
+            "existing",
+            Assert.Single(store.Archive.ReadMessages()).Message["parts"]![0]![
+                "text"
+            ]!.GetValue<string>()
+        );
     }
 
     [Fact]
@@ -73,9 +98,19 @@ public sealed class ArchiveWriterOverlapTests
         a.Initialize();
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         owner.Writer.BeforeBatch = () => release.Task;
-        ArchiveMessageRecord Row(string id, int seq, string text) => ArchiveMessageRecord.Create(id, "main", seq, seq * 1000, Fixture.Message(seq, text, seq * 1000));
+        ArchiveMessageRecord Row(string id, int seq, string text) =>
+            ArchiveMessageRecord.Create(
+                id,
+                "main",
+                seq,
+                seq * 1000,
+                Fixture.Message(seq, text, seq * 1000)
+            );
         var first = await a.EnqueueMessagesAsync([Row("a", 1, "one")]);
-        var rejected = await a.EnqueueMessagesAsync([Row("a", 2, "must roll back"), Row("a", 1, "conflict")]);
+        var rejected = await a.EnqueueMessagesAsync([
+            Row("a", 2, "must roll back"),
+            Row("a", 1, "conflict"),
+        ]);
         var unrelated = await b.EnqueueMessagesAsync([Row("b", 1, "other")]);
         release.SetResult();
         Assert.Single(await first.Completion);
@@ -108,5 +143,6 @@ public sealed class ArchiveWriterOverlapTests
         Assert.Empty(store.ReadMessages());
     }
 
-    private static SessionSnapshot Snapshot(IReadOnlyList<JsonObject> messages) => new("s", messages, [], false, null, false, new(), messages.Count + 1, 0, new());
+    private static SessionSnapshot Snapshot(IReadOnlyList<JsonObject> messages) =>
+        new("s", messages, [], false, null, false, new(), messages.Count + 1, 0, new());
 }
