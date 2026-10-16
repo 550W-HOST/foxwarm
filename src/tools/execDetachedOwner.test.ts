@@ -5,7 +5,6 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import * as llm from '../llm';
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
 import { createExecRuntime, type ExecRuntime, type RunningExecEntry } from '../execManager';

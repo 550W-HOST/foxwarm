@@ -5,7 +5,7 @@ import * as sessionManager from '../sessionManager';
 import * as llm from '../llm';
 import * as vector from '../vector';
 import { formatCompactionCompletionMarker } from '../session/history';
-import { Message, MessagePart, Session } from '../types';
+import { MessagePart, Session } from '../types';
 
 function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;

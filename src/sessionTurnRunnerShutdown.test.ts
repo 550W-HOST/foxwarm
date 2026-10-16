@@ -1,5 +1,4 @@
 import * as toolExecutor from './toolExecutor';
-import { executeTools } from './toolExecutor';
 import type { CurrentSessionTurnEffects } from './session/currentSessionEffects';
 import assert from 'node:assert/strict';
 import test from 'node:test';

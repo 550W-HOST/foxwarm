@@ -1,4 +1,3 @@
-import * as promptSnapshot from './promptSnapshot';
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
@@ -13,7 +12,7 @@ after(async () => {
 });
 
 let modulePromise: Promise<{
-  llm: typeof import('../llm');
+  promptSnapshot: typeof import('./promptSnapshot');
   sessionManager: typeof import('../sessionManager');
   config: typeof import('../config');
 }> | undefined;
@@ -21,10 +20,10 @@ let modulePromise: Promise<{
 async function loadModules() {
   if (!modulePromise) {
     modulePromise = Promise.all([
-      import('../llm'),
+      import('./promptSnapshot'),
       import('../sessionManager'),
       import('../config'),
-    ]).then(([llm, sessionManager, config]) => ({ llm, sessionManager, config }));
+    ]).then(([promptSnapshot, sessionManager, config]) => ({ promptSnapshot, sessionManager, config }));
   }
   return modulePromise;
 }
@@ -34,7 +33,7 @@ function uniqueName(prefix: string): string {
 }
 
 test('framework root 00_SYSTEM takes precedence over legacy fallback and dynamic dirs omit agent_memory', async () => {
-  const { llm, config } = await loadModules();
+  const { promptSnapshot, config } = await loadModules();
   const legacyMainSystemPrompt = path.join(config.MAIN_AGENT_MEMORY_DIR, '00_SYSTEM.md');
 
   assert.equal(await fs.pathExists(config.AGENTS_SYSTEM_PROMPT_TEMPLATE_PATH), true);
@@ -75,7 +74,7 @@ test('framework root 00_SYSTEM takes precedence over legacy fallback and dynamic
 });
 
 test('memory frontmatter include-session/exclude-session filters by canonical session id', async () => {
-  const { llm, config } = await loadModules();
+  const { promptSnapshot, config } = await loadModules();
   const agentName = uniqueName('frontmatter_agent');
   const sessionId = `${agentName}/target-a`;
   const memoryDir = config.getAgentMemoryDir(agentName);
@@ -101,7 +100,7 @@ test('memory frontmatter include-session/exclude-session filters by canonical se
 });
 
 test('legacy ONBOOT memory files remain excluded after startup trigger removal', async () => {
-  const { llm, config } = await loadModules();
+  const { promptSnapshot, config } = await loadModules();
   const agentName = uniqueName('legacy_onboot_agent');
   const memoryDir = config.getAgentMemoryDir(agentName);
 
@@ -119,7 +118,7 @@ test('legacy ONBOOT memory files remain excluded after startup trigger removal',
 });
 
 test('session creation passes session id to snapshot builder and fork keeps parent snapshot', async () => {
-  const { llm, sessionManager, config } = await loadModules();
+  const { promptSnapshot, sessionManager, config } = await loadModules();
 
   const agentName = uniqueName('sessionid_agent');
   const sessionName = 'created';

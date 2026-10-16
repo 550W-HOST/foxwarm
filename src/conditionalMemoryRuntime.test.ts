@@ -352,7 +352,7 @@ test('failover resolves prompts per selected leaf and journals one request with 
 });
 
 test('lifecycle refreshes reuse recorded concrete identity and defer never-materialized virtual sessions', async () => {
-  const { llm, promptSnapshot, config, agentSettings } = await loadModules();
+  const { promptSnapshot, config, agentSettings } = await loadModules();
   const agentName = 'runtime-refresh';
   const memoryDir = config.getAgentMemoryDir(agentName);
   await fs.ensureDir(memoryDir);
