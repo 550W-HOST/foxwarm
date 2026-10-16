@@ -11,6 +11,7 @@ import {
 } from '../composerDraft'
 import { countPastedTextCharacters, getPastedTextPreview } from '../pastedText'
 import { PastedTextModal } from './PastedTextBlock'
+import ImagePreviewDialog, { isSafeImagePreviewMime } from './ImagePreviewDialog'
 
 const MAX_UNDO_ENTRIES = 80
 const MAX_UNDO_BYTES = 2_000_000
@@ -468,7 +469,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     chip.dataset.composerAttachmentRef = segment.ref
     const file = resolveAttachmentFile(segment.ref)
     chip.dataset.attachmentMissing = String(!file)
-    if (segment.mimeType.startsWith('image/') && file) {
+    if (isSafeImagePreviewMime(segment.mimeType) && file) {
       const oldUrl = attachmentUrlMapRef.current.get(segment.ref)
       if (oldUrl) URL.revokeObjectURL(oldUrl)
       attachmentUrlMapRef.current.set(segment.ref, URL.createObjectURL(file))
@@ -1001,6 +1002,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
 
   const activeBlock = activeBlockId ? blockMapRef.current.get(activeBlockId) || null : null
   const activeAttachment = activeAttachmentRef ? attachmentMapRef.current.get(activeAttachmentRef) || null : null
+  const activeImageSrc = activeAttachment && isSafeImagePreviewMime(activeAttachment.mimeType) && resolveAttachmentFile(activeAttachment.ref) ? attachmentUrlMapRef.current.get(activeAttachment.ref) : undefined
   const closeModal = useCallback(() => {
     setActiveBlockId(null)
     requestAnimationFrame(() => activeChipRef.current?.focus())
@@ -1244,12 +1246,10 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
           }}
         />
       )}
-      {!disabled && activeAttachment && createPortal(
+      {!disabled && activeAttachment && activeImageSrc && <ImagePreviewDialog src={activeImageSrc} mimeType={activeAttachment.mimeType} title={activeAttachment.name} onClose={() => setActiveAttachmentRef(null)} />}
+      {!disabled && activeAttachment && !activeImageSrc && createPortal(
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setActiveAttachmentRef(null) }}>
           <div role="dialog" aria-modal="true" aria-label="Attachment information" className="w-full max-w-lg rounded-lg border border-fw-border bg-fw-surface p-4 shadow-xl">
-            {activeAttachment.mimeType.startsWith('image/') && resolveAttachmentFile(activeAttachment.ref) && (
-              <img src={attachmentUrlMapRef.current.get(activeAttachment.ref)} alt={activeAttachment.name} className="mb-3 max-h-72 w-full rounded object-contain" />
-            )}
             <div className="font-medium text-fw-text-strong">{activeAttachment.name}</div>
             <div className="mt-1 text-sm text-fw-text-muted">{activeAttachment.mimeType || 'application/octet-stream'} · {activeAttachment.size.toLocaleString()} B</div>
             {!resolveAttachmentFile(activeAttachment.ref) && <div className="mt-2 text-sm text-fw-warning">This attachment must be reattached or removed before sending.</div>}

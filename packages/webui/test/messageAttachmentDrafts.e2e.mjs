@@ -83,7 +83,7 @@ test('numbered attachment previews form a grid above the editor on desktop and m
     await page.waitForSelector('[data-composer-action="stop"]')
     await page.$eval('#file-upload',input=>{
       const files=new DataTransfer()
-      files.items.add(new File(['<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#84a98c"/></svg>'],'image.svg',{type:'image/svg+xml'}))
+      files.items.add(new File([Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='),c=>c.charCodeAt(0))],'image.png',{type:'image/png'}))
       files.items.add(new File(['notes'],'notes.txt',{type:'text/plain'}))
       files.items.add(new File(['document'],'document.pdf',{type:'application/pdf'}))
       Object.defineProperty(input,'files',{configurable:true,value:files.files});input.dispatchEvent(new Event('change',{bubbles:true}))
@@ -96,6 +96,12 @@ test('numbered attachment previews form a grid above the editor on desktop and m
     })
     assert.deepEqual(layout.numbers,['1','2','3']);assert.deepEqual(layout.inline,['FILE 1','FILE 2','FILE 3']);assert.equal(layout.images,0);assert.equal(layout.grid,'grid');assert.ok(layout.above&&layout.bounded,JSON.stringify(layout))
     if(process.env.FOXWARM_E2E_SCREENSHOT_DIR){await mkdir(process.env.FOXWARM_E2E_SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:process.env.FOXWARM_E2E_SCREENSHOT_DIR+'/attachment-grid-'+width+'.png'})}
+    const previewButton='[aria-label="Preview attachment 1: image.png"]'
+    await page.click(previewButton);await page.waitForSelector('[data-image-preview][open]')
+    assert.equal(await page.$eval('[data-image-preview]',el=>Math.abs(el.getBoundingClientRect().width-innerWidth)<1&&Math.abs(el.getBoundingClientRect().height-innerHeight)<1),true)
+    assert.ok(await page.$('[data-image-preview] img[src^="blob:"]'))
+    await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.querySelector('[data-image-preview]'))
+    assert.equal(await page.evaluate(selector=>document.activeElement===document.querySelector(selector),previewButton),true)
     await page.click('[aria-label="Remove attachment notes.txt"]')
     await page.waitForFunction(()=>document.querySelectorAll('[data-attachment-preview-ref]').length===2)
     assert.deepEqual(await page.$$eval('.foxwarm-composer-attachment-chip',els=>els.map(el=>[el.dataset.composerAttachmentRef,el.textContent])),[[layout.refs[0],'FILE 1'],[layout.refs[2],'FILE 2']])

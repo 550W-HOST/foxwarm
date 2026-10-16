@@ -13,7 +13,7 @@ Projects delivered assistant files into visible, input-bounded reply grids indep
 - `ReplyFile`, `ReplyFileGroup` — display records; legacy size is absent rather than fabricated.
 - `ReplyFileGrid` — fixed-footprint, wrapping output file tiles, safe raster thumbnails/preview, and download-only generic files.
 - `ReplyFileTile` — per-delivery thumbnail/error/download state; aborts pending HEAD requests on unmount and reports missing downloads without navigation.
-- `FilePreview` — body-portaled native modal, original filename, Download/Close, Escape/backdrop, and opener focus restoration.
+- Image previews delegate to the shared [full-screen image viewer](./webui-image-preview.md), retaining the tile-owned download callback and pending/error state.
 
 ## Integration
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { File, Image, X } from 'lucide-react'
 import type { ComposerAttachmentSegment } from '../composerDraft'
+import { isSafeImagePreviewMime } from './ImagePreviewDialog'
 
 interface AttachmentTileProps {
   attachment: ComposerAttachmentSegment
@@ -12,7 +13,7 @@ interface AttachmentTileProps {
 }
 
 function AttachmentTile({ attachment, file, number, disabled, onOpen, onRemove }: AttachmentTileProps) {
-  const image = attachment.mimeType.startsWith('image/')
+  const image = isSafeImagePreviewMime(attachment.mimeType)
   const [preview, setPreview] = useState<{ file: File; url: string }>()
   const [failed, setFailed] = useState(false)
   useEffect(() => {

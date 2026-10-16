@@ -48,6 +48,9 @@ test('reply files remain visible outside Conversation process, in their own turn
    assert.ok(positions.every(x=>x.width<=x.available));assert.ok(positions[0].bottom<positions[1].top)
    await page.waitForFunction(()=>document.querySelector('.reply-file-thumbnail img')?.naturalWidth>0)
    if(process.env.FOXWARM_E2E_SCREENSHOT_DIR){await mkdir(process.env.FOXWARM_E2E_SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:process.env.FOXWARM_E2E_SCREENSHOT_DIR+`/reply-files-${width}.png`})}
+   await page.click('[aria-label="Preview report.png"]');await page.waitForSelector('[data-image-preview][open]')
+   assert.equal(await page.$eval('[data-image-preview]',el=>Math.abs(el.getBoundingClientRect().width-innerWidth)<1&&Math.abs(el.getBoundingClientRect().height-innerHeight)<1),true,'reply images use the same full-viewport viewer on desktop/mobile')
+   await page.click('[aria-label="Close image preview"]');await page.waitForFunction(()=>!document.querySelector('[data-image-preview]'))
    await page.evaluate(()=>window.fixture.setView('detailed'));await page.waitForFunction(()=>document.querySelectorAll('[data-delivery-id]').length===2)
    await page.evaluate(()=>window.fixture.setView('grouped'));await page.waitForFunction(()=>document.querySelectorAll('[data-delivery-id]').length===2)
    await page.reload();await page.waitForSelector('[data-reply-files]');assert.equal((await page.$$('[data-delivery-id]')).length,2)
