@@ -901,6 +901,18 @@ Example:
             },
         },
         {
+            name: 'node_remove',
+            description: "Remove an approved Node and revoke its credentials. Disconnects its active connection without stopping the client process or deleting files, containers, Agents, or Sessions.",
+            parameters: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                    nodeId: { type: 'string', description: "Approved Node ID to remove." },
+                },
+                required: ['nodeId'],
+            },
+        },
+        {
             name: 'node_pair_approve',
             description: "Approve a pending Node pairing request. First inspect node_pair_list and verify the request is from the Node you intend to trust.",
             parameters: {

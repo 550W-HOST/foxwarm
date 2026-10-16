@@ -1,7 +1,7 @@
 import { getChannelId, getConversationId } from './channel';
 import { logger } from './common';
 import { nodesManager } from './nodes/manager';
-import { approvePendingPairing, createApprovedNode, isReservedNodeId, moveApprovedNode, rejectPendingPairing, removeApprovedNode } from './nodes/registry';
+import { approvePendingPairing, createApprovedNode, isReservedNodeId, moveApprovedNode, rejectPendingPairing } from './nodes/registry';
 import * as sessionManager from './sessionManager';
 import * as sessionRuntime from './sessionRuntime';
 import * as skills from './skills';
@@ -389,11 +389,10 @@ export const COMMANDS: Record<string, CommandDef> = {
         const nodeId = args[1]
         if (!nodeId) { ctx.reply('Usage: `/node remove <node-id>`'); return }
         try {
-          const removed = await removeApprovedNode(nodeId)
-          const disconnected = nodesManager.disconnectNode(removed.nodeId, 'Node credentials removed by /node remove')
+          const removed = await nodesManager.removeApprovedNode(nodeId)
           ctx.reply([
             `✅ Removed approved node \`${removed.nodeId}\`.`,
-            `Runtime connection: \`${disconnected ? 'closed' : 'not online'}\`.`,
+            `Runtime connection: \`${removed.disconnected ? 'closed' : 'not online'}\`.`,
             'The old node credentials are no longer valid; the node must be paired again before it can reconnect.',
           ].join('\n'))
         } catch (e: any) { ctx.reply(`❌ Failed to remove node: ${e.message}`) }

@@ -1,7 +1,7 @@
 # Unit: src-tools
 
 Files: src/tools.ts (facade), src/toolCallControls.ts, src/toolCallControls.test.ts, src/tools/resolvedTools.ts, src/tools/placement.ts, src/tools/helpers.ts, src/tools/fileTools.ts, src/tools/fileTools.test.ts, src/tools/memoryTools.ts, src/tools/execTools.ts, src/tools/imageTools.ts, src/tools/browserTools.ts, src/tools/mcpTools.ts, src/tools/nodeTools.ts, src/tools/vectorTools.ts, src/tools/unifiedSearch.ts, src/tools/definitions.ts, src/tools/placement.test.ts, src/tools/agentPathMetadata.test.ts, src/utils/pathResolve.test.ts, src/tools/applyPatchOutput.test.ts, src/utils/pathResolve.ts
-Secondary files: src/tools/configTools.ts, src/handoffConfirmationEnabled.test.ts, src/tools/unifiedTools.test.ts, src/sessionWorkerToolPlacement.test.ts
+Secondary files: src/tools/configTools.ts, src/tools/nodeRemove.test.ts, src/handoffConfirmationEnabled.test.ts, src/tools/unifiedTools.test.ts, src/sessionWorkerToolPlacement.test.ts
 
 ## Purpose
 
@@ -18,6 +18,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - `assertToolAvailableForPlacement(toolName, args, context)` — trusted-placement pre-handler fence; Worker-unsupported operations fail retryably before raw singleton/lifecycle code.
 - The closed Main Management wrappers cover messaging/timers/catalog operations plus Worker cross-session recall/archive reads, Main-owned agent/session creation, other-target session deletion, node bootstrap/pairing, atomic generic policy replacement, and shared task operations.
 - The closed Main Management wrappers also cover discoverable `node_create_auth_token`, which reserves a new approved Node ID and writes its credential to a new owner-only Main file without returning plaintext.
+- `node_remove` — discoverable hidden Main-owned approved-credential revocation, returning only the explicit target ID and whether its active runtime was disconnected; no provider destruction or Session routing change.
 - `BUILTIN_TOOL_PLACEMENTS` — Exhaustive ownership metadata for every registered builtin, independent of schemas and permission rules.
 - `NODE_ENVIRONMENT_BUILTIN_NAMES` — Intentional current-node environment primitive names.
 - `resolveBuiltinToolPlacement(name, args, currentNode)` — Resolves action-aware ownership and the current execution node.
@@ -104,6 +105,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 | `tool_node_pair_approve` | Approves a pending node pairing request; an external Main-local caller can provide a final context/policy fence before registry mutation (see [inbound pairing](./src-mcp-inbound-pairing-service.md)) |
 | `tool_node_pair_list` | Lists pending node pairing request IDs and status without the obsolete display code |
 | `tool_node_create_auth_token` | Reserves a new approved Node ID and writes its credential to a new owner-only file on Main, returning only `{ nodeId, filePath }` |
+| `tool_node_remove` | Routes Worker calls to Main, checks permissions, and shares approved credential removal plus runtime disconnect with `/node remove`; returns only `{ nodeId, disconnected }` |
 
 ### tools/vectorTools.ts — Vector recall scope utilities
 | Function | Description |

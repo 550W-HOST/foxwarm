@@ -90,5 +90,6 @@ Manages a persistent registry of approved nodes and pending pairing requests. Ha
 
 - Used by WebSocket handlers that manage the node pairing handshake (attach/detach socket, claim approved pairing on reconnect).
 - Used by the user-facing `/node` command for direct creation, listing, approving/rejecting pairings, and removing/renaming approved nodes.
+- The Main-owned `node_remove` builtin and `/node remove` share `nodesManager.removeApprovedNode`, which calls registry removal before disconnecting the active runtime and returns no credential fields.
 - `authenticateApprovedNode` is called on every authenticated node connection to verify credentials.
 - Relies on `DiskJsonData` for atomic writes and backup rotation, sharing that utility pattern with other persistent stores in the project.
