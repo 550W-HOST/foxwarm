@@ -60,7 +60,8 @@ internal sealed class MainHost : IAsyncDisposable
                 terminals,
                 http.Address,
                 http.WebUiEnabled,
-                http.BindAddress
+                http.BindAddress,
+                http.Desktop
             );
             if (server.WebUiEnabled)
                 new WebUIChannel(sessions, runtime, router, terminals).Register(server.App);

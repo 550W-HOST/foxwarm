@@ -21,7 +21,10 @@ Microsoft downloads:
 
 The backend runs inside the desktop application's process. WebView2 uses its
 normal browser/renderer subprocesses. The app starts its own authenticated
-loopback-only server on an available port; you do not need to start a server.
+loopback-only server; you do not need to start a server. It remembers its last
+successfully bound port so browser preferences survive a normal restart. If that
+port is occupied, it binds a new available port without connecting to the other
+process; browser-only theme/layout preferences start fresh for that new origin.
 No API keys or existing account settings are included.
 
 ## Window and tray

@@ -1,8 +1,11 @@
+using System.Net;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Microsoft.AspNetCore.Server.Kestrel.Transport.Sockets;
 using Microsoft.Extensions.FileProviders;
 
 namespace Foxwarm;
@@ -21,7 +24,8 @@ internal sealed class HttpServer
         Foxwarm.Terminal.TerminalRegistry terminals,
         PublicWebAddress? publicAddress = null,
         bool? webUiEnabled = null,
-        string bindAddress = "127.0.0.1"
+        string bindAddress = "127.0.0.1",
+        bool desktop = false
     )
     {
         var address = publicAddress ?? PublicWebAddress.Capture(port);
@@ -39,6 +43,24 @@ internal sealed class HttpServer
         // Node authentication uses Source-compatible query credentials. Do not log request URLs.
         builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
         builder.WebHost.UseUrls($"http://{bindAddress}:{port}");
+        if (desktop)
+            builder.WebHost.UseSockets(options =>
+                options.CreateBoundListenSocket = endpoint =>
+                {
+                    try
+                    {
+                        return SocketTransportOptions.CreateDefaultBoundListenSocket(endpoint);
+                    }
+                    catch (SocketException error)
+                        when (error.SocketErrorCode == SocketError.AddressAlreadyInUse)
+                    {
+                        // Retry only the socket bind, not host or Session initialization.
+                        return SocketTransportOptions.CreateDefaultBoundListenSocket(
+                            new IPEndPoint(IPAddress.Loopback, 0)
+                        );
+                    }
+                }
+            );
         builder.Logging.ClearProviders();
         builder.WebHost.ConfigureKestrel(server =>
             server.Limits.MaxRequestBodySize = 2 * 1024 * 1024
@@ -240,7 +262,7 @@ internal sealed class HttpServer
         );
         Foxwarm.Nodes.NodeRoutes.Register(app, sessions, address);
         McpOAuthRoutes.Register(app, sessions.OutboundMcp);
-        if (port == 0)
+        if (port == 0 || desktop)
             app.Lifetime.ApplicationStarted.Register(() =>
                 address.Origin = app.Urls.Single().TrimEnd('/')
             );

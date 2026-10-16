@@ -11,7 +11,8 @@ internal sealed record HttpServerSettings(
     string Token,
     string BindAddress,
     PublicWebAddress Address,
-    bool WebUiEnabled
+    bool WebUiEnabled,
+    bool Desktop = false
 )
 {
     internal static bool Enabled(ModelConfiguration? configuration)
@@ -70,17 +71,25 @@ internal sealed record HttpServerSettings(
     }
 
     // Desktop deliberately ignores the server bind/port/public URL settings. Kestrel
-    // owns an ephemeral loopback listener; its bound address is published after start.
+    // owns the listener; its actual bound address is published after start.
     internal static async Task<HttpServerSettings> CaptureDesktopAsync(string dataRoot)
     {
         var token = await LoadOrCreateTokenAsync(dataRoot);
         if (string.IsNullOrWhiteSpace(token))
             throw new InvalidDataException("HTTP access token must not be blank.");
+        var portPath = Path.Combine(dataRoot, "state", "desktop-port");
+        var port =
+            File.Exists(portPath)
+            && int.TryParse(await File.ReadAllTextAsync(portPath), out var saved)
+            && saved is > 0 and <= 65535
+                ? saved
+                : 0;
         return new(
-            0,
+            port,
             token,
             "127.0.0.1",
-            new PublicWebAddress("http://127.0.0.1:0", PathString.Empty, "/", false),
+            new PublicWebAddress($"http://127.0.0.1:{port}", PathString.Empty, "/", false),
+            true,
             true
         );
     }

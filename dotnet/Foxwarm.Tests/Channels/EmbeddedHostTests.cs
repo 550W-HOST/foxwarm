@@ -8,6 +8,47 @@ namespace Foxwarm.Tests;
 public sealed class EmbeddedHostTests
 {
     [Fact]
+    public async Task Occupied_remembered_port_falls_back_during_the_same_host_start()
+    {
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        var work = Path.Combine(temp.Path, "work");
+        Directory.CreateDirectory(work);
+        var occupied = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        occupied.Start();
+        try
+        {
+            var occupiedPort = ((IPEndPoint)occupied.LocalEndpoint).Port;
+            var settings = await HttpServerSettings.CaptureDesktopAsync(data);
+            await File.WriteAllTextAsync(
+                Path.Combine(data, "state", "desktop-port"),
+                occupiedPort.ToString()
+            );
+            settings = await HttpServerSettings.CaptureDesktopAsync(data);
+            Assert.Equal(occupiedPort, settings.Port);
+            await using var host = await MainHost.CreateAsync(
+                [],
+                data,
+                work,
+                new ModelConfiguration(data),
+                settings,
+                null
+            );
+            await host.App.StartAsync();
+            var actual = new Uri(settings.Address.BaseUrl);
+            Assert.NotEqual(occupiedPort, actual.Port);
+            Assert.False(occupied.Pending());
+            using var client = new HttpClient { BaseAddress = actual };
+            client.DefaultRequestHeaders.Authorization = new("Bearer", settings.Token);
+            Assert.True((await client.GetAsync("health")).IsSuccessStatusCode);
+        }
+        finally
+        {
+            occupied.Stop();
+        }
+    }
+
+    [Fact]
     public async Task Desktop_rejects_a_blank_persisted_token_without_replacing_it()
     {
         using var temp = new TempDirectory();
@@ -86,6 +127,10 @@ public sealed class EmbeddedHostTests
         }
         using (var stopped = new HttpClient { Timeout = TimeSpan.FromSeconds(2) })
             await Assert.ThrowsAsync<HttpRequestException>(() => stopped.GetAsync(endpoint));
+        await File.WriteAllTextAsync(
+            Path.Combine(data, "state", "desktop-port"),
+            endpoint.Port.ToString()
+        );
         var restarted = await HttpServerSettings.CaptureDesktopAsync(data);
         Assert.Equal(token, restarted.Token);
         var configuration = new ModelConfiguration(data);
@@ -99,6 +144,7 @@ public sealed class EmbeddedHostTests
             dist
         );
         await second.App.StartAsync();
+        Assert.Equal(endpoint.AbsoluteUri, restarted.Address.BaseUrl);
         using var authorized = new HttpClient { BaseAddress = new Uri(restarted.Address.BaseUrl) };
         authorized.DefaultRequestHeaders.Authorization = new("Bearer", token);
         Assert.True((await authorized.GetAsync("health")).IsSuccessStatusCode);

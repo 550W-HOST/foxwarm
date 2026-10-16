@@ -100,6 +100,10 @@ internal sealed class DesktopWindow : Form
                 }
             });
             endpoint = new Uri(http.Address.BaseUrl);
+            await File.WriteAllTextAsync(
+                Path.Combine(data, "state", "desktop-port"),
+                endpoint.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            );
             if (exiting)
                 return;
             status.Text = "Opening Foxwarm…";
