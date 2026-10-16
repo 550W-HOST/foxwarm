@@ -682,4 +682,3 @@ async function executeToolBatch(
     }
     return batchResult;
 }
-

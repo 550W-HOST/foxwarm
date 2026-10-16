@@ -25,4 +25,3 @@ export interface CurrentSessionTurnEffects extends CurrentSessionEffects {
     setRuntimeState(sessionId: string, state: ActiveSessionRuntimeStateInput): void;
     clearRuntimeState(sessionId: string): void;
 }
-

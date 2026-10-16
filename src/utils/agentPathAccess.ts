@@ -32,4 +32,3 @@ export function checkPathAccess(fullPath: string, agentName: string): void {
 
   throw new Error(`Isolated agent session can only access agents/${agentName}/ on master.`);
 }
-

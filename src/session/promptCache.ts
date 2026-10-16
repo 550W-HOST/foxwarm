@@ -18,4 +18,3 @@ export function ensurePromptCacheKey(session: Session): string {
     session.promptCacheKey = promptCacheKey;
     return promptCacheKey;
 }
-

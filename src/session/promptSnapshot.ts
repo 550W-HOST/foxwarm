@@ -322,5 +322,3 @@ async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inhe
 
     return combined;
 }
-
-

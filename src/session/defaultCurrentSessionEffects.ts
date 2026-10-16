@@ -39,4 +39,3 @@ export function createDefaultCurrentSessionEffects(): CurrentSessionTurnEffects 
         execRuntime: getDefaultExecRuntime(),
     };
 }
-
