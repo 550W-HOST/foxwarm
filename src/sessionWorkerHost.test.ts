@@ -1140,15 +1140,18 @@ test('real Worker retry ingests durable mailbox input and honors Stop or dequeue
           assert.equal(!!durable.stopping, false);
           assert.equal(durable.queue.length, 0);
           assert.equal(durable.meta.runQueuedAfterStop, undefined);
-          assert.doesNotMatch(JSON.stringify(bodies[0].messages.filter((message: any) => message.role === 'user')), /Queued input:/);
+          assert.doesNotMatch(JSON.stringify(bodies[0].messages.filter((message: any) => message.role === 'user')), /queueInputHint=/);
           const correction = durable.history.find((message: any) => message.parts.some((part: any) => part.system?.includes('mailbox correction A')));
           assert.equal(correction.parts.length, 1);
-          assert.match(parseFoxwarmOpeningTag(correction.parts[0].system)!.attrs.hint, /^direct user message via channel Queued input:/,
-            'retry, passive Stop and Run queued commit the hint in the source wrapper');
+          const correctionAttrs = parseFoxwarmOpeningTag(correction.parts[0].system)!.attrs;
+          assert.equal(correctionAttrs.hint, 'direct user message via channel');
+          assert.match(correctionAttrs.queueInputHint, /^Queued input:/,
+            'retry, passive Stop and Run queued commit queueInputHint in the source wrapper');
+          assert.equal((correction.parts[0].system.match(/queueInputHint=/g) || []).length, 1);
           const event = durable.history.find((message: any) => message.parts.some((part: any) => part.text === 'mailbox correction B'));
-          assert.doesNotMatch(JSON.stringify(event.parts), /Queued input:/);
+          assert.doesNotMatch(JSON.stringify(event.parts), /queueInputHint=/);
           if (control !== 'stop') {
-            assert.equal((JSON.stringify(bodies[1].messages.filter((message: any) => message.role === 'user')).match(/Queued input:/g) || []).length, 1);
+            assert.equal((JSON.stringify(bodies[1].messages.filter((message: any) => message.role === 'user')).match(/queueInputHint=/g) || []).length, 1);
             assert.equal(bodies[1].messages.some((message: any) => message.content === correction.parts[0].system), true);
           }
           for (const text of ['mailbox correction A', 'mailbox correction B']) {
@@ -1163,10 +1166,10 @@ test('real Worker retry ingests durable mailbox input and honors Stop or dequeue
             await host.runPending(8);
             assert.equal(bodies.length, 2);
             const userPayload = JSON.stringify(bodies[1].messages.filter((message: any) => message.role === 'user'));
-            assert.equal((userPayload.match(/Queued input:/g) || []).length, 1, 'passively committed input retains its hint on the next real request');
+            assert.equal((userPayload.match(/queueInputHint=/g) || []).length, 1, 'passively committed input retains its hint on the next real request');
             assert.equal(bodies[1].messages.some((message: any) => message.content === correction.parts[0].system), true);
             const newInput = readDurable().history.find((message: any) => message.__meta?.clientMessageId === 'after-stop');
-            assert.doesNotMatch(JSON.stringify(newInput.parts), /Queued input:/, 'a later idle turn is not itself queued input');
+            assert.doesNotMatch(JSON.stringify(newInput.parts), /queueInputHint=/, 'a later idle turn is not itself queued input');
           }
         }, true);
       } finally {
@@ -1227,15 +1230,15 @@ test('Worker channel mailbox follow-ups reach real provider requests with hints 
     await send('initial-B', [{ text: 'worker initial B' }]);
     await host.runPending(8);
     assert.equal(bodies.length, 3);
-    assert.deepEqual(bodies.map(body => (JSON.stringify(body.messages.filter((message: any) => message.role === 'user')).match(/Queued input:/g) || []).length), [0, 2, 3]);
+    assert.deepEqual(bodies.map(body => (JSON.stringify(body.messages.filter((message: any) => message.role === 'user')).match(/queueInputHint=/g) || []).length), [0, 2, 3]);
     const history = readDurable().history;
     const userRows = history.filter((message: any) => message.__meta?.clientMessageId);
-    assert.deepEqual(userRows.map((message: any) => [message.__meta.clientMessageId, JSON.stringify(message.parts).includes('Queued input:')]), [
+    assert.deepEqual(userRows.map((message: any) => [message.__meta.clientMessageId, JSON.stringify(message.parts).includes('queueInputHint=')]), [
       ['initial-A', false], ['initial-B', false], ['provider-A', true], ['provider-B', true], ['tool', true],
     ]);
     for (const message of userRows) {
       const original = originalParts.get(message.__meta.clientMessageId)!;
-      if (JSON.stringify(message.parts).includes('Queued input:')) {
+      if (JSON.stringify(message.parts).includes('queueInputHint=')) {
         assert.equal(message.parts.length, original.length);
         assert.deepEqual(message.parts.slice(1), original.slice(1));
         const bodyText = original.map(part => part.text || part.system || '').join('\n');
@@ -1247,8 +1250,10 @@ test('Worker channel mailbox follow-ups reach real provider requests with hints 
         assert.match(payload.content, /^<foxwarm-message /, 'no standalone system part precedes the source');
         const expectedAttrs = parseFoxwarmOpeningTag(original[0].system)!.attrs;
         const actualAttrs = parseFoxwarmOpeningTag(payload.content)!.attrs;
-        assert.equal(actualAttrs.hint.startsWith(`${expectedAttrs.hint} Queued input:`), true);
-        assert.deepEqual({ ...actualAttrs, hint: expectedAttrs.hint }, expectedAttrs);
+        const { queueInputHint, ...originalAttrs } = actualAttrs;
+        assert.match(queueInputHint, /^Queued input:/);
+        assert.deepEqual(originalAttrs, expectedAttrs, 'the original hint is not concatenated with queued guidance');
+        assert.equal((payload.content.match(/queueInputHint=/g) || []).length, 1);
         assert.equal(payload.content.slice(payload.content.indexOf('>') + 1), bodyText.slice(bodyText.indexOf('>') + 1));
       } else {
         // Only the first initial input receives the existing session header.

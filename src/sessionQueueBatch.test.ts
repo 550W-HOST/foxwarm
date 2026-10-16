@@ -5,7 +5,7 @@ import * as sessionManager from './sessionManager';
 import { LocalSessionTurnHost, SessionTurnRunner } from './sessionTurnRunner';
 import type { CurrentSessionTurnEffects } from './llm';
 import type { Message, QueueItem, Session } from './types';
-import { formatFoxwarmMessage, formatFoxwarmSystemOpen } from './utils/promptWrappers';
+import { formatFoxwarmMessage, formatFoxwarmSystemOpen, parseFoxwarmOpeningTag } from './utils/promptWrappers';
 
 function makeSession(id: string): Session {
   return { id, agent: 'main', history: [], queue: [], busy: true, persistentMemorySnapshot: '', systemPromptFiles: [], snapshotUpdatedAt: Date.now(), stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null }, meta: { lastMessageTime: Date.now() } } as Session;
@@ -71,8 +71,13 @@ test('queued source hints commit once after an append failure without modifying 
   rejectPersist = false;
   await appendSelected();
   assert.equal(session.history.length, 2);
-  for (const message of session.history) {
-    assert.equal((JSON.stringify(message.parts).match(/Queued input:/g) || []).length, 1);
+  for (const [index, message] of session.history.entries()) {
+    assert.equal((JSON.stringify(message.parts).match(/queueInputHint=/g) || []).length, 1);
+    const source = message.parts.find(part => part.system?.includes('queueInputHint='))!.system!;
+    const attrs = parseFoxwarmOpeningTag(source)!.attrs;
+    assert.equal(attrs.hint, index === 0 ? 'channel guidance' : 'MCP guidance');
+    assert.match(attrs.queueInputHint, /^Queued input:/);
+    assert.equal((source.match(/queueInputHint=/g) || []).length, 1);
   }
   assert.equal(session.history[0].__meta?.clientMessageId, 'channel');
   assert.equal(session.history[1].__meta?.timestamp, 123456);

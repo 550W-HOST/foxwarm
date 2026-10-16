@@ -20,7 +20,7 @@ import { armMainWaitLiveness } from './mainManagementTools';
 import * as llm from './llm';
 import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, isQueueItem, Message, MessagePart, type InlineDataRef, QueueItem, QueueSource, Session, TokenUsage } from './types';
 import { formatFoxwarmSystemTag } from './utils/promptWrappers';
-import { appendInputWrapperHint } from './utils/systemMessageParts';
+import { withQueueInputHint } from './utils/systemMessageParts';
 
 export function shouldBroadcastChannelText(text: string | undefined | null): boolean {
   return typeof text === 'string' && text.trim().length > 0;
@@ -555,7 +555,7 @@ export class SessionTurnRunner {
 
   private queuedInputMessage(item: QueueItem, message: Message): Message {
     return item.type === 'user' && item.queuedInput && message.role === 'user'
-      ? { ...message, parts: appendInputWrapperHint(message.parts,
+      ? { ...message, parts: withQueueInputHint(message.parts,
         'Queued input: this message may predate the preceding replies or tool results. Do not assume it was sent in response to them.') }
       : message;
   }

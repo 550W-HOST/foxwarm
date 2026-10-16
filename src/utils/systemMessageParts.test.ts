@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { appendInputWrapperHint, buildSystemMessageParts, buildTimestampedSystemMessageParts, isSystemPayloadTextPart, withInputTimePart } from './systemMessageParts';
+import { withQueueInputHint, buildSystemMessageParts, buildTimestampedSystemMessageParts, isSystemPayloadTextPart, withInputTimePart } from './systemMessageParts';
 import { formatFoxwarmMessage, formatFoxwarmMessageOpen, formatFoxwarmSystemOpen, parseFoxwarmOpeningTag } from './promptWrappers';
 import type { MessagePart } from '../types';
 
@@ -59,9 +59,10 @@ test('input wrapper hints preserve source attributes and raw full-wrapper bodies
   const body = '  user XML:\n<foxwarm-message type="channel" hint="user-owned">\nkeep this\n</foxwarm-message>\n  ';
   const parts = [{ system: formatFoxwarmMessage(attrs, body) }];
   const snapshot = structuredClone(parts);
-  const prepared = appendInputWrapperHint(parts, 'extra guidance');
+  const prepared = withQueueInputHint(parts, 'extra guidance');
   assert.equal(prepared.length, parts.length);
-  assert.deepEqual(parseFoxwarmOpeningTag(prepared[0].system)?.attrs, { ...attrs, hint: `${attrs.hint} extra guidance` });
+  assert.deepEqual(parseFoxwarmOpeningTag(prepared[0].system)?.attrs, { ...attrs, queueInputHint: 'extra guidance' });
+  assert.deepEqual(withQueueInputHint(prepared, 'extra guidance'), prepared, 'setting the attribute again does not duplicate it');
   assert.equal(prepared[0].system?.slice(prepared[0].system.indexOf('>') + 1), `\n${body}\n</foxwarm-message>`);
   assert.deepEqual(parts, snapshot);
 });
@@ -81,12 +82,12 @@ test('input wrapper hints decorate only the multipart source opening without add
       { system: source.startsWith('<foxwarm-message') ? '</foxwarm-message>' : '</foxwarm-system>' },
     ];
     const original = structuredClone(parts);
-    const prepared = appendInputWrapperHint(parts, 'extra guidance');
+    const prepared = withQueueInputHint(parts, 'extra guidance');
     assert.equal(prepared.length, original.length);
     assert.deepEqual(prepared.slice(0, 2), original.slice(0, 2));
     assert.deepEqual(prepared.slice(3), original.slice(3));
     const attrs = parseFoxwarmOpeningTag(source)!.attrs;
-    assert.deepEqual(parseFoxwarmOpeningTag(prepared[2].system)?.attrs, { ...attrs, hint: `${attrs.hint} extra guidance` });
+    assert.deepEqual(parseFoxwarmOpeningTag(prepared[2].system)?.attrs, { ...attrs, queueInputHint: 'extra guidance' });
     assert.deepEqual(parts, original);
   }
 });
@@ -97,6 +98,6 @@ test('input wrapper hints do not wrap bare input or search user bodies for sourc
     [{ system: '<foxwarm-system kind="system">\n<foxwarm-message type="channel" hint="nested">body</foxwarm-message>\n</foxwarm-system>' }],
     [{ text: 'bare text' }, { system: '<foxwarm-message type="channel" hint="body fragment">' }],
   ]) {
-    assert.deepEqual(appendInputWrapperHint(parts, 'extra guidance'), parts);
+    assert.deepEqual(withQueueInputHint(parts, 'extra guidance'), parts);
   }
 });

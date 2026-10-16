@@ -49,8 +49,8 @@ export function withInputTimePart(parts: MessagePart[], timestamp: Date | number
   ];
 }
 
-/** Copy an existing outer input wrapper to append guidance, never alter its body. */
-export function appendInputWrapperHint(parts: MessagePart[], hint: string): MessagePart[] {
+/** Copy an existing outer source wrapper to set queueInputHint, preserving its body and other attributes. */
+export function withQueueInputHint(parts: MessagePart[], queueInputHint: string): MessagePart[] {
   for (let index = 0; index < parts.length; index++) {
     const system = parts[index].system;
     const opening = parseFoxwarmOpeningTag(system);
@@ -59,7 +59,7 @@ export function appendInputWrapperHint(parts: MessagePart[], hint: string): Mess
       || (opening.tagName === 'foxwarm-system' && opening.attrs.kind === 'external-input');
     if (isSource) {
       const match = system.match(/^(\s*)<foxwarm-(?:message|system)\b[^>]*>/i)!;
-      const attrs = { ...opening.attrs, hint: opening.attrs.hint ? `${opening.attrs.hint} ${hint}` : hint };
+      const attrs = { ...opening.attrs, queueInputHint };
       const replacement = opening.tagName === 'foxwarm-message'
         ? formatFoxwarmMessageOpen(attrs)
         : formatFoxwarmSystemOpen(attrs);
