@@ -1142,10 +1142,15 @@ test('real Worker retry ingests durable mailbox input and honors Stop or dequeue
           assert.equal(durable.meta.runQueuedAfterStop, undefined);
           assert.doesNotMatch(JSON.stringify(bodies[0].messages.filter((message: any) => message.role === 'user')), /Queued input:/);
           const correction = durable.history.find((message: any) => message.parts.some((part: any) => part.system?.includes('mailbox correction A')));
-          assert.equal(correction.__meta.queuedInput, true, 'retry, passive Stop and Run queued retain owner-observed deferred input');
+          assert.equal(correction.parts.length, 1);
+          assert.match(parseFoxwarmOpeningTag(correction.parts[0].system)!.attrs.hint, /^direct user message via channel Queued input:/,
+            'retry, passive Stop and Run queued commit the hint in the source wrapper');
           const event = durable.history.find((message: any) => message.parts.some((part: any) => part.text === 'mailbox correction B'));
-          assert.equal(event.__meta.queuedInput, undefined);
-          if (control !== 'stop') assert.equal((JSON.stringify(bodies[1].messages.filter((message: any) => message.role === 'user')).match(/Queued input:/g) || []).length, 1);
+          assert.doesNotMatch(JSON.stringify(event.parts), /Queued input:/);
+          if (control !== 'stop') {
+            assert.equal((JSON.stringify(bodies[1].messages.filter((message: any) => message.role === 'user')).match(/Queued input:/g) || []).length, 1);
+            assert.equal(bodies[1].messages.some((message: any) => message.content === correction.parts[0].system), true);
+          }
           for (const text of ['mailbox correction A', 'mailbox correction B']) {
             assert.equal(JSON.stringify(durable.history).split(text).length - 1, 1);
             if (control !== 'stop') assert.equal(JSON.stringify(bodies[1]).split(text).length - 1, 1);
@@ -1158,9 +1163,10 @@ test('real Worker retry ingests durable mailbox input and honors Stop or dequeue
             await host.runPending(8);
             assert.equal(bodies.length, 2);
             const userPayload = JSON.stringify(bodies[1].messages.filter((message: any) => message.role === 'user'));
-            assert.equal((userPayload.match(/Queued input:/g) || []).length, 1, 'passively committed input projects its hint once on the next real request');
+            assert.equal((userPayload.match(/Queued input:/g) || []).length, 1, 'passively committed input retains its hint on the next real request');
+            assert.equal(bodies[1].messages.some((message: any) => message.content === correction.parts[0].system), true);
             const newInput = readDurable().history.find((message: any) => message.__meta?.clientMessageId === 'after-stop');
-            assert.equal(newInput.__meta.queuedInput, undefined, 'a later idle turn is not itself queued input');
+            assert.doesNotMatch(JSON.stringify(newInput.parts), /Queued input:/, 'a later idle turn is not itself queued input');
           }
         }, true);
       } finally {
@@ -1224,25 +1230,29 @@ test('Worker channel mailbox follow-ups reach real provider requests with hints 
     assert.deepEqual(bodies.map(body => (JSON.stringify(body.messages.filter((message: any) => message.role === 'user')).match(/Queued input:/g) || []).length), [0, 2, 3]);
     const history = readDurable().history;
     const userRows = history.filter((message: any) => message.__meta?.clientMessageId);
-    assert.deepEqual(userRows.map((message: any) => [message.__meta.clientMessageId, !!message.__meta.queuedInput]), [
+    assert.deepEqual(userRows.map((message: any) => [message.__meta.clientMessageId, JSON.stringify(message.parts).includes('Queued input:')]), [
       ['initial-A', false], ['initial-B', false], ['provider-A', true], ['provider-B', true], ['tool', true],
     ]);
     for (const message of userRows) {
       const original = originalParts.get(message.__meta.clientMessageId)!;
-      // Only the first initial input receives the existing session header.
-      assert.deepEqual(message.parts.slice(-original.length), original);
-      assert.doesNotMatch(JSON.stringify(message.parts), /Queued input:/);
-      if (message.__meta.queuedInput) {
+      if (JSON.stringify(message.parts).includes('Queued input:')) {
+        assert.equal(message.parts.length, original.length);
+        assert.deepEqual(message.parts.slice(1), original.slice(1));
         const bodyText = original.map(part => part.text || part.system || '').join('\n');
+        const canonicalText = message.parts.map((part: MessagePart) => part.text || part.system || '').join('\n');
         const marker = message.__meta.clientMessageId === 'tool' ? 'worker tool correction'
           : `worker correction ${message.__meta.clientMessageId.endsWith('A') ? 'A' : 'B'}`;
         const payload = bodies[2].messages.find((row: any) => row.role === 'user' && row.content.includes(marker));
+        assert.equal(payload.content, canonicalText, 'provider reads the committed wrapper and body without adding another hint');
         assert.match(payload.content, /^<foxwarm-message /, 'no standalone system part precedes the source');
         const expectedAttrs = parseFoxwarmOpeningTag(original[0].system)!.attrs;
         const actualAttrs = parseFoxwarmOpeningTag(payload.content)!.attrs;
         assert.equal(actualAttrs.hint.startsWith(`${expectedAttrs.hint} Queued input:`), true);
         assert.deepEqual({ ...actualAttrs, hint: expectedAttrs.hint }, expectedAttrs);
         assert.equal(payload.content.slice(payload.content.indexOf('>') + 1), bodyText.slice(bodyText.indexOf('>') + 1));
+      } else {
+        // Only the first initial input receives the existing session header.
+        assert.deepEqual(message.parts.slice(-original.length), original);
       }
     }
     assert.equal(history.filter((message: any) => message.role === 'user').length, 6);

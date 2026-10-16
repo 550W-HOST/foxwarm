@@ -154,8 +154,6 @@ export interface Message {
     usage?: TokenUsage;
     /** Persisted wall-clock boundaries and monotonic duration for the logical LLM request. */
     llmRequestTiming?: LlmRequestTiming;
-    /** Owner-observed follow-up input, presented after an execution safe point. */
-    queuedInput?: true;
     /** Responses output range [start, end) of this immutable assistant segment. */
     llmSegment?: { outputStart: number; outputEndExclusive: number; complete: boolean };
     /** Structured CTX-BLOCK metadata for rendered layered-context block messages. */

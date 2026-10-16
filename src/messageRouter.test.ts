@@ -69,7 +69,7 @@ function countHistoryPartSystem(messages: Message[], system: string): number {
   return messages.reduce((count, message) => count + message.parts.filter(part => part.system === system).length, 0);
 }
 
-test('local channel inputs acquire a request-only queue hint at continuation safe points, not initial preparation', async t => {
+test('local channel inputs commit queue hints to canonical history at continuation safe points, not initial preparation', async t => {
   const router = new MessageRouter();
   const session = await createRouterQueueTestSession('queued_input_provider');
   session.model = 'fixture/model';
@@ -98,6 +98,7 @@ test('local channel inputs acquire a request-only queue hint at continuation saf
   const queuedParts = new Map<string, MessagePart[]>();
   const rememberQueued = (id: string) => {
     queuedParts.set(id, structuredClone(session.queue.find(item => item.clientMessageId === id)!.parts!));
+    assert.doesNotMatch(JSON.stringify(queuedParts.get(id)), /Queued input:/, 'enqueue does not alter source hints');
   };
   const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: 'red' } }).png().toBuffer();
   t.mock.method(llm, 'executeTools', async () => {
@@ -131,24 +132,22 @@ test('local channel inputs acquire a request-only queue hint at continuation saf
     assert.deepEqual(bodies.map(body => (JSON.stringify(body.messages.filter((message: any) => message.role === 'user')).match(/Queued input:/g) || []).length), [0, 1, 2]);
     for (const [id, parts] of queuedParts) {
       const message = session.history.find(row => row.__meta?.clientMessageId === id)!;
-      assert.equal(message.__meta?.queuedInput, true);
-      assert.deepEqual(message.parts, parts, 'canonical wrappers, timestamps, attachments and part order stay unchanged');
-      assert.doesNotMatch(JSON.stringify(message.parts), /Queued input:/);
+      assert.equal(message.parts.length, parts.length);
+      assert.deepEqual(message.parts.slice(1), parts.slice(1), 'body, attachments and part order stay unchanged');
       const expectedAttrs = parseFoxwarmOpeningTag(parts[0].system)!.attrs;
+      const canonicalAttrs = parseFoxwarmOpeningTag(message.parts[0].system)!.attrs;
+      assert.equal(canonicalAttrs.hint.startsWith(`${expectedAttrs.hint} Queued input:`), true);
+      assert.deepEqual({ ...canonicalAttrs, hint: expectedAttrs.hint }, expectedAttrs, 'all other source attributes survive');
+      assert.equal(message.parts[0].system!.slice(message.parts[0].system!.indexOf('>') + 1), parts[0].system!.slice(parts[0].system!.indexOf('>') + 1));
       const payload = bodies[2].messages.find((row: any) => row.role === 'user'
         && JSON.stringify(row.content).includes(id === 'thinking' ? 'provider-time correction' : 'tool-time correction'));
       const sourceText = typeof payload.content === 'string' ? payload.content : payload.content[0].text;
-      const actualAttrs = parseFoxwarmOpeningTag(sourceText)!.attrs;
-      assert.equal(actualAttrs.hint.startsWith(`${expectedAttrs.hint} Queued input:`), true);
-      assert.deepEqual({ ...actualAttrs, hint: expectedAttrs.hint }, expectedAttrs, 'all existing source attributes survive');
+      assert.equal(sourceText, message.parts[0].system, 'provider uses the committed source wrapper unchanged');
       assert.match(sourceText, /^<foxwarm-message /, 'the existing source stays first, with no added system part');
-      if (id === 'thinking') {
-        assert.equal(sourceText.slice(sourceText.indexOf('>') + 1), parts[0].system!.slice(parts[0].system!.indexOf('>') + 1));
-      }
     }
     const users = session.history.filter(message => message.role === 'user');
     assert.equal(users.length, 8, 'one canonical row per input or event, with no standalone hint row');
-    assert.deepEqual(users.filter(row => row.__meta?.queuedInput).map(row => row.__meta?.clientMessageId), ['thinking', 'tool']);
+    assert.deepEqual(users.filter(row => JSON.stringify(row.parts).includes('Queued input:')).map(row => row.__meta?.clientMessageId), ['thinking', 'tool']);
     const toolIndex = session.history.findIndex(row => row.role === 'tool');
     assert.equal(session.history[toolIndex - 1].parts.some(part => !!part.functionCall), true);
     assert.equal(session.history[toolIndex + 1].__meta?.clientMessageId, 'tool');

@@ -49,7 +49,7 @@ export function withInputTimePart(parts: MessagePart[], timestamp: Date | number
   ];
 }
 
-/** Decorate an existing outer input wrapper in a request copy, never its body. */
+/** Copy an existing outer input wrapper to append guidance, never alter its body. */
 export function appendInputWrapperHint(parts: MessagePart[], hint: string): MessagePart[] {
   for (let index = 0; index < parts.length; index++) {
     const system = parts[index].system;
