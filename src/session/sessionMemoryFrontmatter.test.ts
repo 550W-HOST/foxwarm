@@ -1,3 +1,4 @@
+import * as promptSnapshot from './promptSnapshot';
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
@@ -44,7 +45,7 @@ test('framework root 00_SYSTEM takes precedence over legacy fallback and dynamic
   await fs.writeFile(config.AGENTS_SYSTEM_PROMPT_PATH, '---\ninclude-session: other/session\n---\nROOT_FRAMEWORK_SYSTEM_PROMPT\n<foxwarm-if model-id="fixture/*">\nFRAMEWORK_CONDITIONAL_VISIBLE\n</foxwarm-if>\n<foxwarm-if model-id="other/*">\nFRAMEWORK_CONDITIONAL_HIDDEN\n</foxwarm-if>\n', 'utf8');
   await fs.writeFile(legacyMainSystemPrompt, '---\nexclude-session: main\n---\nLEGACY_MAIN_SYSTEM_PROMPT\n<foxwarm-if model-id="fixture/*">\nLEGACY_CONDITIONAL_VISIBLE\n</foxwarm-if>\n<foxwarm-if model-id="other/*">\nLEGACY_CONDITIONAL_HIDDEN\n</foxwarm-if>\n', 'utf8');
 
-  const rootSnapshot = await llm.buildSessionSystemPromptSnapshot({ agentName: 'main', sessionId: 'main', modelId: 'fixture/model' });
+  const rootSnapshot = await promptSnapshot.buildSessionSystemPromptSnapshot({ agentName: 'main', sessionId: 'main', modelId: 'fixture/model' });
   assert.match(rootSnapshot, /ROOT_FRAMEWORK_SYSTEM_PROMPT/);
   assert.match(rootSnapshot, /include-session: other\/session/);
   assert.match(rootSnapshot, /FRAMEWORK_CONDITIONAL_VISIBLE/);
@@ -65,7 +66,7 @@ test('framework root 00_SYSTEM takes precedence over legacy fallback and dynamic
   assert.match(rootSnapshot, /long-lived stable rules/);
 
   await fs.remove(config.AGENTS_SYSTEM_PROMPT_PATH);
-  const fallbackSnapshot = await llm.buildSessionSystemPromptSnapshot({ agentName: 'main', sessionId: 'main', modelId: 'fixture/model' });
+  const fallbackSnapshot = await promptSnapshot.buildSessionSystemPromptSnapshot({ agentName: 'main', sessionId: 'main', modelId: 'fixture/model' });
   assert.match(fallbackSnapshot, /LEGACY_MAIN_SYSTEM_PROMPT/);
   assert.match(fallbackSnapshot, /exclude-session: main/);
   assert.match(fallbackSnapshot, /LEGACY_CONDITIONAL_VISIBLE/);
@@ -88,7 +89,7 @@ test('memory frontmatter include-session/exclude-session filters by canonical se
   await fs.writeFile(path.join(memoryDir, 'PARSEFAIL.md'), '---\ninclude-session: [\n---\nPARSE_FAILURE_VISIBLE\n', 'utf8');
   await fs.writeFile(path.join(memoryDir, 'NODELIMITER.md'), '---\ninclude-session: other\nNO_DELIMITER_VISIBLE\n', 'utf8');
 
-  const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName, sessionId, modelId: 'fixture/model' });
+  const snapshot = await promptSnapshot.buildSessionSystemPromptSnapshot({ agentName, sessionId, modelId: 'fixture/model' });
   assert.match(snapshot, /GENERAL_VISIBLE/);
   assert.match(snapshot, /INCLUDE_VISIBLE/);
   assert.match(snapshot, /GLOB_VISIBLE/);
@@ -109,7 +110,7 @@ test('legacy ONBOOT memory files remain excluded after startup trigger removal',
     await fs.writeFile(path.join(memoryDir, 'ONBOOT.md'), 'LEGACY_ONBOOT_MUST_STAY_OUT\n', 'utf8');
     await fs.writeFile(path.join(memoryDir, 'NORMAL.md'), 'NORMAL_MEMORY_REMAINS\n', 'utf8');
 
-    const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName, sessionId: `${agentName}/session`, modelId: 'fixture/model' });
+    const snapshot = await promptSnapshot.buildSessionSystemPromptSnapshot({ agentName, sessionId: `${agentName}/session`, modelId: 'fixture/model' });
     assert.match(snapshot, /NORMAL_MEMORY_REMAINS/);
     assert.doesNotMatch(snapshot, /LEGACY_ONBOOT_MUST_STAY_OUT/);
   } finally {
@@ -145,7 +146,7 @@ test('session creation passes session id to snapshot builder and fork keeps pare
   );
   const parentSession = await sessionManager.getSession(parentId);
   parentSession.agent = 'main';
-  parentSession.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot({ agentName: 'main', sessionId: parentId, modelId: 'fixture/model' });
+  parentSession.persistentMemorySnapshot = await promptSnapshot.buildSessionSystemPromptSnapshot({ agentName: 'main', sessionId: parentId, modelId: 'fixture/model' });
   await sessionManager.saveSession(parentId);
 
   const actualChildId = await sessionManager.createChildSession(parentId, 'child', false);
@@ -157,7 +158,7 @@ test('session creation passes session id to snapshot builder and fork keeps pare
   const forkChildId = `${forkParentId}_fork`;
   const forkParent = await sessionManager.getSession(forkParentId);
   forkParent.agent = 'main';
-  forkParent.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot({ agentName: 'main', sessionId: forkParentId, modelId: 'fixture/model' });
+  forkParent.persistentMemorySnapshot = await promptSnapshot.buildSessionSystemPromptSnapshot({ agentName: 'main', sessionId: forkParentId, modelId: 'fixture/model' });
   await sessionManager.saveSession(forkParentId);
   await fs.writeFile(
     path.join(config.MAIN_AGENT_MEMORY_DIR, 'FORK_CHILD_ONLY.md'),

@@ -151,7 +151,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - `./session/archiveStore` — `getVectorSearchLineage` for archive retrieval
 - `./tokenCount` — `estimateTokenCount` for budget enforcement
 - `./config` — `WORKSPACE_DIR`, `getAgentDir`, `getAgentMemoryDir`
-- `./isolatedCheck` — `checkPathAccess`, `checkToolPermission` for sandboxing
+- `./isolatedCheck` — tool permission checks; `./utils/agentPathAccess` — the pure master-side path guard.
 - `./mcpClient` — MCP server communication
 - `./browser` — `browserManager` for headless browser tools
 - `./nodes/manager` — `nodesManager` for remote node orchestration

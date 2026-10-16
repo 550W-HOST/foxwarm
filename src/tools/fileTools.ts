@@ -1,3 +1,4 @@
+import { checkPathAccess } from '../utils/agentPathAccess';
 import { applyPatchOperations } from '../../packages/shared/dist/fileToolCore';
 import {
     ToolArgs,
@@ -15,7 +16,7 @@ import {
     registerPendingWriteRef,
     PENDING_WRITE_REF_TTL_MS,
 } from './helpers';
-import { checkPathAccess } from '../isolatedCheck';
+
 import { nativeFileOperations } from '../../packages/shared/dist/fileOperations';
 import type { ResolvedToolPath } from '../../packages/shared/dist/resolvedPathMetadata';
 

@@ -1,3 +1,4 @@
+import { refreshSessionSnapshotForSession } from './session/agentSettings';
 import type { CurrentSessionTurnEffects } from './session/currentSessionEffects';
 import crypto from 'node:crypto';
 import path from 'node:path';
@@ -8,7 +9,7 @@ import { createExecRuntime, type ExecRuntime } from './execManager';
 import { initLlmRequestJournal } from './llmRequestJournal';
 import { RpcError } from './rpc';
 import { initArchiveStore } from './session/archiveStore';
-import { refreshSessionSnapshotForSession } from './session/agentMetadata';
+
 import { cancelSessionCompaction, clearSession, compactToolMessages as compactSessionToolMessages, deleteMessages, forceIndexSession, getEffectiveCompactThresholdTokens, getUsageTotalTokens, processSessionCompactionRequest, tryAutomaticToolResponsePruning, waitForCompactPlanningSettle, type CompactCancellationResult, type SessionHistoryDeps } from './session/history';
 import { getManagedSessionState } from './session/managedState';
 import { captureSessionSemanticState, restoreSessionSemanticState } from './session/metadataStore';

@@ -1,10 +1,11 @@
+import { checkPathAccess } from '../utils/agentPathAccess';
 import path from 'path';
 import * as sessionManager from '../sessionManager';
 import * as timers from '../timers';
 import type { ChannelFile } from '../channel';
 import { getAgentDir, MODEL_EFFORTS, resolveModelConfig, type ModelEffort } from '../config';
 import { nodesManager } from '../nodes/manager';
-import { checkPathAccess } from '../isolatedCheck';
+
 import { expandHomePath, resolveAgentPath } from '../utils/pathResolve';
 
 export { expandHomePath, resolveAgentPath };

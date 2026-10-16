@@ -1,3 +1,4 @@
+import { ensurePromptCacheKey } from './session/promptCache';
 import * as toolExecutor from './toolExecutor';
 import type { CurrentSessionEffects } from './session/currentSessionEffects';
 import { createDefaultCurrentSessionEffects } from './session/defaultCurrentSessionEffects';
@@ -11,7 +12,7 @@ import sharp from 'sharp';
 import path from 'path';
 import os from 'os';
 
-import { createModelStreamEventEmitter, DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, convertToAnthropicFormat, ensurePromptCacheKey, getLlmRetryDelayMs, redactProviderImagesForLog, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
+import { createModelStreamEventEmitter, DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, convertToAnthropicFormat, getLlmRetryDelayMs, redactProviderImagesForLog, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
 import { loadModelsConfigFromObject, LOGS_DIR, MAX_OUTPUT } from './config';
 import * as configModule from './config';
 import { formatDate } from './logRotation';

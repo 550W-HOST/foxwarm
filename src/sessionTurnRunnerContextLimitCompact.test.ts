@@ -1,3 +1,5 @@
+import * as promptSnapshot from './session/promptSnapshot';
+import * as promptCache from './session/promptCache';
 import * as toolExecutor from './toolExecutor';
 import type { CurrentSessionTurnEffects } from './session/currentSessionEffects';
 import test from 'node:test';
@@ -66,7 +68,7 @@ function makeSession(sessionId: string): Session {
     nextMessageSeq: 1,
     nextBlockId: 1,
     historyVersion: 0,
-    promptCacheKey: llm.generatePromptCacheKey(),
+    promptCacheKey: promptCache.generatePromptCacheKey(),
   } as Session;
 }
 
@@ -153,7 +155,7 @@ async function appendPlanSubmission(options: any, toolCall: any) {
 function stubProviderSurface() {
   const originalChat = llm.chat;
   const originalExecuteTools = toolExecutor.executeTools;
-  const originalSnapshot = llm.buildSessionSystemPromptSnapshotForSession;
+  const originalSnapshot = promptSnapshot.buildSessionSystemPromptSnapshotForSession;
   const originalResolve = configModule.resolveModelConfig;
   const models = loadModelsConfigFromObject({
     default: 'fixture/context-limit',
@@ -166,7 +168,7 @@ function stubProviderSurface() {
     modelEntry: models.models[models.default],
     contextLimit: CONTEXT_LIMIT_TOKENS,
   });
-  (llm as any).buildSessionSystemPromptSnapshotForSession = async (activeSession: Session) => activeSession.persistentMemorySnapshot;
+  (promptSnapshot as any).buildSessionSystemPromptSnapshotForSession = async (activeSession: Session) => activeSession.persistentMemorySnapshot;
   (toolExecutor as any).executeTools = async (functionCalls: Array<{ id?: string; name: string }>) => ({
     message: {
       role: 'tool', parts: functionCalls.map(call => ({ functionResponse: { tool_use_id: call.id, name: call.name, response: { output: 'ok' } } }))
@@ -175,7 +177,7 @@ function stubProviderSurface() {
   return () => {
     (llm as any).chat = originalChat;
     (toolExecutor as any).executeTools = originalExecuteTools;
-    (llm as any).buildSessionSystemPromptSnapshotForSession = originalSnapshot;
+    (promptSnapshot as any).buildSessionSystemPromptSnapshotForSession = originalSnapshot;
     (configModule as any).resolveModelConfig = originalResolve;
   };
 }

@@ -1,3 +1,4 @@
+import * as promptSnapshot from './promptSnapshot';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
@@ -171,14 +172,14 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
   const prompts: string[] = [];
   const purposes: Array<string | undefined> = [];
   const originalChat = llm.chat;
-  const originalBuild = llm.buildSessionSystemPromptSnapshotForSession;
+  const originalBuild = promptSnapshot.buildSessionSystemPromptSnapshotForSession;
   session.effort = 'none';
   session.childEffortDefault = 'max';
   session.systemPromptFiles = ['custom-memory.md'];
   const before = structuredClone(session.history);
 
   try {
-    (llm as any).buildSessionSystemPromptSnapshotForSession = async (activeSession: Session) => activeSession.persistentMemorySnapshot;
+    (promptSnapshot as any).buildSessionSystemPromptSnapshotForSession = async (activeSession: Session) => activeSession.persistentMemorySnapshot;
     (llm as any).chat = async (
       parts: MessagePart[] | null,
       activeSession: Session,
@@ -278,7 +279,7 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
     assert.equal(estimateSessionTokens(session), estimateSessionTokens(withoutDebug));
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).buildSessionSystemPromptSnapshotForSession = originalBuild;
+    (promptSnapshot as any).buildSessionSystemPromptSnapshotForSession = originalBuild;
     await fs.remove(getSessionHistoryFilePath(session.id));
     if (!SAVE_GENERATED_SESSION_LOGS) {
       await fs.remove(path.join((await loadDeps()).tempRoot, 'logs', 'sessions', `${session.id}.jsonl`)).catch(() => {});
@@ -576,7 +577,7 @@ test('cancellation during final system-prompt snapshot build rolls back before a
   const session = await makeCompactableSession(archive, makeSessionId('compact_cancel_snapshot_boundary'));
   const before = structuredClone(session.history);
   const originalChat = llm.chat;
-  const originalBuild = llm.buildSessionSystemPromptSnapshotForSession;
+  const originalBuild = promptSnapshot.buildSessionSystemPromptSnapshotForSession;
   let boundaryEntered!: () => void; let releaseBoundary!: () => void;
   const entered = new Promise<void>(resolve => { boundaryEntered = resolve; });
   const release = new Promise<void>(resolve => { releaseBoundary = resolve; });
@@ -588,7 +589,7 @@ test('cancellation during final system-prompt snapshot build rolls back before a
       await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
       return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
     };
-    (llm as any).buildSessionSystemPromptSnapshotForSession = async () => { boundaryEntered(); await release; return 'new snapshot'; };
+    (promptSnapshot as any).buildSessionSystemPromptSnapshotForSession = async () => { boundaryEntered(); await release; return 'new snapshot'; };
     const deps = makeDepsForSession(session, { count: 0 });
     const running = sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.5 }, 'await', 'standalone');
     await entered;
@@ -598,7 +599,7 @@ test('cancellation during final system-prompt snapshot build rolls back before a
     await running;
     assert.deepEqual(session.history, before);
     assert.equal((await layeredContext.readArchiveBlocksByIdRange(session.id)).length, 0);
-  } finally { (llm as any).chat = originalChat; (llm as any).buildSessionSystemPromptSnapshotForSession = originalBuild; }
+  } finally { (llm as any).chat = originalChat; (promptSnapshot as any).buildSessionSystemPromptSnapshotForSession = originalBuild; }
 });
 
 test('cancellation during completion-message Archive append rolls back blocks and completion rows', async () => {

@@ -1,25 +1,14 @@
+import { setAgentInherit } from './agentSettings';
+import { setAgentIsolation } from './agentSettings';
+import * as promptSnapshot from './promptSnapshot';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import {
-  createAgentMetadataStore,
-  deleteAgentMetadata,
-  getAgentMetadata,
-  getAgentToolRules,
-  listAgentMetadataEntries,
-  loadAgentMetadata,
-  refreshAgentMetadata,
-  resetAgentMetadataForTests,
-  setAgentMetadata,
-  setAgentInherit,
-  setAgentIsolation,
-  setAgentMetadataStoreForTests,
-} from './agentMetadata';
+import { createAgentMetadataStore, deleteAgentMetadata, getAgentMetadata, getAgentToolRules, listAgentMetadataEntries, loadAgentMetadata, refreshAgentMetadata, resetAgentMetadataForTests, setAgentMetadata, setAgentMetadataStoreForTests } from './agentMetadata';
 import { getAgentDir, getAgentMemoryDir, resolveModelConfig } from '../config';
 import * as sessionManager from '../sessionManager';
-import * as llm from '../llm';
 import { AUTO_REFRESH_STALE_SESSION_SNAPSHOT_MS } from './snapshotRefresh';
 import { tool_create_agent, tool_list_agents, tool_set_agent_inherit, tool_set_agent_isolated } from '../toolsSessionAgent/agents';
 import { checkToolPermissionForSession } from '../isolatedCheck';
@@ -88,7 +77,7 @@ test('agent inheritance defaults to metadata-only and refreshes only affected se
     await setAgentMetadata(transitiveAgent, { inherit: targetAgent });
 
     const modelsConfig = resolveModelConfig(undefined).modelsConfig;
-    const model = Object.keys(modelsConfig.models).find(key => llm.resolveConcreteModelIdForSnapshot(key, modelsConfig));
+    const model = Object.keys(modelsConfig.models).find(key => promptSnapshot.resolveConcreteModelIdForSnapshot(key, modelsConfig));
     assert.ok(model, 'test configuration must expose at least one concrete model');
     const now = 1_700_000_000_000;
     const sessions = new Map<string, any>([
@@ -127,7 +116,7 @@ test('agent inheritance defaults to metadata-only and refreshes only affected se
       assert.deepEqual(saved, []);
       assert.equal(sessions.get(`${targetAgent}/boundary`).persistentMemorySnapshot, 'old target snapshot');
 
-      const futureSnapshot = await llm.buildSessionSystemPromptSnapshot({ agentName: targetAgent, modelId: 'fixture/model' });
+      const futureSnapshot = await promptSnapshot.buildSessionSystemPromptSnapshot({ agentName: targetAgent, modelId: 'fixture/model' });
       assert.match(futureSnapshot, /PARENT_INHERITANCE_SOURCE/);
       assert.match(futureSnapshot, /TARGET_INHERITANCE_SOURCE/);
 

@@ -1,3 +1,5 @@
+import { checkPathAccess } from './utils/agentPathAccess';
+import * as promptCache from './session/promptCache';
 import { throwIfToolStopped, toolFailureMessage } from './toolCallControls';
 import crypto from 'crypto';
 import fs from 'fs-extra';
@@ -9,7 +11,7 @@ import * as managedSessions from './managedSessions';
 import { resolveAgentPath } from './utils/pathResolve';
 import { isToolResultImageRefPart } from './toolImages';
 import * as sessionManager from './sessionManager';
-import { checkPathAccess, checkToolPermissionForSession } from './isolatedCheck';
+import { checkToolPermissionForSession } from './isolatedCheck';
 import { readNodeFile } from './nodeExecution';
 import { NODE_ENVIRONMENT_BUILTIN_NAMES, resolveToolScriptSourceNode } from './tools/placement';
 import { resolveObjectArgWithJsonFallback } from './jsonObjectArgs';
@@ -930,7 +932,7 @@ async function requestModelWithoutContext(prompt: string, session: Session, mode
     model: model || session.model,
     effort: session.effort,
     sessionId: session.id,
-    promptCacheKey: llm.ensurePromptCacheKey(session),
+    promptCacheKey: promptCache.ensurePromptCacheKey(session),
     toolDefinitions: [],
     notifySessionEvents: false,
     registerAbortController: false,

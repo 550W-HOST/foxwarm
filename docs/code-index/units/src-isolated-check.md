@@ -1,6 +1,6 @@
 # Unit: src-isolated-check
 
-Files: src/isolatedCheck.ts
+Files: src/isolatedCheck.ts, src/utils/agentPathAccess.ts
 Secondary files: src/isolatedCheck.test.ts
 
 ## Purpose
@@ -12,7 +12,7 @@ Applies the generic ordered tool policy for every Session, then enforces the cur
 - `checkToolPermission(identity, sessionId, executionNode?, toolArgs?)` — evaluate an isolated session's canonical resolved capability identity.
 - `checkToolPermissionForSession(session, identity, executionNode?, toolArgs?, refreshMetadata?)` — evaluate the same identity from an authoritative current Session; Worker calls may refresh exact agent metadata from disk first.
 - `isToolVisibleForSession(session, identity, executionNode?)` — apply the same exact-rule/default evaluation to discovery visibility.
-- `checkPathAccess(fullPath, agentName)` — restrict master-side filesystem access to the isolated agent's own directory.
+- `utils/agentPathAccess.checkPathAccess(fullPath, agentName)` — the pure master-side agent-directory guard; callers import it directly, without loading Session authorization dispatch.
 - `requireNotIsolated(sessionIdOrCtx, operation)` — reject operations that are unavailable to isolated sessions.
 - `requireNotIsolatedForSession(session, operation)` — apply the identical denial to an already-authoritative passed Session without an ID lookup.
 - `checkArchivedReadPermission(...)` — restrict archive inspection to sessions under the same agent.
@@ -46,7 +46,7 @@ Applies the generic ordered tool policy for every Session, then enforces the cur
 - `config` for agent directory resolution.
 - `permissions` for persisted exact-rule lookup and default isolated fallback evaluation.
 - `toolAuthorization` for generic async execution and synchronous visibility evaluation before isolation compatibility checks.
-- `utils/pathResolve` for home-path expansion.
+- `utils/pathResolve` for home-path expansion. The standalone `utils/agentPathAccess` guard uses only path/config and retains the same lexical normalization and denial messages.
 
 ## Behavior
 

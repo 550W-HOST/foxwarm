@@ -2,11 +2,11 @@
 
 ## Responsibility
 
-LLM owns model/provider configuration consumption, prompt snapshots, provider serialization, streaming collection, retry/error behavior, prompt-cache lineage, interaction diagnostics, and the MCP client transport used by tool dispatch.
+LLM owns model/provider configuration consumption, snapshot consumption, provider serialization, streaming collection, retry/error behavior, provider-facing prompt-cache handling, interaction diagnostics, and the MCP client transport used by tool dispatch.
 
 ## Units
 
-- [src-llm](../units/src-llm.md) — routing, Anthropic path, prompt snapshots, retries, logs, and one-shot/session requests.
+- [src-llm](../units/src-llm.md) — routing, Anthropic path, snapshot consumption, retries, logs, and one-shot/session requests.
 - [src-conditional-memory](../units/src-conditional-memory.md) — pure conditional memory-source filtering and current-model snapshot header helpers.
 - [src-llm-request-journal](../units/src-llm-request-journal.md) — content-addressed canonical request inputs, bounded manifests, attempts, and reconstruction.
 - [src-model-routing](../units/src-model-routing.md) — virtual target selection and process-local failover health.
@@ -19,7 +19,8 @@ LLM owns model/provider configuration consumption, prompt snapshots, provider se
 
 ## Public interfaces
 
-- `chat`, `requestLlmOnce`, and prompt snapshot/cache helpers.
+- `chat` and `requestLlmOnce`.
+- Session snapshot/cache utilities are consumed directly from [Session prompt state](../units/src-session-prompt.md), not exported by LLM.
 - `LlmRequestError`, retry events, abort recognition, and provider payload sanitization.
 - OpenAI conversion/stream collectors.
 - OpenAI custom function-tool request serialization explicitly uses non-strict mode while preserving schema-required keys; canonical decision: [D-llm-openai-non-strict-function-tools](../units/src-llm.md#d-llm-openai-non-strict-function-tools).

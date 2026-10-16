@@ -52,7 +52,7 @@ Implements the skills system: discovering, resolving, and loading skill definiti
 
 Test file additionally imports:
 - `./commands` — `COMMANDS`
-- `./llm` — `buildSessionSystemPromptSnapshot`
+- `./session/promptSnapshot` — `buildSessionSystemPromptSnapshot`
 - `./tools` — `definitions`
 - `./toolsSessionAgent` — `tool_skill({ action: "load" })`
 
@@ -82,7 +82,7 @@ Test file additionally imports:
 ## Integration
 
 - Used by `toolsSessionAgent` (`tool_skill`) to load skill documents on demand during agent sessions.
-- Used by `llm` module (`buildSessionSystemPromptSnapshot`) to inject an `<available_skills>` catalog into the system prompt; the prompt renders the winning `SkillInfo.sourceType` alongside name/description, preserving this unit's precedence and deduplication result.
+- Used by `session/promptSnapshot` (`buildSessionSystemPromptSnapshot`) to inject an `<available_skills>` catalog into the system prompt; the prompt renders the winning `SkillInfo.sourceType` alongside name/description, preserving this unit's precedence and deduplication result.
 - The `/skill` command in `commands` exposes skill listing to users.
 - Relies on `config` for directory layout (agent dirs, global skills dir, agents metadata file).
 

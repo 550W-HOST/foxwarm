@@ -1,9 +1,10 @@
+import { checkPathAccess } from '../utils/agentPathAccess';
 import fs from 'fs-extra';
 import crypto from 'crypto';
 import path from 'path';
 import * as sessionManager from '../sessionManager';
 import { WORKSPACE_DIR, getAgentMemoryDir } from '../config';
-import { checkPathAccess } from '../isolatedCheck';
+
 import { expandHomePath, resolveAgentPath } from '../utils/pathResolve';
 import {
     findWriteParentIssue,

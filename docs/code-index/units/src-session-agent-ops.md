@@ -1,11 +1,13 @@
 # Unit: src-session-agent-ops
 
-Files: src/session/agentOps.ts, src/session/agentMetadata.ts, src/session/agentMetadata.test.ts
+Files: src/session/agentOps.ts, src/session/agentMetadata.ts, src/session/agentSettings.ts, src/session/agentMetadata.test.ts
 Secondary files: src/session/sessionIdAllocation.test.ts
 
 ## Purpose
 
 Manages agent lifecycle operations (creation, renaming, moving sessions between agents) and agent metadata (isolation, inheritance, system prompt snapshots). Provides validation, file-system reorganization of session artifacts, and persistent storage of per-agent configuration.
+
+Metadata facts, normalized storage, isolation reads and inheritance traversal live in `agentMetadata.ts`. Snapshot refresh and inheritance/isolation mutations that update Sessions live in `agentSettings.ts`, which depends on metadata facts and [Session prompt state](./src-session-prompt.md). This direction lets snapshot assembly read metadata without importing refresh operations or provider execution.
 
 ## Key Exports
 
@@ -48,7 +50,7 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 | `createSessionInAgent(options, deps)` | ~438 | Creates a session within an existing agent with a fresh promptCacheKey and metadata |
 | `createAgentWithMainSession(options, deps)` | ~534 | Creates an agent directory and optionally its initial main session |
 | `moveSessionToTarget(options, deps)` | ~(truncated) | Orchestrates session move/rename with optional agent creation |
-| `getSessionSystemPromptOptions(session)` | ~8 (agentMetadata) | Extracts prompt options from a session |
+| `rebuildSessionSnapshotIfMaterialized(session)` | agentSettings | Rebuilds only with a truthful concrete snapshot identity |
 | `normalizeAgentMetadataPayload(raw, filePath)` | ~30 (agentMetadata) | Validates raw loaded metadata shape |
 | `createAgentMetadataStore(filePath)` | ~33 (agentMetadata) | Instantiates DiskJsonData for agent metadata |
 | `setAgentMetadataStoreForTests(store)` | ~45 (agentMetadata) | Replaces store instance for testing |
@@ -62,15 +64,15 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 | `isAgentIsolated(agentName)` | ~115 (agentMetadata) | Boolean isolation check |
 | `isSessionEffectivelyIsolated(session)` | ~119 (agentMetadata) | Delegates to isAgentIsolated via session's agent |
 | `setAgentMetadata(agentName, meta)` | ~124 (agentMetadata) | Normalizes and persists metadata |
-| `refreshSessionSnapshot(deps, sessionId)` | ~129 (agentMetadata) | Rebuilds single session's prompt snapshot |
-| `refreshSessionSnapshotForSession(session, persistSession)` | ~138 (agentMetadata) | Rebuilds a passed Session snapshot and persists through the supplied owner callback; the ID-based entry delegates here |
+| `refreshSessionSnapshot(deps, sessionId)` | ~129 (agentSettings) | Rebuilds single session's prompt snapshot |
+| `refreshSessionSnapshotForSession(session, persistSession)` | ~138 (agentSettings) | Rebuilds a passed Session snapshot and persists through the supplied owner callback; the ID-based entry delegates here |
 | `getAgentInheritanceChain(agentName)` | ~139 (agentMetadata) | Walks inherit links with cycle detection |
-| `setAgentInherit(deps, agentName, inheritAgentName, refreshSnapshots?)` | ~155 (agentMetadata) | Sets inheritance, validates cycles, and refreshes recent transitive sessions only when requested |
-| `setAgentIsolation(deps, agentName, isolatedNode, toolRules?)` | ~(agentMetadata) | Toggles isolation, optionally replaces rules, updates currentNode on sessions, and reports the live rule count |
+| `setAgentInherit(deps, agentName, inheritAgentName, refreshSnapshots?)` | ~155 (agentSettings) | Sets inheritance, validates cycles, and refreshes recent transitive sessions only when requested |
+| `setAgentIsolation(deps, agentName, isolatedNode, toolRules?)` | ~(agentSettings) | Toggles isolation, optionally replaces rules, updates currentNode on sessions, and reports the live rule count |
 
 ## Dependencies
 
-- `../llm` — `ensurePromptCacheKey`, `buildSessionSystemPromptSnapshot`
+- `./promptSnapshot` and `./promptCache` — snapshot construction/concrete identity and persisted cache-key helpers; no provider-module dependency.
 - `../config` — `getAgentDir`, `getAgentMemoryDir`, `getSessionArchiveLogPath`, `getSessionArchiveImagesDir`, `getSessionBlockArchiveLogPath`, `getLegacySessionFrontierPath`, `SESSIONS_DIR`, `AGENTS_FILE`
 - `../types` — `Session`
 - `../common` — `logger`
@@ -104,7 +106,7 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 
 - Consumed by the broader session manager which provides the `deps` implementations (session CRUD, alias cache, channel management).
 - WebUI `POST /api/sessions` for a non-main Agent and single-mode guest channel creation omit `currentNode` and reach the main-session default. Model `create_session` and `/session create` ordinarily pass the caller's current Node, preserving caller inheritance. Timer-created Sessions pass the stored timer Node; newly configured timers normally capture the owner's Node, while an older timer without that field can reach the default. Both named and automatically named Agent-session facades hold the identity lock and supply unlocked dependency helpers, so the new lookup does not re-enter that lock.
-- Relies on `llm` module for prompt cache key management and system prompt snapshot building; new sessions created here pass their canonical session id into snapshot construction so session-specific memory frontmatter can match, and use a fresh key even when recording `parentSessionId` because this path does not fork/copy the parent's prefix.
+- Uses `promptSnapshot` and `promptCache` directly for prompt state; new sessions created here pass their canonical session id into snapshot construction so session-specific memory frontmatter can match, and use a fresh key even when recording `parentSessionId` because this path does not fork/copy the parent's prefix.
 - Archive store and archive index are coordinated during session renames to keep on-disk state consistent.
 - Internal session-ID reuse and move-target rules are canonical in [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
 - `DiskJsonData` utility provides the lightweight persistence layer with fallback/recovery semantics.

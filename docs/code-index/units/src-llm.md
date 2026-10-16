@@ -5,7 +5,7 @@ Secondary files: src/llmRequestJournal.ts, src/llmProviders/openaiWsState.ts, sr
 
 ## Purpose
 
-Owns provider request routing, Anthropic conversion/parsing, session prompt snapshots, prompt-cache keys, retries/aborts, interaction logs, stream progress, unified result parsing, and one-shot requests. OpenAI conversion/stream assembly is delegated to `src/llmProviders/openai.ts`.
+Owns provider request routing, Anthropic conversion/parsing, session snapshot consumption, provider-facing prompt-cache handling, retries/aborts, interaction logs, stream progress, unified result parsing, and one-shot requests. OpenAI conversion/stream assembly is delegated to `src/llmProviders/openai.ts`.
 
 ## Key exports
 
@@ -15,15 +15,11 @@ Owns provider request routing, Anthropic conversion/parsing, session prompt snap
 - `requestLlmOnce(options)` — provider request without automatic session-history orchestration.
 - `deduplicateProviderRequestImages(contents, protocol)` — clones one concrete attempt's history, hashes only protocol-serializable current image bytes/MIME, removes repeated payloads, preserves descriptor/guidance context, and exposes duplicate status through a clone-local predicate rather than message fields.
 - `convertToAnthropicFormat(contents, config)` — serializes the prepared clone into Anthropic-compatible messages while preserving tool-result image association and dedup guidance.
-- `buildSessionSystemPromptSnapshot(options)` — framework prompt, memory, skill catalog, and dynamic hints.
-- `buildSessionSystemPromptSnapshotForSession(session)`, `resolveSessionSnapshotModelId(session)`, `resolveConcreteModelIdForSnapshot(model, config?)` — materialize or defer lifecycle snapshots without selecting virtual routing.
-- `generatePromptCacheKey`, `ensurePromptCacheKey`.
 - `sanitizeProviderRequestPayload`, `isAbortError`.
 - `LlmRequestError`, `isLlmRequestError`, retry event types/defaults/delay helper.
 - `getOpenAIRequestApi(providerType)` — exact OpenAI surface routing.
 - `DEFAULT_LLM_MAX_ATTEMPTS` plus compatibility `DEFAULT_LLM_MAX_RETRIES`; `classifyHttpFailure`.
 - `fixToolCalls(contents)` — provider-safe tool-call/response history normalization.
-
 
 Tool execution and local effects contracts are owned by [src-tool-executor](./src-tool-executor.md). Provider requests consume the neutral `CurrentSessionEffects` type; default Main-local composition lives separately in `session/defaultCurrentSessionEffects.ts`.
 
@@ -39,20 +35,16 @@ Tool execution and local effects contracts are owned by [src-tool-executor](./sr
 
 `getOpenAIRequestApi()` returns null for non-OpenAI values; only `anthropic` then uses Anthropic-format handling. Any other type throws an `unsupported providerType` error while the plan is built, before headers, auth, or body are assembled. Config validation rejects such types earlier, so this guard covers direct entry overrides.
 
-
 ## Tool-response formatting
 
 Anthropic conversion and both OpenAI serializers use `packages/shared/src/toolResponseFormatting.ts` through the built shared package. Structured tool responses remain structured internally; the shared formatter owns provider-facing text. Image parts are promoted separately and accompanied by image guidance. Canonical decision: [D-llm-shared-response-format](../modules/llm.md#d-llm-shared-response-format).
 
 `stripRequestDisplayMeta` renders exact-target ToolScript execution responses with the shared section formatter before removing their activity metadata. This request-local text is journaled and reaches all provider serializers unchanged; native history and nested script calls retain their objects. The output guard selects the same renderer from the executor's existing exact-target activity signal. See [ToolScript execution projection](../threads/tool-dispatch-node-execution.md#d-dispatch-toolscript-execution-projection).
 
-## Prompt snapshot behavior
+## Request prefix inputs
 
-- Framework prompt precedence: top-level agent framework prompt, then documented legacy main-agent framework fallback.
-- Memory is resolved across inherited/current agents with session frontmatter filters.
-- Visible skills are listed as compact metadata; full skill docs remain on-demand.
-- Dynamic hints include agent folder and layered-context recall guidance.
-- Prompt-cache keys are random UUIDs tied to model-facing prefix lineage and persisted by normal session callers. Canonical lineage: [D-lifecycle-prefix-lineage](../threads/session-lifecycle.md#d-lifecycle-prefix-lineage).
+Snapshot construction and persisted cache identity are owned by [Session prompt state](./src-session-prompt.md). This module consumes those helpers for normal chat and selected-attempt prompt resolution; it does not export them.
+
 - Provider `extraFields` and `extraHeaders` expand `${SESSION_CACHE_KEY}` from the concrete plan's effective provider key and `${TURN_ID}` from the request's ephemeral turn identity. This normally remains the resolved persisted/request key; only `openai-ws` applies the Session/scoped derivation in [D-model-routing-openai-ws-prompt-cache-key](../threads/model-routing.md#d-model-routing-openai-ws-prompt-cache-key). A low-level request without a Session ID generates one fallback identity for its retry set; the normal SessionTurnRunner supplies one turn identity for the whole session turn.
 - A provider-neutral optional request effort is captured with the selected-model snapshot. Each physical concrete attempt uses the requested value when its leaf allows it, otherwise that leaf's configured default. Requests without an explicit value use the selected leaf default.
 

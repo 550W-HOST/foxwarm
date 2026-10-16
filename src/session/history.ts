@@ -1,3 +1,5 @@
+import * as promptSnapshot from './promptSnapshot';
+import * as promptCache from './promptCache';
 import * as llm from '../llm';
 import { CompactPlanRepairFile, compactPlanSubmissionUsesFile } from './compactPlanRepair';
 import { parseFunctionCallArgs } from '../toolCallArgs';
@@ -723,7 +725,7 @@ function cloneSessionForCompactJob(session: Session, historySnapshot: Message[])
     // stored prefix-lineage key for virtual routing and non-WS cache reuse.
     // A selected openai-ws leaf derives its provider-facing key later from the
     // actual awaited/background execution scope.
-    promptCacheKey: llm.ensurePromptCacheKey(session),
+    promptCacheKey: promptCache.ensurePromptCacheKey(session),
   };
   (cloned as any).__compactJob = true;
   return cloned;
@@ -757,7 +759,7 @@ function buildCompactJobSnapshot(session: Session, options: CompactionRunOptions
 
 async function ensureCompactPromptCacheKeyPersisted(deps: SessionHistoryDeps, session: Session): Promise<void> {
   const previousPromptCacheKey = session.promptCacheKey;
-  llm.ensurePromptCacheKey(session);
+  promptCache.ensurePromptCacheKey(session);
   if (session.id && session.promptCacheKey !== previousPromptCacheKey) {
     await deps.saveSession(session.id);
   }
@@ -1174,7 +1176,7 @@ async function finalizeCompaction(
   operation: CompactOperation,
   planner?: CompactionPlannerDebug,
 ): Promise<void> {
-  const persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshotForSession(session);
+  const persistentMemorySnapshot = await promptSnapshot.buildSessionSystemPromptSnapshotForSession(session);
   if (isCompactCancelled(operation)) throw new CompactCancelledError();
   if (persistentMemorySnapshot !== undefined) session.persistentMemorySnapshot = persistentMemorySnapshot;
   await checkpointTaskProgress(session);
@@ -1880,7 +1882,7 @@ export async function clearSession(deps: SessionHistoryDeps, sessionId: string):
   session.nextBlockId = nextBlockId;
   session.historyVersion = (session.historyVersion || 0) + 1;
   session.indexingState = undefined;
-  session.promptCacheKey = llm.generatePromptCacheKey();
+  session.promptCacheKey = promptCache.generatePromptCacheKey();
   session.meta = {
     ...session.meta,
     lastMessageTime: Date.now(),

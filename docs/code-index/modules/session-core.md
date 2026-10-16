@@ -14,6 +14,8 @@ Canonical image references in live history, queues, archives, and forks are owne
 
 ## Units
 
+- [src-session-prompt](../units/src-session-prompt.md) — filesystem/memory snapshot assembly, concrete snapshot identity and persisted prompt-cache keys without provider execution.
+
 - [src-session-manager](../units/src-session-manager.md) — façade, in-memory map, lazy hydration, queue/wait coordination, callbacks, and restart recovery.
 - [src-session-deletion](../units/src-session-deletion.md) — shared Main-owned WebUI/command/model deletion orchestration, claims, blocker/revalidation flow, child detachment, and Worker target teardown composition.
 - [src-session-runtime](../units/src-session-runtime.md) — placement-neutral high-level DTO service/facade for external session queries, commands, settings, controls, and events.
@@ -22,7 +24,7 @@ Canonical image references in live history, queues, archives, and forks are owne
 - [src-session-metadata-store](../units/src-session-metadata-store.md) — shared metadata index, per-session history snapshots, rebuild, and durable writes.
 - [src-session-catalog-store](../units/src-session-catalog-store.md) — Main-owned SQLite Session catalog, strict migration, row/batch writes, indexed queries, and counts.
 - [src-session-channels](../units/src-session-channels.md) — persisted channel attachments, direct delivery, and session broadcasts.
-- [src-session-agent-ops](../units/src-session-agent-ops.md) — agent creation, inheritance/isolation metadata, moves, and snapshot refresh.
+- [src-session-agent-ops](../units/src-session-agent-ops.md) — agent creation/moves, lower-level metadata facts/storage, and snapshot-affecting settings operations.
 - [src-session-misc](../units/src-session-misc.md) — archive append helpers, relations, message visibility, snapshot refresh, and child reminders.
 - [src-managed-sessions](../units/src-managed-sessions.md) — exclusive leases, inbox interception, step execution, and controller wakeup.
 - [src-session-task-context](../units/src-session-task-context.md) — legacy Goal migration and request-only task reminders.

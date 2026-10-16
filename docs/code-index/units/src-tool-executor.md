@@ -31,6 +31,6 @@ Owns ordinary model-returned tool batch planning, scheduling, execution and aggr
 
 ## Dependencies and limits
 
-The executor uses the existing tool registry and resolved-tool pipeline. Its no-effects entry retains the established SessionManager source-owner lookup and abort/wait operations. Registry and SessionManager imports still transitively reach provider code; this split does not replace their bootstrap wiring or remove the existing prompt-snapshot dependency between SessionManager and LLM. It introduces no LLM import, compatibility re-export, alternate registry or scheduler.
+The executor uses the existing tool registry and resolved-tool pipeline. Its no-effects entry retains the established SessionManager source-owner lookup and abort/wait operations. Registry and SessionManager imports still transitively reach provider code; this split does not replace their bootstrap wiring or remove the provider dependencies still reached through SessionManager's compaction owner. It introduces no LLM import, compatibility re-export, alternate registry or scheduler.
 
 Canonical behavior remains in [authorization and batches](../threads/tool-dispatch-authorization.md), [Node execution](../threads/tool-dispatch-node-execution.md), and [message processing](../threads/message-processing-pipeline.md). The returned batch envelope is an in-process contract, not persisted data or an RPC DTO.

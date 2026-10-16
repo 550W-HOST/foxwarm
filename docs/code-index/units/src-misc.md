@@ -1,6 +1,6 @@
 # Unit: src-misc
 
-Files: src/common.ts, src/common.test.ts, src/startupUtils.ts, src/jsonObjectArgs.ts, src/asrClient.ts, src/logRotation.ts, src/nodeFileTransfer.ts, src/nodeFileTransferPathVariables.test.ts, src/guestAgent.test.ts, src/session/sessionSystemPromptFiles.test.ts
+Files: src/common.ts, src/common.test.ts, src/startupUtils.ts, src/jsonObjectArgs.ts, src/asrClient.ts, src/logRotation.ts, src/nodeFileTransfer.ts, src/nodeFileTransferPathVariables.test.ts, src/guestAgent.test.ts
 
 ## Purpose
 

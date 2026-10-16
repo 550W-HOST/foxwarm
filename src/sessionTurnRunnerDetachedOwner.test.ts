@@ -1,3 +1,5 @@
+import * as promptSnapshot from './session/promptSnapshot';
+import * as promptCache from './session/promptCache';
 import * as toolExecutor from './toolExecutor';
 import type { CurrentSessionTurnEffects, CurrentSessionEffects } from './session/currentSessionEffects';
 import test from 'node:test';
@@ -246,7 +248,7 @@ test('retry applies a real ready compact-only commit and rebuilds history and sy
   const session = createSession(`retry_compact_only_${Date.now()}`, 'current turn input');
   session.model = 'fixture/model';
   session.persistentMemorySnapshot = '<foxwarm-current-model model-id="fixture/model" />\n\nbefore compact snapshot';
-  session.promptCacheKey = llm.generatePromptCacheKey();
+  session.promptCacheKey = promptCache.generatePromptCacheKey();
   const originalKey = session.promptCacheKey;
   const events: string[] = [];
   const effects = createEffects(session, events);
@@ -267,13 +269,13 @@ test('retry applies a real ready compact-only commit and rebuilds history and sy
   const originalResolve = configModule.resolveModelConfig;
   const originalPost = axios.post;
   const originalChat = llm.chat;
-  const originalSnapshot = llm.buildSessionSystemPromptSnapshotForSession;
+  const originalSnapshot = promptSnapshot.buildSessionSystemPromptSnapshotForSession;
   const models = loadModelsConfigFromObject({ default: 'fixture/model', providers: {
     fixture: { providerType: 'openai-completions', baseUrl: 'https://example.test/v1', apiKey: 'test-key', models: ['model'] },
   } });
   (configModule as any).resolveModelConfig = () => ({ modelsConfig: models, defaultKey: models.default,
     currentKey: models.default, modelEntry: models.models[models.default], contextLimit: models.models[models.default].contextLimit });
-  (llm as any).buildSessionSystemPromptSnapshotForSession = async () => '<foxwarm-current-model model-id="fixture/model" />\n\nafter compact snapshot';
+  (promptSnapshot as any).buildSessionSystemPromptSnapshotForSession = async () => '<foxwarm-current-model model-id="fixture/model" />\n\nafter compact snapshot';
   (llm as any).chat = async (parts: any, owner: Session, iteration: number, options: any) => {
     if (options?.purpose !== 'compact-plan') return originalChat(parts, owner, iteration, options);
     const call = { id: 'retry-compact-plan', name: 'submit_compact_plan', args: { replaceAsBlocks: [
@@ -332,7 +334,7 @@ test('retry applies a real ready compact-only commit and rebuilds history and sy
     (axios as any).post = originalPost;
     (configModule as any).resolveModelConfig = originalResolve;
     (llm as any).chat = originalChat;
-    (llm as any).buildSessionSystemPromptSnapshotForSession = originalSnapshot;
+    (promptSnapshot as any).buildSessionSystemPromptSnapshotForSession = originalSnapshot;
   }
 });
 

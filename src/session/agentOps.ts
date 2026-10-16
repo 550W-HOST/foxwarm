@@ -1,6 +1,7 @@
+import * as promptSnapshot from './promptSnapshot';
+import * as promptCache from './promptCache';
 import fs from 'fs-extra';
 import path from 'path';
-import * as llm from '../llm';
 import { CHANNELS_FILE, getAgentDir, getAgentMemoryDir, getSessionArchiveImagesDir, getSessionArchiveLogPath, getSessionBlockArchiveLogPath, getLegacySessionFrontierPath, SESSION_ID_MOVE_JOURNAL_PATH, SESSIONS_DIR, SESSIONS_FILE, type ModelEffort, type ModelsConfig } from '../config';
 import { Session } from '../types';
 import { commitSessionIdRename, renameSessionArchiveStore, renameSessionArchiveStoreForRecovery } from './archiveStore';
@@ -495,9 +496,9 @@ export async function createSessionInAgent(options: {
     effort === undefined ? {} : { effort },
     modelsConfig,
   );
-  const snapshotModelId = llm.resolveConcreteModelIdForSnapshot(modelEffort.model, modelsConfig);
+  const snapshotModelId = promptSnapshot.resolveConcreteModelIdForSnapshot(modelEffort.model, modelsConfig);
   const snapshot = snapshotModelId
-    ? await llm.buildSessionSystemPromptSnapshot({ agentName, sessionId, systemPromptFiles, modelId: snapshotModelId })
+    ? await promptSnapshot.buildSessionSystemPromptSnapshot({ agentName, sessionId, systemPromptFiles, modelId: snapshotModelId })
     : '';
   deps.assertSessionMutationAllowed([parentSessionId], 'receive a new child session');
   await deps.createSession(sessionId, {
@@ -510,7 +511,7 @@ export async function createSessionInAgent(options: {
     // createSessionInAgent always creates a fresh, empty session context even
     // when a parent relation is recorded. Do not inherit the parent's cache key
     // unless the operation is an actual fork that copies the prefix/history.
-    promptCacheKey: llm.generatePromptCacheKey(),
+    promptCacheKey: promptCache.generatePromptCacheKey(),
     stats: {
       totalCachedTokens: 0,
       totalInputTokens: 0,
@@ -641,9 +642,9 @@ export async function createAgentWithMainSession(options: {
       { model: model ?? sourceSession?.model, effort: effort ?? sourceSession?.effort },
       effort === undefined ? {} : { effort },
     );
-    const snapshotModelId = llm.resolveConcreteModelIdForSnapshot(modelEffort.model);
+    const snapshotModelId = promptSnapshot.resolveConcreteModelIdForSnapshot(modelEffort.model);
     const snapshot = snapshotModelId
-      ? await llm.buildSessionSystemPromptSnapshot({ agentName, sessionId: mainSessionId, modelId: snapshotModelId })
+      ? await promptSnapshot.buildSessionSystemPromptSnapshot({ agentName, sessionId: mainSessionId, modelId: snapshotModelId })
       : '';
     await deps.createSession(mainSessionId, {
       id: mainSessionId,

@@ -1,5 +1,5 @@
+import * as promptSnapshot from '../session/promptSnapshot';
 import fs from 'fs-extra';
-import * as llm from '../llm';
 import * as sessionManager from '../sessionManager';
 import { AGENTS_DIR } from '../config';
 import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
@@ -262,7 +262,7 @@ export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
   const forced = normalizeForceModel(normalizedArgs, 'create_session');
   const systemPromptFiles = normalizedArgs.systemPromptFiles === undefined
     ? undefined
-    : llm.normalizeSystemPromptFiles(normalizedArgs.systemPromptFiles);
+    : promptSnapshot.normalizeSystemPromptFiles(normalizedArgs.systemPromptFiles);
 
   if (normalizedArgs.systemPromptFiles !== undefined && !Array.isArray(normalizedArgs.systemPromptFiles)) {
     throw new Error('systemPromptFiles must be an array of strings');

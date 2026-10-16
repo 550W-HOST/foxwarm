@@ -143,11 +143,11 @@ Compact-threshold settings, child-model settings, snapshot refresh, and current 
 - `./session/compactPlan` — compact plan tool name constant
 - `./contextPreviewRenderer` — shared total-budget renderer for recall/get_session_messages/vector-query previews (tool folding, filters, match-centered snippets)
 - `./config` — agent directory resolution, model config, constants (`AGENTS_DIR`, `COMPACT_KEEP_PERCENT`)
-- `./llm` — LLM interaction layer, normalizeSystemPromptFiles
+- `./session/promptSnapshot` — `normalizeSystemPromptFiles`
 - `./skills` — skill listing and document loading
 - `./timers` — timer CRUD and view types
 - `./nodes/manager` — node management for remote file send
-- `./isolatedCheck` — permission guards for isolated sessions (path access, channel, timer, archived read)
+- `./isolatedCheck` — isolated-session operation/channel/timer/archive guards; `./utils/agentPathAccess` owns the pure path guard.
 - `./utils/messageFormat` — text formatting helpers
 - `./utils/unicode` — safe unicode truncation
 - `./utils/localTime` — local timestamp formatting

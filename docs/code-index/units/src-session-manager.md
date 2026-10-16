@@ -83,13 +83,13 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 
 ## Dependencies
 
-- `src/session/agentOps.ts`, `agentMetadata.ts`, `relations.ts`, `channels.ts`, `history.ts`, `metadataStore.ts`, `archive.ts`, `archiveStore.ts`, `layeredContext.ts`, and `managedState.ts` own their respective domains.
+- `src/session/agentOps.ts`, `agentMetadata.ts`, `agentSettings.ts`, `relations.ts`, `channels.ts`, `history.ts`, `metadataStore.ts`, `archive.ts`, `archiveStore.ts`, `layeredContext.ts`, and `managedState.ts` own their respective domains.
 - `src/sessionRuntimeState.ts` owns the canonical runtime-state model.
 - `src/migrations/` runs before normal lazy hydration. Throwing data-integrity migrations fail startup instead of entering the ordinary best-effort session-load catch.
 - `src/vector.ts` is used for archive-index lifecycle operations, not agent-memory-file CRUD.
 - `src/imageBlobs.ts` owns canonical image materialization and provider-compatible blob references.
 - `src/nodes/remoteExecLiveness.ts` owns transient Main-process remote exec reservation/claim state and receives narrow successful-move/delete lifecycle hooks.
-- `src/llm.ts` is used only for prompt/cache helpers required by lifecycle operations; the router owns the live LLM loop.
+- `src/session/promptSnapshot.ts` and `promptCache.ts` own lifecycle prompt/cache helpers; this facade does not import the provider module. Compaction still reaches provider execution through its existing history owner.
 
 ## Invariants
 

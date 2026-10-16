@@ -35,10 +35,11 @@ after(async () => fs.remove(DATA_ROOT));
 
 let modulesPromise: Promise<{
   llm: typeof import('./llm');
+  promptSnapshot: typeof import('./session/promptSnapshot');
   config: typeof import('./config');
   journal: typeof import('./llmRequestJournal');
   btw: typeof import('./btw');
-  agentMetadata: typeof import('./session/agentMetadata');
+  agentSettings: typeof import('./session/agentSettings');
   sessionManager: typeof import('./sessionManager');
   metadataStore: typeof import('./session/metadataStore');
 }> | undefined;
@@ -46,14 +47,15 @@ let modulesPromise: Promise<{
 async function loadModules() {
   modulesPromise ||= Promise.all([
     import('./llm'),
+    import('./session/promptSnapshot'),
     import('./config'),
     import('./llmRequestJournal'),
     import('./btw'),
-    import('./session/agentMetadata'),
+    import('./session/agentSettings'),
     import('./sessionManager'),
     import('./session/metadataStore'),
-  ]).then(([llm, config, journal, btw, agentMetadata, sessionManager, metadataStore]) => ({
-    llm, config, journal, btw, agentMetadata, sessionManager, metadataStore,
+  ]).then(([llm, promptSnapshot, config, journal, btw, agentSettings, sessionManager, metadataStore]) => ({
+    llm, promptSnapshot, config, journal, btw, agentSettings, sessionManager, metadataStore,
   }));
   return modulesPromise;
 }
@@ -350,24 +352,24 @@ test('failover resolves prompts per selected leaf and journals one request with 
 });
 
 test('lifecycle refreshes reuse recorded concrete identity and defer never-materialized virtual sessions', async () => {
-  const { llm, config, agentMetadata } = await loadModules();
+  const { llm, promptSnapshot, config, agentSettings } = await loadModules();
   const agentName = 'runtime-refresh';
   const memoryDir = config.getAgentMemoryDir(agentName);
   await fs.ensureDir(memoryDir);
   await fs.writeFile(path.join(memoryDir, 'MEMORY.md'), '<foxwarm-if model-id="leafB/*">\nrefresh-beta\n</foxwarm-if>', 'utf8');
 
   const virtual = makeSession(`${agentName}/virtual`, 'alias', '');
-  assert.equal(llm.resolveConcreteModelIdForSnapshot('alias'), undefined);
-  assert.equal(await llm.buildSessionSystemPromptSnapshotForSession(virtual), undefined);
+  assert.equal(promptSnapshot.resolveConcreteModelIdForSnapshot('alias'), undefined);
+  assert.equal(await promptSnapshot.buildSessionSystemPromptSnapshotForSession(virtual), undefined);
   let virtualPersists = 0;
-  await agentMetadata.refreshSessionSnapshotForSession(virtual, async () => { virtualPersists += 1; });
+  await agentSettings.refreshSessionSnapshotForSession(virtual, async () => { virtualPersists += 1; });
   assert.equal(virtual.persistentMemorySnapshot, '');
   assert.equal(virtualPersists, 0);
 
   const recorded = makeSession(`${agentName}/recorded`, 'alias', '<foxwarm-current-model model-id="leafB/beta" />\n\nstale');
   let recordedPersists = 0;
-  await agentMetadata.refreshSessionSnapshotForSession(recorded, async () => { recordedPersists += 1; });
-  assert.equal(llm.resolveSessionSnapshotModelId(recorded), 'leafB/beta');
+  await agentSettings.refreshSessionSnapshotForSession(recorded, async () => { recordedPersists += 1; });
+  assert.equal(promptSnapshot.resolveSessionSnapshotModelId(recorded), 'leafB/beta');
   assert.match(recorded.persistentMemorySnapshot, /refresh-beta/);
   assert.equal(recordedPersists, 1);
 });
