@@ -1452,6 +1452,37 @@ test('session deletion invalidates and defeats a delayed successful history resp
   await page.close()
 })
 
+for (const lifetime of ['session replacement', 'unmount']) {
+  test(`${lifetime} aborts pending history and fences its late success from the next Chat`, async () => {
+    page = await browser.newPage()
+    await page.setViewport({ width: 1000, height: 720 })
+    await page.goto(fixtureUrl, { waitUntil: 'load' })
+    await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+    await page.evaluate(lifetime => {
+      window.fixtureIgnoreHistoryAbort = true
+      // A stable key exercises replacement of the Session within the same mounted Chat.
+      window.renderFixtureChats(lifetime === 'unmount' ? 0 : 1, 0, 'fixture/other')
+    }, lifetime)
+    await page.waitForFunction(() => window.fixtureHistoryAbortCount === 1)
+    if (lifetime === 'unmount') {
+      await page.waitForSelector('.foxwarm-chat-root', { hidden: true })
+      await page.evaluate(() => window.renderFixtureChats(1, 1, 'fixture/other'))
+    }
+    await page.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
+    await page.evaluate(() => window.resolveFixtureHistory())
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    assert.equal(await page.evaluate(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('old history row')), false)
+
+    await page.evaluate(() => window.resolveFixtureHistory(0, [
+      { role: 'user', parts: [{ text: 'next Session history' }], __meta: { seq: 1, timestamp: 20 } },
+    ], 0, { sessionId: 'fixture/other' }))
+    await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('next Session history'))
+    assert.equal(await page.evaluate(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('old history row')), false)
+    assert.equal(await page.evaluate(() => window.fixtureHistoryRequestCount), 2)
+    await page.close()
+  })
+}
+
 test('initial stream registers before bootstrap and a caught-up reconnect avoids history', async () => {
   page = await browser.newPage()
   await page.setViewport({ width: 1000, height: 720 })

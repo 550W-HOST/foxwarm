@@ -244,6 +244,7 @@ test('all current list and Chat surfaces use the shared transport instead of Eve
   const sources = await Promise.all([
     '../src/boundedSessionList.ts',
     '../src/components/ArchitectureView.tsx',
+    '../src/components/useChatConversationSync.ts',
     '../src/components/Chat.tsx',
   ].map(path => readFile(new URL(path, import.meta.url), 'utf8')))
   assert.equal(sources.some(source => /new\s+EventSource|EventSource\s*\(/.test(source)), false)

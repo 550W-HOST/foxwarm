@@ -39,7 +39,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 
 ## State ownership
 
-- Mounted Chat owns one session's history and logical runtime subscription; the page realtime transport owns the physical connection.
+- Each mounted Chat delegates history, queue, draft, and logical runtime subscription ownership to `useChatConversationSync`; rendering, viewport, search, settings requests, and ASR stay in Chat. The page realtime transport owns the physical connection.
 - App/Sidebar/Architecture own their list data and logical subscriptions on the shared transport. Stream-triggered refreshes use fixed-delay, non-overlapping coalescing, while the session-list request gate remains latest-wins; the canonical contract is [D-webui-app-global-list-gate](../units/webui-app.md#d-webui-app-global-list-gate).
 - Workbench store owns tab/pane/split layout; the shared [stable content host](../units/webui-workbench-content.md#d-workbench-stable-content) owns tab instances independently of that changing layout tree. Chat viewport state is ephemeral in-memory state keyed by canonical session ID.
 - Browser-only theme packages/selection, chat/input display preferences, layout, draft, and Code preferences remain local; instance name/icon are server settings.

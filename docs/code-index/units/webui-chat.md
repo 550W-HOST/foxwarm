@@ -1,16 +1,17 @@
 # Unit: WebUI Chat
 
-Files: packages/webui/src/components/Chat.tsx, packages/webui/src/components/chatSessionSearch.ts, packages/webui/src/streamingAssistantDraft.ts, packages/webui/src/components/SessionDebugModal.tsx, packages/webui/src/components/ContextScrollbar.tsx, packages/webui/src/components/contextScrollbarModel.ts, packages/webui/src/chatHistoryState.ts, packages/webui/src/chatViewportState.ts, packages/webui/src/sessionContinuation.ts, packages/webui/src/sessionHeader.ts, packages/webui/src/modelOptionsLoader.ts, packages/webui/test/streamingAssistantDraft.test.mjs, packages/webui/test/sessionContinuation.test.mjs, packages/webui/test/debugSnapshot.e2e.mjs, packages/webui/test/chatHistoryState.test.mjs, packages/webui/test/chatHistoryLoading.e2e.mjs, packages/webui/test/chatViewportState.test.mjs, packages/webui/test/contextScrollbarModel.test.mjs, packages/webui/test/contextScrollbar.e2e.mjs, packages/webui/test/sessionHeader.test.mjs, packages/webui/test/modelOptionsLoader.test.mjs, packages/webui/test/sessionHeader.e2e.mjs, packages/webui/test/scrollState.e2e.mjs, packages/webui/test/lazyTimelineRestore.e2e.mjs, packages/webui/test/chatSessionSearch.e2e.mjs, packages/webui/test/streamFollow.e2e.mjs, packages/webui/test/orderedResponsesDraft.e2e.mjs, packages/webui/test/chatBottomStatus.e2e.mjs
+Files: packages/webui/src/components/Chat.tsx, packages/webui/src/components/useChatConversationSync.ts, packages/webui/src/components/chatSessionSearch.ts, packages/webui/src/streamingAssistantDraft.ts, packages/webui/src/components/SessionDebugModal.tsx, packages/webui/src/components/ContextScrollbar.tsx, packages/webui/src/components/contextScrollbarModel.ts, packages/webui/src/chatHistoryState.ts, packages/webui/src/chatViewportState.ts, packages/webui/src/sessionContinuation.ts, packages/webui/src/sessionHeader.ts, packages/webui/src/modelOptionsLoader.ts, packages/webui/test/streamingAssistantDraft.test.mjs, packages/webui/test/sessionContinuation.test.mjs, packages/webui/test/debugSnapshot.e2e.mjs, packages/webui/test/chatHistoryState.test.mjs, packages/webui/test/chatHistoryLoading.e2e.mjs, packages/webui/test/chatViewportState.test.mjs, packages/webui/test/contextScrollbarModel.test.mjs, packages/webui/test/contextScrollbar.e2e.mjs, packages/webui/test/sessionHeader.test.mjs, packages/webui/test/modelOptionsLoader.test.mjs, packages/webui/test/sessionHeader.e2e.mjs, packages/webui/test/scrollState.e2e.mjs, packages/webui/test/lazyTimelineRestore.e2e.mjs, packages/webui/test/chatSessionSearch.e2e.mjs, packages/webui/test/streamFollow.e2e.mjs, packages/webui/test/orderedResponsesDraft.e2e.mjs, packages/webui/test/chatBottomStatus.e2e.mjs
 Secondary files: packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/src/components/ProcessingStatus.tsx, packages/webui/src/contextScrollbarSettings.ts, packages/webui/test/threadCardHeight.e2e.mjs
 
 ## Purpose
 
-Owns one mounted session's committed history, queued preview, runtime/model snapshot, logical realtime subscription, message upload/send, stop/dequeue/continue commands, ASR, debug view, scroll/viewport state, and the desktop context overview scrollbar.
+`useChatConversationSync` owns one mounted session's committed history, queued preview, runtime/model snapshot, logical realtime subscription, message upload/send, and command submission. `Chat` owns presentation, settings requests, ASR, debug visibility, search, scroll/viewport state, and the desktop context overview scrollbar.
 
 Queue-origin history deltas update committed and queued timelines through one reducer action only when their canonical sequences are contiguous from the trusted frontier. A gap, incoherent state, or request-racing delta stages only a bounded missing sequence range and forces non-starvable authoritative reconciliation from the last contiguous sequence; neither the queue side nor the history side is rendered alone. History responses also replace both timeline sides atomically, including recovery when the transient delta was dropped. During tail-plus-prefix bootstrap, an assembled snapshot ending before a newer staged batch is retained as the complete older boundary and the batch is recovered with `afterSeq`, rather than forcing another full snapshot. The HTTP latest sequence remains authoritative even when older rows are not mounted, while concurrent live rows advance that boundary only through a contiguous sorted suffix; a later row cannot skip an unseen sequence. The authoritative latest-sequence/version frontier, not only mounted rows, fences delayed covered deltas while the prefix is pending.
 
 ## Export
 
+- `useChatConversationSync(sessionId, webUiIdentityMode)` returns render state plus `sendMessage`, `sendSessionCommand`, `retryEarlierHistory`, and `mergeConfirmedSettings`. Mutable synchronization refs, timeline dispatch, and state setters stay private to that mounted owner. Settings callers merge only confirmed model/child-model/effort or node/cwd fields through the settings action; they do not control history or stream authority.
 - default memoized `Chat` component; WebUI identity mode retains normal history, tool cards, live stream, and sending while hiding administrator controls/model picker/debug/ASR.
 - `SessionDebugModal` owns the explicitly mounted diagnostic snapshot lifecycle, including fetch invalidation, serialization, and release on close; the shared `JsonInspectorDialog` owns editor and copy UI resources.
 - `chatHistoryState.ts`, `chatViewportState.ts`, and `sessionHeader.ts` export pure tested reconciliation, viewport, and state/format helpers; `modelOptionsLoader.ts` owns latest-consumer publication gates, the parsed-result Promise cache for the three bootstrap endpoints, and the models-only refresh signal.
@@ -19,7 +20,7 @@ Queue-origin history deltas update committed and queued timelines through one re
 
 ## Current handlers
 
-- `handleSend({ text, attachments })`:
+- `useChatConversationSync.sendMessage({ text, attachments })`, passed to the composer as `handleSend`:
   1. rejects missing/empty/loading submissions;
   2. retains any active model-stream draft, leaving its request/stream reconciliation independent of send acceptance;
   3. uploads each stable `{ ref, file }` attachment to `POST /api/upload` with multipart filename `attachmentN_${originalFileName}` (also its bound Session ID in WebUI identity mode), failing the send if any upload fails;
@@ -27,12 +28,19 @@ Queue-origin history deltas update committed and queued timelines through one re
   5. creates one browser `clientMessageId` and appends an optimistic user row with the same ordinary appended descriptor shape used by canonical history; frontend presentation correlates the numeric filename prefix back to the marker;
   6. awaits `POST /api/sessions/:id/message`; non-2xx removes only an unreconciled optimistic row and returns rejected send so the composer retains its draft, while busy/queued success schedules targeted queue-preview refresh.
 - Manually typed slash commands use the same POST route but omit optimistic history and `clientMessageId`, matching command dispatch's non-persisted user-input boundary.
-- `sendSessionCommand(command)` posts `{ text: command }` to the same message route without optimistic user history.
+- The synchronization owner’s `sendSessionCommand(command)` posts `{ text: command }` to the same message route without optimistic user history.
 - `updateSessionNode(nodeId, signal)` posts to the administrator Session node endpoint and merges the confirmed `currentNode`/`cwd` fields from its canonical Session response; it does not send a chat message or start a model request. The composer owns loading/error/abort presentation, while ordinary runtime Session-state events update the same selected Node. Picker semantics are canonical in [D-composer-session-node-picker](./webui-chat-composer.md#d-composer-session-node-picker).
 - `handleStop`, `handleRunQueued`, and `handleContinue` send `/stop`, `/dequeue`, and `/continue` respectively. After Stop completes, the backend converts queued message/event previews into committed history rows without running them; normal SSE/history reconciliation removes the preview and inserts the canonical rows.
 - There are no current message-index edit/delete/regenerate handlers in this component.
 - The composer's microphone ASR uses the deployment-relative `/asr/stream` endpoint. `getAsrStreamUrl()` builds `${window.location.origin}${API_BASE_PATH}/asr/stream` and switches the HTTP(S) prefix to WS(S); it does not call `makeWebSocketUrl`. The former audio-file transcription UI and its Chat-side `/asr/transcribe` caller are removed; the server endpoint remains available independently.
 - After ASR `ready`, a WebSocket close without a final or error terminates the recording through the composer error callback, preserving any partial draft text and unlocking editing. A completed final, deliberate cancel, and a preceding socket error suppress duplicate close errors. Before `ready`, an unexplained close still rejects transcriber startup.
+
+## Synchronization functions
+
+- `applySessionState` accepts canonical runtime state and updates its immediate reconciliation refs and rendered session snapshot together.
+- `fetchHistory` owns bootstrap/full/after-sequence reconciliation, request coalescing, stream-race journals, queue/history atomic dispatch, and matching draft commit evidence. `scheduleHistoryRefresh` and `scheduleAtomicRecovery` share its bounded pending refresh.
+- `subscribeRealtime` registers a logical subscription with the existing page transport, reconciles session/message/draft events, and handles deletion. The hook's mounted effect owns unsubscribe, timer cancellation, and history abort/invalidation; session replacement resets only synchronization state, leaving viewport cleanup with `Chat`.
+- `sendMessage` owns upload, optimistic identity, acceptance/rejection, and busy-time queue refresh. `retryEarlierHistory` clears the earlier-history error and requests a full correction without exposing fetch modes to rendering.
 
 ## Per-session state and streaming
 
@@ -90,7 +98,7 @@ Queue-origin history deltas update committed and queued timelines through one re
 
 ChatComposer, ChatTimeline, ProcessingStatus, chat shared types/renderers, ToolScript progress context, `API_BASE_PATH`, and [webui-realtime](./webui-realtime.md). Model-settings navigation is canonical in [D-webui-model-settings-navigation](../modules/webui.md#d-webui-model-settings-navigation).
 
-`chatHistoryLoading.e2e.mjs` covers ordinary and early-commentary draft suffixes through a real Composer send, pending/accepted/rejected POSTs, queue/history refresh, canonical user append, duplicate/overlapping offset deltas, completed canonical handoff, and the next request/idle boundary. It also covers manual tool disclosure across streamed call commit, result pairing, and historical regrouping via Chat WebSocket events.
+`chatHistoryLoading.e2e.mjs` covers ordinary and early-commentary draft suffixes through a real Composer send, pending/accepted/rejected POSTs, queue/history refresh, canonical user append, duplicate/overlapping offset deltas, completed canonical handoff, and the next request/idle boundary. It also covers manual tool disclosure across streamed call commit, result pairing, and historical regrouping via Chat WebSocket events, plus pending-history abort and late-response fencing on same-mounted-Chat Session replacement and unmount.
 
 The browser history fixture verifies that the React root installed its renderer before exercising history and stream races; initial document loading alone does not establish fixture readiness.
 
