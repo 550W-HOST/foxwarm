@@ -487,14 +487,15 @@ export class SessionTurnRunner {
   private async consumeLeadingQueuedTurnInputs(
     session: Session,
     pendingParts: MessagePart[] | null,
-    assertCanConsume?: () => void,
-    // An over-limit continuation must not continue without its required
-    // compaction, so its safe point propagates a failed completed-job apply
-    // instead of reporting the swallow as "nothing was compacted here".
-    propagateCompactionFailure = false,
+    options: {
+      assertCanConsume?: () => void;
+      // Required over-limit compaction must propagate failure, not permit a request.
+      propagateCompactionFailure?: boolean;
+      queuedInput?: boolean;
+    } = {},
   ): Promise<{ parts: MessagePart[] | null; consumedInput: boolean; compacted: boolean }> {
-    const compacted = await this.runPendingCompactionIfNeeded(session.id, session, false, propagateCompactionFailure || !!assertCanConsume);
-    assertCanConsume?.();
+    const compacted = await this.runPendingCompactionIfNeeded(session.id, session, false, options.propagateCompactionFailure || !!options.assertCanConsume);
+    options.assertCanConsume?.();
     let parts = pendingParts;
     let consumedInput = false;
 
@@ -522,6 +523,7 @@ export class SessionTurnRunner {
 
     if (selected.length > 0) {
       consumedInput = true;
+      if (options.queuedInput) this.markQueuedUserInputs(selected);
       await this.appendQueuedTurnInputs(session, session.id, selected, false);
     }
 
@@ -542,12 +544,26 @@ export class SessionTurnRunner {
     return false;
   }
 
+  private markQueuedUserInputs(items: QueueItem[]): void {
+    // Owner safe-point evidence, not an ingress clock or Main busy projection.
+    // Persist the bit on queued rows too when Stop/Run queued defers their append.
+    for (const item of items) {
+      if (isQueueItem(item) && item.type === 'user') item.queuedInput = true;
+    }
+  }
+
+  private queuedInputMessage(item: QueueItem, message: Message): Message {
+    return item.type === 'user' && item.queuedInput && message.role === 'user'
+      ? { ...message, __meta: { ...message.__meta, queuedInput: true } }
+      : message;
+  }
+
   private async appendQueuedTurnInputs(session: Session, sessionId: string, items: QueueItem[], firstStartsTurn = true): Promise<void> {
     let firstInputItem = true;
     const messages: Message[] = [];
     for (const item of items) {
       if (item.message) {
-        messages.push(item.message);
+        messages.push(this.queuedInputMessage(item, item.message));
         firstInputItem = false;
         continue;
       }
@@ -560,7 +576,7 @@ export class SessionTurnRunner {
       const parts = firstStartsTurn && firstInputItem
         ? this.prepareTurnParts(session, sessionId, item.parts)
         : item.parts;
-      messages.push({ role: 'user', parts, ...(item.clientMessageId ? { __meta: { clientMessageId: item.clientMessageId } } : {}) });
+      messages.push(this.queuedInputMessage(item, { role: 'user', parts, ...(item.clientMessageId ? { __meta: { clientMessageId: item.clientMessageId } } : {}) }));
       firstInputItem = false;
     }
     if (messages.length === 0) return;
@@ -582,6 +598,7 @@ export class SessionTurnRunner {
 
     while (true) {
       await this.runPendingCompactionIfNeeded(session.id, session, true);
+      this.markQueuedUserInputs(session.queue);
       const messages: Message[] = [];
       const committedItems: QueueItem[] = [];
       let removedQueueItems = 0;
@@ -599,7 +616,7 @@ export class SessionTurnRunner {
         removedQueueItems += 1;
         committedItems.push(item);
         if (item.message) {
-          messages.push(item.message);
+          messages.push(this.queuedInputMessage(item, item.message));
           committedAnyInput = true;
           continue;
         }
@@ -610,11 +627,11 @@ export class SessionTurnRunner {
         const parts = !committedAnyInput
           ? this.prepareTurnParts(session, session.id, item.parts)
           : item.parts;
-        messages.push({
+        messages.push(this.queuedInputMessage(item, {
           role: 'user',
           parts,
           ...(item.clientMessageId ? { __meta: { clientMessageId: item.clientMessageId } } : {}),
-        });
+        }));
         committedAnyInput = true;
       }
 
@@ -696,7 +713,7 @@ export class SessionTurnRunner {
     assertCanRetry();
     await this.host.ingestPendingQueue?.(session);
     assertCanRetry();
-    const selected = await this.consumeLeadingQueuedTurnInputs(session, null, assertCanRetry);
+    const selected = await this.consumeLeadingQueuedTurnInputs(session, null, { assertCanConsume: assertCanRetry, queuedInput: true });
     // Stop/Run queued may change during compact or strict bulk persistence.
     // Inputs received after selection remain queued for a later safe point.
     assertCanRetry();
@@ -1004,7 +1021,7 @@ export class SessionTurnRunner {
         }
 
         this.assertCanContinue();
-        const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts);
+        const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts, { queuedInput: iteration > 0 });
         parts = queuedBeforeLlm.parts;
 
         if (session.stopping) {
@@ -1080,6 +1097,7 @@ export class SessionTurnRunner {
         // point so follow-ups received during the provider request
         // participate in the same canonical runner semantics as local queues.
         await this.host.ingestPendingQueue?.(session);
+        this.markQueuedUserInputs(session.queue);
         // Dequeue may arrive while the awaited Worker ingestion is publishing
         // its newly hot queue. Do not fold those rows into the current provider
         // result after the stop override has claimed them for the outer loop.
@@ -1113,7 +1131,7 @@ export class SessionTurnRunner {
           }
           if (providerTimeQueue) {
             const queuedAfterLlm = await this.consumeLeadingQueuedTurnInputs(
-              session, null, undefined, this.resolveContextLimitExceeded(session, result.usage).exceeded,
+              session, null, { queuedInput: true, propagateCompactionFailure: this.resolveContextLimitExceeded(session, result.usage).exceeded },
             );
             if (!queuedAfterLlm.consumedInput) {
               await this.finishTurnAfterIntermediate(session, broadcast, turnId);
@@ -1281,7 +1299,7 @@ export class SessionTurnRunner {
           break;
         }
         const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(
-          session, null, undefined, this.resolveContextLimitExceeded(session, result.usage).exceeded,
+          session, null, { queuedInput: true, propagateCompactionFailure: this.resolveContextLimitExceeded(session, result.usage).exceeded },
         );
         parts = queuedAfterTools.parts;
 
@@ -1397,6 +1415,7 @@ export class SessionTurnRunner {
       // while Dequeue leaves that prefix queued for the same outer action loop.
       if (stoppedByUser || session.stopping || session.meta?.runQueuedAfterStop) {
         await this.host.ingestPendingQueue?.(session);
+        this.markQueuedUserInputs(session.queue);
       }
       const runQueuedAfterStop = !!session.meta?.runQueuedAfterStop;
       if (session.meta?.runQueuedAfterStop) {

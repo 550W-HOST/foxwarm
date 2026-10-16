@@ -38,6 +38,8 @@ import { createSessionWorkerPublicationServiceHandler, sessionWorkerPublicationS
 import { createSessionTurnDeliveryServiceHandler, sessionTurnDeliveryServiceDescriptor } from './sessionTurnDelivery';
 import { normalizeSessionWorkerIngressRequest } from './sessionWorkerIngress';
 import { registerChannel, unregisterChannel } from './channel';
+import { MessageRouter } from './messageRouter';
+import type { MessagePart } from './types';
 
 function baseSession(id: string): Session {
   return {
@@ -1137,6 +1139,12 @@ test('real Worker retry ingests durable mailbox input and honors Stop or dequeue
           assert.equal(!!durable.stopping, false);
           assert.equal(durable.queue.length, 0);
           assert.equal(durable.meta.runQueuedAfterStop, undefined);
+          assert.doesNotMatch(JSON.stringify(bodies[0].messages.filter((message: any) => message.role === 'user')), /queued-input/);
+          const correction = durable.history.find((message: any) => message.parts.some((part: any) => part.text === 'mailbox correction A'));
+          assert.equal(correction.__meta.queuedInput, true, 'retry, passive Stop and Run queued retain owner-observed deferred input');
+          const event = durable.history.find((message: any) => message.parts.some((part: any) => part.text === 'mailbox correction B'));
+          assert.equal(event.__meta.queuedInput, undefined);
+          if (control !== 'stop') assert.equal((JSON.stringify(bodies[1].messages.filter((message: any) => message.role === 'user')).match(/queued-input/g) || []).length, 1);
           for (const text of ['mailbox correction A', 'mailbox correction B']) {
             assert.equal(JSON.stringify(durable.history).split(text).length - 1, 1);
             if (control !== 'stop') assert.equal(JSON.stringify(bodies[1]).split(text).length - 1, 1);
@@ -1144,6 +1152,15 @@ test('real Worker retry ingests durable mailbox input and honors Stop or dequeue
           const assistant = durable.history.find((message: any) => message.parts[0]?.text === 'worker retry answer');
           if (control !== 'stop') assert.equal(assistant.__meta.llmAttempt, 1);
           assert.equal(durable.history.some((message: any) => message.parts[0]?.text?.startsWith('Error:')), false);
+          if (control === 'stop') {
+            store.enqueueIntent(initial.id, 'after-stop-idle-input', 'enqueue', { type: 'user', clientMessageId: 'after-stop', parts: [{ text: 'new idle input' }] });
+            await host.runPending(8);
+            assert.equal(bodies.length, 2);
+            const userPayload = JSON.stringify(bodies[1].messages.filter((message: any) => message.role === 'user'));
+            assert.equal((userPayload.match(/queued-input/g) || []).length, 1, 'passively committed input projects its hint once on the next real request');
+            const newInput = readDurable().history.find((message: any) => message.__meta?.clientMessageId === 'after-stop');
+            assert.equal(newInput.__meta.queuedInput, undefined, 'a later idle turn is not itself queued input');
+          }
         }, true);
       } finally {
         (axios as any).post = originalPost;
@@ -1151,6 +1168,76 @@ test('real Worker retry ingests durable mailbox input and honors Stop or dequeue
       }
     });
   }
+});
+
+test('Worker channel mailbox follow-ups reach real provider requests with hints independently of Main busy projections', async t => {
+  const initial = baseSession(`worker-queued-hint-${Date.now()}`);
+  initial.model = 'fixture/model';
+  initial.persistentMemorySnapshot = '<foxwarm-current-model model-id="fixture/model" />\n\nworker prompt';
+  const models = loadModelsConfigFromObject({ default: 'fixture/model', providers: {
+    fixture: { providerType: 'openai-completions', baseUrl: 'https://example.test/v1', apiKey: 'test-key', models: ['model'] },
+  } });
+  t.mock.method(configModule, 'resolveModelConfig', () => ({ modelsConfig: models, defaultKey: models.default,
+    currentKey: models.default, modelEntry: models.models[models.default], contextLimit: models.models[models.default].contextLimit }));
+  await withLocalHost(initial, async ({ host, store, session, readDurable }) => {
+    let ingressId = 0;
+    const originalParts = new Map<string, MessagePart[]>();
+    const router = new MessageRouter(undefined, async (sessionId, item) => {
+      const normalized = normalizeSessionWorkerIngressRequest({ sessionId, item });
+      if (item.clientMessageId) originalParts.set(item.clientMessageId, structuredClone(normalized.item.parts!));
+      const intent = store.enqueueIntent(sessionId, `channel-input-${++ingressId}`, 'enqueue', normalized.item);
+      return { accepted: true, mailboxIntentId: intent.id, generation: 1, lastAppliedMailboxId: 0, messageCount: 0, busy: false };
+    });
+    // The real owner is busy during subsequent input; Main's presentation
+    // projection deliberately remains idle for every channel admission.
+    t.mock.method(router as any, 'resolveSessionForIncomingMessage', async (): Promise<{ sessionId: string; session: Session }> => ({
+      sessionId: initial.id, session: { ...initial, busy: false, queue: [], meta: { lastMessageTime: 0 } },
+    }));
+    const ctx = { channelId: 'webui', channelType: 'webui', platform: 'webui', channelUserId: initial.id,
+      conversationId: initial.id, reply: async () => {}, sendTyping: async () => {} };
+    const send = (id: string, parts: MessagePart[]) => router.handleMessage(ctx, { channelUserId: initial.id, parts, clientMessageId: id });
+    const bodies: any[] = [];
+    t.mock.method(axios, 'post', async (_url: string, body: any) => {
+      bodies.push(body);
+      if (bodies.length === 1) {
+        await send('provider-A', [{ text: 'worker correction A' }]);
+        await send('provider-B', [{ text: 'worker correction B' }]);
+        store.enqueueIntent(initial.id, 'exec-event', 'enqueue', { type: 'background', parts: [{ system: '<foxwarm-system kind="exec" event="completed" />' }] });
+        assert.equal(session.queue.length, 0, 'input is still mailbox-only during provider execution');
+      }
+      const delta = bodies.length === 2
+        ? { tool_calls: [{ index: 0, id: 'worker-queue-tool', type: 'function', function: { name: 'session', arguments: '{"action":"status"}' } }] }
+        : { content: bodies.length === 1 ? 'first worker result' : 'worker finished' };
+      const stream = new PassThrough();
+      process.nextTick(() => stream.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: bodies.length === 2 ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`));
+      return { status: 200, statusText: 'OK', headers: {}, data: stream };
+    });
+    t.mock.method(llm, 'executeTools', async () => {
+      await send('tool', [{ text: 'worker tool correction' }, { text: '<foxwarm-file name="worker-notes.txt" node="master" path="worker-notes.txt" mime="text/plain" />' }]);
+      return { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'worker-queue-tool', name: 'session', response: { output: 'ok' } } }] };
+    });
+    await send('initial-A', [{ text: 'worker initial A' }]);
+    await send('initial-B', [{ text: 'worker initial B' }]);
+    await host.runPending(8);
+    assert.equal(bodies.length, 3);
+    assert.deepEqual(bodies.map(body => (JSON.stringify(body.messages.filter((message: any) => message.role === 'user')).match(/queued-input/g) || []).length), [0, 2, 3]);
+    const history = readDurable().history;
+    const userRows = history.filter((message: any) => message.__meta?.clientMessageId);
+    assert.deepEqual(userRows.map((message: any) => [message.__meta.clientMessageId, !!message.__meta.queuedInput]), [
+      ['initial-A', false], ['initial-B', false], ['provider-A', true], ['provider-B', true], ['tool', true],
+    ]);
+    for (const message of userRows) {
+      const original = originalParts.get(message.__meta.clientMessageId)!;
+      // Only the first initial input receives the existing session header.
+      assert.deepEqual(message.parts.slice(-original.length), original);
+      assert.doesNotMatch(JSON.stringify(message.parts), /queued-input/);
+    }
+    assert.equal(history.filter((message: any) => message.role === 'user').length, 6);
+    const toolIndex = history.findIndex((message: any) => message.role === 'tool');
+    assert.equal(history[toolIndex - 1].parts.some((part: any) => !!part.functionCall), true);
+    assert.equal(history[toolIndex + 1].__meta.clientMessageId, 'tool');
+    assert.equal(readDurable().queue.length, 0);
+  }, true);
 });
 
 test('dequeue during post-tool ingestion leaves new rows for the same outer action loop', async () => {

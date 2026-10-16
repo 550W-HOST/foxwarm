@@ -2491,6 +2491,12 @@ export async function chat(
         .filter(isModelVisibleMessage)
         .map((message: Message): Message => {
             const { __meta, ...msg } = message;
+            if (message.role === 'user' && __meta?.queuedInput === true) {
+                msg.parts = [{ system: formatFoxwarmSystemTag({
+                    kind: 'queued-input',
+                    hint: 'Queued input: this message may predate the preceding replies or tool results. Do not assume it was sent in response to them.',
+                }) }, ...message.parts];
+            }
             const modelId = getHistoricalConcreteModelId(message);
             return modelId ? { ...msg, __meta: { modelId } } : msg;
         }), ...requestContext];

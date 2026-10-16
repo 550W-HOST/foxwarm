@@ -1,12 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import axios from 'axios';
+import { PassThrough } from 'node:stream';
+import sharp from 'sharp';
+import * as configModule from './config';
+import { loadModelsConfigFromObject } from './config';
 import { MessageRouter, shouldBroadcastChannelText } from './messageRouter';
 import { CommandHandler } from './commandHandler';
 import * as sessionManager from './sessionManager';
 import * as sessionRuntime from './sessionRuntime';
 import * as sessionHistory from './session/history';
 import * as llm from './llm';
-import type { Message, MessagePart, Session } from './types';
+import type { Message, MessagePart, QueueItem, Session } from './types';
 import { parseFoxwarmOpeningTag } from './utils/promptWrappers';
 
 const GROUP_MENTIONED_METADATA = '<foxwarm-metadata kind="group-message" mentioned="true" hint="The current group message explicitly mentioned this agent." />';
@@ -63,6 +68,91 @@ function countHistoryPartText(messages: Message[], text: string): number {
 function countHistoryPartSystem(messages: Message[], system: string): number {
   return messages.reduce((count, message) => count + message.parts.filter(part => part.system === system).length, 0);
 }
+
+test('local channel inputs acquire a request-only queue hint at continuation safe points, not initial preparation', async t => {
+  const router = new MessageRouter();
+  const session = await createRouterQueueTestSession('queued_input_provider');
+  session.model = 'fixture/model';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="fixture/model" />\n\nsystem prompt';
+  const models = loadModelsConfigFromObject({ default: 'fixture/model', providers: {
+    fixture: { providerType: 'openai-completions', baseUrl: 'https://example.test/v1', apiKey: 'test-key', models: ['model'] },
+  } });
+  t.mock.method(configModule, 'resolveModelConfig', () => ({ modelsConfig: models, defaultKey: models.default,
+    currentKey: models.default, modelEntry: models.models[models.default], contextLimit: models.models[models.default].contextLimit }));
+  t.mock.method(router as any, 'resolveSessionForIncomingMessage', async () => ({ sessionId: session.id, session }));
+  const ctx = { channelId: 'webui', channelType: 'webui', platform: 'webui', channelUserId: session.id,
+    conversationId: session.id, reply: async () => {}, sendTyping: async () => {} };
+  const send = (id: string, parts: MessagePart[]) => router.handleMessage(ctx, { channelUserId: session.id, parts, clientMessageId: id });
+  const host = (router as any).turnRunner.host;
+  const originalAppend = host.appendQueuedSessionMessages.bind(host);
+  let initialAppend = true;
+  t.mock.method(host, 'appendQueuedSessionMessages', async (owner: Session, messages: Message[]) => {
+    await originalAppend(owner, messages);
+    if (initialAppend) {
+      initialAppend = false;
+      // This row is consumed by the first pre-request safe point, not by the
+      // initial drained batch. firstStartsTurn=false alone is not evidence.
+      await send('early', [{ text: 'initial preparation input' }]);
+    }
+  });
+  const queuedParts = new Map<string, MessagePart[]>();
+  const rememberQueued = (id: string) => {
+    queuedParts.set(id, structuredClone(session.queue.find(item => item.clientMessageId === id)!.parts!));
+  };
+  const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: 'red' } }).png().toBuffer();
+  t.mock.method(llm, 'executeTools', async () => {
+    await send('tool', [{ text: 'tool-time correction' }, { inlineData: { mimeType: 'image/png', data: png.toString('base64') } },
+      { text: '<foxwarm-file name="notes.txt" node="master" path="notes.txt" mime="text/plain" />' }]);
+    rememberQueued('tool');
+    return { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'queued-hint-tool', name: 'session', response: { output: 'ok' } } }] };
+  });
+  const bodies: any[] = [];
+  t.mock.method(axios, 'post', async (_url: string, body: any) => {
+    bodies.push(body);
+    if (bodies.length === 1) {
+      assert.doesNotMatch(JSON.stringify(body.messages.filter((message: any) => message.role === 'user')), /queued-input/);
+      assert.match(JSON.stringify(body), /initial preparation input/);
+      await send('thinking', [{ text: 'provider-time correction' }]);
+      rememberQueued('thinking');
+      const structured: Message = { role: 'user', parts: [{ text: 'structured provider-time correction' }],
+        __meta: { timestamp: 123456, clientMessageId: 'structured' } };
+      queuedParts.set('structured', structuredClone(structured.parts));
+      await sessionManager.enqueueSessionItem(session.id, { type: 'user', message: structured });
+      for (const type of ['intersession', 'background', 'trigger', 'onboot'] as QueueItem['type'][]) {
+        await sessionManager.enqueueSessionItem(session.id, { type, parts: [{ system: `<foxwarm-system kind="${type}" />` }] });
+      }
+    }
+    const delta = bodies.length === 2
+      ? { content: 'running a tool', tool_calls: [{ index: 0, id: 'queued-hint-tool', type: 'function', function: { name: 'session', arguments: '{"action":"status"}' } }] }
+      : { content: bodies.length === 1 ? 'first result' : 'finished' };
+    const stream = new PassThrough();
+    process.nextTick(() => stream.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: bodies.length === 2 ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`));
+    return { status: 200, statusText: 'OK', headers: {}, data: stream };
+  });
+  try {
+    await send('initial', [{ text: 'initial input' }]);
+    assert.equal(bodies.length, 3);
+    assert.deepEqual(bodies.map(body => (JSON.stringify(body.messages.filter((message: any) => message.role === 'user')).match(/queued-input/g) || []).length), [0, 2, 3]);
+    for (const [id, parts] of queuedParts) {
+      const message = session.history.find(row => row.__meta?.clientMessageId === id)!;
+      assert.equal(message.__meta?.queuedInput, true);
+      assert.deepEqual(message.parts, parts, 'canonical wrappers, timestamps, attachments and part order stay unchanged');
+      assert.doesNotMatch(JSON.stringify(message.parts), /queued-input/);
+    }
+    const users = session.history.filter(message => message.role === 'user');
+    assert.equal(users.length, 9, 'one canonical row per input or event, with no standalone hint row');
+    assert.deepEqual(users.filter(row => row.__meta?.queuedInput).map(row => row.__meta?.clientMessageId), ['thinking', 'structured', 'tool']);
+    assert.equal(users.find(row => row.__meta?.clientMessageId === 'structured')!.__meta?.timestamp, 123456);
+    const toolIndex = session.history.findIndex(row => row.role === 'tool');
+    assert.equal(session.history[toolIndex - 1].parts.some(part => !!part.functionCall), true);
+    assert.equal(session.history[toolIndex + 1].__meta?.clientMessageId, 'tool');
+    assert.match(JSON.stringify(bodies[2]), /image_url/);
+    assert.match(JSON.stringify(bodies[2]), /notes.txt/);
+    assert.equal(session.queue.length, 0);
+  } finally {
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
 
 test('shouldBroadcastChannelText rejects empty or whitespace-only text', () => {
   assert.equal(shouldBroadcastChannelText(''), false);

@@ -53,6 +53,7 @@ Attached task completion carries an internal resolved-builtin signal that resolv
 - Ordinary queued continuation is iterative under one reentry guard and one busy claim/release; `runSessionTurn` never recursively invokes later queued turns.
 - A later turn after a real control/lifecycle boundary receives a fresh `${TURN_ID}` even when it shares the same owned busy window.
 - Queue items retain individual canonical history boundaries even when a compatible batch shares one provider request.
+- `markQueuedUserInputs` records owner-observed deferred ordinary input on queue rows; `queuedInputMessage` transfers it to canonical user metadata without changing parts. Continuation/retry consumption and Stop/Run queued preserve that evidence, while the first request's preparation remains unmarked. The model-only projection and limits are canonical in [queued user input hints](../threads/message-processing-pipeline.md#d-pipeline-queued-user-input-hint).
 - `prepareLlmRetry` binds the exact turn owner to the awaited LLM retry safe point. It ingests pending mailbox input, checks Stop/Run queued, applies ready compaction through `consumeLeadingQueuedTurnInputs`, checks controls again before selecting one finite strict append batch and after persistence, then restores the existing normal-turn requesting phase. Successful compact application or consumed input reports changed context; compact and strict-append failures propagate to owner cleanup rather than provider health/retry handling. Canonical policy: [D-pipeline-retry-input-safe-point](../threads/message-processing-pipeline.md#d-pipeline-retry-input-safe-point).
 - Child-reminder pending-input checks reuse the ordinary-input peek; a compact wake signal alone cannot suppress an otherwise-required reminder.
 - Completed compact jobs have priority at input-consumption safe points but their wake signals are not batch boundaries. Stop, waits, managed yields, tool-call/result ordering, and authority/mailbox fences retain their control boundaries.
@@ -75,6 +76,8 @@ Attached task completion carries an internal resolved-builtin signal that resolv
 `src/sessionTurnRunnerContextLimitCompact.test.ts` drives real background compact jobs through a detached exact owner to pin the over-limit wait and commit-before-continuation order, the safe-point-commit skip above and below the limit, the terminal outcome of failed planning, and Stop releasing the wait without cancelling the job.
 
 The detached-owner child-handoff cases also verify direct-user input suppresses routine reporting without preventing a later genuine parent/other handoff from re-establishing the report-required reminder boundary.
+
+The Router and Worker host suites also capture actual serialized provider requests through normal channel ingress and the shared runner: initial/preparation inputs remain unhinted, provider/tool follow-ups carry one request-only hint each, canonical multipart input and identity remain intact, events remain unmarked, and retry/Stop/Run queued preserve the same evidence despite stale Main Worker projections.
 
 ## Canonical ownership
 
