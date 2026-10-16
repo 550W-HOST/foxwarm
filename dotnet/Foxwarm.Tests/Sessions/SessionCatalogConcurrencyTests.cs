@@ -25,13 +25,31 @@ public sealed class SessionCatalogConcurrencyTests(ITestOutputHelper output)
                 throw new TimeoutException("Presentation writer was not released.");
             return null!;
         };
-        var writer = Task.Factory.StartNew(() => catalog.Pin("one", true), TaskCreationOptions.LongRunning);
+        var writer = Task.Factory.StartNew(
+            () => catalog.Pin("one", true),
+            TaskCreationOptions.LongRunning
+        );
         Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
         var watch = Stopwatch.StartNew();
-        var reads = Enumerable.Range(0, 8).Select(_ => Task.Factory.StartNew(() =>
-        {
-            return new[] { catalog.Get("one")!, catalog.Resolve("one"), catalog.Resolve("only"), catalog.Resolve("shared"), catalog.Resolve("absent") };
-        }, TaskCreationOptions.LongRunning)).ToArray();
+        var reads = Enumerable
+            .Range(0, 8)
+            .Select(_ =>
+                Task.Factory.StartNew(
+                    () =>
+                    {
+                        return new[]
+                        {
+                            catalog.Get("one")!,
+                            catalog.Resolve("one"),
+                            catalog.Resolve("only"),
+                            catalog.Resolve("shared"),
+                            catalog.Resolve("absent"),
+                        };
+                    },
+                    TaskCreationOptions.LongRunning
+                )
+            )
+            .ToArray();
         try
         {
             var results = await Task.WhenAll(reads).WaitAsync(TimeSpan.FromSeconds(1));
@@ -43,12 +61,16 @@ public sealed class SessionCatalogConcurrencyTests(ITestOutputHelper output)
                 Assert.Equal("ambiguous", result[3]["kind"]!.GetValue<string>());
                 Assert.Equal("missing", result[4]["kind"]!.GetValue<string>());
             }
-            output.WriteLine($"Eight ordinary readers completed all 40 Get/Resolve calls in {watch.Elapsed.TotalMilliseconds:F3} ms while the writer remained held.");
+            output.WriteLine(
+                $"Eight ordinary readers completed all 40 Get/Resolve calls in {watch.Elapsed.TotalMilliseconds:F3} ms while the writer remained held."
+            );
             Assert.False(writer.IsCompleted);
         }
         catch (TimeoutException)
         {
-            output.WriteLine($"Held writer: {reads.Count(read => read.IsCompleted)} of eight readers completed within {watch.Elapsed.TotalMilliseconds:F3} ms.");
+            output.WriteLine(
+                $"Held writer: {reads.Count(read => read.IsCompleted)} of eight readers completed within {watch.Elapsed.TotalMilliseconds:F3} ms."
+            );
             throw;
         }
         finally
@@ -68,25 +90,39 @@ public sealed class SessionCatalogConcurrencyTests(ITestOutputHelper output)
     {
         using var temp = new TempDirectory();
         using var catalog = new SessionCatalog(temp.Path);
-        catalog.Upsert([SessionCatalogTests.Row("parent", 0), SessionCatalogTests.Row("child", 0, "parent")]);
+        catalog.Upsert([
+            SessionCatalogTests.Row("parent", 0),
+            SessionCatalogTests.Row("child", 0, "parent"),
+        ]);
         using var rowsRead = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
         using var writerStarted = new ManualResetEventSlim();
         catalog.QueryObserved = (sql, _) =>
         {
-            if (!sql.Contains("INDEXED BY idx_session_catalog_parent_default", StringComparison.Ordinal))
+            if (
+                !sql.Contains(
+                    "INDEXED BY idx_session_catalog_parent_default",
+                    StringComparison.Ordinal
+                )
+            )
                 return;
             rowsRead.Set();
             if (!release.Wait(TimeSpan.FromSeconds(10)))
                 throw new TimeoutException("Children query was not released.");
         };
-        var query = Task.Factory.StartNew(() => catalog.Children([("parent", null)], "default", 10, null), TaskCreationOptions.LongRunning);
+        var query = Task.Factory.StartNew(
+            () => catalog.Children([("parent", null)], "default", 10, null),
+            TaskCreationOptions.LongRunning
+        );
         Assert.True(rowsRead.Wait(TimeSpan.FromSeconds(5)));
-        var writer = Task.Factory.StartNew(() =>
-        {
-            writerStarted.Set();
-            catalog.SetParent("child", null);
-        }, TaskCreationOptions.LongRunning);
+        var writer = Task.Factory.StartNew(
+            () =>
+            {
+                writerStarted.Set();
+                catalog.SetParent("child", null);
+            },
+            TaskCreationOptions.LongRunning
+        );
         Assert.True(writerStarted.Wait(TimeSpan.FromSeconds(5)));
         try
         {
@@ -111,16 +147,24 @@ public sealed class SessionCatalogConcurrencyTests(ITestOutputHelper output)
     {
         using var temp = new TempDirectory();
         using var catalog = new SessionCatalog(temp.Path);
-        await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() => Assert.Null(catalog.Get("parent")))));
+        await Task.WhenAll(
+            Enumerable.Range(0, 8).Select(_ => Task.Run(() => Assert.Null(catalog.Get("parent"))))
+        );
         catalog.Upsert([
             SessionCatalogTests.Row("parent", 0, aliases: ["alias"]),
             SessionCatalogTests.Row("child", 0, "alias"),
         ]);
-        Assert.Equal("parent", catalog.Presentation("child")!["parentSessionId"]!.GetValue<string>());
+        Assert.Equal(
+            "parent",
+            catalog.Presentation("child")!["parentSessionId"]!.GetValue<string>()
+        );
         catalog.RewriteIdentity("parent", "renamed", "main", ["parent", "alias"]);
         Assert.Null(catalog.Get("parent"));
         Assert.Equal("renamed", catalog.Resolve("alias")["sessionId"]!.GetValue<string>());
-        Assert.Equal("renamed", catalog.Presentation("child")!["parentSessionId"]!.GetValue<string>());
+        Assert.Equal(
+            "renamed",
+            catalog.Presentation("child")!["parentSessionId"]!.GetValue<string>()
+        );
         catalog.Dispose();
         Assert.NotNull(catalog.Get("renamed"));
         catalog.RemoveForDeletion("renamed");
