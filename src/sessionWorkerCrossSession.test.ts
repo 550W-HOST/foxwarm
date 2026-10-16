@@ -13,7 +13,7 @@ import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import { buildSessionRuntimeSessionDto } from './sessionRuntimeService';
 import type { Session } from './types';
 import { Channel, registerChannel, unregisterChannel } from './channel';
-import { createNodeRegistryStore, createPendingPairing, resetNodeRegistryForTests, setNodeRegistryStoreForTests } from './nodes/registry';
+import { authenticateApprovedNode, createApprovedNode, createNodeRegistryStore, createPendingPairing, listApprovedNodes, resetNodeRegistryForTests, setNodeRegistryStoreForTests } from './nodes/registry';
 import * as nodeTools from './tools/nodeTools';
 import { getAgentDir, getAgentMemoryDir, resolveModelConfig } from './config';
 import { sessionCatalogStore } from './session/catalogStore';
@@ -352,7 +352,7 @@ test('main-management facade forks read-only, rejects stale generations, and val
   }
 });
 
-test('real Worker calls cross-session recall, agent creation, and node bootstrap/pairing through exact Main ownership', async () => {
+test('real Worker calls cross-session recall, agent creation, and node bootstrap/pairing/removal through exact Main ownership', async () => {
   const sourceId = `mc-tools-${Date.now()}`;
   const targetId = `${sourceId}-target`;
   const agentName = `mcagent_${Date.now()}`;
@@ -363,6 +363,8 @@ test('real Worker calls cross-session recall, agent creation, and node bootstrap
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
   setNodeRegistryStoreForTests(createNodeRegistryStore(path.join(root, 'nodes.json')));
   const pending = await createPendingPairing({ requestedName: 'worker-fixture', nodeType: 'cli', capabilities: { tools: [] } });
+  const unifiedNode = await createApprovedNode('worker-remove-unified');
+  const scriptNode = await createApprovedNode('worker-remove-script');
   const calls = [
     { name: 'recall', args: { sessionId: targetId, target: 'overview', previewLength: 1000 } },
     { name: 'get_archived_messages', args: { sessionId: targetId } },
@@ -374,6 +376,9 @@ test('real Worker calls cross-session recall, agent creation, and node bootstrap
     { name: 'node_bootstrap_info', args: {} },
     { name: 'node_pair_list', args: {} },
     { name: 'node_pair_approve', args: { pendingId: pending.id, nodeId: approvedNodeId } },
+    { name: 'node_remove', args: { nodeId: approvedNodeId } },
+    { name: 'call_tool', args: { toolId: 'builtin:node_remove', args: { nodeId: unifiedNode.nodeId } } },
+    { name: 'run_script', args: { code: 'def main(args):\n    return call_tool(toolId="builtin:node_remove", args={"nodeId":"worker-remove-script"})' } },
   ];
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
@@ -435,6 +440,12 @@ test('real Worker calls cross-session recall, agent creation, and node bootstrap
     assert.match(text, /disposable-bootstrap-fixture/);
     assert.match(text, new RegExp(pending.id));
     assert.match(text, new RegExp(`Approved node.*${approvedNodeId}`));
+    assert.equal((await listApprovedNodes()).length, 0, 'direct, unified, and ToolScript removal all mutate the Main registry');
+    assert.equal(await authenticateApprovedNode(unifiedNode.nodeId, unifiedNode.authToken), null);
+    assert.equal(await authenticateApprovedNode(scriptNode.nodeId, scriptNode.authToken), null);
+    assert.ok(text.includes('disconnected'), 'safe removal results reach the Worker authority');
+    assert.equal(text.includes(unifiedNode.authToken), false);
+    assert.equal(text.includes(scriptNode.authToken), false);
     assert.equal(JSON.stringify(sessionManager.getAllSessions().get(sourceId)!.history), '[]', 'Main source stub remains unhydrated');
   } finally {
     sessionManager.setSessionWorkerEnqueueSink(undefined);

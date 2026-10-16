@@ -20,6 +20,7 @@ Theme-aware inline SVG loaders for HTML startup, lazy workbench views, and ordin
 
 ## Behavior
 
+- Fox spinner highlights advance in 20 discrete steps per 1.4-second loop (about 14 visible updates per second), retaining the same SVG path and speed. Reduced motion keeps the highlight static. This does not cap page/compositor frame scheduling or establish measured power savings.
 - The HTML owns a visible startup illustration before React or any external JavaScript, stylesheet, or font loads. The build hook reuses the same SVG geometry and loader CSS as the React illustrations; generated output is not a separately maintained palette or animation source.
 - The inline script resolves colors through the real theme selection, built-in registry, and strict custom manifest validator. It projects canvas, accent, text, and filled-accent foreground only. The complete theme runtime still initializes before React and owns subsequent theme changes. No extra persisted palette cache or custom-manifest migration is introduced.
 - Initial HTML stylesheet links load with non-applying media so they cannot block the inline screen’s first paint. The inline load handler enables each sheet without changing document/cascade order; content readiness waits for these actual sheets too. The app root remains hidden until that readiness gate completes, including in popup/embedded roots, avoiding an unstyled reveal. There is no general resource manager or timeout.
@@ -35,7 +36,7 @@ Theme-aware inline SVG loaders for HTML startup, lazy workbench views, and ordin
 
 `htmlBoot.e2e.mjs` serves the production HTML and assets over HTTP under a deployment prefix. Browser request blocking, actual entry/static-dependency/lazy-root 404s, held render-blocking CSS with a first-paint assertion, delayed auth/root delivery, auth recovery, safe execution-error text, representative built-in/custom/Auto/fallback selections, and popup/embed failures exercise the real startup path. A small Vite-built two-version fixture verifies old HTML against only new hashed assets and an already-running old page importing a removed asynchronous chunk after readiness, including continued interaction beneath the non-modal notice. A caught module failure while entry CSS is held verifies that the original readiness gate still completes; a stylesheet failure after root mount remains fatal. The same HTTP suite has a native Firefox administrator startup, entry/static-module failure, and Reload path. These are controlled resource-failure reproductions, not proof of browser tab discard or the source of a user's cached HTML. Optional browser evidence includes screenshots and request/error diagnostics.
 
-`foxThinkingText.e2e.mjs` covers rotation, width/Stop positioning, mode changes, reduced motion, stable labels, queue placement and timer cleanup.
+`foxThinkingText.e2e.mjs` covers stepped spinner progression, caption rotation and width/Stop positioning, mode changes, reduced-motion behavior, stable labels, queue placement and timer cleanup.
 
 `foxLoaderPreview.e2e.mjs` covers keyboard opening, Escape dismissal and focus return, and pointer dismissal for the independent demo. `processingStatus.test.mjs` checks thinking/loading wiring without altering runtime action semantics.
 

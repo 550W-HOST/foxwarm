@@ -8,7 +8,7 @@ import { definitions } from './definitions';
 import { BUILTIN_TOOL_PLACEMENTS } from './placement';
 import * as sessionManager from '../sessionManager';
 import { task, callTool, call_tool, modelFacingDefinitions, create_child_session } from '../tools';
-import { resetMainManagementToolsForTests, shutdownMainManagementTools } from '../mainManagementTools';
+import { executeMainManagementTool, resetMainManagementToolsForTests, shutdownMainManagementTools } from '../mainManagementTools';
 import { tool_create_child_session as directCreateChildSession } from '../toolsSessionAgent/interSession';
 import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from '../toolAuthorization';
 import { parseFoxwarmWrappedContent } from '../utils/promptWrappers';
@@ -99,6 +99,52 @@ rules:
   }
 });
 
+
+test('shared description edits cross Agent boundaries but task update policy still applies at dispatch and Main effect', async () => {
+  const prefix = `task_description_${Date.now()}`;
+  const creator = await sessionManager.getSession(`${prefix}_creator`);
+  const owner = await sessionManager.getSession(`${prefix}_owner`);
+  const outsider = await sessionManager.getSession(`${prefix}/reviewer`);
+  const creatorCtx = { sessionId: creator.id };
+  const outsiderCtx: any = { sessionId: outsider.id, session: outsider, sessionPlacement: 'session-worker', persistCurrentSession: async () => { throw new Error('Task must not persist Session state'); } };
+  try {
+    assert.notEqual(sessionManager.getSessionCatalog(outsider.id).agent, creator.agent);
+    const taskId = readResult(await task({ action: 'create', title: 'Shared scope', description: 'Original', ownerSessionId: owner.id }, creatorCtx)).taskId;
+    await task({ action: 'update', taskId, description: 'Creator revision' }, creatorCtx);
+    assert.equal(taskService.get(taskId).task.description, 'Creator revision');
+    assert.equal(readResult(await task({ action: 'list' }, outsiderCtx)).tasks.some((entry: any) => entry.id === taskId), false, 'list scope is not an authorization boundary');
+    await callTool('task', { action: 'update', taskId, description: 'Other Agent revision' }, { sessionId: outsider.id });
+    assert.equal(taskService.get(taskId).task.description, 'Other Agent revision');
+    const update = { action: 'update', taskId, description: 'Worker revision', note: 'Scope clarified' };
+    await call_tool({ source: 'builtin', name: 'task', args: update }, outsiderCtx);
+    const before = taskService.get(taskId);
+    assert.equal(before.task.description, 'Worker revision');
+    assert.equal(before.notes.at(-1).sessionId, outsider.id);
+    await assert.rejects(() => task({ ...update, description: 'Forbidden', status: 'active' }, outsiderCtx), /owner required/);
+    assert.deepEqual(taskService.get(taskId), before);
+
+    setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
+version: 1
+defaultAction: allow
+rules:
+- id: deny-task-updates
+  match:
+    tool: { source: builtin, name: task }
+    args: { action: update }
+  action: deny
+`));
+    await assert.rejects(() => callTool('task', update, creatorCtx), /denies/i);
+    await assert.rejects(() => call_tool({ source: 'builtin', name: 'task', args: update }, outsiderCtx), /denies/i);
+    await assert.rejects(() => executeMainManagementTool('task', update, outsiderCtx), /denies/i);
+    assert.deepEqual(taskService.get(taskId), before, 'denied calls do not change persisted task fields or notes');
+    assert.equal(readResult(await task({ action: 'get', taskId }, creatorCtx)).task.description, 'Worker revision', 'the action-specific rule does not deny get');
+  } finally {
+    setToolAuthorizationPolicyForTests(undefined);
+    await shutdownMainManagementTools();
+    resetMainManagementToolsForTests();
+    for (const session of [creator, owner, outsider]) await sessionManager.deleteSession(session.id);
+  }
+});
 
 test('create_child_session taskId assigns or transfers the real child before delivery and rejects unauthorized or terminal tasks before creation', async () => {
   const prefix = `task_child_${Date.now()}`;

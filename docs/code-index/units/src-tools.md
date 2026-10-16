@@ -1,7 +1,7 @@
 # Unit: src-tools
 
 Files: src/tools.ts (facade), src/toolCallControls.ts, src/toolCallControls.test.ts, src/tools/resolvedTools.ts, src/tools/placement.ts, src/tools/helpers.ts, src/tools/fileTools.ts, src/tools/fileTools.test.ts, src/tools/memoryTools.ts, src/tools/execTools.ts, src/tools/imageTools.ts, src/tools/browserTools.ts, src/tools/mcpTools.ts, src/tools/nodeTools.ts, src/tools/vectorTools.ts, src/tools/unifiedSearch.ts, src/tools/definitions.ts, src/tools/placement.test.ts, src/tools/agentPathMetadata.test.ts, src/utils/pathResolve.test.ts, src/tools/applyPatchOutput.test.ts, src/utils/pathResolve.ts
-Secondary files: src/tools/configTools.ts, src/handoffConfirmationEnabled.test.ts, src/tools/unifiedTools.test.ts, src/sessionWorkerToolPlacement.test.ts
+Secondary files: src/tools/configTools.ts, src/tools/nodeRemove.test.ts, src/handoffConfirmationEnabled.test.ts, src/tools/unifiedTools.test.ts, src/sessionWorkerToolPlacement.test.ts
 
 ## Purpose
 
@@ -18,10 +18,13 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - `assertToolAvailableForPlacement(toolName, args, context)` — trusted-placement pre-handler fence; Worker-unsupported operations fail retryably before raw singleton/lifecycle code.
 - The closed Main Management wrappers cover messaging/timers/catalog operations plus Worker cross-session recall/archive reads, Main-owned agent/session creation, other-target session deletion, node bootstrap/pairing, atomic generic policy replacement, and shared task operations.
 - The closed Main Management wrappers also cover discoverable `node_create_auth_token`, which reserves a new approved Node ID and writes its credential to a new owner-only Main file without returning plaintext.
+- `node_remove` — discoverable hidden Main-owned approved-credential revocation, returning only the explicit target ID and whether its active runtime was disconnected; no provider destruction or Session routing change.
 - `BUILTIN_TOOL_PLACEMENTS` — Exhaustive ownership metadata for every registered builtin, independent of schemas and permission rules.
 - `NODE_ENVIRONMENT_BUILTIN_NAMES` — Intentional current-node environment primitive names.
 - `resolveBuiltinToolPlacement(name, args, currentNode)` — Resolves action-aware ownership and the current execution node.
-- `builtinNodeArgumentSelectsPlacement(name)` — Reports the explicit root-`node` placement classification used only by file source/target builtins.
+- `builtinNodeArgumentSelectsPlacement(name)` — Reports root-`node` placement selection for file delivery/image operations.
+- `builtinNodeArgumentSelectsFileSource(name)` / `resolveToolScriptSourceNode(args, currentNode)` — Classifies and resolves ToolScript source-only selectors without relocating execution; inline rejects an explicit selector.
+- `builtinHasOptionalFileNode(name)` — Marks unsupplied placement/source selectors for conservative authorization discovery.
 - `isToolDirectlyExposedToModel(toolName)` — Check if a tool has `defaultInject: true`
 - `getToolPermissionNode(toolName, executionNode, targetNode)` — Determine which node governs permission for a tool call
 - `resolveMemorySearchOptions` — Scope/lineage helper used by `recall({ vector_query })` to constrain semantic retrieval before archive back-resolution; an exact trusted current owner supplies source identity/aliases directly.
@@ -64,7 +67,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 
 ### tools/execTools.ts — Shell command execution
 
-`toolCallControls` supplies `throwIfToolStopped`, `toolFailureMessage`, and the shared unstarted receipt text; model-requested cancellation planning is unchanged. The trusted ToolContext carries a foreground signal. Dispatch checks it after permission/preparation; exec passes it to the shared wait and uses the normal background receipt on interruption. Result settlement is not aborted. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
+`toolCallControls` supplies `throwIfToolStopped`, `toolFailureMessage`, `toolCancellationSource`, `toolNotStartedMessage`, and the shared default unstarted receipt; model-requested cancellation planning is unchanged. The trusted ToolContext carries a foreground signal. Dispatch checks it after permission/preparation; exec passes it to the shared wait and uses the normal background receipt on interruption. Result settlement is not aborted. A declared process-shutdown reason changes cancellation attribution without treating it as user Stop or killing persistent execs. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands) and [local shutdown](../threads/session-lifecycle.md#d-lifecycle-main-local-shutdown).
 | Function | Description |
 |----------|-------------|
 | `tool_exec` | Executes shell commands with timeout and background support |
@@ -102,6 +105,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 | `tool_node_pair_approve` | Approves a pending node pairing request; an external Main-local caller can provide a final context/policy fence before registry mutation (see [inbound pairing](./src-mcp-inbound-pairing-service.md)) |
 | `tool_node_pair_list` | Lists pending node pairing request IDs and status without the obsolete display code |
 | `tool_node_create_auth_token` | Reserves a new approved Node ID and writes its credential to a new owner-only file on Main, returning only `{ nodeId, filePath }` |
+| `tool_node_remove` | Routes Worker calls to Main, checks permissions, and shares approved credential removal plus runtime disconnect with `/node remove`; returns only `{ nodeId, disconnected }` |
 
 ### tools/vectorTools.ts — Vector recall scope utilities
 | Function | Description |
@@ -122,6 +126,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 | `resolveDirectTool` | Resolves direct provider invocations into one builtin or Node operation |
 | `resolveUnifiedTool` | Resolves `call_tool` IDs/descriptors; omitted Node IDs use the current target and builtin aliases for Node capabilities are rejected |
 | `executeResolvedTool` | Authorizes the resolved concrete target and dispatches through local, Node, or MCP owners; `call_tool` itself is permission-neutral |
+| `resolvedToolAuthorizationSession` | Applies only the resolved ToolScript source cwd to read-only authorization facts, shared by model preflight and canonical dispatch; raw args and the live execution owner remain unchanged |
 | `buildUnifiedToolId` | Constructs the source-qualified identifier used by discovery |
 | `parseUnifiedToolId` | Canonical source-qualified ID parser reused by internal and inbound MCP invocation |
 | `parseUnifiedToolCall` | Parses the canonical unified target reference and object/JSON-fallback arguments before placement resolution; reused for failed Node-selection batch classification |

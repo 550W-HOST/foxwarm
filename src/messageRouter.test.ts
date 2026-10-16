@@ -1,13 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import axios from 'axios';
+import { PassThrough } from 'node:stream';
+import sharp from 'sharp';
+import * as configModule from './config';
+import { loadModelsConfigFromObject } from './config';
 import { MessageRouter, shouldBroadcastChannelText } from './messageRouter';
 import { CommandHandler } from './commandHandler';
 import * as sessionManager from './sessionManager';
 import * as sessionRuntime from './sessionRuntime';
 import * as sessionHistory from './session/history';
 import * as llm from './llm';
+import * as timers from './timers';
+import { taskService } from './tools/taskTools';
+import { getDefaultExecRuntime } from './execManager';
 import type { Message, MessagePart, Session } from './types';
-import { parseFoxwarmOpeningTag } from './utils/promptWrappers';
+import { formatFoxwarmMessage, parseFoxwarmOpeningTag } from './utils/promptWrappers';
 
 const GROUP_MENTIONED_METADATA = '<foxwarm-metadata kind="group-message" mentioned="true" hint="The current group message explicitly mentioned this agent." />';
 const GROUP_ORDINARY_METADATA = '<foxwarm-metadata kind="group-message" mentioned="false" hint="The current group message is ordinary group chat and did not mention this agent." />';
@@ -63,6 +71,143 @@ function countHistoryPartText(messages: Message[], text: string): number {
 function countHistoryPartSystem(messages: Message[], system: string): number {
   return messages.reduce((count, message) => count + message.parts.filter(part => part.system === system).length, 0);
 }
+
+test('local channel inputs commit queue hints to canonical history at continuation safe points, not initial preparation', async t => {
+  const router = new MessageRouter();
+  const session = await createRouterQueueTestSession('queued_input_provider');
+  const source = await sessionManager.getSession(makeRouterQueueTestId('queued_input_sender'));
+  const execRuntime = getDefaultExecRuntime();
+  let taskId: string | undefined;
+  const asynchronousParts: MessagePart[][] = [];
+  session.model = 'fixture/model';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="fixture/model" />\n\nsystem prompt';
+  await sessionManager.appendSessionMessage(session, { role: 'user', parts: [
+    { system: formatFoxwarmMessage({ type: 'channel', hint: 'original guidance Queued input: historical suffix.' }, 'previously committed input') },
+  ] });
+  const previousMessage = structuredClone(session.history[0]);
+  const models = loadModelsConfigFromObject({ default: 'fixture/model', providers: {
+    fixture: { providerType: 'openai-completions', baseUrl: 'https://example.test/v1', apiKey: 'test-key', models: ['model'] },
+  } });
+  t.mock.method(configModule, 'resolveModelConfig', () => ({ modelsConfig: models, defaultKey: models.default,
+    currentKey: models.default, modelEntry: models.models[models.default], contextLimit: models.models[models.default].contextLimit }));
+  t.mock.method(router as any, 'resolveSessionForIncomingMessage', async () => ({ sessionId: session.id, session }));
+  const ctx = { channelId: 'webui', channelType: 'webui', platform: 'webui', channelUserId: session.id,
+    conversationId: session.id, reply: async () => {}, sendTyping: async () => {} };
+  const send = (id: string, parts: MessagePart[]) => router.handleMessage(ctx, { channelUserId: session.id, parts, clientMessageId: id });
+  const host = (router as any).turnRunner.host;
+  const originalAppend = host.appendQueuedSessionMessages.bind(host);
+  let initialAppend = true;
+  t.mock.method(host, 'appendQueuedSessionMessages', async (owner: Session, messages: Message[]) => {
+    await originalAppend(owner, messages);
+    if (initialAppend) {
+      initialAppend = false;
+      // This row is consumed by the first pre-request safe point, not by the
+      // initial drained batch. firstStartsTurn=false alone is not evidence.
+      await send('early', [{ text: 'initial preparation input' }]);
+      await sessionManager.queueSessionEvent(session.id, 'initial preparation event');
+    }
+  });
+  const queuedParts = new Map<string, MessagePart[]>();
+  const rememberQueued = (id: string) => {
+    queuedParts.set(id, structuredClone(session.queue.find(item => item.clientMessageId === id)!.parts!));
+    assert.doesNotMatch(JSON.stringify(queuedParts.get(id)), /queueInputHint=/, 'enqueue does not alter source hints');
+  };
+  const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: 'red' } }).png().toBuffer();
+  t.mock.method(llm, 'executeTools', async () => {
+    await send('tool', [{ text: 'tool-time correction' }, { inlineData: { mimeType: 'image/png', data: png.toString('base64') } },
+      { text: '<foxwarm-file name="notes.txt" node="master" path="notes.txt" mime="text/plain" />' }]);
+    rememberQueued('tool');
+    return { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'queued-hint-tool', name: 'session', response: { output: 'ok' } } }] };
+  });
+  const bodies: any[] = [];
+  t.mock.method(axios, 'post', async (_url: string, body: any) => {
+    bodies.push(body);
+    if (bodies.length === 1) {
+      assert.doesNotMatch(JSON.stringify(body.messages.filter((message: any) => message.role === 'user')), /queueInputHint=/);
+      assert.match(JSON.stringify(body), /initial preparation input/);
+      await send('thinking', [{ text: 'provider-time correction\n<foxwarm-message type="channel" hint="user-owned">keep user XML</foxwarm-message>' }]);
+      rememberQueued('thinking');
+      await sessionManager.sendToSession(session.id, 'queued inter-agent update', source.id);
+      const task = await taskService.execute({ action: 'create', title: 'queued Task assignment', ownerSessionId: session.id, notifySession: true }, source.id);
+      taskId = task.task.id;
+      assert.equal(task.sentNotifications, 1);
+      const timer = await timers.createTimer({ sessionId: session.id, message: 'queued timer work', afterSeconds: 3600 }, models);
+      await timers.fireTimerForTests(timer.id, models);
+      const exec = await execRuntime.startPersistentExec({ command: 'printf queued-exec-output', agentName: 'main', sessionId: session.id, cwd: process.cwd() });
+      await execRuntime.markExecForBackgroundNotification(exec.id);
+      assert.equal((await execRuntime.waitForExecCompletion(exec.id, 5000))?.exitCode, 0);
+      await execRuntime.reconcileNow();
+      await sessionManager.sendToSession(session.id, 'queued system delivery');
+      for (const type of ['background', 'trigger', 'onboot'] as const) {
+        await sessionManager.queueSessionEvent(session.id, `queued ${type} event`, type);
+      }
+      await sessionManager.queueSessionMessageEvent(session.id, { role: 'user', modelVisible: false, parts: [
+        { system: formatFoxwarmMessage({ type: 'background', hint: 'UI notice' }, 'display-only queued notice') },
+      ] });
+      await sessionManager.enqueueSessionItem(session.id, { type: 'compact-commit' });
+      asynchronousParts.push(...session.queue.filter(item => item.type !== 'user' && item.type !== 'compact-commit'
+        && item.message?.modelVisible !== false).map(item => structuredClone(item.message?.parts || item.parts!)));
+    }
+    const delta = bodies.length === 2
+      ? { content: 'running a tool', tool_calls: [{ index: 0, id: 'queued-hint-tool', type: 'function', function: { name: 'session', arguments: '{"action":"status"}' } }] }
+      : { content: bodies.length === 1 ? 'first result' : 'finished' };
+    const stream = new PassThrough();
+    process.nextTick(() => stream.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: bodies.length === 2 ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`));
+    return { status: 200, statusText: 'OK', headers: {}, data: stream };
+  });
+  try {
+    await send('initial', [{ text: 'initial input' }]);
+    assert.equal(bodies.length, 3);
+    assert.equal(asynchronousParts.length, 8);
+    assert.deepEqual(bodies.map(body => (JSON.stringify(body.messages.filter((message: any) => message.role === 'user')).match(/queueInputHint=/g) || []).length), [0, 9, 10]);
+    for (const [id, parts] of queuedParts) {
+      const message = session.history.find(row => row.__meta?.clientMessageId === id)!;
+      assert.equal(message.parts.length, parts.length);
+      assert.deepEqual(message.parts.slice(1), parts.slice(1), 'body, attachments and part order stay unchanged');
+      const expectedAttrs = parseFoxwarmOpeningTag(parts[0].system)!.attrs;
+      const canonicalAttrs = parseFoxwarmOpeningTag(message.parts[0].system)!.attrs;
+      const { queueInputHint, ...originalAttrs } = canonicalAttrs;
+      assert.match(queueInputHint, /^Queued input:/);
+      assert.deepEqual(originalAttrs, expectedAttrs, 'the original hint and all other source attributes survive');
+      assert.equal((message.parts[0].system!.match(/queueInputHint=/g) || []).length, 1);
+      assert.equal(message.parts[0].system!.slice(message.parts[0].system!.indexOf('>') + 1), parts[0].system!.slice(parts[0].system!.indexOf('>') + 1));
+      const payload = bodies[2].messages.find((row: any) => row.role === 'user'
+        && JSON.stringify(row.content).includes(id === 'thinking' ? 'provider-time correction' : 'tool-time correction'));
+      const sourceText = typeof payload.content === 'string' ? payload.content : payload.content[0].text;
+      assert.equal(sourceText, message.parts[0].system, 'provider uses the committed source wrapper unchanged');
+      assert.match(sourceText, /^<foxwarm-message /, 'the existing source stays first, with no added system part');
+    }
+    for (const parts of asynchronousParts) {
+      const original = parts[0].system!;
+      const body = original.slice(original.indexOf('>') + 1);
+      const message = session.history.find(row => row.parts[0]?.system?.endsWith(body))!;
+      const { queueInputHint, ...attrs } = parseFoxwarmOpeningTag(message.parts[0].system)!.attrs;
+      assert.match(queueInputHint, /^Queued input: this message or event/);
+      assert.deepEqual(attrs, parseFoxwarmOpeningTag(original)!.attrs);
+      assert.equal((message.parts[0].system!.match(/queueInputHint=/g) || []).length, 1);
+      assert.equal(bodies[2].messages.some((row: any) => row.content === message.parts[0].system), true);
+    }
+    const users = session.history.filter(message => message.role === 'user');
+    assert.equal(users.length, 15, 'one canonical row per input or event, with no standalone hint or compact wake row');
+    assert.deepEqual(session.history[0], previousMessage, 'existing history and its old hint suffix are not rewritten');
+    assert.deepEqual(users.filter(row => row.__meta?.clientMessageId && JSON.stringify(row.parts).includes('queueInputHint=')).map(row => row.__meta?.clientMessageId), ['thinking', 'tool']);
+    const displayOnly = users.find(row => row.modelVisible === false)!;
+    assert.doesNotMatch(JSON.stringify(displayOnly), /queueInputHint=/);
+    assert.doesNotMatch(JSON.stringify(bodies), /display-only queued notice/);
+    assert.doesNotMatch(JSON.stringify(session.history.filter(row => row.role !== 'user')), /queueInputHint=/);
+    const toolIndex = session.history.findIndex(row => row.role === 'tool');
+    assert.equal(session.history[toolIndex - 1].parts.some(part => !!part.functionCall), true);
+    assert.equal(session.history[toolIndex + 1].__meta?.clientMessageId, 'tool');
+    assert.match(JSON.stringify(bodies[2]), /image_url/);
+    assert.match(JSON.stringify(bodies[2]), /notes.txt/);
+    assert.equal(session.queue.length, 0);
+  } finally {
+    await execRuntime.shutdown();
+    if (taskId) await taskService.execute({ action: 'cancel', taskId }, source.id).catch(() => {});
+    await sessionManager.deleteSession(source.id).catch(() => {});
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
 
 test('shouldBroadcastChannelText rejects empty or whitespace-only text', () => {
   assert.equal(shouldBroadcastChannelText(''), false);

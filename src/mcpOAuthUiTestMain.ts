@@ -4,6 +4,7 @@ import path from 'node:path';
 import https from 'node:https';
 import http from 'node:http';
 import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { HttpServer } from './httpServer';
 import { McpOAuthService, setMcpOAuthServiceForTests } from './mcpOAuth';
 import { registerMcpOAuthRoutes } from './mcpOAuthRoutes';
@@ -23,7 +24,7 @@ async function main() {
   resource.state.browserConsent = true;
   const root = path.resolve(__dirname, '..');
   const webuiRoot = path.join(root, 'packages', 'webui');
-  const { createServer } = require(path.join(webuiRoot, 'node_modules', 'vite'));
+  const { createServer } = createRequire(path.join(webuiRoot, 'package.json'))('vite');
   const vite = await createServer({ root: webuiRoot, cacheDir: path.join(directory, 'vite-cache'),
     server: { host: '127.0.0.1', port: 0, proxy: {} }, logLevel: 'error' });
   await vite.listen();

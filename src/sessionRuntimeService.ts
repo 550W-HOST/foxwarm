@@ -153,7 +153,7 @@ export type SessionListProjectionBatchDto = {
   revision: string;
 };
 
-export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 12, {
+export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 14, {
   getSession: rpcMethod<{ sessionId: string }, { session: SessionRuntimeSessionDto | null }>(),
   listSessions: rpcMethod<{ limit?: number; offset?: number; agent?: string }, { sessions: SessionRuntimeSessionDto[]; total: number }>(),
   getSessionListProjections: rpcMethod<{ sessionIds: string[]; includeVolatile?: boolean; currentOwnersOnly?: boolean }, SessionListProjectionBatchDto>(),

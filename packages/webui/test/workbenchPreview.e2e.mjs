@@ -111,7 +111,13 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
         terminal = null
         return json({ ok: true })
       }
-      if (pathname.includes('/api/terminals/') && terminal) return json({ terminal })
+      if (pathname.includes('/api/terminals/') && terminal) {
+        if (window.__failNextTerminalLookup) {
+          window.__failNextTerminalLookup = false
+          return Promise.reject(new Error('Terminal lookup unavailable'))
+        }
+        return json({ terminal })
+      }
       if (pathname.endsWith('/api/terminals')) return json({ terminals: terminal ? [terminal] : [] })
       if (pathname.endsWith('/api/tasks')) return json({ tasks: [], omitted: 0 })
       if (pathname.endsWith('/api/nodes')) return json({ nodes: nodeDirectory })
@@ -147,13 +153,16 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       readyState = 1
       onopen = null; onmessage = null; onclose = null; onerror = null
       constructor(url) {
+        this.url = String(url)
+        this.sent = []
         FixtureWebSocket.instances.push(this)
         if (new URL(url).pathname.endsWith('/terminals/stream')) window.__terminalConnections.push(url)
         queueMicrotask(() => {
         this.onopen?.({})
-        if (new URL(url).pathname.endsWith('/terminals/stream') && terminal) this.onmessage?.({ data: JSON.stringify({ type: 'ready', terminal, backlog: '' }) })
+        if (new URL(url).pathname.endsWith('/terminals/stream') && terminal && !window.__holdTerminalReady) this.onmessage?.({ data: JSON.stringify({ type: 'ready', terminal, backlog: '' }) })
       }) }
       send(raw) {
+        this.sent.push(JSON.parse(raw))
         if (!responsiveChat) return
         const data = JSON.parse(raw)
         if (data.type === 'set-subscriptions') window.__subscriptions.push(data.sessionIds)
@@ -409,6 +418,127 @@ test('collapsing Terminal detaches without closing resources and kept Code stays
     await codePage.waitForSelector('[data-foxwarm-vscode-web-frame="true"]')
     assert.equal(await codePage.$eval('[data-foxwarm-vscode-web-frame="true"]', frame => frame.dataset.testFrameIdentity), codeFrameIdentity, 'expansion reuses the same iframe object')
   } finally { await codePage.close() }
+})
+
+test('Terminal disconnect puts a compact red reconnect action after PID and restores the same remote PTY', async () => {
+  const terminal = { id: 'term-reconnect', nodeId: 'remote-fixture', cwd: '/workspace/project', pid: 4242, cols: 80, rows: 24 }
+  const terminalTab = { id: 'terminal:term-reconnect', type: 'terminal', terminalId: terminal.id, nodeId: terminal.nodeId, cwd: terminal.cwd, title: 'Terminal' }
+  const layout = { id: 'split-main', kind: 'split', direction: 'column', sizes: [65, 35], children: [
+    { id: 'pane-other', kind: 'pane', tabIds: ['chat:e2e-a'], activeTabId: 'chat:e2e-a' },
+    { id: 'pane-main', kind: 'pane', tabIds: [terminalTab.id], activeTabId: terminalTab.id },
+  ] }
+  const page = await openFixture({ tabs: [terminalTab, chat('e2e-a', false)], activeTabId: terminalTab.id, hash: `#tab/${encodeURIComponent(terminalTab.id)}`, terminal, layout })
+  const action = '[data-terminal-header] [role="status"] + button'
+  try {
+    await page.waitForFunction(() => document.querySelector('[data-terminal-header]')?.textContent.includes('status ready'))
+    assert.equal(await page.$('[data-terminal-header] [role="status"]'), null, 'connected terminals add no disconnect notice')
+    const initialHeight = await page.$eval('[data-terminal-header]', header => header.getBoundingClientRect().height)
+    await page.evaluate(() => {
+      window.__reconnectTextarea = document.querySelector('.xterm-helper-textarea')
+      window.__disconnectedSocket = window.WebSocket.instances.find(socket => socket.url.includes('/terminals/stream'))
+      window.__disconnectedSocket.close()
+    })
+    await page.waitForSelector(action)
+    const header = await page.$eval('[data-terminal-header]', header => {
+      const notice = header.querySelector('[role="status"]')
+      const button = notice.nextElementSibling
+      return {
+        preceding: notice.parentElement.previousElementSibling.textContent,
+        text: notice.textContent,
+        color: getComputedStyle(notice).color,
+        height: header.getBoundingClientRect().height,
+        buttonHeight: button.getBoundingClientRect().height,
+      }
+    })
+    assert.equal(header.preceding, 'pid 4242')
+    assert.equal(header.text, 'Disconnected')
+    assert.doesNotMatch(await page.$eval('[data-terminal-header]', header => header.textContent), /status disconnected/)
+    assert.ok(header.buttonHeight <= 22, JSON.stringify(header))
+    assert.equal(header.height, initialHeight, 'the existing wide status row keeps its height')
+    assert.ok(await page.$eval('[data-terminal-header] [role="status"]', notice => {
+      const [r, g, b] = getComputedStyle(notice).color.match(/[\d.]+/g).map(Number)
+      return r > g && r > b
+    }), `danger text is red: ${header.color}`)
+    assert.deepEqual(await page.evaluate(() => window.__terminalDeletes), [])
+    await workbenchScreenshot(page, 'terminal-disconnected-wide.png')
+    const buttonBox = await (await page.$(action)).boundingBox()
+    await page.mouse.move(buttonBox.x + 5, buttonBox.y + buttonBox.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(buttonBox.x + 20, buttonBox.y + buttonBox.height / 2, { steps: 4 })
+    assert.equal(await page.$('[data-pane-drag-overlay]'), null, 'Reconnect pointer motion does not start pane dragging')
+    await page.mouse.move(buttonBox.x + buttonBox.width + 10, buttonBox.y + buttonBox.height / 2)
+    await page.mouse.up()
+
+    await page.setViewport({ width: 390, height: 844 })
+    await page.waitForFunction(() => document.querySelector('[data-terminal-header]').getBoundingClientRect().right <= innerWidth)
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
+    assert.ok(await page.$eval(action, button => button.getBoundingClientRect().right <= innerWidth))
+    await workbenchScreenshot(page, 'terminal-disconnected-narrow.png')
+
+    await page.evaluate(() => { window.__failNextTerminalLookup = true })
+    await page.click(action)
+    await page.waitForFunction(() => document.querySelector('[data-terminal-header]')?.textContent.includes('Terminal lookup unavailable'))
+    assert.equal(await page.$eval(action, button => button.disabled), false, 'a failed reconnect can be retried')
+    assert.doesNotMatch(await page.$eval('[data-terminal-header]', header => header.textContent), /status error/)
+    assert.deepEqual(await page.evaluate(() => window.__terminalCreates), [])
+    await page.evaluate(() => { window.__holdTerminalReady = true })
+    await page.click(action)
+    await page.waitForFunction(() => window.__terminalConnections.length === 2)
+    assert.equal(await page.$eval(action, button => button.disabled), true)
+    assert.doesNotMatch(await page.$eval('[data-terminal-header]', header => header.textContent), /status connecting/)
+    await page.evaluate(terminal => {
+      const previous = window.__disconnectedSocket
+      previous.onclose?.({})
+      previous.onerror?.({})
+      previous.onmessage?.({ data: JSON.stringify({ type: 'exit', exitCode: 0 }) })
+      const current = window.WebSocket.instances.filter(socket => socket.url.includes('/terminals/stream')).at(-1)
+      current.onmessage?.({ data: JSON.stringify({ type: 'ready', terminal, backlog: 'restored remote prompt\r\n\x1b[6n' }) })
+    }, terminal)
+    await page.waitForFunction(() => document.querySelector('[data-terminal-header]')?.textContent.includes('status ready'))
+    await page.waitForFunction(() => document.querySelector('.xterm-screen')?.textContent.includes('restored remote prompt'))
+    assert.equal(await page.$('[data-terminal-header] [role="status"]'), null)
+    assert.equal(await page.evaluate(() => window.__reconnectTextarea === document.querySelector('.xterm-helper-textarea')), true, 'reconnect reuses xterm')
+    assert.deepEqual(await page.evaluate(() => window.__terminalConnections.map(url => new URL(url).searchParams.get('terminalId'))), [terminal.id, terminal.id])
+    assert.deepEqual(await page.evaluate(() => window.__terminalCreates), [], 'reconnect never creates a second surviving PTY')
+    assert.deepEqual(await page.evaluate(() => window.WebSocket.instances.filter(socket => socket.url.includes('/terminals/stream')).at(-1).sent.filter(message => message.type === 'input')), [], 'backlog query replies stay suppressed')
+    await page.focus('.xterm-helper-textarea')
+    await page.keyboard.type('x')
+    assert.deepEqual(await page.evaluate(() => window.WebSocket.instances.filter(socket => socket.url.includes('/terminals/stream')).flatMap(socket => socket.sent.filter(message => message.type === 'input'))), [{ type: 'input', data: 'x' }], 'one key sends once after reconnect')
+    await page.evaluate(() => {
+      const current = window.WebSocket.instances.filter(socket => socket.url.includes('/terminals/stream')).at(-1)
+      current.sent.length = 0
+    })
+    await page.setViewport({ width: 1400, height: 900 })
+    await page.waitForFunction(() => window.WebSocket.instances.filter(socket => socket.url.includes('/terminals/stream')).at(-1).sent.some(message => message.type === 'resize' && message.cols > 80))
+    assert.ok(await page.$('[data-workbench-pane-drag-area="pane-main"]'), 'the existing pane drag area remains available')
+    await workbenchScreenshot(page, 'terminal-reconnected-wide.png')
+  } finally { await page.close() }
+})
+
+test('a newly created Terminal reconnects its remembered ID and PTY exit never offers reconnect', async () => {
+  const terminal = { id: 'term-template', nodeId: 'remote-fixture', cwd: '/workspace/new', pid: 4243, cols: 80, rows: 24 }
+  const terminalTab = { id: 'terminal:draft', type: 'terminal', nodeId: terminal.nodeId, cwd: terminal.cwd, createMode: 'new', title: 'Terminal' }
+  const page = await openFixture({ tabs: [terminalTab], activeTabId: terminalTab.id, hash: `#tab/${encodeURIComponent(terminalTab.id)}`, terminal })
+  try {
+    await page.waitForFunction(() => document.querySelector('[data-terminal-header]')?.textContent.includes('status ready'))
+    assert.deepEqual(await page.evaluate(() => window.__terminalCreates.map(request => ({ nodeId: request.nodeId, cwd: request.cwd }))), [{ nodeId: terminal.nodeId, cwd: terminal.cwd }])
+    await page.evaluate(() => window.WebSocket.instances.find(socket => socket.url.includes('/terminals/stream')).close())
+    await page.waitForSelector('[data-terminal-header] [role="status"] + button')
+    await page.click('[data-terminal-header] [role="status"] + button')
+    await page.waitForFunction(() => window.__terminalConnections.length === 2 && document.querySelector('[data-terminal-header]')?.textContent.includes('status ready'))
+    assert.deepEqual(await page.evaluate(() => window.__terminalConnections.map(url => new URL(url).searchParams.get('terminalId'))), ['term-reopened', 'term-reopened'])
+    assert.equal(await page.evaluate(() => window.__terminalCreates.length), 1)
+    await page.evaluate(() => {
+      const current = window.WebSocket.instances.filter(socket => socket.url.includes('/terminals/stream')).at(-1)
+      current.onmessage?.({ data: JSON.stringify({ type: 'exit', exitCode: 0 }) })
+      current.close()
+      current.onerror?.({})
+    })
+    await page.waitForFunction(() => !document.querySelector('[data-terminal-header]') || document.querySelector('[data-terminal-header]').textContent.includes('status closed'))
+    assert.equal(await page.$('[data-terminal-header] [role="status"]'), null)
+    assert.equal(await page.evaluate(() => window.__terminalCreates.length), 1, 'PTY exit never creates a replacement')
+    assert.equal(await page.evaluate(() => window.__terminalConnections.length), 2)
+  } finally { await page.close() }
 })
 
 function findFixturePane(root, paneId) {
@@ -793,6 +923,8 @@ async function mousePressAt(page, point, button = 'left') {
 }
 
 async function tabToControl(page, selector) {
+  // Enter the target strip before walking native Tab order, not every Chat's controls.
+  await page.$eval(selector, element => element.closest('.foxwarm-workbench-tab-row').querySelector('[data-tab-id]').focus())
   for (let index = 0; index < 120; index++) {
     if (await page.evaluate(selector => document.activeElement?.matches(selector), selector)) return
     await page.keyboard.press('Tab')
@@ -1994,9 +2126,8 @@ async function clickStatusPageEntry(page, section) {
   const popup = '[data-workbench-status-popup]'
   await page.click(`[data-workbench-status-bar] button[aria-label^="${section === 'Tasks' ? 'Tasks:' : 'Nodes:'}"]`)
   await page.waitForSelector(popup, { visible: true })
-  const entry = await page.evaluateHandle(label => [...document.querySelectorAll('[data-workbench-status-popup] button')].find(button => button.textContent === label), `Open ${section}`)
-  await entry.asElement().click()
-  await entry.dispose()
+  // Loading preview rows can move the action after the popup first appears.
+  await page.locator(`${popup} button::-p-text(Open ${section})`).click()
   await page.waitForSelector(popup, { hidden: true })
 }
 
@@ -2008,6 +2139,7 @@ test('Tasks and Nodes popup entries close the preview and activate singleton pag
     await page.waitForSelector('[data-workbench-status-popup]', { visible: true })
     await workbenchScreenshot(page, 'status-tasks-popup.png')
     await page.keyboard.press('Escape')
+    await page.waitForSelector('[data-workbench-status-popup]', { hidden: true })
     await clickStatusPageEntry(page, 'Tasks')
     await page.waitForFunction(() => location.hash.includes('system%3Atasks'))
     await page.waitForSelector('[data-tab-id="system:tasks"]')
@@ -2023,6 +2155,7 @@ test('Tasks and Nodes popup entries close the preview and activate singleton pag
     await page.waitForFunction(() => document.querySelector('[data-workbench-status-popup]')?.textContent.includes('Open Nodes'))
     await workbenchScreenshot(page, 'status-nodes-popup.png')
     await page.keyboard.press('Escape')
+    await page.waitForSelector('[data-workbench-status-popup]', { hidden: true })
     await clickStatusPageEntry(page, 'Nodes')
     await page.waitForSelector('[data-node-surface]')
     await workbenchScreenshot(page, 'nodes-workbench-wide.png')

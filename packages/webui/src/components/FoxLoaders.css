@@ -56,7 +56,7 @@
 .fw-fox-spinner .fw-fox-faint-all .fw-fox-nose { fill: color-mix(in srgb, var(--fw-fox-ink) 38%, transparent); }
 .fw-fox-spinner .fw-fox-comet {
   stroke-dasharray: 0.38 0.62;
-  animation: fw-fox-trace 1.4s linear infinite;
+  animation: fw-fox-trace 1.4s steps(20, end) infinite;
 }
 @keyframes fw-fox-trace { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -1; } }
 

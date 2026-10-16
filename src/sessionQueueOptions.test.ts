@@ -1,3 +1,4 @@
+import * as sessionRuntime from './sessionRuntime';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as sessionManager from './sessionManager';
@@ -64,7 +65,7 @@ test('passive managed ingress uses the same inbox and save without controller/ow
   }
 });
 
-test('passive admission keeps Worker sink ownership and rolls local queue back on precommit failure', async () => {
+test('generic passive ingress keeps Worker sink ownership and rolls local queue back on precommit failure', async () => {
   const session = await sessionManager.getSession(id('fence'));
   const before = JSON.stringify(session);
   const calls: any[] = [];
@@ -82,6 +83,102 @@ test('passive admission keeps Worker sink ownership and rolls local queue back o
     assert.equal(JSON.stringify(session), before);
   } finally {
     (metadataStore as any).writeSessionHistoryAtomically = originalWrite;
+    await sessionManager.deleteSession(session.id);
+  }
+});
+
+
+test('idle and waiting setters save settings without raw notices or wakeups', async () => {
+  const session = await sessionManager.getSession(id('selection'));
+  const triggers: string[] = [];
+  sessionManager.setSessionTriggerCallback(target => { triggers.push(target); });
+  try {
+    const wait = await sessionManager.startSessionWait(session.id, { waitForInput: true });
+    let saves = 0;
+    sessionManager.setSessionPersistenceFaultInjectorForTests((phase, target) => {
+      if (phase === 'history' && target === session.id) saves++;
+    });
+    await sessionRuntime.updateSettings(session.id, { model: 'fixture/a', effort: 'none', currentNode: 'node-a' });
+    assert.equal(saves, 1);
+    assert.equal(session.queue.length, 0);
+    assert.equal(session.meta.lastEffectiveRequest, undefined);
+    await sessionRuntime.updateSettings(session.id, { model: 'fixture/b', currentNode: 'node-b' });
+    assert.equal(session.meta.wait.id, wait.id);
+    assert.deepEqual(triggers, []);
+    assert.equal((await metadataStore.readSessionHistorySnapshot(session.id)).queue.length, 0);
+  } finally {
+    sessionManager.setSessionPersistenceFaultInjectorForTests(null);
+    sessionManager.setSessionTriggerCallback(() => {});
+    await sessionManager.deleteSession(session.id);
+  }
+});
+
+test('managed selection setters leave no inbox notice and do not wake the controller or owner', async () => {
+  const owner = await sessionManager.getSession(id('selection_owner'));
+  const session = await sessionManager.getSession(id('selection_managed'));
+  const originalResume = toolscript.resumeBackgroundToolScriptRunForManagedSession;
+  let resumes = 0;
+  (toolscript as any).resumeBackgroundToolScriptRunForManagedSession = async () => { resumes++; return true; };
+  try {
+    await managedSessions.openManagedSession({ sessionId: session.id, ownerSessionId: owner.id, controllerRunId: 'fixture-controller' });
+    await sessionRuntime.updateSettings(session.id, { currentNode: 'fixture-node' });
+    const managed = await managedSessions.getManagedSessionStateForTests(session.id);
+    assert.equal(managed.pendingInbox.length, 0);
+    assert.equal(session.queue.length, 0);
+    assert.equal(owner.queue.length, 0);
+    const persisted = await metadataStore.readSessionHistorySnapshot(session.id);
+    assert.equal(persisted.currentNode, 'fixture-node');
+    assert.equal(persisted.meta.managedSession.pendingInbox.length, 0);
+    await sessionManager.resumeBusySessions();
+    assert.equal(resumes, 0);
+  } finally {
+    (toolscript as any).resumeBackgroundToolScriptRunForManagedSession = originalResume;
+    await sessionManager.deleteSession(session.id);
+    await sessionManager.deleteSession(owner.id);
+  }
+});
+
+
+test('passive input cannot satisfy waitAll, while the ordinary completion from the same source still does', async () => {
+  const session = await sessionManager.getSession(id('passive_wait_all'));
+  const triggers: string[] = [];
+  sessionManager.setSessionTriggerCallback(target => { triggers.push(target); });
+  try {
+    const wait = await sessionManager.startSessionWait(session.id, { waitAllSessions: ['fixture-sender'] });
+    await sessionManager.enqueueSessionItem(session.id, notice, { trigger: false });
+    assert.equal(session.meta.wait.id, wait.id);
+    assert.deepEqual(session.meta.wait.waitAll.satisfiedSessions, []);
+    assert.deepEqual(session.meta.wait.waitAll.deferredQueue, []);
+    assert.deepEqual(triggers, []);
+    await sessionManager.enqueueSessionItem(session.id, notice);
+    assert.equal(session.meta.wait, undefined);
+    assert.deepEqual(triggers, [session.id]);
+    assert.equal(session.queue.length, 2);
+    assert.equal(session.queue[0].trigger, false);
+    assert.equal(session.queue[1].trigger, undefined);
+  } finally {
+    sessionManager.setSessionTriggerCallback(() => {});
+    await sessionManager.deleteSession(session.id);
+  }
+});
+
+
+test('explicit local Run queued clears wait before processing passive-only input', async () => {
+  const session = await sessionManager.getSession(id('selection_run_queued'));
+  let processed = 0;
+  sessionManager.setSessionTriggerCallback(target => {
+    assert.equal(target, session.id);
+    assert.equal(session.meta.wait, undefined);
+    processed++;
+  });
+  try {
+    await sessionManager.startSessionWait(session.id, { waitForInput: true });
+    await sessionManager.enqueueSessionItem(session.id, notice, { trigger: false });
+    await sessionManager.requestSessionDequeue(session.id);
+    assert.equal(processed, 1);
+    assert.equal((await metadataStore.readSessionHistorySnapshot(session.id)).meta.wait, undefined);
+  } finally {
+    sessionManager.setSessionTriggerCallback(() => {});
     await sessionManager.deleteSession(session.id);
   }
 });

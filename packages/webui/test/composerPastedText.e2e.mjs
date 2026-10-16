@@ -86,6 +86,7 @@ await writeFile(entryPath, `
     window.fixtureSetSession = setSessionId
     window.fixtureSetLoading = setLoading
     window.fixtureSetSendKeyMode = setSendKeyMode
+    window.fixtureSendKeyMode = sendKeyMode
     window.fixtureRedraw = () => redraw(value => value + 1)
     const props = {
       sessionId, sessionMissing: false, loading, sendKeyMode, asrAvailable: true,
@@ -93,7 +94,16 @@ await writeFile(entryPath, `
       childModelDefault: 'model/current', effectiveChildModelKey: 'model/current', effectiveEffort: 'medium', effectiveChildEffort: 'medium',
       onChangeModel: noop, onChangeChildModel: noop, onChangeEffort: noop, onChangeChildEffort: noop,
       onRefreshModels: noop, onOpenModelSettings: () => {},
-      onSend: async value => { window.fixtureSends.push(value); return window.fixtureAccept },
+      onSend: async value => {
+        window.fixtureSendActiveElement = document.activeElement?.getAttribute('aria-label')
+        window.fixtureSends.push(value)
+        if (window.fixtureHoldSend) {
+          setLoading(true)
+          await new Promise(resolve => { window.fixtureReleaseSend = resolve })
+          setLoading(false)
+        }
+        return window.fixtureAccept
+      },
       onCreateStreamingTranscriber: async callbacks => {
         if (window.fixtureStreamMode === 'reject') throw new Error('Streaming setup unavailable')
         const session = { callbacks, sent: [], stopped: false, cancelled: false,
@@ -102,7 +112,11 @@ await writeFile(entryPath, `
         return session
       },
     }
-    return <div id="host"><ChatComposer {...props} /></div>
+    return <><div id="host"><ChatComposer {...props} /></div>
+      <input aria-label="Other pane input" />
+      <div id="other-pane" style={{ height: 40 }}>Other pane</div>
+      <button aria-label="Switch fixture Session" onClick={() => setSessionId('fixture/other')}>Switch session</button>
+    </>
   }
   // Observe the canonical persisted draft rather than a production edit callback.
   Object.defineProperty(window, 'fixtureDraft', {
@@ -228,6 +242,110 @@ const browsers = [
   { name: 'Chromium', path: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', args: ['--no-sandbox', '--disable-setuid-sandbox'] },
   { name: 'Firefox', browser: 'firefox', path: process.env.FOXWARM_E2E_FIREFOX || '/usr/bin/firefox' },
 ].filter(browser => selectedBrowser === 'all' || browser.name.toLowerCase() === selectedBrowser)
+
+async function settleSend(page) {
+  await page.waitForFunction(() => window.fixtureEditor().contentEditable === 'true')
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+}
+
+for (const spec of browsers) {
+  test(`${spec.name} accepted sends return focus only after the editor is editable`, async () => withBrowser(spec, async page => {
+    const editor = '[role="textbox"][aria-label="Message"]'
+    await page.evaluate(() => {
+      window.fixtureAccept = true
+      window.fixtureHoldSend = true
+      window.fixtureOriginalEditor = window.fixtureEditor()
+    })
+    // A real Send pointer click blurs the editor before onSend disables both controls.
+    await page.click(editor)
+    await page.keyboard.type('pointer send')
+    await page.click('button[aria-label="Send message"]')
+    await page.waitForFunction(() => window.fixtureEditor().contentEditable === 'false')
+    assert.equal(await page.evaluate(() => document.activeElement.tagName), 'BODY')
+    await page.evaluate(() => window.fixtureReleaseSend())
+    await settleSend(page)
+    assert.equal(await page.evaluate(() => window.fixtureEditor() === window.fixtureOriginalEditor), true)
+    assert.equal(await page.evaluate(() => document.activeElement === window.fixtureEditor()), true)
+    await page.keyboard.type('next without refocusing')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), 'next without refocusing')
+
+    // Exercise both configured keyboard send paths, including an immediate acceptance.
+    for (const [mode, held] of [['enter', false], ['modEnter', true]]) {
+      await page.evaluate((mode, held) => {
+        window.fixtureSetSendKeyMode(mode)
+        window.fixtureHoldSend = held
+      }, mode, held)
+      await page.waitForFunction(mode => window.fixtureSendKeyMode === mode, {}, mode)
+      const count = await page.evaluate(() => window.fixtureSends.length)
+      if (mode === 'modEnter') await page.keyboard.down('Control')
+      await page.keyboard.press('Enter')
+      if (mode === 'modEnter') await page.keyboard.up('Control')
+      await page.waitForFunction(count => window.fixtureSends.length === count + 1, { timeout: 3000 }, count)
+      if (held) {
+        await page.waitForFunction(() => window.fixtureEditor().contentEditable === 'false')
+        await page.evaluate(() => window.fixtureReleaseSend())
+      }
+      await settleSend(page)
+      assert.equal(await page.evaluate(() => document.activeElement === window.fixtureEditor()), true)
+      assert.equal(await page.evaluate(() => window.fixtureDraft), '')
+      await page.keyboard.type('continued ' + mode)
+      assert.equal(await page.evaluate(() => window.fixtureDraft), 'continued ' + mode)
+    }
+  }))
+
+  test(`${spec.name} delayed sends do not reclaim an abandoned focus or a different Session`, async () => withBrowser(spec, async page => {
+    const editor = '[role="textbox"][aria-label="Message"]'
+    const begin = async text => {
+      await page.evaluate(() => { window.fixtureAccept = true; window.fixtureHoldSend = true })
+      await page.click(editor)
+      await page.keyboard.type(text)
+      await page.click('button[aria-label="Send message"]')
+      await page.waitForFunction(() => window.fixtureEditor().contentEditable === 'false')
+    }
+    await begin('focus elsewhere')
+    await page.click('input[aria-label="Other pane input"]')
+    await page.keyboard.type('other')
+    await page.evaluate(() => window.fixtureReleaseSend())
+    await settleSend(page)
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), 'Other pane input')
+    await page.keyboard.type(' pane')
+    assert.equal(await page.$eval('input[aria-label="Other pane input"]', node => node.value), 'other pane')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), '')
+
+    // A pointer on a nonfocusable pane is still an intentional departure from Send.
+    await begin('nonfocusable pane')
+    await page.click('#other-pane')
+    await page.evaluate(() => window.fixtureReleaseSend())
+    await settleSend(page)
+    assert.equal(await page.evaluate(() => document.activeElement.tagName), 'BODY')
+    await page.keyboard.type('must not enter composer')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), '')
+
+    await begin('old Session')
+    await page.click('button[aria-label="Switch fixture Session"]')
+    await page.waitForFunction(() => window.fixtureCurrentSession === 'fixture/other')
+    await page.evaluate(() => { window.fixtureSetLoading(false); window.fixtureSetSession('fixture/main') })
+    await settleSend(page)
+    await page.click('input[aria-label="Other pane input"]')
+    await page.evaluate(() => window.fixtureReleaseSend())
+    await settleSend(page)
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), 'Other pane input')
+  }))
+
+  test(`${spec.name} rejected sends retain the draft without moving focus`, async () => withBrowser(spec, async page => {
+    await page.evaluate(() => { window.fixtureAccept = false; window.fixtureHoldSend = true })
+    await page.click('[role="textbox"][aria-label="Message"]')
+    await page.keyboard.type('keep my draft')
+    await page.click('button[aria-label="Send message"]')
+    await page.waitForFunction(() => window.fixtureEditor().contentEditable === 'false')
+    await page.click('input[aria-label="Other pane input"]')
+    await page.evaluate(() => window.fixtureReleaseSend())
+    await settleSend(page)
+    assert.equal(await page.evaluate(() => window.fixtureDraft), 'keep my draft')
+    assert.equal(await page.evaluate(() => window.fixtureEditor().textContent), 'keep my draft')
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), 'Other pane input')
+  }))
+}
 
 for (const spec of browsers) {
   test(`${spec.name} edits pasted-text blocks without resetting native text flow`, async () => withBrowser(spec, async page => {
@@ -1318,17 +1436,23 @@ test('Chromium Send pointer click synchronously submits composition committed on
   assert.equal(await page.evaluate(() => window.fixtureDraft), 'prefix ')
 
   await switchSession('fixture/ime-send-accepted')
-  await page.evaluate(() => { window.fixtureSends = []; window.fixtureAccept = true })
+  await page.evaluate(() => { window.fixtureSends = []; window.fixtureAccept = true; window.fixtureHoldSend = true })
   await page.click(editor)
   await page.keyboard.type('accepted ')
   await observeOrder()
   await client.send('Input.imeSetComposition', { text: 'n', selectionStart: 1, selectionEnd: 1 })
   await client.send('Input.imeSetComposition', { text: '你', selectionStart: 1, selectionEnd: 1 })
   await page.click(sendButton)
-  await page.waitForFunction(() => window.fixtureSends.length === 1 && window.fixtureEditor()?.textContent === '')
+  await page.waitForFunction(() => window.fixtureSends.length === 1 && window.fixtureEditor()?.contentEditable === 'false')
+  assert.equal(await page.evaluate(() => window.fixtureSendActiveElement), 'Send message')
+  await page.evaluate(() => window.fixtureReleaseSend())
+  await settleSend(page)
   await assertBlurCommitOrder()
   assert.equal(await page.evaluate(() => window.fixtureSends[0].text), 'accepted 你')
   assert.equal(await page.evaluate(() => localStorage.getItem('composer_draft_v1_fixture/ime-send-accepted')), null)
+  assert.equal(await page.evaluate(() => document.activeElement === window.fixtureEditor()), true)
+  await page.keyboard.type('after composition send')
+  assert.equal(await page.evaluate(() => window.fixtureDraft), 'after composition send')
   await client.detach()
 }))
 

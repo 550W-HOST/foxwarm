@@ -1,3 +1,7 @@
+import path from 'node:path';
+import { decodeNodeTransferFile } from '../nodeFileTransfer';
+import { readWholeFile } from '../../packages/shared/dist/fileOperations';
+import { RESOLVED_PATH_SIDECAR } from '../../packages/shared/dist/resolvedPathMetadata';
 import { throwIfToolStopped } from '../toolCallControls';
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from '../tools/placement';
 import { nodesManager } from './manager';
@@ -157,6 +161,8 @@ export interface NodeProvider {
   /** Historical complete-tool adapter used only by authenticated resident Node runtimes. */
   invokeTool?(request: NodeToolRequest, options?: NodeProviderCallOptions): Promise<unknown>;
   invokeFilesystem?(request: NodeFilesystemRequest, options?: NodeProviderCallOptions): Promise<unknown>;
+  /** Complete internal file bytes, not a formatted or truncated model result. */
+  readFile?(request: Extract<NodeToolRequest, { sourceSessionId: string }> & { toolName: 'read' }, options?: NodeProviderCallOptions): Promise<Buffer>;
   invokeExec?(request: NodeExecRequest, options?: NodeProviderCallOptions): Promise<unknown>;
   getDefaultCwd?(request: NodeDefaultCwdRequest, options?: NodeProviderCallOptions): Promise<string | undefined>;
   createNode?(request: NodeLifecycleProviderRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult>;
@@ -286,7 +292,7 @@ export class NodeProviderRegistry {
     return resolved;
   }
 
-  async invokeTool(request: NodeToolRequest, options?: NodeProviderCallOptions): Promise<unknown> {
+  private async resolveAvailableTool(request: NodeToolRequest, options?: NodeProviderCallOptions) {
     const resolved = await this.resolveNode(request.nodeId, options);
     if (!resolved || resolved.descriptor.availability !== 'ready') {
       if (resolved?.descriptor.unavailable) {
@@ -308,6 +314,11 @@ export class NodeProviderRegistry {
         `Tool \`${request.toolName}\` not available on node \`${request.nodeId}\`.`,
       );
     }
+    return resolved;
+  }
+
+  async invokeTool(request: NodeToolRequest, options?: NodeProviderCallOptions): Promise<unknown> {
+    const resolved = await this.resolveAvailableTool(request, options);
     if (options?.foregroundToolCancellation) {
       throwIfToolStopped(options.signal);
       options = { ...options, signal: request.toolName === 'exec' && resolved.provider.supportsExecWaitCancellation
@@ -320,6 +331,23 @@ export class NodeProviderRegistry {
       throw new NodeProviderError('NODE_EXECUTION_TOOL_UNAVAILABLE', `Tool \`${request.toolName}\` not available on node \`${request.nodeId}\`.`);
     }
     return resolved.provider.invokeTool(request, options);
+  }
+
+  async readFile(request: Extract<NodeToolRequest, { sourceSessionId: string }> & { toolName: 'read' }, options?: NodeProviderCallOptions): Promise<Buffer> {
+    const { descriptor, provider } = await this.resolveAvailableTool(request, options);
+    if (descriptor.primitiveBackends?.filesystem && provider.invokeFilesystem) {
+      const filePath = request.args.filePath;
+      if (typeof filePath !== 'string' || !filePath) throw new NodeProviderError('NODE_FILE_READ_INVALID_PATH', 'filePath is required.');
+      rejectUnsupportedAgentPathVariable(filePath);
+      const { operations } = this.filesystemBackend(provider, request, options);
+      const stat = await operations.stat(filePath);
+      if (stat.kind === 'directory') throw new NodeProviderError('NODE_FILE_READ_NOT_FILE', 'Source path is a directory.');
+      const bytes = await readWholeFile(operations, filePath);
+      if (bytes.length !== stat.size) throw new NodeProviderError('NODE_FILE_READ_INCOMPLETE', 'Source file changed or the filesystem returned incomplete data.');
+      return bytes;
+    }
+    if (provider.readFile) return provider.readFile(request, options);
+    throw new NodeProviderError('NODE_FILE_READ_UNAVAILABLE', `Node \`${request.nodeId}\` does not support complete file reads.`);
   }
 
   private materializeDescriptor(descriptor: NodeProviderDescriptor, provider?: NodeProvider): NodeDescriptor {
@@ -382,6 +410,23 @@ export class NodeProviderRegistry {
     } else {
       rejectUnsupportedAgentPathVariable(request.args.filePath);
     }
+    const { operations, providerParent } = this.filesystemBackend(provider, request, options);
+    const context = {
+      ...(request.owner
+        ? { externalOwner: request.owner, externalCwd: request.context.cwd }
+        : { sessionId: request.sourceSessionId, session: { agent: request.context.agent, cwd: request.context.cwd, currentNode: request.nodeId } }),
+      ...(request.context.programmatic ? { programmatic: true as const } : {}),
+      fileOperations: operations,
+      resolveFilePath: (filePath: string) => filePath,
+      dirnameFilePath: providerParent,
+    };
+    const tool = { read, write, edit, apply_patch }[request.toolName as 'read' | 'write' | 'edit' | 'apply_patch'];
+    if (!tool) throw new NodeProviderError('NODE_EXECUTION_TOOL_UNAVAILABLE', `Tool \`${request.toolName}\` not available on node \`${request.nodeId}\`.`);
+    return tool(request.args, context);
+  }
+
+  private filesystemBackend(provider: NodeProvider, request: NodeToolRequest, options?: NodeProviderCallOptions) {
+    const source = request.owner ? { owner: request.owner } : { sourceSessionId: request.sourceSessionId };
     let externalMutationAttempted = false;
     const call = async (operation: NodeFilesystemOperation, fields: Partial<NodeFilesystemRequest>) => {
       if (request.owner && ['write', 'mkdir', 'remove'].includes(operation)) externalMutationAttempted = true;
@@ -434,18 +479,7 @@ export class NodeProviderRegistry {
       }
       return (result as any).path;
     };
-    const context = {
-      ...(request.owner
-        ? { externalOwner: request.owner, externalCwd: request.context.cwd }
-        : { sessionId: request.sourceSessionId, session: { agent: request.context.agent, cwd: request.context.cwd, currentNode: request.nodeId } }),
-      ...(request.context.programmatic ? { programmatic: true as const } : {}),
-      fileOperations: operations,
-      resolveFilePath: (filePath: string) => filePath,
-      dirnameFilePath: providerParent,
-    };
-    const tool = { read, write, edit, apply_patch }[request.toolName as 'read' | 'write' | 'edit' | 'apply_patch'];
-    if (!tool) throw new NodeProviderError('NODE_EXECUTION_TOOL_UNAVAILABLE', `Tool \`${request.toolName}\` not available on node \`${request.nodeId}\`.`);
-    return tool(request.args, context);
+    return { operations, providerParent };
   }
 
   private normalizeFileStat(value: any): FileOperationStat {
@@ -818,6 +852,46 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
       request.context.programmatic,
       options?.signal,
     );
+  }
+
+  async readFile(request: Extract<NodeToolRequest, { sourceSessionId: string }> & { toolName: 'read' }, options?: NodeProviderCallOptions): Promise<Buffer> {
+    const node = nodesManager.getNode(request.nodeId);
+    if (!node?.ws || node.type !== 'cli-node') {
+      throw new NodeProviderError('NODE_FILE_READ_UNAVAILABLE', `Node \`${request.nodeId}\` does not support complete file reads.`);
+    }
+    const raw = request.args.filePath;
+    if (typeof raw !== 'string' || !raw) throw new NodeProviderError('NODE_FILE_READ_INVALID_PATH', 'filePath is required.');
+    // Canonical read retains the interactive CLI's approval hook. A rejected or
+    // failed read must never be followed by an unapproved file transfer.
+    const result: any = await this.invokeTool({ ...request, context: { ...request.context, programmatic: true } }, options);
+    if (result && typeof result.content === 'string' && result.truncated === false
+      && Number.isSafeInteger(result.sizeBytes) && result.sizeBytes >= 0 && result.selectedBytes === result.sizeBytes) {
+      return Buffer.from(result.content, 'utf8');
+    }
+    const paths = result?.[RESOLVED_PATH_SIDECAR];
+    const resolvedPath = typeof result?.filePath === 'string' && result.filePath
+      ? result.filePath : Array.isArray(paths) && paths.length === 1 && paths[0]?.raw === raw && typeof paths[0]?.resolved === 'string'
+        ? paths[0].resolved : undefined;
+    let filePath = resolvedPath || raw;
+    if (!resolvedPath) {
+      // Older CLI peers may have neither complete content nor resolved-path
+      // metadata. Preserve their native home/Agent expansion and same-Node cwd.
+      const cwd = request.context.cwd;
+      const targetPath = cwd && /^(?:[A-Za-z]:[\\/]|\\\\)/.test(cwd) ? path.win32 : path.posix;
+      if (cwd && targetPath === path.win32 && /^[A-Za-z]:(?:$|[^\\/])/.test(raw)
+        && raw[0].toLowerCase() !== cwd[0].toLowerCase()) {
+        throw new NodeProviderError('NODE_FILE_READ_AMBIGUOUS_PATH', 'Use a drive-absolute source path instead of a drive-relative path on another Windows drive.');
+      }
+      // Absolute/rooted paths must keep the target runtime's own drive resolution.
+      if (cwd && !raw.startsWith('$') && !/^~(?:[\\/]|$)/.test(raw) && !targetPath.isAbsolute(raw)) {
+        filePath = targetPath.isAbsolute(cwd) ? targetPath.resolve(cwd, raw) : targetPath.join(cwd, raw);
+      }
+    }
+    try {
+      return decodeNodeTransferFile(await nodesManager.readFileFromNode(request.nodeId, filePath, request.sourceSessionId));
+    } catch (error) {
+      throw new NodeProviderError('NODE_FILE_READ_FAILED', error instanceof Error ? error.message : String(error));
+    }
   }
 
   async getDefaultCwd(request: NodeDefaultCwdRequest): Promise<string | undefined> {

@@ -16,7 +16,7 @@ import {
   applyNormalizedSessionModelEffortSettings,
   normalizeProspectiveSessionModelEffortSettings,
 } from './session/modelEffortSettings';
-import { applyQueuedItemToWaitState, appendSessionMessagesForSession, buildManualForkNotificationMessage, startSessionWaitForSession, updateSessionBusyStateForSession } from './sessionManager';
+import { applyQueuedItemToWaitState, appendSessionMessagesForSession, buildManualForkNotificationMessage, clearSessionWaitForDirectTurn, startSessionWaitForSession, updateSessionBusyStateForSession } from './sessionManager';
 import { beginCompactionSessionRuntimeState, clearActiveSessionRuntimeState, setActiveSessionRuntimeState, setSessionRuntimeStateUpdateCallback } from './sessionRuntimeState';
 import { LocalSessionTurnHost, SessionTurnRunner, type SessionTurnHost } from './sessionTurnRunner';
 import type { SessionTurnFinalKind } from './sessionTurnDelivery';
@@ -119,6 +119,11 @@ export class SessionWorkerHost {
   private loadPromise?: Promise<void>;
   private runTail: Promise<void> = Promise.resolve();
   private serializedPending = 0;
+  private readonly pendingOperations: Array<{
+    kind: 'ordinary' | 'run-pending' | 'selection-settings';
+    execute: () => Promise<void>;
+    failure?: unknown;
+  }> = [];
   private session?: Session;
   private runner?: SessionTurnRunner;
   private execRuntime?: ExecRuntime;
@@ -169,7 +174,7 @@ export class SessionWorkerHost {
   }
 
   async runPending(limit: number): Promise<SessionWorkerProjection> {
-    const run = this.serialize(() => this.runPendingSerial(limit));
+    const run = this.serialize(() => this.runPendingSerial(limit), 'run-pending');
     return run;
   }
 
@@ -337,13 +342,16 @@ export class SessionWorkerHost {
         }
         const settingOrder = ['cwd', 'model', 'effort', 'childModelDefault', 'childEffortDefault', 'currentNode', 'compactThresholdTokens', 'verbose'];
         changed.sort((left, right) => settingOrder.indexOf(left) - settingOrder.indexOf(right));
-        if (changed.length > 0) await this.persistOwner();
+        if (changed.length > 0) {
+          await this.persistOwner();
+        }
         return { changed, previous, current: this.settingsSnapshot(session), projection: buildSessionWorkerProjection(session) };
       } catch (error) {
         if (!this.isResyncError(error)) restoreSessionSemanticState(session, before);
         throw error;
       }
-    });
+    }, Object.prototype.hasOwnProperty.call(patch, 'model') || Object.prototype.hasOwnProperty.call(patch, 'currentNode')
+      ? 'selection-settings' : 'ordinary');
   }
 
   async deleteMessages(num: number): Promise<SessionWorkerHistoryMutationResult> {
@@ -515,15 +523,46 @@ export class SessionWorkerHost {
     // Idle dequeue follows the same canonical queue runner. It is serialized
     // with history/settings operations and creates neither a mailbox record nor
     // a second runner.
-    await this.runPending(4096);
+    await this.serialize(async () => {
+      await this.ensureHealthy(); await this.fenceMutation();
+      if (clearSessionWaitForDirectTurn(session, 'run-queued')) await this.persistOwner();
+      await this.runPendingSerial(4096);
+    });
     return { queuedItems, stoppedCurrent: false, abortedInFlight: false };
   }
 
-  private serialize<T>(operation: () => Promise<T>): Promise<T> {
+  private serialize<T>(operation: () => Promise<T>, kind: 'ordinary' | 'run-pending' | 'selection-settings' = 'ordinary'): Promise<T> {
     this.serializedPending += 1;
-    const run = this.runTail.then(operation).finally(() => { this.serializedPending -= 1; });
-    this.runTail = run.then(() => {}, () => {});
-    return run;
+    let resolve!: (value: T) => void;
+    let reject!: (error: unknown) => void;
+    const result = new Promise<T>((accept, fail) => { resolve = accept; reject = fail; });
+    let started = false;
+    const entry: typeof this.pendingOperations[number] = { kind, execute: async () => {
+      if (started) return;
+      started = true;
+      this.pendingOperations.splice(this.pendingOperations.indexOf(entry), 1);
+      try { resolve(await operation()); }
+      catch (error) { entry.failure = error; reject(error); }
+      finally { this.serializedPending -= 1; }
+    } };
+    this.pendingOperations.push(entry);
+    this.runTail = this.runTail.then(entry.execute);
+    return result;
+  }
+
+  /** Cooperatively execute a bounded accepted prefix on the current owner lane.
+   * Pending runPending calls are transparent placeholders, not early RPC replies.
+   * History/admin operations remain barriers; nothing mutates the owner concurrently.
+   */
+  private async applySelectionSettingsAtSafePoint(): Promise<void> {
+    const accepted = [...this.pendingOperations];
+    for (const entry of accepted) {
+      if (entry.kind === 'run-pending') continue;
+      if (entry.kind !== 'selection-settings') break;
+      await entry.execute();
+      if (this.isResyncError(entry.failure)) throw entry.failure;
+      await this.ensureHealthy();
+    }
   }
 
   private async runPendingSerial(limit: number): Promise<SessionWorkerProjection> {
@@ -784,6 +823,7 @@ export class SessionWorkerHost {
           this.assertOwner(candidate);
           await this.ensureHealthy();
           await this.ingestPendingMailbox(4096);
+          await this.applySelectionSettingsAtSafePoint();
         },
         ...(this.dependencies.deliverCommittedFinal ? {
           deliverCommittedFinal: async (_session, text, outcome, turnId) => {

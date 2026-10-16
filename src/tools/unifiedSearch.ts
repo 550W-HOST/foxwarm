@@ -3,7 +3,7 @@ import * as mcpExternal from '../mcpExternalService';
 import { nodesManager } from '../nodes/manager';
 import { listNodeTopology } from '../nodeExecution';
 import { buildUnifiedToolId, executeResolvedTool, resolveUnifiedTool } from './resolvedTools';
-import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './placement';
+import { builtinHasOptionalFileNode, NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './placement';
 import { definitions } from './definitions';
 import { isToolVisibleForSession } from '../isolatedCheck';
 import * as sessionManager from '../sessionManager';
@@ -422,7 +422,9 @@ async function collectBuiltinUnifiedSearchResults(query: string, includeSchema: 
     return definitions
         .filter(def => !NODE_ENVIRONMENT_BUILTIN_NAMES.includes(def.name as any))
         .filter(def => !isPermissionNeutralBuiltinDispatcher(def.name))
-        .filter(def => isToolVisibleForSession(session, { source: 'builtin', tool: def.name }))
+        .filter(def => isToolVisibleForSession(session, { source: 'builtin', tool: def.name },
+            resolveBuiltinToolPlacement(def.name, undefined, session?.currentNode || 'master').executionNode,
+            { targetNodeUnknown: builtinHasOptionalFileNode(def.name) }))
         .map(def => ({ def, score: scoreUnifiedToolQuery(query, [def.name, def.description]) }))
         .filter(entry => entry.score >= 0)
         .map(def => ({

@@ -123,6 +123,9 @@ test('timer, wait-timeout, ONBOOT, and node event triggers share the durable Wor
     assert.equal(projected?.effort, 'none');
     assert.equal(projected?.childEffortDefault, 'max');
     assert.equal(mainLocalSaves, 0);
+    const afterSettings = await fs.readJson(fixture.statePath);
+    assert.equal(afterSettings.history.length, authority.history.length, 'idle selection does not start a provider turn');
+    assert.equal(afterSettings.queue.length, 0, 'idle settings do not enqueue raw notices');
 
     // Managed sessions fail closed at the shared boundary instead of spawning a worker.
     await assert.rejects(

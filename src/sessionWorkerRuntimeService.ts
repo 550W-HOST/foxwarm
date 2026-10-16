@@ -61,7 +61,7 @@ export type SessionWorkerBtwResult = {
   projection: SessionWorkerProjection;
 };
 
-export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 14, {
+export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 16, {
   loadProjection: rpcMethod<Record<string, never>, SessionWorkerProjection>(),
   runPending: rpcMethod<{ limit: number }, SessionWorkerProjection>(),
   retry: rpcMethod<Record<string, never>, SessionWorkerProjection>(),
@@ -148,7 +148,7 @@ export function createSessionWorkerRuntimeServiceHandler(
     async updateSettings(input) {
       gate.assertActive();
       if (!input || typeof input !== 'object' || Array.isArray(input)
-        || Object.keys(input).length !== 1 || !input.patch || typeof input.patch !== 'object' || Array.isArray(input.patch)) {
+        || Object.keys(input).some(key => key !== 'patch') || !input.patch || typeof input.patch !== 'object' || Array.isArray(input.patch)) {
         throw new RpcError('SESSION_WORKER_SETTINGS_INVALID', 'updateSettings takes { patch: object }.');
       }
       const allowed = new Set(['cwd', 'model', 'effort', 'childModelDefault', 'childEffortDefault', 'currentNode', 'compactThresholdTokens', 'verbose']);

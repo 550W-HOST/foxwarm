@@ -1,4 +1,5 @@
-import { STOPPED_TOOL_NOT_STARTED_MESSAGE } from './toolCallControls';
+import { buildEffectiveSelectionNotice, readEffectiveRequestSelection } from './session/effectiveSelection';
+import { STOPPED_TOOL_NOT_STARTED_MESSAGE, toolNotStartedMessage } from './toolCallControls';
 import axios, { AxiosResponse } from 'axios';
 import crypto, { randomUUID } from 'crypto';
 import fs from 'fs-extra';
@@ -8,7 +9,7 @@ import { StringDecoder } from 'string_decoder';
 import zlib from 'zlib';
 import * as tools from './tools';
 import { logger } from './common';
-import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, ToolScriptSubCall, LinkedTaskCompletion, TokenUsage, ToolDefinition, ModelStreamPart, ModelStreamPartDelta, ModelStreamToolCall } from './types';
+import { EffectiveRequestSelection, MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, ToolScriptSubCall, LinkedTaskCompletion, TokenUsage, ToolDefinition, ModelStreamPart, ModelStreamPartDelta, ModelStreamToolCall } from './types';
 import { clearModelStreamDraft, resetModelStreamDraft, updateModelStreamDraft } from './modelStreamDraft';
 import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig, NormalizedOpenAIImageGenerationConfig, ModelEffort, MODEL_EFFORTS, getConcreteModelEffortConfig, HANDOFF_CONFIRMATION_ENABLED, PROVIDER_IMAGE_OUTPUT_FORMAT } from './config';
 import * as sessionManager from './sessionManager';
@@ -17,9 +18,9 @@ import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotat
 import { listSkills } from './skills';
 import { checkGenericToolAuthorizationForSession, checkPathAccess, isToolVisibleForSession } from './isolatedCheck';
 import { isPermissionNeutralBuiltinDispatcher } from './permissions';
-import { builtinNodeArgumentSelectsPlacement, NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './tools/placement';
+import { builtinHasOptionalFileNode, NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './tools/placement';
 import type { ResolvedTool } from './tools/resolvedTools';
-import { executeResolvedTool, parseUnifiedToolCall, resolveDirectTool } from './tools/resolvedTools';
+import { executeResolvedTool, parseUnifiedToolCall, resolveDirectTool, resolvedToolAuthorizationSession } from './tools/resolvedTools';
 import { expandHomePath } from './utils/pathResolve';
 import {
     collectOpenAIChatCompletionsStream as collectOpenAIChatCompletionsStreamProvider,
@@ -1842,7 +1843,7 @@ async function prepareToolCall(
     presetResult?: any,
 ): Promise<PreparedToolCall> {
     if (presetResult === undefined && (toolContext.signal?.aborted || session.stopping)) {
-        presetResult = { error: STOPPED_TOOL_NOT_STARTED_MESSAGE };
+        presetResult = { error: toolNotStartedMessage(toolContext.signal) };
     }
     const toolId = call.id || `tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const argsPreview = buildToolArgsPreview(call);
@@ -1859,13 +1860,13 @@ async function prepareToolCall(
                     : resolved.source === 'mcp'
                         ? { source: 'mcp' as const, server: resolved.server, tool: resolved.name }
                         : { source: 'builtin' as const, tool: resolved.name };
-                await checkGenericToolAuthorizationForSession(session, permissionIdentity, resolved.permissionNode, resolved.args,
+                await checkGenericToolAuthorizationForSession(resolvedToolAuthorizationSession(resolved, session), permissionIdentity, resolved.permissionNode, resolved.args,
                     toolContext.sessionPlacement === 'session-worker');
             }
         } catch (error) { placementError = error; }
     }
     if (presetResult === undefined && (toolContext.signal?.aborted || session.stopping)) {
-        presetResult = { error: STOPPED_TOOL_NOT_STARTED_MESSAGE };
+        presetResult = { error: toolNotStartedMessage(toolContext.signal) };
     }
     const toolArgs = resolved?.args || { ...(call.args || {}) };
     const executionNode = resolved?.executionNode || snapshot?.currentNode || session.currentNode || 'master';
@@ -1965,7 +1966,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
     try {
         if (prepared.placementError) throw prepared.placementError;
         if (result === undefined && (toolContext.signal?.aborted || toolContext.session?.stopping)) {
-            return buildSkippedToolCall(prepared, STOPPED_TOOL_NOT_STARTED_MESSAGE);
+            return buildSkippedToolCall(prepared, toolNotStartedMessage(toolContext.signal));
         }
         if (result === undefined && prepared.resolved) {
             const runtimeContext = { ...toolContext, toolUseId: prepared.toolId };
@@ -2231,10 +2232,10 @@ async function executeToolBatch(
         if (session?.stopping || toolContext.signal.aborted) {
             for (; cursor < plannedCalls.length; cursor++) {
                 const planned = plannedCalls[cursor];
-                const prepared = await prepareToolCall(planned.call, cursor, plannedCalls.length, toolContext, session, undefined, false, planned.presetResult ?? { error: STOPPED_TOOL_NOT_STARTED_MESSAGE });
+                const prepared = await prepareToolCall(planned.call, cursor, plannedCalls.length, toolContext, session, undefined, false, planned.presetResult ?? { error: toolNotStartedMessage(toolContext.signal) });
                 executions.push(planned.presetResult !== undefined
                     ? await runPreparedToolCall(prepared, toolContext)
-                    : buildSkippedToolCall(prepared));
+                    : buildSkippedToolCall(prepared, toolNotStartedMessage(toolContext.signal)));
             }
             break;
         }
@@ -2395,7 +2396,7 @@ export async function resolveSessionToolDefinitions(session: Session, override?:
         }
         const placement = resolveBuiltinToolPlacement(tool.name, undefined, currentNode);
         return isToolVisibleForSession(session, { source: 'builtin', tool: tool.name }, placement.executionNode,
-            { targetNodeUnknown: builtinNodeArgumentSelectsPlacement(tool.name) });
+            { targetNodeUnknown: builtinHasOptionalFileNode(tool.name) });
     });
     if (!session.currentNode || session.currentNode === 'master') return definitions;
     let node;
@@ -2496,10 +2497,10 @@ export async function chat(
     const contentsForLlm = getCommittedHistoryForRetry();
     const partialCommitEnabled = (options?.purpose || 'normal-turn') === 'normal-turn'
         && options?.snapshotAuthority !== 'detached' && !!options?.onIntermediateAssistantText;
-    const prepareRetry = normalOwnedRequest && (options?.prepareRetry || options?.requestContext)
+    const prepareRetry = normalOwnedRequest
         ? async (signal: AbortSignal): Promise<boolean> => {
-            const changed = options.prepareRetry ? await options.prepareRetry(signal) : false;
-            if (!options.requestContext) return changed;
+            const changed = options?.prepareRetry ? await options.prepareRetry(signal) : false;
+            if (!options?.requestContext) return changed;
             const nextContext = await options.requestContext();
             const contextChanged = JSON.stringify(nextContext) !== JSON.stringify(requestContext);
             requestContext = nextContext;
@@ -2531,7 +2532,26 @@ export async function chat(
         currentSessionEffects: options?.currentSessionEffects,
         resolveSystemPromptForModel,
         ...((partialCommitEnabled || prepareRetry) ? { getCommittedHistoryForRetry } : {}),
-        ...(prepareRetry ? { prepareRetry } : {}),
+        ...(prepareRetry ? {
+            prepareRetry,
+            getSelectionForRetry: () => ({ model: session.model, effort: session.effort }),
+            prepareEffectiveSelection: async (adopted: AdoptedAttemptSelection): Promise<boolean> => {
+                const previous = readEffectiveRequestSelection(session.meta.lastEffectiveRequest);
+                const current: EffectiveRequestSelection = {
+                    modelId: adopted.modelId, nodeId: session.currentNode || 'master', effort: adopted.effectiveEffort,
+                    ...(adopted.missingModelKey ? { missingModelKey: adopted.missingModelKey } : {}),
+                };
+                if (previous && previous.modelId === current.modelId && previous.nodeId === current.nodeId
+                    && previous.effort === current.effort && previous.missingModelKey === current.missingModelKey) return false;
+                const notice = buildEffectiveSelectionNotice(previous, current, adopted.reason);
+                if (notice) await appendMessage(notice);
+                // Only normal-owned adoption writes this small semantic baseline.
+                // Snapshot refresh and detached requests cannot manufacture it.
+                session.meta.lastEffectiveRequest = current;
+                await currentSessionEffects.persistSession(session);
+                return !!notice;
+            },
+        } : {}),
         ...(partialCommitEnabled ? {
             onPartialAssistantCommit: async (segment: Parameters<NonNullable<RequestLlmOnceOptions['onPartialAssistantCommit']>>[0]) => {
                 const message: Message = {
@@ -2925,10 +2945,7 @@ function buildConcreteRequestPlan(options: {
         ? modelEntry.imageGeneration
         : undefined;
     const imageGenerationTool = buildOpenAIImageGenerationTool(imageGenerationConfig);
-    const effortConfig = getConcreteModelEffortConfig(modelEntry);
-    const effectiveEffort = requestedEffort && effortConfig.allowed.includes(requestedEffort)
-        ? requestedEffort
-        : effortConfig.default;
+    const effectiveEffort = resolveEffectiveRequestEffort(modelEntry, requestedEffort);
     const effortFallback = requestedEffort !== undefined && requestedEffort !== effectiveEffort;
 
     if (!baseUrl) {
@@ -3531,9 +3548,23 @@ function createResponsesPrefixCommitLane(args: {
     };
 }
 
+type AdoptedAttemptSelection = {
+    modelId: string;
+    effectiveEffort: ModelEffort;
+    missingModelKey?: string;
+    reason: 'effective-selection' | 'failover';
+};
+
+function resolveEffectiveRequestEffort(modelEntry: ModelConfigEntry, requestedEffort?: ModelEffort): ModelEffort {
+    const config = getConcreteModelEffortConfig(modelEntry);
+    return requestedEffort && config.allowed.includes(requestedEffort) ? requestedEffort : config.default;
+}
+
 async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
     /** Exact normal-turn owner safe point; true rebuilds committed request context. */
     prepareRetry?: (signal: AbortSignal) => Promise<boolean>;
+    getSelectionForRetry?: () => { model?: string; effort?: ModelEffort };
+    prepareEffectiveSelection?: (adopted: AdoptedAttemptSelection) => Promise<boolean>;
 }): Promise<InternalLlmResult> {
     // Repair the provider-neutral source form first. This exact canonical
     // array is journaled before clone-only provider hydration, so durable
@@ -3541,7 +3572,8 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
     let canonicalContents = stripRequestDisplayMeta(stripReservedProviderImageHelperFields(
         fixToolCalls(structuredClone(options.contents || [])),
     ));
-    const resolvedModel = options.modelsConfigOverride
+    let selectedModel = options.model;
+    let resolvedModel = options.modelsConfigOverride
         ? (() => {
             const modelsConfig = options.modelsConfigOverride!;
             const defaultKey = modelsConfig.default;
@@ -3554,8 +3586,8 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
             };
         })()
         : resolveModelConfig(options.model);
-    const routeEntry = options.modelEntryOverride || resolvedModel.modelEntry;
-    const routeKey = options.modelEntryOverride
+    let routeEntry = options.modelEntryOverride || resolvedModel.modelEntry;
+    let routeKey = options.modelEntryOverride
         ? `${options.modelEntryOverride.providerKey || 'setup'}/${options.modelEntryOverride.model || 'model'}`
         : resolvedModel.currentKey;
     if (!routeEntry) {
@@ -3565,9 +3597,10 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
         throw new Error('modelEntryOverride does not support virtual model routing; select a configured model key instead.');
     }
 
-    // Activation is an independent-request boundary. Retries use this captured
-    // generation and cannot reactivate an obsolete configuration fingerprint.
-    const virtualRoutingRequest: VirtualRoutingRequest | undefined = isVirtualModelConfigEntry(routeEntry)
+    // Capture one generation for this explicit selection. Ordinary retries
+    // cannot reactivate an obsolete configuration fingerprint; only a later
+    // explicit owner model selection establishes a new boundary below.
+    let virtualRoutingRequest: VirtualRoutingRequest | undefined = isVirtualModelConfigEntry(routeEntry)
         ? beginVirtualRoutingRequest(routeKey, routeEntry)
         : undefined;
     if (!virtualRoutingRequest) clearVirtualRoutingState(routeKey);
@@ -3581,10 +3614,10 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
     // for this whole request so retries expand `${TURN_ID}` consistently;
     // normal session turns provide their own value from SessionTurnRunner.
     const turnId = options.turnId || randomUUID();
-    // Resolve the provider-neutral requested effort once for this entire outer
-    // request. Each physical concrete attempt may fall back independently to
-    // its leaf default when the selected leaf does not allow that request.
-    const requestedEffort = normalizeRequestedEffort(options.effort);
+    // Capture requested effort with this selection. An explicit model change
+    // below refreshes the normalized pair; effort-only edits do not. Each leaf
+    // may independently fall back to its configured default.
+    let requestedEffort = normalizeRequestedEffort(options.effort);
     // Allocate the stable outer-request identity before streaming setup. The
     // manifest is written after attempt 1 selects its concrete model and
     // resolves the exact effective prompt, but still before provider send.
@@ -3631,6 +3664,22 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
         }
     };
 
+    const rebuildCommittedRequestContext = () => {
+        canonicalContents = stripRequestDisplayMeta(stripReservedProviderImageHelperFields(
+            fixToolCalls(structuredClone(options.getCommittedHistoryForRetry!())),
+        ));
+        // A notice can join an already-rebuilt, not-yet-journaled request. Keep
+        // its allocated identity instead of creating another empty generation.
+        if (!requestJournalStarted) return;
+        modelStreamEmitter.close();
+        requestId = randomUUID();
+        requestJournalStarted = false;
+        journalAttempt = 0;
+        requestStartedAt = undefined;
+        logFiles = null;
+        modelStreamEmitter = makeModelStreamEmitter(requestId);
+    };
+
     if (shouldRegisterAbortController) {
         if (options.currentSessionEffects) options.currentSessionEffects.registerAbortController(options.sessionId!, abortController);
         else sessionManager.registerSessionAbortController(options.sessionId!, abortController);
@@ -3639,6 +3688,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
 
     try {
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            let explicitSelectionChanged = false;
             if (attempt > 1) {
                 // The previous lane/checkpoint and abortable backoff have settled.
                 // Owner preparation is local work, outside provider classification,
@@ -3649,23 +3699,29 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
                     const contextChanged = await options.prepareRetry(abortController.signal);
                     if (abortController.signal.aborted) throw makeAbortError();
                     resumeFromCommittedHistory ||= contextChanged;
+                    const selection = options.getSelectionForRetry?.();
+                    if (selection && selection.model !== selectedModel) {
+                        explicitSelectionChanged = true;
+                        // Only an explicit owner model change crosses the captured
+                        // configuration boundary. Effort-only edits and ordinary
+                        // config reloads retain this request's original snapshot.
+                        selectedModel = selection.model;
+                        resolvedModel = resolveModelConfig(selectedModel);
+                        routeEntry = resolvedModel.modelEntry;
+                        routeKey = resolvedModel.currentKey;
+                        if (!routeEntry) throw new Error(`Unable to resolve model config for \`${routeKey}\`.`);
+                        virtualRoutingRequest = isVirtualModelConfigEntry(routeEntry)
+                            ? beginVirtualRoutingRequest(routeKey, routeEntry) : undefined;
+                        if (!virtualRoutingRequest) clearVirtualRoutingState(routeKey);
+                        requestedEffort = normalizeRequestedEffort(selection.effort);
+                        resumeFromCommittedHistory = true;
+                    }
                 }
                 if (resumeFromCommittedHistory) {
-                    modelStreamEmitter.close();
-                    canonicalContents = stripRequestDisplayMeta(stripReservedProviderImageHelperFields(
-                        fixToolCalls(structuredClone(options.getCommittedHistoryForRetry!())),
-                    ));
-                    requestId = randomUUID();
-                    requestJournalStarted = false;
-                    journalAttempt = 0;
-                    requestStartedAt = undefined;
-                    logFiles = null;
-                    modelStreamEmitter = makeModelStreamEmitter(requestId);
+                    rebuildCommittedRequestContext();
                     resumeFromCommittedHistory = false;
                 }
-                if (shouldNotifySessionEvents) modelStreamEmitter.reset();
             }
-            journalAttempt += 1;
 
             let selection: VirtualTargetSelection | undefined;
             let modelEntry = routeEntry;
@@ -3681,6 +3737,18 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
             }
 
             const concreteModelId = getModelIdForMetadata(modelEntry, modelKey);
+            if (options.prepareEffectiveSelection && !abortController.signal.aborted) {
+                const contextChanged = await options.prepareEffectiveSelection({
+                    modelId: concreteModelId,
+                    effectiveEffort: resolveEffectiveRequestEffort(modelEntry, requestedEffort),
+                    ...(selectedModel && !resolvedModel.modelsConfig.models[selectedModel] ? { missingModelKey: selectedModel } : {}),
+                    reason: attempt > 1 && !explicitSelectionChanged && routeEntry.providerType === 'failover'
+                        ? 'failover' : 'effective-selection',
+                });
+                if (contextChanged) rebuildCommittedRequestContext();
+            }
+            if (attempt > 1 && shouldNotifySessionEvents) modelStreamEmitter.reset();
+            journalAttempt += 1;
             const requestApi = getOpenAIRequestApi(modelEntry.providerType || 'openai');
             const providerContents = prepareHistoryForConcreteModel(canonicalContents, concreteModelId);
             // This runs outside the transport retry catch: unreadable original

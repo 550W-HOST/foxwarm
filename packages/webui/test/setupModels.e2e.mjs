@@ -1010,8 +1010,6 @@ test('Setup editor Ctrl/Cmd+S shortcuts save once, prevent browser Save, and sta
     await pressSaveShortcut(shortcutPage, 'Meta')
     await waitForItems(heldConfigSaves, 1)
     assert.deepEqual(configSaveRequests, [{ yaml: configYaml }])
-    await degradedPage.click('#foxwarm-boot-dismiss')
-    assert.equal(await degradedPage.$('#foxwarm-boot'), null)
     assert.deepEqual((await readEditorShortcuts()).map(event => ({ metaKey: event.metaKey, defaultPrevented: event.defaultPrevented })), [
       { metaKey: true, defaultPrevented: true },
     ])

@@ -9,8 +9,9 @@ import * as managedSessions from './managedSessions';
 import { resolveAgentPath } from './utils/pathResolve';
 import { isToolResultImageRefPart } from './toolImages';
 import * as sessionManager from './sessionManager';
-import { checkPathAccess } from './isolatedCheck';
-import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './tools/placement';
+import { checkPathAccess, checkToolPermissionForSession } from './isolatedCheck';
+import { readNodeFile } from './nodeExecution';
+import { NODE_ENVIRONMENT_BUILTIN_NAMES, resolveToolScriptSourceNode } from './tools/placement';
 import { resolveObjectArgWithJsonFallback } from './jsonObjectArgs';
 import type { Message, MessagePart, Session, ToolScriptSubCall, LinkedTaskCompletion } from './types';
 import { RpcError } from './rpc';
@@ -24,6 +25,7 @@ type ToolContext = {
   session?: Session;
   broadcast?: (text: string, options?: any) => Promise<void>;
   runtimeNodeId?: string;
+  toolScriptSourceRouting?: { currentNode: string; cwd?: string };
   toolScriptRunId?: string;
   toolUseId?: string;
   onToolScriptSubCalls?: (subCalls: ToolScriptSubCall[]) => void;
@@ -98,6 +100,7 @@ type ToolScriptRunRecord = {
   ownerSessionId: string;
   agentName: string;
   filePath: string;
+  sourceNode?: string;
   scriptPath: string;
   scriptName: string;
   vmRuntime?: ToolScriptVmRuntimeIdentity;
@@ -128,6 +131,7 @@ type ToolScriptResult = {
   ownerSessionId: string;
   scriptPath: string;
   filePath: string;
+  sourceNode?: string;
   vmRuntime?: ToolScriptVmRuntimeIdentity;
   stdout: string;
   executedTools: string[];
@@ -698,6 +702,7 @@ function buildBaseResult(run: ToolScriptRunRecord): ToolScriptResult {
     ownerSessionId: run.ownerSessionId,
     scriptPath: run.scriptPath,
     filePath: run.filePath,
+    ...(run.sourceNode ? { sourceNode: run.sourceNode } : {}),
     ...(run.vmRuntime ? { vmRuntime: structuredClone(run.vmRuntime) } : {}),
     stdout: run.stdout,
     executedTools: [...run.executedTools],
@@ -1508,19 +1513,22 @@ async function requireSessionContext(ctx: ToolContext): Promise<{ sessionId: str
   return { sessionId, session };
 }
 
-async function readScriptSource(filePath: string, _ctx: ToolContext, session: Session): Promise<{ scriptPath: string; code: string }> {
-  if (!filePath || typeof filePath !== 'string') {
-    throw new Error('filePath is required');
-  }
+async function readScriptSource(filePath: string, sourceNode: string, ctx: ToolContext, session: Session): Promise<{ scriptPath: string; code: string }> {
+  const normalizedPath = filePath.trim();
   const agentName = session.agent || 'main';
-  const scriptPath = resolveAgentPath(filePath, agentName, session.cwd);
-
-  if (sessionManager.isSessionEffectivelyIsolated(session)) {
-    checkPathAccess(scriptPath, agentName);
+  const routingSnapshot = ctx.toolScriptSourceRouting || {
+    currentNode: sourceNode,
+    ...((sourceNode === 'master' || session.currentNode === sourceNode) && typeof session.cwd === 'string' ? { cwd: session.cwd } : {}),
+  };
+  const scriptPath = sourceNode === 'master' ? resolveAgentPath(normalizedPath, agentName, routingSnapshot.cwd) : normalizedPath;
+  await checkToolPermissionForSession({ ...session, cwd: routingSnapshot.cwd }, { source: 'node', node: sourceNode, tool: 'read' }, sourceNode,
+    { filePath: normalizedPath }, ctx.sessionPlacement === 'session-worker');
+  if (sourceNode !== 'master') {
+    const code = await readNodeFile(session.id, sourceNode, normalizedPath, routingSnapshot, ctx.signal);
+    return { scriptPath, code };
   }
-
-  const code = await fs.readFile(scriptPath, 'utf8');
-  return { scriptPath, code };
+  if (sessionManager.isSessionEffectivelyIsolated(session)) checkPathAccess(scriptPath, agentName);
+  return { scriptPath, code: await fs.readFile(scriptPath, 'utf8') };
 }
 
 function createRunRecord(args: {
@@ -1528,6 +1536,7 @@ function createRunRecord(args: {
   mode: ToolScriptRunMode;
   session: Session;
   filePath: string;
+  sourceNode?: string;
   scriptPath: string;
   timeoutSecs: number;
 }): ToolScriptRunRecord {
@@ -1540,6 +1549,7 @@ function createRunRecord(args: {
     agentName: args.session.agent || 'main',
     filePath: args.filePath,
     scriptPath: args.scriptPath,
+    ...(args.sourceNode ? { sourceNode: args.sourceNode } : {}),
     scriptName: args.scriptPath === '<inline>' ? 'inline.py' : (path.basename(args.scriptPath) || 'script.py'),
     vmRuntime: structuredClone(CURRENT_VM_RUNTIME),
     stdout: '',
@@ -1684,6 +1694,7 @@ export async function tool_run_script(args: ToolArgs, ctx: ToolContext): Promise
   const timeoutSecs = parseTimeoutSecs(args?.timeoutSecs);
   const scriptArgs = resolveObjectArgWithJsonFallback(args, 'args', 'argsJson', { label: 'run_script args' }) || {};
 
+  const sourceNode = resolveToolScriptSourceNode(args || {}, session.currentNode || 'master');
   let scriptPath: string;
   let code: string;
 
@@ -1692,7 +1703,7 @@ export async function tool_run_script(args: ToolArgs, ctx: ToolContext): Promise
     code = inlineCode;
     scriptPath = '<inline>';
   } else if (filePath && typeof filePath === 'string' && filePath.trim()) {
-    const source = await readScriptSource(filePath, ctx, session);
+    const source = await readScriptSource(filePath, sourceNode!, ctx, session);
     scriptPath = source.scriptPath;
     code = source.code;
   } else {
@@ -1700,8 +1711,9 @@ export async function tool_run_script(args: ToolArgs, ctx: ToolContext): Promise
   }
 
   const runId = newRunId();
-  const record = createRunRecord({ runId, mode, session, filePath: filePath || '<inline>', scriptPath, timeoutSecs });
-  return executeWithTaskCompletion(ctx, context => startRun(record, code, scriptArgs, { ...context, sessionId, session, toolScriptRunId: runId }));
+  const record = createRunRecord({ runId, mode, session, filePath: filePath || '<inline>', ...(sourceNode ? { sourceNode } : {}), scriptPath, timeoutSecs });
+  const { toolScriptSourceRouting: _sourceRouting, ...executionContext } = ctx;
+  return executeWithTaskCompletion(executionContext, context => startRun(record, code, scriptArgs, { ...context, sessionId, session, toolScriptRunId: runId }));
 }
 
 export async function tool_start_toolscript_run(args: ToolArgs, ctx: ToolContext): Promise<ToolScriptExecutionResult> {

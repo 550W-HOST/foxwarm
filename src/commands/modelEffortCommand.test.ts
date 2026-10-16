@@ -24,7 +24,7 @@ test('session create flags use one strict serial parser', () => {
 test('model and child-model commands parse effort-only and atomic default clears', async () => {
   const sessionId = id('command_effort');
   const replies: string[] = [];
-  const ctx: any = { reply: (text: string) => replies.push(text), channelId: 'test', conversationId: id('conversation') };
+  const ctx: any = { reply: (text: string) => replies.push(text), channelId: 'test', platform: 'fixture', senderId: 'fixture-user', username: 'Fixture User', conversationId: id('conversation') };
   try {
     const session = await sessionManager.getSession(sessionId);
     session.effort = 'high';
@@ -42,10 +42,12 @@ test('model and child-model commands parse effort-only and atomic default clears
     assert.equal((await sessionManager.getSession(sessionId)).effort, 'none');
     assert.match(replies.at(-1) || '', /raw=none, effective=none/);
 
+    session.model = 'fixture-before-command';
     await COMMANDS['/model'].handler(ctx, ['default', '--effort', 'unset'], sessionId, session as any);
     const cleared = await sessionManager.getSession(sessionId);
     assert.equal(cleared.model, undefined);
     assert.equal(cleared.effort, undefined);
+    assert.equal(cleared.queue.length, 0);
 
     await handleSessionCommand(ctx, ['child-model', '--effort', 'max'], sessionId, cleared as any);
     assert.equal((await sessionManager.getSession(sessionId)).childEffortDefault, 'max');

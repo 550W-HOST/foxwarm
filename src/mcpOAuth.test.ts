@@ -307,7 +307,7 @@ test('instance-shared rotating refresh preserves two distinct caller contexts; i
     await assert.rejects(client.callTool('remote', 'state', {}, { owner: alpha }), /expired|revoked|changed/);
     assert.equal(env.state.effects, 4);
     assert.equal((await env.service.status('remote', (await client.getServers()).remote)).state, 'needs-authorization');
-    await assert.rejects(client.callTool('remote', 'state', {}, { owner: beta }), /administrator authorization/);
+    await assert.rejects(client.callTool('remote', 'state', {}, { owner: beta }), { code: 'needs-authorization' });
     assert.equal(env.state.effects, 4);
   } finally { await env.cleanup(); }
 });
@@ -331,7 +331,7 @@ test('scope rejection does not replay a tool or discard its context; explicit ne
     const changed = await client.callTool('remote', 'state', {}, { owner: alpha });
     assert.notEqual(changed.context, initial.context);
     await env.service.disconnect('remote');
-    await assert.rejects(client.callTool('remote', 'state', {}, { owner: alpha }), /administrator authorization/);
+    await assert.rejects(client.callTool('remote', 'state', {}, { owner: alpha }), { code: 'needs-authorization' });
   } finally { await env.cleanup(); }
 });
 

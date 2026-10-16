@@ -8,7 +8,7 @@ Cross-module lifecycle from public creation through lazy hydration, queued execu
 
 - `createEmptySession(sessionId?)` is the simple public façade. It returns an existing session when present or lazily creates/saves an empty one and reports `{ session, created }`.
 - Fresh concrete lifetimes materialize a concrete-model memory snapshot; fresh virtual lifetimes defer until actual leaf selection. Forks retain the copied snapshot until actual-use correction. Canonical snapshot behavior: [conditional memory snapshots](./conditional-memory-snapshots.md).
-- `createSessionInAgent(options)` is the agent-aware public creation surface for a named session with display/node/model/effort/parent/prompt-file options.
+- `createSessionInAgent(options)` is the agent-aware public creation surface for a named session with display/node/model/effort/parent/prompt-file options. Its optional same-Agent main Node default and caller-specific overrides are described in [named-session Node defaults](../units/src-session-agent-ops.md#named-session-node-defaults); child/fork routing remains separate.
 - `createAgentWithMainSession(options)` owns agent creation plus optional main session.
 - Low-level `createSession(sessionId, sessionData)` accepts a fully constructed session object, ensures its prompt-cache key, installs it in the map, and saves it. It does **not** allocate an ID from an options object.
 - `forkSession` and `createChildSession(parentSessionId, suffix, fork, options)` own fork/non-fork child creation. A child may name another existing Agent only for a fresh non-fork lifetime.
@@ -36,6 +36,14 @@ Canonical data authority: [D-session-core-authoritative-history](../modules/sess
 - `resumeBusySessions()` inspects metadata-only busy/queued/managed-inbox state. It clears stale busy fields and appends or deduplicates a restart event, retriggers queued work, and reclaims or wakes persisted managed inboxes/controllers. Under Session-worker placement, residual Main-local busy/queued/managed sessions are logged loudly and skipped rather than executed locally; durable mailbox intents resume through the non-fatal ensure/run path owned by [process topology and RPC](./process-topology-and-rpc.md), and residual local work runs only at the next durable Worker ingress.
 
 Canonical turn flow: [message processing pipeline](./message-processing-pipeline.md).
+
+### D-lifecycle-main-local-shutdown
+
+[2026-10-16] Main closes admission on its actual local turn runner synchronously when termination begins. Channel triggers, manual continuation and finish-window reentry share this boundary. Already-selected input commits before an interrupted owner yields; unselected input remains in the existing durable queue. Accepted provider/tool work may settle while its dependencies remain available, but shutdown starts no further provider retry, tool dispatch or turn continuation at the runner's safe points.
+
+A genuinely completed final, terminal handoff/wait or user Stop retains ordinary idle finalization. A shutdown-owned cancellation or unfinished safe-point yield instead keeps the exact owner's existing busy checkpoint, without a synthetic terminal model error. Startup uses the existing busy/queue recovery mechanism; there is no persisted shutdown marker, history-text classifier or second recovery loop. Foreground cancellation receipts distinguish process shutdown from user Stop without changing persistent exec lifetime.
+
+Dependency teardown waits for local owner drain. If accepted work does not settle within the bounded grace and cancellation phases, Main kills only its own process rather than claiming a successful drain or closing dependencies beneath an advancing runner. Native work can prevent `process.exit()` from completing. Service children retain existing IPC-loss cleanup; independent persistent user execs are not killed. Forced exit has crash-like service semantics, not a cross-Main child-exit acknowledgement: an immediate restart can overlap an old Vector child's final derived-index commit. See [Vector ownership](../units/src-vector.md#process-placement). Session-worker placement keeps its existing generation fences and supervisor drain/handback path and does not receive the Main-local runner shutdown hook.
 
 ## Context, archive, and recall
 

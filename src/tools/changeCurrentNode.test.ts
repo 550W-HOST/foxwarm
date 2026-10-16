@@ -18,7 +18,9 @@ test('node select clears session cwd and reports master default cwd', async () =
   try {
     (sessionManager as any).getSession = async () => session;
     (sessionManager as any).getSessionCatalog = () => session;
-    (sessionRuntime as any).updateSettings = async () => {
+    (sessionRuntime as any).updateSettings = async (target: string, patch: any) => {
+      assert.equal(target, 'test-session');
+      assert.deepEqual(patch, { currentNode: 'master', cwd: null });
       session.currentNode = 'master';
       delete session.cwd;
       saved = true;

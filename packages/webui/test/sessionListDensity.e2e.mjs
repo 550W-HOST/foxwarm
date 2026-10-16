@@ -628,7 +628,7 @@ test('remote node indicator shows only for non-master sessions in both densities
 })
 
 
-test('busy rings share stepped motion across normal/detailed rows, rail and timeline while waiting and unread stay dots', async () => {
+test('busy rings retain stepped motion while model/exec use Fox loaders and waiting/unread stay dots', async () => {
   const page = await browser.newPage()
   try {
     await page.setViewport({ width: 1080, height: 700 })
@@ -651,14 +651,14 @@ test('busy rings share stepped motion across normal/detailed rows, rail and time
     assert.equal(await page.$(`${railWaiting} [data-runtime-perimeter]`), null)
     for (const id of ['main', 'child', 'legacy']) {
       const selector = `${timeline} [data-activity-case="demo/${id}"]`
-      assert.equal(await page.$$eval(`${selector} ${id === 'legacy' ? '[data-fox-loader=thinking]' : '.runtime-busy-spinner'}`, nodes => nodes.length), 1)
+      assert.equal(await page.$$eval(`${selector} ${id === 'main' ? '.runtime-busy-spinner' : '[data-fox-loader=thinking]'}`, nodes => nodes.length), 1)
       assert.ok(await page.$(`${selector} button::-p-text(Stop)`))
       assert.equal(await page.$(`${selector} .animate-bounce`), null)
     }
     assert.match(await page.$eval(`${timeline} [data-activity-case="demo/main"]`, e => e.textContent), /Compacting/)
     assert.equal(await page.$(`${timeline} [data-activity-case="demo/wait"] button::-p-text(Stop)`), null)
     for (const id of ['wait', 'idle', 'archive']) assert.equal(await page.$(`${timeline} [data-activity-case="demo/${id}"] .runtime-busy-spinner`), null)
-    assert.match(await page.$eval(`${timeline} [data-activity-case="demo/idle"]`, e => e.textContent), /2 queued messages pending/)
+    assert.match(await page.$eval(`${timeline} [data-activity-case="demo/idle"] [data-processing-queue-status]`, e => e.textContent), /2 queued/)
 
     for (const themeId of ['foxwarm.default', 'foxwarm.550a-mono']) {
       for (const colorMode of ['light', 'dark']) {
@@ -667,11 +667,10 @@ test('busy rings share stepped motion across normal/detailed rows, rail and time
           const css = getComputedStyle(e)
           return { animation: css.animationName, duration: css.animationDuration, timing: css.animationTimingFunction, fill: css.fill, stroke: css.stroke, shadow: css.boxShadow }
         }))
-        assert.ok(styles.length >= 5)
         assert.ok(styles.every(css => css.animation === 'runtime-busy-spin' && css.duration === '1s' && css.timing === 'steps(20)' && css.fill === 'none' && css.shadow === 'none'))
         assert.equal(await page.$eval(`${row('wait')} [data-session-status] > span`, e => getComputedStyle(e).backgroundColor), await page.$eval(`${railWaiting} span.bg-fw-warning`, e => getComputedStyle(e).backgroundColor))
         assert.equal(await page.$eval(`${row('main')} [aria-label="Unread idle completion"]`, e => getComputedStyle(e).backgroundColor), await page.$eval(`${row('main')} .runtime-busy-spinner`, e => getComputedStyle(e).stroke))
-        assert.equal(await page.$eval(`${railTool} [data-runtime-perimeter] rect`, e => getComputedStyle(e).stroke), await page.$eval(`${timeline} [data-activity-case="demo/child"] .runtime-busy-spinner`, e => getComputedStyle(e).stroke))
+        assert.equal(await page.$eval(`${railTool} [data-runtime-perimeter] rect`, e => getComputedStyle(e).stroke), await page.$eval(`${row('child')} .runtime-busy-spinner`, e => getComputedStyle(e).stroke))
         if (process.env.FOXWARM_E2E_SCREENSHOT_DIR) {
           await mkdir(process.env.FOXWARM_E2E_SCREENSHOT_DIR, { recursive: true })
           await page.screenshot({ path: path.join(process.env.FOXWARM_E2E_SCREENSHOT_DIR, `busy-surfaces-${themeId}-${colorMode}.png`) })

@@ -116,34 +116,43 @@ test('authoritative alias requests materialize the selected concrete snapshot on
   ].join('\n'), 'utf8');
 
   const session = makeSession(`${agentName}/main`, 'alias', 'legacy markerless snapshot');
-  let persists = 0;
+  let snapshotPersists = 0;
+  let persistedSnapshot = session.persistentMemorySnapshot;
+  const effects = {
+    ...makeEffects(session, 'local', async () => {}),
+    persistSessionStrict: async () => {
+      snapshotPersists += 1;
+      persistedSnapshot = session.persistentMemorySnapshot;
+    },
+  };
   const bodies: any[] = [];
   const originalPost = axios.post;
   (axios as any).post = async (_url: string, body: any) => {
+    assert.equal(session.persistentMemorySnapshot, persistedSnapshot, 'the snapshot is durable before provider send');
     bodies.push(body);
     return { status: 200, statusText: 'OK', headers: {}, data: makeChatStream('ok') };
   };
   try {
     const first = await llm.chat(null, session, 0, {
       toolDefinitions: [], notifySessionEvents: false, registerAbortController: false,
-      currentSessionEffects: makeEffects(session, 'local', async () => { persists += 1; }),
+      currentSessionEffects: effects,
     });
     const firstSnapshot = session.persistentMemorySnapshot;
     assert.match(firstSnapshot, /^<foxwarm-current-model model-id="leafA\/astra" \/>\n\n/);
     assert.match(firstSnapshot, /astra-only/);
     assert.doesNotMatch(firstSnapshot, /beta-only|<foxwarm-if/);
     assert.equal(systemText(bodies[0]), firstSnapshot);
-    assert.equal(persists, 1);
+    assert.equal(snapshotPersists, 1);
     assert.equal(session.promptCacheKey, '11111111-2222-3333-4444-555555555555');
 
     await fs.remove(memoryFile);
     const second = await llm.chat(null, session, 1, {
       toolDefinitions: [], notifySessionEvents: false, registerAbortController: false,
-      currentSessionEffects: makeEffects(session, 'local', async () => { persists += 1; }),
+      currentSessionEffects: effects,
     });
     assert.equal(session.persistentMemorySnapshot, firstSnapshot);
     assert.equal(systemText(bodies[1]), firstSnapshot);
-    assert.equal(persists, 1);
+    assert.equal(snapshotPersists, 1);
 
     for (const result of [first, second]) {
       const reconstructed = await journal.reconstructLlmRequest(result.llmRequestId!);
