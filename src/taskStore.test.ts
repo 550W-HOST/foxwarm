@@ -15,7 +15,7 @@ function fixture(t: any): TaskStore {
   return store;
 }
 
-test('coordinator creates, executor claims and updates, coordinator cannot update or complete the owned task', t => {
+test('coordinator creates and edits description, executor owns status and completion', t => {
   const store = fixture(t);
   const created = store.execute({ action: 'create', title: 'Implement parser', description: 'Parse one format.' }, 'coordinator').task;
   assert.match(created.id, /^task_[0-9a-f]{12}$/);
@@ -28,7 +28,8 @@ test('coordinator creates, executor claims and updates, coordinator cannot updat
   assert.equal(claimed.status, 'active');
   assert.deepEqual(store.execute({ action: 'claim', taskId: created.id }, 'executor').task, claimed);
   assert.throws(() => store.execute({ action: 'claim', taskId: created.id }, 'other'), /already claimed.*owner=executor/);
-  assert.throws(() => store.execute({ action: 'update', taskId: created.id, description: 'Changed' }, 'coordinator'), /status=active, owner=executor.*owner required/);
+  assert.equal(store.execute({ action: 'update', taskId: created.id, description: 'Changed' }, 'coordinator').task.description, 'Changed');
+  assert.throws(() => store.execute({ action: 'update', taskId: created.id, status: 'open' }, 'coordinator'), /status=active, owner=executor.*owner required/);
   store.execute({ action: 'update', taskId: created.id, note: 'Coordinator progress' }, 'coordinator');
   assert.throws(() => store.execute({ action: 'complete', taskId: created.id }, 'coordinator'), /owner required/);
   store.execute({ action: 'update', taskId: created.id, description: '', note: 'Parser passes', status: 'open' }, 'executor');
@@ -58,20 +59,34 @@ test('coordinator creates, executor claims and updates, coordinator cannot updat
   assert.deepEqual(restored, JSON.parse(JSON.stringify(inspected)), 'task and notes survive a fresh process');
 });
 
-test('note-only updates are open to other Sessions while description and status remain owner-controlled', t => {
+test('description and note updates are shared, but status makes the entire update owner-controlled', t => {
   const store = fixture(t);
   const task = store.execute({ action: 'create', title: 'Shared notes' }, 'creator').task;
   store.execute({ action: 'claim', taskId: task.id }, 'owner');
   store.execute({ action: 'update', taskId: task.id, note: 'Reviewer note' }, 'reviewer');
-  assert.throws(() => store.execute({ action: 'update', taskId: task.id, description: 'Reviewer edit', note: 'Mixed update' }, 'reviewer'), /owner required/);
+  assert.equal(store.execute({ action: 'update', taskId: task.id, description: 'Reviewer edit' }, 'reviewer').task.description, 'Reviewer edit');
+  store.execute({ action: 'update', taskId: task.id, description: 'Revised scope', note: 'Scope clarified' }, 'reviewer');
+  const before = store.execute({ action: 'get', taskId: task.id });
+  assert.throws(() => store.execute({ action: 'update', taskId: task.id, description: 'Forbidden scope', status: 'active', note: 'Forbidden note' }, 'reviewer'), /owner required/);
   assert.throws(() => store.execute({ action: 'update', taskId: task.id, status: 'open', note: 'Mixed update' }, 'reviewer'), /owner required/);
+  assert.deepEqual(store.execute({ action: 'get', taskId: task.id }), before, 'rejected mixed updates leave all fields and notes unchanged');
   store.execute({ action: 'update', taskId: task.id, note: 'Owner note' }, 'owner');
   assert.deepEqual(store.execute({ action: 'get', taskId: task.id }).notes.map((note: any) => [note.sessionId, note.text]), [
-    ['reviewer', 'Reviewer note'], ['owner', 'Owner note'],
+    ['reviewer', 'Reviewer note'], ['reviewer', 'Scope clarified'], ['owner', 'Owner note'],
   ]);
   const unclaimed = store.execute({ action: 'create', title: 'Unclaimed notes' }, 'creator').task;
-  store.execute({ action: 'update', taskId: unclaimed.id, note: 'Outside note' }, 'reviewer');
+  store.execute({ action: 'update', taskId: unclaimed.id, description: '', note: 'Outside note' }, 'reviewer');
   assert.equal(store.execute({ action: 'get', taskId: unclaimed.id }).notes[0].sessionId, 'reviewer');
+  assert.equal(store.execute({ action: 'get', taskId: unclaimed.id }).task.description, '');
+  assert.throws(() => store.execute({ action: 'update', taskId: unclaimed.id, description: 'Forbidden', status: 'active' }, 'reviewer'), /creator required/);
+  assert.equal(store.execute({ action: 'update', taskId: unclaimed.id, status: 'active' }, 'creator').task.status, 'active');
+  for (const terminal of ['complete', 'cancel']) {
+    const terminalId = store.execute({ action: 'create', title: 'Terminal shared edits', ownerSessionId: 'owner' }, 'creator').task.id;
+    store.execute({ action: terminal, taskId: terminalId }, 'owner');
+    const finished = store.execute({ action: 'get', taskId: terminalId });
+    assert.throws(() => store.execute({ action: 'update', taskId: terminalId, description: 'Terminal edit', note: 'Terminal note' }, 'reviewer'), /terminal/);
+    assert.deepEqual(store.execute({ action: 'get', taskId: terminalId }), finished);
+  }
 });
 
 test('simultaneous independent SQLite connections have one claim winner', async t => {
@@ -161,7 +176,7 @@ test('runtime validates action-specific fields, types, required fields, sizes an
     { action: 'create', title: 'Bad', createdBySessionId: 'other' },
     { action: 'create', title: 'Bad', description: null }, { action: 'get' },
     { action: 'get', taskId: 'id', title: 'Unused' }, { action: 'claim', taskId: 'id', ownerSessionId: 'other' },
-    { action: 'update', taskId: 'id' }, { action: 'update', taskId: 'id', status: 'completed' },
+    { action: 'update', taskId: 'id' }, { action: 'update', taskId: 'id', title: 'Immutable title' }, { action: 'update', taskId: 'id', status: 'completed' },
     { action: 'update', taskId: 'id', note: '' }, { action: 'list', status: 'claimed' }, { action: 'list', scope: 'agent-prefix' }, { action: 'list', scope: null },
     { action: 'complete', taskId: 'id', note: 'Wrong field' }, { action: 'cancel', taskId: 'id', reason: 12 }];
   for (const args of invalid) assert.throws(() => store.execute(args as any, 'coordinator'));

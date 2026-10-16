@@ -64,7 +64,7 @@ const baseDefinitions = [
                 properties: {
                     action: { type: 'string', enum: ['create', 'list', 'get', 'claim', 'assign', 'update', 'complete', 'cancel'], description: "Task operation to perform." },
                     title: { type: 'string', maxLength: 200, description: "Task title. Required when action is create." },
-                    description: { type: 'string', maxLength: 20000, description: "Problem or scope description for a new task, or replacement description when updating. For long description or result text, use ToolScript to compose the operation so you do not regenerate duplicate content." },
+                    description: { type: 'string', maxLength: 20000, description: "Problem or scope description for a new task, or replacement description when updating. Any Session may update the description of an open or active task, subject to tool permissions. For long description or result text, use ToolScript to compose the operation so you do not regenerate duplicate content." },
                     parentTaskId: { type: 'string', maxLength: 128, description: "Existing parent task ID for a simple child task. Set only when creating." },
                     taskId: { type: 'string', maxLength: 128, description: "Existing task ID. Required for get, claim, update, complete, and cancel." },
                     status: { type: 'string', enum: ['open', 'active', 'completed', 'cancelled'], description: "For list, filter by task status. For update, set only open or active." },
