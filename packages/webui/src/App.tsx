@@ -506,7 +506,7 @@ function App() {
   const focusedActiveTabId = focusedPane?.activeTabId || paneNodes[0]?.activeTabId || null
   const focusedActiveTab = focusedActiveTabId ? (tabsById[focusedActiveTabId] || null) : null
   const activePaneTabTypes = useMemo(
-    () => paneNodes.filter((pane) => !pane.collapsed && (!isMobile || pane.id === (focusedPaneId || paneNodes[0]?.id))).map((pane) => pane.activeTabId ? tabsById[pane.activeTabId]?.type : null),
+    () => paneNodes.filter((pane) => (isMobile || !pane.collapsed) && (!isMobile || pane.id === (focusedPaneId || paneNodes[0]?.id))).map((pane) => pane.activeTabId ? tabsById[pane.activeTabId]?.type : null),
     [paneNodes, tabsById, isMobile, focusedPaneId],
   )
   const handleFocusModelsRequestHandled = useCallback((handled: number) => {
@@ -1558,6 +1558,7 @@ function App() {
           canonicalSessionId={sessionRecord?.id || tab.sessionId}
           sessionDisplayName={sessionRecord?.displayName}
           onBack={onBack}
+          onNewSession={async () => { try { await handleCreateSession(sessionRecord?.agent || 'main') } catch (error) { window.alert(`Failed to create session: ${error instanceof Error ? error.message : String(error)}`) } }}
           onOpenTerminal={isMobile ? () => openTerminalTab({ nodeId: sessionRecord?.currentNode || 'master', path: sessionRecord?.cwd || '/', sourcePaneId }) : undefined}
           onOpenCode={() => openCode(resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd))}
           onOpenCodeFile={(filePath, lines, target) => {
@@ -1591,12 +1592,12 @@ function App() {
 
     if (tab.type === 'nodes') return <Suspense fallback={<LazyViewFallback label="Loading nodes…" />}><NodesView onBack={onBack} /></Suspense>
 
-    if (tab.type === 'tasks') return <Suspense fallback={<LazyViewFallback label="Loading tasks…" />}><TasksView onBack={onBack} onOpenSession={openChatTab} /></Suspense>
+    if (tab.type === 'tasks') return <Suspense fallback={<LazyViewFallback label="Loading tasks…" />}><TasksView mobileHome={tab.id.startsWith('mobile:')} onBack={onBack} onOpenSession={openChatTab} /></Suspense>
 
     if (tab.type === 'logs') return <Suspense fallback={<LazyViewFallback label="Loading logs…" />}><LogsView onBack={onBack} /></Suspense>
 
     if (tab.type === 'search') return <HistorySearchView
-      tabId={tab.id} isMobile={isMobile} timelineView={timelineView}
+      mobileHome={tab.id.startsWith('mobile:')} tabId={tab.id} isMobile={isMobile} timelineView={timelineView}
       showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata}
       knownSessions={sidebarSessions.map(session => session.id)} onBack={onBack} onOpenSession={openChatTab}
       initialDraft={{ query: tab.searchQuery || '', agentName: tab.searchAgentName || '', sessionId: tab.searchSessionId || '' }}
@@ -1635,7 +1636,7 @@ function App() {
     if (tab.type === 'setup') {
       return (
         <Suspense fallback={<LazyViewFallback label="Loading setup…" />}>
-          <SetupView
+          <SetupView mobileHome={tab.id.startsWith('mobile:')}
             forced={setupOobe}
             onClose={setupOobe ? undefined : () => { void closeWorkbenchTab(tab.id) }}
             onSetupChanged={() => { void fetchSetupStatus() }}
@@ -1718,12 +1719,12 @@ function App() {
       tabs: paneTabs,
       activeTabId: pane.activeTabId,
       revealRequest: tabRevealRequest,
-      collapsed: pane.collapsed,
+      collapsed: !isMobile && pane.collapsed,
       focused: focusedPaneId === paneId,
       emphasizeFocus: paneIds.length > 1,
       dragEnabled: !isMobile,
       showPaneControls: !isMobile,
-      hideTabStrip: paneTabs.length === 1 && paneTabs[0].type !== 'vscode',
+      hideTabStrip: isMobile || paneTabs.length === 1 && paneTabs[0].type !== 'vscode',
       canClosePane: paneIds.length > 1,
       onFocusPane: handleFocus,
       onSetCollapsed: (targetPaneId, collapsed) => {
@@ -1947,7 +1948,7 @@ function App() {
   const renderStableContent = () => <WorkbenchContentLayer>{allTabs.map(tab => {
     const pane = findPaneContainingTab(root, tab.id)
     if (!pane) return null
-    const visible = !pane.collapsed && pane.activeTabId === tab.id
+    const visible = (isMobile || !pane.collapsed) && pane.activeTabId === tab.id
       && (!isMobile || (!showSessionList && pane.id === mobilePaneId))
     // History already retains hidden views; Code starts lazily then keeps its frame.
     // Ordinary tabs retain their existing semantic hide/unmount policy.
@@ -2014,9 +2015,12 @@ function App() {
   )
 
   if (isMobile) {
-    if (showSessionList) {
-      return renderWorkbenchSurface(
+    const mobilePaneProps = mobilePaneId ? getPaneProps(mobilePaneId) : undefined
+    const showHome = showSessionList || !mobilePaneProps
+    return renderWorkbenchSurface(<>
+      <div style={{display: showHome ? 'contents' : 'none'}}>
         <SessionList
+          renderPage={page => renderTabContent({id: `mobile:${page}`, type: page, title: page === 'setup' ? 'Settings' : page === 'tasks' ? 'Tasks' : 'Search'})}
           sessions={sidebarSessions}
           agents={agents}
           currentSession={currentContextSessionId}
@@ -2047,17 +2051,10 @@ function App() {
           unreadSessionIds={unreadSessionIds}
           onToggleIdleNotificationMode={toggleIdleNotificationMode}
           bounded={boundedPresentation}
-        />,
-      )
-    }
-
-    return renderWorkbenchSurface(
-      <div className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell fixed inset-x-0 bg-fw-canvas overflow-hidden">
-        <div className="h-full min-h-0 overflow-hidden p-0">
-          {mobilePaneId ? renderPane(mobilePaneId) : null}
-        </div>
-      </div>,
-    )
+        />
+      </div>
+      {!showHome && mobilePaneProps && <WorkbenchPane {...mobilePaneProps} />}
+    </>)
   }
 
   return renderWorkbenchSurface(

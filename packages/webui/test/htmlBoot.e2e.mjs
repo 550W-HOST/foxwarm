@@ -411,3 +411,63 @@ test('old HTML against a new hashed deployment and an old live page importing a 
     assert.equal(await page.$eval('#root span', node => node.textContent), 'b')
   } finally { await page.close(); serveVersion = 'a'; staleHtml = false }
 })
+
+test('recovery groups stay centered and compact, with separated actions and keyboard-accessible diagnostics', async () => {
+  const message = 'Could not load application resource:\nhttps://example.invalid/assets/' + 'unavailable-bundle-'.repeat(90) + '.js\n' + 'Module import failed.\n'.repeat(12)
+  for (const scenario of [
+    { name: 'desktop-light', width: 1440, height: 900, blockAssets: true },
+    { name: 'mobile-light', width: 390, height: 844, blockAssets: true },
+    { name: 'short-light', width: 320, height: 360, blockAssets: true },
+    { name: 'desktop-dark', width: 1440, height: 900, dark: true },
+    { name: 'landscape-dark', width: 844, height: 390, dark: true },
+  ]) {
+    const page = await newPage({ ...scenario, reduced: true, selection: current('foxwarm.catppuccin', 'foxwarm.catppuccin', scenario.dark ? 'dark' : 'light') })
+    await page.setViewport({ width: scenario.width, height: scenario.height, hasTouch: scenario.width < 500 })
+    if (!scenario.blockAssets) {
+      await page.setRequestInterception(true)
+      page.on('request', request => request.url().endsWith('/' + entry)
+        ? request.respond({status: 200, contentType: 'text/javascript', body: `throw new Error(${JSON.stringify(message)})`})
+        : request.continue())
+    }
+    try {
+      await page.goto(baseUrl + '/preview/')
+      await page.waitForSelector(errorScreen, { visible: true })
+      const layout = await page.evaluate(() => {
+        const bounds = selector => document.querySelector(selector).getBoundingClientRect()
+        const fox = bounds('#foxwarm-boot > svg'), title = bounds('#foxwarm-boot-title'), description = bounds('#foxwarm-boot-description')
+        const button = bounds('#foxwarm-boot-reload'), details = bounds('#foxwarm-boot-details')
+        return { foxWidth: fox.width, centers: [fox, title, description, button, details].map(box => box.left + box.width / 2),
+          centerY: (fox.top + details.bottom) / 2, gap: details.top - button.bottom,
+          collapsed: !document.querySelector('#foxwarm-boot-details').open, hiddenError: bounds('#foxwarm-boot-error').height === 0,
+          overflow: document.querySelector('#foxwarm-boot').scrollWidth > innerWidth }
+      })
+      assert.equal(layout.foxWidth, 88)
+      assert.ok(layout.centers.every(center => Math.abs(center - scenario.width / 2) < 1), JSON.stringify(layout))
+      assert.ok(Math.abs(layout.centerY - scenario.height / 2) < 1, JSON.stringify(layout))
+      assert.ok(layout.gap >= 20)
+      assert.equal(layout.collapsed, true)
+      assert.equal(layout.hiddenError, true)
+      assert.equal(layout.overflow, false)
+      await screenshot(page, 'recovery-' + scenario.name)
+      await page.keyboard.press('Tab')
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'foxwarm-boot-reload')
+      await page.keyboard.press('Tab')
+      assert.equal(await page.evaluate(() => document.activeElement.tagName), 'SUMMARY')
+      await page.keyboard.press('Enter')
+      await page.waitForFunction(() => document.querySelector('#foxwarm-boot-details').open)
+      const opened = await page.$eval('#foxwarm-boot-error', node => {
+        const box = node.getBoundingClientRect(), button = document.querySelector('#foxwarm-boot-reload').getBoundingClientRect()
+        return { left: box.left, right: box.right, height: box.height, maxHeight: parseFloat(getComputedStyle(node).maxHeight), gap: box.top - button.bottom,
+          overflow: node.scrollWidth > node.clientWidth, original: node.textContent }
+      })
+      assert.ok(opened.height <= opened.maxHeight + 1)
+      assert.ok(opened.left >= 24 && opened.right <= scenario.width - 24)
+      assert.ok(opened.gap >= 48)
+      assert.equal(opened.overflow, false)
+      if (!scenario.blockAssets) assert.equal(opened.original, message)
+      await screenshot(page, 'recovery-' + scenario.name + '-details')
+      await page.keyboard.press('Enter')
+      await page.waitForFunction(() => !document.querySelector('#foxwarm-boot-details').open)
+    } finally { await page.close() }
+  }
+})

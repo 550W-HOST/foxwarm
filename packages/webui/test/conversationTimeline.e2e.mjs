@@ -30,7 +30,7 @@ before(async () => {
     import React from 'react'
     import { createRoot } from 'react-dom/client'
     import ChatTimeline from './src/components/ChatTimeline'
-    import ProcessingStatus from './src/components/ProcessingStatus'
+    import ProcessingStatus, {QueuedMessageStatus} from './src/components/ProcessingStatus'
     import SessionUiSettingsMenu from './src/components/SessionUiSettingsMenu'
     import { useChatPreferences } from './src/chatPreferences'
     import { projectSessionSearchFields, findSessionSearchMatches } from './src/components/chatSessionSearch'
@@ -70,8 +70,8 @@ before(async () => {
       return <div className="foxwarm-chat-root">
         <SessionUiSettingsMenu {...prefs} onSendKeyModeChange={prefs.setSendKeyMode} onTimelineViewChange={prefs.setTimelineView} onShowUsageBadgeChange={prefs.setShowUsageBadge} onShowUserMessageMetadataChange={prefs.setShowUserMessageMetadata} onOpenDebugInfo={()=>{}} />
         <div id="timeline"><ChatTimeline sessionId="fixture/main" messages={[...messages.slice(...slice),...(draft?[draft]:[])]} historyMessages={messages} runtimeState={runtime} isRunningTool={runtime.state==='running-tool'} isMobile={false} timelineView={prefs.timelineView} showUsageBadge={prefs.showUsageBadge} showUserMessageMetadata={prefs.showUserMessageMetadata} /></div>
-        <div id="status"><ProcessingStatus timelineView={prefs.timelineView} runtimeState={runtime} sessionBusy={runtime.busy} sessionQueueLength={2} turnIncomplete={runtime.state==='idle'} loading={false} isMobile={false} onStop={()=>window.fixture.controls.push('stop')} onContinue={()=>window.fixture.controls.push('continue')} onRunQueued={()=>window.fixture.controls.push('queued')} /></div>
-        <div id="queue"><ChatTimeline sessionId="fixture/main" messages={queued} isMobile={false} timelineView={prefs.timelineView} showUsageBadge={false} showTimeDividers={false} /></div>
+        <div id="status"><ProcessingStatus timelineView={prefs.timelineView} runtimeState={runtime} sessionBusy={runtime.busy} sessionQueueLength={2} turnIncomplete={runtime.state==='idle'} loading={false} isMobile={false} onContinue={()=>window.fixture.controls.push('continue')} onRunQueued={()=>window.fixture.controls.push('queued')} /></div>
+        <div id="queue"><ChatTimeline sessionId="fixture/main" messages={queued} isMobile={false} timelineView={prefs.timelineView} showUsageBadge={false} showTimeDividers={false} renderMessageFooter={alignment=><QueuedMessageStatus count={2} alignment={alignment} isMobile={false} onRunQueued={()=>window.fixture.controls.push('queued')} />} /></div>
       </div>
     }
     createRoot(document.getElementById('root')).render(<Fixture />)
@@ -167,8 +167,8 @@ test('live status owns Working once; pending internal inputs do not become activ
   assert.ok((await page.$eval('#status', root => root.textContent)).includes('Working…'))
   assert.equal(await page.$eval('#root', root => (root.textContent.match(/Working…/g) || []).length), 1)
   assert.equal(await page.$eval('#queue', root => root.querySelectorAll('[data-timeline-activity]').length), 0)
-  assert.equal((await page.$eval('#queue', root => root.textContent)).trim(), 'QUEUED_USER')
-  await page.$eval('#status', root => [...root.querySelectorAll('button')].find(button => button.textContent === 'Stop').click())
+  assert.equal((await page.$eval('#queue .foxwarm-user-message-text', root => root.textContent)).trim(), 'QUEUED_USER')
+  assert.equal(await page.$('#status button::-p-text(Stop)'), null)
   await page.evaluate(() => window.fixture.setRuntime({ state: 'waiting', busy: false, queueLength: 2, waiting: { waitingFor: 'input', reason: 'Please choose a target' } }))
   await page.waitForSelector('#status [data-processing-runtime-state="waiting"]')
   assert.equal(await page.$eval('#status [data-processing-runtime-state="waiting"] [title]', label => label.textContent), 'Waiting')
@@ -179,7 +179,8 @@ test('live status owns Working once; pending internal inputs do not become activ
   await page.evaluate(() => window.fixture.setRuntime({ state: 'idle', busy: false, queueLength: 2 }))
   await page.waitForFunction(() => document.querySelector('#status').textContent.includes('Turn interrupted'))
   await page.$eval('#status', root => [...root.querySelectorAll('button')].forEach(button => button.click()))
-  assert.deepEqual(await page.evaluate(() => window.fixture.controls), ['stop', 'continue', 'queued'])
+  await page.click('#queue button::-p-text(Run queued)')
+  assert.deepEqual(await page.evaluate(() => window.fixture.controls), ['continue', 'queued'])
 })
 
 test('stream text stays visible and retains its DOM on canonical commit while the untouched tool tail stays collapsed', async () => {

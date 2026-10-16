@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 
 export type SendKeyMode = 'modEnter' | 'enter'
 export type TimelineView = 'detailed' | 'grouped' | 'conversation'
@@ -14,6 +14,7 @@ export type ChatPreferences = {
 const SEND_KEY_MODE_STORAGE_KEY = 'foxwarm_send_key_mode_v1'
 const GROUP_TOOLS_STORAGE_KEY = 'foxwarm_group_tools_v1'
 const TIMELINE_VIEW_STORAGE_KEY = 'foxwarm_timeline_view_v1'
+const MOBILE_TIMELINE_VIEW_STORAGE_KEY = 'foxwarm_mobile_timeline_view_v1'
 const SHOW_USAGE_BADGE_STORAGE_KEY = 'foxwarm_show_usage_badge_v1'
 const SHOW_USER_MESSAGE_METADATA_STORAGE_KEY = 'foxwarm_show_user_message_metadata_v1'
 const FULL_WIDTH_STORAGE_KEY = 'foxwarm_chat_full_width_v1'
@@ -21,16 +22,28 @@ const CHAT_PREFERENCE_STORAGE_KEYS = new Set([
   SEND_KEY_MODE_STORAGE_KEY,
   GROUP_TOOLS_STORAGE_KEY,
   TIMELINE_VIEW_STORAGE_KEY,
+  MOBILE_TIMELINE_VIEW_STORAGE_KEY,
   SHOW_USAGE_BADGE_STORAGE_KEY,
   SHOW_USER_MESSAGE_METADATA_STORAGE_KEY,
   FULL_WIDTH_STORAGE_KEY,
 ])
 
-export function readChatPreferences(): ChatPreferences {
-  const storedView = localStorage.getItem(TIMELINE_VIEW_STORAGE_KEY)
+const mobileQuery = '(max-width: 767px)'
+function subscribeMobileViewport(notify: () => void) {
+  const query = window.matchMedia(mobileQuery)
+  query.addEventListener('change', notify)
+  return () => query.removeEventListener('change', notify)
+}
+/** Root viewport policy, independent of a compact desktop split pane. */
+export function useMobileChatViewport() {
+  return useSyncExternalStore(subscribeMobileViewport, () => window.innerWidth < 768, () => false)
+}
+
+export function readChatPreferences(mobile = false): ChatPreferences {
+  const storedView = localStorage.getItem(mobile ? MOBILE_TIMELINE_VIEW_STORAGE_KEY : TIMELINE_VIEW_STORAGE_KEY)
   const timelineView = storedView === 'detailed' || storedView === 'grouped' || storedView === 'conversation'
     ? storedView
-    : localStorage.getItem(GROUP_TOOLS_STORAGE_KEY) === 'true' ? 'grouped' : 'detailed'
+    : mobile ? 'conversation' : localStorage.getItem(GROUP_TOOLS_STORAGE_KEY) === 'true' ? 'grouped' : 'detailed'
   return {
     sendKeyMode: localStorage.getItem(SEND_KEY_MODE_STORAGE_KEY) === 'enter' ? 'enter' : 'modEnter',
     timelineView,
@@ -41,13 +54,15 @@ export function readChatPreferences(): ChatPreferences {
 }
 
 export function useChatPreferences() {
-  const [preferences, setPreferences] = useState<ChatPreferences>(readChatPreferences)
+  const mobile = useMobileChatViewport()
+  const [preferences, setPreferences] = useState<ChatPreferences>(() => readChatPreferences(mobile))
+  useEffect(() => { setPreferences(readChatPreferences(mobile)) }, [mobile])
 
   useEffect(() => {
     const sync = (event: StorageEvent) => {
       if (event.storageArea && event.storageArea !== localStorage) return
       if (event.key !== null && !CHAT_PREFERENCE_STORAGE_KEYS.has(event.key)) return
-      setPreferences(readChatPreferences())
+      setPreferences(readChatPreferences(window.innerWidth < 768))
     }
     window.addEventListener('storage', sync)
     return () => window.removeEventListener('storage', sync)
@@ -59,7 +74,7 @@ export function useChatPreferences() {
   }, [])
 
   const setTimelineView = useCallback((timelineView: TimelineView) => {
-    localStorage.setItem(TIMELINE_VIEW_STORAGE_KEY, timelineView)
+    localStorage.setItem(window.innerWidth < 768 ? MOBILE_TIMELINE_VIEW_STORAGE_KEY : TIMELINE_VIEW_STORAGE_KEY, timelineView)
     setPreferences(current => current.timelineView === timelineView ? current : { ...current, timelineView })
   }, [])
 

@@ -283,7 +283,7 @@ test('session menu clamps inside a narrow left split pane instead of clipping pa
 test('outer and embedded Chat roots synchronize all relocated preferences in both directions', async () => {
   await mountFixture()
   await page.evaluate(() => {
-    for (const key of ['foxwarm_send_key_mode_v1', 'foxwarm_group_tools_v1', 'foxwarm_timeline_view_v1', 'foxwarm_show_usage_badge_v1', 'foxwarm_show_user_message_metadata_v1']) localStorage.removeItem(key)
+    for (const key of ['foxwarm_send_key_mode_v1', 'foxwarm_group_tools_v1', 'foxwarm_timeline_view_v1', 'foxwarm_mobile_timeline_view_v1', 'foxwarm_show_usage_badge_v1', 'foxwarm_show_user_message_metadata_v1']) localStorage.removeItem(key)
   })
   await page.reload({ waitUntil: 'load' })
   await page.waitForFunction(() => !!window.chatSettingsFixture)
@@ -300,7 +300,7 @@ test('outer and embedded Chat roots synchronize all relocated preferences in bot
   await openMenu()
   await clickMenuLabel('Enter')
   await clickMenuLabel('Grouped')
-  await embeddedFrame.waitForFunction(() => window.chatSettingsFixture?.sendKeyMode === 'enter' && window.chatSettingsFixture?.timelineView === 'grouped')
+  await embeddedFrame.waitForFunction(() => window.chatSettingsFixture?.sendKeyMode === 'enter' && window.chatSettingsFixture?.timelineView === 'conversation')
 
   await embeddedFrame.$eval('button[aria-label="Open session options"]', button => button.click())
   await embeddedFrame.waitForSelector('[data-session-ui-settings-menu]')

@@ -16,10 +16,12 @@ const bundledPath = path.join(tempDir, 'fixture.cjs')
 await writeFile(fixturePath, `
   import { createElement } from 'react'
   import { renderToStaticMarkup } from 'react-dom/server'
-  import ProcessingStatus from ${JSON.stringify(path.join(webuiRoot, 'src/components/ProcessingStatus.tsx'))}
+  import ProcessingStatus, { QueuedMessageStatus } from ${JSON.stringify(path.join(webuiRoot, 'src/components/ProcessingStatus.tsx'))}
 
   export function renderProcessingStatus(props) {
-    return renderToStaticMarkup(createElement(ProcessingStatus, props))
+    return renderToStaticMarkup(createElement('div', null,
+      createElement(ProcessingStatus, props),
+      createElement(QueuedMessageStatus, {count: props.sessionQueueLength, alignment: 'left', isMobile: props.isMobile, onRunQueued: props.onRunQueued})))
   }
 `)
 
@@ -67,7 +69,7 @@ test('compacting status is blue and animated, with short queue metadata and cont
   assert.match(html, /2 queued/)
   assert.equal((html.match(/runtime-busy-spinner/g) || []).length, 1)
   assert.doesNotMatch(html, /animate-bounce/)
-  assert.match(html, />Stop<\/button>/)
+  assert.doesNotMatch(html, />Stop<\/button>/)
   assert.match(html, />Run queued<\/button>/)
   assert.doesNotMatch(html, />Continue<\/button>/)
 })
@@ -89,11 +91,11 @@ test('exec status uses a purple action caption and short queue metadata', () => 
   assert.match(html, /data-fox-copy-mode="exec"/)
   assert.doesNotMatch(html, /data-processing-tool-tag/)
   assert.doesNotMatch(html, /animate-bounce/)
-  assert.match(html, />Stop<\/button>/)
+  assert.doesNotMatch(html, />Stop<\/button>/)
   assert.match(html, />Run queued<\/button>/)
 })
 
-test('waiting status is amber with one static dot, short queue metadata, and no Stop action', () => {
+test('waiting status has a sleeping fox, truthful summary, and no Stop action', () => {
   const html = render({
     sessionBusy: false,
     sessionQueueLength: 2,
@@ -104,7 +106,8 @@ test('waiting status is amber with one static dot, short queue metadata, and no 
 
   assert.match(html, /data-processing-runtime-state="waiting"/)
   assert.match(html, /text-fw-warning/)
-  assert.match(html, /data-processing-status-dot="static"/)
+  assert.match(html, /data-fox-loader="sleeping"/)
+  assert.doesNotMatch(html, /data-processing-status-dot|data-fox-loader="spinner"|data-fox-thinking-copy/)
   assert.match(html, /waiting: sessions 1\/2/)
   assert.doesNotMatch(html, /animate-bounce|runtime-busy-spinner/)
   assert.match(html, /2 queued/)
@@ -151,7 +154,7 @@ test('idle queue keeps its pending action and canonical idle overrides legacy bu
   assert.match(legacyBusyHtml, /Thinking\.\.\./)
   assert.match(legacyBusyHtml, /data-fox-loader="thinking"/)
   assert.doesNotMatch(legacyBusyHtml, /runtime-busy-spinner/)
-  assert.match(legacyBusyHtml, />Stop<\/button>/)
+  assert.doesNotMatch(legacyBusyHtml, />Stop<\/button>/)
 })
 
 test('loading indicator still takes precedence over runtime status', () => {

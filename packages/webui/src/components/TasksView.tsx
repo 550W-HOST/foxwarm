@@ -1,3 +1,5 @@
+import MobilePageHeader from './MobilePageHeader'
+import ContextMenu, {type ContextMenuAnchorRect, type ContextMenuEntry} from './ContextMenu'
 import { createPortal } from 'react-dom'
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, Check, ClipboardList, Copy, X, Plus, RefreshCw, List, Columns3, SlidersHorizontal, Search, ChevronDown } from 'lucide-react'
@@ -152,7 +154,7 @@ function SessionReference({ sessionId, agent, compact = true, onOpenSession }: {
   </span>
 }
 
-export default function TasksView({ onBack, onOpenSession }: { onBack?: () => void; onOpenSession?: (sessionId: string) => void }) {
+export default function TasksView({ onBack, onOpenSession: navigateToSession, mobileHome = false }: { onBack?: () => void; onOpenSession?: (sessionId: string) => void; mobileHome?: boolean }) {
   const tabHeader = useWorkbenchTabHeader()
   const rootRef = useRef<HTMLElement>(null)
   const filterRef = useRef<HTMLDivElement>(null)
@@ -172,6 +174,11 @@ export default function TasksView({ onBack, onOpenSession }: { onBack?: () => vo
   const [detailsLoading, setDetailsLoading] = useState(false)
   const [detailsError, setDetailsError] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false)
+  const [mobileViewAnchor, setMobileViewAnchor] = useState<ContextMenuAnchorRect | null>(null)
+  const mobileSearchRef = useRef<HTMLInputElement>(null)
+  const mobileViewRef = useRef<HTMLButtonElement>(null)
+
   const [createTitle, setCreateTitle] = useState('')
   const [createDescription, setCreateDescription] = useState('')
   const [createOwner, setCreateOwner] = useState<string | null>(() => readLastTaskOwner())
@@ -190,6 +197,8 @@ export default function TasksView({ onBack, onOpenSession }: { onBack?: () => vo
   const [agentFilter, setAgentFilter] = useState('')
   const [agentRelation, setAgentRelation] = useState<typeof AGENT_RELATIONS[number]>('ownerOrCreator')
   const [isNarrow, setIsNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 1024)
+  // A narrow detail sheet must not remain portaled over the destination Chat.
+  const onOpenSession = navigateToSession ? (sessionId: string) => { if (isNarrow) setSelectedId(null); navigateToSession(sessionId) } : undefined
   const commentRequest = useRef(0)
 
   useEffect(() => {
@@ -433,7 +442,15 @@ export default function TasksView({ onBack, onOpenSession }: { onBack?: () => vo
       rootRef.current?.querySelector<HTMLButtonElement>(`[data-task-row="${CSS.escape(id)}"] .tasks-title-button`)?.focus({ preventScroll: true })
       rootRef.current?.querySelector<HTMLElement>(`[data-task-card="${CSS.escape(id)}"]`)?.focus({ preventScroll: true })
     }
-  }} data-tasks-view data-task-narrow={isNarrow || undefined} aria-busy={loading} className="tasks-workbench flex h-full min-h-0 min-w-0 flex-col bg-fw-canvas text-fw-text">
+  }} data-tasks-view data-task-narrow={isNarrow || undefined} aria-busy={loading} className={`tasks-workbench ${mobileHome ? 'mobile-page-root mobile-tasks-page' : ''} flex h-full min-h-0 min-w-0 flex-col bg-fw-canvas text-fw-text`}>
+    {mobileHome ? <MobilePageHeader title="Tasks" actions={<>
+      <button type="button" className="mobile-header-circle" aria-label="Search tasks" data-filtered={!!search || undefined} aria-expanded={mobileSearchOpen} onClick={() => {setMobileSearchOpen(value => !value); requestAnimationFrame(() => mobileSearchRef.current?.focus({preventScroll:true}))}}><Search size={20} /></button>
+      <button ref={mobileViewRef} type="button" className="mobile-header-circle" aria-label="Task display options" aria-haspopup="menu" aria-expanded={!!mobileViewAnchor} onClick={() => setMobileViewAnchor(mobileViewRef.current!.getBoundingClientRect())}><SlidersHorizontal size={20} /></button>
+      <button type="button" className="mobile-header-circle" aria-label="New task" onClick={() => {setCreateError('');setTaskWarning('');setCreateOwner(readLastTaskOwner());setCreateOpen(true)}}><Plus size={20} /></button>
+    </>}>
+      {mobileSearchOpen && <input ref={mobileSearchRef} aria-label="Filter tasks" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search tasks" className="mobile-header-search w-full" />}
+      {taskWarning && <p role="alert" className="text-xs text-fw-danger">{taskWarning}</p>}
+    </MobilePageHeader> : (
     <header className="tasks-header">
       <WorkbenchHeaderDragArea className="tasks-heading-row">
         {tabHeader ? <WorkbenchTabClose className={buttonClass} iconClassName="h-4 w-4" /> : onBack && <button type="button" className={buttonClass} onClick={onBack} aria-label="Back"><ArrowLeft className="h-4 w-4" /></button>}
@@ -464,6 +481,17 @@ export default function TasksView({ onBack, onOpenSession }: { onBack?: () => vo
         {taskWarning && <p role="alert" data-task-warning="header" className="tasks-header-warning">{taskWarning}</p>}
       </div>
     </header>
+    )}
+    <ContextMenu open={!!mobileViewAnchor} anchorRect={mobileViewAnchor} preferredPlacement="bottom-end" onClose={() => {setMobileViewAnchor(null);mobileViewRef.current?.focus({preventScroll:true})}} entries={[
+      ...TASK_SCOPES.map(value => ({key:`scope-${value}`,label:TASK_SCOPE_LABELS[value],checked:scope===value,onSelect:()=>setScope(value)})),
+      {key:'sep-view',type:'separator'},
+      ...(['table','board'] as const).map(value => ({key:value,label:value==='table'?'Table':'Board',checked:view===value,onSelect:()=>setView(value)})),
+      {key:'sep-agent',type:'separator'},
+      ...['',...agentOptions].map(value => ({key:`agent-${value}`,label:value?`Agent: ${value}`:'All agents',checked:agentFilter===value,onSelect:()=>setAgentFilter(value)})),
+      ...AGENT_RELATIONS.map(value => ({key:`relation-${value}`,label:AGENT_RELATION_LABELS[value],checked:agentRelation===value,onSelect:()=>setAgentRelation(value)})),
+      {key:'sep-refresh',type:'separator'},
+      {key:'refresh',label:'Refresh',disabled:loading,onSelect:()=>setRefresh(value=>value+1)},
+    ] satisfies ContextMenuEntry[]} />
     <div className="tasks-body">
       <div className="tasks-main foxwarm-content-gutter">
         <div className="tasks-content foxwarm-content-column">

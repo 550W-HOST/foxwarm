@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, List, GitBranch, Server, Copy } from 'lucide-react'
+import { SlidersHorizontal, MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, List, GitBranch, Server, Copy } from 'lucide-react'
 import RuntimeBusySpinner from './RuntimeBusySpinner'
+import MobilePageHeader from './MobilePageHeader'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import { copyTextToClipboard } from './chatShared'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
@@ -68,6 +69,7 @@ interface SessionListCoreProps {
   currentSession?: string
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
+  mobileHeaderActions?: ReactNode
   toolbarContainerClassName?: string
   listContainerClassName?: string
   dragEnabled?: boolean
@@ -88,6 +90,7 @@ export interface SessionMoveRequest {
 type SessionListViewMode = SessionListOrderMode
 
 const SESSION_LIST_VIEW_MODE_KEY = 'foxwarm_session_list_view_mode_v1'
+const MOBILE_SESSION_LIST_VIEW_MODE_KEY = 'foxwarm_session_list_mobile_view_mode_v1'
 
 interface ContextMenuState {
   sessionId: string
@@ -123,9 +126,22 @@ const SESSION_LIST_VIEW_MODE_TITLES: Record<SessionListViewMode, string> = {
   'flat-time': 'Flat time: ignore saved sidebar order and parent tree; show all sessions at the top level by recent activity.',
 }
 
-const loadStoredSessionListViewMode = (): SessionListViewMode => {
-  const stored = localStorage.getItem(SESSION_LIST_VIEW_MODE_KEY)
-  return SESSION_LIST_VIEW_MODES.includes(stored as SessionListViewMode) ? stored as SessionListViewMode : 'default'
+const loadStoredSessionListViewMode = (mobile: boolean): SessionListViewMode => {
+  try {
+    const stored = localStorage.getItem(mobile ? MOBILE_SESSION_LIST_VIEW_MODE_KEY : SESSION_LIST_VIEW_MODE_KEY)
+    if (SESSION_LIST_VIEW_MODES.includes(stored as SessionListViewMode)) return stored as SessionListViewMode
+  } catch { /* Preferences are optional when browser storage is unavailable. */ }
+  return mobile ? 'flat-time' : 'default'
+}
+
+const activityTime = (timestamp: number): string => {
+  if (!timestamp || !Number.isFinite(new Date(timestamp).getTime())) return ''
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000))
+  if (minutes < 1) return 'Now'
+  if (minutes < 60) return `${minutes}m ago`
+  if (minutes < 1440) return `${Math.floor(minutes / 60)}h ago`
+  if (minutes < 10080) return `${Math.floor(minutes / 1440)}d ago`
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(timestamp)
 }
 
 const getNextSessionListViewMode = (mode: SessionListViewMode): SessionListViewMode => {
@@ -461,14 +477,30 @@ function DraggableSessionRow({
   )
 }
 
-export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true, idleNotificationModes = {}, unreadSessionIds = new Set(), onToggleIdleNotificationMode, bounded }: SessionListCoreProps) {
+export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, mobileHeaderActions, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true, idleNotificationModes = {}, unreadSessionIds = new Set(), onToggleIdleNotificationMode, bounded }: SessionListCoreProps) {
   const { active } = useDndContext()
   const [compact, toggleCompact] = useSessionListCompact()
   const [primaryPointerCoarse, setPrimaryPointerCoarse] = useState(() => window.matchMedia?.('(pointer: coarse)').matches ?? false)
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
   const [visibleChildCounts, setVisibleChildCounts] = useState<Map<string, number>>(new Map())
   const [filterText, setFilterText] = useState('')
-  const [viewMode, setViewMode] = useState<SessionListViewMode>(loadStoredSessionListViewMode)
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false)
+  const [mobileViewAnchor, setMobileViewAnchor] = useState<ContextMenuAnchorRect | null>(null)
+  const mobileSearchRef = useRef<HTMLInputElement>(null)
+  const mobileViewRef = useRef<HTMLButtonElement>(null)
+
+  const [viewPreference, setViewPreference] = useState(() => {
+    const mobile = window.innerWidth < 768
+    return { mobile, mode: loadStoredSessionListViewMode(mobile) }
+  })
+  const { mode: viewMode, mobile: mobileList } = viewPreference
+
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 767px)')
+    const update = (event: MediaQueryListEvent) => setViewPreference({ mobile: event.matches, mode: loadStoredSessionListViewMode(event.matches) })
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [])
   const [visibleRootCount, setVisibleRootCount] = useState(DEFAULT_VISIBLE_ROOTS)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
@@ -666,13 +698,14 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   }
 
   useEffect(() => {
-    localStorage.setItem(SESSION_LIST_VIEW_MODE_KEY, viewMode)
+    try { localStorage.setItem(mobileList ? MOBILE_SESSION_LIST_VIEW_MODE_KEY : SESSION_LIST_VIEW_MODE_KEY, viewMode) } catch { /* Keep the in-memory choice. */ }
     setVisibleRootCount(DEFAULT_VISIBLE_ROOTS)
     bounded?.onModeChange(viewMode)
-  }, [viewMode, normalizedFilterQuery])
+  }, [viewMode, normalizedFilterQuery, mobileList])
 
   useEffect(() => { bounded?.onFilterChange(filterText) }, [filterText, bounded?.onFilterChange])
-  useEffect(() => { if (bounded) setExpandedSessions(new Set()) }, [viewMode, filterText, resolvedCurrentSessionId])
+  // Presentation changes reset disclosure; selection only adds the new active path below.
+  useEffect(() => { if (bounded) setExpandedSessions(new Set()) }, [viewMode, filterText])
   useEffect(() => {
     if (!bounded) return
     relationGenerationRef.current += 1; setContextMenu(null); setDeleteConfirm(null); setArchiveConfirm(null); setRelationRows(new Map())
@@ -809,7 +842,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   }
 
   const cycleViewMode = () => {
-    setViewMode(current => getNextSessionListViewMode(current))
+    setViewPreference(current => ({ ...current, mode: getNextSessionListViewMode(current.mode) }))
   }
 
   const toggleShowMoreRoots = () => {
@@ -1167,25 +1200,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       </span>
     )
 
-    const pinButton = (
-      <button
-        type="button"
-        className={`session-pin ${compact ? 'session-compact-pin h-6' : 'h-5'} inline-flex w-4 shrink-0 items-center justify-center rounded focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/40 ${session.pinned ? 'text-fw-accent' : 'text-fw-text-muted hover:text-fw-text'}`}
-        aria-label={session.pinned ? 'Unpin from top' : 'Pin to top'}
-        aria-pressed={!!session.pinned}
-        title={session.pinned ? 'Unpin from top' : 'Pin to top'}
-        onClick={(e) => {
-          e.stopPropagation()
-          void togglePinned(session.id, !session.pinned)
-        }}
-        onPointerDown={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
-        onDoubleClick={(e) => e.stopPropagation()}
-      >
-        <Pin className="h-3.5 w-3.5 rotate-45" strokeWidth={1.5} aria-hidden="true" />
-      </button>
-    )
-
     const disclosure = (
       hasChildren && (
         <div className={compact ? "session-compact-disclosure w-4 shrink-0 flex items-center" : "mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-fw-text-muted"}>
@@ -1249,11 +1263,11 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               />
               {compact ? (
                 <div className="flex flex-1 min-w-0 items-center gap-1.5 py-1 pr-2 min-h-10" style={{ paddingLeft: contentPaddingLeft }}>
-                  {hasChildren ? disclosure : <span className="session-compact-disclosure w-4 shrink-0" aria-hidden="true" />}
+                  {hasChildren ? disclosure : viewMode !== 'flat-time' && !isFiltering ? <span className="session-compact-disclosure w-4 shrink-0" aria-hidden="true" /> : null}
                   <span className="min-w-0 flex-1 truncate text-sm font-medium text-fw-text-strong" title={`${session.displayName || displayId} · ${session.id}`}>
                     {session.displayName || displayId}
+                    {mobileList && activityTime(session.lastMessageTime) && <span className="mt-0.5 block truncate text-xs font-normal text-fw-text-muted">{session.agent ? `${session.agent} · ` : ''}{activityTime(session.lastMessageTime)}</span>}
                   </span>
-                  {pinButton}
                   {session.archived && <Archive className="h-3 w-3 shrink-0 text-fw-text-muted" aria-label="Archived session" />}
                   {unreadSessionIds.has(session.id) && (
                     <span className="h-2 w-2 shrink-0 rounded-full bg-fw-accent" role="img" aria-label="Unread idle completion" title="Unread idle completion" />
@@ -1292,7 +1306,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                         <span className="ml-2 text-xs text-fw-text-muted">[Archived]</span>
                       )}
                     </span>
-                    {pinButton}
                   </div>
                   {session.displayName && (
                     <div className="text-xs text-fw-text-muted font-mono truncate">
@@ -1323,11 +1336,14 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 </div>
               </div>
               )}
-              {/* Menu button - only visible on mobile */}
+              {/* The same menu owns row actions on both desktop and mobile. */}
               <button
                 onClick={(e) => handleMenuClick(e, session.id)}
                 onPointerDown={(e) => e.stopPropagation()}
-                className="p-2 text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text hover:bg-fw-hover dark:hover:bg-fw-hover rounded md:hidden"
+                className="session-menu-trigger inline-flex h-10 w-8 shrink-0 items-center justify-center rounded-md text-fw-text-muted hover:text-fw-text-strong hover:bg-fw-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring"
+                type="button"
+                aria-label={`More options for ${session.displayName || displayId}`}
+                aria-haspopup="menu"
                 title="More options"
               >
                 <MoreVertical className="w-4 h-4" />
@@ -1488,10 +1504,24 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     }
   }, [archiveConfirm, archiveDescendantCount, archiveIncludeDescendants])
   const ViewModeIcon = SESSION_LIST_VIEW_MODE_ICONS[viewMode]
+  const customMobileHeader = mobileList && mobileHeaderActions !== undefined
+  const mobileViewEntries: ContextMenuEntry[] = [
+    ...SESSION_LIST_VIEW_MODES.map(mode => ({key: mode, label: `${SESSION_LIST_VIEW_MODE_LABELS[mode]} view`, checked: mode === viewMode, onSelect: () => setViewPreference(current => ({...current, mode}))})),
+    {key: 'sep', type: 'separator'},
+    {key: 'density', label: 'Detailed rows', checked: !compact, onSelect: toggleCompact},
+  ]
+
 
   return (
     <>
-      <div className="flex h-full min-h-0 flex-col" data-session-list-density={compact ? 'normal' : 'detailed'}>
+      <div className={`relative flex h-full min-h-0 flex-col ${customMobileHeader ? 'mobile-page-root' : ''}`} data-session-list-density={compact ? 'normal' : 'detailed'} data-session-list-mobile={mobileList || undefined}>
+        {customMobileHeader ? <MobilePageHeader title="Sessions" actions={<>
+          <button type="button" aria-label="Search sessions" data-filtered={!!filterText || undefined} aria-expanded={mobileSearchOpen} onClick={() => { setMobileSearchOpen(value => !value); requestAnimationFrame(() => mobileSearchRef.current?.focus({preventScroll:true})) }} className="mobile-header-circle"><Search size={20} /></button>
+          <button ref={mobileViewRef} type="button" aria-label="Session display options" aria-haspopup="menu" aria-expanded={!!mobileViewAnchor} onClick={() => setMobileViewAnchor(mobileViewRef.current!.getBoundingClientRect())} className="mobile-header-circle"><SlidersHorizontal size={20} /></button>
+          {mobileHeaderActions}
+        </>}>
+          {mobileSearchOpen && <div className="relative"><input ref={mobileSearchRef} type="search" aria-label="Filter sessions" placeholder="Search sessions" value={filterText} onChange={event => setFilterText(event.target.value)} onKeyDown={event => {if(event.key === 'Escape') {setMobileSearchOpen(false); setFilterText('')}}} className="mobile-header-search w-full pr-10" />{filterText && <button type="button" aria-label="Clear session search" onClick={() => setFilterText('')} className="absolute right-0 top-0 inline-flex h-11 w-11 items-center justify-center"><X size={16} /></button>}</div>}
+        </MobilePageHeader> : (
         <div className={`shrink-0 bg-fw-surface/95 dark:bg-fw-surface/95 ${toolbarContainerClassName}`}>
           <div className="flex items-center gap-1.5">
             <div className="relative min-w-0 flex-1">
@@ -1539,6 +1569,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
           <SidebarRootDropZone visible={sessionDragEnabled && !!draggingSessionId && allowParentDrop} disabled={!sessionDragEnabled || isFiltering || draggingPinnedSession} allowOrder={allowSidebarOrder} />
         </div>
 
+        )}
+        <ContextMenu open={!!mobileViewAnchor} entries={mobileViewEntries} anchorRect={mobileViewAnchor} preferredPlacement="bottom-end" onClose={() => {setMobileViewAnchor(null); mobileViewRef.current?.focus({preventScroll:true})}} />
         <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto" data-session-list-scroll-container>
           <div className={listContainerClassName}>
             {rootSessions.length > 0 ? (

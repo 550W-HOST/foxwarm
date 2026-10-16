@@ -23,3 +23,5 @@ The search form and result sections share the centered reading-column cap and ou
 ## Workbench header integration
 
 The normal sole-tab header controls and empty-header pane movement use [Single-tab headers](./webui-workbench.md#single-tab-headers). Standalone and embedded leaf roots retain their existing navigation and do not own Workbench tabs.
+
+Mobile-specific navigation, headers, and preferences follow the [mobile shell contract](../threads/webui-mobile-shell.md); desktop data and workbench owners remain unchanged.

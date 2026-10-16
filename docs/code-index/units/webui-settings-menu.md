@@ -59,3 +59,5 @@ Renders the compact global UI dropdown for color mode, Setup, reload, and Logs p
 ## Design Decisions
 
 - [2026-07-22] Global UI settings placement is preferred-alignment plus viewport clamping: preserve the current start/end alignment when there is room, but if either horizontal edge would leave the body/visual viewport, shift the whole menu inside an 8px safe gutter even though it no longer aligns with the trigger corner. Apply this to ordinary desktop/mobile and Code-embedded sidebars without changing other popovers or iframe stacking.
+
+Mobile-specific navigation, headers, and preferences follow the [mobile shell contract](../threads/webui-mobile-shell.md); desktop data and workbench owners remain unchanged.

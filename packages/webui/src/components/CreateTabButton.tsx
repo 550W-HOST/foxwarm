@@ -11,10 +11,12 @@ interface CreateTabButtonProps {
   nodeTargets?: readonly WebUiNodeTarget[]
   nodeTargetsError?: string
   onRefreshNodeTargets?: () => void
+  inlineOptions?: boolean
+  onCancel?: () => void
 }
 
-export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, nodeTargets, nodeTargetsError, onRefreshNodeTargets }: CreateTabButtonProps) {
-  const [open, setOpen] = useState(false)
+export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, nodeTargets, nodeTargetsError, onRefreshNodeTargets, inlineOptions = false, onCancel }: CreateTabButtonProps) {
+  const [open, setOpen] = useState(inlineOptions)
   const [nodeId, setNodeId] = useState(defaultNodeId || 'master')
   const [path, setPath] = useState(defaultPath || '')
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -28,7 +30,7 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, 
   }, [defaultPath])
 
   useEffect(() => {
-    if (!open) return
+    if (!open || inlineOptions) return
 
     const handleClickOutside = (event: MouseEvent) => {
       if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
@@ -38,7 +40,7 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, 
 
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [open])
+  }, [open, inlineOptions])
 
   const label = 'Terminal'
   const baseClass = 'bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised/60 dark:text-fw-text-strong dark:hover:bg-fw-hover'
@@ -65,7 +67,7 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, 
 
   return (
     <div className="relative" ref={rootRef}>
-      <div className="flex w-full items-stretch gap-1">
+      {!inlineOptions && <div className="flex w-full items-stretch gap-1">
         <button
           onClick={handleDefaultCreate}
           className={`inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-fw-border-strong px-3 py-2 text-sm font-medium transition-colors ${baseClass}`}
@@ -86,11 +88,11 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, 
         >
           <ChevronDown className={`h-4 w-4 transition-transform ${open ? 'rotate-180' : ''}`} />
         </button>
-      </div>
+      </div>}
 
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-fw-border bg-fw-surface p-3 shadow-xl dark:border-fw-border dark:bg-fw-surface">
-          <div className="text-sm font-semibold text-fw-text-strong">Create {label.toLowerCase()} tab</div>
+        <div className={inlineOptions ? 'min-w-0' : 'absolute left-0 top-full z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-fw-border bg-fw-surface p-3 shadow-xl dark:border-fw-border dark:bg-fw-surface'}>
+          {!inlineOptions && <div className="text-sm font-semibold text-fw-text-strong">Create {label.toLowerCase()} tab</div>}
           <div className="mt-3 space-y-3">
             {nodeTargets && <div>
               <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-fw-text-muted">Node</label>
@@ -116,7 +118,7 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, 
             </div>
             <div className="flex justify-end gap-2">
               <button
-                onClick={() => setOpen(false)}
+                onClick={() => { setOpen(false); onCancel?.() }}
                 className="rounded-lg border border-fw-border-strong px-3 py-2 text-sm text-fw-text hover:bg-fw-hover dark:text-fw-text dark:hover:bg-fw-hover"
               >
                 Cancel

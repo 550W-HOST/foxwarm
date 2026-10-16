@@ -107,11 +107,13 @@ The browser history fixture verifies that the React root installed its renderer 
 
 ### D-chat-bottom-status-layout
 
-All Timeline modes use one transparent borderless status region. The left side contains 18px runtime captions and their adjacent Stop/Continue actions. Ordinary thinking and actual exec calls use the decorative fox captions and a 24px fox; accessible runtime labels remain stable. The right side contains only `N queued` and the existing Run queued action. There is no long queue explanation or replacement tooltip. Queue-only and interrupted-plus-queue states retain their count/actions, and actual queued message previews remain separately below the region. Scoped action permissions are unchanged.
+All Timeline modes retain one transparent borderless runtime region with 18px captions and an adjacent Continue action when interrupted. Stop belongs to the [composer running action](./webui-chat-composer.md#d-composer-running-action). Ordinary thinking and actual exec calls use decorative fox captions and a 24px fox; accessible runtime labels and scoped action permissions remain unchanged.
 
-Without a queue, an always-present 3.5rem slot bottom-aligns the row; idle/loading/runtime/interrupted visibility changes do not alter its height or the message viewport. With a queue, the same 56px minimum includes its existing above-status gap; the region grows and wraps naturally, keeping every action visible. It retains the current mobile width and desktop 80% maximum width. The existing Composer spacer and status/preview-to-Composer gap remain unchanged. There is no new height observer, viewport-fixed footer, scroll compensation or rejoin rule.
+Queue metadata is a separate message footer containing only `N queued` and the existing Run queued action. It follows the final visible message: right-aligned under a direct-user bubble, otherwise left-aligned. If queued previews exist, only the preview timeline gets this footer; otherwise it belongs to the committed timeline, including its streaming row. ChatTimeline derives its alignment from its final rendered group/row so hidden/grouped input does not override the visible tail. No placeholder message, extra history fetch, or DOM-position observer is needed. Queue-only metadata remains visible before preview hydration and disappears when the count reaches zero.
 
-`chatBottomStatus.e2e.mjs` covers native leave/rejoin, stable 56px runtime/loading/idle/interrupted transitions, queue-only metadata, separate previews, narrow controls and real command actions.
+The existing 56px minimum runtime slot, its above-status padding, Composer spacer, and status/preview-to-Composer gap remain unchanged. Queue footers participate in normal message flow and can wrap without clipping their action; they do not join the runtime controls or add a new viewport-follow rule.
+
+`chatBottomStatus.e2e.mjs` covers native leave/rejoin, stable 56px runtime/loading/idle/interrupted transitions, queue-only metadata, message-side footer alignment in every Timeline mode, preview hydration, narrow controls and real command actions.
 
 ### D-chat-queued-preview
 
@@ -152,3 +154,5 @@ Per-session versus global stream ownership is canonical in [D-webui-session-stre
 Mounted-Chat timing regressions use the current process statistics, completed-request endpoints and native tool disclosures while honoring the displayed-divider waiting floor. The context-overview keyboard-focus regression waits for the opacity transition endpoint before asserting its full-opacity state.
 
 Model-picker browser checks wait for published canonical effort state; closing the popup after selection is not a response-completion signal.
+
+The root-viewport mobile header, metric visibility, and Timeline preference rules follow the [mobile shell contract](../threads/webui-mobile-shell.md), independently of a compact desktop pane.
