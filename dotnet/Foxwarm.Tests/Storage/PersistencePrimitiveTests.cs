@@ -125,6 +125,37 @@ public sealed class PersistencePrimitiveTests
     }
 
     [Fact]
+    public async Task IndependentArchiveCallersShareDatabaseWithoutSharingConnectionsOrRollbackTargets()
+    {
+        using var temp = new TempDirectory();
+        var database = Path.Combine(temp.Path, "archive-store.sqlite");
+        new SqliteArchiveMessageStore(database, "initial").Initialize();
+        using var start = new ManualResetEventSlim();
+        var callers = Enumerable.Range(0, 8).Select(index => Task.Run(() =>
+        {
+            var session = $"session-{index}";
+            var store = new SqliteArchiveMessageStore(database, session);
+            start.Wait();
+            for (var seq = 1; seq <= 16; seq++)
+            {
+                var message = Fixture.Message(seq, $"{session}/{seq}", seq * 1000);
+                var row = ArchiveMessageRecord.Create(session, "main", seq, seq * 1000, message);
+                var inserted = store.WriteMessages([row]);
+                Assert.Single(inserted);
+                Assert.Empty(store.WriteMessages([row]));
+                Assert.Equal(seq, store.ReadMessages().Count);
+                store.RollbackInsertedMessages(inserted);
+                Assert.Equal(seq - 1, store.ReadMessages().Count);
+                Assert.Single(store.WriteMessages([row]));
+            }
+        })).ToArray();
+        start.Set();
+        await Task.WhenAll(callers).WaitAsync(TimeSpan.FromSeconds(30));
+        for (var index = 0; index < callers.Length; index++)
+            Assert.Equal(16, new SqliteArchiveMessageStore(database, $"session-{index}").ReadMessages().Count);
+    }
+
+    [Fact]
     public void ArchiveStoreRejectsAnIncompatibleSameNamedTable()
     {
         using var temp = new TempDirectory();

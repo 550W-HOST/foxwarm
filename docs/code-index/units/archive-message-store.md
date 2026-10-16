@@ -18,6 +18,8 @@ Callers: `PersistentSessionAuthorityStore`, `SessionCompactor`, `ArchiveContextR
 
 ## Side effects and compatibility
 
+Each write retains its own non-pooled connection; concurrent Sessions do not share a connection or transaction. Schema initialization and `OpenConfigured` install the existing native `busy_timeout=5000` before database-dependent PRAGMAs, including `synchronous=FULL`. This covers first-statement preparation with the same busy handler already used by later transaction work, without changing the driver's command timeout/retry policy. FULL is still set on every configured writer before identity checks or transaction admission. Read-only connection behavior is unchanged.
+
 Writes are exact-current-identity only; historical aliases can read committed rows but cannot redirect writes. The schema preserves the source-compatible `archive_messages` columns/primary key and rejects unsupported extra indexes or foreign keys. Archive rows are immutable audit/context records even when active JSON history is cleared or compacted.
 
 ## Tests

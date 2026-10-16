@@ -67,31 +67,31 @@ public sealed class LlmRequestJournalStore : IDisposable
         CancellationToken token = default
     )
     {
+        token.ThrowIfCancellationRequested();
         var requestId = Guid.NewGuid().ToString();
+        // Consume request-owned JSON before waiting; only immutable encoded values cross the gate.
+        var prompt = PrepareObject("prompt", JsonValue.Create(systemPrompt)!);
+        var tools = PrepareObject("tool-schema", toolDefinitions);
+        var preparedMessages = messages
+            .Where(message =>
+                message["modelVisible"] is not JsonValue visibility
+                || !visibility.TryGetValue<bool>(out var visible)
+                || visible
+            )
+            .Select(message => PrepareObject("message", CanonicalMessage(message)))
+            .ToArray();
+        var messageIds = preparedMessages.Select(message => message.Id).ToArray();
+        var cacheHash = Sha256(promptCacheKey);
         await gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
             using var connection = Open();
             EnsureSchema(connection);
             using var transaction = connection.BeginTransaction(deferred: false);
-            var promptId = PutObject(
-                connection,
-                transaction,
-                "prompt",
-                JsonValue.Create(systemPrompt)!
-            );
-            var toolId = PutObject(connection, transaction, "tool-schema", toolDefinitions);
-            var canonicalMessages = messages
-                .Where(message =>
-                    message["modelVisible"] is not JsonValue visibility
-                    || !visibility.TryGetValue<bool>(out var visible)
-                    || visible
-                )
-                .Select(CanonicalMessage)
-                .ToArray();
-            var messageIds = canonicalMessages
-                .Select(message => PutObject(connection, transaction, "message", message))
-                .ToArray();
+            var promptId = PutObject(connection, transaction, prompt);
+            var toolId = PutObject(connection, transaction, tools);
+            foreach (var message in preparedMessages)
+                PutObject(connection, transaction, message);
             string? baseRequest = null;
             int? commonPrefix = null;
             var deltaDepth = 0;
@@ -134,7 +134,7 @@ public sealed class LlmRequestJournalStore : IDisposable
             Add(command, "$prompt", promptId);
             Add(command, "$schema", toolId);
             Add(command, "$model", requestedModelKey);
-            Add(command, "$cache", Sha256(promptCacheKey));
+            Add(command, "$cache", cacheHash);
             Add(command, "$count", messageIds.Length);
             Add(command, "$checkpoint", checkpoint);
             Add(command, "$base", baseRequest);
@@ -162,6 +162,9 @@ public sealed class LlmRequestJournalStore : IDisposable
         CancellationToken token = default
     )
     {
+        token.ThrowIfCancellationRequested();
+        var prompt = PrepareObject("prompt", JsonValue.Create(effectivePrompt)!);
+        var payloadHash = HashValue(semanticPayload);
         await gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
@@ -178,19 +181,14 @@ public sealed class LlmRequestJournalStore : IDisposable
                 ?? throw new InvalidDataException(
                     "LLM journal request is missing before attempt start."
                 );
-            var effectiveId = ObjectId("prompt", JsonValue.Create(effectivePrompt)!);
+            var effectiveId = prompt.Id;
             string? overrideId = null;
             if (attempt == 1 && effectiveId != promptId)
                 throw new InvalidDataException(
                     "First LLM journal attempt must use the request prompt."
                 );
             if (effectiveId != promptId)
-                overrideId = PutObject(
-                    connection,
-                    transaction,
-                    "prompt",
-                    JsonValue.Create(effectivePrompt)!
-                );
+                overrideId = PutObject(connection, transaction, prompt);
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText =
@@ -202,7 +200,7 @@ public sealed class LlmRequestJournalStore : IDisposable
             Add(command, "$model", concreteModelId);
             Add(command, "$virtual", virtualModelKey);
             Add(command, "$provider", providerType);
-            Add(command, "$hash", HashValue(semanticPayload));
+            Add(command, "$hash", payloadHash);
             Add(command, "$prompt", overrideId);
             command.ExecuteNonQuery();
             transaction.Commit();
@@ -222,6 +220,9 @@ public sealed class LlmRequestJournalStore : IDisposable
         CancellationToken token = default
     )
     {
+        token.ThrowIfCancellationRequested();
+        var resultJson = result is null ? null : Codec.Write(result);
+        var errorJson = error is null ? null : Codec.Write(error);
         await gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
@@ -237,8 +238,8 @@ public sealed class LlmRequestJournalStore : IDisposable
             Add(command, "$attempt", attempt);
             Add(command, "$completed", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             Add(command, "$outcome", outcome);
-            Add(command, "$result", result is null ? null : Codec.Write(result));
-            Add(command, "$error", error is null ? null : Codec.Write(error));
+            Add(command, "$result", resultJson);
+            Add(command, "$error", errorJson);
             command.ExecuteNonQuery();
             transaction.Commit();
         }
@@ -1332,25 +1333,30 @@ public sealed class LlmRequestJournalStore : IDisposable
         schema.Commit();
     }
 
+    private sealed record PreparedObject(string Id, string Kind, string Payload);
+
+    private static PreparedObject PrepareObject(string kind, JsonNode value)
+    {
+        var payload = Codec.Write(value);
+        return new PreparedObject(Sha256(kind + "\0" + payload), kind, payload);
+    }
+
     private static string PutObject(
         SqliteConnection connection,
         SqliteTransaction transaction,
-        string kind,
-        JsonNode value
+        PreparedObject value
     )
     {
-        var payload = Codec.Write(value);
-        var id = Sha256(kind + "\0" + payload);
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText =
             "INSERT OR IGNORE INTO llm_journal_objects(object_id,object_kind,payload,created_at) VALUES($id,$kind,$payload,$created)";
-        Add(command, "$id", id);
-        Add(command, "$kind", kind);
-        Add(command, "$payload", payload);
+        Add(command, "$id", value.Id);
+        Add(command, "$kind", value.Kind);
+        Add(command, "$payload", value.Payload);
         Add(command, "$created", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         command.ExecuteNonQuery();
-        return id;
+        return value.Id;
     }
 
     private static (string RequestId, int Depth)? ReadLatestRequest(
@@ -1730,9 +1736,6 @@ public sealed class LlmRequestJournalStore : IDisposable
             Add(command, value.Name, value.Value);
         return command.ExecuteScalar();
     }
-
-    private static string ObjectId(string kind, JsonNode value) =>
-        Sha256(kind + "\0" + Codec.Write(value));
 
     private static string HashValue(JsonNode value) => Sha256(Codec.Write(value));
 

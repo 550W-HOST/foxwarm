@@ -253,9 +253,9 @@ public sealed partial class SqliteArchiveMessageStore
 
     private static void InitializeSchema(SqliteConnection connection)
     {
+        Execute(connection, "PRAGMA busy_timeout=5000");
         Execute(connection, "PRAGMA journal_mode=WAL");
         Execute(connection, "PRAGMA synchronous=FULL");
-        Execute(connection, "PRAGMA busy_timeout=5000");
         Execute(connection, "PRAGMA foreign_keys=ON");
         Execute(
             connection,
@@ -547,8 +547,9 @@ public sealed partial class SqliteArchiveMessageStore
         var connection = Open();
         try
         {
-            Execute(connection, "PRAGMA synchronous=FULL");
+            // Install the existing native busy handler before any database-dependent setup.
             Execute(connection, "PRAGMA busy_timeout=5000");
+            Execute(connection, "PRAGMA synchronous=FULL");
             Execute(connection, "PRAGMA foreign_keys=ON");
             return connection;
         }

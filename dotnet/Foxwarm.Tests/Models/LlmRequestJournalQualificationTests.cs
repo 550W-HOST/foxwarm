@@ -8,6 +8,33 @@ namespace Foxwarm.Tests.Models;
 public sealed class LlmRequestJournalQualificationTests
 {
     [Fact]
+    public async Task Attempt_start_is_committed_and_reconstructable_by_an_independent_reader_before_send()
+    {
+        using var temp = new TempDirectory();
+        using var journal = new LlmRequestJournalStore(temp.Path);
+        var sends = 0;
+        using var client = new HttpClient(new CountingHandler(() =>
+        {
+            // A separate store/connection observes durable state at the actual transport boundary.
+            using var reader = new LlmRequestJournalStore(temp.Path);
+            var requests = reader.ListAsync("session", null, null, null, 10).GetAwaiter().GetResult();
+            var id = Assert.Single(requests)!["requestId"]!.GetValue<string>();
+            var restored = reader.ReconstructAsync(id).GetAwaiter().GetResult();
+            Assert.Equal("complete", restored["completeness"]!.GetValue<string>());
+            var attempt = Assert.Single(restored["attempts"]!.AsArray());
+            Assert.Equal(1, attempt!["start"]!["attempt"]!.GetValue<int>());
+            Assert.Null(attempt!["result"]);
+            sends++;
+        }, "{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}"));
+        var owner = new ModelRequestOwner(client,
+            new ResponsesClientOptions(new Uri("http://localhost"), "model", "model", "token", "", 50),
+            new ModelRouting(), journal: journal);
+        await owner.RequestAsync("session", Catalog("anthropic"), "model", null, "cache", "turn",
+            History(), (_, _) => Task.FromResult("prompt"), null, null, null, null, CancellationToken.None);
+        Assert.Equal(1, sends);
+    }
+
+    [Fact]
     public async Task Journal_preparation_failure_happens_before_provider_send()
     {
         var root = Path.Combine(
