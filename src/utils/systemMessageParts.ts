@@ -1,5 +1,5 @@
 import { MessagePart } from '../types';
-import { formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystemOpen, formatFoxwarmSystemTag, formatSystemPartForModel, parseFoxwarmOpeningTag } from './promptWrappers';
+import { formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystemOpen, formatFoxwarmSystemTag, formatSystemPartForModel, parseFoxwarmOpeningTag, parseFoxwarmTagLine } from './promptWrappers';
 import { formatLocalTimestamp } from './localTime';
 
 function addInputTimeToSystemWrapper(message: string, timestamp: Date | number): string {
@@ -47,6 +47,34 @@ export function withInputTimePart(parts: MessagePart[], timestamp: Date | number
     ...parts.map(part => ({ ...part })),
     { system: formatFoxwarmMessageClose() },
   ];
+}
+
+/** Decorate an existing outer input wrapper in a request copy, never its body. */
+export function appendInputWrapperHint(parts: MessagePart[], hint: string): MessagePart[] {
+  for (let index = 0; index < parts.length; index++) {
+    const system = parts[index].system;
+    const opening = parseFoxwarmOpeningTag(system);
+    if (!opening || typeof system !== 'string') return parts;
+    const isSource = (opening.tagName === 'foxwarm-message' && opening.attrs.type === 'channel')
+      || (opening.tagName === 'foxwarm-system' && opening.attrs.kind === 'external-input');
+    if (isSource) {
+      const match = system.match(/^(\s*)<foxwarm-(?:message|system)\b[^>]*>/i)!;
+      const attrs = { ...opening.attrs, hint: opening.attrs.hint ? `${opening.attrs.hint} ${hint}` : hint };
+      const replacement = opening.tagName === 'foxwarm-message'
+        ? formatFoxwarmMessageOpen(attrs)
+        : formatFoxwarmSystemOpen(attrs);
+      return parts.map((part, partIndex) => partIndex === index
+        ? { ...part, system: `${match[1]}${replacement}${system.slice(match[0].length)}` }
+        : part);
+    }
+    // Only framework metadata can precede the source wrapper. Do not search
+    // arbitrary user parts or nested XML for something that resembles one.
+    const metadata = parseFoxwarmTagLine(system);
+    if (metadata?.tagName !== 'foxwarm-system'
+      || !['session', 'channel-mode'].includes(metadata.attrs.kind)
+      || !/\/\s*>\s*$/.test(system)) return parts;
+  }
+  return parts;
 }
 
 export function buildSystemMessageParts(message: string): MessagePart[] {

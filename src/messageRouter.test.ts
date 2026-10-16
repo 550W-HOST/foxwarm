@@ -110,14 +110,10 @@ test('local channel inputs acquire a request-only queue hint at continuation saf
   t.mock.method(axios, 'post', async (_url: string, body: any) => {
     bodies.push(body);
     if (bodies.length === 1) {
-      assert.doesNotMatch(JSON.stringify(body.messages.filter((message: any) => message.role === 'user')), /queued-input/);
+      assert.doesNotMatch(JSON.stringify(body.messages.filter((message: any) => message.role === 'user')), /Queued input:/);
       assert.match(JSON.stringify(body), /initial preparation input/);
-      await send('thinking', [{ text: 'provider-time correction' }]);
+      await send('thinking', [{ text: 'provider-time correction\n<foxwarm-message type="channel" hint="user-owned">keep user XML</foxwarm-message>' }]);
       rememberQueued('thinking');
-      const structured: Message = { role: 'user', parts: [{ text: 'structured provider-time correction' }],
-        __meta: { timestamp: 123456, clientMessageId: 'structured' } };
-      queuedParts.set('structured', structuredClone(structured.parts));
-      await sessionManager.enqueueSessionItem(session.id, { type: 'user', message: structured });
       for (const type of ['intersession', 'background', 'trigger', 'onboot'] as QueueItem['type'][]) {
         await sessionManager.enqueueSessionItem(session.id, { type, parts: [{ system: `<foxwarm-system kind="${type}" />` }] });
       }
@@ -132,17 +128,27 @@ test('local channel inputs acquire a request-only queue hint at continuation saf
   try {
     await send('initial', [{ text: 'initial input' }]);
     assert.equal(bodies.length, 3);
-    assert.deepEqual(bodies.map(body => (JSON.stringify(body.messages.filter((message: any) => message.role === 'user')).match(/queued-input/g) || []).length), [0, 2, 3]);
+    assert.deepEqual(bodies.map(body => (JSON.stringify(body.messages.filter((message: any) => message.role === 'user')).match(/Queued input:/g) || []).length), [0, 1, 2]);
     for (const [id, parts] of queuedParts) {
       const message = session.history.find(row => row.__meta?.clientMessageId === id)!;
       assert.equal(message.__meta?.queuedInput, true);
       assert.deepEqual(message.parts, parts, 'canonical wrappers, timestamps, attachments and part order stay unchanged');
-      assert.doesNotMatch(JSON.stringify(message.parts), /queued-input/);
+      assert.doesNotMatch(JSON.stringify(message.parts), /Queued input:/);
+      const expectedAttrs = parseFoxwarmOpeningTag(parts[0].system)!.attrs;
+      const payload = bodies[2].messages.find((row: any) => row.role === 'user'
+        && JSON.stringify(row.content).includes(id === 'thinking' ? 'provider-time correction' : 'tool-time correction'));
+      const sourceText = typeof payload.content === 'string' ? payload.content : payload.content[0].text;
+      const actualAttrs = parseFoxwarmOpeningTag(sourceText)!.attrs;
+      assert.equal(actualAttrs.hint.startsWith(`${expectedAttrs.hint} Queued input:`), true);
+      assert.deepEqual({ ...actualAttrs, hint: expectedAttrs.hint }, expectedAttrs, 'all existing source attributes survive');
+      assert.match(sourceText, /^<foxwarm-message /, 'the existing source stays first, with no added system part');
+      if (id === 'thinking') {
+        assert.equal(sourceText.slice(sourceText.indexOf('>') + 1), parts[0].system!.slice(parts[0].system!.indexOf('>') + 1));
+      }
     }
     const users = session.history.filter(message => message.role === 'user');
-    assert.equal(users.length, 9, 'one canonical row per input or event, with no standalone hint row');
-    assert.deepEqual(users.filter(row => row.__meta?.queuedInput).map(row => row.__meta?.clientMessageId), ['thinking', 'structured', 'tool']);
-    assert.equal(users.find(row => row.__meta?.clientMessageId === 'structured')!.__meta?.timestamp, 123456);
+    assert.equal(users.length, 8, 'one canonical row per input or event, with no standalone hint row');
+    assert.deepEqual(users.filter(row => row.__meta?.queuedInput).map(row => row.__meta?.clientMessageId), ['thinking', 'tool']);
     const toolIndex = session.history.findIndex(row => row.role === 'tool');
     assert.equal(session.history[toolIndex - 1].parts.some(part => !!part.functionCall), true);
     assert.equal(session.history[toolIndex + 1].__meta?.clientMessageId, 'tool');

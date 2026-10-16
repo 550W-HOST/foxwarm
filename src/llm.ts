@@ -46,7 +46,7 @@ import {
 import { parseFunctionCallArgs } from './toolCallArgs';
 import { createDisplayOnlyModelMessage } from './session/messageVisibility';
 import { formatToolResponsePayload, formatToolScriptExecutionResponse } from '../packages/shared/dist/toolResponseFormatting';
-import { isSystemPayloadTextPart } from './utils/systemMessageParts';
+import { appendInputWrapperHint, isSystemPayloadTextPart } from './utils/systemMessageParts';
 import { formatFoxwarmSystemTag, formatSystemPartForModel, isFoxwarmMetadataLine } from './utils/promptWrappers';
 import { formatLocalTimestamp } from './utils/localTime';
 import { appendImageGuidanceText, buildImageGuidanceText, normalizeToolResultImages } from './toolImages';
@@ -2492,10 +2492,8 @@ export async function chat(
         .map((message: Message): Message => {
             const { __meta, ...msg } = message;
             if (message.role === 'user' && __meta?.queuedInput === true) {
-                msg.parts = [{ system: formatFoxwarmSystemTag({
-                    kind: 'queued-input',
-                    hint: 'Queued input: this message may predate the preceding replies or tool results. Do not assume it was sent in response to them.',
-                }) }, ...message.parts];
+                msg.parts = appendInputWrapperHint(message.parts,
+                    'Queued input: this message may predate the preceding replies or tool results. Do not assume it was sent in response to them.');
             }
             const modelId = getHistoricalConcreteModelId(message);
             return modelId ? { ...msg, __meta: { modelId } } : msg;

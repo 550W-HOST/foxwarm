@@ -40,6 +40,7 @@ import { normalizeSessionWorkerIngressRequest } from './sessionWorkerIngress';
 import { registerChannel, unregisterChannel } from './channel';
 import { MessageRouter } from './messageRouter';
 import type { MessagePart } from './types';
+import { formatFoxwarmMessage, parseFoxwarmOpeningTag } from './utils/promptWrappers';
 
 function baseSession(id: string): Session {
   return {
@@ -1106,7 +1107,7 @@ test('real Worker retry ingests durable mailbox input and honors Stop or dequeue
           (axios as any).post = async (_url: string, body: any) => {
             bodies.push(body);
             if (bodies.length === 1) {
-              store.enqueueIntent(initial.id, 'retry-correction-A', 'enqueue', { type: 'user', parts: [{ text: 'mailbox correction A' }] });
+              store.enqueueIntent(initial.id, 'retry-correction-A', 'enqueue', { type: 'user', parts: [{ system: formatFoxwarmMessage({ type: 'channel', channelType: 'webui', time: 'original', hint: 'direct user message via channel' }, 'mailbox correction A') }] });
               store.enqueueIntent(initial.id, 'retry-correction-B', 'enqueue', { type: 'background', parts: [{ text: 'mailbox correction B' }] });
               assert.equal(session.queue.length, 0, 'new Worker input is durable only in the mailbox before the retry safe point');
               throw new Error('mock provider retry failure');
@@ -1139,12 +1140,12 @@ test('real Worker retry ingests durable mailbox input and honors Stop or dequeue
           assert.equal(!!durable.stopping, false);
           assert.equal(durable.queue.length, 0);
           assert.equal(durable.meta.runQueuedAfterStop, undefined);
-          assert.doesNotMatch(JSON.stringify(bodies[0].messages.filter((message: any) => message.role === 'user')), /queued-input/);
-          const correction = durable.history.find((message: any) => message.parts.some((part: any) => part.text === 'mailbox correction A'));
+          assert.doesNotMatch(JSON.stringify(bodies[0].messages.filter((message: any) => message.role === 'user')), /Queued input:/);
+          const correction = durable.history.find((message: any) => message.parts.some((part: any) => part.system?.includes('mailbox correction A')));
           assert.equal(correction.__meta.queuedInput, true, 'retry, passive Stop and Run queued retain owner-observed deferred input');
           const event = durable.history.find((message: any) => message.parts.some((part: any) => part.text === 'mailbox correction B'));
           assert.equal(event.__meta.queuedInput, undefined);
-          if (control !== 'stop') assert.equal((JSON.stringify(bodies[1].messages.filter((message: any) => message.role === 'user')).match(/queued-input/g) || []).length, 1);
+          if (control !== 'stop') assert.equal((JSON.stringify(bodies[1].messages.filter((message: any) => message.role === 'user')).match(/Queued input:/g) || []).length, 1);
           for (const text of ['mailbox correction A', 'mailbox correction B']) {
             assert.equal(JSON.stringify(durable.history).split(text).length - 1, 1);
             if (control !== 'stop') assert.equal(JSON.stringify(bodies[1]).split(text).length - 1, 1);
@@ -1157,7 +1158,7 @@ test('real Worker retry ingests durable mailbox input and honors Stop or dequeue
             await host.runPending(8);
             assert.equal(bodies.length, 2);
             const userPayload = JSON.stringify(bodies[1].messages.filter((message: any) => message.role === 'user'));
-            assert.equal((userPayload.match(/queued-input/g) || []).length, 1, 'passively committed input projects its hint once on the next real request');
+            assert.equal((userPayload.match(/Queued input:/g) || []).length, 1, 'passively committed input projects its hint once on the next real request');
             const newInput = readDurable().history.find((message: any) => message.__meta?.clientMessageId === 'after-stop');
             assert.equal(newInput.__meta.queuedInput, undefined, 'a later idle turn is not itself queued input');
           }
@@ -1220,7 +1221,7 @@ test('Worker channel mailbox follow-ups reach real provider requests with hints 
     await send('initial-B', [{ text: 'worker initial B' }]);
     await host.runPending(8);
     assert.equal(bodies.length, 3);
-    assert.deepEqual(bodies.map(body => (JSON.stringify(body.messages.filter((message: any) => message.role === 'user')).match(/queued-input/g) || []).length), [0, 2, 3]);
+    assert.deepEqual(bodies.map(body => (JSON.stringify(body.messages.filter((message: any) => message.role === 'user')).match(/Queued input:/g) || []).length), [0, 2, 3]);
     const history = readDurable().history;
     const userRows = history.filter((message: any) => message.__meta?.clientMessageId);
     assert.deepEqual(userRows.map((message: any) => [message.__meta.clientMessageId, !!message.__meta.queuedInput]), [
@@ -1230,7 +1231,19 @@ test('Worker channel mailbox follow-ups reach real provider requests with hints 
       const original = originalParts.get(message.__meta.clientMessageId)!;
       // Only the first initial input receives the existing session header.
       assert.deepEqual(message.parts.slice(-original.length), original);
-      assert.doesNotMatch(JSON.stringify(message.parts), /queued-input/);
+      assert.doesNotMatch(JSON.stringify(message.parts), /Queued input:/);
+      if (message.__meta.queuedInput) {
+        const bodyText = original.map(part => part.text || part.system || '').join('\n');
+        const marker = message.__meta.clientMessageId === 'tool' ? 'worker tool correction'
+          : `worker correction ${message.__meta.clientMessageId.endsWith('A') ? 'A' : 'B'}`;
+        const payload = bodies[2].messages.find((row: any) => row.role === 'user' && row.content.includes(marker));
+        assert.match(payload.content, /^<foxwarm-message /, 'no standalone system part precedes the source');
+        const expectedAttrs = parseFoxwarmOpeningTag(original[0].system)!.attrs;
+        const actualAttrs = parseFoxwarmOpeningTag(payload.content)!.attrs;
+        assert.equal(actualAttrs.hint.startsWith(`${expectedAttrs.hint} Queued input:`), true);
+        assert.deepEqual({ ...actualAttrs, hint: expectedAttrs.hint }, expectedAttrs);
+        assert.equal(payload.content.slice(payload.content.indexOf('>') + 1), bodyText.slice(bodyText.indexOf('>') + 1));
+      }
     }
     assert.equal(history.filter((message: any) => message.role === 'user').length, 6);
     const toolIndex = history.findIndex((message: any) => message.role === 'tool');
