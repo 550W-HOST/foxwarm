@@ -66,7 +66,7 @@ None — this file is the application entry point and does not export any symbol
 - Configured Telegram/Matrix default-main attachments retain the exact `main` target identity and log an actionable warning when that target is unavailable; startup still completes without recreating or retargeting it.
 - On `SIGINT`/`SIGTERM`, synchronously closes Main-local turn admission and starts owner drain while stopping inbound MCP and outbound notification receivers. Only successful local owner drain reaches ToolScript/Monty, Node execution/providers, Session-worker handback, outbound MCP, Main Management, SessionRuntime and Vector teardown. A local drain failure logs the error and sends SIGKILL only to Main itself. Contract: [local shutdown](../threads/session-lifecycle.md#d-lifecycle-main-local-shutdown). A router created during interrupted startup is also closed before it can run recovery work.
 
-`mainShutdown.integration.test.ts` uses real HTTP ingress, synthetic provider/embedding endpoints, SIGTERM and a fresh process against the same authority. It covers the original dependency-drain window, final/Stop settling after the signal, provider cancellation and a Linux native FIFO write that ignores cancellation and requires actual forced exit.
+`mainShutdown.integration.test.ts` uses real HTTP ingress, synthetic provider/embedding endpoints, SIGTERM and a fresh process against the same authority. It covers the original dependency-drain window, final/Stop settling after the signal, provider cancellation, an over-limit asynchronous compact-planning wait with queued follow-up, and a Linux native FIFO write that ignores cancellation and requires actual forced exit.
 
 ## Integration
 

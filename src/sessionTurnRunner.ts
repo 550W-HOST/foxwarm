@@ -94,6 +94,7 @@ export interface SessionTurnHost {
    * committing its result: `completed` when a ready/failed result is
    * observable for a safe-point commit, `none` when no compact work remains,
    * and `released` when a Stop/dequeue interruption ended the wait.
+   * A shutdown-owned cancellation propagates to the turn's interrupted outcome.
    */
   waitForCompactPlanningSettle(sessionId: string): Promise<'completed' | 'none' | 'released'>;
   checkAndCompactIfNeeded: typeof sessionManager.checkAndCompactIfNeeded;
@@ -223,6 +224,9 @@ export class LocalSessionTurnHost implements SessionTurnHost {
       this.currentSessionEffects.registerAbortController(sessionId, controller);
       try {
         const outcome = await sessionManager.waitForCompactPlanningSettle(sessionId, controller.signal);
+        if (outcome === 'aborted' && controller.signal.reason instanceof SessionTurnShutdownError) {
+          throw controller.signal.reason;
+        }
         return outcome === 'aborted' ? 'released' : outcome;
       } finally {
         this.currentSessionEffects.clearAbortController(sessionId, controller);

@@ -23,7 +23,7 @@ async function waitFor(check: () => Promise<boolean> | boolean, label: string, t
 
 type ToolReply = boolean | { name: string; args: Record<string, unknown> };
 
-function complete(response: http.ServerResponse, tools: ToolReply = false): void {
+function complete(response: http.ServerResponse, tools: ToolReply = false, highUsage?: boolean): void {
   const tool = tools === true ? { name: 'node', args: { action: 'list' } } : tools || undefined;
   const delta = tool
     ? { role: 'assistant', tool_calls: [{ index: 0, id: 'call', type: 'function', function: {
@@ -32,10 +32,11 @@ function complete(response: http.ServerResponse, tools: ToolReply = false): void
     : { role: 'assistant', content: 'Completed answer.' };
   response.setHeader('Content-Type', 'text/event-stream');
   response.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
-  response.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: tools ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`);
+  const usage = highUsage === undefined ? undefined : { prompt_tokens: highUsage ? 2100 : 10, completion_tokens: 1, total_tokens: highUsage ? 2101 : 11 };
+  response.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: tools ? 'tool_calls' : 'stop' }], usage })}\n\ndata: [DONE]\n\n`);
 }
 
-async function fixture(vector = false) {
+async function fixture(vector = false, compactWait = false) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-main-shutdown-'));
   const stateDir = path.join(root, 'state');
   await fs.mkdir(stateDir, { recursive: true });
@@ -51,8 +52,9 @@ async function fixture(vector = false) {
       response.end(JSON.stringify({ data: [{ embedding: Array(1024).fill(0.01) }] }));
     } else if (request.url?.endsWith('/chat/completions')) {
       providerCalls++;
-      if (providerCalls === 1) pendingProvider = response;
-      else complete(response);
+      if (providerCalls === 1 || (compactWait && providerCalls === 4)) pendingProvider = response;
+      else if (compactWait && providerCalls === 3) complete(response, true, true);
+      else complete(response, false, compactWait ? false : undefined);
     } else {
       response.writeHead(404).end();
     }
@@ -66,7 +68,7 @@ async function fixture(vector = false) {
   const baseUrl = `http://127.0.0.1:${port}`;
   await fs.writeFile(path.join(stateDir, 'token'), 'synthetic-shutdown-test-token');
   await fs.writeFile(path.join(stateDir, 'mcp.json'), '{}');
-  await fs.writeFile(path.join(stateDir, 'models.yaml'), `default: mock/test\nproviders:\n  mock:\n    providerType: openai-completions\n    baseUrl: ${providerUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    models: [test]\n`);
+  await fs.writeFile(path.join(stateDir, 'models.yaml'), `default: mock/test\nproviders:\n  mock:\n    providerType: openai-completions\n    baseUrl: ${providerUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: ${compactWait}\n${compactWait ? '    contextLimit: 2000\n' : ''}    models: [test]\n`);
   await fs.writeFile(path.join(stateDir, 'config.yaml'), `bot:\n  name: shutdown-test\n  httpPort: ${port}\n  enableWebUI: true\n  enableTrigger: false\nvector: ${vector ? `\n  baseUrl: ${providerUrl}/v1` : 'false'}\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: true\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(path.join(stateDir, 'mcp.json'))}\n`);
   await fs.mkdir(path.join(root, 'agents/main/memory'), { recursive: true });
   await fs.writeFile(path.join(root, 'agents/00_SYSTEM.md'), 'Synthetic process-shutdown test.');
@@ -118,18 +120,19 @@ async function fixture(vector = false) {
   };
   return {
     root, api, start, authority, waitForExit,
+    message(text: string) { return api(`/api/sessions/${encodeURIComponent(sessionId)}/message`, { text }); },
     get providerCalls() { return providerCalls; },
     async begin() {
       await start();
       sessionId = (await api('/api/sessions', { agentId: 'main', sessionId: 'interrupted' })).sessionId;
-      await api(`/api/sessions/${encodeURIComponent(sessionId)}/message`, { text: vector ? 'synthetic input '.repeat(4500) : 'input' });
+      await api(`/api/sessions/${encodeURIComponent(sessionId)}/message`, { text: vector || compactWait ? 'synthetic input '.repeat(4500) : 'input' });
       await waitFor(() => !!pendingProvider && (!vector || !!pendingEmbedding), 'accepted provider/index work');
       const saved = await authority();
       assert.equal(saved.busy, true);
       assert.equal(saved.queue.length, 0);
     },
     signal() { child!.kill('SIGTERM'); },
-    releaseProvider(tools: ToolReply = false) { complete(pendingProvider!, tools); pendingProvider = undefined; },
+    releaseProvider(tools: ToolReply = false) { complete(pendingProvider!, tools, compactWait ? false : undefined); pendingProvider = undefined; },
     releaseEmbedding,
     stop() { return api(`/api/sessions/${encodeURIComponent(sessionId)}/message`, { text: '/stop' }); },
     async close() {
@@ -200,6 +203,35 @@ test('the shutdown grace cancels an unresolved provider without terminalizing it
     assert.ok(!interrupted.history.some(row => row.role === 'model'));
     await f.start();
     await waitFor(async () => f.providerCalls === 2 && !(await f.authority()).busy, 'recovery after provider cancellation');
+  } finally { await f.close(); }
+});
+
+test('SIGTERM during a required compact-planning wait preserves busy and queued follow-up for restart', { skip: skipPosixSignal }, async () => {
+  const f = await fixture(false, true);
+  const followUp = 'follow-up accepted while compact planning is waiting';
+  try {
+    await f.begin();
+    f.releaseProvider();
+    await waitFor(async () => !(await f.authority()).busy, 'first completed exchange');
+    await f.message('second completed exchange');
+    await waitFor(async () => f.providerCalls === 2 && !(await f.authority()).busy, 'second completed exchange');
+    await f.message('continue using the node tool');
+    await waitFor(() => f.providerCalls === 4, 'real over-limit compact planner request');
+    await f.message(followUp);
+    await waitFor(async () => (await f.authority()).queue.length === 1, 'persisted follow-up while planning');
+    f.signal();
+    assert.deepEqual(await f.waitForExit(), [0, null]);
+    const interrupted = await f.authority();
+    assert.equal(interrupted.busy, true);
+    assert.equal(interrupted.queue.length, 1);
+    assert.ok(!JSON.stringify(interrupted.history).includes(followUp), 'shutdown must not turn later input into passive Stop history');
+    await f.start();
+    await waitFor(async () => f.providerCalls === 5 && !(await f.authority()).busy, 'interrupted continuation and queued input recovery');
+    const resumed = await f.authority();
+    assert.equal(resumed.queue.length, 0);
+    assert.ok(JSON.stringify(resumed.history).includes('session-resumed'));
+    assert.ok(JSON.stringify(resumed.history).includes(followUp));
+    assert.equal(resumed.history.at(-1)!.parts[0].text, 'Completed answer.');
   } finally { await f.close(); }
 });
 

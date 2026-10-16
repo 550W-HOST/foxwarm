@@ -35,6 +35,8 @@ After each normal-turn `llm.chat` assistant append succeeds (including an eligib
 
 When Main invokes local shutdown, `assertCanContinue` yields unfinished work at pre-provider/retry/tool continuation boundaries. The selected initial input batch still commits first. An ephemeral shutdown-interrupted outcome transfers busy-release ownership away from outer cleanup, while true terminals retain idle release. New outer actions and trailing reentry remain closed. Worker callers do not activate this lifecycle mode. Contract: [local shutdown](../threads/session-lifecycle.md#d-lifecycle-main-local-shutdown).
 
+`LocalSessionTurnHost.waitForCompactPlanningSettle` propagates the exact shutdown cancellation reason into that interrupted outcome instead of converting it to the Stop/dequeue `released` result. The history wait still observes planning readiness only; it neither cancels the planner nor awaits the commit owned by the waiting turn.
+
 Attached task completion carries an internal resolved-builtin signal that resolves the child handoff without fabricating a parent notification; the creator still receives the real completion delivery. Passive-only finish-window input stays queued rather than claiming another processor. These contracts are canonical in [Tasks](src-tasks.md) and [the pipeline](../threads/message-processing-pipeline.md#d-pipeline-passive-task-notification).
 
 ## Main collaborators
