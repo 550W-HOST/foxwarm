@@ -23,13 +23,13 @@ Owns the timing and usage presentation rules for timeline rows: persisted reques
 | `getConversationActivityStart` / `getConversationLiveRequestStart` | `conversationTiming.ts` | CTX-local leading input/execution origins and authoritative requesting-model starts; exclude creation/maintenance and unknown earlier work. |
 | `selectTimelineTimeMarker` | `timelineTime.ts` | Reuses the minute/date comparison for committed units and a presentation-only live request. |
 | `applyConversationTiming` | `conversationTiming.ts` | Projected reply/user/display-cut elapsed ranges with reliable leading origins and pre-first-part live work, clipped/unioned measured and live busy evidence with a displayed-divider waiting floor and per-gap noise filtering, runtime-confirmed pending batch receipts with conservative missing-data fallback, untimed canonical compact maintenance, and final error/CTX cuts. |
-| `isCompactCompletionMaintenanceMessage` | `../sessionContinuation.ts` | Shares exact canonical marker/generated reminder recognition for timing without changing the continuation classifier's legacy/read behavior. |
+| `isCompactCompletionMaintenanceMessage` | `packages/shared/src/sessionContinuation.ts` | Shares exact canonical marker/generated reminder recognition for timing without changing the continuation classifier's legacy/read behavior. |
 
 ## Dependencies
 
 - `./chatShared` — shared message types and helpers.
 - `./timelineRows` — row model consumed by the conversation timing pass; see [webui-timeline-rows](./webui-timeline-rows.md).
-- `../chatHistoryState`, `../sessionContinuation`, `../sessionRuntimeState` — history tail, compact-completion classification, and runtime state used as timing evidence.
+- `../chatHistoryState`, shared `sessionContinuation`, `../sessionRuntimeState` — history tail, compact-completion classification, and runtime state used as timing evidence.
 - `./timelineTime` and `usageTiming.ts` — time-marker and request-timing helpers owned by this unit.
 
 ## Behavior

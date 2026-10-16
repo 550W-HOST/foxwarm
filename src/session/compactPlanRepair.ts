@@ -4,7 +4,7 @@ import path from 'node:path';
 import { getAgentDir } from '../config';
 import { checkToolPermissionForSession } from '../isolatedCheck';
 import { applyUpdatePatch, parseApplyPatchInput } from '../../packages/shared/dist/applyPatch';
-import { applyExactReplacement } from '../tools/helpers';
+import { applyExactReplacement } from '../../packages/shared/dist/exactReplacement';
 import type { FunctionCall, Session } from '../types';
 
 /** Private to one planning invocation; never stored on Session or in persisted operation state. */

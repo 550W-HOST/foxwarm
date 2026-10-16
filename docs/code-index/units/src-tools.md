@@ -44,9 +44,8 @@ Implements the core tool registry and execution layer for the agent system. Defi
 | `resolveAgentMemoryPath` | Resolves paths within agent memory directory |
 | `readResolvedPath` | Master wrapper around shared `readFileToolPath`; reads file/directory/image and treats start/end line 0 as omitted |
 | `writeResolvedPath` | Master wrapper around shared `writeFileToolPath`; writes content with overwrite and parent-directory checks |
-| `editResolvedPath` | Applies exact text replacement in a file |
+| `editResolvedPath` | Reads the file, validates edit strings, then calls shared `exactReplacement` before writing |
 | `deleteResolvedPath` | Deletes a file (refuses directories) |
-| `applyExactReplacement` | Single-match regex replacement with validation |
 
 ### tools/fileTools.ts — File read/write/edit/patch/delete
 | Function | Description |

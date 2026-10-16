@@ -30,7 +30,7 @@ import { nodesManager } from './nodes/manager';
 import { getModelStreamDraft } from './modelStreamDraft';
 import { collectOpenAIResponsesStream, convertToOpenAIResponsesFormat } from './llmProviders/openai';
 import { mergeModelStreamDeltaEvents } from './sessionWorkerHost';
-import { isSessionTurnIncomplete } from './sessionContinuation';
+import { isSessionTurnIncomplete } from '../packages/shared/dist/sessionContinuation';
 import { clearOpenAIWsCompletedChains, getOpenAIWsCompletedChainCountForTests, setOpenAIWsTransportTestHooks } from './llmProviders/openaiWsTransport';
 import { isToolAuthorizationPolicyUnavailable, parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests, setToolAuthorizationPolicyPathForTests } from './toolAuthorization';
 import { makeAnthropicMessageStream } from './testFixtures/anthropicMessageStream';

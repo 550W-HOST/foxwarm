@@ -18,7 +18,7 @@ import { getContextBlockMetaFromMessage } from './ContextBlockCard'
 import { isCommittedHistoryMessage } from '../chatHistoryState'
 import { buildConversationActivitySummary } from './conversationActivity'
 import { applyConversationTiming, readConversationWorkInterval, getConversationActivityStart, getConversationLiveRequestStart, type ConversationTimingContext } from './conversationTiming'
-import { isCompactCompletionMaintenanceMessage } from '../sessionContinuation'
+import { isCompactCompletionMaintenanceMessage } from '../../../shared/src/sessionContinuation'
 import { getWebSearchAction } from '../webSearchAction'
 
 /**

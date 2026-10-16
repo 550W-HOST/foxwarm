@@ -1,6 +1,6 @@
 # Unit: shared-node-tools
 
-Files: packages/shared/src/fileOperations.ts, packages/shared/src/fileToolCore.ts, packages/shared/src/fileToolCore.test.ts, packages/shared/src/nodeTools.ts, packages/shared/src/nodeTools.test.ts, packages/shared/src/agentPathVariables.ts, packages/shared/src/agentPathVariables.test.ts, packages/shared/src/resolvedPathMetadata.ts, packages/shared/src/nodeCapabilities.ts, packages/shared/src/nodeFileTransfer.ts, packages/shared/src/execCwd.ts, packages/shared/src/index.ts, packages/shared/src/tokenCount.ts, packages/shared/src/toolResponseFormatting.ts, packages/shared/src/toolResponseFormatting.test.ts, packages/shared/src/foxwarmMarkup.ts, packages/shared/src/webuiToolRendering.ts, packages/shared/src/webuiToolRendering.test.ts
+Files: packages/shared/src/exactReplacement.ts, packages/shared/src/exactReplacement.test.ts, packages/shared/src/fileOperations.ts, packages/shared/src/fileToolCore.ts, packages/shared/src/fileToolCore.test.ts, packages/shared/src/nodeTools.ts, packages/shared/src/nodeTools.test.ts, packages/shared/src/agentPathVariables.ts, packages/shared/src/agentPathVariables.test.ts, packages/shared/src/resolvedPathMetadata.ts, packages/shared/src/nodeCapabilities.ts, packages/shared/src/nodeFileTransfer.ts, packages/shared/src/execCwd.ts, packages/shared/src/index.ts, packages/shared/src/tokenCount.ts, packages/shared/src/toolResponseFormatting.ts, packages/shared/src/toolResponseFormatting.test.ts, packages/shared/src/foxwarmMarkup.ts, packages/shared/src/webuiToolRendering.ts, packages/shared/src/webuiToolRendering.test.ts
 Secondary files: packages/shared/src/outputTruncation.ts, packages/shared/src/outputTruncation.test.ts
 
 Trusted foreground exec signals enter the shared wait and launch fence, not process termination. Interruption uses the existing background-registration and completion path under [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
@@ -14,6 +14,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 - `nodeTools` — aggregated object of all node tool functions (read, write, edit, apply_patch, exec, get_default_cwd, browse_*)
 - `read`, `write`, `edit`, `apply_patch`, `exec`, `get_default_cwd` — file and shell tool functions
 - `readFileToolPath`, `writeFileToolPath`, `applyPatchOperations`, `readDirectoryListing`, `findWriteParentIssue`, `formatWriteParentIssueMessage` — shared file read/write/patch core used by Main and Node wrappers
+- `applyExactReplacement` — pure exact single-match text replacement used directly by Main, Node, and compact repair
 - `requireToolFilePath` — shared required-path validation called by Main and Node read/edit wrappers before path resolution
 - `FileOperations`, `nativeFileOperations`, `readWholeFile`, `fileOperationPathExists` — low-level target-local stat/ranged-read/list/write/mkdir/remove contract, native implementation, and composition helpers
 - `NodeToolContext.resolveFilePath` / async-capable `dirnameFilePath` — optional target-namespace path seam used by primitive Node providers so Core can compose canonical file tools while the provider owns its namespace parent relation
@@ -43,8 +44,8 @@ Provides shared file system tools, shell execution, browser automation, and util
 
 | Function | Lines (approx) | Description |
 |----------|----------------|-------------|
-| `escapeRegExp(text)` | ~19 | Escapes special regex characters in a string |
-| `applyExactReplacement(content, searchText, replaceText, label)` | ~21 | Replaces exactly one occurrence of text or throws |
+| `escapeRegExp(text)` (exactReplacement, private) | helper | Escapes special regex characters in literal search text |
+| `applyExactReplacement(content, searchText, replaceText, label)` (exactReplacement) | pure transformation | Replaces one non-overlapping regex match or throws with the caller label; preserves JavaScript replacement-string substitutions |
 | `nativeFileOperations` (fileOperations) | complete file | Native stat, offset/count read, directory metadata, whole-write, mkdir, and remove implementation |
 | `readWholeFile(operations, filePath)` (fileOperations) | helper | Repeats bounded 64 KiB ranged reads until EOF for edit/patch callers |
 | `requireToolFilePath(filePath, toolName)` (fileToolCore) | required-path validation | Rejects missing or blank read/edit paths before wrapper path resolution without trimming valid paths |
@@ -116,7 +117,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 - `initializeNodeToolExecRecovery()` discovers persisted per-agent exec registries at authenticated node startup and initializes their managers, including already-finished entries; recovery does not wait for a later tool call.
 - Node-side `exec` shares master-side timeout resolution: finite values above 60 seconds clamp to 60 and emit the requested/effective warning in the immediate foreground or background-switch result; invalid and below-minimum values still reject.
 - `read` and `edit` reject missing or blank `filePath` values before path resolution with `read requires filePath.` or `edit requires filePath.`; valid paths retain the existing resolution and operation behavior.
-- `edit` enforces single-occurrence matching to prevent ambiguous replacements
+- `edit` uses shared `exactReplacement` single-occurrence matching. Search text is literal; replacement text keeps JavaScript `String.replace` substitutions. `exactReplacement.test.ts` covers literal metacharacters/whitespace, missing and multiple matches, non-overlapping matching, dollar substitutions, and the existing empty-search behavior. Validation and file operations remain wrapper-owned.
 - File existence checks treat only canonical `ENOENT` as missing; permission, protocol, malformed-provider, and other stat failures propagate so patch Add cannot overwrite an existing target after an indeterminate lookup.
 - `write` refuses to overwrite unless explicitly told, and requires parent directories to already exist unless `createDirs=true` is passed. The native backend retains `w`/`wx` behavior, so symlinked parent directories work naturally; friendly parent errors are generated only after write failure.
 - Shared cached-write retry formatting emits the executable `write({ ... })` call for the failing path, states that the scoped ref may use another independently authorized `filePath`, explicitly prohibits including `content` alongside `contentRef`, and directs intentional replacements to omit `contentRef` and submit only the new content plus the desired path and required flags; the canonical guidance contract is [D-tools-write-contentref-retry-guidance](./src-tools.md#d-tools-write-contentref-retry-guidance).
