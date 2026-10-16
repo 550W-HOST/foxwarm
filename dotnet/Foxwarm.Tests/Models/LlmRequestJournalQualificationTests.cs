@@ -13,24 +13,55 @@ public sealed class LlmRequestJournalQualificationTests
         using var temp = new TempDirectory();
         using var journal = new LlmRequestJournalStore(temp.Path);
         var sends = 0;
-        using var client = new HttpClient(new CountingHandler(() =>
-        {
-            // A separate store/connection observes durable state at the actual transport boundary.
-            using var reader = new LlmRequestJournalStore(temp.Path);
-            var requests = reader.ListAsync("session", null, null, null, 10).GetAwaiter().GetResult();
-            var id = Assert.Single(requests)!["requestId"]!.GetValue<string>();
-            var restored = reader.ReconstructAsync(id).GetAwaiter().GetResult();
-            Assert.Equal("complete", restored["completeness"]!.GetValue<string>());
-            var attempt = Assert.Single(restored["attempts"]!.AsArray());
-            Assert.Equal(1, attempt!["start"]!["attempt"]!.GetValue<int>());
-            Assert.Null(attempt!["result"]);
-            sends++;
-        }, "{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}"));
-        var owner = new ModelRequestOwner(client,
-            new ResponsesClientOptions(new Uri("http://localhost"), "model", "model", "token", "", 50),
-            new ModelRouting(), journal: journal);
-        await owner.RequestAsync("session", Catalog("anthropic"), "model", null, "cache", "turn",
-            History(), (_, _) => Task.FromResult("prompt"), null, null, null, null, CancellationToken.None);
+        using var client = new HttpClient(
+            new CountingHandler(
+                () =>
+                {
+                    // A separate store/connection observes durable state at the actual transport boundary.
+                    using var reader = new LlmRequestJournalStore(temp.Path);
+                    var requests = reader
+                        .ListAsync("session", null, null, null, 10)
+                        .GetAwaiter()
+                        .GetResult();
+                    var id = Assert.Single(requests)!["requestId"]!.GetValue<string>();
+                    var restored = reader.ReconstructAsync(id).GetAwaiter().GetResult();
+                    Assert.Equal("complete", restored["completeness"]!.GetValue<string>());
+                    var attempt = Assert.Single(restored["attempts"]!.AsArray());
+                    Assert.Equal(1, attempt!["start"]!["attempt"]!.GetValue<int>());
+                    Assert.Null(attempt!["result"]);
+                    sends++;
+                },
+                "{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}"
+            )
+        );
+        var owner = new ModelRequestOwner(
+            client,
+            new ResponsesClientOptions(
+                new Uri("http://localhost"),
+                "model",
+                "model",
+                "token",
+                "",
+                50
+            ),
+            new ModelRouting(),
+            journal: journal
+        );
+        await owner.RequestAsync(
+            "session",
+            Catalog("anthropic"),
+            "model",
+            null,
+            "cache",
+            "turn",
+            History(),
+            (_, _) => Task.FromResult("prompt"),
+            null,
+            null,
+            null,
+            null,
+            CancellationToken.None
+        );
         Assert.Equal(1, sends);
     }
 
