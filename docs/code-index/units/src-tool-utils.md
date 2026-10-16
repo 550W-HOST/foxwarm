@@ -75,7 +75,7 @@ Provides utilities for serializing/parsing tool call arguments, guarding oversiz
 - `./sessionManager` — session retrieval, archived messages, channel/file sending
 - `../packages/shared/dist/toolResponseFormatting` — `formatStructuredValue`, `formatToolResponsePayload`, `formatToolScriptExecutionResponse`
 - `./utils/unicode` — `takeUnicodeSafe`, `takeUnicodeSafeEnd`, `truncateUnicodeSafe`
-- `./llm` — `executeTools`, `fixToolCalls` (tested)
+- `./llm` and `./toolExecutor` — `fixToolCalls` and typed tool batch execution (tested)
 - `./llmProviders/openai` — `convertToOpenAIFormat`, `convertToOpenAIResponsesFormat` (tested)
 - `./tools` — tool implementations and definitions (tested)
 - `./toolsSessionAgent` — `tool_send_file`, `tool_send_to_channel` (tested)
@@ -104,7 +104,7 @@ Provides utilities for serializing/parsing tool call arguments, guarding oversiz
 
 ## Integration
 
-- The output guard is called by `executeTools` in the LLM layer before tool results are appended to session history, ensuring model context stays within token limits.
+- The output guard is called by `executeTools` in the tool executor before tool results are appended to session history, ensuring model context stays within token limits.
 - The guard preserves the structured tool-result object shape; provider serializers later call `formatToolResponsePayload()` to produce string content for OpenAI Chat Completions, OpenAI Responses function_call_output, and Anthropic tool_result blocks.
 - Image normalization feeds into the message part system, enabling downstream image tools (`image_crop`, `image_write_to_file`) to reference prior tool images by ID.
 - Durable image storage and provider/WebUI boundaries are canonical in [image blob lifecycle](../threads/image-blob-lifecycle.md).

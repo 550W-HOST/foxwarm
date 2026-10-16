@@ -1,10 +1,12 @@
+import type { ToolBatchResult } from './toolExecutor';
+import { executeTools } from './toolExecutor';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 import sharp from 'sharp';
-import { executeTools } from './llm';
+
 import * as llm from './llm';
 import * as sessionManager from './sessionManager';
 import * as tools from './tools';
@@ -49,8 +51,8 @@ function imagePart(ref: InlineDataRef): MessagePart {
   };
 }
 
-function responseParts(toolMessage: any): any {
-  const part = toolMessage.parts.find((entry: MessagePart) => entry.functionResponse);
+function responseParts(toolMessage: ToolBatchResult): any {
+  const part = toolMessage.message.parts.find((entry: MessagePart) => entry.functionResponse);
   return part?.functionResponse?.response;
 }
 
@@ -147,7 +149,7 @@ test('a script-returned image reaches the tool result and the session as a Blob 
       { id: toolCallId, name: 'run_script', args: { filePath: scriptName } },
     ], { sessionId, session }, session);
 
-    const imageParts = toolMessage.parts.filter(part => part.inlineDataRef);
+    const imageParts = toolMessage.message.parts.filter(part => part.inlineDataRef);
     assert.equal(imageParts.length, 1);
     assert.equal(imageParts[0].toolUseId, toolCallId);
     assert.equal(imageParts[0].imageMeta?.imageId, `${toolCallId}#1`);
@@ -163,7 +165,7 @@ test('a script-returned image reaches the tool result and the session as a Blob 
 
     // The provider boundary restores the bytes from the reference, so the next
     // model request sees the exact script-produced image.
-    const hydrated = await hydrateMessagesForProvider([toolMessage]);
+    const hydrated = await hydrateMessagesForProvider([toolMessage.message]);
     const hydratedPart = hydrated[0].parts.find(part => part.inlineData);
     assert.ok(hydratedPart?.inlineData);
     assert.equal(hydratedPart!.inlineData!.mimeType, 'image/png');
@@ -197,7 +199,7 @@ test('returning the one-shot result object promotes its image parts', async () =
       { id: 'call_envelope', name: 'run_script', args: { filePath: scriptName } },
     ], { sessionId, session }, session);
 
-    const imageParts = toolMessage.parts.filter(part => part.inlineDataRef);
+    const imageParts = toolMessage.message.parts.filter(part => part.inlineDataRef);
     assert.equal(imageParts.length, 1);
     assert.equal(imageParts[0].imageMeta?.imageId, 'call_envelope#1');
     assert.deepEqual(imageParts[0].inlineDataRef, ref);
@@ -231,7 +233,7 @@ test('returning an object that carries the one-shot parts promotes its image par
       { id: 'call_parts_only', name: 'run_script', args: { filePath: scriptName } },
     ], { sessionId, session }, session);
 
-    const imageParts = toolMessage.parts.filter(part => part.inlineDataRef);
+    const imageParts = toolMessage.message.parts.filter(part => part.inlineDataRef);
     assert.equal(imageParts.length, 1);
     assert.equal(imageParts[0].imageMeta?.imageId, 'call_parts_only#1');
     assert.deepEqual(imageParts[0].inlineDataRef, ref);
@@ -269,10 +271,10 @@ test('promoting an inline image keeps unrelated parts JSON untouched', async () 
     assert.deepEqual(response.result.parts, [{ text: 'KEEP_ME' }, { note: 'ordinary json' }]);
     assert.equal(response.result.status, 'kept');
     assert.match(String(response.result.inlineData), /^\[image promoted, mimeType=image\/png\]$/);
-    const imageParts = toolMessage.parts.filter(part => part.inlineData);
+    const imageParts = toolMessage.message.parts.filter(part => part.inlineData);
     assert.equal(imageParts.length, 1);
     assert.equal(imageParts[0].imageMeta?.imageId, 'call_inline_parts#1');
-    assert.equal(toolMessage.parts.filter(part => part.inlineDataRef).length, 0);
+    assert.equal(toolMessage.message.parts.filter(part => part.inlineDataRef).length, 0);
   } finally {
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);
@@ -301,7 +303,7 @@ test('promoting inlineDataItems keeps unrelated parts JSON untouched', async () 
     const response = responseParts(toolMessage);
     assert.deepEqual(response.result.parts, [{ text: 'KEEP_ME_TOO' }]);
     assert.equal(response.result.inlineDataItems, '[1 image(s) promoted]');
-    const imageParts = toolMessage.parts.filter(part => part.inlineData);
+    const imageParts = toolMessage.message.parts.filter(part => part.inlineData);
     assert.equal(imageParts.length, 1);
     assert.equal(imageParts[0].imageMeta?.imageId, 'call_inline_items#1');
   } finally {
@@ -338,7 +340,7 @@ test('a one-shot part carrying both text and an image reference keeps both', asy
     const toolMessage = await executeTools([
       { id: 'call_dual_field', name: 'run_script', args: { filePath: scriptName } },
     ], { sessionId, session }, session);
-    const imageParts = toolMessage.parts.filter(part => part.inlineDataRef);
+    const imageParts = toolMessage.message.parts.filter(part => part.inlineDataRef);
     assert.equal(imageParts.length, 1);
     assert.deepEqual(imageParts[0].inlineDataRef, ref);
     assert.equal(responseParts(toolMessage).result.text, 'here is a fox');
@@ -378,7 +380,7 @@ test('text plus image returns keep the text and promote only the image parts', a
     const toolMessage = await executeTools([
       { id: 'call_script_mixed', name: 'run_script', args: { filePath: scriptName } },
     ], { sessionId, session }, session);
-    assert.equal(toolMessage.parts.filter(part => part.inlineDataRef).length, 1);
+    assert.equal(toolMessage.message.parts.filter(part => part.inlineDataRef).length, 1);
     assert.equal(responseParts(toolMessage).result.text, 'here is a fox');
     assert.equal(JSON.stringify(toolMessage).includes(png.toString('base64')), false);
   } finally {
@@ -413,7 +415,7 @@ test('multiple script images keep their order and distinct references', async ()
       { id: 'call_script_multi', name: 'run_script', args: { filePath: scriptName } },
     ], { sessionId, session }, session);
 
-    const imageParts = toolMessage.parts.filter(part => part.inlineDataRef);
+    const imageParts = toolMessage.message.parts.filter(part => part.inlineDataRef);
     assert.equal(imageParts.length, 2);
     assert.deepEqual(imageParts.map(part => part.imageMeta?.imageId), ['call_script_multi#1', 'call_script_multi#2']);
     assert.deepEqual(imageParts.map(part => part.inlineDataRef?.blobId), [firstRef.blobId, secondRef.blobId]);
@@ -452,7 +454,7 @@ test('a missing stored image fails the tool result explicitly instead of leaving
       { id: 'call_script_missing', name: 'run_script', args: { filePath: scriptName } },
     ], { sessionId, session }, session);
 
-    assert.equal(toolMessage.parts.filter(part => part.inlineDataRef).length, 0);
+    assert.equal(toolMessage.message.parts.filter(part => part.inlineDataRef).length, 0);
     const response = responseParts(toolMessage);
     assert.match(String(response.error || ''), /ENOENT|no such file/i);
   } finally {
@@ -479,7 +481,7 @@ test('ordinary JSON returned by a script stays ordinary JSON', async () => {
     const toolMessage = await executeTools([
       { id: 'call_script_json', name: 'run_script', args: { filePath: scriptName } },
     ], { sessionId, session }, session);
-    assert.equal(toolMessage.parts.filter(part => part.inlineDataRef).length, 0);
+    assert.equal(toolMessage.message.parts.filter(part => part.inlineDataRef).length, 0);
     assert.deepEqual(responseParts(toolMessage).result, { parts: [{ inlineDataRef: { blobId: 'not-a-blob' } }], text: 'plain' });
   } finally {
     await resetToolScriptRunsForTests();
@@ -508,7 +510,7 @@ test('a script-produced image can be saved through the existing image id lookup'
       { id: 'call_script_saved', name: 'run_script', args: { filePath: scriptName } },
     ], { sessionId, session }, session);
 
-    (sessionManager as any).getExistingSession = async () => ({ id: sessionId, agent: 'main', cwd: tempDir, history: [toolMessage] });
+    (sessionManager as any).getExistingSession = async () => ({ id: sessionId, agent: 'main', cwd: tempDir, history: [toolMessage.message] });
     (sessionManager as any).getArchivedMessages = async () => ({ records: [] as any[] });
 
     const saved = await tools.image_write_to_file({

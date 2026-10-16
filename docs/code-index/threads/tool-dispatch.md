@@ -12,7 +12,7 @@ Dedicated compaction uses its own bounded gate rather than the ordinary tool loo
 
 1. The LLM returns one or more tool calls in a `ChatResult`.
 2. Before target resolution, per-call `onToolStart` publication, or tool effect, ordinary model-turn batches consume the reserved top-level cancellation controls. Batch-level returned-call progress/runtime state may already have been published by the turn runner. One `__cancelAllToolsThisTurn:true` returns a canceled response for every call without resolving any of them; `__cancelTool:true` skips only that call. Invalid reserved values fail only their own call. The controls are removed from execution arguments while the canonical assistant call remains unchanged. The dedicated compact-plan tool is excluded from this ordinary model-facing cancellation schema surface.
-3. The message-processing loop schedules the remaining batch in model order. Adjacent direct `exec` calls form a bounded parallel segment; every other direct or unified tool is a serial barrier.
+3. The turn host calls `toolExecutor.executeTools` directly; its typed result separates the canonical tool Message from transient control/post-actions. The executor schedules the remaining batch in model order. Adjacent direct `exec` calls form a bounded parallel segment; every other direct or unified tool is a serial barrier.
    A successful builtin `node` selection takes effect before later exec/file calls in the same model response. Failed selection skips the remaining unstarted calls without resolving them; see [Node selection batch prerequisite](./tool-dispatch-authorization.md#d-dispatch-node-selection-batch-prerequisite).
    The segment carries one process-local ExecRuntime plus the exact current Session persistence hook. Each call keeps all exec lifecycle methods on that runtime; deferred cwd changes replay against the same passed owner in model order.
 4. Direct provider calls, unified `call_tool`, and ToolScript nested calls resolve one canonical `ResolvedTool` before permission or execution. Capability source (`builtin`, `node`, or `mcp`), exact execution Node ID, and process/service owner remain separate. `ResolvedTool` does not classify Node implementations. A root builtin `node` schema field selects the current tool's placement only when explicit placement metadata says so: `send_file` and `image_write_to_file` consume it as their file source/target, while `create_child_session.node` remains a semantic authorization/effect argument and the management operation itself stays on Main. `call_tool` itself is a permission-neutral dispatcher/container rather than a concrete builtin capability: authorization belongs only to the resolved target, and MCP retains its authoritative Main service recheck for the concrete server/tool. Node-environment direct tools select the session's current Node. Main-local production uses local facades, while Session-worker production borrows reverse Main Management, Node, MCP, vector, file, delivery, and presentation facades through the exact Worker source boundary.
@@ -37,6 +37,8 @@ Dedicated compaction uses its own bounded gate rather than the ordinary tool loo
 - [session core](../modules/session-core.md)
 
 ## Key units
+
+- [src-tool-executor](../units/src-tool-executor.md)
 
 - [src-tools](../units/src-tools.md)
 - [src-isolated-check](../units/src-isolated-check.md)

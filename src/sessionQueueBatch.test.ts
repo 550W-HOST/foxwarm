@@ -1,9 +1,10 @@
+import type { CurrentSessionTurnEffects } from './session/currentSessionEffects';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { initArchiveStore } from './session/archiveStore';
 import * as sessionManager from './sessionManager';
 import { LocalSessionTurnHost, SessionTurnRunner } from './sessionTurnRunner';
-import type { CurrentSessionTurnEffects } from './llm';
+
 import type { Message, QueueItem, Session } from './types';
 import { formatFoxwarmMessage, formatFoxwarmSystemOpen, parseFoxwarmOpeningTag } from './utils/promptWrappers';
 

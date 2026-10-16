@@ -1,6 +1,7 @@
+import { executeTools } from '../toolExecutor';
 import { DatabaseSync } from 'node:sqlite';
 import { taskService } from './taskTools';
-import { executeTools } from '../llm';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TASK_ACTIONS, TASK_LIST_SCOPES, TASK_STATUSES } from '../taskStore';
@@ -192,7 +193,7 @@ test('create_child_session taskId assigns or transfers the real child before del
     assert.equal(sessionManager.getAllSessions().size, count);
     const completion = await executeTools([{ id: 'child-task-complete', name: 'task', args: { action: 'complete', taskId, result: 'Finished delegated work' } }],
       { sessionId: replacement.id, session: replacement }, replacement);
-    assert.deepEqual((completion as any).__toolPostAction, { successfulSendToSessionTargets: [parent.id], completedLinkedTask: { taskId, attachedSessionId: transferredId } });
+    assert.deepEqual(completion.postActions, { successfulSendToSessionTargets: [parent.id], completedLinkedTask: { taskId, attachedSessionId: transferredId } });
     assert.equal(readResult(await task({ action: 'get', taskId }, ctx)).task.status, 'completed');
     await assert.rejects(() => create_child_session({ suffix: 'terminal', taskId }, ctx), /terminal/);
     assert.equal(sessionManager.getAllSessions().size, count);
@@ -281,8 +282,8 @@ test('real Session moves preserve task owner/creator/attached identities, notifi
     const completed = await executeTools([{ id: 'complete-renamed-child', name: 'call_tool', args: {
       toolId: 'builtin:task', args: { action: 'complete', taskId, result: 'Done after rename' },
     } }], currentCtx, child);
-    assert.deepEqual((completed as any).__toolPostAction.completedLinkedTask, { taskId, attachedSessionId: child.id });
-    assert.deepEqual((completed as any).__toolPostAction.successfulSendToSessionTargets, [currentCreator.id]);
+    assert.deepEqual(completed.postActions.completedLinkedTask, { taskId, attachedSessionId: child.id });
+    assert.deepEqual(completed.postActions.successfulSendToSessionTargets, [currentCreator.id]);
     assert.equal(currentCreator.queue.length, 1, 'notification reaches the real moved creator');
     assert.equal(currentCreator.queue[0].sourceSessionId, child.id);
     assert.equal(parent.queue.length, 0, 'no fabricated routine report to actual parent');

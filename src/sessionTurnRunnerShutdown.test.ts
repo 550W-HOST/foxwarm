@@ -1,3 +1,6 @@
+import * as toolExecutor from './toolExecutor';
+import { executeTools } from './toolExecutor';
+import type { CurrentSessionTurnEffects } from './session/currentSessionEffects';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as llm from './llm';
@@ -39,7 +42,7 @@ function fixture() {
     session.history.push(...messages);
     await persist();
   };
-  const effects: llm.CurrentSessionTurnEffects = {
+  const effects: CurrentSessionTurnEffects = {
     placement: 'local',
     appendMessage: (owner, message) => append(owner, [message]),
     appendMessages: append,
@@ -54,9 +57,13 @@ function fixture() {
   const state = {
     chatCalls: 0, toolCalls: 0,
     chat: async (_signal: AbortSignal): Promise<ChatResult> => ({ text: 'answer' }),
-    tools: async (_signal: AbortSignal): Promise<Message> => ({ role: 'tool', parts: [{ functionResponse: {
-      name: 'read', tool_use_id: 'call', response: { output: 'done' },
-    } }] }),
+    tools: async (_signal: AbortSignal): Promise<toolExecutor.ToolBatchResult> => ({
+      message: {
+        role: 'tool', parts: [{ functionResponse: {
+              name: 'read', tool_use_id: 'call', response: { output: 'done' },
+            } }]
+      }
+    }),
   };
   class Host extends LocalSessionTurnHost {
     override get chat(): typeof llm.chat {
@@ -71,7 +78,7 @@ function fixture() {
         } finally { activeAbort = undefined; }
       };
     }
-    override get executeTools(): typeof llm.executeTools {
+    override get executeTools(): typeof toolExecutor.executeTools {
       return async () => {
         state.toolCalls++;
         const controller = new AbortController();
@@ -229,15 +236,19 @@ for (const terminal of ['finish', 'wait'] as const) {
   test(`a successful ${terminal} handoff that settles during shutdown remains idle`, async () => {
     const f = fixture();
     const entered = deferred();
-    const tools = deferred<Message>();
+    const tools = deferred<toolExecutor.ToolBatchResult>();
     f.state.chat = async () => toolResult;
     f.state.tools = async () => { entered.resolve(); return tools.promise; };
     const running = f.runner.processSessionQueue(f.session.id);
     await entered.promise;
     const shutdown = f.runner.shutdown(f.abort);
-    tools.resolve({ role: 'tool', parts: [], ...(terminal === 'finish'
-      ? { __toolLoopControl: { stopCurrentTurn: true } }
-      : { __toolPostAction: { waitForReply: true } }) } as Message);
+    tools.resolve({
+      message: {
+        role: 'tool', parts: []
+      }, ...(terminal === 'finish'
+        ? { control: { stopCurrentTurn: true } }
+        : { postActions: { waitForReply: true } })
+    });
     await Promise.all([running, shutdown]);
     assert.equal(f.session.busy, false);
     assert.equal(!!f.session.meta.wait, terminal === 'wait');
@@ -248,7 +259,7 @@ for (const terminal of ['finish', 'wait'] as const) {
 test('a tool that ignores cancellation makes drain fail, never a false successful shutdown', async () => {
   const f = fixture();
   const entered = deferred();
-  const tools = deferred<Message>();
+  const tools = deferred<toolExecutor.ToolBatchResult>();
   f.state.chat = async () => toolResult;
   f.state.tools = async () => { entered.resolve(); return tools.promise; };
   const running = f.runner.processSessionQueue(f.session.id);
@@ -257,7 +268,11 @@ test('a tool that ignores cancellation makes drain fail, never a false successfu
   assert.equal(f.session.busy, true);
   // Test cleanup releases the actual operation; the closed admission still
   // prevents its next provider request or a new processor.
-  tools.resolve({ role: 'tool', parts: [] });
+  tools.resolve({
+    message: {
+      role: 'tool', parts: []
+    }
+  });
   await running;
   assert.equal(f.session.busy, true);
   assert.equal(f.state.chatCalls, 1);

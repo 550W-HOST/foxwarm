@@ -86,7 +86,7 @@ Unknown external function names are returned to Monty as runtime exceptions that
 
 ### D-toolscript-dynamic-dispatch
 
-Nested tool execution dynamically calls the exported `./tools.call_tool` wrapper. It does not call `llm.executeTools` and does not maintain a parallel registry.
+Nested tool execution dynamically calls the exported `./tools.call_tool` wrapper. It does not call `toolExecutor.executeTools` and does not maintain a parallel registry.
 
 ### D-toolscript-safe-timeout
 

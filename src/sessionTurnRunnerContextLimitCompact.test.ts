@@ -1,3 +1,5 @@
+import * as toolExecutor from './toolExecutor';
+import type { CurrentSessionTurnEffects } from './session/currentSessionEffects';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -26,7 +28,7 @@ const TURN_TOOL_CALL = { id: 'limit-guard-tool', name: 'read', args: { action: '
 type Harness = {
   session: Session;
   deps: sessionHistory.SessionHistoryDeps;
-  effects: llm.CurrentSessionTurnEffects;
+  effects: CurrentSessionTurnEffects;
   abortControllers: Map<string, AbortController>;
   deliveries: string[];
   /** Broadcasts flagged as turn-final, the terminal deliveries of a turn. */
@@ -85,7 +87,7 @@ async function createHarness(sessionId: string): Promise<Harness> {
   const appendMessages = async (owner: Session, messages: Message[]) => { await sessionManager.appendSessionMessagesForSession(
     owner, messages, () => persistSession(owner), notifyHistoryUpdate,
   ); };
-  const effects: llm.CurrentSessionTurnEffects = {
+  const effects: CurrentSessionTurnEffects = {
     placement: 'local',
     appendMessage: (owner, message) => appendMessages(owner, [message]),
     appendMessages,
@@ -150,7 +152,7 @@ async function appendPlanSubmission(options: any, toolCall: any) {
 
 function stubProviderSurface() {
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   const originalSnapshot = llm.buildSessionSystemPromptSnapshotForSession;
   const originalResolve = configModule.resolveModelConfig;
   const models = loadModelsConfigFromObject({
@@ -165,13 +167,14 @@ function stubProviderSurface() {
     contextLimit: CONTEXT_LIMIT_TOKENS,
   });
   (llm as any).buildSessionSystemPromptSnapshotForSession = async (activeSession: Session) => activeSession.persistentMemorySnapshot;
-  (llm as any).executeTools = async (functionCalls: Array<{ id?: string; name: string }>) => ({
-    role: 'tool',
-    parts: functionCalls.map(call => ({ functionResponse: { tool_use_id: call.id, name: call.name, response: { output: 'ok' } } })),
+  (toolExecutor as any).executeTools = async (functionCalls: Array<{ id?: string; name: string }>) => ({
+    message: {
+      role: 'tool', parts: functionCalls.map(call => ({ functionResponse: { tool_use_id: call.id, name: call.name, response: { output: 'ok' } } }))
+    }
   });
   return () => {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
     (llm as any).buildSessionSystemPromptSnapshotForSession = originalSnapshot;
     (configModule as any).resolveModelConfig = originalResolve;
   };

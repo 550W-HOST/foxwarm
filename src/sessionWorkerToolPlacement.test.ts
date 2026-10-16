@@ -1,3 +1,4 @@
+import { executeTools } from './toolExecutor';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
@@ -9,7 +10,7 @@ import { callTool } from './tools';
 import { tool_call_tool } from './tools/unifiedSearch';
 import { tool_search_tools } from './tools/unifiedSearch';
 import { tool_run_script } from './toolscript';
-import { executeTools } from './llm';
+
 import * as nodeExecution from './nodeExecution';
 import * as mcpExternal from './mcpExternalService';
 import * as agentMetadata from './session/agentMetadata';
@@ -55,7 +56,7 @@ test('worker direct, unified, and ToolScript node dispatch retain exact owner wi
         args: { path: filePath },
       },
     } }], { sessionId: session.id }, session, { currentSessionEffects: effects });
-    const scriptResponse = scriptMessage.parts[0].functionResponse!;
+    const scriptResponse = scriptMessage.message.parts[0].functionResponse!;
     assert.equal(scriptResponse.response.status, 'completed');
     assert.equal(scriptResponse.response.result, 'exact-owner'.length);
     assert.deepEqual(Object.keys(scriptResponse.response).sort(), ['result', 'runId', 'status']);

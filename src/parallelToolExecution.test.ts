@@ -1,9 +1,11 @@
+import type { ToolBatchResult } from './toolExecutor';
+import { executeTools } from './toolExecutor';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import fs from 'fs-extra';
-import { executeTools } from './llm';
+
 import { nodesManager } from './nodes/manager';
 import * as sessionManager from './sessionManager';
 import type { FunctionCall, Session } from './types';
@@ -21,8 +23,8 @@ async function waitForFiles(paths: string[], timeoutMs = 5000): Promise<void> {
   assert.fail(`Timed out waiting for files: ${paths.join(', ')}`);
 }
 
-function functionResponses(message: any): any[] {
-  return message.parts.filter((part: any) => part.functionResponse).map((part: any) => part.functionResponse);
+function functionResponses(message: ToolBatchResult): any[] {
+  return message.message.parts.filter((part: any) => part.functionResponse).map((part: any) => part.functionResponse);
 }
 
 async function createSession(sessionId: string, cwd?: string): Promise<Session> {
@@ -129,10 +131,10 @@ test('serial image and error barriers retain per-call image/result ordering', as
       { id: 'image-read', name: 'read', args: { filePath: imagePath } },
       { id: 'missing-read', name: 'read', args: { filePath: path.join(root, 'missing.txt') } },
     ], { sessionId, session }, session);
-    assert.equal(result.parts[0].imageMeta?.imageId, 'image-read#1');
-    assert.equal(result.parts[1].functionResponse?.tool_use_id, 'image-read');
-    assert.equal(result.parts[2].functionResponse?.tool_use_id, 'missing-read');
-    assert.notEqual(result.parts[2].functionResponse?.response?.error, undefined);
+    assert.equal(result.message.parts[0].imageMeta?.imageId, 'image-read#1');
+    assert.equal(result.message.parts[1].functionResponse?.tool_use_id, 'image-read');
+    assert.equal(result.message.parts[2].functionResponse?.tool_use_id, 'missing-read');
+    assert.notEqual(result.message.parts[2].functionResponse?.response?.error, undefined);
   } finally {
     await sessionManager.deleteSession(sessionId).catch(() => false);
     await fs.remove(root);

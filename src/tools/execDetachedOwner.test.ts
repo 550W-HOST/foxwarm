@@ -1,3 +1,5 @@
+import * as toolExecutor from '../toolExecutor';
+import type { CurrentSessionEffects } from '../session/currentSessionEffects';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
@@ -170,7 +172,7 @@ test('parallel detached exec replays cwd in model order through the same owner',
   const originals = { save: sessionManager.saveSession, update: sessionRuntime.updateSettings };
   (sessionManager as any).saveSession = async () => { throw new Error('global save forbidden'); };
   (sessionRuntime as any).updateSettings = async () => { throw new Error('global cwd update forbidden'); };
-  const effects: llm.CurrentSessionEffects = {
+  const effects: CurrentSessionEffects = {
     placement: 'local',
     appendMessage: async () => {},
     persistSession: async owner => { assert.strictEqual(owner, session); persistCount += 1; },
@@ -182,11 +184,11 @@ test('parallel detached exec replays cwd in model order through the same owner',
   };
 
   try {
-    const message = await llm.executeTools([
+    const message = await toolExecutor.executeTools([
       { id: 'call-first', name: 'exec', args: { command: 'first' } },
       { id: 'call-second', name: 'exec', args: { command: 'second' } },
     ], { sessionId: session.id }, session, { currentSessionEffects: effects });
-    assert.equal(message.parts.length, 2);
+    assert.equal(message.message.parts.length, 2);
     assert.equal(session.cwd, secondCwd, 'last model-order exec owns the replayed cwd');
     assert.equal(persistCount, 4, 'two unconditional pre-exec saves plus two ordered cwd changes');
     assert.match(JSON.stringify(message), /SESSION CWD CHANGED/);

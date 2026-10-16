@@ -29,7 +29,7 @@ Tests the `wait` tool functionality, including timeout behavior, `waitAllSession
 
 - `./messageRouter` — `MessageRouter` for processing session queues
 - `./sessionManager` — session CRUD, wait management, queue operations
-- `./llm` — mocked `chat` and `executeTools` for simulating LLM responses
+- `./llm` and `./toolExecutor` — mocked `chat` and typed tool batches for simulating turns
 - `./vector` — mocked `scheduleSessionArchiveIndex`
 - `./timers` — `buildWaitTimeoutMessage`, `createTimer`, `createTimersStore`, `resetTimersForTests`, `setTimersStoreForTests`
 - `./tools` — `definitions` (tool schema registry)

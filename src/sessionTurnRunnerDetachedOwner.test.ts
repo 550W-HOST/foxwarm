@@ -1,3 +1,5 @@
+import * as toolExecutor from './toolExecutor';
+import type { CurrentSessionTurnEffects, CurrentSessionEffects } from './session/currentSessionEffects';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as llm from './llm';
@@ -35,7 +37,7 @@ function createSession(id: string, text: string): Session {
   } as Session;
 }
 
-function createEffects(session: Session, events: string[]): llm.CurrentSessionTurnEffects {
+function createEffects(session: Session, events: string[]): CurrentSessionTurnEffects {
   const persistSession = async (owner: Session) => {
     assert.strictEqual(owner, session);
     events.push(`persist:${owner.busy ? 'busy' : 'idle'}:${owner.history.length}`);
@@ -346,7 +348,7 @@ test('normal turn delivers only this committed response images, independently of
     deliverGeneratedImages: async (_session, images) => { deliveries.push(images.map(image => image.imageId)); },
   });
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   let calls = 0;
   const toolCall = { id: 'generated_media_test_call', name: 'synthetic', args: {} };
   (llm as any).chat = async (parts: any, owner: Session, _iteration: number, options: any) => {
@@ -367,9 +369,13 @@ test('normal turn delivers only this committed response images, independently of
     return { text: calls === 1 ? '' : calls === 2 ? 'second reply' : 'follow-up after tool',
       allParts: assistant.parts, ...(calls === 2 ? { toolCalls: [toolCall] } : {}) };
   };
-  (llm as any).executeTools = async () => ({ role: 'tool', parts: [{
-    functionResponse: { tool_use_id: toolCall.id, name: toolCall.name, response: { output: 'ok' } },
-  }] });
+  (toolExecutor as any).executeTools = async () => ({
+    message: {
+      role: 'tool', parts: [{
+          functionResponse: { tool_use_id: toolCall.id, name: toolCall.name, response: { output: 'ok' } },
+        }]
+    }
+  });
   try {
     await withGlobalOwnerLookupsForbidden(() => new SessionTurnRunner(host).processSessionQueue(session.id));
     assert.deepEqual(deliveries, [['ig_one']]);
@@ -380,7 +386,7 @@ test('normal turn delivers only this committed response images, independently of
     assert.equal(session.history.filter(message => message.role === 'model').length, 3);
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
     await fs.remove(resolveImageBlobPath(first.blobId!));
   }
 });
@@ -835,7 +841,7 @@ test('local post-final child-reminder failure keeps one provider final and relea
 test('persisted child-handoff state exclusively drives reminder boundaries, resolution, and transparency', async () => {
   await initArchiveStore();
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
 
   async function runCase(options: {
     name: string;
@@ -884,15 +890,15 @@ test('persisted child-handoff state exclusively drives reminder boundaries, reso
       await chatOptions.appendMessage({ role: 'model', parts: [{ text }] });
       return { text };
     };
-    (llm as any).executeTools = async () => ({
-      role: 'tool',
-      parts: [{ functionResponse: {
-        tool_use_id: 'send', name: 'send_to_session',
-        response: options.failedSend ? { error: 'failed send' } : { output: 'sent' },
-      } }],
-      ...(!options.failedSend && options.successfulSendTargets
-        ? { __toolPostAction: { successfulSendToSessionTargets: options.successfulSendTargets } }
-        : {}),
+    (toolExecutor as any).executeTools = async () => ({
+      message: {
+        role: 'tool', parts: [{ functionResponse: {
+              tool_use_id: 'send', name: 'send_to_session',
+              response: options.failedSend ? { error: 'failed send' } : { output: 'sent' },
+            } }]
+      }, ...(!options.failedSend && options.successfulSendTargets
+        ? { postActions: { successfulSendToSessionTargets: options.successfulSendTargets } }
+        : {})
     });
     await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
     return { session, reminders };
@@ -1002,7 +1008,7 @@ test('persisted child-handoff state exclusively drives reminder boundaries, reso
     assert.equal(absentState.reminders.length, 0, 'no explicit state means no inferred reminder');
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
   }
 });
 
@@ -1527,7 +1533,7 @@ test('base effects fallback persists both busy transitions with one notification
   const notified: string[] = [];
   const originalNotify = sessionManager.notifySessionStateUpdated;
   (sessionManager as any).notifySessionStateUpdated = (sessionId: string) => { notified.push(sessionId); };
-  const effects: llm.CurrentSessionEffects = {
+  const effects: CurrentSessionEffects = {
     placement: 'local',
     appendMessage: async () => {},
     persistSession: async owner => { persistedBusy.push(owner.busy); },

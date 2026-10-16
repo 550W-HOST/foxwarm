@@ -1,3 +1,4 @@
+import * as toolExecutor from '../toolExecutor';
 import assert from 'assert';
 import { MessageRouter } from '../messageRouter';
 import * as sessionManager from '../sessionManager';
@@ -80,7 +81,7 @@ async function main(): Promise<void> {
   sessionManager.setSessionTriggerCallback(() => {});
 
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
   const originalHasCompletedCompactJob = sessionManager.hasCompletedCompactJob;
   const originalArchiveIndex = (vector as any).scheduleSessionArchiveIndex;
@@ -134,7 +135,7 @@ async function main(): Promise<void> {
           throw new Error(`expected two LLM calls, got ${callIndex}`);
         };
 
-        (llm as any).executeTools = async (_toolCalls: any, toolContext: { sessionId: string }) => {
+        (toolExecutor as any).executeTools = async (_toolCalls: any, toolContext: { sessionId: string }) => {
           assert.strictEqual(toolContext.sessionId, sessionId);
           await sessionManager.queueSessionStructuredEvent(sessionId, [{ text: 'queued part before message' }], 'background');
           await sessionManager.queueSessionMessageEvent(sessionId, {
@@ -144,16 +145,17 @@ async function main(): Promise<void> {
           await sessionManager.queueSessionStructuredEvent(sessionId, [{ text: 'queued part after message' }], 'background');
 
           return {
-            role: 'tool',
-            parts: [{ functionResponse: { tool_use_id: 'queue-mid-tool', name: 'read', response: { output: 'queued' } } }],
-          } as Message;
+            message: {
+              role: 'tool', parts: [{ functionResponse: { tool_use_id: 'queue-mid-tool', name: 'read', response: { output: 'queued' } } }]
+            }
+          } as toolExecutor.ToolBatchResult;
         };
 
         session.queue.push({ type: 'user', parts: [{ text: 'start queue drain' }] });
         await sessionManager.saveSession(sessionId);
         await router.processSessionQueue(sessionId);
       } finally {
-        (llm as any).executeTools = originalExecuteTools;
+        (toolExecutor as any).executeTools = originalExecuteTools;
       }
 
       const refreshedSession = await sessionManager.getSession(sessionId);
@@ -262,7 +264,7 @@ async function main(): Promise<void> {
     console.log('queue drain selftest passed');
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
     (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
     (sessionManager as any).hasCompletedCompactJob = originalHasCompletedCompactJob;
     (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;

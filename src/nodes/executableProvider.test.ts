@@ -1,3 +1,4 @@
+import { executeTools } from '../toolExecutor';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
@@ -6,7 +7,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import { executeTools } from '../llm';
+
 import * as nodeExecution from '../nodeExecution';
 import { createNodeExecutionServiceHandler, nodeExecutionServiceDescriptor } from '../nodeExecutionService';
 import { LocalRpcTransport, RpcClient, RpcServiceRegistry } from '../rpc';

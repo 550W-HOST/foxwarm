@@ -1,10 +1,11 @@
+import { executeTools } from './toolExecutor';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import path from 'path';
 import sharp from 'sharp';
 
-import { executeTools } from './llm';
+
 import { getAgentDir } from './config';
 import * as mcpClient from './mcpClient';
 import { nodesManager } from './nodes/manager';
@@ -202,7 +203,7 @@ test('MCP images below and above the text guard threshold stay structured on uni
       verbose: false,
     });
 
-    const imageParts = toolMessage.parts.filter(part => part.inlineData);
+    const imageParts = toolMessage.message.parts.filter(part => part.inlineData);
     assert.equal(imageParts.length, 4);
     assert.equal(imageParts[0].toolUseId, 'call_tool_small_image');
     assert.equal(imageParts[0].inlineData?.data, TINY_PNG_BASE64);
@@ -214,7 +215,7 @@ test('MCP images below and above the text guard threshold stay structured on uni
     assert.equal(imageParts[3].toolUseId, 'call_tool_mixed_images');
     assert.equal(imageParts[3].inlineData?.data, largePngBase64);
 
-    const responses = toolMessage.parts
+    const responses = toolMessage.message.parts
       .map(part => part.functionResponse?.response)
       .filter((response): response is Record<string, any> => !!response);
     assert.equal(responses.length, 3);
@@ -265,8 +266,8 @@ test('builtin and MCP magic-looking text stays ordinary text outside remote-node
       verbose: false,
     });
 
-    assert.equal(toolMessage.parts.some(part => !!part.inlineData), false);
-    const responses = toolMessage.parts
+    assert.equal(toolMessage.message.parts.some(part => !!part.inlineData), false);
+    const responses = toolMessage.message.parts
       .map(part => part.functionResponse?.response)
       .filter((response): response is Record<string, any> => !!response);
     assert.deepEqual(responses.map(response => response.output), [
@@ -314,13 +315,13 @@ test('canonical remote CLI screenshots below and above the text limit become ima
       session,
     }, session);
 
-    const imageParts = toolMessage.parts.filter(part => part.inlineData);
+    const imageParts = toolMessage.message.parts.filter(part => part.inlineData);
     assert.equal(imageParts.length, 2);
     assert.deepEqual(imageParts.map(part => part.toolUseId), ['cli-small', 'cli-large']);
     assert.equal(imageParts[0].inlineData?.data, TINY_PNG_BASE64);
     assert.equal(imageParts[1].inlineData?.data, largePngBase64);
 
-    const responses = toolMessage.parts
+    const responses = toolMessage.message.parts
       .map(part => part.functionResponse?.response)
       .filter((response): response is Record<string, any> => !!response);
     assert.equal(responses.length, 2);
@@ -379,7 +380,7 @@ test('read returns full content to unified guard instead of old 10000-char trunc
     { id: sessionId, agent: 'main', verbose: false },
   );
 
-  const response = toolMessage.parts[0].functionResponse?.response;
+  const response = toolMessage.message.parts[0].functionResponse?.response;
   assert.equal(response.outputTruncated, true);
   assert.equal(response.outputOriginalLengthChars, expectedReadOutput.length);
   assert.doesNotMatch(String(response.output), /Showing first 10000 chars only/);

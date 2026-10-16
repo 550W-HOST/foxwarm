@@ -47,7 +47,7 @@ These files have no exports — they are standalone self-test scripts executed v
 |--------|-------|
 | `../messageRouter` | `MessageRouter` class — the system under test for turn execution and queue processing |
 | `../sessionManager` | Session CRUD, queue operations, compaction, message appending |
-| `../llm` | `chat` and `executeTools` — monkey-patched to stub LLM responses |
+| `../llm` and `../toolExecutor` | `chat` and typed tool batches — monkey-patched to stub turns |
 | `../vector` | `scheduleSessionArchiveIndex` — stubbed out to prevent indexing side effects |
 | `../session/history` | `getCompactOperationPhase`, `hasCompletedCompactJob` — distinguish held planning from completed work without using signal position |
 | `../session/compactPlan` | `COMPACT_FLOW_MAX_ROUNDS` — used to verify compaction round limits |
@@ -55,7 +55,7 @@ These files have no exports — they are standalone self-test scripts executed v
 
 ## Behavior
 
-- Monkey-patches `llm.chat`, `llm.executeTools`, `sessionManager.processSessionCompactionRequest`, `axios.post`, and vector indexing to isolate the message router logic.
+- Monkey-patches `llm.chat`, `toolExecutor.executeTools`, `sessionManager.processSessionCompactionRequest`, `axios.post`, and vector indexing to isolate the message router logic.
 - Queue drain tests verify that structured events, message events, and compaction items queued mid-tool-execution are consumed in the correct order within the same turn.
 - Tool loop stall tests verify multi-step tool chains (apply_patch → read → exec → final response) complete without stalling.
 - Child/parent session tests verify child sessions can read files, send results to parents, and that parent sessions process those notifications.

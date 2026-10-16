@@ -1,3 +1,6 @@
+import * as toolExecutor from './toolExecutor';
+import type { CurrentSessionEffects } from './session/currentSessionEffects';
+import { createDefaultCurrentSessionEffects } from './session/defaultCurrentSessionEffects';
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import axios from 'axios';
@@ -8,7 +11,7 @@ import sharp from 'sharp';
 import path from 'path';
 import os from 'os';
 
-import { createDefaultCurrentSessionEffects, createModelStreamEventEmitter, CurrentSessionEffects, DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, convertToAnthropicFormat, ensurePromptCacheKey, getLlmRetryDelayMs, redactProviderImagesForLog, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
+import { createModelStreamEventEmitter, DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, convertToAnthropicFormat, ensurePromptCacheKey, getLlmRetryDelayMs, redactProviderImagesForLog, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
 import { loadModelsConfigFromObject, LOGS_DIR, MAX_OUTPUT } from './config';
 import * as configModule from './config';
 import { formatDate } from './logRotation';
@@ -2229,7 +2232,7 @@ test('a truncated-response notice failure does not undo the committed assistant 
       { sessionId: session.id, session },
       session,
     );
-    assert.match(String((dispatched.parts[0].functionResponse?.response as any)?.output), /dispatch proof/);
+    assert.match(String((dispatched.message.parts[0].functionResponse?.response as any)?.output), /dispatch proof/);
   } finally {
     (axios as any).post = originalPost;
     await fs.remove(dirPath);
@@ -3297,7 +3300,7 @@ test('LocalSessionTurnHost clears explicit wait through injected effects when a 
       { id: 'sibling-error', name: 'read', args: { filePath: `/missing-effects-${Date.now()}` } },
     ], { sessionId, session }, session);
     assert.deepEqual(cleared, [{ sessionId, waitId: 'detached-wait-token' }]);
-    assert.equal((message as any).__toolLoopControl, undefined);
+    assert.equal(message.control, undefined);
   } finally {
     (tools as any).wait = originalWait;
     await sessionManager.deleteSession(sessionId).catch(() => false);
@@ -3337,8 +3340,8 @@ test('LocalSessionTurnHost executes detached read and compact setting without gl
     ], { sessionId: session.id, session }, session);
     assert.equal(session.compactThresholdTokens, 12345);
     assert.equal(persisted, 1);
-    assert.match(String((message.parts[0].functionResponse?.response as any)?.output), /12345/);
-    assert.match(String((message.parts[1].functionResponse?.response as any)?.output), /detached read ok/);
+    assert.match(String((message.message.parts[0].functionResponse?.response as any)?.output), /12345/);
+    assert.match(String((message.message.parts[1].functionResponse?.response as any)?.output), /detached read ok/);
     assert.equal(sessionManager.getAllSessions().has(session.id), false);
   } finally {
     Object.assign(sessionManager, {
@@ -3373,13 +3376,13 @@ test('executeTools without effects resolves and uses the exact global source Ses
   };
 
   try {
-    const message = await llmModule.executeTools([
+    const message = await toolExecutor.executeTools([
       { id: 'legacy-read', name: 'read', args: { filePath: 'probe.txt' } },
       { id: 'legacy-explicit', name: 'image_write_to_file', args: { id: 'image-id', filePath: '/tmp/image.png', node: 'remote-explicit' } },
     ], { sessionId, session: clone }, clone as any);
-    assert.match(String((message.parts[0].functionResponse?.response as any)?.output), /authoritative owner read/);
-    assert.doesNotMatch(String((message.parts[0].functionResponse?.response as any)?.output), /untrusted clone read/);
-    assert.deepEqual(message.parts[1].functionResponse?.response, { output: 'explicit owner route' });
+    assert.match(String((message.message.parts[0].functionResponse?.response as any)?.output), /authoritative owner read/);
+    assert.doesNotMatch(String((message.message.parts[0].functionResponse?.response as any)?.output), /untrusted clone read/);
+    assert.deepEqual(message.message.parts[1].functionResponse?.response, { output: 'explicit owner route' });
   } finally {
     (nodesManager as any).getCurrentNode = originalGetCurrentNode;
     (tools as any).image_write_to_file = originalImageWrite;
@@ -3400,10 +3403,10 @@ test('executeTools without effects cannot bypass authoritative isolation with a 
   const clone = { ...session, agent: 'main', currentNode: 'master' };
 
   try {
-    const message = await llmModule.executeTools([
+    const message = await toolExecutor.executeTools([
       { id: 'isolated-clone-read', name: 'read', args: { filePath: '/tmp/outside-owner.txt' } },
     ], { sessionId, session: clone }, clone as any);
-    assert.match(String((message.parts[0].functionResponse?.response as any)?.error), /[Ii]solated/);
+    assert.match(String((message.message.parts[0].functionResponse?.response as any)?.error), /[Ii]solated/);
   } finally {
     await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
     await sessionManager.deleteSession(sessionId).catch(() => false);
@@ -3442,7 +3445,7 @@ test('executeTools without effects rejects a missing source without creating it'
   const clone = createOpenAITestSession(missingId);
   assert.equal(sessionManager.getAllSessions().has(missingId), false);
   await assert.rejects(
-    () => llmModule.executeTools([
+    () => toolExecutor.executeTools([
       { id: 'missing-read', name: 'read', args: { filePath: '/tmp/missing-owner.txt' } },
     ], { sessionId: missingId, session: clone }, clone),
     new RegExp(`source session .*${missingId}.* was not found`),

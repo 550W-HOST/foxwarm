@@ -1,3 +1,4 @@
+import * as toolExecutor from './toolExecutor';
 import { taskService } from './tools/taskTools';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -522,7 +523,7 @@ test('worker publishes a no-tool result once when a different-source follow-up a
 
 test('worker keeps tool call/result adjacent while delivering text before appending a compatible follow-up', async () => {
   const initial = baseSession('worker-tool-followup-adjacency');
-  const originalChat = llm.chat; const originalExecuteTools = llm.executeTools;
+  const originalChat = llm.chat; const originalExecuteTools = toolExecutor.executeTools;
   const source = {
     platform: 'qqbot', channelId: 'qq-instance', channelType: 'qqbot',
     channelUserId: 'c2c:openid', conversationId: 'c2c:openid', qqbotMessageId: 'qq-first',
@@ -546,9 +547,10 @@ test('worker keeps tool call/result adjacent while delivering text before append
     await options.appendMessage({ role: 'model', parts: [{ text: 'tool follow-up final' }] });
     return { text: 'tool follow-up final' };
   };
-  (llm as any).executeTools = async () => ({
-    role: 'tool',
-    parts: [{ functionResponse: { tool_use_id: 'adjacent-tool', name: 'session', response: { output: 'ok' } } }],
+  (toolExecutor as any).executeTools = async () => ({
+    message: {
+      role: 'tool', parts: [{ functionResponse: { tool_use_id: 'adjacent-tool', name: 'session', response: { output: 'ok' } } }]
+    }
   });
   try {
     await withLocalHost(initial, async ({ host, store, readDurable }) => {
@@ -565,11 +567,11 @@ test('worker keeps tool call/result adjacent while delivering text before append
         assert.deepEqual(readDurableRef!().history.map((message: any) => message.role), ['user', 'model']);
         intermediate.push(text);
       });
-  } finally { (llm as any).chat = originalChat; (llm as any).executeTools = originalExecuteTools; }
+  } finally { (llm as any).chat = originalChat; (toolExecutor as any).executeTools = originalExecuteTools; }
 });
 
 test('tool terminal paths never resend model text and close an active Worker WeWork stream', async t => {
-  const originalChat = llm.chat; const originalExecuteTools = llm.executeTools;
+  const originalChat = llm.chat; const originalExecuteTools = toolExecutor.executeTools;
   let mode: 'wait' | 'stop' | 'stop-empty' | 'managed' | 'tool-stop' = 'wait';
   (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
     if (parts) await options.appendMessage({ role: 'user', parts });
@@ -578,17 +580,16 @@ test('tool terminal paths never resend model text and close an active Worker WeW
     await options.appendMessage({ role: 'model', parts: [{ text }, { functionCall: toolCall }] });
     return { text, toolCalls: [toolCall], allParts: [{ text }, { functionCall: toolCall }] };
   };
-  (llm as any).executeTools = async (_calls: any, _context: any, session: Session) => {
+  (toolExecutor as any).executeTools = async (_calls: any, _context: any, session: Session) => {
     if (mode === 'stop' || mode === 'stop-empty') session.stopping = true;
     if (mode === 'managed') (session.meta as any).managedSession = {
       ownerSessionId: 'owner', leaseId: 'lease', revision: 1, pendingInbox: [], openedAt: 1, leaseTouchedAt: 1,
       currentStep: { stepId: 'step', runMode: 'tool' },
     };
     return {
-      role: 'tool',
-      parts: [{ functionResponse: { tool_use_id: `terminal-${mode}`, name: 'session', response: { output: 'ok' } } }],
-      ...(mode === 'wait' ? { __toolPostAction: { waitForReply: true } } : {}),
-      ...(mode === 'tool-stop' ? { __toolLoopControl: { stopCurrentTurn: true } } : {}),
+      message: {
+        role: 'tool', parts: [{ functionResponse: { tool_use_id: `terminal-${mode}`, name: 'session', response: { output: 'ok' } } }]
+      }, ...(mode === 'wait' ? { postActions: { waitForReply: true } } : {}), ...(mode === 'tool-stop' ? { control: { stopCurrentTurn: true } } : {})
     };
   };
   try {
@@ -614,7 +615,7 @@ test('tool terminal paths never resend model text and close an active Worker WeW
           async (_source, text) => { intermediates.push(text); });
       });
     }
-  } finally { (llm as any).chat = originalChat; (llm as any).executeTools = originalExecuteTools; }
+  } finally { (llm as any).chat = originalChat; (toolExecutor as any).executeTools = originalExecuteTools; }
 });
 
 test('worker intermediate delivery failure is swallowed without poisoning later turns', async () => {
@@ -648,7 +649,7 @@ test('worker intermediate delivery failure is swallowed without poisoning later 
 
 test('worker tool-stop finalizes the iteration without a duplicate model-text delivery', async () => {
   const initial = baseSession('worker-intermediate-no-duplicate-final');
-  const originalChat = llm.chat; const originalExecuteTools = llm.executeTools;
+  const originalChat = llm.chat; const originalExecuteTools = toolExecutor.executeTools;
   let intermediateCalls = 0; let finalCalls = 0;
   (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
     if (parts) await options.appendMessage({ role: 'user', parts });
@@ -656,7 +657,11 @@ test('worker tool-stop finalizes the iteration without a duplicate model-text de
     await options.appendMessage({ role: 'model', parts: [{ text: 'already sent', }, { functionCall: toolCall }] });
     return { text: 'already sent', toolCalls: [toolCall], allParts: [{ text: 'already sent' }, { functionCall: toolCall }] };
   };
-  (llm as any).executeTools = async () => ({ parts: [{ functionResponse: { name: 'session', response: 'stopped' } }], __toolLoopControl: { stopCurrentTurn: true } });
+  (toolExecutor as any).executeTools = async () => ({
+    message: {
+      role: 'tool', parts: [{ functionResponse: { name: 'session', response: 'stopped' } }]
+    }, control: { stopCurrentTurn: true }
+  });
   try {
     await withLocalHost(initial, async ({ host, store, readDurable }) => {
       store.enqueueIntent(initial.id, 'stop-after-text', 'enqueue', { type: 'user', source: { platform: 'qqbot', channelId: 'qq', channelType: 'qqbot', channelUserId: 'c2c:openid', conversationId: 'c2c:openid', qqbotMessageId: 'inbound' }, parts: [{ text: 'stop' }] });
@@ -665,12 +670,12 @@ test('worker tool-stop finalizes the iteration without a duplicate model-text de
     }, true, undefined,
       async () => { finalCalls += 1; },
       async () => { intermediateCalls += 1; });
-  } finally { (llm as any).chat = originalChat; (llm as any).executeTools = originalExecuteTools; }
+  } finally { (llm as any).chat = originalChat; (toolExecutor as any).executeTools = originalExecuteTools; }
 });
 
 test('fatal tool-loop metadata preserves pairing, delivers one terminal error, and releases busy', async () => {
   const initial = baseSession(`worker-tool-policy-fatal-${Date.now()}`);
-  const originalChat = llm.chat; const originalExecuteTools = llm.executeTools;
+  const originalChat = llm.chat; const originalExecuteTools = toolExecutor.executeTools;
   const finals: Array<{ text: string; outcome: string }> = [];
   (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
     if (parts) await options.appendMessage({ role: 'user', parts });
@@ -678,10 +683,10 @@ test('fatal tool-loop metadata preserves pairing, delivers one terminal error, a
     await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
     return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
   };
-  (llm as any).executeTools = async () => ({
-    role: 'tool',
-    parts: [{ functionResponse: { tool_use_id: 'policy-fatal', name: 'session', response: { error: 'policy unavailable', code: 'TOOL_AUTH_POLICY_UNAVAILABLE' } } }],
-    __toolLoopControl: { stopCurrentTurn: true, fatalError: { code: 'TOOL_AUTH_POLICY_UNAVAILABLE', message: 'policy unavailable' } },
+  (toolExecutor as any).executeTools = async () => ({
+    message: {
+      role: 'tool', parts: [{ functionResponse: { tool_use_id: 'policy-fatal', name: 'session', response: { error: 'policy unavailable', code: 'TOOL_AUTH_POLICY_UNAVAILABLE' } } }]
+    }, control: { stopCurrentTurn: true, fatalError: { code: 'TOOL_AUTH_POLICY_UNAVAILABLE', message: 'policy unavailable' } }
   });
   try {
     await withLocalHost(initial, async ({ host, store, readDurable }) => {
@@ -691,7 +696,7 @@ test('fatal tool-loop metadata preserves pairing, delivers one terminal error, a
       assert.equal(readDurable().busy, false);
       assert.deepEqual(finals, [{ text: 'Error: policy unavailable', outcome: 'error' }]);
     }, true, undefined, async (_source, text, outcome) => { finals.push({ text, outcome }); });
-  } finally { (llm as any).chat = originalChat; (llm as any).executeTools = originalExecuteTools; }
+  } finally { (llm as any).chat = originalChat; (toolExecutor as any).executeTools = originalExecuteTools; }
 });
 
 test('automatic compact maintenance failure after a delivered success resyncs without a second final', async () => {
@@ -1255,10 +1260,14 @@ test('Worker channel mailbox follow-ups reach real provider requests with hints 
         process.nextTick(() => stream.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: bodies.length === 2 ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`));
         return { status: 200, statusText: 'OK', headers: {}, data: stream };
       });
-      t.mock.method(llm, 'executeTools', async () => {
+      t.mock.method(toolExecutor, 'executeTools', async () => {
         await send('tool', [{ text: 'worker tool correction' }, { text: '<foxwarm-file name="worker-notes.txt" node="master" path="worker-notes.txt" mime="text/plain" />' }]);
         await sessionManager.queueSessionEvent(initial.id, 'Worker tool-period background event');
-        return { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'worker-queue-tool', name: 'session', response: { output: 'ok' } } }] };
+        return {
+          message: {
+            role: 'tool', parts: [{ functionResponse: { tool_use_id: 'worker-queue-tool', name: 'session', response: { output: 'ok' } } }]
+          }
+        };
       });
       await send('initial-A', [{ text: 'worker initial A' }]);
       await send('initial-B', [{ text: 'worker initial B' }]);
@@ -1328,7 +1337,7 @@ test('Worker channel mailbox follow-ups reach real provider requests with hints 
 test('dequeue during post-tool ingestion leaves new rows for the same outer action loop', async () => {
   const initial = baseSession('worker-dequeue-tool-phase');
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   let storeRef: SessionWorkerStore | undefined;
   let chatCalls = 0;
   const finalDeliveries: Array<{ text: string; outcome: string }> = [];
@@ -1343,13 +1352,14 @@ test('dequeue during post-tool ingestion leaves new rows for the same outer acti
     await options.appendMessage({ role: 'model', parts: [{ text: 'queued turn final' }] });
     return { text: 'queued turn final' };
   };
-  (llm as any).executeTools = async () => {
+  (toolExecutor as any).executeTools = async () => {
     storeRef!.enqueueIntent(initial.id, 'queued-during-tool', 'enqueue', {
       type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'queued after tool' }],
     });
     return {
-      role: 'tool',
-      parts: [{ functionResponse: { tool_use_id: 'held-tool', name: 'session', response: { output: 'ok' } } }],
+      message: {
+        role: 'tool', parts: [{ functionResponse: { tool_use_id: 'held-tool', name: 'session', response: { output: 'ok' } } }]
+      }
     };
   };
   try {
@@ -1400,7 +1410,7 @@ test('dequeue during post-tool ingestion leaves new rows for the same outer acti
     });
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
   }
 });
 
@@ -1409,13 +1419,13 @@ test('idle worker BTW snapshots exact owner state, persists cache lineage, and a
   initial.history = [{ role: 'user', parts: [{ text: 'immutable owner prefix' }] }];
   initial.nextMessageSeq = 2;
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   let executeToolsCalled = false;
   let readDurable!: () => Record<string, any>;
   let hotOwner!: Session;
   let calls = 0;
   const deliveries: Array<{ source: any; text: string }> = [];
-  (llm as any).executeTools = async () => { executeToolsCalled = true; throw new Error('BTW must not execute tools'); };
+  (toolExecutor as any).executeTools = async () => { executeToolsCalled = true; throw new Error('BTW must not execute tools'); };
   (llm as any).chat = async (parts: any, snapshot: Session, _iteration: number, options: any) => {
     calls += 1;
     assert.notEqual(snapshot, hotOwner);
@@ -1465,7 +1475,7 @@ test('idle worker BTW snapshots exact owner state, persists cache lineage, and a
     }, false, undefined, undefined, async (source, text) => { deliveries.push({ source, text }); });
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
   }
 });
 

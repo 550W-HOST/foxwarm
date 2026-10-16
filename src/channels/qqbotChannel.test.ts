@@ -1,3 +1,4 @@
+import * as toolExecutor from '../toolExecutor';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
@@ -919,7 +920,7 @@ test('QQ Bot group busy follow-up joins the active tool loop and one final uses 
   );
   const router = new MessageRouter([{ platform: 'qqbot', userId: 'member-1' }]);
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   let toolStarted!: () => void;
   let releaseTool!: () => void;
   const toolStartedPromise = new Promise<void>(resolve => { toolStarted = resolve; });
@@ -947,12 +948,13 @@ test('QQ Bot group busy follow-up joins the active tool loop and one final uses 
       await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'combined final' }] });
       return { text: 'combined final', allParts: [{ text: 'combined final' }] };
     };
-    (llm as any).executeTools = async () => {
+    (toolExecutor as any).executeTools = async () => {
       toolStarted();
       await releaseToolPromise;
       return {
-        role: 'tool',
-        parts: [{ functionResponse: { tool_use_id: 'call-1', name: 'read', response: { output: 'ok' } } }],
+        message: {
+          role: 'tool', parts: [{ functionResponse: { tool_use_id: 'call-1', name: 'read', response: { output: 'ok' } } }]
+        }
       };
     };
 
@@ -984,7 +986,7 @@ test('QQ Bot group busy follow-up joins the active tool loop and one final uses 
   } finally {
     releaseTool?.();
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
     unregisterChannel(channelId);
     await channel.stop();
     const cleanupSession = await sessionManager.getSession(sessionId).catch((): null => null);

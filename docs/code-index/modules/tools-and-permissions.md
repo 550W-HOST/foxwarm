@@ -6,6 +6,8 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 
 ## Key units
 
+- [src-tool-executor](../units/src-tool-executor.md) — typed model tool batches, scheduling, owner/signal lifecycle and shared local effects contracts.
+
 - [src-tasks](../units/src-tasks.md) — small Session-shared task tool, atomic claim ownership and bounded persistent output.
 - [src-tools](../units/src-tools.md) — registry, schemas, builtin implementations, and unified discovery/dispatch.
 - [src-mcp-inbound-catalog](../units/src-mcp-inbound-catalog.md) — authenticated external MCP discovery/call wrappers over Main's existing outbound MCP client and exact generic policy.
@@ -22,6 +24,8 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 - [src-exec-manager](../units/src-exec-manager.md) — persistent command execution integration.
 
 ## Public interfaces
+
+- `executeTools` and `ToolBatchResult` — canonical tool Message plus separate typed transient turn controls/post-actions.
 
 - `definitions` and `modelFacingDefinitions` — builtin tool registry and default model schema.
 - `BUILTIN_TOOL_PLACEMENTS` and `resolveBuiltinToolPlacement` — exhaustive process-ownership metadata and current-node routing, independent of permission policy.

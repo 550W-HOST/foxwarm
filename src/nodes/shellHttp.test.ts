@@ -28,7 +28,8 @@ test('actual POSIX shell/curl Node uses Main dispatch, bounded output and scoped
   const { executeNodeTool, validateNodeSelection, shutdownNodeExecution } = await import('../nodeExecution');
   const { tool_wait } = await import('../toolsSessionAgent/interSession');
   const { hasRemoteExecLivenessClaim } = await import('./remoteExecLiveness');
-  const { resolveSessionToolDefinitions, executeTools } = await import('../llm');
+  const { resolveSessionToolDefinitions } = await import('../llm');
+  const { executeTools } = await import('../toolExecutor');
   const { setNodeEventCapabilitySecretForTests } = await import('./sessionEventCapability');
   setNodeEventCapabilitySecretForTests(Buffer.alloc(32, 47));
   const server = new HttpServer(0, 'fixture-api');
@@ -177,7 +178,7 @@ test('actual POSIX shell/curl Node uses Main dispatch, bounded output and scoped
 
     // Use the ordinary adjacent-exec batch path with the real 62s call deadline
     // and 90s poll-liveness boundary; no production clocks/limits are changed.
-    const batchResponses = (message: any): any[] => message.parts.filter((part: any) => part.functionResponse).map((part: any) => part.functionResponse.response);
+    const batchResponses = (message: Awaited<ReturnType<typeof executeTools>>): any[] => message.message.parts.filter((part: any) => part.functionResponse).map((part: any) => part.functionResponse.response);
     const backgroundStarted = Date.now();
     const manyBackground = batchResponses(await executeTools(Array.from({ length: 4 }, (_, index) => ({
       id: `long-background-${index}`, name: 'exec',

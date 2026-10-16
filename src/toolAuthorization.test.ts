@@ -1,3 +1,4 @@
+import { executeTools } from './toolExecutor';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
@@ -23,7 +24,7 @@ import {
 import { resolveToolAuthorizationSessionTargetRequest } from './toolAuthorizationSessionTargets';
 import { checkToolPermissionForSession, isToolVisibleForSession } from './isolatedCheck';
 import { tool_set_config } from './tools/configTools';
-import { executeTools } from './llm';
+
 import * as tools from './tools';
 import { tool_run_script } from './toolscript';
 import { canonicalPotentialPathSync } from './utils/pathResolve';
@@ -546,7 +547,7 @@ test('policy unavailability preserves paired tool responses and requests a fatal
   setToolAuthorizationTestClockForTests(() => 10000, async () => {});
   const session: any = { id: 'plain/main', agent: 'plain', currentNode: 'master', history: [], queue: [] };
   let starts = 0;
-  const message: any = await executeTools([
+  const message = await executeTools([
     { id: 'fatal-call', name: 'wait', args: { waitForInput: true } },
     { id: 'skipped-call', name: 'task', args: { action: 'create', title: 'must not run' } },
   ], { sessionId: session.id, session, onToolStart: () => { starts += 1; } }, session, {
@@ -566,14 +567,14 @@ test('policy unavailability preserves paired tool responses and requests a fatal
     } as any,
   });
   assert.equal(starts, 0);
-  const responses = message.parts.filter((part: any) => part.functionResponse);
+  const responses = message.message.parts.filter((part: any) => part.functionResponse);
   assert.equal(responses.length, 2);
   assert.equal(responses[0].functionResponse.tool_use_id, 'fatal-call');
   assert.equal(responses[0].functionResponse.response.code, 'TOOL_AUTH_POLICY_UNAVAILABLE');
   assert.equal(responses[1].functionResponse.tool_use_id, 'skipped-call');
   assert.match(responses[1].functionResponse.response.error, /authorization policy was unavailable/i);
-  assert.equal(message.__toolLoopControl.stopCurrentTurn, true);
-  assert.equal(message.__toolLoopControl.fatalError.code, 'TOOL_AUTH_POLICY_UNAVAILABLE');
+  assert.equal(message.control.stopCurrentTurn, true);
+  assert.equal(message.control.fatalError.code, 'TOOL_AUTH_POLICY_UNAVAILABLE');
   await fs.remove(dir);
 });
 
