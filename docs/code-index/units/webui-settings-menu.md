@@ -13,7 +13,7 @@ Renders the compact global UI dropdown for color mode, Setup, reload, and Logs p
 - `clampAnchoredMenuHorizontally` — pure preferred-alignment + viewport-gutter clamp helper
 - `readHorizontalViewportBounds` — intersects the layout/body bounds with the current visual viewport
 - Both menus use the existing send-mode union (`'modEnter' | 'enter'`) at their component boundary.
-- `TimelineView` — the single display-mode union shared by every Timeline consumer; `readChatPreferences` reads valid new values before the old boolean preference, and `setTimelineView` writes only `foxwarm_timeline_view_v1`. See [D-webui-timeline-view](../modules/webui.md#d-webui-timeline-view).
+- `TimelineView` — the single display-mode union shared by every Timeline consumer; `readChatPreferences` reads valid new values before the old boolean preference, and `setTimelineView` writes only `foxwarm_timeline_view_v1`. See [D-webui-timeline-view](../modules/webui-timeline.md#d-webui-timeline-view).
 - `GlobalUiSettingsMenuProps` — props interface for Setup/Logs activation and preferred menu alignment
 
 ## Function Index
