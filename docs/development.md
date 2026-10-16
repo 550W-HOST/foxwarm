@@ -124,6 +124,23 @@ skill 会自动出现在可见 skills catalog 中；需要完整说明时，使�
 npm run build
 ```
 
+根目录构建依次执行 shared、sandbox runtime、CLI node 和 Main 的 TypeScript 编译；
+sandbox runtime 和 CLI node 仍用 esbuild 生成各自的 bundle。此命令不构建 WebUI，
+WebUI 使用独立的 `npm --prefix packages/webui run build`。
+
+这四个 TypeScript 项目启用磁盘增量缓存，因此独立执行的 `npm run build` 也能复用
+上次编译结果，不需要开启 watch。Main 的缓存位于 `lib/.tsbuildinfo`，其余三个
+项目各自使用 `dist/.tsbuildinfo`；类型检查、declaration 和现有编译范围不变。
+esbuild bundle 仍在每次构建时生成。
+
+需要完整重建时，删除对应的整个 `lib/` 或 `dist/` 目录，让产物和缓存一起清理；
+不要保留缓存而只删除部分产物。清理全部后重新构建：
+
+```bash
+rm -rf lib packages/shared/dist packages/sandbox-node-runtime/dist packages/cli-node/dist
+npm run build
+```
+
 ### 质量检查
 
 ```bash

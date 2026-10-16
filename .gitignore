@@ -31,3 +31,6 @@ __pycache__/
 # CLI node package build output
 /packages/cli-node/dist
 /packages/cli-node/node_modules
+
+# Sandbox runtime incremental compiler cache (runtime artifacts remain tracked)
+/packages/sandbox-node-runtime/dist/.tsbuildinfo

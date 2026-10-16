@@ -18,7 +18,7 @@ Provides lightweight, no-new-dependency quality gates for repeatable TypeScript 
 
 ## Behavior
 
-- The script is read-only: it uses TypeScript `--noEmit` and does not run package installs or generated builds.
+- The script is read-only: it uses TypeScript `--noEmit` and does not run package installs or generated builds. Backend checks also pass `--incremental false` so their build-enabled tsconfigs cannot write compiler caches during this gate.
 - It fails fast on the first failing project and prints the failing phase label.
 - It intentionally uses existing TypeScript tooling only; ESLint/Knip/unused-export/tiny-wrapper scanning are left for later phases.
 
