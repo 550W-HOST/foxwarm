@@ -275,10 +275,64 @@ export class LocalSessionTurnHost implements SessionTurnHost {
 
 }
 
+class SessionTurnShutdownError extends Error {
+  readonly code = 'SESSION_TURN_SHUTTING_DOWN';
+  readonly retryable = true;
+
+  constructor() {
+    super('Session processing is shutting down.');
+  }
+}
+
+type SessionProcessor = {
+  settled: Promise<void>;
+  resolveSettled: () => void;
+  shutdownAbortRequested: boolean;
+};
+
 export class SessionTurnRunner {
-  private processingSessions: Set<string> = new Set();
+  private readonly processingSessions = new Map<string, SessionProcessor>();
+  private shuttingDown = false;
+  private shutdownPromise?: Promise<void>;
 
   constructor(private readonly host: SessionTurnHost) {}
+
+  /** Close admission synchronously, then settle this owner's accepted work. */
+  shutdown(
+    abortInFlight: (sessionId: string, reason: Error) => boolean,
+    options: { graceMs?: number; cancelMs?: number } = {},
+  ): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+    this.shuttingDown = true;
+    const settled = Promise.all([...this.processingSessions.values()].map(processor => processor.settled));
+    const waitWithin = async (timeoutMs: number): Promise<boolean> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          settled.then(() => true),
+          new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), timeoutMs); }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+    this.shutdownPromise = (async () => {
+      if (await waitWithin(options.graceMs ?? 5_000)) return;
+      for (const [sessionId, processor] of this.processingSessions) {
+        processor.shutdownAbortRequested = true;
+        if (!abortInFlight(sessionId, new SessionTurnShutdownError())) processor.shutdownAbortRequested = false;
+      }
+      if (await waitWithin(options.cancelMs ?? 5_000)) return;
+      const error = new Error('Accepted Session work did not settle during shutdown.') as Error & { code: string };
+      error.code = 'SESSION_TURN_DRAIN_TIMEOUT';
+      throw error;
+    })();
+    return this.shutdownPromise;
+  }
+
+  private assertCanContinue(): void {
+    if (this.shuttingDown) throw new SessionTurnShutdownError();
+  }
 
   snapshotSource(ctx: ChannelContext): QueueSource {
     return snapshotQueueSource(ctx);
@@ -633,6 +687,7 @@ export class SessionTurnRunner {
         error.name = 'AbortError';
         throw error;
       }
+      this.assertCanContinue();
     };
     assertCanRetry();
     await this.host.ingestPendingQueue?.(session);
@@ -663,6 +718,7 @@ export class SessionTurnRunner {
     iteration: number,
     compactAppliedAtSafePoint: boolean,
   ): Promise<'continue' | 'stopped'> {
+    this.assertCanContinue();
     if (!usage) return 'continue';
     const currentSize = sessionManager.getUsageTotalTokens(usage);
     const compactThreshold = sessionManager.getEffectiveCompactThresholdTokens(session);
@@ -883,7 +939,7 @@ export class SessionTurnRunner {
       session?: Session;
       onTurnOwnedRelease?: () => void;
     }
-  ): Promise<'suppress-trailing-handoff' | void> {
+  ): Promise<'suppress-trailing-handoff' | 'shutdown-interrupted' | void> {
     const session = options.session ?? await this.host.getSession(sessionId);
     if (options.parts?.length || options.message || options.queuedItems?.length) {
       sessionManager.clearSessionWaitForDirectTurn(session, options.message || options.queuedItems?.some(item => item.message) ? 'direct-message-turn' : 'direct-parts-turn');
@@ -908,6 +964,8 @@ export class SessionTurnRunner {
     let fencedMaintenanceError: unknown;
     let fencedMaintenanceDirect = false;
     let terminalRetryDelivered = false;
+    let interruptedByShutdown = false;
+    let turnCompleted = false;
     try {
       if (options.sendTyping && options.sourceCtx) {
         await this.host.sendTyping(options.sourceCtx);
@@ -929,6 +987,7 @@ export class SessionTurnRunner {
       let iteration = 0;
       let finalUsage: TokenUsage | undefined;
       while (iteration < 500) {
+        if (iteration > 0) this.assertCanContinue();
         await this.runPendingCompactionIfNeeded(sessionId, session);
 
         if (queuedItems?.length) {
@@ -940,6 +999,7 @@ export class SessionTurnRunner {
           parts = null;
         }
 
+        this.assertCanContinue();
         const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts);
         parts = queuedBeforeLlm.parts;
 
@@ -969,6 +1029,7 @@ export class SessionTurnRunner {
 
         let result;
         try {
+          this.assertCanContinue();
           result = await this.host.chat(parts, session, iteration, {
             onRetry: this.createLlmRetryNotifier(session, broadcast, turnId, () => { terminalRetryDelivered = true; }),
             requestContext: createTaskRequestContext(session),
@@ -1019,13 +1080,14 @@ export class SessionTurnRunner {
         // its newly hot queue. Do not fold those rows into the current provider
         // result after the stop override has claimed them for the outer loop.
         const stopOverrideAfterProviderIngest = !!session.meta?.runQueuedAfterStop;
-        const providerTimeQueue = stopOverrideAfterProviderIngest
+        const providerTimeQueue = stopOverrideAfterProviderIngest || this.shuttingDown
           ? false
           : this.inspectLeadingQueuedTurnInputs(session);
         // Decide this result's finality from a non-mutating queue view. Queue
         // rows append only after this text and, for tools, after the tool row.
         const hasTools = !!result.toolCalls?.length;
         const willContinue = hasTools || providerTimeQueue;
+        if (!willContinue) turnCompleted = true;
         if (!willContinue && isNoActionSignalText(result.text) && resolveChildHandoffBoundary(session)) {
           await this.host.saveSession(session);
         }
@@ -1038,12 +1100,20 @@ export class SessionTurnRunner {
         );
 
         if (!hasTools) {
+          if (this.shuttingDown) {
+            // This provider result really completed. Leave later input queued,
+            // but do not replay the completed answer after restart.
+            if (providerTimeQueue) await this.finishTurnAfterIntermediate(session, broadcast, turnId);
+            turnCompleted = true;
+            break;
+          }
           if (providerTimeQueue) {
             const queuedAfterLlm = await this.consumeLeadingQueuedTurnInputs(
               session, null, undefined, this.resolveContextLimitExceeded(session, result.usage).exceeded,
             );
             if (!queuedAfterLlm.consumedInput) {
               await this.finishTurnAfterIntermediate(session, broadcast, turnId);
+              turnCompleted = true;
               break;
             }
             if (await this.maybeRequestAutoCompactionBeforeContinuation(session, result.usage, iteration, queuedAfterLlm.compacted) === 'stopped') {
@@ -1057,6 +1127,7 @@ export class SessionTurnRunner {
           break;
         }
 
+        this.assertCanContinue();
         const turnToolCalls = this.getTurnToolCalls(result.toolCalls!, iteration);
 
         await this.emitTurnProgress({
@@ -1105,6 +1176,7 @@ export class SessionTurnRunner {
             });
           },
         };
+        this.assertCanContinue();
         const toolResultMsg = await this.host.executeTools(turnToolCalls, toolContext, session);
 
         const successfulSendTargets = (toolResultMsg as any).__toolPostAction?.successfulSendToSessionTargets;
@@ -1149,6 +1221,7 @@ export class SessionTurnRunner {
           };
           setManagedSessionState(session, managedStateAfterTools);
           managedStepYieldReason = 'tool';
+          turnCompleted = true;
           await this.finishTurnAfterIntermediate(session, broadcast, turnId);
           break;
         }
@@ -1173,15 +1246,18 @@ export class SessionTurnRunner {
         if ((toolResultMsg as any).__toolLoopControl?.stopCurrentTurn) {
           logger.info({ sessionId: session.id, iteration }, 'Tool requested immediate turn stop');
           await this.finishTurnAfterIntermediate(session, broadcast, turnId);
+          turnCompleted = true;
           break;
         }
 
         if (waitForReply) {
           logger.info({ sessionId: session.id, iteration }, 'Successful handoff requested an activity wait');
           await this.finishTurnAfterIntermediate(session, broadcast, turnId);
+          turnCompleted = true;
           break;
         }
 
+        this.assertCanContinue();
         await this.host.ingestPendingQueue?.(session);
         // This is the second ingestion-to-consume boundary in a tool
         // iteration. Dequeue can signal while the awaited ingestion is in
@@ -1243,10 +1319,16 @@ export class SessionTurnRunner {
         // into a synthetic model row or a second external final.
         logger.error({ err: error, sessionId }, 'Post-final child reminder queueing failed');
       }
-      if (!stoppedByUser) {
+      if (!stoppedByUser && !this.shuttingDown) {
         await this.host.checkAndCompactIfNeeded(sessionId, finalUsage);
       }
     } catch (e: any) {
+      if (e instanceof SessionTurnShutdownError
+        || (this.processingSessions.get(sessionId)?.shutdownAbortRequested && llm.isAbortError(e)
+          && !session.stopping && !session.meta?.runQueuedAfterStop)) {
+        interruptedByShutdown = !turnCompleted;
+        return;
+      }
       logger.error(e, 'Error handling message');
       const errorText = formatTerminalSessionError(e);
       const mutationFencedMaintenance = e?.code === 'SESSION_WORKER_AUTO_COMPACTION_FATAL';
@@ -1329,6 +1411,12 @@ export class SessionTurnRunner {
       if (session.stopping) {
         session.stopping = false;
       }
+      if (interruptedByShutdown) {
+        // The exact owner already persisted busy before committing its inputs.
+        // Keep that recovery checkpoint; shutdown is not a user Stop or final.
+        options.onTurnOwnedRelease?.();
+        return 'shutdown-interrupted';
+      }
     }
   }
 
@@ -1337,6 +1425,10 @@ export class SessionTurnRunner {
   }
 
   async processSessionQueue(sessionId: string, options: { retry?: boolean } = {}): Promise<void> {
+    if (this.shuttingDown) {
+      if (options.retry) throw new SessionTurnShutdownError();
+      return;
+    }
     if (this.processingSessions.has(sessionId)) {
       if (options.retry) {
         throw new Error('Session is already busy');
@@ -1344,7 +1436,13 @@ export class SessionTurnRunner {
       return;
     }
 
-    this.processingSessions.add(sessionId);
+    let resolveSettled!: () => void;
+    const processor: SessionProcessor = {
+      settled: new Promise<void>(resolve => { resolveSettled = resolve; }),
+      resolveSettled: () => resolveSettled(),
+      shutdownAbortRequested: false,
+    };
+    this.processingSessions.set(sessionId, processor);
     let session: Session | null = null;
     let claimed = false;
     let outerOwnsBusyRelease = true;
@@ -1355,6 +1453,7 @@ export class SessionTurnRunner {
       if (!session) {
         return;
       }
+      if (this.shuttingDown) return;
       if (options.retry) {
         if (buildSessionRuntimeState(session).state === 'waiting') {
           throw new SessionContinuationUnavailableError('Session is waiting and cannot be continued manually.');
@@ -1380,10 +1479,12 @@ export class SessionTurnRunner {
             session,
             onTurnOwnedRelease: () => { outerOwnsBusyRelease = false; },
           });
+          if (outcome === 'shutdown-interrupted') break;
           suppressTrailingHandoff = outcome === 'suppress-trailing-handoff';
           continue;
         }
 
+        if (this.shuttingDown) break;
         const managed = getManagedSessionState(session);
         if (managed?.currentStep && managed.lastStepResult?.stepId === managed.currentStep.stepId) {
           break;
@@ -1406,6 +1507,7 @@ export class SessionTurnRunner {
         // Preserve the durable ordinary queue before selecting the next batch.
         // The turn then commits each input as its own canonical message.
         await this.host.saveSession(session);
+        if (this.shuttingDown) break;
 
         const queuedItems = this.drainLeadingQueuedTurnInputs(session);
         if (queuedItems.length === 0) {
@@ -1417,6 +1519,7 @@ export class SessionTurnRunner {
           session,
           onTurnOwnedRelease: () => { outerOwnsBusyRelease = false; },
         });
+        if (outcome === 'shutdown-interrupted') break;
         suppressTrailingHandoff = outcome === 'suppress-trailing-handoff';
       }
     } catch (error) {
@@ -1431,22 +1534,27 @@ export class SessionTurnRunner {
         failed = true;
         throw error;
       } finally {
-        this.processingSessions.delete(sessionId);
-        // An item can become visible after the outer loop's final queue scan
-        // but before this processor releases its guard. Hand that finish-window
-        // work to exactly one fresh processor after ownership is idle.
-        session = await this.host.getExistingSession(sessionId);
-        if (claimed
-          && !failed
-          && !suppressTrailingHandoff
-          && session
-          && !session.busy
-          && !getManagedSessionState(session)?.currentStep
-          && !this.host.isSessionDestructiveLifecycleClaimed(session.id)
-          && session.queue.some(item => isQueueItem(item) && item.trigger !== false)) {
-          void this.processSessionQueue(sessionId).catch(error => {
-            logger.error({ err: error, sessionId }, 'Trailing queued work failed');
-          });
+        try {
+          this.processingSessions.delete(sessionId);
+          // An item can become visible after the outer loop's final queue scan
+          // but before this processor releases its guard. Hand that finish-window
+          // work to exactly one fresh processor after ownership is idle.
+          session = await this.host.getExistingSession(sessionId);
+          if (claimed
+            && !failed
+            && !this.shuttingDown
+            && !suppressTrailingHandoff
+            && session
+            && !session.busy
+            && !getManagedSessionState(session)?.currentStep
+            && !this.host.isSessionDestructiveLifecycleClaimed(session.id)
+            && session.queue.some(item => isQueueItem(item) && item.trigger !== false)) {
+            void this.processSessionQueue(sessionId).catch(error => {
+              logger.error({ err: error, sessionId }, 'Trailing queued work failed');
+            });
+          }
+        } finally {
+          processor.resolveSettled();
         }
       }
     }

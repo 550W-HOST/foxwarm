@@ -1,7 +1,7 @@
 # Unit: src-session-turn-runner
 
 Files: src/sessionTurnRunner.ts, src/sessionContinuation.ts
-Secondary files: src/sessionTurnRunnerDetachedOwner.test.ts, src/sessionTurnRunnerContextLimitCompact.test.ts, src/sessionWorkerHost.test.ts, src/sessionSelectionRetry.test.ts, src/messageRouter.test.ts, src/managedSessions.test.ts, src/toolsSessionAgent/handoffWait.test.ts, src/toolsSessionAgent/waitTool.test.ts, src/selftest/queueDrainSelfTest.ts, src/selftest/toolLoopStallSelfTest.ts
+Secondary files: src/sessionTurnRunnerShutdown.test.ts, src/sessionTurnRunnerDetachedOwner.test.ts, src/sessionTurnRunnerContextLimitCompact.test.ts, src/sessionWorkerHost.test.ts, src/sessionSelectionRetry.test.ts, src/messageRouter.test.ts, src/managedSessions.test.ts, src/toolsSessionAgent/handoffWait.test.ts, src/toolsSessionAgent/waitTool.test.ts, src/selftest/queueDrainSelfTest.ts, src/selftest/toolLoopStallSelfTest.ts
 
 ## Purpose
 
@@ -11,11 +11,12 @@ One turn-specific `SessionTurnHost` exposes only effects called by the runner. `
 
 ## Key exports
 
-- `SessionTurnRunner` — stateful local runner with one per-session reentrancy set.
+- `SessionTurnRunner` — stateful local runner with one per-session active-processor map and settlement promise per admitted processor.
 - `SessionTurnHost` — non-RPC interface for the runner's current persistence, compact, provider/tool, runtime-event, and channel-delivery effects. Its compact members include the compaction request result, the completed-job apply, and an interruption-aware wait for pending compact planning to settle.
 - `LocalSessionTurnHost` — in-process implementation shared by Main-local turns and the child host; it binds one effects owner and accepts a small coherent override object for exact snapshot, system-queue, compaction, safe-point pending-queue ingestion, intermediate delivery, and committed-final behavior. Unbound hosts preserve module-backed behavior. A bound host rejects every other ID and every different same-ID Session object before invoking effects.
 - `SessionTurnRunner.processSessionQueue(sessionId, options)` — canonical iterative queue owner from one busy claim through final finish-window recheck.
 - `SessionTurnRunner.processSessionRetry(sessionId)` — direct retry entry into the ordinary turn loop without queue control state.
+- `SessionTurnRunner.shutdown(abortInFlight, options)` — idempotently closes admission, permits a five-second grace phase, cancels still-active foreground operations through the supplied exact-owner primitive, and waits five more seconds. A remaining processor rejects with `SESSION_TURN_DRAIN_TIMEOUT`; it is never reported as a successful drain. Budgets are local lifecycle parameters, not a persisted setting or latency guarantee.
 - `isSessionTurnIncomplete(messages)` — pure derived-history classifier shared semantically with WebUI Continue presentation. A last Responses segment marked `complete:false` is interrupted; `complete:true` is terminal without a function call even when its real completion row has no parts. [Canonical contract](../threads/streaming-pipeline.md#d-streaming-early-commentary-commit).
 - `shouldBroadcastChannelText(text)` — shared final-response visibility predicate.
 
@@ -31,6 +32,8 @@ Retry notices are coalesced only for presentation within one `llm.chat` request:
 6. After all currently selectable actions finish, the outer processor performs the ordinary awaited busy release once. Stop finalization and fenced maintenance instead transfer release ownership to the exact turn cleanup before its one release call; if that call throws after restoring busy authority, outer cleanup propagates the failure without a generic second attempt. It then removes the in-process reentrancy guard, checks for newly visible finish-window work, and starts at most one fresh processor so a late enqueue is not stranded. A yielded managed step remains owned by its controller and suppresses this automatic handoff, leaving its queue durable without a claim/release loop. A direct mutation-fenced maintenance presentation returns one ephemeral per-invocation outcome through the current queue call stack; it preserves the durable queue but suppresses only that invocation's trailing processor. Any claimed processor or release failure suppresses the normal handoff even if a custom effect left the owner marked idle. Failure from the intentionally spawned trailing processor is logged once with the session ID; it is not retried or broadcast, and the durable queue remains available to a later explicit trigger.
 
 After each normal-turn `llm.chat` assistant append succeeds (including an eligible commentary prefix), its optional post-commit callback hands only that immutable row’s generated-image references to the placement host for best-effort automatic file delivery. Image-only, text-bearing, and continuing tool turns share this path; unrelated detached chat purposes do not. The canonical cross-module contract is [D-image-generated-output-replay](../threads/image-blob-lifecycle.md#d-image-generated-output-replay).
+
+When Main invokes local shutdown, `assertCanContinue` yields unfinished work at pre-provider/retry/tool continuation boundaries. The selected initial input batch still commits first. An ephemeral shutdown-interrupted outcome transfers busy-release ownership away from outer cleanup, while true terminals retain idle release. New outer actions and trailing reentry remain closed. Worker callers do not activate this lifecycle mode. Contract: [local shutdown](../threads/session-lifecycle.md#d-lifecycle-main-local-shutdown).
 
 Attached task completion carries an internal resolved-builtin signal that resolves the child handoff without fabricating a parent notification; the creator still receives the real completion delivery. Passive-only finish-window input stays queued rather than claiming another processor. These contracts are canonical in [Tasks](src-tasks.md) and [the pipeline](../threads/message-processing-pipeline.md#d-pipeline-passive-task-notification).
 
@@ -62,6 +65,8 @@ Attached task completion carries an internal resolved-builtin signal that resolv
 - The internal retry entry used by public Continue validates the exact owner's current runtime/history before claiming busy. Its pure server classifier and the WebUI mirror normalize effective-bare wait arguments before deciding terminal completion. Active parameterized waits and completed history reject with `SESSION_CONTINUATION_NOT_AVAILABLE`; the classifier contract is canonical in [D-pipeline-control-commands](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
 
 ## Tests
+
+`sessionTurnRunnerShutdown.test.ts` covers admission during lookup, a selected-but-uncommitted batch, finish-window input, returned tool calls, provider cancellation, normal final/Stop and terminal handoff/wait after closing, and rejection when a tool ignores cancellation.
 
 `src/messageRouter.test.ts` exercises the runner through public `MessageRouter` delegates and focused pure seam probes: queue/lifecycle boundaries, retry notices, provider failure, compact safe points, Stop/dequeue/retry, in-tool follow-ups, goal ordering, runtime state, and finish-window handoff. `src/managedSessions.test.ts` verifies idle/tool yields and manager/inbox ordering through real public managed steps. `src/sessionTurnRunnerDetachedOwner.test.ts` runs provider and real local-tool turns for an exact owner absent from the global map and checks many-turn iterative draining, compact-turn-compact ordering under one claim, retry-to-queued fresh turn identities, active-versus-yielded managed steps, exact stop/fenced release ownership, archive/history/state-file ordering, a real Responses held-stream case that persists commentary and encrypted-reasoning checkpoints before retry input, finish-window work, and busy/wait/persistence failure behavior.
 
