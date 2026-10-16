@@ -7,6 +7,52 @@ namespace Foxwarm.Tests;
 public sealed class PersistencePrimitiveTests
 {
     [Fact]
+    public void BorrowedAuthorityInputAndReturnedTreesCannotChangeValidatedState()
+    {
+        var input = FixtureAuthority();
+        input["futureTop"] = new JsonObject { ["nested"] = new JsonArray("original") };
+        var expected = input.DeepClone();
+        var document = SessionAuthorityDocument.FromNode(input, Fixture.SessionId);
+
+        input["futureTop"]!["nested"]![0] = "changed input";
+        input["history"]![0]!["parts"]![0]!["text"] = "changed history";
+        input["meta"]!["messageCount"] = 100;
+        var returned = document.CloneRoot();
+        returned["futureTop"]!["nested"]![0] = "changed output";
+        returned["history"]!.AsArray().Clear();
+
+        Assert.True(JsonNode.DeepEquals(expected, JsonNode.Parse(document.ToJson())));
+        Assert.True(JsonNode.DeepEquals(expected, document.CloneRoot()));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void OwnedAuthorityAndParsedAuthorityKeepDetachedReadsAndDurableOpenFields(bool parsed)
+    {
+        using var temp = new TempDirectory();
+        var input = FixtureAuthority();
+        input["futureTop"] = new JsonObject { ["nested"] = new JsonArray(true, null, "opaque") };
+        input["history"]![0]!["parts"]![0]!["futurePart"] = new JsonObject
+        {
+            ["array"] = new JsonArray(12.5, "café", null),
+        };
+        var expected = input.DeepClone();
+        var document = parsed
+            ? SessionAuthorityDocument.Parse(input.ToJsonString(), Fixture.SessionId)
+            : SessionAuthorityDocument.FromOwned(input, Fixture.SessionId);
+        // The transfer branch no longer uses input; only detached reads are mutable.
+        var returned = document.CloneRoot();
+        returned["futureTop"]!["nested"]!.AsArray().Clear();
+        returned["history"]![0]!["parts"]![0]!["futurePart"]!["array"]![0] = 99;
+        var file = new LinuxAtomicJsonFile(temp.Path, "state/authority.json");
+        file.Write(document);
+
+        Assert.True(JsonNode.DeepEquals(expected, file.Read(Fixture.SessionId).CloneRoot()));
+        Assert.True(JsonNode.DeepEquals(expected, document.CloneRoot()));
+    }
+
+    [Fact]
     public void AuthorityDocumentPreservesOpenJsonAndRejectsKnownUnsupportedState()
     {
         var root = FixtureAuthority();
@@ -18,14 +64,14 @@ public sealed class PersistencePrimitiveTests
         };
         ((JsonObject)((JsonObject)((JsonArray)root["history"]!)[0]!)["__meta"]!)["futureMeta"] =
             12.5;
-        var document = SessionAuthorityDocument.FromOwned(root, Fixture.SessionId);
+        var document = SessionAuthorityDocument.FromNode(root, Fixture.SessionId);
         var roundTrip = JsonNode.Parse(document.ToJson()) as JsonObject;
         Assert.True(JsonNode.DeepEquals(root, roundTrip));
 
         var mailbox = (JsonObject)root.DeepClone();
         mailbox["lastAppliedMailboxId"] = 1;
         Assert.Throws<UnsupportedSessionAuthorityException>(() =>
-            SessionAuthorityDocument.FromOwned(mailbox, Fixture.SessionId)
+            SessionAuthorityDocument.FromNode(mailbox, Fixture.SessionId)
         );
         var queue = (JsonObject)root.DeepClone();
         ((JsonArray)queue["queue"]!).Add(
@@ -38,11 +84,11 @@ public sealed class PersistencePrimitiveTests
                 ["futureQueue"] = new JsonObject { ["keep"] = true },
             }
         );
-        var queued = SessionAuthorityDocument.FromOwned(queue, Fixture.SessionId).CloneRoot();
+        var queued = SessionAuthorityDocument.FromNode(queue, Fixture.SessionId).CloneRoot();
         Assert.True(JsonNode.DeepEquals(queue["queue"], queued["queue"]));
         var compact = (JsonObject)root.DeepClone();
         ((JsonArray)compact["queue"]!).Add(new JsonObject { ["type"] = "compact-commit" });
-        var signals = SessionAuthorityDocument.FromOwned(compact, Fixture.SessionId).CloneRoot();
+        var signals = SessionAuthorityDocument.FromNode(compact, Fixture.SessionId).CloneRoot();
         Assert.Equal(
             "compact-commit",
             signals["queue"]!.AsArray().Last()!["type"]!.GetValue<string>()
@@ -56,20 +102,20 @@ public sealed class PersistencePrimitiveTests
         ((JsonObject)((JsonObject)((JsonArray)block["history"]!)[0]!)["__meta"]!)["contextBlock"] =
             new JsonObject { ["id"] = 1 };
         Assert.Throws<UnsupportedSessionAuthorityException>(() =>
-            SessionAuthorityDocument.FromOwned(block, Fixture.SessionId)
+            SessionAuthorityDocument.FromNode(block, Fixture.SessionId)
         );
         var preserved = (JsonObject)root.DeepClone();
         ((JsonObject)((JsonObject)((JsonArray)preserved["history"]!)[0]!)["__meta"]!)[
             "preservedFromBlockId"
         ] = 1;
         var preservedRoundTrip = SessionAuthorityDocument
-            .FromOwned(preserved, Fixture.SessionId)
+            .FromNode(preserved, Fixture.SessionId)
             .CloneRoot();
         Assert.True(JsonNode.DeepEquals(preserved, preservedRoundTrip));
         var version = (JsonObject)root.DeepClone();
         version["sessionStateVersion"] = 2;
         Assert.Throws<UnsupportedSessionAuthorityException>(() =>
-            SessionAuthorityDocument.FromOwned(version, Fixture.SessionId)
+            SessionAuthorityDocument.FromNode(version, Fixture.SessionId)
         );
     }
 
@@ -229,12 +275,12 @@ public sealed class PersistencePrimitiveTests
     )
     {
         using var temp = new TempDirectory();
-        var baseline = SessionAuthorityDocument.FromOwned(FixtureAuthority(), Fixture.SessionId);
+        var baseline = SessionAuthorityDocument.FromNode(FixtureAuthority(), Fixture.SessionId);
         var path = new LinuxAtomicJsonFile(temp.Path, "state/sessions/c1/fixture.json");
         path.Write(baseline);
         var changedRoot = FixtureAuthority();
         changedRoot["futureTopLevel"] = "new";
-        var changed = SessionAuthorityDocument.FromOwned(changedRoot, Fixture.SessionId);
+        var changed = SessionAuthorityDocument.FromNode(changedRoot, Fixture.SessionId);
         var failing = new LinuxAtomicJsonFile(
             temp.Path,
             "state/sessions/c1/fixture.json",
@@ -261,7 +307,7 @@ public sealed class PersistencePrimitiveTests
         using var temp = new TempDirectory();
         var changedRoot = FixtureAuthority();
         changedRoot["futureTopLevel"] = "published";
-        var changed = SessionAuthorityDocument.FromOwned(changedRoot, Fixture.SessionId);
+        var changed = SessionAuthorityDocument.FromNode(changedRoot, Fixture.SessionId);
         var failing = new LinuxAtomicJsonFile(
             temp.Path,
             "state/sessions/c1/fixture.json",
@@ -288,7 +334,7 @@ public sealed class PersistencePrimitiveTests
             "state/sessions/c1/fixture.json",
             stages.Add
         );
-        var document = SessionAuthorityDocument.FromOwned(FixtureAuthority(), Fixture.SessionId);
+        var document = SessionAuthorityDocument.FromNode(FixtureAuthority(), Fixture.SessionId);
         writer.Write(document);
         Assert.Equal(Enum.GetValues<AtomicJsonWriteStage>(), stages);
         if (OperatingSystem.IsLinux())

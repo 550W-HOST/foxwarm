@@ -65,7 +65,7 @@ public sealed class TypeScriptFixtureTests
                 ["futureQueue"] = new JsonObject { ["keep"] = true },
             }
         );
-        var document = SessionAuthorityDocument.FromOwned(root, Fixture.SessionId);
+        var document = SessionAuthorityDocument.FromNode(root, Fixture.SessionId);
         var archive = new SqliteArchiveMessageStore(
             Path.Combine(temp.Path, "state", "archive-store.sqlite"),
             Fixture.SessionId

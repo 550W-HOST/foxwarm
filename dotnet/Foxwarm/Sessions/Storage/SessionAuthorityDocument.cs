@@ -28,7 +28,7 @@ public sealed class SessionAuthorityDocument
     private SessionAuthorityDocument(JsonObject root, string sessionId, string agent)
     {
         Validate(root, sessionId, agent);
-        this.root = (JsonObject)root.DeepClone();
+        this.root = root;
         SessionId = sessionId;
         Agent = agent;
     }
@@ -61,7 +61,14 @@ public sealed class SessionAuthorityDocument
         );
     }
 
-    public static SessionAuthorityDocument FromOwned(
+    public static SessionAuthorityDocument FromNode(
+        JsonObject root,
+        string sessionId,
+        string agent = "main"
+    ) => FromOwned((JsonObject)root.DeepClone(), sessionId, agent);
+
+    // Transfers the complete mutable tree. The caller must not retain or expose aliases.
+    internal static SessionAuthorityDocument FromOwned(
         JsonObject root,
         string sessionId,
         string agent = "main"
@@ -170,7 +177,7 @@ public sealed class SessionAuthorityDocument
         _ = RequiredFiniteNumber(meta, "timestamp", $"{label}.__meta");
     }
 
-    private static void Validate(JsonObject root, string sessionId, string agent)
+    internal static void Validate(JsonObject root, string sessionId, string agent)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(agent);

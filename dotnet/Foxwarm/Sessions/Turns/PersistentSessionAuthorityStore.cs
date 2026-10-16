@@ -271,11 +271,10 @@ public sealed class PersistentSessionAuthorityStore
         var normalized = SessionCatalog.NormalizeAuthority(raw, sessionId, agent);
         if (mainFields?.Invoke() is { } main)
             SessionCatalog.OverlayAuthorityContext(normalized, main);
-        var document = SessionAuthorityDocument.FromOwned(normalized, sessionId, agent);
-        var ownedRoot = document.CloneRoot();
-        foreach (var message in ((JsonArray)ownedRoot["history"]!).OfType<JsonObject>())
+        SessionAuthorityDocument.Validate(normalized, sessionId, agent);
+        foreach (var message in ((JsonArray)normalized["history"]!).OfType<JsonObject>())
             await Images.ExternalizeMessageAsync(message, strict: false, cancellationToken);
-        var loaded = FromAuthority(ownedRoot);
+        var loaded = FromAuthority(normalized);
         foreach (var item in loaded.Queue)
         {
             if (item.Message is not null)

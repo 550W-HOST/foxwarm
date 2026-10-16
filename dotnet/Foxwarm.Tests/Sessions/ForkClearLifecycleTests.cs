@@ -91,6 +91,11 @@ public sealed class ForkClearLifecycleTests
         await using var fixture = new LifecycleFixture();
         var parent = await fixture.Manager.CreateNamedAsync("main", "main", null, null);
         parent.Registry.TriggerOverride = _ => Task.CompletedTask;
+        fixture.Manager.TopologyChanged += () =>
+        {
+            foreach (var owner in fixture.Manager.Owners())
+                owner.Registry.TriggerOverride = _ => Task.CompletedTask;
+        };
         await AppendAsync(
             parent,
             Text("inherited input"),

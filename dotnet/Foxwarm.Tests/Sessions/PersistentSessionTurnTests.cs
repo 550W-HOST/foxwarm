@@ -5,6 +5,58 @@ namespace Foxwarm.Tests;
 
 public sealed class PersistentSessionTurnTests
 {
+    [Fact]
+    public async Task AuthorityPreparationPreservesSnapshotOwnershipAndNestedOpenFields()
+    {
+        using var temp = new TempDirectory();
+        var store = new PersistentSessionAuthorityStore(temp.Path, "s");
+        var message = CanonicalMessage(1, "original", 1000);
+        message["futureMessage"] = new JsonObject { ["nested"] = new JsonArray(true, null) };
+        message["parts"]![0]!["futurePart"] = new JsonObject { ["text"] = "opaque" };
+        var queued = new JsonObject
+        {
+            ["type"] = "user",
+            ["parts"] = new JsonArray(new JsonObject { ["text"] = "queued" }),
+            ["futureQueue"] = new JsonObject { ["array"] = new JsonArray(12.5, "keep") },
+        };
+        var snapshot = new SessionSnapshot(
+            "s", [message], [PersistentSessionAuthorityStore.FromQueueJson(queued)],
+            false, null, false,
+            new JsonObject { ["lastChannel"] = "catalog", ["futureMeta"] = new JsonObject { ["keep"] = true } },
+            2, 0,
+            new JsonObject
+            {
+                ["futureTop"] = new JsonObject { ["array"] = new JsonArray("preserved") },
+                ["goalState"] = new JsonObject { ["remindOnTurnEnd"] = true, ["futureGoal"] = "keep" },
+            }
+        );
+        var beforeMeta = snapshot.Meta.DeepClone();
+        var beforeEnvelope = snapshot.AuthorityEnvelope.DeepClone();
+        var beforeQueue = PersistentSessionAuthorityStore.ToQueueJson(snapshot.Queue[0]);
+        await store.CommitCanonicalAppendAsync(snapshot, [message]);
+        Assert.True(JsonNode.DeepEquals(beforeMeta, snapshot.Meta));
+        Assert.True(JsonNode.DeepEquals(beforeEnvelope, snapshot.AuthorityEnvelope));
+        Assert.True(JsonNode.DeepEquals(beforeQueue, PersistentSessionAuthorityStore.ToQueueJson(snapshot.Queue[0])));
+        Assert.True(JsonNode.DeepEquals(message, snapshot.History[0].ToJson()));
+
+        var loaded = (await store.LoadAsync("s"))!;
+        Assert.True(JsonNode.DeepEquals(message, loaded.History[0].ToJson()));
+        Assert.True(JsonNode.DeepEquals(queued["futureQueue"], loaded.Queue[0].OpenFields!["futureQueue"]));
+        Assert.True(JsonNode.DeepEquals(beforeEnvelope["futureTop"], loaded.AuthorityEnvelope["futureTop"]));
+        Assert.True(JsonNode.DeepEquals(beforeMeta["futureMeta"], loaded.Meta["futureMeta"]));
+        Assert.Null(loaded.Meta["lastChannel"]);
+        Assert.Null(loaded.AuthorityEnvelope["goalState"]!["remindOnTurnEnd"]);
+        loaded.History[0].ToJson()["parts"]![0]!["text"] = "detached";
+        loaded.AuthorityEnvelope["futureTop"]!["array"]![0] = "changed loaded envelope";
+        loaded.Queue[0].OpenFields!["futureQueue"]!["array"]![0] = 99;
+        loaded.Meta["futureMeta"]!["keep"] = false;
+        var reloaded = (await store.LoadAsync("s"))!;
+        Assert.True(JsonNode.DeepEquals(message, reloaded.History[0].ToJson()));
+        Assert.True(JsonNode.DeepEquals(queued["futureQueue"], reloaded.Queue[0].OpenFields!["futureQueue"]));
+        Assert.True(JsonNode.DeepEquals(beforeEnvelope["futureTop"], reloaded.AuthorityEnvelope["futureTop"]));
+        Assert.True(JsonNode.DeepEquals(beforeMeta["futureMeta"], reloaded.Meta["futureMeta"]));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

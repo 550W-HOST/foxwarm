@@ -357,11 +357,7 @@ internal sealed partial class SessionCatalog
                 var agent = Text(raw["agent"]) ?? SessionIdentity.Agent(id);
                 if (!agents.Exists(agent) || agent != SessionIdentity.Agent(id))
                     throw new InvalidDataException("Predecessor Agent binding is invalid.");
-                _ = SessionAuthorityDocument.FromOwned(
-                    NormalizeAuthority(raw, id, agent),
-                    id,
-                    agent
-                );
+                _ = NormalizeAuthority(raw, id, agent);
                 var authority = (JsonObject)raw.DeepClone();
                 authority["id"] = id;
                 rows.Add(new(id, Project(authority)));

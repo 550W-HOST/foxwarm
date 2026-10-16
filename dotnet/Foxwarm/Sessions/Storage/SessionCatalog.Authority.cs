@@ -127,7 +127,7 @@ internal sealed partial class SessionCatalog
         value["sessionStateVersion"] = 1;
         // Main supplies the binding; old JSON copies never override catalog identity.
         value["agent"] = agent;
-        _ = SessionAuthorityDocument.FromOwned(value, id, agent);
+        SessionAuthorityDocument.Validate(value, id, agent);
         return value;
     }
 

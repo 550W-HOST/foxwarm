@@ -8,7 +8,7 @@ Defines and durably writes the active per-Session JSON authority. `SessionAuthor
 
 ## Stable symbols and callers
 
-- `SessionAuthorityDocument.Parse`, `FromOwned`, `Load`, `CloneRoot`, and `ValidateMessage` validate version, history, queue, metadata, waits, images, context-block shape, and unsupported catalog/worker fields.
+- `SessionAuthorityDocument.Parse`, `FromNode`, `Load`, `CloneRoot`, and `ValidateMessage` validate version, history, queue, metadata, waits, images, context-block shape, and unsupported catalog/worker fields.
 - `LinuxAtomicJsonFile.Write` and `WritePayload` are the only atomic-file publication primitives used by the authority store. `AtomicJsonWriteStage` is the testable boundary for pre-rename versus post-rename failure classification.
 - `AuthorityCommittedException.AuthorityCommitted` tells callers that the rename happened even if directory sync or a later projection step failed.
 
@@ -16,8 +16,9 @@ Callers: `PersistentSessionAuthorityStore` builds the authority envelope; `Sessi
 
 ## Behavior and side effects
 
+- Mutable `FromNode` input is copied before validation; `Parse` transfers its freshly parsed tree through internal `FromOwned`. The same internal transfer is used for the store's freshly built authority. Transfer callers relinquish all mutable aliases; `CloneRoot` always returns a detached tree. Validation-only normalization uses `Validate` without constructing or copying a document.
 - The active `history` array and queue are validated as JSON-owned state; `meta.messageCount` must equal history length.
-- Unsupported `childHandoffState`, worker mailbox/frontier state, and catalog-only semantic fields fail closed instead of being silently migrated into active history.
+- Malformed `childHandoffState`, unsupported worker mailbox/frontier state, and catalog-only semantic fields fail closed instead of being silently migrated into active history.
 - A failure before rename leaves the previous authority and removes the temp file. A failure after rename raises `AuthorityCommittedException`; reading the file returns the newly published document.
 - Directory sync may be unsupported on a platform, but the result is recorded; the host still distinguishes publication from durability-finalization failure.
 - The optional `privateFile` creation mode supplies owner-only temporary files for MCP configuration and OAuth credentials. The same write/fsync/rename/directory-sync primitive remains canonical; ordinary Session authority callers keep their existing defaults.
