@@ -471,7 +471,9 @@ internal sealed class ModelRequestOwner(
                 await manifestCompletion.ConfigureAwait(false);
             }
             catch (OperationCanceledException)
-                when (preparationOrRequestError is OperationCanceledException && cancellationToken.IsCancellationRequested)
+                when (preparationOrRequestError is OperationCanceledException
+                    && cancellationToken.IsCancellationRequested
+                )
             {
                 // Both failures describe this caller's cancellation; retain its cancellation outcome.
             }

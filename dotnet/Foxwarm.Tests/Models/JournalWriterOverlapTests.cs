@@ -286,16 +286,35 @@ public sealed class JournalWriterOverlapTests
         using var cancel = new CancellationTokenSource();
         var sends = 0;
         using var http = new HttpClient(new Handler(() => Interlocked.Increment(ref sends)));
-        var request = Owner(http, journal).RequestAsync("s", Catalog(), "model", null, "cache", "turn", History(),
-            (_, _) => Task.FromResult("prompt"), null, () => prepared.SetResult(), null, null, cancel.Token);
+        var request = Owner(http, journal)
+            .RequestAsync(
+                "s",
+                Catalog(),
+                "model",
+                null,
+                "cache",
+                "turn",
+                History(),
+                (_, _) => Task.FromResult("prompt"),
+                null,
+                () => prepared.SetResult(),
+                null,
+                null,
+                cancel.Token
+            );
         try
         {
             await prepared.Task.WaitAsync(TimeSpan.FromSeconds(5));
             cancel.Cancel();
             Assert.False(request.IsCompleted);
         }
-        finally { release.TrySetResult(); }
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request.WaitAsync(TimeSpan.FromSeconds(5)));
+        finally
+        {
+            release.TrySetResult();
+        }
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            request.WaitAsync(TimeSpan.FromSeconds(5))
+        );
         Assert.Equal(0, sends);
         Assert.Empty(await journal.ListAsync("s", null, null, null, 10));
     }
