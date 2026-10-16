@@ -470,6 +470,11 @@ internal sealed class ModelRequestOwner(
             {
                 await manifestCompletion.ConfigureAwait(false);
             }
+            catch (OperationCanceledException)
+                when (preparationOrRequestError is OperationCanceledException && cancellationToken.IsCancellationRequested)
+            {
+                // Both failures describe this caller's cancellation; retain its cancellation outcome.
+            }
             catch (Exception persistenceError)
                 when (!ReferenceEquals(preparationOrRequestError, persistenceError))
             {

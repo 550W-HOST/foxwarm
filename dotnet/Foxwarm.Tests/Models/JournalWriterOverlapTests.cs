@@ -275,6 +275,31 @@ public sealed class JournalWriterOverlapTests
         );
     }
 
+    [Fact]
+    public async Task Cancelling_while_manifest_is_queued_preserves_cancellation_and_resolves_it_before_returning()
+    {
+        using var temp = new TempDirectory();
+        await using var journal = new LlmRequestJournalStore(temp.Path);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        journal.Writer.BeforeBatch = () => release.Task;
+        var prepared = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancel = new CancellationTokenSource();
+        var sends = 0;
+        using var http = new HttpClient(new Handler(() => Interlocked.Increment(ref sends)));
+        var request = Owner(http, journal).RequestAsync("s", Catalog(), "model", null, "cache", "turn", History(),
+            (_, _) => Task.FromResult("prompt"), null, () => prepared.SetResult(), null, null, cancel.Token);
+        try
+        {
+            await prepared.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            cancel.Cancel();
+            Assert.False(request.IsCompleted);
+        }
+        finally { release.TrySetResult(); }
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0, sends);
+        Assert.Empty(await journal.ListAsync("s", null, null, null, 10));
+    }
+
     private static ModelRequestOwner Owner(HttpClient http, LlmRequestJournalStore journal) =>
         new(
             http,
