@@ -21,6 +21,7 @@ import * as llm from './llm';
 import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, isQueueItem, Message, MessagePart, type InlineDataRef, QueueItem, QueueSource, Session, TokenUsage } from './types';
 import { formatFoxwarmSystemTag } from './utils/promptWrappers';
 import { withQueueInputHint } from './utils/systemMessageParts';
+import { isModelVisibleMessage } from './session/messageVisibility';
 
 export function shouldBroadcastChannelText(text: string | undefined | null): boolean {
   return typeof text === 'string' && text.trim().length > 0;
@@ -524,7 +525,7 @@ export class SessionTurnRunner {
 
     if (selected.length > 0) {
       consumedInput = true;
-      if (options.queuedInput) this.markQueuedUserInputs(selected);
+      if (options.queuedInput) this.markQueuedInputs(selected);
       await this.appendQueuedTurnInputs(session, session.id, selected, false);
     }
 
@@ -545,18 +546,21 @@ export class SessionTurnRunner {
     return false;
   }
 
-  private markQueuedUserInputs(items: QueueItem[]): void {
+  private markQueuedInputs(items: QueueItem[]): void {
     // Owner safe-point evidence, not an ingress clock or Main busy projection.
     // Persist the bit on queued rows too when Stop/Run queued defers their append.
     for (const item of items) {
-      if (isQueueItem(item) && item.type === 'user') item.queuedInput = true;
+      if (isQueueItem(item) && item.type !== 'compact-commit'
+        && (!item.message || item.message.role === 'user') && isModelVisibleMessage(item.message)) {
+        item.queuedInput = true;
+      }
     }
   }
 
   private queuedInputMessage(item: QueueItem, message: Message): Message {
-    return item.type === 'user' && item.queuedInput && message.role === 'user'
+    return item.queuedInput && message.role === 'user' && isModelVisibleMessage(message)
       ? { ...message, parts: withQueueInputHint(message.parts,
-        'Queued input: this message may predate the preceding replies or tool results. Do not assume it was sent in response to them.') }
+        'Queued input: this message or event may predate the preceding outputs. Its position here reflects when it was processed, not necessarily when it was sent or occurred.') }
       : message;
   }
 
@@ -600,7 +604,7 @@ export class SessionTurnRunner {
 
     while (true) {
       await this.runPendingCompactionIfNeeded(session.id, session, true);
-      this.markQueuedUserInputs(session.queue);
+      this.markQueuedInputs(session.queue);
       const messages: Message[] = [];
       const committedItems: QueueItem[] = [];
       let removedQueueItems = 0;
@@ -1099,7 +1103,7 @@ export class SessionTurnRunner {
         // point so follow-ups received during the provider request
         // participate in the same canonical runner semantics as local queues.
         await this.host.ingestPendingQueue?.(session);
-        this.markQueuedUserInputs(session.queue);
+        this.markQueuedInputs(session.queue);
         // Dequeue may arrive while the awaited Worker ingestion is publishing
         // its newly hot queue. Do not fold those rows into the current provider
         // result after the stop override has claimed them for the outer loop.
@@ -1417,7 +1421,7 @@ export class SessionTurnRunner {
       // while Dequeue leaves that prefix queued for the same outer action loop.
       if (stoppedByUser || session.stopping || session.meta?.runQueuedAfterStop) {
         await this.host.ingestPendingQueue?.(session);
-        this.markQueuedUserInputs(session.queue);
+        this.markQueuedInputs(session.queue);
       }
       const runQueuedAfterStop = !!session.meta?.runQueuedAfterStop;
       if (session.meta?.runQueuedAfterStop) {

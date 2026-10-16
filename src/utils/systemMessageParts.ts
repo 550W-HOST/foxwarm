@@ -55,24 +55,23 @@ export function withQueueInputHint(parts: MessagePart[], queueInputHint: string)
     const system = parts[index].system;
     const opening = parseFoxwarmOpeningTag(system);
     if (!opening || typeof system !== 'string') return parts;
-    const isSource = (opening.tagName === 'foxwarm-message' && opening.attrs.type === 'channel')
-      || (opening.tagName === 'foxwarm-system' && opening.attrs.kind === 'external-input');
-    if (isSource) {
+    if (opening.tagName === 'foxwarm-system' && ['session', 'channel-mode', 'time'].includes(opening.attrs.kind)) {
+      // Metadata can precede the input, but its body is never searched for one.
+      if (!parseFoxwarmTagLine(system) || !/\/\s*>\s*$/.test(system)) return parts;
+      continue;
+    }
+    if (opening.tagName === 'foxwarm-message' || opening.tagName === 'foxwarm-system') {
       const match = system.match(/^(\s*)<foxwarm-(?:message|system)\b[^>]*>/i)!;
       const attrs = { ...opening.attrs, queueInputHint };
-      const replacement = opening.tagName === 'foxwarm-message'
+      const formattedOpen = opening.tagName === 'foxwarm-message'
         ? formatFoxwarmMessageOpen(attrs)
         : formatFoxwarmSystemOpen(attrs);
+      const replacement = /\/\s*>$/.test(match[0]) ? `${formattedOpen.slice(0, -1)} />` : formattedOpen;
       return parts.map((part, partIndex) => partIndex === index
         ? { ...part, system: `${match[1]}${replacement}${system.slice(match[0].length)}` }
         : part);
     }
-    // Only framework metadata can precede the source wrapper. Do not search
-    // arbitrary user parts or nested XML for something that resembles one.
-    const metadata = parseFoxwarmTagLine(system);
-    if (metadata?.tagName !== 'foxwarm-system'
-      || !['session', 'channel-mode'].includes(metadata.attrs.kind)
-      || !/\/\s*>\s*$/.test(system)) return parts;
+    return parts;
   }
   return parts;
 }

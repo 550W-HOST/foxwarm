@@ -17,7 +17,7 @@ Core utility functions for durable JSON file persistence with write coalescing a
 - `formatLocalTimestamp`, `formatLocalTimeRange` — local time formatting with numeric UTC offset
 - `buildSystemMessageParts`, `isSystemPayloadTextPart` — split system messages into header + payload parts
 - `buildTimestampedSystemMessageParts`, `withInputTimePart` — freeze source-boundary timestamps on one model-visible input wrapper without standalone time parts
-- `withQueueInputHint` — copy an existing Channel or external-MCP source wrapper to set its independent `queueInputHint` attribute, preserving its original hint and other attributes, raw body and multipart boundaries; never wrap bare input or search user bodies
+- `withQueueInputHint` — copy an existing outer source/event wrapper to set its independent `queueInputHint` attribute, preserving its original hint and other attributes, raw body, multipart boundaries and paired/self-closing shape; skip preceding Session/channel-mode/time metadata, and never wrap bare input or search bodies
 - `escapeFoxwarmAttributeValue`, `escapeFoxwarmTextContent`, `formatFoxwarmSystemTag`, `formatFoxwarmMessageOpen`, `formatFoxwarmMessageClose`, `formatSystemPartForModel`, `parseFoxwarmTagLine` — build/parse Foxwarm XML-ish prompt wrapper tags with escaped attrs, opt-in escaped nested text, and raw outer message bodies
 - `replaceLoneSurrogates`, `containsLoneSurrogate`, `containsAnySurrogate` — surrogate detection/replacement
 - `takeUnicodeSafe`, `takeUnicodeSafeEnd`, `truncateUnicodeSafe`, `truncateUnicodeSafeWithEllipsis` — grapheme-count-aware truncation

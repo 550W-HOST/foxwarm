@@ -24,7 +24,7 @@ import { sessionWorkerControlServiceDescriptor } from './sessionWorkerControlSer
 import { SessionWorkerHost } from './sessionWorkerHost';
 import { sessionWorkerRuntimeServiceDescriptor } from './sessionWorkerRuntimeService';
 import { SessionWorkerStore } from './sessionWorkerStore';
-import type { InlineDataRef, Session } from './types';
+import type { InlineDataRef, QueueItem, Session } from './types';
 import * as llm from './llm';
 import * as sessionManager from './sessionManager';
 import { getAgentDir, SESSIONS_FILE, TIMERS_FILE } from './config';
@@ -40,7 +40,8 @@ import { normalizeSessionWorkerIngressRequest } from './sessionWorkerIngress';
 import { registerChannel, unregisterChannel } from './channel';
 import { MessageRouter } from './messageRouter';
 import type { MessagePart } from './types';
-import { formatFoxwarmMessage, parseFoxwarmOpeningTag } from './utils/promptWrappers';
+import { formatFoxwarmMessage, formatFoxwarmSystemTag, parseFoxwarmOpeningTag } from './utils/promptWrappers';
+import { issueRemoteExecCompletionCapability } from './nodes/sessionEventCapability';
 
 function baseSession(id: string): Session {
   return {
@@ -1108,7 +1109,7 @@ test('real Worker retry ingests durable mailbox input and honors Stop or dequeue
             bodies.push(body);
             if (bodies.length === 1) {
               store.enqueueIntent(initial.id, 'retry-correction-A', 'enqueue', { type: 'user', parts: [{ system: formatFoxwarmMessage({ type: 'channel', channelType: 'webui', time: 'original', hint: 'direct user message via channel' }, 'mailbox correction A') }] });
-              store.enqueueIntent(initial.id, 'retry-correction-B', 'enqueue', { type: 'background', parts: [{ text: 'mailbox correction B' }] });
+              store.enqueueIntent(initial.id, 'retry-correction-B', 'enqueue', { type: 'background', parts: [{ system: formatFoxwarmMessage({ type: 'background', time: 'original', hint: 'background guidance' }, 'mailbox correction B') }] });
               assert.equal(session.queue.length, 0, 'new Worker input is durable only in the mailbox before the retry safe point');
               throw new Error('mock provider retry failure');
             }
@@ -1148,10 +1149,12 @@ test('real Worker retry ingests durable mailbox input and honors Stop or dequeue
           assert.match(correctionAttrs.queueInputHint, /^Queued input:/,
             'retry, passive Stop and Run queued commit queueInputHint in the source wrapper');
           assert.equal((correction.parts[0].system.match(/queueInputHint=/g) || []).length, 1);
-          const event = durable.history.find((message: any) => message.parts.some((part: any) => part.text === 'mailbox correction B'));
-          assert.doesNotMatch(JSON.stringify(event.parts), /queueInputHint=/);
+          const event = durable.history.find((message: any) => message.parts.some((part: any) => part.system?.includes('mailbox correction B')));
+          const eventAttrs = parseFoxwarmOpeningTag(event.parts[0].system)!.attrs;
+          assert.equal(eventAttrs.hint, 'background guidance');
+          assert.match(eventAttrs.queueInputHint, /^Queued input: this message or event/);
           if (control !== 'stop') {
-            assert.equal((JSON.stringify(bodies[1].messages.filter((message: any) => message.role === 'user')).match(/queueInputHint=/g) || []).length, 1);
+            assert.equal((JSON.stringify(bodies[1].messages.filter((message: any) => message.role === 'user')).match(/queueInputHint=/g) || []).length, 2);
             assert.equal(bodies[1].messages.some((message: any) => message.content === correction.parts[0].system), true);
           }
           for (const text of ['mailbox correction A', 'mailbox correction B']) {
@@ -1166,7 +1169,7 @@ test('real Worker retry ingests durable mailbox input and honors Stop or dequeue
             await host.runPending(8);
             assert.equal(bodies.length, 2);
             const userPayload = JSON.stringify(bodies[1].messages.filter((message: any) => message.role === 'user'));
-            assert.equal((userPayload.match(/queueInputHint=/g) || []).length, 1, 'passively committed input retains its hint on the next real request');
+            assert.equal((userPayload.match(/queueInputHint=/g) || []).length, 2, 'passively committed message and event retain their hints on the next real request');
             assert.equal(bodies[1].messages.some((message: any) => message.content === correction.parts[0].system), true);
             const newInput = readDurable().history.find((message: any) => message.__meta?.clientMessageId === 'after-stop');
             assert.doesNotMatch(JSON.stringify(newInput.parts), /queueInputHint=/, 'a later idle turn is not itself queued input');
@@ -1182,6 +1185,10 @@ test('real Worker retry ingests durable mailbox input and honors Stop or dequeue
 
 test('Worker channel mailbox follow-ups reach real provider requests with hints independently of Main busy projections', async t => {
   const initial = baseSession(`worker-queued-hint-${Date.now()}`);
+  await sessionManager.loadSessions();
+  await sessionManager.getSession(initial.id);
+  const source = await sessionManager.getSession(`${initial.id}-sender`);
+  let taskId: string | undefined;
   initial.model = 'fixture/model';
   initial.persistentMemorySnapshot = '<foxwarm-current-model model-id="fixture/model" />\n\nworker prompt';
   const models = loadModelsConfigFromObject({ default: 'fixture/model', providers: {
@@ -1189,83 +1196,133 @@ test('Worker channel mailbox follow-ups reach real provider requests with hints 
   } });
   t.mock.method(configModule, 'resolveModelConfig', () => ({ modelsConfig: models, defaultKey: models.default,
     currentKey: models.default, modelEntry: models.models[models.default], contextLimit: models.models[models.default].contextLimit }));
-  await withLocalHost(initial, async ({ host, store, session, readDurable }) => {
-    let ingressId = 0;
-    const originalParts = new Map<string, MessagePart[]>();
-    const router = new MessageRouter(undefined, async (sessionId, item) => {
-      const normalized = normalizeSessionWorkerIngressRequest({ sessionId, item });
-      if (item.clientMessageId) originalParts.set(item.clientMessageId, structuredClone(normalized.item.parts!));
-      const intent = store.enqueueIntent(sessionId, `channel-input-${++ingressId}`, 'enqueue', normalized.item);
-      return { accepted: true, mailboxIntentId: intent.id, generation: 1, lastAppliedMailboxId: 0, messageCount: 0, busy: false };
-    });
-    // The real owner is busy during subsequent input; Main's presentation
-    // projection deliberately remains idle for every channel admission.
-    t.mock.method(router as any, 'resolveSessionForIncomingMessage', async (): Promise<{ sessionId: string; session: Session }> => ({
-      sessionId: initial.id, session: { ...initial, busy: false, queue: [], meta: { lastMessageTime: 0 } },
-    }));
-    const ctx = { channelId: 'webui', channelType: 'webui', platform: 'webui', channelUserId: initial.id,
-      conversationId: initial.id, reply: async () => {}, sendTyping: async () => {} };
-    const send = (id: string, parts: MessagePart[]) => router.handleMessage(ctx, { channelUserId: initial.id, parts, clientMessageId: id });
-    const bodies: any[] = [];
-    t.mock.method(axios, 'post', async (_url: string, body: any) => {
-      bodies.push(body);
-      if (bodies.length === 1) {
-        await send('provider-A', [{ text: 'worker correction A' }]);
-        await send('provider-B', [{ text: 'worker correction B' }]);
-        store.enqueueIntent(initial.id, 'exec-event', 'enqueue', { type: 'background', parts: [{ system: '<foxwarm-system kind="exec" event="completed" />' }] });
-        assert.equal(session.queue.length, 0, 'input is still mailbox-only during provider execution');
+  try {
+    await withLocalHost(initial, async ({ host, store, session, readDurable }) => {
+      let ingressId = 0;
+      const asynchronousItems: QueueItem[] = [];
+      sessionManager.setSessionWorkerEnqueueSink(async (sessionId, item, options, assertActive) => {
+        assert.equal(sessionId, initial.id);
+        assertActive?.();
+        const { trigger: _trigger, ...ordinary } = item;
+        const normalized = normalizeSessionWorkerIngressRequest({ sessionId, item: ordinary });
+        asynchronousItems.push(structuredClone(normalized.item));
+        store.enqueueIntent(sessionId, `event-input-${++ingressId}`, 'enqueue', options?.trigger === false
+          ? { ...normalized.item, trigger: false } : normalized.item);
+      });
+      const originalParts = new Map<string, MessagePart[]>();
+      const router = new MessageRouter(undefined, async (sessionId, item) => {
+        const normalized = normalizeSessionWorkerIngressRequest({ sessionId, item });
+        if (item.clientMessageId) originalParts.set(item.clientMessageId, structuredClone(normalized.item.parts!));
+        const intent = store.enqueueIntent(sessionId, `channel-input-${++ingressId}`, 'enqueue', normalized.item);
+        return { accepted: true, mailboxIntentId: intent.id, generation: 1, lastAppliedMailboxId: 0, messageCount: 0, busy: false };
+      });
+      // The real owner is busy during subsequent input; Main's presentation
+      // projection deliberately remains idle for every channel admission.
+      t.mock.method(router as any, 'resolveSessionForIncomingMessage', async (): Promise<{ sessionId: string; session: Session }> => ({
+        sessionId: initial.id, session: { ...initial, busy: false, queue: [], meta: { lastMessageTime: 0 } },
+      }));
+      const ctx = { channelId: 'webui', channelType: 'webui', platform: 'webui', channelUserId: initial.id,
+        conversationId: initial.id, reply: async () => {}, sendTyping: async () => {} };
+      const send = (id: string, parts: MessagePart[]) => router.handleMessage(ctx, { channelUserId: initial.id, parts, clientMessageId: id });
+      const bodies: any[] = [];
+      t.mock.method(axios, 'post', async (_url: string, body: any) => {
+        bodies.push(body);
+        if (bodies.length === 1) {
+          await send('provider-A', [{ text: 'worker correction A' }]);
+          await send('provider-B', [{ text: 'worker correction B' }]);
+          await sessionManager.sendToSession(initial.id, 'Worker inter-agent update', source.id);
+          const task = await taskService.execute({ action: 'create', title: 'Worker queued Task assignment', ownerSessionId: initial.id, notifySession: true }, source.id);
+          taskId = task.task.id;
+          assert.equal(task.sentNotifications, 1);
+          const timer = await timers.createTimer({ sessionId: initial.id, message: 'Worker queued timer work', afterSeconds: 3600 }, models);
+          await timers.fireTimerForTests(timer.id, models);
+          const nodeId = 'queued-event-node';
+          const execId = 'queued-remote-exec';
+          await nodesManager.handleSessionEvent(nodeId, initial.id,
+            'Background Process Finished\nexecId: queued-remote-exec\nExit code: 0\nremote output retained', 'background', {
+              eventId: `remote-exec-completion:${execId}`, execId, eventTimestamp: 1700000000000,
+              completionCapability: issueRemoteExecCompletionCapability(nodeId, initial.id, execId),
+            });
+          await sessionManager.queueSessionSystemEvent(initial.id,
+            formatFoxwarmSystemTag({ kind: 'event', type: 'node-online', nodeId, hint: 'Node availability event' }));
+          await sessionManager.queueSessionEvent(initial.id, 'Worker queued trigger event', 'trigger');
+          assert.equal(session.queue.length, 0, 'input is still mailbox-only during provider execution');
+        }
+        const delta = bodies.length === 2
+          ? { tool_calls: [{ index: 0, id: 'worker-queue-tool', type: 'function', function: { name: 'session', arguments: '{"action":"status"}' } }] }
+          : { content: bodies.length === 1 ? 'first worker result' : 'worker finished' };
+        const stream = new PassThrough();
+        process.nextTick(() => stream.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: bodies.length === 2 ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`));
+        return { status: 200, statusText: 'OK', headers: {}, data: stream };
+      });
+      t.mock.method(llm, 'executeTools', async () => {
+        await send('tool', [{ text: 'worker tool correction' }, { text: '<foxwarm-file name="worker-notes.txt" node="master" path="worker-notes.txt" mime="text/plain" />' }]);
+        await sessionManager.queueSessionEvent(initial.id, 'Worker tool-period background event');
+        return { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'worker-queue-tool', name: 'session', response: { output: 'ok' } } }] };
+      });
+      await send('initial-A', [{ text: 'worker initial A' }]);
+      await send('initial-B', [{ text: 'worker initial B' }]);
+      await host.runPending(8);
+      assert.equal(bodies.length, 3);
+      assert.equal(asynchronousItems.length, 7);
+      assert.deepEqual(bodies.map(body => (JSON.stringify(body.messages.filter((message: any) => message.role === 'user')).match(/queueInputHint=/g) || []).length), [0, 8, 10]);
+      const history = readDurable().history;
+      const userRows = history.filter((message: any) => message.__meta?.clientMessageId);
+      assert.deepEqual(userRows.map((message: any) => [message.__meta.clientMessageId, JSON.stringify(message.parts).includes('queueInputHint=')]), [
+        ['initial-A', false], ['initial-B', false], ['provider-A', true], ['provider-B', true], ['tool', true],
+      ]);
+      for (const message of userRows) {
+        const original = originalParts.get(message.__meta.clientMessageId)!;
+        if (JSON.stringify(message.parts).includes('queueInputHint=')) {
+          assert.equal(message.parts.length, original.length);
+          assert.deepEqual(message.parts.slice(1), original.slice(1));
+          const bodyText = original.map(part => part.text || part.system || '').join('\n');
+          const canonicalText = message.parts.map((part: MessagePart) => part.text || part.system || '').join('\n');
+          const marker = message.__meta.clientMessageId === 'tool' ? 'worker tool correction'
+            : `worker correction ${message.__meta.clientMessageId.endsWith('A') ? 'A' : 'B'}`;
+          const payload = bodies[2].messages.find((row: any) => row.role === 'user' && row.content.includes(marker));
+          assert.equal(payload.content, canonicalText, 'provider reads the committed wrapper and body without adding another hint');
+          assert.match(payload.content, /^<foxwarm-message /, 'no standalone system part precedes the source');
+          const expectedAttrs = parseFoxwarmOpeningTag(original[0].system)!.attrs;
+          const actualAttrs = parseFoxwarmOpeningTag(payload.content)!.attrs;
+          const { queueInputHint, ...originalAttrs } = actualAttrs;
+          assert.match(queueInputHint, /^Queued input:/);
+          assert.deepEqual(originalAttrs, expectedAttrs, 'the original hint is not concatenated with queued guidance');
+          assert.equal((payload.content.match(/queueInputHint=/g) || []).length, 1);
+          assert.equal(payload.content.slice(payload.content.indexOf('>') + 1), bodyText.slice(bodyText.indexOf('>') + 1));
+        } else {
+          // Only the first initial input receives the existing session header.
+          assert.deepEqual(message.parts.slice(-original.length), original);
+        }
       }
-      const delta = bodies.length === 2
-        ? { tool_calls: [{ index: 0, id: 'worker-queue-tool', type: 'function', function: { name: 'session', arguments: '{"action":"status"}' } }] }
-        : { content: bodies.length === 1 ? 'first worker result' : 'worker finished' };
-      const stream = new PassThrough();
-      process.nextTick(() => stream.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: bodies.length === 2 ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`));
-      return { status: 200, statusText: 'OK', headers: {}, data: stream };
-    });
-    t.mock.method(llm, 'executeTools', async () => {
-      await send('tool', [{ text: 'worker tool correction' }, { text: '<foxwarm-file name="worker-notes.txt" node="master" path="worker-notes.txt" mime="text/plain" />' }]);
-      return { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'worker-queue-tool', name: 'session', response: { output: 'ok' } } }] };
-    });
-    await send('initial-A', [{ text: 'worker initial A' }]);
-    await send('initial-B', [{ text: 'worker initial B' }]);
-    await host.runPending(8);
-    assert.equal(bodies.length, 3);
-    assert.deepEqual(bodies.map(body => (JSON.stringify(body.messages.filter((message: any) => message.role === 'user')).match(/queueInputHint=/g) || []).length), [0, 2, 3]);
-    const history = readDurable().history;
-    const userRows = history.filter((message: any) => message.__meta?.clientMessageId);
-    assert.deepEqual(userRows.map((message: any) => [message.__meta.clientMessageId, JSON.stringify(message.parts).includes('queueInputHint=')]), [
-      ['initial-A', false], ['initial-B', false], ['provider-A', true], ['provider-B', true], ['tool', true],
-    ]);
-    for (const message of userRows) {
-      const original = originalParts.get(message.__meta.clientMessageId)!;
-      if (JSON.stringify(message.parts).includes('queueInputHint=')) {
-        assert.equal(message.parts.length, original.length);
-        assert.deepEqual(message.parts.slice(1), original.slice(1));
-        const bodyText = original.map(part => part.text || part.system || '').join('\n');
-        const canonicalText = message.parts.map((part: MessagePart) => part.text || part.system || '').join('\n');
-        const marker = message.__meta.clientMessageId === 'tool' ? 'worker tool correction'
-          : `worker correction ${message.__meta.clientMessageId.endsWith('A') ? 'A' : 'B'}`;
-        const payload = bodies[2].messages.find((row: any) => row.role === 'user' && row.content.includes(marker));
-        assert.equal(payload.content, canonicalText, 'provider reads the committed wrapper and body without adding another hint');
-        assert.match(payload.content, /^<foxwarm-message /, 'no standalone system part precedes the source');
-        const expectedAttrs = parseFoxwarmOpeningTag(original[0].system)!.attrs;
-        const actualAttrs = parseFoxwarmOpeningTag(payload.content)!.attrs;
-        const { queueInputHint, ...originalAttrs } = actualAttrs;
-        assert.match(queueInputHint, /^Queued input:/);
-        assert.deepEqual(originalAttrs, expectedAttrs, 'the original hint is not concatenated with queued guidance');
-        assert.equal((payload.content.match(/queueInputHint=/g) || []).length, 1);
-        assert.equal(payload.content.slice(payload.content.indexOf('>') + 1), bodyText.slice(bodyText.indexOf('>') + 1));
-      } else {
-        // Only the first initial input receives the existing session header.
-        assert.deepEqual(message.parts.slice(-original.length), original);
+      for (const item of asynchronousItems) {
+        const original = item.parts![0].system!;
+        const expectedAttrs = parseFoxwarmOpeningTag(original)!.attrs;
+        const suffix = original.slice(original.indexOf('>') + 1);
+        const message = history.find((row: any) => {
+          const attrs = parseFoxwarmOpeningTag(row.parts[0]?.system)?.attrs;
+          return attrs && Object.entries(expectedAttrs).every(([key, value]) => attrs[key] === value)
+            && row.parts[0].system.endsWith(suffix);
+        });
+        const { queueInputHint, ...attrs } = parseFoxwarmOpeningTag(message.parts[0].system)!.attrs;
+        assert.match(queueInputHint, /^Queued input: this message or event/);
+        assert.deepEqual(attrs, expectedAttrs);
+        assert.equal((message.parts[0].system.match(/queueInputHint=/g) || []).length, 1);
+        assert.equal(bodies[2].messages.some((row: any) => row.content === message.parts[0].system), true);
+        if (original.endsWith('/>')) assert.equal(message.parts[0].system.endsWith('/>'), true);
       }
-    }
-    assert.equal(history.filter((message: any) => message.role === 'user').length, 6);
-    const toolIndex = history.findIndex((message: any) => message.role === 'tool');
-    assert.equal(history[toolIndex - 1].parts.some((part: any) => !!part.functionCall), true);
-    assert.equal(history[toolIndex + 1].__meta.clientMessageId, 'tool');
-    assert.equal(readDurable().queue.length, 0);
-  }, true);
+      assert.equal(history.filter((message: any) => message.role === 'user').length, 12);
+      const toolIndex = history.findIndex((message: any) => message.role === 'tool');
+      assert.equal(history[toolIndex - 1].parts.some((part: any) => !!part.functionCall), true);
+      assert.equal(history[toolIndex + 1].__meta.clientMessageId, 'tool');
+      assert.equal(readDurable().queue.length, 0);
+    }, true);
+  } finally {
+    sessionManager.setSessionWorkerEnqueueSink(undefined);
+    if (taskId) await taskService.execute({ action: 'cancel', taskId }, source.id).catch(() => {});
+    await sessionManager.deleteSession(initial.id).catch(() => {});
+    await sessionManager.deleteSession(source.id).catch(() => {});
+  }
 });
 
 test('dequeue during post-tool ingestion leaves new rows for the same outer action loop', async () => {

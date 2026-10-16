@@ -374,7 +374,7 @@ export interface SessionDeliveryOptions extends SessionEnqueueOptions {
 }
 
 export interface QueueItem {
-  /** Set only by the canonical runner for deferred ordinary user input. */
+  /** Set only by the canonical runner for deferred model-visible input or events. */
   queuedInput?: true;
   /** Internal passive ingress: stays durable but does not independently start processing. */
   trigger?: false;

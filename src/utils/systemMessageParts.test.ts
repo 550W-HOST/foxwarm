@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { withQueueInputHint, buildSystemMessageParts, buildTimestampedSystemMessageParts, isSystemPayloadTextPart, withInputTimePart } from './systemMessageParts';
-import { formatFoxwarmMessage, formatFoxwarmMessageOpen, formatFoxwarmSystemOpen, parseFoxwarmOpeningTag } from './promptWrappers';
+import { formatFoxwarmMessage, formatFoxwarmMessageOpen, formatFoxwarmSystemOpen, formatFoxwarmSystemTag, parseFoxwarmOpeningTag } from './promptWrappers';
 import type { MessagePart } from '../types';
 
 process.env.TZ = 'Asia/Shanghai';
@@ -75,6 +75,7 @@ test('input wrapper hints decorate only the multipart source opening without add
     const parts: MessagePart[] = [
       { system: '<foxwarm-system kind="session" currentSessionId="test" />' },
       { system: '<foxwarm-system kind="channel-mode" mode="send-only" />' },
+      { system: '<foxwarm-system kind="time" localTime="original" />' },
       { system: source },
       { text: '<foxwarm-message type="channel" hint="body">user text</foxwarm-message>' },
       { inlineData: { mimeType: 'image/png', data: 'unchanged image bytes' } },
@@ -84,10 +85,10 @@ test('input wrapper hints decorate only the multipart source opening without add
     const original = structuredClone(parts);
     const prepared = withQueueInputHint(parts, 'extra guidance');
     assert.equal(prepared.length, original.length);
-    assert.deepEqual(prepared.slice(0, 2), original.slice(0, 2));
-    assert.deepEqual(prepared.slice(3), original.slice(3));
+    assert.deepEqual(prepared.slice(0, 3), original.slice(0, 3));
+    assert.deepEqual(prepared.slice(4), original.slice(4));
     const attrs = parseFoxwarmOpeningTag(source)!.attrs;
-    assert.deepEqual(parseFoxwarmOpeningTag(prepared[2].system)?.attrs, { ...attrs, queueInputHint: 'extra guidance' });
+    assert.deepEqual(parseFoxwarmOpeningTag(prepared[3].system)?.attrs, { ...attrs, queueInputHint: 'extra guidance' });
     assert.deepEqual(parts, original);
   }
 });
@@ -95,9 +96,29 @@ test('input wrapper hints decorate only the multipart source opening without add
 test('input wrapper hints do not wrap bare input or search user bodies for source-like tags', () => {
   for (const parts of [
     [{ text: '<foxwarm-message type="channel" hint="user-owned">body</foxwarm-message>' }],
-    [{ system: '<foxwarm-system kind="system">\n<foxwarm-message type="channel" hint="nested">body</foxwarm-message>\n</foxwarm-system>' }],
+    [{ system: '<foxwarm-system kind="session">\n<foxwarm-message type="channel" hint="nested">body</foxwarm-message>\n</foxwarm-system>' }],
     [{ text: 'bare text' }, { system: '<foxwarm-message type="channel" hint="body fragment">' }],
   ]) {
     assert.deepEqual(withQueueInputHint(parts, 'extra guidance'), parts);
+  }
+});
+
+test('queued event wrappers retain paired or self-closing structure and never decorate nested body tags', () => {
+  const body = '\n<foxwarm-message type="inter-agent" hint="body-owned">event payload</foxwarm-message>\n';
+  for (const source of [
+    formatFoxwarmMessage({ type: 'task', taskId: 'test-task', time: 'original', hint: 'task guidance' }, body),
+    `${formatFoxwarmSystemOpen({ kind: 'event', type: 'background-process-finished', time: 'original' })}${body}</foxwarm-system>`,
+    `${formatFoxwarmSystemOpen({ kind: 'system', time: 'original' })}${body}</foxwarm-system>`,
+    `${formatFoxwarmSystemOpen({ kind: 'event', type: 'wait-timeout', seconds: 5, time: 'original' })}${body}</foxwarm-system>`,
+    formatFoxwarmSystemTag({ kind: 'event', type: 'node-online', time: 'original', hint: 'event guidance' }),
+    '<foxwarm-message type="background" time="original" hint="event guidance" />',
+  ]) {
+    const prepared = withQueueInputHint([{ system: source }], 'queued event guidance')[0].system!;
+    assert.deepEqual(parseFoxwarmOpeningTag(prepared)?.attrs, {
+      ...parseFoxwarmOpeningTag(source)!.attrs, queueInputHint: 'queued event guidance',
+    });
+    assert.equal(prepared.endsWith('/>'), source.endsWith('/>'));
+    assert.equal(prepared.slice(prepared.indexOf('>') + 1), source.slice(source.indexOf('>') + 1));
+    assert.equal((prepared.match(/queueInputHint=/g) || []).length, 1);
   }
 });
