@@ -452,6 +452,7 @@ test('Terminal disconnect puts a compact red reconnect action after PID and rest
     })
     assert.equal(header.preceding, 'pid 4242')
     assert.equal(header.text, 'Disconnected')
+    assert.doesNotMatch(await page.$eval('[data-terminal-header]', header => header.textContent), /status disconnected/)
     assert.ok(header.buttonHeight <= 22, JSON.stringify(header))
     assert.equal(header.height, initialHeight, 'the existing wide status row keeps its height')
     assert.ok(await page.$eval('[data-terminal-header] [role="status"]', notice => {
@@ -478,11 +479,13 @@ test('Terminal disconnect puts a compact red reconnect action after PID and rest
     await page.click(action)
     await page.waitForFunction(() => document.querySelector('[data-terminal-header]')?.textContent.includes('Terminal lookup unavailable'))
     assert.equal(await page.$eval(action, button => button.disabled), false, 'a failed reconnect can be retried')
+    assert.doesNotMatch(await page.$eval('[data-terminal-header]', header => header.textContent), /status error/)
     assert.deepEqual(await page.evaluate(() => window.__terminalCreates), [])
     await page.evaluate(() => { window.__holdTerminalReady = true })
     await page.click(action)
     await page.waitForFunction(() => window.__terminalConnections.length === 2)
     assert.equal(await page.$eval(action, button => button.disabled), true)
+    assert.doesNotMatch(await page.$eval('[data-terminal-header]', header => header.textContent), /status connecting/)
     await page.evaluate(terminal => {
       const previous = window.__disconnectedSocket
       previous.onclose?.({})

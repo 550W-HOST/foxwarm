@@ -417,7 +417,7 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
                   <ArrowLeft className="h-4 w-4" />
                 </button>
               )}
-              <span>status {status}</span>
+              {!showReconnect && <span>status {status}</span>}
               {keyboardMode !== 'web' && (
                 <TerminalKeyboardHeaderControl
                   nativeMode={keyboardMode === 'native'}
