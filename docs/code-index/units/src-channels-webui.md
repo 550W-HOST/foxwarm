@@ -1,6 +1,6 @@
 # Unit: src-channels-webui
 
-Files: src/channels/webuiChannel.ts, src/providerModelList.ts, src/providerModelList.test.ts, src/channels/webuiQueuePreview.ts, src/channels/webuiQueuePreview.test.ts, src/channels/webuiAgentsRoute.test.ts, src/channels/webuiUpload.ts, src/channels/webuiUpload.test.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiHistorySearch.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts, src/channels/webuiNodesRoute.test.ts, src/channels/webuiTerminalsRoute.test.ts, src/channels/webuiTrigger.test.ts, src/channels/webuiTerminalStream.test.ts
+Files: src/channels/webuiChannel.ts, src/channels/webuiSetup.ts, src/channels/webuiSetup.test.ts, src/providerModelList.ts, src/providerModelList.test.ts, src/channels/webuiQueuePreview.ts, src/channels/webuiQueuePreview.test.ts, src/channels/webuiAgentsRoute.test.ts, src/channels/webuiUpload.ts, src/channels/webuiUpload.test.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiHistorySearch.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts, src/channels/webuiNodesRoute.test.ts, src/channels/webuiTerminalsRoute.test.ts, src/channels/webuiTrigger.test.ts, src/channels/webuiTerminalStream.test.ts
 Secondary files: src/webuiSessionScope.ts, src/channels/webuiAccess.test.ts, src/channels/webuiSessionNodesRoute.test.ts, src/channels/webuiLogs.ts, src/channels/webuiRealtime.ts, src/channels/webuiRealtime.test.ts, src/webuiSettings.ts, src/webuiSettings.test.ts, src/vscodeWebRoutes.ts
 
 ## Purpose
@@ -13,11 +13,12 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 
 - `WebUIChannel` — channel implementation and WebUI route registrar.
 - `buildWebUiSessionState(sessionDto)` — canonical single-session runtime/model/effort/node/cwd payload shared by list, history, and streams.
-- `buildWebUiModelsPayload(currentModel?)` / `buildWebUiModelsPayloadFromConfig(modelsConfig, currentKey?)` — model selector capability payload including safe concrete identity, virtual routing metadata, and allowed/default effort presentation.
+- `registerWebUiSetupRoutes(server, installer)` in `webuiSetup.ts` — registers the administrator model catalog and Setup routes using `HttpServer` and the existing `ConfigInstaller`; Session model/child-model mutation and scoped chat/history remain in `WebUIChannel`.
+- `buildWebUiModelsPayload(currentModel?)` / `buildWebUiModelsPayloadFromConfig(modelsConfig, currentKey?)` in `webuiSetup.ts` — model selector capability payload including safe concrete identity, virtual routing metadata, and allowed/default effort presentation.
 - `buildQueuedPreviewMessages(queue)` — bounded render-only queue previews.
 - `composeQueuedPreviewProjection(...)` — combines a Worker hot preview with later durable mailbox input while preserving the global preview cap and queue indices.
 - `broadcastMessage`, `broadcastSessionStateUpdate`, and `broadcastSessionListUpdate` — parity delivery to current multiplexed WebSocket and compatibility SSE clients.
-- `getModelsSetupDiagnostics(modelsPath?)` — structured concrete/virtual setup diagnostics.
+- `getModelsSetupDiagnostics(modelsPath?)` in `webuiSetup.ts` — structured concrete/virtual setup diagnostics.
 - `parseProviderModelListRequest` / `listProviderModels` — validate one transient provider connection and perform a bounded OpenAI-family or Anthropic model-list request without exposing upstream bodies or credentials.
 
 ## Route groups
