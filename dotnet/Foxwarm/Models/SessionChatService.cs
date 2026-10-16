@@ -27,7 +27,13 @@ internal sealed class SessionChatService(
         SessionHistory history,
         Func<CancellationToken, Task<bool>> prepareRetry,
         CancellationToken cancellationToken
-    ) => ChatCoreAsync(sessionId, RequestHistory.FromSnapshot(history), prepareRetry, cancellationToken);
+    ) =>
+        ChatCoreAsync(
+            sessionId,
+            RequestHistory.FromSnapshot(history),
+            prepareRetry,
+            cancellationToken
+        );
 
     private async Task<ChatResult> ChatCoreAsync(
         string sessionId,

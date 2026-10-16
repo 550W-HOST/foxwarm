@@ -375,9 +375,15 @@ internal sealed class RequestChatService(IChatService inner, SessionOwner hosted
         try
         {
             var result =
-                inner is ISessionChatService ordinary && prepareRetry is not null && snapshot is not null
+                inner is ISessionChatService ordinary
+                && prepareRetry is not null
+                && snapshot is not null
                     ? await ordinary.ChatAsync(sessionId, snapshot, Prepare, cancellationToken)
-                    : await inner.ChatAsync(sessionId, history ?? snapshot!.Materialize(), cancellationToken);
+                    : await inner.ChatAsync(
+                        sessionId,
+                        history ?? snapshot!.Materialize(),
+                        cancellationToken
+                    );
             requestId = result.JournalRequestId ?? requestId;
             if (result.AssistantMessage is null)
                 hosted.ClearDraft();

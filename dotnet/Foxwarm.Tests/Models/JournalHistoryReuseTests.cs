@@ -19,8 +19,14 @@ public sealed class JournalHistoryReuseTests
         var requests = Owner(http, journal);
         var hosted = new SessionOwner("s", "main", models);
         var agents = new AgentCatalog(temp.Path, Path.Combine(temp.Path, "work"));
-        var chat = new SessionChatService(requests, Defaults(), hosted, models,
-            new AgentMemory(agents, new Skills(agents, Path.Combine(temp.Path, "skills"))), (_, _) => { });
+        var chat = new SessionChatService(
+            requests,
+            Defaults(),
+            hosted,
+            models,
+            new AgentMemory(agents, new Skills(agents, Path.Combine(temp.Path, "skills"))),
+            (_, _) => { }
+        );
         var wrapped = new RequestChatService(chat, hosted);
         var store = new InMemorySessionAuthorityStore();
         hosted.Registry = new SessionRegistry(store, wrapped);
@@ -43,7 +49,10 @@ public sealed class JournalHistoryReuseTests
         entry.State.History.Add(User("new live history"));
         var result = await chat.ChatAsync("s", initial, _ => Task.FromResult(false), default);
         var restored = await journal.ReconstructAsync(result.JournalRequestId!);
-        Assert.Equal("captured", restored["messages"]![0]!["parts"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(
+            "captured",
+            restored["messages"]![0]!["parts"]![0]!["text"]!.GetValue<string>()
+        );
         Assert.Single(restored["messages"]!.AsArray());
         Assert.Same(prepared, Cached(initial[0]));
     }
@@ -56,17 +65,29 @@ public sealed class JournalHistoryReuseTests
         using var http = new HttpClient(new Handler());
         var owner = Owner(http, journal);
         var user = HistoryMessage.FromJson(User("NBSP\u00a0😀"));
-        var callJson = JsonNode.Parse("""
-            {"role":"model","parts":[{"functionCall":{"id":"one","name":"read","args":{"10":1e-7,"2":-0}}}],"__meta":{"modelId":"a/m","seq":3},"compaction":{"diagnostic":true}}
-            """)!.AsObject();
+        var callJson = JsonNode
+            .Parse(
+                """
+                {"role":"model","parts":[{"functionCall":{"id":"one","name":"read","args":{"10":1e-7,"2":-0}}}],"__meta":{"modelId":"a/m","seq":3},"compaction":{"diagnostic":true}}
+                """
+            )!
+            .AsObject();
         var call = HistoryMessage.FromJson(callJson);
-        var outputJson = JsonNode.Parse("""
-            {"role":"tool","parts":[{"functionResponse":{"tool_use_id":"one","name":"read","response":{"output":"done"},"__meta":{"toolScriptSubCalls":[]}}}],"__meta":{"seq":4}}
-            """)!.AsObject();
+        var outputJson = JsonNode
+            .Parse(
+                """
+                {"role":"tool","parts":[{"functionResponse":{"tool_use_id":"one","name":"read","response":{"output":"done"},"__meta":{"toolScriptSubCalls":[]}}}],"__meta":{"seq":4}}
+                """
+            )!
+            .AsObject();
         var output = HistoryMessage.FromJson(outputJson);
         var hiddenJson = (JsonObject)outputJson.DeepClone();
         hiddenJson["modelVisible"] = false;
-        var missing = SessionHistory.FromMessages([user, call, HistoryMessage.FromJson(hiddenJson)]);
+        var missing = SessionHistory.FromMessages([
+            user,
+            call,
+            HistoryMessage.FromJson(hiddenJson),
+        ]);
         var paired = SessionHistory.FromMessages([user, call, output]);
         var hiddenCall = (JsonObject)callJson.DeepClone();
         hiddenCall["modelVisible"] = false;
@@ -76,28 +97,53 @@ public sealed class JournalHistoryReuseTests
         var replaced = HistoryMessage.FromJson(replacement);
         var histories = new[]
         {
-            missing, paired, paired.AppendJson([User("appended")]),
+            missing,
+            paired,
+            paired.AppendJson([User("appended")]),
             SessionHistory.FromMessages([user, HistoryMessage.FromJson(hiddenCall), output]),
             SessionHistory.FromMessages([user, call]), // pruned response needs a fresh synthetic row
             SessionHistory.FromMessages([user, replaced, output]),
             SessionHistory.FromMessages([user, output]), // compacted call leaves an orphan output
             SessionHistory.FromMessages(paired), // fork shares the same immutable records
-            SessionHistory.Empty, paired, // clear does not retire a still-live fork/snapshot
+            SessionHistory.Empty,
+            paired, // clear does not retire a still-live fork/snapshot
         };
         LlmRequestJournalStore.PreparedObject? first = null;
         foreach (var history in histories)
         {
             var captured = RequestHistory.FromSnapshot(history);
-            var result = await owner.RequestAsync("s", owner.Capture(Catalog(), "a/m", null),
-                "cache", "turn", captured, (_, _) => Task.FromResult("prompt"),
-                null, null, null, null, default, ModelRequestScope.Canonical);
+            var result = await owner.RequestAsync(
+                "s",
+                owner.Capture(Catalog(), "a/m", null),
+                "cache",
+                "turn",
+                captured,
+                (_, _) => Task.FromResult("prompt"),
+                null,
+                null,
+                null,
+                null,
+                default,
+                ModelRequestScope.Canonical
+            );
             var repaired = RequestHistoryRepair.SelectAndRepair(captured);
             var prepared = LlmRequestJournalStore.PrepareMessages(repaired);
-            var uncached = LlmRequestJournalStore.PrepareMessages(RequestHistoryRepair.SelectAndRepair(
-                RequestHistory.FromMutable(history.Materialize())));
-            Assert.Equal(uncached.Select(row => (row.Id, row.Payload)), prepared.Select(row => (row.Id, row.Payload)));
+            var uncached = LlmRequestJournalStore.PrepareMessages(
+                RequestHistoryRepair.SelectAndRepair(
+                    RequestHistory.FromMutable(history.Materialize())
+                )
+            );
+            Assert.Equal(
+                uncached.Select(row => (row.Id, row.Payload)),
+                prepared.Select(row => (row.Id, row.Payload))
+            );
             var restored = await journal.ReconstructAsync(result.JournalRequestId!);
-            Assert.Equal(prepared.Select(row => row.Payload), restored["messages"]!.AsArray().Select(row => LlmRequestJournalStore.EncodeCli(row!)));
+            Assert.Equal(
+                prepared.Select(row => row.Payload),
+                restored["messages"]!
+                    .AsArray()
+                    .Select(row => LlmRequestJournalStore.EncodeCli(row!))
+            );
             if (history.Count > 0)
             {
                 first ??= prepared[0];
@@ -108,7 +154,12 @@ public sealed class JournalHistoryReuseTests
         Assert.Null(Cached(missing[2])); // hidden records never acquire prepared payloads
         Assert.DoesNotContain("compaction", Cached(call)!.Payload);
         Assert.DoesNotContain("__meta", Cached(output)!.Payload);
-        Assert.Equal("done", JsonNode.Parse(Cached(output)!.Payload)!["parts"]![0]!["functionResponse"]!["response"]!["output"]!.GetValue<string>());
+        Assert.Equal(
+            "done",
+            JsonNode.Parse(Cached(output)!.Payload)!["parts"]![0]!["functionResponse"]![
+                "response"
+            ]!["output"]!.GetValue<string>()
+        );
     }
 
     [Fact]
@@ -119,19 +170,36 @@ public sealed class JournalHistoryReuseTests
         var handler = new Handler(failures: 2);
         using var http = new HttpClient(handler);
         var owner = Owner(http, journal);
-        var model = JsonNode.Parse("""
-            {"role":"model","parts":[{"text":"answer","thinking":"private thought","providerMeta":{"signature":"signed"}}],"__meta":{"modelId":"a/m"}}
-            """)!.AsObject();
+        var model = JsonNode
+            .Parse(
+                """
+                {"role":"model","parts":[{"text":"answer","thinking":"private thought","providerMeta":{"signature":"signed"}}],"__meta":{"modelId":"a/m"}}
+                """
+            )!
+            .AsObject();
         var snapshot = SessionHistory.FromJson([User("seed"), model]);
         var contexts = 0;
         var ids = new List<string>();
-        await owner.RequestAsync("s", owner.Capture(Catalog(), "route", null), "cache", "turn",
-            RequestHistory.FromSnapshot(snapshot), (_, _) => Task.FromResult("prompt"),
-            null, null, null, null, default, ModelRequestScope.Canonical,
+        await owner.RequestAsync(
+            "s",
+            owner.Capture(Catalog(), "route", null),
+            "cache",
+            "turn",
+            RequestHistory.FromSnapshot(snapshot),
+            (_, _) => Task.FromResult("prompt"),
+            null,
+            null,
+            null,
+            null,
+            default,
+            ModelRequestScope.Canonical,
             prepareRetry: _ => Task.FromResult<RequestHistory?>(null),
             journalRequestStarted: ids.Add,
-            requestContext: () => Task.FromResult<IReadOnlyList<JsonObject>>(
-                [User(++contexts < 3 ? "reminder-one" : "reminder-two")]));
+            requestContext: () =>
+                Task.FromResult<IReadOnlyList<JsonObject>>([
+                    User(++contexts < 3 ? "reminder-one" : "reminder-two"),
+                ])
+        );
         Assert.Equal(3, contexts);
         Assert.Equal(ids[0], ids[1]);
         Assert.NotEqual(ids[1], ids[2]);
@@ -139,10 +207,18 @@ public sealed class JournalHistoryReuseTests
         var changed = await journal.ReconstructAsync(ids[2]);
         Assert.Equal(2, original["attempts"]!.AsArray().Count);
         Assert.Single(changed["attempts"]!.AsArray());
-        Assert.Equal("reminder-one", original["messages"]![2]!["parts"]![0]!["text"]!.GetValue<string>());
-        Assert.Equal("reminder-two", changed["messages"]![2]!["parts"]![0]!["text"]!.GetValue<string>());
-        Assert.Equal(LlmRequestJournalStore.EncodeCli(original["messages"]![1]!),
-            LlmRequestJournalStore.EncodeCli(changed["messages"]![1]!));
+        Assert.Equal(
+            "reminder-one",
+            original["messages"]![2]!["parts"]![0]!["text"]!.GetValue<string>()
+        );
+        Assert.Equal(
+            "reminder-two",
+            changed["messages"]![2]!["parts"]![0]!["text"]!.GetValue<string>()
+        );
+        Assert.Equal(
+            LlmRequestJournalStore.EncodeCli(original["messages"]![1]!),
+            LlmRequestJournalStore.EncodeCli(changed["messages"]![1]!)
+        );
         Assert.Contains("signed", Cached(snapshot[1])!.Payload);
         Assert.EndsWith("/a/v1/messages", handler.Paths[0]);
         Assert.EndsWith("/b/v1/messages", handler.Paths[2]);
@@ -158,12 +234,27 @@ public sealed class JournalHistoryReuseTests
         using var http = new HttpClient(new Handler());
         var owner = Owner(http, journal);
         var history = new[] { User("before") };
-        var tools = JsonNode.Parse("""[{"name":"before","parameters":{"type":"object"}}]""")!.AsArray();
+        var tools = JsonNode
+            .Parse("""[{"name":"before","parameters":{"type":"object"}}]""")!
+            .AsArray();
         async Task<JsonObject> Send()
         {
-            var result = await owner.RequestAsync("s", Catalog(), "a/m", null, "cache", "turn",
-                history, (_, _) => Task.FromResult("prompt"), null, null, null, null, default,
-                definitions: () => tools);
+            var result = await owner.RequestAsync(
+                "s",
+                Catalog(),
+                "a/m",
+                null,
+                "cache",
+                "turn",
+                history,
+                (_, _) => Task.FromResult("prompt"),
+                null,
+                null,
+                null,
+                null,
+                default,
+                definitions: () => tools
+            );
             return await journal.ReconstructAsync(result.JournalRequestId!);
         }
         var first = await Send();
@@ -175,7 +266,10 @@ public sealed class JournalHistoryReuseTests
         Assert.Contains("before", first["toolDefinitions"]!.ToJsonString());
         Assert.Contains("after", second["toolDefinitions"]!.ToJsonString());
         var input = RequestHistory.FromMutable(history);
-        Assert.NotSame(LlmRequestJournalStore.PrepareMessages(input)[0], LlmRequestJournalStore.PrepareMessages(input)[0]);
+        Assert.NotSame(
+            LlmRequestJournalStore.PrepareMessages(input)[0],
+            LlmRequestJournalStore.PrepareMessages(input)[0]
+        );
     }
 
     [Fact]
@@ -198,37 +292,55 @@ public sealed class JournalHistoryReuseTests
 
     private static LlmRequestJournalStore.PreparedObject? Cached(HistoryMessage message)
     {
-        var table = (ConditionalWeakTable<HistoryMessage, LlmRequestJournalStore.PreparedObject>)
-            typeof(LlmRequestJournalStore).GetField("preparedHistory", BindingFlags.NonPublic | BindingFlags.Static)!.GetValue(null)!;
+        var table =
+            (ConditionalWeakTable<HistoryMessage, LlmRequestJournalStore.PreparedObject>)
+                typeof(LlmRequestJournalStore)
+                    .GetField("preparedHistory", BindingFlags.NonPublic | BindingFlags.Static)!
+                    .GetValue(null)!;
         return table.TryGetValue(message, out var prepared) ? prepared : null;
     }
 
-    private static JsonObject User(string text) => new()
-    {
-        ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["text"] = text }),
-    };
+    private static JsonObject User(string text) =>
+        new() { ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["text"] = text }) };
 
-    private static ResponsesClientOptions Defaults() => new(new Uri("http://localhost"), "m", "a/m", "token", "", 50);
+    private static ResponsesClientOptions Defaults() =>
+        new(new Uri("http://localhost"), "m", "a/m", "token", "", 50);
 
     private static ModelRequestOwner Owner(HttpClient http, LlmRequestJournalStore journal) =>
         new(http, Defaults(), new ModelRouting(), (_, _) => Task.CompletedTask, journal: journal);
 
-    private static HostModels Catalog() => HostModels.Parse(JsonNode.Parse("""
-        {"default":"a/m","providers":{"a":{"providerType":"anthropic","baseUrl":"http://localhost/a","apiKey":"token","models":["m"],"extraFields":{"stream":false}},"b":{"providerType":"anthropic","baseUrl":"http://localhost/b","apiKey":"token","models":["m"],"extraFields":{"stream":false}},"route":{"providerType":"failover","targets":["a/m","b/m"],"failureThreshold":2}}}
-        """)!.AsObject(), new JsonObject());
+    private static HostModels Catalog() =>
+        HostModels.Parse(
+            JsonNode
+                .Parse(
+                    """
+                    {"default":"a/m","providers":{"a":{"providerType":"anthropic","baseUrl":"http://localhost/a","apiKey":"token","models":["m"],"extraFields":{"stream":false}},"b":{"providerType":"anthropic","baseUrl":"http://localhost/b","apiKey":"token","models":["m"],"extraFields":{"stream":false}},"route":{"providerType":"failover","targets":["a/m","b/m"],"failureThreshold":2}}}
+                    """
+                )!
+                .AsObject(),
+            new JsonObject()
+        );
 
     private sealed class Handler(int failures = 0) : HttpMessageHandler
     {
         internal List<string> Bodies { get; } = [];
         internal List<string> Paths { get; } = [];
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
         {
             Paths.Add(request.RequestUri!.AbsolutePath);
             Bodies.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
             var fail = Bodies.Count <= failures;
-            return new HttpResponseMessage(fail ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.OK)
+            return new HttpResponseMessage(
+                fail ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.OK
+            )
             {
-                Content = new StringContent(fail ? "unavailable" : "{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}"),
+                Content = new StringContent(
+                    fail ? "unavailable" : "{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}"
+                ),
             };
         }
     }

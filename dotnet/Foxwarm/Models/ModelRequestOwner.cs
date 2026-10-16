@@ -122,8 +122,12 @@ internal sealed class ModelRequestOwner(
             cancellationToken,
             scope,
             definitions,
-            prepareRetry is null ? null : async token =>
-                await prepareRetry(token) is { } updated ? RequestHistory.FromMutable(updated) : null,
+            prepareRetry is null
+                ? null
+                : async token =>
+                    await prepareRetry(token) is { } updated
+                        ? RequestHistory.FromMutable(updated)
+                        : null,
             journalPurpose,
             journalIteration,
             journalRequestStarted,

@@ -6,13 +6,13 @@ namespace Foxwarm.Models;
 
 internal static partial class RequestHistoryRepair
 {
-    internal static IReadOnlyList<JsonObject> SelectAndRepair(IReadOnlyList<JsonObject> history)
-        => SelectAndRepair(RequestHistory.FromMutable(history)).Messages;
+    internal static IReadOnlyList<JsonObject> SelectAndRepair(IReadOnlyList<JsonObject> history) =>
+        SelectAndRepair(RequestHistory.FromMutable(history)).Messages;
 
     internal static RequestHistory SelectAndRepair(RequestHistory history)
     {
-        var source = history.Rows
-            .Where(row => CanonicalMessage.IsVisible(row.Message))
+        var source = history
+            .Rows.Where(row => CanonicalMessage.IsVisible(row.Message))
             .Select(row => new RequestHistory.Row((JsonObject)row.Message.DeepClone(), row.Origin))
             .ToArray();
         var result = new List<RequestHistory.Row>();
@@ -53,33 +53,35 @@ internal static partial class RequestHistoryRepair
             )
                 continue;
             result.Add(
-                new RequestHistory.Row(new JsonObject
-                {
-                    ["role"] = "tool",
-                    ["parts"] = new JsonArray(
-                        calls
-                            .Select(call =>
-                                (JsonNode)
-                                    new JsonObject
-                                    {
-                                        ["functionResponse"] = new JsonObject
+                new RequestHistory.Row(
+                    new JsonObject
+                    {
+                        ["role"] = "tool",
+                        ["parts"] = new JsonArray(
+                            calls
+                                .Select(call =>
+                                    (JsonNode)
+                                        new JsonObject
                                         {
-                                            ["tool_use_id"] = SessionWait.Text(call["id"])
-                                                is { Length: > 0 } id
-                                                ? id
-                                                : "unknown",
-                                            ["name"] = call["name"]?.DeepClone(),
-                                            ["response"] = new JsonObject
+                                            ["functionResponse"] = new JsonObject
                                             {
-                                                ["error"] =
-                                                    "Tool output is lost due to agent restart or error",
+                                                ["tool_use_id"] = SessionWait.Text(call["id"])
+                                                    is { Length: > 0 } id
+                                                    ? id
+                                                    : "unknown",
+                                                ["name"] = call["name"]?.DeepClone(),
+                                                ["response"] = new JsonObject
+                                                {
+                                                    ["error"] =
+                                                        "Tool output is lost due to agent restart or error",
+                                                },
                                             },
-                                        },
-                                    }
-                            )
-                            .ToArray()
-                    ),
-                })
+                                        }
+                                )
+                                .ToArray()
+                        ),
+                    }
+                )
             );
         }
         return new RequestHistory(result);

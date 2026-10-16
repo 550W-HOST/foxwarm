@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Numerics;
-using System.Security.Cryptography;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -116,8 +116,17 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
     {
         CheckOpen();
         token.ThrowIfCancellationRequested();
-        return EnqueueRequestAsync(sessionId, purpose, iteration, systemPrompt, toolDefinitions,
-            RequestHistory.FromMutable(messages), requestedModelKey, promptCacheKey, token);
+        return EnqueueRequestAsync(
+            sessionId,
+            purpose,
+            iteration,
+            systemPrompt,
+            toolDefinitions,
+            RequestHistory.FromMutable(messages),
+            requestedModelKey,
+            promptCacheKey,
+            token
+        );
     }
 
     internal async ValueTask<JournalRequestAdmission> EnqueueRequestAsync(
@@ -1454,16 +1463,24 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
 
     // Weak keys tie retained payloads to live immutable records, including shared snapshots/forks.
     // Values contain only encoded strings and never retain their record or Session.
-    private static readonly ConditionalWeakTable<HistoryMessage, PreparedObject> preparedHistory = new();
+    private static readonly ConditionalWeakTable<HistoryMessage, PreparedObject> preparedHistory =
+        new();
 
     internal static PreparedObject[] PrepareMessages(RequestHistory messages) =>
-        messages.Rows
-            .Where(row => row.Message["modelVisible"] is not JsonValue visibility
+        messages
+            .Rows.Where(row =>
+                row.Message["modelVisible"] is not JsonValue visibility
                 || !visibility.TryGetValue<bool>(out var visible)
-                || visible)
-            .Select(row => row.Origin is { } origin
-                ? preparedHistory.GetValue(origin, message => PrepareObject("message", CanonicalMessage(message.ToJson())))
-                : PrepareObject("message", CanonicalMessage(row.Message)))
+                || visible
+            )
+            .Select(row =>
+                row.Origin is { } origin
+                    ? preparedHistory.GetValue(
+                        origin,
+                        message => PrepareObject("message", CanonicalMessage(message.ToJson()))
+                    )
+                    : PrepareObject("message", CanonicalMessage(row.Message))
+            )
             .ToArray();
 
     internal sealed record PreparedObject(string Id, string Kind, string Payload);
