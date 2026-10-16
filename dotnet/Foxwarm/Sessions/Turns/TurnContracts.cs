@@ -45,7 +45,7 @@ public interface ISessionChatService : IChatService
 {
     Task<ChatResult> ChatAsync(
         string sessionId,
-        IReadOnlyList<JsonObject> history,
+        SessionHistory history,
         Func<CancellationToken, Task<bool>> prepareRetry,
         CancellationToken cancellationToken
     );

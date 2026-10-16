@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Numerics;
 using System.Security.Cryptography;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -101,7 +102,7 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
         return admission.RequestId;
     }
 
-    internal async ValueTask<JournalRequestAdmission> EnqueueRequestAsync(
+    internal ValueTask<JournalRequestAdmission> EnqueueRequestAsync(
         string? sessionId,
         string purpose,
         int iteration,
@@ -115,18 +116,29 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
     {
         CheckOpen();
         token.ThrowIfCancellationRequested();
+        return EnqueueRequestAsync(sessionId, purpose, iteration, systemPrompt, toolDefinitions,
+            RequestHistory.FromMutable(messages), requestedModelKey, promptCacheKey, token);
+    }
+
+    internal async ValueTask<JournalRequestAdmission> EnqueueRequestAsync(
+        string? sessionId,
+        string purpose,
+        int iteration,
+        string systemPrompt,
+        JsonArray toolDefinitions,
+        RequestHistory messages,
+        string requestedModelKey,
+        string promptCacheKey,
+        CancellationToken token = default
+    )
+    {
+        CheckOpen();
+        token.ThrowIfCancellationRequested();
         var requestId = Guid.NewGuid().ToString();
         // Consume request-owned JSON before admission; only immutable encoded values cross the queue.
         var prompt = PrepareObject("prompt", JsonValue.Create(systemPrompt)!);
         var tools = PrepareObject("tool-schema", toolDefinitions);
-        var preparedMessages = messages
-            .Where(message =>
-                message["modelVisible"] is not JsonValue visibility
-                || !visibility.TryGetValue<bool>(out var visible)
-                || visible
-            )
-            .Select(message => PrepareObject("message", CanonicalMessage(message)))
-            .ToArray();
+        var preparedMessages = PrepareMessages(messages);
         var messageIds = preparedMessages.Select(message => message.Id).ToArray();
         var cacheHash = Sha256(promptCacheKey);
         var receipt = await Writer
@@ -1440,7 +1452,21 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
         schema.Commit();
     }
 
-    private sealed record PreparedObject(string Id, string Kind, string Payload);
+    // Weak keys tie retained payloads to live immutable records, including shared snapshots/forks.
+    // Values contain only encoded strings and never retain their record or Session.
+    private static readonly ConditionalWeakTable<HistoryMessage, PreparedObject> preparedHistory = new();
+
+    internal static PreparedObject[] PrepareMessages(RequestHistory messages) =>
+        messages.Rows
+            .Where(row => row.Message["modelVisible"] is not JsonValue visibility
+                || !visibility.TryGetValue<bool>(out var visible)
+                || visible)
+            .Select(row => row.Origin is { } origin
+                ? preparedHistory.GetValue(origin, message => PrepareObject("message", CanonicalMessage(message.ToJson())))
+                : PrepareObject("message", CanonicalMessage(row.Message)))
+            .ToArray();
+
+    internal sealed record PreparedObject(string Id, string Kind, string Payload);
 
     private static PreparedObject PrepareObject(string kind, JsonNode value)
     {

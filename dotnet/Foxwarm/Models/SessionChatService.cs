@@ -20,18 +20,18 @@ internal sealed class SessionChatService(
         string sessionId,
         IReadOnlyList<JsonObject> history,
         CancellationToken cancellationToken
-    ) => ChatCoreAsync(sessionId, history, null, cancellationToken);
+    ) => ChatCoreAsync(sessionId, RequestHistory.FromMutable(history), null, cancellationToken);
 
     public Task<ChatResult> ChatAsync(
         string sessionId,
-        IReadOnlyList<JsonObject> history,
+        SessionHistory history,
         Func<CancellationToken, Task<bool>> prepareRetry,
         CancellationToken cancellationToken
-    ) => ChatCoreAsync(sessionId, history, prepareRetry, cancellationToken);
+    ) => ChatCoreAsync(sessionId, RequestHistory.FromSnapshot(history), prepareRetry, cancellationToken);
 
     private async Task<ChatResult> ChatCoreAsync(
         string sessionId,
-        IReadOnlyList<JsonObject> history,
+        RequestHistory history,
         Func<CancellationToken, Task<bool>>? prepareRetry,
         CancellationToken cancellationToken
     )
@@ -133,7 +133,7 @@ internal sealed class SessionChatService(
                         if (!await prepareRetry(token))
                             return null;
                         return hosted.Entry.WithState(state =>
-                            state.History.Snapshot().Materialize()
+                            RequestHistory.FromSnapshot(state.History.Snapshot())
                         );
                     },
                 "normal-turn",

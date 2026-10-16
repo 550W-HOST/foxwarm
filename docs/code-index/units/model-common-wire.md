@@ -1,6 +1,6 @@
 # Unit: Provider-neutral history and OpenAI wire helpers
 
-Files: `dotnet/Foxwarm/Models/ConcreteRequestHistory.cs`, `dotnet/Foxwarm/Models/OpenAIHttp.cs`, `dotnet/Foxwarm/Models/OpenAIRequestText.cs`, `dotnet/Foxwarm/Models/OpenAISseReader.cs`, `dotnet/Foxwarm/Models/ProviderHttpRequest.cs`, `dotnet/Foxwarm/Models/ProviderImageParts.cs`, `dotnet/Foxwarm/Models/RequestHistoryRepair.cs`, `dotnet/Foxwarm/Models/SessionChatService.cs`
+Files: `dotnet/Foxwarm/Models/ConcreteRequestHistory.cs`, `dotnet/Foxwarm/Models/OpenAIHttp.cs`, `dotnet/Foxwarm/Models/OpenAIRequestText.cs`, `dotnet/Foxwarm/Models/OpenAISseReader.cs`, `dotnet/Foxwarm/Models/ProviderHttpRequest.cs`, `dotnet/Foxwarm/Models/ProviderImageParts.cs`, `dotnet/Foxwarm/Models/RequestHistory.cs`, `dotnet/Foxwarm/Models/RequestHistoryRepair.cs`, `dotnet/Foxwarm/Models/SessionChatService.cs`
 
 ## Purpose
 
@@ -10,6 +10,7 @@ Builds provider-neutral request history, handles HTTP/SSE primitives, repairs re
 
 - `ConcreteRequestHistory` selects canonical history/prompt-visible parts for a concrete request without changing active Session JSON.
 - `ConcreteRequestHistory.ProjectDisplayMetadata` removes top-level message `compaction` diagnostics and function-response display metadata from request copies. Trusted `toolScriptSubCalls` presence projects the outer native response into `{ output: formattedExecutionText }`, including empty subcall arrays. `LlmRequestJournalStore.CanonicalMessage` applies the same projection before canonical journaling; concrete preparation applies it before image hydration and provider serialization. Ordinary MCP values and result-owned metadata are not classifiers. Session/Archive/run history stays native; pruned historical outputs and guard summaries retain their existing formatter fallback.
+- `RequestHistory.FromSnapshot` materializes the exact captured immutable history with per-record provenance; `FromMutable` and request-only context deliberately carry none. Repair transfers that provenance only for unchanged selected rows; synthetic responses have none. `Messages` remains a request-owned projection, never active Session JSON.
 - `RequestHistoryRepair` repairs provider retry inputs at the supported safe point; it does not rebuild a missing Session authority.
 - `OpenAIHttp`, `ProviderHttpRequest`, and `OpenAISseReader` own request headers/body/status/SSE parsing and preserve provider error/stream boundaries. The reader optionally accepts a terminal predicate and final-event EOF flush for Messages; existing Completions EOF behavior is unchanged. Provider-specific accumulation remains in the adapters.
 - `OpenAIRequestText` extracts model-visible request text and recognizes only supported historical compatibility strings; it is not a child-handoff receipt consumer.
@@ -19,10 +20,10 @@ Callers: `LocalSessionTurnHost`, model-specific services, retry preparation, ima
 
 ## Contract and side effects
 
-History-to-request conversion is an explicit mutable JSON projection, not an alias of Session history. Visibility validation reads existing records without cloning them. Retry repair owns its output; concrete preparation can mutate that owned output directly while the standalone preparation API still copies caller input. Cross-model part filtering reuses the already-owned request parts rather than cloning them a second time. Canonical part views share only their private canonical tree, as documented in [history ownership](./session-domain.md#history-ownership).
+The ordinary `ISessionChatService` retry-capable path carries a captured `SessionHistory` through `RequestChatService` to `SessionChatService`; a successful committed-context retry captures a new root. It does not recover provenance by looking up live Session state. History-to-request conversion is still an explicit mutable JSON projection, not an alias of Session history. The [journal](./model-journal.md#immutable-record-preparation) alone memoizes neutral record encoding; concrete preparation always applies current repair, model filtering and hydration. Visibility validation reads existing records without cloning them. Retry repair owns its output; concrete preparation can mutate that owned output directly while the standalone preparation API still copies caller input. Cross-model part filtering reuses the already-owned request parts rather than cloning them a second time. Canonical part views share only their private canonical tree, as documented in [history ownership](./session-domain.md#history-ownership).
 
 Provider input is derived from Session state and request scope. The neutral repaired/visibility-filtered manifest precedes concrete leaf filtering and image hydration. Same-model missing-generated-blob and other local preparation/persistence failures happen before provider send and do not enter provider retry/health. The `all-images-fail` condition is produced while processing provider output/generated-image results; it is non-retryable/non-countable but is not a send-preparation failure. Provider transport failures alone enter normal backoff/retry/health handling. Retry repair preserves the safe point, logical request identity, and attempt attribution; canonical Session messages remain owned by Session persistence.
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Models/RequestHistoryRepairTests.cs`; `ResponsesClientTests.cs`; `RetryPreparationTests.cs`; `HostedResponsesWsImageTests.cs`; `LlmRequestJournalQualificationTests.cs`.
+`dotnet/Foxwarm.Tests/Models/JournalHistoryReuseTests.cs`; `dotnet/Foxwarm.Tests/Models/RequestHistoryRepairTests.cs`; `ResponsesClientTests.cs`; `RetryPreparationTests.cs`; `HostedResponsesWsImageTests.cs`; `LlmRequestJournalQualificationTests.cs`.

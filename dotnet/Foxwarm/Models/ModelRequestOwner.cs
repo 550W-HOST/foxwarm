@@ -88,7 +88,7 @@ internal sealed class ModelRequestOwner(
             requestContext
         );
 
-    internal async Task<ChatResult> RequestAsync(
+    internal Task<ChatResult> RequestAsync(
         string sessionId,
         CapturedRequest captured,
         string cacheKey,
@@ -103,6 +103,48 @@ internal sealed class ModelRequestOwner(
         ModelRequestScope scope = ModelRequestScope.LowLevel,
         Func<JsonArray>? definitions = null,
         Func<CancellationToken, Task<IReadOnlyList<JsonObject>?>>? prepareRetry = null,
+        string journalPurpose = "low-level",
+        int journalIteration = 0,
+        Action<string>? journalRequestStarted = null,
+        Func<Task<IReadOnlyList<JsonObject>>>? requestContext = null
+    ) =>
+        RequestAsync(
+            sessionId,
+            captured,
+            cacheKey,
+            turnId,
+            RequestHistory.FromMutable(history),
+            prompt,
+            retry,
+            beginAttempt,
+            progress,
+            warning,
+            cancellationToken,
+            scope,
+            definitions,
+            prepareRetry is null ? null : async token =>
+                await prepareRetry(token) is { } updated ? RequestHistory.FromMutable(updated) : null,
+            journalPurpose,
+            journalIteration,
+            journalRequestStarted,
+            requestContext
+        );
+
+    internal async Task<ChatResult> RequestAsync(
+        string sessionId,
+        CapturedRequest captured,
+        string cacheKey,
+        string turnId,
+        RequestHistory history,
+        Func<ConcreteHostModel, CancellationToken, Task<string>> prompt,
+        Func<ModelRetryEvent, Task<bool>>? retry,
+        Action? beginAttempt,
+        Action<string, ResponsesStreamProgress>? progress,
+        Action<Exception>? warning,
+        CancellationToken cancellationToken,
+        ModelRequestScope scope = ModelRequestScope.LowLevel,
+        Func<JsonArray>? definitions = null,
+        Func<CancellationToken, Task<RequestHistory?>>? prepareRetry = null,
         string journalPurpose = "low-level",
         int journalIteration = 0,
         Action<string>? journalRequestStarted = null,
@@ -122,7 +164,7 @@ internal sealed class ModelRequestOwner(
         var retainedContext = requestContext is null
             ? Array.Empty<JsonObject>()
             : (await requestContext().ConfigureAwait(false)).ToArray();
-        history = baseHistory.Concat(retainedContext).ToArray();
+        history = baseHistory.WithContext(retainedContext);
         try
         {
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
@@ -205,7 +247,7 @@ internal sealed class ModelRequestOwner(
                             ),
                     };
                 }
-                var prepared = ConcreteRequestHistory.PrepareRequest(history, leaf.Key);
+                var prepared = ConcreteRequestHistory.PrepareRequest(history.Messages, leaf.Key);
                 if (images is not null)
                 {
                     try
@@ -437,7 +479,7 @@ internal sealed class ModelRequestOwner(
                     if (updated is not null)
                     {
                         baseHistory = updated;
-                        history = baseHistory.Concat(retainedContext).ToArray();
+                        history = baseHistory.WithContext(retainedContext);
                         requestStarted = null;
                         journalRequestId = null;
                         journalAttempt = 0;
@@ -453,7 +495,7 @@ internal sealed class ModelRequestOwner(
                         if (changed)
                         {
                             retainedContext = nextContext;
-                            history = baseHistory.Concat(retainedContext).ToArray();
+                            history = baseHistory.WithContext(retainedContext);
                             requestStarted = null;
                             journalRequestId = null;
                             journalAttempt = 0;

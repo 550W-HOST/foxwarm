@@ -351,16 +351,17 @@ internal sealed class RequestChatService(IChatService inner, SessionOwner hosted
 
     public Task<ChatResult> ChatAsync(
         string sessionId,
-        IReadOnlyList<JsonObject> history,
+        SessionHistory history,
         Func<CancellationToken, Task<bool>> prepareRetry,
         CancellationToken cancellationToken
-    ) => ChatCoreAsync(sessionId, history, prepareRetry, cancellationToken);
+    ) => ChatCoreAsync(sessionId, null, prepareRetry, cancellationToken, history);
 
     private async Task<ChatResult> ChatCoreAsync(
         string sessionId,
-        IReadOnlyList<JsonObject> history,
+        IReadOnlyList<JsonObject>? history,
         Func<CancellationToken, Task<bool>>? prepareRetry,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        SessionHistory? snapshot = null
     )
     {
         string? requestId = null;
@@ -374,9 +375,9 @@ internal sealed class RequestChatService(IChatService inner, SessionOwner hosted
         try
         {
             var result =
-                inner is ISessionChatService ordinary && prepareRetry is not null
-                    ? await ordinary.ChatAsync(sessionId, history, Prepare, cancellationToken)
-                    : await inner.ChatAsync(sessionId, history, cancellationToken);
+                inner is ISessionChatService ordinary && prepareRetry is not null && snapshot is not null
+                    ? await ordinary.ChatAsync(sessionId, snapshot, Prepare, cancellationToken)
+                    : await inner.ChatAsync(sessionId, history ?? snapshot!.Materialize(), cancellationToken);
             requestId = result.JournalRequestId ?? requestId;
             if (result.AssistantMessage is null)
                 hosted.ClearDraft();

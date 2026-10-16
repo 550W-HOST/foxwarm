@@ -7,12 +7,15 @@ namespace Foxwarm.Models;
 internal static partial class RequestHistoryRepair
 {
     internal static IReadOnlyList<JsonObject> SelectAndRepair(IReadOnlyList<JsonObject> history)
+        => SelectAndRepair(RequestHistory.FromMutable(history)).Messages;
+
+    internal static RequestHistory SelectAndRepair(RequestHistory history)
     {
-        var source = history
-            .Where(row => CanonicalMessage.IsVisible(row))
-            .Select(row => (JsonObject)row.DeepClone())
+        var source = history.Rows
+            .Where(row => CanonicalMessage.IsVisible(row.Message))
+            .Select(row => new RequestHistory.Row((JsonObject)row.Message.DeepClone(), row.Origin))
             .ToArray();
-        var result = new List<JsonObject>();
+        var result = new List<RequestHistory.Row>();
         bool Nearby(int index, int direction, bool request)
         {
             for (
@@ -21,7 +24,7 @@ internal static partial class RequestHistoryRepair
                 cursor += direction
             )
             {
-                var row = source[cursor];
+                var row = source[cursor].Message;
                 if (Interruption(row))
                     continue;
                 return request
@@ -33,7 +36,7 @@ internal static partial class RequestHistoryRepair
         }
         for (var index = 0; index < source.Length; index++)
         {
-            var row = source[index];
+            var row = source[index].Message;
             var parts = Parts(row);
             if (
                 SessionWait.Text(row["role"]) == "tool"
@@ -41,7 +44,7 @@ internal static partial class RequestHistoryRepair
                 && !Nearby(index, -1, true)
             )
                 continue;
-            result.Add(row);
+            result.Add(source[index]);
             var calls = parts.Select(part => part["functionCall"]).OfType<JsonObject>().ToArray();
             if (
                 SessionWait.Text(row["role"]) != "model"
@@ -50,7 +53,7 @@ internal static partial class RequestHistoryRepair
             )
                 continue;
             result.Add(
-                new JsonObject
+                new RequestHistory.Row(new JsonObject
                 {
                     ["role"] = "tool",
                     ["parts"] = new JsonArray(
@@ -76,10 +79,10 @@ internal static partial class RequestHistoryRepair
                             )
                             .ToArray()
                     ),
-                }
+                })
             );
         }
-        return result;
+        return new RequestHistory(result);
     }
 
     private static JsonObject[] Parts(JsonObject row) =>
