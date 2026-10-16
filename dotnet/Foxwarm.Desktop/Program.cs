@@ -1,3 +1,5 @@
+using System.Security.Principal;
+
 namespace Foxwarm.Desktop;
 
 internal static class Program
@@ -8,7 +10,7 @@ internal static class Program
         ApplicationConfiguration.Initialize();
         using var instance = new Mutex(
             false,
-            "Foxwarm.Desktop",
+            "Foxwarm.Desktop." + WindowsIdentity.GetCurrent().User!.Value,
             new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = false }
         );
         bool acquired;
