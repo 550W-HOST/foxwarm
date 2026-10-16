@@ -60,12 +60,13 @@ internal sealed class DesktopWindow : Form
                     ?? Path.Combine(
                         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                         "Foxwarm",
-                        "Desktop"
+                        "Desktop",
+                        "data"
                     )
             );
             var work = Path.GetFullPath(
                 Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_TOOL_ROOT")
-                    ?? Path.Combine(data, "workspace")
+                    ?? Path.Combine(Path.GetDirectoryName(data)!, "workspace")
             );
             var dist = Path.Combine(AppContext.BaseDirectory, "webui");
             if (

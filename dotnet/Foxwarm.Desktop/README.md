@@ -32,11 +32,13 @@ copy shows a message instead of starting another backend. External links open in
 your default browser; the app view remains on its own local WebUI.
 
 Settings, conversations, workspace and the owned WebView2 profile live under
-`%LOCALAPPDATA%\Foxwarm\Desktop`, not in the extracted ZIP. They remain when the
+`%LOCALAPPDATA%\Foxwarm\Desktop`, not in the extracted ZIP. Host state is in
+its `data` subdirectory and the workspace is a separate `workspace` subdirectory. They remain when the
 app is restarted or the ZIP is replaced. Do not share that directory: it can
 contain provider credentials and chat history. Exit Foxwarm before backing it up.
-For isolated development, `FOXWARM_DATA_DIR` changes this data directory and
-`FOXWARM_EXPERIMENT_TOOL_ROOT` changes the workspace. Server port/bind/public-URL
+For isolated development, `FOXWARM_DATA_DIR` changes the host data directory; by default its sibling
+`workspace` is the tool workspace. `FOXWARM_EXPERIMENT_TOOL_ROOT` explicitly
+changes that workspace. These two directories must not overlap. Server port/bind/public-URL
 settings do not change the desktop's loopback listener.
 
 ## Prototype limits
