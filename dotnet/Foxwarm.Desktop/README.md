@@ -31,7 +31,9 @@ No API keys or existing account settings are included.
 
 Closing the window hides it to the tray. Double-click the fox tray icon or use
 **Open** to restore it. Use **Exit** to stop the app and backend. Starting another
-copy shows a message instead of starting another backend. External links open in
+copy shows a message instead of starting another backend. The single-instance
+lock applies to the same user across Windows login sessions, so those sessions
+cannot run competing writers against the same user data. External links open in
 your default browser; the app view remains on its own local WebUI.
 
 Settings, conversations, workspace and the owned WebView2 profile live under

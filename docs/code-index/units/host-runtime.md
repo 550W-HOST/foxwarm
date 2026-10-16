@@ -9,7 +9,7 @@ Composes the .NET executable, captures environment/configuration, builds ASP.NET
 ## Stable methods and callers
 
 - `Program.cs` preserves the console/Code-helper entry and captures environment/settings. `MainHost.CreateAsync` shares the in-process Session/terminal/runtime/router/HTTP/WebUI composition with the Windows desktop; disposal begins admission shutdown, stops HTTP, drains Sessions and disposes resources.
-- `Foxwarm.Desktop` is a framework-dependent `net10.0-windows`/`win-x64` WinForms host using WebView2 SDK 1.0.4258.31. It owns a per-user named mutex, one window/tray, one embedded Main host and one WebView2 profile. Close hides; Open restores; Exit drains/disposes; Windows shutdown is not hide-to-tray.
+- `Foxwarm.Desktop` is a framework-dependent `net10.0-windows`/`win-x64` WinForms host using WebView2 SDK 1.0.4258.31. It owns a per-user named mutex across login sessions (`NamedWaitHandleOptions` with `CurrentUserOnly=true`, `CurrentSessionOnly=false`), one window/tray, one embedded Main host and one WebView2 profile. Close hides; Open restores; Exit drains/disposes; Windows shutdown is not hide-to-tray.
 - `HttpServer` owns prefix normalization, token/cookie auth, static WebUI entry, `/health`, `/admin/shutdown`, and registration of Code/WebUI/external Node routes.
 - `HttpServerSettings.CaptureAsync`/`Enabled` determine port, bind address, public origin, the login token read from or created at `state/token` under the data root, and WebUI mode; the optional `FOXWARM_EXPERIMENT_BIND_ADDRESS` accepts an IPv4 address and defaults to loopback. `ConfigurationYaml` parses source-compatible YAML; `Skills` enumerates configured Agent skills.
 
