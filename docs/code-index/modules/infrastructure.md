@@ -61,6 +61,7 @@ Speech recognition is integrated as an external service boundary: Foxwarm sends 
 - Model configuration resolution applies provider defaults before model-specific overrides.
 - The one-shot model CLI reuses production configuration and provider request code rather than implementing a second protocol stack.
 - Packaged runtimes include bundled skills and the shared/CLI-node artifacts required by bootstrap features.
+- Backend build order and incremental-cache ownership are canonical in [D-infrastructure-incremental-build](#d-infrastructure-incremental-build).
 
 ## Compatibility
 
@@ -89,6 +90,12 @@ Shell automation uses the production `requestLlmOnce` stack through `foxwarm mod
 ### D-infrastructure-quality-baseline
 
 The baseline unused-code gate uses TypeScript `--noEmit` checks without adding a linter dependency. Broader linting, dependency analysis, and unused-export checks remain separate work.
+
+### D-infrastructure-incremental-build
+
+The root `npm run build` compiles shared, sandbox runtime, CLI node, then Main sequentially. It does not build WebUI. All four backend TypeScript projects use incremental compilation, with separate `.tsbuildinfo` files inside their own output directories (`lib/` for Main and package-local `dist/` for the others). Clean builds remove the whole corresponding output directory, including its cache; deleting individual outputs while retaining the cache is not a clean rebuild.
+
+Compilation scope, type checking, declaration settings, and output layout remain unchanged. Sandbox and CLI esbuild bundles are regenerated on every build. The read-only unused-code gate disables incremental writes for its backend checks.
 
 ## Open questions
 
