@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <ApplicationIcon>Foxwarm.ico</ApplicationIcon>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Foxwarm/Foxwarm.csproj" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" GeneratePathProperty="true" />
+    <EmbeddedResource Include="Foxwarm.ico" />
+    <Content Include="../../packages/webui/dist/**/*" Link="webui/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="README.md" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/webui/public/favicon.LICENSE.txt" Link="Foxwarm-icon-LICENSE.txt" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../LICENSE" Link="LICENSE.txt" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="DesktopPublishNotices" AfterTargets="Publish">
+    <Copy SourceFiles="$(PkgMicrosoft_Web_WebView2)/LICENSE.txt" DestinationFiles="$(PublishDir)WebView2-LICENSE.txt" />
+    <Copy SourceFiles="$(PkgMicrosoft_Web_WebView2)/NOTICE.txt" DestinationFiles="$(PublishDir)WebView2-NOTICE.txt" />
+  </Target>
+  <!-- The SDK also adds WPF references; this host uses only WinForms. -->
+  <Target Name="RemoveUnusedWebView2WpfReference" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <Reference Remove="@(Reference)" Condition="'%(Reference.Filename)' == 'Microsoft.Web.WebView2.Wpf'" />
+    </ItemGroup>
+  </Target>
+</Project>

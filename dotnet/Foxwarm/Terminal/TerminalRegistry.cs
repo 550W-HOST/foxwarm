@@ -36,7 +36,7 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
     {
         if (!IsSupported)
             throw new PlatformNotSupportedException(
-                "Main terminal PTY is unavailable on this Linux host."
+                "Main terminal PTY is unavailable on this platform."
             );
         if (string.IsNullOrWhiteSpace(cwd))
             throw new ArgumentException("cwd is required.");

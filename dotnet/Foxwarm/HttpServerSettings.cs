@@ -69,6 +69,17 @@ internal sealed record HttpServerSettings(
         return new(port, token, bindAddress, address, enabled);
     }
 
+    // Desktop deliberately ignores the server bind/port/public URL settings. Kestrel
+    // owns an ephemeral loopback listener; its bound address is published after start.
+    internal static async Task<HttpServerSettings> CaptureDesktopAsync(string dataRoot)
+    {
+        var token = await LoadOrCreateTokenAsync(dataRoot);
+        if (string.IsNullOrWhiteSpace(token))
+            throw new InvalidDataException("HTTP access token must not be blank.");
+        return new(0, token, "127.0.0.1",
+            new PublicWebAddress("http://127.0.0.1:0", PathString.Empty, "/", false), true);
+    }
+
     private static async Task<string> LoadOrCreateTokenAsync(string dataRoot)
     {
         var path = Path.Combine(dataRoot, "state", "token");
@@ -103,6 +114,7 @@ internal sealed record PublicWebAddress(
     bool Secure
 )
 {
+    public string Origin { get; internal set; } = Origin;
     internal string BaseUrl => Origin + CookiePath;
 
     internal static PublicWebAddress Capture(int port, string? configured = null)

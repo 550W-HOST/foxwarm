@@ -240,6 +240,10 @@ internal sealed class HttpServer
         );
         Foxwarm.Nodes.NodeRoutes.Register(app, sessions, address);
         McpOAuthRoutes.Register(app, sessions.OutboundMcp);
+        if (port == 0)
+            app.Lifetime.ApplicationStarted.Register(() =>
+                address.Origin = app.Urls.Single().TrimEnd('/')
+            );
         App = app;
     }
 

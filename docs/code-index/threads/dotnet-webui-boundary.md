@@ -41,6 +41,10 @@ Targeted merged-client fixtures independently cover pane/iframe/terminal identit
 
 The built Vite 8/Rolldown client keeps its recovery script/styles inline in `index.html`; external scripts, styles and lazy chunks remain deployment-relative files under `assets/`. The existing host serves that index with no-store and the original administrator login/prefix boundary, without a new route or endpoint. `experimentHostLegacyNodeProjection.e2e.mjs` qualifies a real prefix/login, browser-only missing root-chunk fault and explicit reload recovery alongside retained Session projection. `experimentHostNodeConsumers.e2e.mjs` uses a normal host, real CLI/Shell peers, the Nodes workbench directory and onboarding dialog, and exact composer Node/cwd consumers. The output must still be supplied as a complete built WebUI directory at the existing host/publish boundary; a C# build alone does not build or deploy client assets.
 
+## Windows desktop consumer
+
+The minimal [desktop host](../units/host-runtime.md#desktop-boundary) embeds the same Main composition and built original App in WinForms/WebView2. It owns an authenticated ephemeral loopback endpoint, not a separately launched backend or a connection to an existing test server. Window/tray lifetime, credential initialization, persisted per-user data and Windows prototype limitations are owned by the host unit.
+
 ## Canonical units and tests
 
 - [Host runtime](../units/host-runtime.md)

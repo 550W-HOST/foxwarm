@@ -181,8 +181,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
         var definitions = WorkspaceTools.Definitions();
         foreach (var definition in Foxwarm.Nodes.NodeToolDefinitions.All())
             definitions.Add(definition?.DeepClone());
-        foreach (var definition in LocalExecManager.Definitions())
-            definitions.Add(definition?.DeepClone());
+        if (LocalExecManager.IsSupported)
+            foreach (var definition in LocalExecManager.Definitions())
+                definitions.Add(definition?.DeepClone());
         definitions.Add(ArchiveRecallTool.Definition());
         foreach (var definition in ArchiveControlTools.Definitions())
             definitions.Add(definition?.DeepClone());
@@ -197,8 +198,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
             );
         foreach (var definition in TimerToolDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());
-        foreach (var definition in ToolScriptToolDefinitions.Definitions())
-            definitions.Add(definition?.DeepClone());
+        if (Foxwarm.ToolScript.MontyWorker.IsSupported)
+            foreach (var definition in ToolScriptToolDefinitions.Definitions())
+                definitions.Add(definition?.DeepClone());
         definitions.Add(WaitToolDefinitions.Definition());
         foreach (var definition in KnowledgeToolDefinitions.Definitions())
             definitions.Add(definition);

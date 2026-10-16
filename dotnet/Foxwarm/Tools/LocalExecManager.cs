@@ -12,6 +12,8 @@ namespace Foxwarm.Tools;
 /// <summary>Trusted single-host Linux exec with owned on-disk artifacts. Cwd is not an OS sandbox.</summary>
 internal sealed partial class LocalExecManager : IAsyncDisposable
 {
+    internal static bool IsSupported => OperatingSystem.IsLinux();
+
     private const int PageBytes = 16 * 1024;
     private const int DisplayChars = 16 * 1024;
     private readonly string directory;
@@ -77,8 +79,6 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         Func<string, string[]>? historicalOwners = null
     )
     {
-        if (!OperatingSystem.IsLinux())
-            throw new PlatformNotSupportedException("Experimental persistent exec requires Linux.");
         directory = Path.Combine(Path.GetFullPath(dataRoot), "state", "exec");
         this.workspaceForSession = workspaceForSession;
         this.notify = notify;
@@ -105,6 +105,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
 
     internal async Task RegisterRecordsAsync(Func<string, bool> hasSession)
     {
+        if (!IsSupported)
+            return;
         foreach (
             var file in Directory.EnumerateFiles(
                 directory,
@@ -139,6 +141,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
 
     internal void StartReconciliation()
     {
+        if (!IsSupported)
+            return;
         reconcileStop = new CancellationTokenSource();
         reconcileTask = ReconcileAsync(reconcileStop.Token);
     }
@@ -161,6 +165,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         Foxwarm.ToolScript.ToolScriptDataBudget? programmatic = null
     )
     {
+        if (!IsSupported)
+            return Error("exec_unavailable", "Local shell execution is not supported on this platform. Select a supported Node.");
         if (closing)
             return Error("exec_unavailable", "Host is shutting down.");
         if (

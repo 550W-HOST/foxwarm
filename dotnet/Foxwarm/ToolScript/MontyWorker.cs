@@ -10,6 +10,8 @@ namespace Foxwarm.ToolScript;
 /// <summary>One owned native interpreter; waiting runs retain opaque dumps, not a live process.</summary>
 internal sealed class MontyWorker : IAsyncDisposable
 {
+    internal static bool IsSupported => OperatingSystem.IsLinux()
+        && RuntimeInformation.ProcessArchitecture == Architecture.X64;
     internal const string Version = "0.0.19";
     private readonly Process process;
     private readonly Task stderrDrain;
@@ -21,8 +23,7 @@ internal sealed class MontyWorker : IAsyncDisposable
     internal MontyWorker(string binary)
     {
         if (
-            !OperatingSystem.IsLinux()
-            || RuntimeInformation.ProcessArchitecture != Architecture.X64
+            !IsSupported
         )
             throw new PlatformNotSupportedException(
                 "ToolScript native execution requires the qualified Linux x64 GNU Monty 0.0.19 executable."

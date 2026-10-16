@@ -145,8 +145,6 @@ internal sealed partial class CommittedArchiveIdentity(string root)
 
     private void WriteLedger(Dictionary<string, string> mappings, Action? afterRename = null)
     {
-        if (!OperatingSystem.IsLinux())
-            throw new PlatformNotSupportedException("Durable Main authority writes require Linux.");
         Directory.CreateDirectory(Path.GetDirectoryName(LedgerPath)!);
         var temp = LedgerPath + ".tmp-" + Guid.NewGuid().ToString("N");
         try
@@ -160,7 +158,8 @@ internal sealed partial class CommittedArchiveIdentity(string root)
                 )
             )
             {
-                File.SetUnixFileMode(temp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                if (!OperatingSystem.IsWindows())
+                    File.SetUnixFileMode(temp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
                 var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 foreach (
                     var (id, canonical) in mappings.OrderBy(

@@ -1,6 +1,6 @@
 # Unit: Host startup, configuration, and HTTP ingress
 
-Files: `dotnet/Foxwarm/AssemblyInfo.cs`, `dotnet/Foxwarm/ConfigurationYaml.cs`, `dotnet/Foxwarm/HttpServer.cs`, `dotnet/Foxwarm/HttpServerSettings.cs`, `dotnet/Foxwarm/Program.cs`, `dotnet/Foxwarm/Skills.cs`
+Files: `dotnet/Foxwarm/AssemblyInfo.cs`, `dotnet/Foxwarm/ConfigurationYaml.cs`, `dotnet/Foxwarm/HttpServer.cs`, `dotnet/Foxwarm/HttpServerSettings.cs`, `dotnet/Foxwarm/Program.cs`, `dotnet/Foxwarm/MainHost.cs`, `dotnet/Foxwarm.Desktop/Program.cs`, `dotnet/Foxwarm.Desktop/DesktopWindow.cs`, `dotnet/Foxwarm.Desktop/Foxwarm.Desktop.csproj`, `dotnet/Foxwarm.Desktop/README.md`, `dotnet/scripts/publish-desktop.sh`, `dotnet/Foxwarm/Skills.cs`
 
 ## Purpose
 
@@ -8,7 +8,8 @@ Composes the .NET executable, captures environment/configuration, builds ASP.NET
 
 ## Stable methods and callers
 
-- `Program.cs` is the executable entry that resolves data/workspace roots, captures `HttpServerSettings`, constructs `SessionManager`, `TerminalRegistry`, `SessionRuntime`, `MessageRouter`, `HttpServer`, and `WebUIChannel`, then loads Main state before serving.
+- `Program.cs` preserves the console/Code-helper entry and captures environment/settings. `MainHost.CreateAsync` shares the in-process Session/terminal/runtime/router/HTTP/WebUI composition with the Windows desktop; disposal begins admission shutdown, stops HTTP, drains Sessions and disposes resources.
+- `Foxwarm.Desktop` is a framework-dependent `net10.0-windows`/`win-x64` WinForms host using WebView2 SDK 1.0.4258.31. It owns a per-user named mutex, one window/tray, one embedded Main host and one WebView2 profile. Close hides; Open restores; Exit drains/disposes; Windows shutdown is not hide-to-tray.
 - `HttpServer` owns prefix normalization, token/cookie auth, static WebUI entry, `/health`, `/admin/shutdown`, and registration of Code/WebUI/external Node routes.
 - `HttpServerSettings.CaptureAsync`/`Enabled` determine port, bind address, public origin, the login token read from or created at `state/token` under the data root, and WebUI mode; the optional `FOXWARM_EXPERIMENT_BIND_ADDRESS` accepts an IPv4 address and defaults to loopback. `ConfigurationYaml` parses source-compatible YAML; `Skills` enumerates configured Agent skills.
 
@@ -24,6 +25,14 @@ Protected `GET /api/auth/session` returns the ordinary administrator role used b
 
 [Outbound MCP OAuth routes](./dotnet-mcp-oauth.md) use the same administrator boundary. Only exact GET `/api/mcp/oauth/client.json` and `/api/mcp/oauth/callback` bypass it. The fixed callback GET reflects no parameters and exchanges no code; its first-party authenticated JSON completion preserves Strict-cookie behavior after cross-site consent. OAuth callbacks derive from captured startup app `url`, not Host or the ordinary address fallback/override; deployment prefixes remain intact.
 
+## Desktop boundary
+
+`CaptureDesktopAsync` retains file-token validation but explicitly selects an ephemeral IPv4 loopback listener and enables WebUI, independent of configured server port/bind/public URL. Kestrel binds port zero without probing or adopting another listener; its startup callback updates the shared public address before the desktop consumes the endpoint. Console port/public-prefix validation remains unchanged. The native host posts the token only to that owned endpoint's existing `/api/auth`, transfers the returned HttpOnly/Strict cookie into its owned WebView2, and never includes the token in navigation or arbitrary requests. Top-level external navigation/popups go to the default browser; off-origin HTTP resource loads are blocked. There is no host-object/message bridge.
+
+Default data is `%LOCALAPPDATA%\Foxwarm\Desktop` with a `workspace` subdirectory and a `webview2` profile; existing data/workspace overrides support isolated development. The ZIP contains the built original WebUI, managed/native Windows dependencies, templates and notices, not runtime/state/credentials. Desktop and ASP.NET Core .NET 10 x64 shared frameworks plus WebView2 Evergreen are required. The repository's Linux PTY target is skipped for Windows RIDs even when built on Linux.
+
+The prototype is not a full Windows tool port: local exec and Main-native ToolScript are omitted from unsupported platform discovery, local PTY reports platform unavailability, and optional Code/HEIF/vector/external-service assets are not supplied. The identity ledger retains flush-to-disk and atomic replacement on Windows; directory synchronization uses the pre-existing `Unsupported` result. Successful normal restart tests do not qualify power-loss durability.
+
 ## Tests
 
-`dotnet/Foxwarm.Tests/Channels/WebUiStartupTests.cs`; `AppConfigurationRulesTests.cs`; `WebUiStartupTests.cs` auth/startup coverage.
+`dotnet/Foxwarm.Tests/Channels/WebUiStartupTests.cs`; `AppConfigurationRulesTests.cs`; `EmbeddedHostTests.cs` (shared startup/disposal, ephemeral address, cookie/token auth, token/config restart, invalid token); `WebUiStartupTests.cs` auth/startup coverage.
