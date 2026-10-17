@@ -64,6 +64,22 @@ public sealed class DeferredInputTests
     }
 
     [Fact]
+    public void Channel_source_boundary_preserves_plain_text_whitespace_and_chunk_separators()
+    {
+        const string first = "    indented body\n  trailing spaces  \n";
+        const string second = "\tsecond chunk \n";
+        var prepared = SessionBoundary.ChannelInput(
+            [new JsonObject { ["text"] = first }, new JsonObject { ["text"] = second }],
+            "webui"
+        );
+        var wrapper = Assert.Single(prepared)["system"]!.GetValue<string>();
+        Assert.Equal(
+            first + "\n" + second,
+            wrapper[(wrapper.IndexOf('>') + 2)..^"\n</foxwarm-message>".Length]
+        );
+    }
+
+    [Fact]
     public async Task Provider_time_ordinary_and_actual_background_exec_events_commit_hints_once_without_rewriting_initial_or_old_history()
     {
         var store = new InMemorySessionAuthorityStore();

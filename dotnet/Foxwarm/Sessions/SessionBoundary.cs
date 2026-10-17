@@ -97,7 +97,6 @@ internal static class SessionBoundary
                         opening
                         + "\n"
                         + string.Join("\n", parts.Select(part => part["text"]!.GetValue<string>()))
-                            .Trim()
                         + "\n</foxwarm-message>",
                 },
             ];
