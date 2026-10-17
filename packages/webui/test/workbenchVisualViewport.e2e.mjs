@@ -22,7 +22,7 @@ before(async () => {
 })
 after(async () => { await browser?.close(); await new Promise(resolve => server?.close(resolve)) })
 
-async function openMobileApp({ simulateViewport = true, width = 390, height = 844, themeId = 'foxwarm.default', colorMode = 'light', search = '' } = {}) {
+async function openMobileApp({ simulateViewport = true, width = 390, height = 844, themeId = 'foxwarm.default', colorMode = 'light', search = '', home = false } = {}) {
   const page = await browser.newPage()
   await page.setViewport({ width, height })
   await page.evaluateOnNewDocument(({ simulateViewport, width, height, themeId, colorMode }) => {
@@ -62,7 +62,7 @@ async function openMobileApp({ simulateViewport = true, width = 390, height = 84
     // The original mobile shell follows offsetTop; a body portal starts at -offsetTop.
     window.__setViewport = values => {
       Object.assign(viewport, values)
-      document.body.style.transform = `translate(${-viewport.offsetLeft}px, ${-viewport.offsetTop}px)`
+      document.body.style.transform = viewport.offsetLeft || viewport.offsetTop ? `translate(${-viewport.offsetLeft}px, ${-viewport.offsetTop}px)` : ''
       viewport.dispatchEvent(new Event('resize'))
       viewport.dispatchEvent(new Event('scroll'))
     }
@@ -72,6 +72,11 @@ async function openMobileApp({ simulateViewport = true, width = 390, height = 84
   await page.waitForSelector('[role="textbox"]')
   await page.waitForFunction(() => document.querySelectorAll('[data-chat-message-anchor-key]').length === 20)
   await page.evaluate(() => { window.__originalEditor = document.querySelector('[role="textbox"]'); window.__originalChat = document.querySelector('.foxwarm-chat-root') })
+  if (home) {
+    await page.click('.mobile-header-back')
+    await page.waitForSelector('.mobile-primary-nav', { visible: true })
+    return page
+  }
   await page.click('[role="textbox"]')
   return page
 }
@@ -217,6 +222,56 @@ test('independent mobile Chat leaves retain their own header safe-area spacing',
     await page.evaluate(() => document.documentElement.style.setProperty('--foxwarm-safe-area-top', '62px'))
     const top = await page.$eval('.mobile-header-capsule', element => element.getBoundingClientRect().top)
     assert.equal(top, 62 + 8)
+  } finally { await page.close() }
+})
+
+test('mobile primary navigation uses the visible browser boundary rather than a shorter home shell', async () => {
+  const page = await openMobileApp({ home: true, width: 440, height: 956, themeId: 'foxwarm.550a', colorMode: 'dark' })
+  try {
+    await page.evaluate(() => {
+      document.documentElement.style.setProperty('--foxwarm-safe-area-top', '62px')
+      document.documentElement.style.setProperty('--foxwarm-safe-area-bottom', '34px')
+      // Model a PWA-style discrepancy without changing the real fixed viewport.
+      window.__setViewport({ height: 894 })
+      window.__homeNav = document.querySelector('.mobile-primary-nav')
+    })
+    for (const tab of ['sessions', 'tasks', 'search', 'setup', 'sessions']) {
+      await page.click(`#mobile-tab-${tab}`)
+      await page.waitForFunction(tab => document.getElementById(`mobile-tab-${tab}`)?.getAttribute('aria-selected') === 'true' && document.getElementById(`mobile-panel-${tab}`)?.getBoundingClientRect().height > 0, {}, tab)
+      const state = await page.evaluate(() => {
+        const rect = element => { const r = element.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height, bottom: r.bottom } }
+        const nav = document.querySelector('.mobile-primary-nav')
+        const bounds = nav.getBoundingClientRect()
+        return {
+          viewportBottom: innerHeight,
+          shell: rect(document.querySelector('[data-mobile-session-home]')),
+          nav: rect(nav), sameNav: nav === window.__homeNav,
+          bottomHit: nav.contains(document.elementFromPoint(bounds.left + bounds.width / 2, bounds.bottom - 3)),
+          newSession: rect(document.querySelector('button[aria-label="New session"]')),
+          controlsHit: [...nav.querySelectorAll('button')].every(button => {
+            const r = button.getBoundingClientRect()
+            const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+            return hit === button || button.contains(hit)
+          }),
+        }
+      })
+      await captureViewport(page, `home-${tab}`, state)
+      assert.equal(state.shell.bottom, 894, 'the shell still follows the reported visual viewport')
+      assert.equal(state.nav.bottom, state.viewportBottom - 34 - 12, JSON.stringify(state))
+      assert.ok(state.sameNav && state.controlsHit && state.bottomHit)
+      assert.ok(state.nav.left >= 12 && state.nav.left + state.nav.width <= 440 - 12)
+      if (tab === 'sessions') assert.equal(state.newSession.bottom, state.viewportBottom - 34 - 88)
+    }
+    await page.click('[data-session-id="e2e-a"]')
+    await page.waitForSelector('[data-mobile-chat-header]')
+    const chat = await page.evaluate(() => ({
+      backTop: document.querySelector('.mobile-header-back').getBoundingClientRect().top,
+      composerBottom: document.querySelector('.foxwarm-chat-composer-form').getBoundingClientRect().bottom,
+    }))
+    assert.equal(chat.backTop, 62 + 1 + 8)
+    assert.equal(chat.composerBottom, 894 - 1 - 16, 'Chat composer spacing is deliberately unchanged')
+    await page.click('.mobile-header-back')
+    assert.ok(await page.$eval('.mobile-primary-nav', element => element === window.__homeNav))
   } finally { await page.close() }
 })
 

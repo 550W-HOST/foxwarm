@@ -125,7 +125,7 @@ export default function SessionList({
         </button>
 
         )} toolbarContainerClassName="px-4 py-2" listContainerClassName="mobile-session-scroll px-4 pt-2" />
-        <div className="absolute right-4 z-20" style={{bottom: 'calc(var(--foxwarm-safe-area-bottom) + 88px)'}}>
+        <div className="fixed right-4 z-20" style={{bottom: 'calc(var(--foxwarm-safe-area-bottom) + 88px)'}}>
           <AgentCreationMenu agents={agents} currentAgent={currentSessionRecord?.agent} onCreateAgent={onCreateAgent} onCreateSession={onCreateSession}
             triggerLabel="New session" triggerClassName="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-fw-accent px-4 text-sm font-medium text-fw-accent-text shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring focus-visible:ring-offset-2" />
         </div>

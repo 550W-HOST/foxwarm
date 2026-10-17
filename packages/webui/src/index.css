@@ -2472,7 +2472,7 @@ html .foxwarm-conversation-process .foxwarm-reasoning-card .foxwarm-reasoning-pr
   width: calc(100% - 24px);
   max-width: 440px;
   margin-inline: auto;
-  position: absolute;
+  position: fixed;
   z-index: 30;
   left: 12px;
   right: 12px;
