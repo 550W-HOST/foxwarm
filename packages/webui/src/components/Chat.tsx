@@ -594,6 +594,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       const laterContinuous = historyMode === 'continuous' && pagingIntent === 'later' && distanceFromBottom < 120
         && windowStart + CONTINUOUS_HISTORY_WINDOW_SIZE < messages.length
       if (earlierContinuous || laterContinuous || (historyMode === 'active' && !showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES && scrollTop < 120)) {
+        // This reading navigation supersedes an older host-resize correction.
+        pendingContentResizeRef.current = null
+        setBottomFollow(false)
         const containerRect = container.getBoundingClientRect()
         const anchors = committedTimelineRef.current
           ? Array.from(committedTimelineRef.current.querySelectorAll<HTMLElement>(CHAT_MESSAGE_ANCHOR_SELECTOR))
