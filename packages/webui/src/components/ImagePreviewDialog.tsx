@@ -41,6 +41,7 @@ function Preview({ src, mimeType, title, onClose, onDownload, downloadPending, d
   const imageRef = useRef<HTMLImageElement>(null)
   const pointers = useRef(new Map<number, { x: number; y: number; startX: number; startY: number }>())
   const pinch = useRef<{ distance: number; scale: number; x: number; y: number } | null>(null)
+  const pan = useRef<{ x: number; y: number; left: number; top: number } | null>(null)
   const anchor = useRef<{ x: number; y: number; clientX: number; clientY: number } | null>(null)
   const suppressClick = useRef(false)
   const requestRef = useRef<AbortController | null>(null)
@@ -89,9 +90,15 @@ function Preview({ src, mimeType, title, onClose, onDownload, downloadPending, d
     anchor.current = actualSize ? null : imagePoint(box.left + stage.clientWidth / 2, box.top + stage.clientHeight / 2)
     setView({ scale: 1, actualSize: !actualSize })
   }
-  const startPinch = () => {
+  const resetGesture = () => {
     const [a, b] = [...pointers.current.values()]
-    if (!a || !b) { pinch.current = null; return }
+    if (!a || !b) {
+      pinch.current = null
+      const stage = stageRef.current!
+      pan.current = a ? { x: a.x, y: a.y, left: stage.scrollLeft, top: stage.scrollTop } : null
+      return
+    }
+    pan.current = null
     const point = imagePoint((a.x + b.x) / 2, (a.y + b.y) / 2)
     pinch.current = { distance: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), scale: actualSize ? scale : fit, x: point.x, y: point.y }
     suppressClick.current = true
@@ -103,13 +110,12 @@ function Preview({ src, mimeType, title, onClose, onDownload, downloadPending, d
     // Capture on the original target so an ordinary tap still clicks the image.
     const target = event.target as HTMLElement
     target.setPointerCapture(event.pointerId)
-    startPinch()
+    resetGesture()
   }
   const pointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     const previous = pointers.current.get(event.pointerId)
     if (!previous) return
     event.preventDefault()
-    const dx = event.clientX - previous.x, dy = event.clientY - previous.y
     pointers.current.set(event.pointerId, { ...previous, x: event.clientX, y: event.clientY })
     if (Math.hypot(event.clientX - previous.startX, event.clientY - previous.startY) > 6) suppressClick.current = true
     if (pinch.current) {
@@ -117,14 +123,22 @@ function Preview({ src, mimeType, title, onClose, onDownload, downloadPending, d
       const nextScale = Math.min(Math.max(8 * fit, 1), Math.max(fit, pinch.current.scale * Math.hypot(a.x - b.x, a.y - b.y) / pinch.current.distance))
       anchor.current = { x: pinch.current.x, y: pinch.current.y, clientX: (a.x + b.x) / 2, clientY: (a.y + b.y) / 2 }
       setView({ scale: nextScale, actualSize: nextScale > fit })
-    } else if (actualSize && suppressClick.current) {
-      stageRef.current!.scrollBy(-dx, -dy)
+    } else if (actualSize && suppressClick.current && pan.current) {
+      const stage = stageRef.current!
+      // Keep fractional CSS-pixel intent, rather than adding each delta to a
+      // browser-rounded scroll offset. Image zoom does not scale finger motion.
+      const drag = pan.current
+      drag.left = Math.max(0, Math.min(stage.scrollWidth - stage.clientWidth, drag.left + drag.x - event.clientX))
+      drag.top = Math.max(0, Math.min(stage.scrollHeight - stage.clientHeight, drag.top + drag.y - event.clientY))
+      drag.x = event.clientX
+      drag.y = event.clientY
+      stage.scrollTo(drag.left, drag.top)
     }
   }
   const pointerEnd = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!pointers.current.delete(event.pointerId)) return
     if (event.type !== 'pointerup') suppressClick.current = true
-    startPinch()
+    resetGesture()
   }
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null
@@ -165,6 +179,7 @@ function Preview({ src, mimeType, title, onClose, onDownload, downloadPending, d
     </header>
     <div ref={stageRef} className="image-preview-stage" data-actual-size={actualSize || undefined} tabIndex={0} aria-label="Image preview"
       onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerEnd} onPointerCancel={pointerEnd} onLostPointerCapture={pointerEnd}
+      onContextMenu={event => event.preventDefault()}
       onClickCapture={event => { if (suppressClick.current) { event.preventDefault(); event.stopPropagation() } }}
       onClick={event => { if (!actualSize && (event.target === event.currentTarget || event.target === surfaceRef.current)) onClose() }}>
       {failed ? <span role="status">Image unavailable</span> : <>
