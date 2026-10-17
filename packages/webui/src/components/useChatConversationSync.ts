@@ -88,11 +88,10 @@ type TimelineAction =
 
 function timelineReducer(state: TimelineState, action: TimelineAction): TimelineState {
   if (action.type === 'archive-start') {
-    return state.archiveStatus === 'idle' || action.replace
-      ? { ...state, archiveStatus: 'loading', archivePendingMessages: [] } : state
+    return { ...state, archiveStatus: 'loading', archivePendingMessages: action.replace ? [] : state.archivePendingMessages }
   }
   if (action.type === 'archive') {
-    const originals = mergeContinuousHistory(action.replace || state.archiveStatus === 'loading' ? [] : state.archiveMessages, action.messages)
+    const originals = mergeContinuousHistory(action.replace ? [] : state.archiveMessages, action.messages)
     return {
       ...state,
       archiveStatus: action.reset ? 'idle' : 'loaded',
@@ -108,7 +107,7 @@ function timelineReducer(state: TimelineState, action: TimelineAction): Timeline
   return {
     ...state,
     messages,
-    archiveMessages: action.archiveMessages && state.archiveStatus === 'loaded'
+    archiveMessages: action.archiveMessages && state.archiveStatus !== 'idle'
       ? appendContinuousCommits(state.archiveMessages, action.archiveMessages) : state.archiveMessages,
     archivePendingMessages: action.archiveMessages && state.archiveStatus === 'loading'
       ? mergeContinuousHistory(state.archivePendingMessages, action.archiveMessages) : state.archivePendingMessages,
@@ -125,7 +124,7 @@ type ConfirmedSessionSettings = Partial<Pick<ChatSessionRecord,
 >>
 
 /** One mounted Chat's history, queue, draft and send lifetime; viewport and physical transport stay separate. */
-export function useChatConversationSync(sessionId: string, webUiIdentityMode: boolean, historyMode: HistoryMode = 'active') {
+export function useChatConversationSync(sessionId: string, webUiIdentityMode: boolean, historyMode: HistoryMode = 'active', initialArchiveSeq?: number) {
   const [timelineState, dispatchTimeline] = useReducer(timelineReducer, { messages: [], queuedMessages: [], archiveMessages: [], archivePendingMessages: [], archiveStatus: 'idle' })
   const messages = timelineState.messages
   const queuedMessages = timelineState.queuedMessages
@@ -141,33 +140,52 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     }
     const controller = new AbortController()
     archiveRequestRef.current = controller
-    setArchivePage(previous => ({ ...previous, loading: true, error: false, direction }))
+    const restoringAnchor = direction === 'initial' && initialArchiveSeq !== undefined
+    setArchivePage(previous => ({ ...previous, loading: true, error: false, direction, ...(restoringAnchor ? { hasLater: true } : {}) }))
     const boundary = archiveBoundaryRef.current
-    if (direction === 'initial' || direction === 'latest') dispatchTimeline({ type: 'archive-start', replace: direction === 'latest' })
+    const replace = direction === 'initial' || direction === 'latest'
+    dispatchTimeline({ type: 'archive-start', replace })
     const seq = direction === 'earlier' ? boundary.firstSeq : direction === 'later' ? boundary.lastSeq : undefined
     const query = seq ? `?${direction === 'earlier' ? 'beforeSeq' : 'afterSeq'}=${seq}` : ''
-    try {
-      const response = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/history/continuous${query}`, { signal: controller.signal })
+    const fetchPage = async (pageQuery: string) => {
+      const response = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/history/continuous${pageQuery}`, { signal: controller.signal })
       if (!response.ok) throw new Error('History could not be loaded')
-      const data = await response.json()
+      return response.json()
+    }
+    try {
+      // Two bounded pages surround the saved row, leaving room to restore its pixel offset.
+      // No previously loaded pages or whole-Archive scan are needed after a remount.
+      let data
+      if (restoringAnchor) {
+        const [earlier, later] = await Promise.all([
+          fetchPage(`?beforeSeq=${initialArchiveSeq! + 1}`),
+          fetchPage(`?afterSeq=${initialArchiveSeq}`),
+        ])
+        data = { messages: [...earlier.messages, ...later.messages],
+          firstSeq: earlier.firstSeq ?? later.firstSeq, lastSeq: later.lastSeq ?? earlier.lastSeq,
+          hasEarlier: earlier.hasMore, hasLater: later.hasMore }
+      } else data = await fetchPage(query)
       if (controller.signal.aborted) return []
       const rows = Array.isArray(data.messages) ? data.messages as Message[] : []
       archiveBoundaryRef.current = {
         firstSeq: direction === 'later' ? boundary.firstSeq ?? data.firstSeq : data.firstSeq ?? boundary.firstSeq,
         lastSeq: direction === 'earlier' ? boundary.lastSeq ?? data.lastSeq : data.lastSeq ?? boundary.lastSeq,
       }
-      dispatchTimeline({ type: 'archive', messages: rows, replace: direction === 'latest' })
+      dispatchTimeline({ type: 'archive', messages: rows, replace })
       setArchivePage(previous => ({ loaded: true, loading: false, error: false, direction,
-        hasEarlier: direction === 'later' ? previous.hasEarlier : !!data.hasMore,
-        hasLater: direction === 'earlier' ? previous.hasLater : direction === 'later' && !!data.hasMore }))
+        hasEarlier: restoringAnchor ? !!data.hasEarlier : direction === 'later' ? previous.hasEarlier : !!data.hasMore,
+        hasLater: restoringAnchor ? !!data.hasLater : direction === 'earlier' ? previous.hasLater : direction === 'later' && !!data.hasMore }))
       return rows
     } catch (error) {
-      if (!controller.signal.aborted) setArchivePage(previous => ({ ...previous, loading: false, error: true }))
+      if (!controller.signal.aborted) {
+        setArchivePage(previous => ({ ...previous, loading: false, error: true }))
+        controller.abort()
+      }
       return []
     } finally {
       if (archiveRequestRef.current === controller) archiveRequestRef.current = null
     }
-  }, [sessionId])
+  }, [initialArchiveSeq, sessionId])
   const setMessages = useCallback((update: Message[] | ((messages: Message[]) => Message[]), archiveMessages?: Message[]) => dispatchTimeline({ type: 'messages', update, archiveMessages }), [])
   const setQueuedMessages = useCallback((update: Message[] | ((messages: Message[]) => Message[])) => dispatchTimeline({ type: 'queue', update }), [])
   const [sessionMissing, setSessionMissing] = useState(false)

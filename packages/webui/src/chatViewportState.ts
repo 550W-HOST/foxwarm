@@ -133,6 +133,13 @@ export function getChatViewportAnchorAdjustment(currentOffsetPx: number, savedOf
   return currentOffsetPx - savedOffsetPx
 }
 
+/** Continuous history anchors carry their canonical Archive sequence in the row key. */
+export function getChatViewportAnchorSeq(state: ChatViewportState | null): number | undefined {
+  const match = state?.kind === 'anchor' ? /^seq-.+-(\d+)$/.exec(state.messageKey) : null
+  const seq = match ? Number(match[1]) : 0
+  return Number.isSafeInteger(seq) && seq > 0 ? seq : undefined
+}
+
 export function getStoredChatViewportState(sessionId: string, historyMode: HistoryMode = 'active'): ChatViewportState | null {
   return viewportStateBySession.get(`${sessionId}\0${historyMode}`) || null
 }

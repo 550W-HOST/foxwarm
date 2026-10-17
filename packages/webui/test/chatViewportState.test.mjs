@@ -149,3 +149,13 @@ test('active and continuous reading positions are independent for one canonical 
   storeChatViewportState('same-session', { kind: 'bottom' }, 'active')
   assert.deepEqual(getStoredChatViewportState('same-session', 'continuous'), continuous)
 })
+
+
+test('continuous remount targets only canonical sequence anchors', async () => {
+  const { getChatViewportAnchorSeq } = await loadTypeScriptModule('../src/chatViewportState.ts')
+  assert.equal(getChatViewportAnchorSeq({ kind: 'anchor', messageKey: 'seq-local-312', offsetPx: -29.5 }), 312)
+  assert.equal(getChatViewportAnchorSeq({ kind: 'anchor', messageKey: 'seq-source-session-12', offsetPx: 24 }), 12)
+  assert.equal(getChatViewportAnchorSeq({ kind: 'bottom' }), undefined)
+  assert.equal(getChatViewportAnchorSeq({ kind: 'anchor', messageKey: 'ctx-block-local-312', offsetPx: 0 }), undefined)
+  assert.equal(getChatViewportAnchorSeq({ kind: 'anchor', messageKey: 'seq-local-0', offsetPx: 0 }), undefined)
+})

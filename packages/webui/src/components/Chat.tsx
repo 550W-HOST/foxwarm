@@ -29,6 +29,7 @@ import {
   CONTEXT_SCROLLBAR_ANCHOR_SELECTOR,
   chooseChatViewportState,
   getChatViewportAnchorAdjustment,
+  getChatViewportAnchorSeq,
   getMessageStableKey,
   getMessageViewportAnchorKey,
   getStoredChatViewportState,
@@ -166,12 +167,14 @@ type StreamingAsrSession = {
 }
 
 const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onNewSession, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', timelineView = 'detailed', historyMode = historyModeForTimelineView(timelineView), showUsageBadge = true, showUserMessageMetadata = false, fullWidth = true, onFullWidthChange = () => {}, onSendKeyModeChange = () => {}, onTimelineViewChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
+  const viewportSessionId = canonicalSessionId || sessionId
+  const initialContinuousAnchorSeq = useMemo(() => getChatViewportAnchorSeq(getStoredChatViewportState(viewportSessionId, 'continuous')), [viewportSessionId])
   const {
     messages: activeMessages, continuousMessages, archivePage, loadArchivePage, queuedMessages, sessionRecord, sessionMissing, sessionBusy, sessionQueueLength,
     persistentMemorySnapshot, streamingAssistantDraft, toolScriptProgress,
     historyLoaded, isFullHistoryLoaded, earlierHistoryError, connectionState, reconnectCountdown,
     loading, retryEarlierHistory, sendMessage: handleSend, sendSessionCommand, mergeConfirmedSettings,
-  } = useChatConversationSync(sessionId, webUiIdentityMode, historyMode)
+  } = useChatConversationSync(sessionId, webUiIdentityMode, historyMode, initialContinuousAnchorSeq)
   const messages = historyMode === 'continuous' ? continuousMessages : activeMessages
   const [continuousWindowKey, setContinuousWindowKey] = useState<string | null>(null)
   const continuousWindowAtLatestRef = useRef(true)
@@ -202,7 +205,6 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   const sessionHeaderSubtitle = formatSessionHeaderSubtitle(sessionId, sessionRecord?.cwd)
   const chatMessageContainerId = `foxwarm-chat-messages-${useId()}`
 
-  const viewportSessionId = canonicalSessionId || sessionId
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const messagesContentRef = useRef<HTMLDivElement>(null)
   const committedTimelineRef = useRef<HTMLDivElement>(null)
@@ -483,7 +485,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
 
   const handleBottomNavigation = useCallback(() => {
     if (historyMode === 'continuous' && archivePage.hasLater) void loadArchivePage('latest')
-    setContinuousWindowKey(null)
+    if (historyMode === 'continuous') setContinuousWindowKey(null)
     markUserViewportInteraction()
     pendingContextScrollbarNavigationRef.current = null
     pendingScrollToTrueTopRef.current = false
@@ -1055,6 +1057,15 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         return
       }
 
+      if (historyMode === 'continuous' && pending.state.kind === 'anchor') {
+        const messageKey = pending.state.messageKey
+        const index = messages.findIndex(message => getMessageViewportAnchorKey(message) === messageKey)
+        if (index >= 0 && (index < continuousWindowStart || index >= continuousWindowStart + visibleMessages.length)) {
+          setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, index - 20)], 0))
+          return
+        }
+      }
+
       if (historyMode === 'active' && pending.state.kind === 'anchor' && !showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
         setShowFullTimeline(true)
         return
@@ -1093,7 +1104,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       }
       capturedInteractionVersionRef.current = userInteractionVersionRef.current
     }
-  }, [applyViewportAnchorCandidates, applyViewportState, historyLoaded, messages.length, readCurrentViewportState, setBottomFollow, showFullTimeline, timelineMessages, viewportSessionId, historyMode, archivePage.loaded])
+  }, [applyViewportAnchorCandidates, applyViewportState, historyLoaded, messages.length, readCurrentViewportState, setBottomFollow, showFullTimeline, timelineMessages, viewportSessionId, historyMode, archivePage.loaded, continuousWindowStart, visibleMessages.length])
 
   useLayoutEffect(() => {
     const pending = pendingContextScrollbarNavigationRef.current

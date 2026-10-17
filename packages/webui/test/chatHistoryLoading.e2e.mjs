@@ -2102,3 +2102,138 @@ test('continuous Chat backfills original Archive tool results rather than pruned
     assert.equal(await chatPage.evaluate(() => document.querySelector('[data-chat-timeline="committed"]').textContent.includes('PrunedActiveSnapshotResult')), false)
   } finally { await chatPage.close() }
 })
+
+
+async function readOlderContinuousPosition(chatPage) {
+  await loadContinuousEarlier(chatPage)
+  await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-401"]')
+  await loadContinuousEarlier(chatPage)
+  await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-301"]')
+  await chatPage.evaluate(() => {
+    const container = document.querySelector('.foxwarm-chat-messages')
+    container.scrollTop = 900
+    container.dispatchEvent(new Event('scroll'))
+  })
+  await chatPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  return readingAnchor(chatPage)
+}
+
+async function waitForReadingPosition(chatPage, expected) {
+  await chatPage.waitForFunction(expected => {
+    const container = document.querySelector('.foxwarm-chat-messages')
+    const anchor = [...container.querySelectorAll('[data-chat-message-anchor-key]')].find(element => element.getBoundingClientRect().bottom > container.getBoundingClientRect().top)
+    return anchor?.getAttribute('data-chat-message-anchor-key') === expected.key
+      && Math.abs(anchor.getBoundingClientRect().top - container.getBoundingClientRect().top - expected.offset) < 3
+  }, {}, expected)
+}
+
+test('continuous Chat keeps its older window when active history returns to bottom', async () => {
+  const chatPage = await openContinuousChat()
+  try {
+    const before = await readOlderContinuousPosition(chatPage)
+    await chatPage.evaluate(() => { window.fixtureTimelineView = 'detailed'; window.fixtureHistoryMode = 'active'; window.renderFixtureChats() })
+    await chatPage.waitForFunction(() => document.querySelector('[data-chat-timeline="committed"]').textContent.includes('Generated summary'))
+    await chatPage.evaluate(() => {
+      const container = document.querySelector('.foxwarm-chat-messages')
+      container.dispatchEvent(new WheelEvent('wheel', { deltaY: -300, bubbles: true }))
+      container.scrollTop = 20
+      container.dispatchEvent(new Event('scroll'))
+    })
+    await chatPage.click('[aria-label="Scroll to bottom"]')
+    await chatPage.evaluate(() => { window.fixtureTimelineView = 'conversation'; window.fixtureHistoryMode = 'continuous'; window.renderFixtureChats() })
+    await waitForReadingPosition(chatPage, before)
+    assert.ok(await chatPage.$$eval('[data-chat-message-anchor-key]', nodes => nodes.length <= 200))
+  } finally { await chatPage.close() }
+})
+
+test('continuous Chat remount locates an older saved row with two bounded pages', async () => {
+  const chatPage = await openContinuousChat()
+  try {
+    const before = await readOlderContinuousPosition(chatPage)
+    const requestsBefore = await chatPage.evaluate(() => window.fixtureArchiveRequests.length)
+    await chatPage.evaluate(() => window.renderFixtureChats(1, 1))
+    await chatPage.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
+    await chatPage.evaluate(() => window.resolveFixtureHistory(0, [{ role: 'model', parts: [{ text: 'Generated summary' }], __meta: { contextBlock: { id: 1, level: 1, sourceKind: 'message', rawStartSeq: 1, rawEndSeq: 594 } } }, ...window.fixtureArchive.slice(-6)], 1, { latestSeq: 600 }))
+    await waitForReadingPosition(chatPage, before)
+    const requests = await chatPage.evaluate(() => window.fixtureArchiveRequests)
+    const seq = Number(before.key.match(/-(\d+)$/)[1])
+    assert.deepEqual(requests.slice(requestsBefore).map(url => new URL(url, 'http://fixture').search), [`?beforeSeq=${seq + 1}`, `?afterSeq=${seq}`])
+    assert.ok(await chatPage.$$eval('[data-chat-message-anchor-key]', nodes => nodes.length <= 200))
+    assert.equal(await chatPage.$('[data-chat-message-anchor-key="seq-local-600"]'), null)
+    await chatPage.click('[aria-label="Scroll to bottom"]')
+    await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-600"]')
+  } finally { await chatPage.close() }
+})
+
+test('continuous Chat retains live commits racing the final later page and accepts subsequent commits', async () => {
+  const chatPage = await openContinuousChat()
+  try {
+    await chatPage.evaluate(() => {
+      for (let seq = 601; seq <= 800; seq++) window.fixtureArchive.push({ role: seq % 2 ? 'user' : 'model', parts: [{ text: 'Offline original ' + seq }], __meta: { seq, timestamp: 1700000000000 + seq } })
+      window.emitFixtureEvent({ type: 'session-state', session: { id: 'fixture/main', busy: false, runtimeState: { state: 'idle' }, queueLength: 0, messageCount: 2, historyVersion: 2, modelKey: 'fixture/model' } })
+    })
+    await chatPage.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
+    await chatPage.evaluate(() => window.resolveFixtureHistory(0, [{ role: 'model', parts: [{ text: 'Summary after offline work' }], __meta: { contextBlock: { id: 2, level: 1, sourceKind: 'message', rawStartSeq: 1, rawEndSeq: 799 } } }, window.fixtureArchive.at(-1)], 2, { latestSeq: 800 }))
+    await chatPage.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === 'Load newer messages'))
+    await chatPage.evaluate(() => {
+      window.fixtureDelayArchive = true
+      ;[...document.querySelectorAll('button')].find(button => button.textContent === 'Load newer messages').click()
+    })
+    await chatPage.waitForFunction(() => window.fixtureArchiveRequests.length === 3)
+    await chatPage.evaluate(() => {
+      const message = { role: 'model', parts: [{ text: 'Racing canonical 801' }], __meta: { seq: 801, timestamp: 1700000000801 } }
+      window.fixtureArchive.push(message)
+      window.emitFixtureEvent({ type: 'session-state', session: { id: 'fixture/main', busy: false, runtimeState: { state: 'idle' }, queueLength: 0, messageCount: 3, historyVersion: 2, modelKey: 'fixture/model' } })
+      window.emitFixtureMessage(message)
+      window.fixtureDelayArchive = false
+      window.resolveFixtureArchive()
+    })
+    await chatPage.waitForFunction(() => ![...document.querySelectorAll('button')].some(button => button.textContent === 'Load newer messages'))
+    await chatPage.evaluate(() => {
+      const message = { role: 'model', parts: [{ text: 'Subsequent canonical 802' }], __meta: { seq: 802, timestamp: 1700000000802 } }
+      window.fixtureArchive.push(message)
+      window.emitFixtureEvent({ type: 'session-state', session: { id: 'fixture/main', busy: false, runtimeState: { state: 'idle' }, queueLength: 0, messageCount: 4, historyVersion: 2, modelKey: 'fixture/model' } })
+      window.emitFixtureMessage(message)
+    })
+    await chatPage.click('[aria-label="Find in chat"]')
+    await chatPage.type('[aria-label="Search messages"]', 'Racing canonical 801')
+    await chatPage.waitForFunction(() => document.querySelector('[role="search"] [aria-live]')?.textContent === '1/1')
+    await chatPage.click('[aria-label="Search messages"]', { clickCount: 3 })
+    await chatPage.type('[aria-label="Search messages"]', 'Subsequent canonical 802')
+    await chatPage.waitForFunction(() => document.querySelector('[role="search"] [aria-live]')?.textContent === '1/1')
+    assert.equal(await chatPage.evaluate(() => window.fixtureArchiveRequests.length), 3)
+    assert.equal(await chatPage.evaluate(() => window.fixtureHistoryRequestCount), 2)
+  } finally { await chatPage.close() }
+})
+
+test('continuous Chat remount mounts its saved window even when a live burst outgrows the recent tail', async () => {
+  const chatPage = await openContinuousChat()
+  try {
+    await chatPage.evaluate(() => {
+      const container = document.querySelector('.foxwarm-chat-messages')
+      container.dispatchEvent(new WheelEvent('wheel', { deltaY: -300, bubbles: true }))
+      const anchor = container.querySelector('[data-chat-message-anchor-key="seq-local-550"]')
+      container.scrollTop += anchor.getBoundingClientRect().top - container.getBoundingClientRect().top + 29.5
+      container.dispatchEvent(new Event('scroll'))
+    })
+    await chatPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    const before = await readingAnchor(chatPage)
+    assert.equal(before.key, 'seq-local-550')
+    await chatPage.evaluate(() => { window.fixtureDelayArchive = true; window.renderFixtureChats(1, 1) })
+    await chatPage.waitForFunction(() => window.fixtureHistoryRequestCount === 2 && window.fixtureArchiveRequests.length === 3)
+    await chatPage.evaluate(() => window.resolveFixtureHistory(0, [{ role: 'model', parts: [{ text: 'Generated summary' }], __meta: { contextBlock: { id: 1, level: 1, sourceKind: 'message', rawStartSeq: 1, rawEndSeq: 594 } } }, ...window.fixtureArchive.slice(-6)], 1, { latestSeq: 600 }))
+    await chatPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    await chatPage.evaluate(() => {
+      for (let seq = 601; seq <= 900; seq++) {
+        const message = { role: 'model', parts: [{ text: 'Concurrent canonical ' + seq }], __meta: { seq, timestamp: 1700000000000 + seq } }
+        window.fixtureArchive.push(message)
+        window.emitFixtureMessage(message)
+      }
+      window.fixtureDelayArchive = false
+      window.resolveFixtureArchive()
+      window.resolveFixtureArchive()
+    })
+    await waitForReadingPosition(chatPage, before)
+    assert.ok(await chatPage.$$eval('[data-chat-message-anchor-key]', nodes => nodes.length <= 200))
+  } finally { await chatPage.close() }
+})
