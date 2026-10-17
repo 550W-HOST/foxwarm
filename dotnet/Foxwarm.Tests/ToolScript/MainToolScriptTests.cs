@@ -101,10 +101,14 @@ public sealed class MainToolScriptTests
         var path = Path.Combine(f.Work, "nested.txt");
         await File.WriteAllTextAsync(path, "nested bytes");
         var before = f.Owner.History().Select(row => row.ToJsonString()).ToArray();
-        var completed = await f.Call("run_script", new JsonObject
-        {
-            ["code"] = "result = call_tool({'toolId':'builtin:send_file'}, {'filePath':'nested.txt'})\nprint('ordinary stdout')\nreturn {'nested': [result]}\n",
-        });
+        var completed = await f.Call(
+            "run_script",
+            new JsonObject
+            {
+                ["code"] =
+                    "result = call_tool({'toolId':'builtin:send_file'}, {'filePath':'nested.txt'})\nprint('ordinary stdout')\nreturn {'nested': [result]}\n",
+            }
+        );
         Assert.True(SessionWait.Text(completed["status"]) == "completed", completed.ToJsonString());
         var delivery = completed["result"]!["nested"]![0]!["fileDelivery"]!;
         Assert.Equal(f.Owner.Id, SessionWait.Text(delivery["targetId"]));
@@ -116,7 +120,10 @@ public sealed class MainToolScriptTests
         Assert.Empty(f.Owner.Entry.Snapshot().Queue);
         var runId = SessionWait.Text(completed["runId"])!;
         var inspected = await f.Call("get_toolscript_run", new JsonObject { ["runId"] = runId });
-        Assert.Equal(SessionWait.Text(delivery["deliveryId"]), SessionWait.Text(inspected["result"]?["nested"]?[0]?["fileDelivery"]?["deliveryId"]));
+        Assert.Equal(
+            SessionWait.Text(delivery["deliveryId"]),
+            SessionWait.Text(inspected["result"]?["nested"]?[0]?["fileDelivery"]?["deliveryId"])
+        );
     }
 
     [Fact]

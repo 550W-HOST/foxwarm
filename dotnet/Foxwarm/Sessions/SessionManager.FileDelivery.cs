@@ -101,8 +101,14 @@ internal sealed partial class SessionManager
             path = Path.Combine(directory, name);
             await File.WriteAllBytesAsync(path, file.Bytes, token);
         }
-        var artifact = FileDeliveryArtifact.Create(target is null ? "channel" : "session", target ?? direct, name,
-            new FileInfo(path).Length, path, node);
+        var artifact = FileDeliveryArtifact.Create(
+            target is null ? "channel" : "session",
+            target ?? direct,
+            name,
+            new FileInfo(path).Length,
+            path,
+            node
+        );
         var delivered = new List<string>();
         var skipped = new List<string>();
         var failed = new List<string>();
@@ -164,7 +170,12 @@ internal sealed partial class SessionManager
         var output = string.Join("\n", lines);
         if (delivered.Count == 0)
             throw new InvalidOperationException(output);
-        return new JsonObject { ["output"] = output, ["fullPath"] = path, ["fileDelivery"] = artifact };
+        return new JsonObject
+        {
+            ["output"] = output,
+            ["fullPath"] = path,
+            ["fileDelivery"] = artifact,
+        };
     }
 
     private string FileSession(string requested) =>

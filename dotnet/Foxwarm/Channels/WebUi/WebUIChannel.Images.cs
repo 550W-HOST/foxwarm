@@ -93,54 +93,82 @@ internal sealed partial class WebUIChannel
                 }
             }
         );
-        app.MapPost("/api/blobs/{blobId}/download", async (string blobId, HttpRequest request) =>
-        {
-            try
-            {
-                var path = sessions.Images.ResolveBlob(blobId);
-                if (!File.Exists(path)) return Results.NotFound(new { error = "Image is unavailable." });
-                var input = await request.ReadFromJsonAsync<JsonObject>() ?? new JsonObject();
-                var grant = downloads.Issue("blob", blobId, input);
-                request.HttpContext.Response.Headers.CacheControl = "no-store";
-                return Results.Ok(new { url = Uri.EscapeDataString(blobId) + grant.Query, expiresAt = grant.ExpiresAt });
-            }
-            catch (ImageInputException)
-            {
-                return Results.BadRequest(new { error = "Image is unavailable or invalid." });
-            }
-        });
-        app.MapMethods(
-            "/api/blobs/{blobId}", ["GET", "HEAD"],
-            async (string blobId, HttpContext context) =>
+        app.MapPost(
+            "/api/blobs/{blobId}/download",
+            async (string blobId, HttpRequest request) =>
             {
                 try
                 {
                     var path = sessions.Images.ResolveBlob(blobId);
                     if (!File.Exists(path))
                         return Results.NotFound(new { error = "Image is unavailable." });
-                    var reference = new JsonObject
-                    {
-                        ["blobId"] = blobId,
-                        ["sha256"] = blobId[..64],
-                    };
-                    var bytes = await sessions.Images.ReadAsync(reference, context.RequestAborted);
-                    var etag = '"' + blobId[..64] + '"';
-                    context.Response.Headers.ETag = etag;
-                    context.Response.Headers.CacheControl = "private, max-age=31536000, immutable";
-                    context.Response.Headers.XContentTypeOptions = "nosniff";
-                    if (context.Request.Headers.IfNoneMatch.ToString() == etag)
-                        return Results.StatusCode(304);
-                    var mime = ImageBlobStore.SafeMime(blobId);
-                    if (mime is null || context.Request.Query["preview"] == "0" || context.Request.Query["download"] == "1")
-                        DownloadDisposition(context.Response, WebUiDownloadSignatures.FileName(
-                            WebUiDownloadSignatures.Text(context.Request.Query, "filename"), blobId), inline: false);
-                    return Results.File(bytes, mime ?? "application/octet-stream");
+                    var input = await request.ReadFromJsonAsync<JsonObject>() ?? new JsonObject();
+                    var grant = downloads.Issue("blob", blobId, input);
+                    request.HttpContext.Response.Headers.CacheControl = "no-store";
+                    return Results.Ok(
+                        new
+                        {
+                            url = Uri.EscapeDataString(blobId) + grant.Query,
+                            expiresAt = grant.ExpiresAt,
+                        }
+                    );
                 }
                 catch (ImageInputException)
                 {
                     return Results.BadRequest(new { error = "Image is unavailable or invalid." });
                 }
             }
-        ).WithMetadata(new WebUiDownloadResource("blob"));
+        );
+        app.MapMethods(
+                "/api/blobs/{blobId}",
+                ["GET", "HEAD"],
+                async (string blobId, HttpContext context) =>
+                {
+                    try
+                    {
+                        var path = sessions.Images.ResolveBlob(blobId);
+                        if (!File.Exists(path))
+                            return Results.NotFound(new { error = "Image is unavailable." });
+                        var reference = new JsonObject
+                        {
+                            ["blobId"] = blobId,
+                            ["sha256"] = blobId[..64],
+                        };
+                        var bytes = await sessions.Images.ReadAsync(
+                            reference,
+                            context.RequestAborted
+                        );
+                        var etag = '"' + blobId[..64] + '"';
+                        context.Response.Headers.ETag = etag;
+                        context.Response.Headers.CacheControl =
+                            "private, max-age=31536000, immutable";
+                        context.Response.Headers.XContentTypeOptions = "nosniff";
+                        if (context.Request.Headers.IfNoneMatch.ToString() == etag)
+                            return Results.StatusCode(304);
+                        var mime = ImageBlobStore.SafeMime(blobId);
+                        if (
+                            mime is null
+                            || context.Request.Query["preview"] == "0"
+                            || context.Request.Query["download"] == "1"
+                        )
+                            DownloadDisposition(
+                                context.Response,
+                                WebUiDownloadSignatures.FileName(
+                                    WebUiDownloadSignatures.Text(context.Request.Query, "filename"),
+                                    blobId
+                                ),
+                                inline: false
+                            );
+                        return Results.File(bytes, mime ?? "application/octet-stream");
+                    }
+                    catch (ImageInputException)
+                    {
+                        return Results.BadRequest(
+                            new { error = "Image is unavailable or invalid." }
+                        );
+                    }
+                }
+            )
+            .WithMetadata(new WebUiDownloadResource("blob"));
     }
 }

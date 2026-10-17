@@ -64,7 +64,9 @@ internal sealed class MainHost : IAsyncDisposable
                 http.Desktop
             );
             if (server.WebUiEnabled)
-                new WebUIChannel(sessions, runtime, router, terminals, server.Downloads).Register(server.App);
+                new WebUIChannel(sessions, runtime, router, terminals, server.Downloads).Register(
+                    server.App
+                );
             return new MainHost(sessions, terminals, server);
         }
         catch

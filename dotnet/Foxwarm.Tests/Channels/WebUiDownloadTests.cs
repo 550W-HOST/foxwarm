@@ -28,19 +28,43 @@ public sealed class WebUiDownloadTests
             var f = new Fixture();
             var data = Path.Combine(f.Temp.Path, "data");
             Directory.CreateDirectory(f.Work);
-            var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
+            var options = new ResponsesClientOptions(
+                new Uri("http://127.0.0.1:1"),
+                "wire",
+                "a",
+                "",
+                "",
+                713
+            );
             f.Manager = new(data, f.Work, options, HostModels.ForTest(options));
             await f.Manager.LoadAsync();
             f.terminals = new(data, CancellationToken.None);
-            var address = new PublicWebAddress("http://127.0.0.1:0", new PathString("/nested/app"), "/nested/app/", false);
+            var address = new PublicWebAddress(
+                "http://127.0.0.1:0",
+                new PathString("/nested/app"),
+                "/nested/app/",
+                false
+            );
             f.Server = new([], 0, Token, null, f.Manager, f.terminals, address, true);
             var runtime = new SessionRuntime(f.Manager);
-            new WebUIChannel(f.Manager, runtime, new MessageRouter(runtime), f.terminals, f.Server.Downloads).Register(f.Server.App);
+            new WebUIChannel(
+                f.Manager,
+                runtime,
+                new MessageRouter(runtime),
+                f.terminals,
+                f.Server.Downloads
+            ).Register(f.Server.App);
             await f.Server.App.StartAsync();
             var root = new Uri(f.Server.App.Urls.Single() + "/nested/app/");
-            f.Admin = new(new HttpClientHandler { UseCookies = false, AllowAutoRedirect = false }) { BaseAddress = root };
+            f.Admin = new(new HttpClientHandler { UseCookies = false, AllowAutoRedirect = false })
+            {
+                BaseAddress = root,
+            };
             f.Admin.DefaultRequestHeaders.Authorization = new("Bearer", Token);
-            f.Native = new(new HttpClientHandler { UseCookies = false, AllowAutoRedirect = false }) { BaseAddress = root };
+            f.Native = new(new HttpClientHandler { UseCookies = false, AllowAutoRedirect = false })
+            {
+                BaseAddress = root,
+            };
             return f;
         }
 
@@ -54,9 +78,13 @@ public sealed class WebUiDownloadTests
 
         public async ValueTask DisposeAsync()
         {
-            Admin.Dispose(); Native.Dispose();
-            await Server.App.StopAsync(); await Server.App.DisposeAsync();
-            await terminals.DisposeAsync(); await Manager.DisposeAsync(); Temp.Dispose();
+            Admin.Dispose();
+            Native.Dispose();
+            await Server.App.StopAsync();
+            await Server.App.DisposeAsync();
+            await terminals.DisposeAsync();
+            await Manager.DisposeAsync();
+            Temp.Dispose();
         }
     }
 
@@ -68,15 +96,31 @@ public sealed class WebUiDownloadTests
         var options = new JsonObject { ["filename"] = "résumé.txt", ["preview"] = "0" };
         var issued = signer.Issue("path", "/tmp/文.txt", options);
         // Independent Source JSON.stringify/HMAC fixture, including non-ASCII resource/name.
-        var key = HMACSHA256.HashData(Encoding.UTF8.GetBytes("source-token"), Encoding.UTF8.GetBytes("foxwarm/webui-download-key/v1"));
-        var mac = Convert.ToHexStringLower(HMACSHA256.HashData(key, Encoding.UTF8.GetBytes("[\"download-v1\",\"path\",\"/tmp/文.txt\",null,\"résumé.txt\",\"0\",\"1700000900\"]")));
+        var key = HMACSHA256.HashData(
+            Encoding.UTF8.GetBytes("source-token"),
+            Encoding.UTF8.GetBytes("foxwarm/webui-download-key/v1")
+        );
+        var mac = Convert.ToHexStringLower(
+            HMACSHA256.HashData(
+                key,
+                Encoding.UTF8.GetBytes(
+                    "[\"download-v1\",\"path\",\"/tmp/文.txt\",null,\"résumé.txt\",\"0\",\"1700000900\"]"
+                )
+            )
+        );
         var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(issued.Query);
         Assert.Equal(mac, query["signature"]);
         var parsed = new QueryCollection(query);
         Assert.True(signer.Verify("path", "/tmp/文.txt", parsed));
         Assert.False(signer.Verify("path", "/other", parsed));
         Assert.False(signer.Verify("blob", "/tmp/文.txt", parsed));
-        Assert.False(new WebUiDownloadSignatures("rotated", () => clock).Verify("path", "/tmp/文.txt", parsed));
+        Assert.False(
+            new WebUiDownloadSignatures("rotated", () => clock).Verify(
+                "path",
+                "/tmp/文.txt",
+                parsed
+            )
+        );
         clock = issued.ExpiresAt;
         Assert.False(signer.Verify("path", "/tmp/文.txt", parsed));
     }
@@ -87,22 +131,45 @@ public sealed class WebUiDownloadTests
         await using var f = await Fixture.Create();
         var path = Path.Combine(f.Work, "picture.png");
         await File.WriteAllBytesAsync(path, [1, 2, 3, 4]);
-        var issued = await f.Sign("api/download/sign", new { path, filename = "../original\r\n.png", preview = "1" });
+        var issued = await f.Sign(
+            "api/download/sign",
+            new
+            {
+                path,
+                filename = "../original\r\n.png",
+                preview = "1",
+            }
+        );
         var url = issued["url"]!.GetValue<string>();
         Assert.StartsWith("download?", url);
-        Assert.InRange(issued["expiresAt"]!.GetValue<long>() - DateTimeOffset.UtcNow.ToUnixTimeSeconds(), 895, 900);
+        Assert.InRange(
+            issued["expiresAt"]!.GetValue<long>() - DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            895,
+            900
+        );
         var response = await f.Native.GetAsync(url);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(new byte[] { 1, 2, 3, 4 }, await response.Content.ReadAsByteArrayAsync());
         Assert.Equal("image/png", response.Content.Headers.ContentType!.MediaType);
         Assert.Equal("inline", response.Content.Headers.ContentDisposition!.DispositionType);
-        Assert.Contains(".._original__.png", response.Content.Headers.ContentDisposition.ToString());
+        Assert.Contains(
+            ".._original__.png",
+            response.Content.Headers.ContentDisposition.ToString()
+        );
         Assert.Equal("nosniff", response.Headers.GetValues("X-Content-Type-Options").Single());
         var head = await f.Native.SendAsync(new(HttpMethod.Head, url));
         Assert.Equal(HttpStatusCode.OK, head.StatusCode);
         Assert.Equal(4, head.Content.Headers.ContentLength);
         Assert.Empty(await head.Content.ReadAsByteArrayAsync());
-        foreach (var bad in new[] { url.Replace("preview=1", "preview=0"), url + "&filename=other", url.Replace("expires=", "expires=1"), url.Replace("signature=", "signature=0") })
+        foreach (
+            var bad in new[]
+            {
+                url.Replace("preview=1", "preview=0"),
+                url + "&filename=other",
+                url.Replace("expires=", "expires=1"),
+                url.Replace("signature=", "signature=0"),
+            }
+        )
         {
             Assert.Equal(HttpStatusCode.Unauthorized, (await f.Native.GetAsync(bad)).StatusCode);
             Assert.Equal(HttpStatusCode.OK, (await f.Admin.GetAsync(bad)).StatusCode);
@@ -110,14 +177,34 @@ public sealed class WebUiDownloadTests
         using var cookie = new HttpRequestMessage(HttpMethod.Get, url + "&signature=invalid");
         cookie.Headers.Add("Cookie", "foxwarm_token=" + Fixture.Token);
         Assert.Equal(HttpStatusCode.OK, (await f.Native.SendAsync(cookie)).StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await f.Native.PostAsJsonAsync("api/download/sign", new { path })).StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await f.Native.GetAsync("api/sessions?" + url.Split('?')[1])).StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await f.Native.PostAsJsonAsync(url, new { })).StatusCode);
-        Assert.Equal(HttpStatusCode.BadRequest, (await f.Admin.PostAsJsonAsync("api/download/sign", new { path = "relative" })).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await f.Admin.PostAsJsonAsync("api/download/sign", new { path = path + "absent" })).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.Unauthorized,
+            (await f.Native.PostAsJsonAsync("api/download/sign", new { path })).StatusCode
+        );
+        Assert.Equal(
+            HttpStatusCode.Unauthorized,
+            (await f.Native.GetAsync("api/sessions?" + url.Split('?')[1])).StatusCode
+        );
+        Assert.Equal(
+            HttpStatusCode.Unauthorized,
+            (await f.Native.PostAsJsonAsync(url, new { })).StatusCode
+        );
+        Assert.Equal(
+            HttpStatusCode.BadRequest,
+            (
+                await f.Admin.PostAsJsonAsync("api/download/sign", new { path = "relative" })
+            ).StatusCode
+        );
+        Assert.Equal(
+            HttpStatusCode.NotFound,
+            (
+                await f.Admin.PostAsJsonAsync("api/download/sign", new { path = path + "absent" })
+            ).StatusCode
+        );
         foreach (var extension in new[] { ".svg", ".html", ".unknown" })
         {
-            var active = Path.Combine(f.Work, "unsafe" + extension); await File.WriteAllTextAsync(active, "<script>active</script>");
+            var active = Path.Combine(f.Work, "unsafe" + extension);
+            await File.WriteAllTextAsync(active, "<script>active</script>");
             var grant = await f.Sign("api/download/sign", new { path = active, preview = "1" });
             var file = await f.Native.GetAsync(grant["url"]!.GetValue<string>());
             Assert.Equal("application/octet-stream", file.Content.Headers.ContentType!.MediaType);
@@ -129,13 +216,23 @@ public sealed class WebUiDownloadTests
     public async Task Global_blob_signing_is_protected_and_preserves_safe_display_and_explicit_attachment()
     {
         await using var f = await Fixture.Create();
-        var blob = await f.Manager.Images.PutAsync(ImageCodecTests.Raster(SkiaSharp.SKEncodedImageFormat.Png), "image/png", "archived");
+        var blob = await f.Manager.Images.PutAsync(
+            ImageCodecTests.Raster(SkiaSharp.SKEncodedImageFormat.Png),
+            "image/png",
+            "archived"
+        );
         var id = blob["blobId"]!.GetValue<string>();
         var resource = "api/blobs/" + id;
         Assert.Equal(HttpStatusCode.Unauthorized, (await f.Native.GetAsync(resource)).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await f.Admin.GetAsync(resource)).StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await f.Native.PostAsJsonAsync(resource + "/download", new { })).StatusCode);
-        var issued = await f.Sign(resource + "/download", new { filename = "original.png", preview = "0" });
+        Assert.Equal(
+            HttpStatusCode.Unauthorized,
+            (await f.Native.PostAsJsonAsync(resource + "/download", new { })).StatusCode
+        );
+        var issued = await f.Sign(
+            resource + "/download",
+            new { filename = "original.png", preview = "0" }
+        );
         var native = "api/blobs/" + issued["url"]!.GetValue<string>();
         var file = await f.Native.GetAsync(native);
         Assert.Equal(HttpStatusCode.OK, file.StatusCode);
@@ -145,10 +242,32 @@ public sealed class WebUiDownloadTests
         var head = await f.Native.SendAsync(new(HttpMethod.Head, native));
         Assert.Equal(file.Content.Headers.ContentLength, head.Content.Headers.ContentLength);
         Assert.Empty(await head.Content.ReadAsByteArrayAsync());
-        Assert.Equal(HttpStatusCode.Unauthorized, (await f.Native.GetAsync(native.Replace("preview=0", "preview=1"))).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await f.Admin.GetAsync(native + "&signature=bad")).StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await f.Native.GetAsync("download" + native[native.IndexOf('?')..] + "&path=" + Uri.EscapeDataString(f.Work))).StatusCode);
-        var expired = new WebUiDownloadSignatures(Fixture.Token, () => DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 901).Issue("blob", id, new JsonObject());
-        Assert.Equal(HttpStatusCode.Unauthorized, (await f.Native.GetAsync(resource + expired.Query)).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.Unauthorized,
+            (await f.Native.GetAsync(native.Replace("preview=0", "preview=1"))).StatusCode
+        );
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (await f.Admin.GetAsync(native + "&signature=bad")).StatusCode
+        );
+        Assert.Equal(
+            HttpStatusCode.Unauthorized,
+            (
+                await f.Native.GetAsync(
+                    "download"
+                        + native[native.IndexOf('?')..]
+                        + "&path="
+                        + Uri.EscapeDataString(f.Work)
+                )
+            ).StatusCode
+        );
+        var expired = new WebUiDownloadSignatures(
+            Fixture.Token,
+            () => DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 901
+        ).Issue("blob", id, new JsonObject());
+        Assert.Equal(
+            HttpStatusCode.Unauthorized,
+            (await f.Native.GetAsync(resource + expired.Query)).StatusCode
+        );
     }
 }

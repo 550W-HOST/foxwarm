@@ -25,10 +25,21 @@ internal sealed class WebUiDownloadSignatures(string token, Func<long>? now = nu
     internal static string? Text(IQueryCollection input, string key) =>
         input.TryGetValue(key, out var values) && values.Count == 1 ? values[0] : null;
 
-    private byte[] Mac(string kind, string resource, string? filename, string? preview, string expires) =>
-        HMACSHA256.HashData(key, Encoding.UTF8.GetBytes(EcmaJson.Stringify(new JsonArray(
-            "download-v1", kind, resource, null, filename, preview, expires
-        ))));
+    private byte[] Mac(
+        string kind,
+        string resource,
+        string? filename,
+        string? preview,
+        string expires
+    ) =>
+        HMACSHA256.HashData(
+            key,
+            Encoding.UTF8.GetBytes(
+                EcmaJson.Stringify(
+                    new JsonArray("download-v1", kind, resource, null, filename, preview, expires)
+                )
+            )
+        );
 
     internal (string Query, long ExpiresAt) Issue(string kind, string resource, JsonObject input)
     {
@@ -37,11 +48,19 @@ internal sealed class WebUiDownloadSignatures(string token, Func<long>? now = nu
         var expiresAt = Now + 15 * 60;
         var expires = expiresAt.ToString(CultureInfo.InvariantCulture);
         var values = new List<KeyValuePair<string, string?>>();
-        if (filename is not null) values.Add(new("filename", filename));
-        if (preview is not null) values.Add(new("preview", preview));
+        if (filename is not null)
+            values.Add(new("filename", filename));
+        if (preview is not null)
+            values.Add(new("preview", preview));
         values.Add(new("expires", expires));
-        values.Add(new("signature", Convert.ToHexStringLower(Mac(kind, resource, filename, preview, expires))));
-        if (kind == "path") values.Add(new("path", resource));
+        values.Add(
+            new(
+                "signature",
+                Convert.ToHexStringLower(Mac(kind, resource, filename, preview, expires))
+            )
+        );
+        if (kind == "path")
+            values.Add(new("path", resource));
         return (QueryString.Create(values).Value!, expiresAt);
     }
 
@@ -49,17 +68,30 @@ internal sealed class WebUiDownloadSignatures(string token, Func<long>? now = nu
     {
         var expires = Text(query, "expires");
         var signature = Text(query, "signature");
-        if (expires is null || !Regex.IsMatch(expires, "^[1-9][0-9]{0,12}$", RegexOptions.CultureInvariant)
-            || !long.TryParse(expires, NumberStyles.None, CultureInfo.InvariantCulture, out var seconds) || seconds <= Now
-            || signature is null || !Regex.IsMatch(signature, "^[a-f0-9]{64}$", RegexOptions.CultureInvariant)) return false;
+        if (
+            expires is null
+            || !Regex.IsMatch(expires, "^[1-9][0-9]{0,12}$", RegexOptions.CultureInvariant)
+            || !long.TryParse(
+                expires,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var seconds
+            )
+            || seconds <= Now
+            || signature is null
+            || !Regex.IsMatch(signature, "^[a-f0-9]{64}$", RegexOptions.CultureInvariant)
+        )
+            return false;
         return CryptographicOperations.FixedTimeEquals(
             Mac(kind, resource, Text(query, "filename"), Text(query, "preview"), expires),
-            Convert.FromHexString(signature));
+            Convert.FromHexString(signature)
+        );
     }
 
     internal bool Authorizes(HttpContext context)
     {
-        if (context.Request.Method is not ("GET" or "HEAD")) return false;
+        if (context.Request.Method is not ("GET" or "HEAD"))
+            return false;
         var kind = context.GetEndpoint()?.Metadata.GetMetadata<WebUiDownloadResource>()?.Kind;
         var resource = kind switch
         {
@@ -72,18 +104,20 @@ internal sealed class WebUiDownloadSignatures(string token, Func<long>? now = nu
 
     internal static string FileName(string? requested, string fallback)
     {
-        if (requested is null) return fallback;
+        if (requested is null)
+            return fallback;
         var safe = Regex.Replace(requested, @"[\\/\x00-\x1f]", "_");
         safe = safe[..Math.Min(255, safe.Length)];
         return safe.Length == 0 ? fallback : safe;
     }
 
-    internal static string? RasterMime(string path) => Path.GetExtension(path).ToLowerInvariant() switch
-    {
-        ".png" => "image/png",
-        ".jpg" or ".jpeg" => "image/jpeg",
-        ".gif" => "image/gif",
-        ".webp" => "image/webp",
-        _ => null,
-    };
+    internal static string? RasterMime(string path) =>
+        Path.GetExtension(path).ToLowerInvariant() switch
+        {
+            ".png" => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".gif" => "image/gif",
+            ".webp" => "image/webp",
+            _ => null,
+        };
 }
