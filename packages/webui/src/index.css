@@ -2502,6 +2502,10 @@ html .foxwarm-conversation-process .foxwarm-reasoning-card .foxwarm-reasoning-pr
   background: transparent;
   border: 0;
 }
+/* Workbench slots already exclude these insets; independent Chat leaves do not. */
+[data-workbench-content-tab] .mobile-chat-floating-header {
+  padding: 0;
+}
 [data-mobile-chat-ui] .foxwarm-chat-messages { padding-top: calc(var(--chat-mobile-header-height, 60px) + 12px); scroll-padding-top: calc(var(--chat-mobile-header-height, 60px) + 1rem); }
 
 /* Attachment previews live above the editor; canonical inline atoms are numbered references. */

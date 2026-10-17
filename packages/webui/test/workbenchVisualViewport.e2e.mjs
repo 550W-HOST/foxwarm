@@ -22,10 +22,11 @@ before(async () => {
 })
 after(async () => { await browser?.close(); await new Promise(resolve => server?.close(resolve)) })
 
-async function openMobileApp({ simulateViewport = true } = {}) {
+async function openMobileApp({ simulateViewport = true, width = 390, height = 844, themeId = 'foxwarm.default', colorMode = 'light', search = '' } = {}) {
   const page = await browser.newPage()
-  await page.setViewport({ width: 390, height: 844 })
-  await page.evaluateOnNewDocument(simulateViewport => {
+  await page.setViewport({ width, height })
+  await page.evaluateOnNewDocument(({ simulateViewport, width, height, themeId, colorMode }) => {
+    localStorage.setItem('foxwarm_theme_selection_v3', JSON.stringify({ version: 3, themeId, lightThemeId: themeId, darkThemeId: themeId, colorMode }))
     const tab = { id: 'chat:e2e-a', type: 'chat', sessionId: 'e2e-a', title: 'Viewport fixture' }
     localStorage.setItem('foxwarm_workbench_state_v4', JSON.stringify({ state: { version: 4, tabsById: { [tab.id]: tab }, root: { id: 'pane-main', kind: 'pane', tabIds: [tab.id], activeTabId: tab.id }, focusedPaneId: 'pane-main' }, version: 1 }))
     const session = { id: 'e2e-a', aliases: [], archived: false, parentSessionId: null, childTotal: 0, messageCount: 20, lastMessageTime: 1, busy: false, modelKey: 'fixture/model' }
@@ -55,7 +56,7 @@ async function openMobileApp({ simulateViewport = true } = {}) {
       close() { this.readyState = 3; this.onclose?.({}) }
     }
     if (!simulateViewport) return
-    const viewport = Object.assign(new EventTarget(), { height: 844, width: 390, offsetTop: 0, offsetLeft: 0, scale: 1 })
+    const viewport = Object.assign(new EventTarget(), { height, width, offsetTop: 0, offsetLeft: 0, scale: 1 })
     Object.defineProperty(window, 'visualViewport', { value: viewport })
     // This models a shifted fixed-position origin, NOT a real iOS keyboard.
     // The original mobile shell follows offsetTop; a body portal starts at -offsetTop.
@@ -65,8 +66,8 @@ async function openMobileApp({ simulateViewport = true } = {}) {
       viewport.dispatchEvent(new Event('resize'))
       viewport.dispatchEvent(new Event('scroll'))
     }
-  }, simulateViewport)
-  await page.goto(`${url}#tab/chat:e2e-a`)
+  }, { simulateViewport, width, height, themeId, colorMode })
+  await page.goto(`${url}${search}#tab/chat:e2e-a`)
   await waitForWebUiReady(page)
   await page.waitForSelector('[role="textbox"]')
   await page.waitForFunction(() => document.querySelectorAll('[data-chat-message-anchor-key]').length === 20)
@@ -79,7 +80,16 @@ async function measure(page) {
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))))
   return page.evaluate(() => {
     const rect = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height, bottom: r.bottom } }
-    return { pane: rect('[data-pane-id]'), header: rect('[data-mobile-chat-header]'), slot: rect('[data-workbench-content-slot]'), host: rect('[data-workbench-content-tab]'), layer: rect('[data-workbench-content-layer]'), editor: rect('[role="textbox"]'), sameChat: window.__originalChat === document.querySelector('.foxwarm-chat-root'), sameEditor: window.__originalEditor === document.querySelector('[role="textbox"]'), focused: document.activeElement === window.__originalEditor, reads: window.__viewportHistoryReads }
+    return {
+      pane: rect('[data-pane-id]'), header: rect('[data-mobile-chat-header]'),
+      back: rect('.mobile-header-back'), actions: rect('.mobile-header-capsule'),
+      slot: rect('[data-workbench-content-slot]'), host: rect('[data-workbench-content-tab]'),
+      layer: rect('[data-workbench-content-layer]'), editor: rect('[role="textbox"]'),
+      form: rect('.foxwarm-chat-composer-form'),
+      sameChat: window.__originalChat === document.querySelector('.foxwarm-chat-root'),
+      sameEditor: window.__originalEditor === document.querySelector('[role="textbox"]'),
+      focused: document.activeElement === window.__originalEditor, reads: window.__viewportHistoryReads,
+    }
   })
 }
 
@@ -167,6 +177,46 @@ test('mobile App keeps its stable focused editor aligned during simulated keyboa
     assertVisibleViewport(restored, { height: 844 })
     assert.ok(Math.abs(restored.editor.bottom - initial.editor.bottom) < 1, 'closing the keyboard must restore the composer without a leftover gap')
     await captureViewport(page, 'restored', restored)
+  } finally { await page.close() }
+})
+
+test('mobile workbench consumes PWA-sized safe areas once around the actual header controls', async () => {
+  const page = await openMobileApp({ width: 440, height: 956, themeId: 'foxwarm.550a', colorMode: 'dark' })
+  try {
+    await page.evaluate(() => {
+      for (const [edge, value] of Object.entries({ top: 62, bottom: 34, left: 7, right: 9 })) {
+        document.documentElement.style.setProperty(`--foxwarm-safe-area-${edge}`, `${value}px`)
+      }
+    })
+    const state = await measure(page)
+    await captureViewport(page, 'pwa-safe-area', state)
+    assertAligned(state)
+    assertVisibleViewport(state, { height: 956, top: 62, left: 7, width: 424 })
+    // Check real controls, not the header wrapper's already-inset rectangle.
+    assert.equal(state.back.top, 62 + 1 + 8)
+    assert.equal(state.back.left, 7 + 1 + 12)
+    assert.equal(state.actions.left + state.actions.width, 440 - 9 - 1 - 12)
+    assert.equal(state.form.bottom, 956 - 1 - 16)
+    await page.evaluate(() => window.__setViewport({ height: 500, offsetTop: 220 }))
+    const keyboard = await measure(page)
+    assertAligned(keyboard)
+    assertVisibleViewport(keyboard, { height: 500, top: 62, left: 7, width: 424 })
+    assert.equal(keyboard.back.top, state.back.top)
+    await page.evaluate(() => window.__setViewport({ height: 956, offsetTop: 0 }))
+    const restored = await measure(page)
+    assertAligned(restored)
+    assert.equal(restored.back.top, state.back.top)
+    assert.equal(restored.form.bottom, state.form.bottom)
+  } finally { await page.close() }
+})
+
+test('independent mobile Chat leaves retain their own header safe-area spacing', async () => {
+  const page = await openMobileApp({ search: '?foxwarmPopup=chat&foxwarmPopupVersion=1&sessionId=e2e-a' })
+  try {
+    assert.equal(await page.$('[data-workbench-content-tab]'), null)
+    await page.evaluate(() => document.documentElement.style.setProperty('--foxwarm-safe-area-top', '62px'))
+    const top = await page.$eval('.mobile-header-capsule', element => element.getBoundingClientRect().top)
+    assert.equal(top, 62 + 8)
   } finally { await page.close() }
 })
 
