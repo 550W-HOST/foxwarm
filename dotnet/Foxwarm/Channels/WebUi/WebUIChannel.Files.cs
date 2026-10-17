@@ -11,7 +11,7 @@ internal sealed partial class WebUIChannel
         app.Lifetime.ApplicationStarted.Register(() =>
             sessions.RegisterWebUiFileDelivery(FileReady)
         );
-        app.Lifetime.ApplicationStopping.Register(() => sessions.RegisterWebUiFileDelivery(null));
+        app.Lifetime.ApplicationStopped.Register(() => sessions.RegisterWebUiFileDelivery(null));
         app.MapPost(
             "/api/download/sign",
             async (HttpRequest request) =>

@@ -89,6 +89,22 @@ public sealed class WebUiDownloadTests
     }
 
     [Fact]
+    public async Task File_delivery_adapter_survives_stopping_and_is_released_when_stopped()
+    {
+        await using var f = await Fixture.Create();
+        var adapter = typeof(SessionManager).GetField(
+            "webUiFileDelivery",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
+        )!;
+        Assert.NotNull(adapter.GetValue(f.Manager));
+        f.Server.App.Lifetime.StopApplication();
+        Assert.NotNull(adapter.GetValue(f.Manager));
+        await f.Manager.ShutdownAsync();
+        await f.Server.App.StopAsync();
+        Assert.Null(adapter.GetValue(f.Manager));
+    }
+
+    [Fact]
     public void Mac_matches_Source_format_and_enforces_expiry_resource_options_and_rotation()
     {
         long clock = 1700000000;
