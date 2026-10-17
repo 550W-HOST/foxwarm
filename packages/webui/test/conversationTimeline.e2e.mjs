@@ -57,11 +57,13 @@ before(async () => {
       const prefs = useChatPreferences()
       const [messages,setMessages] = React.useState(original)
       const [slice,setSlice] = React.useState([0,undefined])
+      const [currentHistory,setCurrentHistory] = React.useState(undefined)
       const [draft,setDraft] = React.useState(null)
       const [runtime,setRuntime] = React.useState({state:'running-tool',tool:{name:'exec',startedAt:1700000000000},since:1700000000000,busy:true,queueLength:2})
       window.fixture.prefs=prefs
       window.fixture.setMessages=setMessages
       window.fixture.setSlice=setSlice
+      window.fixture.setCurrentHistory=setCurrentHistory
       window.fixture.setDraft=setDraft
       window.fixture.setRuntime=setRuntime
       window.fixture.runtime=runtime
@@ -69,7 +71,7 @@ before(async () => {
       window.fixture.matches = term => findSessionSearchMatches(projectSessionSearchFields(messages,prefs.timelineView),term)
       return <div className="foxwarm-chat-root">
         <SessionUiSettingsMenu {...prefs} onSendKeyModeChange={prefs.setSendKeyMode} onTimelineViewChange={prefs.setTimelineView} onShowUsageBadgeChange={prefs.setShowUsageBadge} onShowUserMessageMetadataChange={prefs.setShowUserMessageMetadata} onOpenDebugInfo={()=>{}} />
-        <div id="timeline"><ChatTimeline sessionId="fixture/main" messages={[...messages.slice(...slice),...(draft?[draft]:[])]} historyMessages={messages} runtimeState={runtime} isRunningTool={runtime.state==='running-tool'} isMobile={false} timelineView={prefs.timelineView} showUsageBadge={prefs.showUsageBadge} showUserMessageMetadata={prefs.showUserMessageMetadata} /></div>
+        <div id="timeline"><ChatTimeline sessionId="fixture/main" messages={[...messages.slice(...slice),...(draft?[draft]:[])]} historyMessages={messages} currentHistoryMessages={currentHistory} runtimeState={runtime} isRunningTool={runtime.state==='running-tool'} isMobile={false} timelineView={prefs.timelineView} showUsageBadge={prefs.showUsageBadge} showUserMessageMetadata={prefs.showUserMessageMetadata} /></div>
         <div id="status"><ProcessingStatus timelineView={prefs.timelineView} runtimeState={runtime} sessionBusy={runtime.busy} sessionQueueLength={2} turnIncomplete={runtime.state==='idle'} loading={false} isMobile={false} onContinue={()=>window.fixture.controls.push('continue')} onRunQueued={()=>window.fixture.controls.push('queued')} /></div>
         <div id="queue"><ChatTimeline sessionId="fixture/main" messages={queued} isMobile={false} timelineView={prefs.timelineView} showUsageBadge={false} showTimeDividers={false} renderMessageFooter={alignment=><QueuedMessageStatus count={2} alignment={alignment} isMobile={false} onRunQueued={()=>window.fixture.controls.push('queued')} />} /></div>
       </div>
@@ -708,4 +710,24 @@ test('Every progress update separates adjacent technical spans, including early 
     await page.setViewport({width:600,height:900})
     await (await page.$('#timeline')).screenshot({path:process.env.FOXWARM_CONVERSATION_PREVIEW_PATH})
   }
+})
+
+
+test('active history owns retry status independently of a loaded Archive source', async () => {
+  await mode('conversation')
+  await page.evaluate(() => {
+    const retry = { role: 'model', parts: [{ text: '⚠️ LLM Error: ARCHIVE_STATUS_RETRY' }], __meta: { seq: 700, noticeType: 'llm-retry' } }
+    window.fixture.archiveStatusRetry = retry
+    window.fixture.setMessages([retry])
+    window.fixture.setSlice([0, undefined])
+    window.fixture.setCurrentHistory([{ role: 'user', parts: [{ text: 'Later active input' }], __meta: { seq: 701 } }])
+  })
+  await page.waitForFunction(() => document.querySelector('#timeline [data-timeline-activity]'))
+  assert.equal(await page.$('#timeline [data-system-message-kind="llm error"]'), null)
+  await page.evaluate(() => window.fixture.setCurrentHistory([structuredClone(window.fixture.archiveStatusRetry)]))
+  await page.waitForSelector('#timeline [data-system-message-kind="llm error"]')
+  assert.match(await page.$eval('#timeline [data-system-message-kind="llm error"]', node => node.textContent), /ARCHIVE_STATUS_RETRY/)
+  await page.evaluate(() => window.fixture.setCurrentHistory([]))
+  await page.waitForFunction(() => !document.querySelector('#timeline [data-system-message-kind="llm error"]'))
+  await page.evaluate(() => window.fixture.setCurrentHistory(undefined))
 })

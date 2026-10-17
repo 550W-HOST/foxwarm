@@ -76,6 +76,7 @@ interface ChatTimelineProps {
   reasoningPresentation?: ReasoningPresentation
   isRunningTool?: boolean
   /** Supplied by Chat from full committed history, never inferred from a viewport or nested slice. */
+  currentHistoryMessages?: readonly Message[]
   historyMessages?: readonly Message[]
   activityDetails?: boolean
   runtimeState?: import('../sessionRuntimeState').SessionRuntimeState
@@ -1259,7 +1260,7 @@ const TimelineTimeSeparator = memo(function TimelineTimeSeparator({ marker }: { 
   )
 })
 
-const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, reasoningPresentation, isRunningTool = false, isMobile, timelineView, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget, historyMessages, activityDetails, runtimeState, busyStartedAt, renderMessageFooter }: ChatTimelineProps) {
+const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, reasoningPresentation, isRunningTool = false, isMobile, timelineView, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget, historyMessages, currentHistoryMessages, activityDetails, runtimeState, busyStartedAt, renderMessageFooter }: ChatTimelineProps) {
   const hideMetrics = useMobileChatViewport()
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
   const [expandedTools, setExpandedTools] = useState<ExpandedTools>(new Map())
@@ -1286,7 +1287,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
   ), [timelineView, isMobile, onOpenCodeCommit, onOpenCodeFile, sessionId, showUsageBadge, showUserMessageMetadata])
 
   const rows = useMemo(() => {
-    const input = { messages, reasoningPresentation, isRunningTool, isMobile, timelineView, showUsageBadge: showUsageBadge && !hideMetrics, showTimeDividers, nestedDepth, activityDetails, historyMessages, timing: { runtimeState, busyStartedAt, now: historyMessages && nestedDepth === 0 ? Date.now() : undefined }, expandedGroupKeys: expandedToolGroups }
+    const input = { messages, reasoningPresentation, isRunningTool, isMobile, timelineView, showUsageBadge: showUsageBadge && !hideMetrics, showTimeDividers, nestedDepth, activityDetails, historyMessages, currentHistoryMessages, timing: { runtimeState, busyStartedAt, now: historyMessages && nestedDepth === 0 ? Date.now() : undefined }, expandedGroupKeys: expandedToolGroups }
     let result = buildTimelineRows(input, rowsCacheRef.current)
     // A search reveal is transient: include only its owning group without changing manual expansion state.
     if (searchTarget && timelineView === 'grouped' && nestedDepth === 0) {
@@ -1301,7 +1302,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
     }
     rowsCacheRef.current = result.cache
     return result.rows
-  }, [expandedToolGroups, timelineView, isMobile, isRunningTool, messages, reasoningPresentation, nestedDepth, activityDetails, historyMessages, clockTick, runtimeState, busyStartedAt, searchTarget, showUsageBadge, showTimeDividers, hideMetrics])
+  }, [expandedToolGroups, timelineView, isMobile, isRunningTool, messages, reasoningPresentation, nestedDepth, activityDetails, historyMessages, currentHistoryMessages, clockTick, runtimeState, busyStartedAt, searchTarget, showUsageBadge, showTimeDividers, hideMetrics])
 
 
   const dynamicTiming = rows.some(row => row.activity?.dynamic)

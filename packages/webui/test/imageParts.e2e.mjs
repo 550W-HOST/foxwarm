@@ -34,7 +34,7 @@ async function buildFixtureBundle() {
         React.createElement(ImageParts, { imageParts: [{ inlineDataRef: ref }], keyPrefix: id }))
     )
     render('safe', { blobId: '${pngId}', imageId: 'safe', mimeType: 'image/png', apiPath: '/blobs/${pngId}' })
-    render('scoped', { blobId: '${pngId}', imageId: 'scoped', mimeType: 'image/png', apiPath: '/blobs/${pngId}' }, 'reader/main')
+    render('scoped', { blobId: '${pngId}', imageId: 'scoped', mimeType: 'image/png', apiPath: '/blobs/${pngId}?archiveSeq=2' }, 'reader/main')
     render('unsafe', { blobId: '${svgId}', imageId: 'unsafe', mimeType: 'image/svg+xml', apiPath: '/blobs/${svgId}' })
     render('missing', { blobId: '${missingId}', imageId: 'missing', mimeType: 'image/png', apiPath: '/blobs/${missingId}' })
     window.renderLargeImage = () => {
@@ -70,6 +70,7 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
   const backend=new HttpServer(0,'fixture-token')
   backend.setWebUiIdentityVerifier(token=>token==='scoped-image-token'?{role:'webui',identityId:'reader',sessionIds:['reader/main']}:null)
   const signRequests=[]
+  const archiveAuthorizationInputs=[]
   backend.app.use((request,_response,next)=>{
     if(request.path.includes('/blobs/'))requests.push({url:request.originalUrl,cookie:request.headers.cookie||''})
     if(request.path.endsWith('/download'))signRequests.push({url:request.originalUrl,cookie:request.headers.cookie||''})
@@ -78,7 +79,9 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
   const signatures=registerWebUiFileDownloads(backend,'fixture-token')
   registerWebUiBlobDownloads(backend,signatures,async(req,res,sessionId,blobId)=>{
     const auth=await backend.getAuthContext(req)
-    if(auth?.role==='admin'||(auth?.role==='webui'&&sessionId==='reader/main'&&blobId===pngId))return true
+    const archiveSeq=req.query.archiveSeq??req.body?.archiveSeq
+    archiveAuthorizationInputs.push({method:req.method,archiveSeq})
+    if(auth?.role==='admin'||(auth?.role==='webui'&&sessionId==='reader/main'&&blobId===pngId&&archiveSeq==='2'))return true
     res.status(auth?403:401).json({error:'Forbidden'});return false
   })
   for(const [id,bytes]of[[pngId,pngBytes],[svgId,Buffer.from('<svg/>')]]){
@@ -156,7 +159,11 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
         assert.ok(signRequests.at(-1).cookie.includes('foxwarm_token='+token))
         const downloaded=requests.findLast(request=>request.url.includes('signature='))
         assert.ok(downloaded);assert.equal(downloaded.cookie,'')
-        if(id==='scoped')assert.ok(downloaded.url.startsWith('/nested/api/sessions/reader%2Fmain/blobs/'))
+        if(id==='scoped'){
+          assert.ok(downloaded.url.startsWith('/nested/api/sessions/reader%2Fmain/blobs/'))
+          assert.ok(requests.some(request=>request.url.includes('/sessions/reader%2Fmain/blobs/')&&request.url.includes('archiveSeq=2')))
+          assert.ok(archiveAuthorizationInputs.some(input=>input.method==='POST'&&input.archiveSeq==='2'),'Archive proof reaches signature issuance')
+        }
         await page.click('[aria-label="Close image preview"]')
       }
     }finally{

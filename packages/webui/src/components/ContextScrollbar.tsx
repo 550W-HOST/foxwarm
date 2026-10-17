@@ -17,6 +17,7 @@ import type { Message } from './chatShared'
 
 type ContextScrollbarProps = {
   messages: Message[]
+  contextMessages?: Message[]
   persistentMemorySnapshot?: Message | null
   contextLimit: number | null | undefined
   historyComplete?: boolean
@@ -64,7 +65,7 @@ const getBoundaryToken = (segments: ContextScrollbarSegment[], timeline: HTMLEle
  * Desktop context overview.  It deliberately reads the native scroll geometry
  * and asks Chat to perform scrolling; it never becomes a scroll container.
  */
-const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMemorySnapshot, contextLimit, historyComplete = true, containerId, containerRef, timelineRef, onNavigate }: ContextScrollbarProps) {
+const ContextScrollbar = memo(function ContextScrollbar({ messages, contextMessages = messages, persistentMemorySnapshot, contextLimit, historyComplete = true, containerId, containerRef, timelineRef, onNavigate }: ContextScrollbarProps) {
   const rawSegments = useMemo(() => buildContextScrollbarSegments(messages, persistentMemorySnapshot), [messages, persistentMemorySnapshot])
   const [verticalScale, setVerticalScale] = useState<ContextScrollbarVerticalScale>(() => {
     const value = window.localStorage.getItem(VERTICAL_SCALE_STORAGE_KEY)
@@ -75,7 +76,7 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
   const [scaleMenu, setScaleMenu] = useState<{ x: number; y: number } | null>(null)
   const segments = useMemo(() => buildContextScrollbarScaleSegments(rawSegments, verticalScale, measuredAnchorHeights), [measuredAnchorHeights, rawSegments, verticalScale])
   const legendStats = useMemo(() => getContextScrollbarLegendStats(rawSegments), [rawSegments])
-  const contextUsage = useMemo(() => getContextScrollbarContextUsage(messages, contextLimit), [contextLimit, messages])
+  const contextUsage = useMemo(() => getContextScrollbarContextUsage(contextMessages, contextLimit), [contextLimit, contextMessages])
   const effectiveContextUsage = verticalScale === 'rendered-height' ? null : contextUsage
   const totalEstimatedTokens = segments[segments.length - 1]?.endTokens || 0
   const [viewportRange, setViewportRange] = useState<ViewportRange>(null)

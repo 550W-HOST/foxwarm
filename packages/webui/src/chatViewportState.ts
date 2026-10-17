@@ -1,3 +1,4 @@
+import type { HistoryMode } from './continuousHistory'
 import type { Message } from './components/chatShared'
 
 export const CHAT_MESSAGE_ANCHOR_ATTRIBUTE = 'data-chat-message-anchor-key'
@@ -132,12 +133,12 @@ export function getChatViewportAnchorAdjustment(currentOffsetPx: number, savedOf
   return currentOffsetPx - savedOffsetPx
 }
 
-export function getStoredChatViewportState(sessionId: string): ChatViewportState | null {
-  return viewportStateBySession.get(sessionId) || null
+export function getStoredChatViewportState(sessionId: string, historyMode: HistoryMode = 'active'): ChatViewportState | null {
+  return viewportStateBySession.get(`${sessionId}\0${historyMode}`) || null
 }
 
-export function storeChatViewportState(sessionId: string, state: ChatViewportState): void {
-  viewportStateBySession.set(sessionId, state)
+export function storeChatViewportState(sessionId: string, state: ChatViewportState, historyMode: HistoryMode = 'active'): void {
+  viewportStateBySession.set(`${sessionId}\0${historyMode}`, state)
 }
 
 export function clearStoredChatViewportStatesForTests(): void {
