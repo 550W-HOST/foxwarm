@@ -40,13 +40,23 @@ async function openMobileApp({ simulateViewport = true, width = 390, height = 84
     const session = { id: 'e2e-a', aliases: [], archived: false, parentSessionId: null, childTotal: 0, messageCount: 20, lastMessageTime: 1, busy: false, modelKey: 'fixture/model' }
     const messages = Array.from({ length: 20 }, (_, index) => ({ role: 'user', parts: [{ text: `Viewport row ${index}. ` + 'Loaded content without streaming. '.repeat(15) }], __meta: { seq: index + 1 } }))
     window.__viewportHistoryReads = 0
+    window.__viewportArchiveReads = 0
     const json = body => Promise.resolve(new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } }))
     window.fetch = input => {
-      const pathname = new URL(typeof input === 'string' ? input : input.url, location.href).pathname
+      const requestUrl = new URL(typeof input === 'string' ? input : input.url, location.href)
+      const pathname = requestUrl.pathname
       if (pathname.endsWith('/auth/session')) return json({ role: 'admin' })
       if (pathname.endsWith('/setup/status')) return json({ oobe: false, models: { exists: true, hasPlaceholderSecrets: false }, channels: [] })
       if (pathname.endsWith('/models')) return json({ models: [{ key: 'fixture/model', label: 'Fixture model', contextLimit: 128000 }] })
       if (pathname.endsWith('/session-list/sidebar')) return json({ version: 1, revision: 'r1', sessions: [session], nextCursor: null, children: [], focus: [], pathContext: [], forcedChildren: {} })
+      if (pathname.endsWith('/history/continuous')) {
+        window.__viewportArchiveReads++
+        const before = Number(requestUrl.searchParams.get('beforeSeq')) || Infinity
+        const after = Number(requestUrl.searchParams.get('afterSeq')) || 0
+        const candidates = messages.filter(message => message.__meta.seq < before && message.__meta.seq > after)
+        const rows = after ? candidates.slice(0, 100) : candidates.slice(-100)
+        return json({ messages: rows, firstSeq: rows[0]?.__meta.seq, lastSeq: rows.at(-1)?.__meta.seq, hasMore: candidates.length > 100, latestSeq: 20 })
+      }
       if (pathname.endsWith('/history')) { window.__viewportHistoryReads++; return json({ messages, queuedMessages: [], session, latestSeq: 20, historyVersion: 1, historyComplete: true }) }
       return json({ settings: {}, tasks: [], total: 0, omitted: 0, agents: [], nodes: [], terminals: [], commands: [], results: [] })
     }
@@ -78,6 +88,7 @@ async function openMobileApp({ simulateViewport = true, width = 390, height = 84
   await page.goto(`${url}${recordedPwa ? 'recorded-pwa/' : ''}${search}#tab/chat:e2e-a`)
   await waitForWebUiReady(page)
   await page.waitForSelector('[role="textbox"]')
+  await page.waitForSelector('[data-continuous-history]')
   await page.waitForFunction(() => document.querySelectorAll('[data-chat-message-anchor-key]').length === 20)
   await page.evaluate(() => { window.__originalEditor = document.querySelector('[role="textbox"]'); window.__originalChat = document.querySelector('.foxwarm-chat-root') })
   if (home) {
@@ -101,7 +112,7 @@ async function measure(page) {
       form: rect('.foxwarm-chat-composer-form'),
       sameChat: window.__originalChat === document.querySelector('.foxwarm-chat-root'),
       sameEditor: window.__originalEditor === document.querySelector('[role="textbox"]'),
-      focused: document.activeElement === window.__originalEditor, reads: window.__viewportHistoryReads,
+      focused: document.activeElement === window.__originalEditor, reads: window.__viewportHistoryReads, archiveReads: window.__viewportArchiveReads,
     }
   })
 }
@@ -127,6 +138,7 @@ function assertAligned(state) {
   for (const key of ['left', 'top', 'width', 'height']) assert.ok(Math.abs(state.host[key] - state.slot[key]) < 1, `host ${key} must match slot: ${JSON.stringify(state)}`)
   assert.ok(state.sameChat && state.sameEditor && state.focused)
   assert.equal(state.reads, 1)
+  assert.equal(state.archiveReads, 1)
 }
 
 test('mobile App keeps its stable focused editor aligned during simulated keyboard resize and viewport pan', async () => {
