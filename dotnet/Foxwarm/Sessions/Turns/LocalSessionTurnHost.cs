@@ -20,7 +20,9 @@ public sealed partial class LocalSessionTurnHost
     private readonly Action? assertCanContinue;
     private readonly Func<bool>? closing;
     private bool Closing => closing?.Invoke() == true;
+
     private void AssertCanContinue() => assertCanContinue?.Invoke();
+
     private readonly Func<Task>? safePoint;
     private readonly Func<Task>? retrySafePoint;
     private readonly Func<
@@ -40,7 +42,8 @@ public sealed partial class LocalSessionTurnHost
         Func<Task>? safePoint = null,
         Func<Task>? retrySafePoint = null,
         Func<string?>? parentSessionResolver = null,
-        Func<ChatResult, Func<Func<Task>, Task>, CancellationToken, Task>? beforeContinuation = null,
+        Func<ChatResult, Func<Func<Task>, Task>, CancellationToken, Task>? beforeContinuation =
+            null,
         Action? assertCanContinue = null,
         Func<bool>? closing = null
     )

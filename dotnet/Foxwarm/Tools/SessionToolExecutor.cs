@@ -373,10 +373,14 @@ internal sealed partial class SessionToolExecutor(
                 throw;
             return UnsupportedTurnToolExecutor.ToolError("tool_io_error", error.Message);
         }
-        catch (OperationCanceledException error) when (cancellationToken.IsCancellationRequested || error is SessionTurnShutdownException)
+        catch (OperationCanceledException error)
+            when (cancellationToken.IsCancellationRequested || error is SessionTurnShutdownException
+            )
         {
-            var source = hosted.Registry.Runner.Closing && !hosted.Entry.WithState(state => state.Stopping)
-                ? "process shutdown" : hosted.Entry.ToolCancellationSource;
+            var source =
+                hosted.Registry.Runner.Closing && !hosted.Entry.WithState(state => state.Stopping)
+                    ? "process shutdown"
+                    : hosted.Entry.ToolCancellationSource;
             return UnsupportedTurnToolExecutor.ToolError(
                 "tool_call_cancelled",
                 dispatched

@@ -208,7 +208,8 @@ public sealed partial class LocalSessionTurnHost
                     ["error"] = new JsonObject
                     {
                         ["type"] = "tool_call_cancelled",
-                        ["message"] = $"Tool call was not started because {(Closing && !entry.WithState(state => state.Stopping) ? "process shutdown" : entry.ToolCancellationSource)} cancelled it; it was not executed.",
+                        ["message"] =
+                            $"Tool call was not started because {(Closing && !entry.WithState(state => state.Stopping) ? "process shutdown" : entry.ToolCancellationSource)} cancelled it; it was not executed.",
                     },
                 }
             );

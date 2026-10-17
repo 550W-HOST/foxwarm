@@ -87,7 +87,9 @@ internal sealed class MainHost : IAsyncDisposable
     internal async Task WaitForShutdownAsync()
     {
         var stopping = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var registration = App.Lifetime.ApplicationStopping.Register(() => stopping.TrySetResult());
+        using var registration = App.Lifetime.ApplicationStopping.Register(() =>
+            stopping.TrySetResult()
+        );
         await stopping.Task.ConfigureAwait(false);
     }
 

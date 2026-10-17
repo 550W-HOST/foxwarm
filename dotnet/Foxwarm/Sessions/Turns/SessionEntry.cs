@@ -53,6 +53,7 @@ public sealed class SessionEntry
     {
         internal readonly SessionEntry Entry = entry;
         internal volatile bool Active = true;
+
         public void Dispose()
         {
             Active = false;
@@ -241,9 +242,12 @@ public sealed class SessionEntry
 
     internal bool ShutdownCancellationRequested { get; private set; }
 
-    internal string ToolCancellationSource => WithState(state =>
-        ShutdownCancellationRequested && !state.Stopping ? "process shutdown" : "Stop or Run queued"
-    );
+    internal string ToolCancellationSource =>
+        WithState(state =>
+            ShutdownCancellationRequested && !state.Stopping
+                ? "process shutdown"
+                : "Stop or Run queued"
+        );
 
     internal void CancelForShutdown()
     {

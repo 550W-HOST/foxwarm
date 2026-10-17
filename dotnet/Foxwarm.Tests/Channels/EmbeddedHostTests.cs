@@ -15,14 +15,29 @@ public sealed class EmbeddedHostTests
         var work = Path.Combine(temp.Path, "work");
         Directory.CreateDirectory(work);
         var settings = await HttpServerSettings.CaptureDesktopAsync(data);
-        await using var host = await MainHost.CreateAsync([], data, work, new ModelConfiguration(data), settings, null);
+        await using var host = await MainHost.CreateAsync(
+            [],
+            data,
+            work,
+            new ModelConfiguration(data),
+            settings,
+            null
+        );
         await host.App.StartAsync();
         using var client = new HttpClient { BaseAddress = new Uri(settings.Address.BaseUrl) };
         client.DefaultRequestHeaders.Authorization = new("Bearer", settings.Token);
-        var created = await client.PostAsJsonAsync("api/sessions", new { agentId = "main", sessionId = "stream-owner" });
+        var created = await client.PostAsJsonAsync(
+            "api/sessions",
+            new { agentId = "main", sessionId = "stream-owner" }
+        );
         created.EnsureSuccessStatusCode();
-        var id = (await created.Content.ReadFromJsonAsync<JsonObject>())!["sessionId"]!.GetValue<string>();
-        using var stream = await client.GetAsync("api/sessions/" + Uri.EscapeDataString(id) + "/stream", HttpCompletionOption.ResponseHeadersRead);
+        var id = (await created.Content.ReadFromJsonAsync<JsonObject>())![
+            "sessionId"
+        ]!.GetValue<string>();
+        using var stream = await client.GetAsync(
+            "api/sessions/" + Uri.EscapeDataString(id) + "/stream",
+            HttpCompletionOption.ResponseHeadersRead
+        );
         stream.EnsureSuccessStatusCode();
         Assert.Equal("text/event-stream", stream.Content.Headers.ContentType!.MediaType);
         await host.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));

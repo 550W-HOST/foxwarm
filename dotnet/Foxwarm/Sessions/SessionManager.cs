@@ -621,7 +621,6 @@ internal sealed partial class SessionManager : IAsyncDisposable
         admissionStop.Cancel();
         waitTimeouts.Stop();
         waitLiveness.Stop();
-
     }
 
     public async ValueTask DisposeAsync()

@@ -225,7 +225,8 @@ public sealed class SessionTurnRunner
                     interrupted = true;
                     break;
                 }
-                catch (OperationCanceledException) when (closing && entry.ShutdownCancellationRequested)
+                catch (OperationCanceledException)
+                    when (closing && entry.ShutdownCancellationRequested)
                 {
                     interrupted = true;
                     break;

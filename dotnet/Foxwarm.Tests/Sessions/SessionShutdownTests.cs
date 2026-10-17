@@ -1,13 +1,15 @@
 using System.Text.Json.Nodes;
-using Foxwarm.Sessions;
 using Foxwarm.Models;
+using Foxwarm.Sessions;
 using Foxwarm.Tools;
 
 namespace Foxwarm.Tests;
 
 public sealed class SessionShutdownTests
 {
-    private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private static TaskCompletionSource Signal() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(5);
 
     [Fact]
@@ -15,14 +17,24 @@ public sealed class SessionShutdownTests
     {
         var store = new InMemorySessionAuthorityStore();
         var chat = new FakeChatService();
-        chat.EnqueuePlan(async token => { await Task.Delay(Timeout.Infinite, token); return "unreachable"; });
+        chat.EnqueuePlan(async token =>
+        {
+            await Task.Delay(Timeout.Infinite, token);
+            return "unreachable";
+        });
         var registry = new SessionRegistry(store, chat);
         registry.TriggerOverride = _ => Task.CompletedTask;
         var entry = registry.Add("s");
-        await registry.Ingress.EnqueueAsync("s", QueueItem.UserText("seed", clientMessageId: "seed"));
+        await registry.Ingress.EnqueueAsync(
+            "s",
+            QueueItem.UserText("seed", clientMessageId: "seed")
+        );
         var processing = registry.Runner.ProcessQueueAsync("s");
         await chat.FirstCallStarted.Task.WaitAsync(Deadline);
-        await registry.Ingress.EnqueueAsync("s", QueueItem.UserText("later", clientMessageId: "later"));
+        await registry.Ingress.EnqueueAsync(
+            "s",
+            QueueItem.UserText("later", clientMessageId: "later")
+        );
         await registry.Runner.ShutdownAsync(TimeSpan.Zero, Deadline);
         await processing;
         var snapshot = (await store.LoadAsync("s"))!;
@@ -33,7 +45,9 @@ public sealed class SessionShutdownTests
         Assert.Equal(0, entry.BackgroundProcessorFailureCount);
         Assert.True(entry.ShutdownCancellationRequested);
         await registry.Runner.ProcessQueueAsync("s");
-        await Assert.ThrowsAsync<SessionTurnShutdownException>(() => registry.Runner.ProcessQueueAsync("s", retry: true));
+        await Assert.ThrowsAsync<SessionTurnShutdownException>(() =>
+            registry.Runner.ProcessQueueAsync("s", retry: true)
+        );
         Assert.Single(chat.Calls);
         Assert.Equal(1, entry.ProcessorClaimCount);
     }
@@ -43,7 +57,11 @@ public sealed class SessionShutdownTests
     {
         var release = Signal();
         var chat = new FakeChatService();
-        chat.EnqueuePlan(async _ => { await release.Task; return "actual final"; });
+        chat.EnqueuePlan(async _ =>
+        {
+            await release.Task;
+            return "actual final";
+        });
         var store = new InMemorySessionAuthorityStore();
         var registry = new SessionRegistry(store, chat);
         registry.TriggerOverride = _ => Task.CompletedTask;
@@ -60,7 +78,10 @@ public sealed class SessionShutdownTests
         var snapshot = (await store.LoadAsync("s"))!;
         Assert.False(snapshot.Busy);
         Assert.Single(snapshot.Queue);
-        Assert.Equal("actual final", snapshot.History.Materialize()[^1]["parts"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(
+            "actual final",
+            snapshot.History.Materialize()[^1]["parts"]![0]!["text"]!.GetValue<string>()
+        );
         Assert.Equal(0, entry.BackgroundProcessorFailureCount);
         Assert.Single(chat.Calls);
     }
@@ -68,7 +89,9 @@ public sealed class SessionShutdownTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Launched_tools_settle_with_complete_pairs_and_unstarted_calls_do_not_execute(bool terminal)
+    public async Task Launched_tools_settle_with_complete_pairs_and_unstarted_calls_do_not_execute(
+        bool terminal
+    )
     {
         var tools = new HeldTools(terminal);
         var chat = new CallsChat(terminal ? 1 : 2);
@@ -97,12 +120,18 @@ public sealed class SessionShutdownTests
         Assert.Equal("model", rows[1]["role"]!.GetValue<string>());
         Assert.Equal("tool", rows[2]["role"]!.GetValue<string>());
         Assert.Equal(terminal ? 1 : 2, rows[2]["parts"]!.AsArray().Count);
-        Assert.Equal("committed effect", rows[2]["parts"]![0]!["functionResponse"]!["response"]!["output"]!.GetValue<string>());
+        Assert.Equal(
+            "committed effect",
+            rows[2]["parts"]![0]!["functionResponse"]!["response"]!["output"]!.GetValue<string>()
+        );
         if (!terminal)
         {
             var skipped = rows[2]["parts"]![1]!["functionResponse"]!;
             Assert.Equal("call-1", skipped["tool_use_id"]!.GetValue<string>());
-            Assert.Contains("not started because process shutdown", skipped["response"]!.ToJsonString());
+            Assert.Contains(
+                "not started because process shutdown",
+                skipped["response"]!.ToJsonString()
+            );
         }
         Assert.Equal(0, entry.BackgroundProcessorFailureCount);
         Assert.Equal(1, chat.Invocations);
@@ -111,11 +140,18 @@ public sealed class SessionShutdownTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Concurrent_explicit_Stop_is_terminal_but_RunQueued_keeps_later_work_for_restart(bool runQueued)
+    public async Task Concurrent_explicit_Stop_is_terminal_but_RunQueued_keeps_later_work_for_restart(
+        bool runQueued
+    )
     {
         var chat = new FakeChatService();
         var release = Signal();
-        chat.EnqueuePlan(async token => { await release.Task; token.ThrowIfCancellationRequested(); return "unreachable"; });
+        chat.EnqueuePlan(async token =>
+        {
+            await release.Task;
+            token.ThrowIfCancellationRequested();
+            return "unreachable";
+        });
         var store = new InMemorySessionAuthorityStore();
         var registry = new SessionRegistry(store, chat);
         registry.TriggerOverride = _ => Task.CompletedTask;
@@ -153,7 +189,13 @@ public sealed class SessionShutdownTests
         var entry = registry.Add("s");
         await registry.Ingress.EnqueueAsync("s", QueueItem.UserText("unselected"));
         var selecting = Signal();
-        registry.OnTurnStarting = _ => { store.ResetCommitSignal("s"); store.Hold("s"); selecting.TrySetResult(); return Task.CompletedTask; };
+        registry.OnTurnStarting = _ =>
+        {
+            store.ResetCommitSignal("s");
+            store.Hold("s");
+            selecting.TrySetResult();
+            return Task.CompletedTask;
+        };
         var processing = registry.Runner.ProcessQueueAsync("s");
         await selecting.Task.WaitAsync(Deadline);
         await store.WaitForCommitAsync("s").WaitAsync(Deadline);
@@ -172,14 +214,19 @@ public sealed class SessionShutdownTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Selected_canonical_append_settles_before_interrupted_owner_yields(bool explicitStop)
+    public async Task Selected_canonical_append_settles_before_interrupted_owner_yields(
+        bool explicitStop
+    )
     {
         var store = new HeldAppendStore();
         var chat = new FakeChatService();
         var registry = new SessionRegistry(store, chat);
         registry.TriggerOverride = _ => Task.CompletedTask;
         var entry = registry.Add("s");
-        await registry.Ingress.EnqueueAsync("s", QueueItem.UserText("selected", clientMessageId: "selected"));
+        await registry.Ingress.EnqueueAsync(
+            "s",
+            QueueItem.UserText("selected", clientMessageId: "selected")
+        );
         var processing = registry.Runner.ProcessQueueAsync("s");
         await store.Appending.Task.WaitAsync(Deadline);
         var stop = explicitStop ? registry.Control.StopAsync("s") : Task.CompletedTask;
@@ -203,7 +250,11 @@ public sealed class SessionShutdownTests
     {
         var chat = new FakeChatService();
         var release = Signal();
-        chat.EnqueuePlan(async _ => { await release.Task; return "late actual final"; });
+        chat.EnqueuePlan(async _ =>
+        {
+            await release.Task;
+            return "late actual final";
+        });
         var store = new InMemorySessionAuthorityStore();
         var registry = new SessionRegistry(store, chat);
         var entry = registry.Add("s");
@@ -227,24 +278,55 @@ public sealed class SessionShutdownTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Real_wait_or_finish_handoff_settles_its_pair_and_terminal_state_before_manager_teardown(bool handoff)
+    public async Task Real_wait_or_finish_handoff_settles_its_pair_and_terminal_state_before_manager_teardown(
+        bool handoff
+    )
     {
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
         var work = Path.Combine(temp.Path, "work");
         Directory.CreateDirectory(work);
-        var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
-        await using var manager = new SessionManager(data, work, options, HostModels.ForTest(options));
+        var options = new ResponsesClientOptions(
+            new Uri("http://127.0.0.1:1"),
+            "wire",
+            "a",
+            "",
+            "",
+            713
+        );
+        await using var manager = new SessionManager(
+            data,
+            work,
+            options,
+            HostModels.ForTest(options)
+        );
         await manager.LoadAsync();
         var owner = await manager.CreateNamedAsync("main", "sender", null, null);
         var target = await manager.CreateNamedAsync("main", "target", null, null);
         target.Registry.TriggerOverride = _ => Task.CompletedTask;
-        IEnumerable<JsonObject> definitions = handoff ? AgentToolDefinitions.Definitions() : [WaitToolDefinitions.Definition()];
-        var registry = SessionToolExecutor.CreateRegistry(new JsonArray(definitions.Select(value => (JsonNode)value.DeepClone()).ToArray()), manager.OutboundMcp, _ => work, manager.Nodes);
-        var actual = new SessionToolExecutor(manager.IdentityWorkspace(owner), owner, manager, registry);
+        IEnumerable<JsonObject> definitions = handoff
+            ? AgentToolDefinitions.Definitions()
+            : [WaitToolDefinitions.Definition()];
+        var registry = SessionToolExecutor.CreateRegistry(
+            new JsonArray(definitions.Select(value => (JsonNode)value.DeepClone()).ToArray()),
+            manager.OutboundMcp,
+            _ => work,
+            manager.Nodes
+        );
+        var actual = new SessionToolExecutor(
+            manager.IdentityWorkspace(owner),
+            owner,
+            manager,
+            registry
+        );
         var held = new SettledTools(actual);
         var args = handoff
-            ? new JsonObject { ["sessionId"] = target.Id, ["message"] = "actual committed handoff", ["afterSend"] = "finish" }
+            ? new JsonObject
+            {
+                ["sessionId"] = target.Id,
+                ["message"] = "actual committed handoff",
+                ["afterSend"] = "finish",
+            }
             : new JsonObject { ["waitForInput"] = true };
         var chat = new CallsChat(1, handoff ? "send_to_session" : "wait", args);
         var entry = owner.Entry;
@@ -257,7 +339,10 @@ public sealed class SessionShutdownTests
             await turns.Ingress.EnqueueAsync(owner.Id, QueueItem.UserText("seed"));
             await held.Settled.Task.WaitAsync(Deadline);
             if (handoff)
-                Assert.Contains("actual committed handoff", Assert.Single(target.Entry.Snapshot().Queue).Parts![0].ToJsonString());
+                Assert.Contains(
+                    "actual committed handoff",
+                    Assert.Single(target.Entry.Snapshot().Queue).Parts![0].ToJsonString()
+                );
             else
                 Assert.NotNull(SessionWait.Current(entry.Snapshot().Meta));
             var shutdown = manager.ShutdownAsync();
@@ -269,7 +354,10 @@ public sealed class SessionShutdownTests
             Assert.False(saved.Stopping);
             Assert.Equal(3, saved.History.Count);
             var rows = saved.History.Materialize();
-            Assert.Equal("call-0", rows[^1]["parts"]![0]!["functionResponse"]!["tool_use_id"]!.GetValue<string>());
+            Assert.Equal(
+                "call-0",
+                rows[^1]["parts"]![0]!["functionResponse"]!["tool_use_id"]!.GetValue<string>()
+            );
             Assert.Null(rows[^1]["parts"]![0]!["functionResponse"]!["response"]!["error"]);
             Assert.Equal(0, entry.BackgroundProcessorFailureCount);
             Assert.Equal(1, chat.Invocations);
@@ -289,13 +377,29 @@ public sealed class SessionShutdownTests
         var data = Path.Combine(temp.Path, "data");
         var work = Path.Combine(temp.Path, "work");
         Directory.CreateDirectory(work);
-        var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
-        await using var manager = new SessionManager(data, work, options, HostModels.ForTest(options));
+        var options = new ResponsesClientOptions(
+            new Uri("http://127.0.0.1:1"),
+            "wire",
+            "a",
+            "",
+            "",
+            713
+        );
+        await using var manager = new SessionManager(
+            data,
+            work,
+            options,
+            HostModels.ForTest(options)
+        );
         await manager.LoadAsync();
         var owner = await manager.CreateNamedAsync("main", "busy-target", null, null);
         var entry = owner.Entry;
         var chat = new FakeChatService();
-        chat.EnqueuePlan(async token => { await Task.Delay(Timeout.Infinite, token); return "unreachable"; });
+        chat.EnqueuePlan(async token =>
+        {
+            await Task.Delay(Timeout.Infinite, token);
+            return "unreachable";
+        });
         var turns = new SessionRegistry(owner.AuthorityStore, chat);
         turns.BindIdentity(owner.Id, entry);
         owner.Registry = turns;
@@ -311,12 +415,20 @@ public sealed class SessionShutdownTests
         Assert.Equal(0, entry.BackgroundProcessorFailureCount);
     }
 
-    private sealed class SettledTools(SessionToolExecutor actual) : ITurnToolExecutor, ITurnToolControl
+    private sealed class SettledTools(SessionToolExecutor actual)
+        : ITurnToolExecutor,
+            ITurnToolControl
     {
-        internal readonly TaskCompletionSource Settled = Signal(), Release = Signal();
+        internal readonly TaskCompletionSource Settled = Signal(),
+            Release = Signal();
+
         public void BeginTurn() => actual.BeginTurn();
+
         public bool ConsumeFinishAfterBatch() => actual.ConsumeFinishAfterBatch();
-        public Task<bool> CompleteBatchAsync(JsonObject message, bool stopping) => actual.CompleteBatchAsync(message, stopping);
+
+        public Task<bool> CompleteBatchAsync(JsonObject message, bool stopping) =>
+            actual.CompleteBatchAsync(message, stopping);
+
         public async Task<JsonNode?> ExecuteAsync(JsonObject call, CancellationToken token)
         {
             var result = await actual.ExecuteAsync(call, token);
@@ -326,29 +438,59 @@ public sealed class SessionShutdownTests
         }
     }
 
-    private sealed class CallsChat(int calls, string name = "write", JsonObject? args = null) : IChatService
+    private sealed class CallsChat(int calls, string name = "write", JsonObject? args = null)
+        : IChatService
     {
         internal int Invocations;
-        public Task<ChatResult> ChatAsync(string id, IReadOnlyList<JsonObject> history, CancellationToken token)
+
+        public Task<ChatResult> ChatAsync(
+            string id,
+            IReadOnlyList<JsonObject> history,
+            CancellationToken token
+        )
         {
             Invocations++;
-            return Task.FromResult(new ChatResult(new JsonObject
-            {
-                ["role"] = "model",
-                ["parts"] = new JsonArray(Enumerable.Range(0, calls).Select(index => (JsonNode)new JsonObject
-                {
-                    ["functionCall"] = new JsonObject { ["id"] = "call-" + index, ["name"] = name, ["args"] = args?.DeepClone() ?? new JsonObject() },
-                }).ToArray()),
-            }));
+            return Task.FromResult(
+                new ChatResult(
+                    new JsonObject
+                    {
+                        ["role"] = "model",
+                        ["parts"] = new JsonArray(
+                            Enumerable
+                                .Range(0, calls)
+                                .Select(index =>
+                                    (JsonNode)
+                                        new JsonObject
+                                        {
+                                            ["functionCall"] = new JsonObject
+                                            {
+                                                ["id"] = "call-" + index,
+                                                ["name"] = name,
+                                                ["args"] = args?.DeepClone() ?? new JsonObject(),
+                                            },
+                                        }
+                                )
+                                .ToArray()
+                        ),
+                    }
+                )
+            );
         }
     }
 
     private sealed class HeldTools(bool terminal) : ITurnToolExecutor, ITurnToolControl
     {
-        internal readonly TaskCompletionSource Started = Signal(), Cancelled = Signal(), Release = Signal();
-        internal int Effects, Completions, Invocations;
+        internal readonly TaskCompletionSource Started = Signal(),
+            Cancelled = Signal(),
+            Release = Signal();
+        internal int Effects,
+            Completions,
+            Invocations;
+
         public void BeginTurn() { }
+
         public bool ConsumeFinishAfterBatch() => terminal;
+
         public async Task<JsonNode?> ExecuteAsync(JsonObject call, CancellationToken token)
         {
             Invocations++;
@@ -365,10 +507,23 @@ public sealed class SessionShutdownTests
     private sealed class HeldAppendStore : ISessionAuthorityStore, ICanonicalAppendAuthorityStore
     {
         private readonly InMemorySessionAuthorityStore inner = new();
-        internal readonly TaskCompletionSource Appending = Signal(), Release = Signal();
-        public Task CommitAsync(SessionSnapshot value, SaveKind kind, CancellationToken token = default) => inner.CommitAsync(value, kind, token);
-        public Task<SessionSnapshot?> LoadAsync(string id, CancellationToken token = default) => inner.LoadAsync(id, token);
-        public async Task CommitCanonicalAppendAsync(SessionSnapshot value, IReadOnlyList<JsonObject> rows, CancellationToken token = default)
+        internal readonly TaskCompletionSource Appending = Signal(),
+            Release = Signal();
+
+        public Task CommitAsync(
+            SessionSnapshot value,
+            SaveKind kind,
+            CancellationToken token = default
+        ) => inner.CommitAsync(value, kind, token);
+
+        public Task<SessionSnapshot?> LoadAsync(string id, CancellationToken token = default) =>
+            inner.LoadAsync(id, token);
+
+        public async Task CommitCanonicalAppendAsync(
+            SessionSnapshot value,
+            IReadOnlyList<JsonObject> rows,
+            CancellationToken token = default
+        )
         {
             Appending.TrySetResult();
             await Release.Task;

@@ -9,7 +9,9 @@ public sealed partial class CompactLifecycleTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Shutdown_interrupts_required_planning_wait_without_finalizing_later_input_or_cancelling_its_independent_planner(bool beforeWait)
+    public async Task Shutdown_interrupts_required_planning_wait_without_finalizing_later_input_or_cancelling_its_independent_planner(
+        bool beforeWait
+    )
     {
         await using var fixture = await CompactFixture.CreateAsync();
         await fixture.SeedAsync();
@@ -18,19 +20,31 @@ public sealed partial class CompactLifecycleTests
         fixture.HoldBeforeContinuation = beforeWait;
         fixture.Peer.NextUsage = 21000;
         fixture.Peer.NextTool = true;
-        await fixture.Owner.Registry.Ingress.EnqueueAsync("s", QueueItem.UserText("tool continuation"));
+        await fixture.Owner.Registry.Ingress.EnqueueAsync(
+            "s",
+            QueueItem.UserText("tool continuation")
+        );
         await fixture.ContinuationReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
         if (!beforeWait)
             Assert.False(fixture.Continuation!.IsCompleted);
-        await fixture.Owner.Registry.Ingress.EnqueueAsync("s", QueueItem.UserText("pending after required wait", clientMessageId: "pending"));
+        await fixture.Owner.Registry.Ingress.EnqueueAsync(
+            "s",
+            QueueItem.UserText("pending after required wait", clientMessageId: "pending")
+        );
         fixture.Owner.Registry.Runner.CloseAdmission();
         fixture.ContinuationRelease.TrySetResult();
-        await fixture.Owner.Registry.Runner.ShutdownAsync(beforeWait ? TimeSpan.FromSeconds(5) : TimeSpan.Zero, TimeSpan.FromSeconds(5));
+        await fixture.Owner.Registry.Runner.ShutdownAsync(
+            beforeWait ? TimeSpan.FromSeconds(5) : TimeSpan.Zero,
+            TimeSpan.FromSeconds(5)
+        );
         await fixture.Owner.DrainForegroundAsync();
         var saved = (await fixture.Store.LoadAsync("s"))!;
         Assert.True(saved.Busy);
         Assert.False(saved.Stopping);
-        Assert.Equal("pending", Assert.Single(saved.Queue, SessionCompactor.Ordinary).ClientMessageId);
+        Assert.Equal(
+            "pending",
+            Assert.Single(saved.Queue, SessionCompactor.Ordinary).ClientMessageId
+        );
         Assert.True(fixture.Owner.Compactor.Active);
         Assert.Equal(8, fixture.Peer.NormalRequests);
         Assert.Equal(1, fixture.Peer.PlannerRequests);

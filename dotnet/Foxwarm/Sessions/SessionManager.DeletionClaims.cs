@@ -134,7 +134,8 @@ internal sealed partial class SessionManager
                 && owning is null
                 && !ids.All(id =>
                     mutationContext.Value?.AlreadyAccepted(id) == true
-                    || sessions.TryGetValue(id, out var owner) && owner.Entry.CanSettleDuringShutdown
+                    || sessions.TryGetValue(id, out var owner)
+                        && owner.Entry.CanSettleDuringShutdown
                 )
             )
                 throw new InvalidOperationException("Host is shutting down.");
