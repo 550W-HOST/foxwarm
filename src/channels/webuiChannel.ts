@@ -1,3 +1,4 @@
+import { registerWebUiFileDownloads } from './webuiFileDownloads';
 import { AccessConfigRuntime, type NormalizedAccessIdentity } from '../accessConfig';
 import { configInstaller, type ConfigInstaller } from '../configInstaller';
 import { projectWebUiSessionScope, webUiSessionScopeAllows } from '../webuiSessionScope';
@@ -824,30 +825,6 @@ export class WebUIChannel implements Channel {
     if (active) this.presentationSubscriberSessions.add(sessionId);
     else this.presentationSubscriberSessions.delete(sessionId);
     await this.presentationSubscriptionListener?.(sessionId, active);
-  }
-
-  private async streamPathDownload(resolvedPath: string, res: express.Response): Promise<void> {
-    const stat = await fs.stat(resolvedPath);
-
-    if (!stat.isFile()) {
-      throw new Error('Path is not a file');
-    }
-
-    await new Promise<void>((resolve, reject) => {
-      const fileName = path.basename(resolvedPath);
-      res.setHeader('Content-Type', 'application/octet-stream');
-      res.setHeader('Content-Disposition', `attachment; filename="${fileName.replace(/"/g, '')}"`);
-
-      const stream = fs.createReadStream(resolvedPath);
-      stream.on('error', (err) => reject(err));
-      res.on('close', () => {
-        if (!res.writableEnded) {
-          stream.destroy();
-        }
-      });
-      res.on('finish', () => resolve());
-      stream.pipe(res);
-    });
   }
 
   constructor(options: WebUIChannelOptions) {
@@ -3300,46 +3277,8 @@ export class WebUIChannel implements Channel {
       logger.info('WebUI endpoints enabled');
     }
 
-    // File download endpoint
-    httpServerInstance.addRoute({
-      path: '/download',
-      method: 'GET',
-      handler: async (req: express.Request, res: express.Response) => {
-        // Check token
-        if (!httpServer.checkToken(req)) {
-          logger.warn('Download token validation failed');
-          res.status(401).json({ error: 'Unauthorized' });
-          return;
-        }
+    registerWebUiFileDownloads(httpServerInstance, req => httpServer.checkToken(req));
 
-        const filePath = req.query.path as string;
-        if (!filePath) {
-          res.status(400).json({ error: 'Missing path parameter' });
-          return;
-        }
-
-        // Security: Ensure absolute path
-        if (!path.isAbsolute(filePath)) {
-          res.status(400).json({ error: 'Path must be absolute' });
-          return;
-        }
-
-        // Check if file exists
-        if (!fs.existsSync(filePath)) {
-          res.status(404).json({ error: 'File not found' });
-          return;
-        }
-
-        try {
-          await this.streamPathDownload(filePath, res);
-        } catch (err) {
-          logger.error({ err, filePath }, 'Failed to send file download');
-          if (!res.headersSent) {
-            res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to send download' });
-          }
-        }
-      }
-    });
   }
 
   // Broadcast new message to SSE clients

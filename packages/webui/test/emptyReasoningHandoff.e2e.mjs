@@ -196,7 +196,9 @@ test('wide and narrow prose wraps a right float while original hover controls ov
   await page.addStyleTag({ content: 'section:not([data-case="tool"]):not([data-case="longText"]):not([data-case="shortText"]):not([data-case="shortPlain"]):not([data-case="conversation"]) {display:none}' })
   await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }])
   for (const width of [1100, 390]) {
-    await page.setViewport({ width, height: 900 })
+    // Narrow desktop panes keep metrics/actions; root-mobile hiding is checked separately below.
+    await page.setViewport({ width:1100, height:900 })
+    await page.$eval('main',(main,width)=>{main.style.maxWidth=`${width-48}px`},width)
     for (const id of ['tool', 'longText', 'shortText', 'shortPlain', 'conversation']) await page.evaluate(id => window.renderScenario(id), id)
     await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-tool-card, [data-timeline-activity]')].every(el => !el.style.height))
     await page.evaluate(() => document.activeElement?.blur())
@@ -263,6 +265,9 @@ test('wide and narrow prose wraps a right float while original hover controls ov
     assert.equal(await page.$eval('#shortText .foxwarm-assistant-message-raw', element => element.textContent), 'Ready.')
     await page.click('#shortText button[title="Rendered (Markdown)"]')
   }
+  await page.setViewport({width:390,height:900})
+  await page.waitForFunction(()=>!document.querySelector('#shortText .foxwarm-assistant-action-buttons'))
+  assert.equal(await page.$$eval('[data-reasoning-handoff]',elements=>elements.length),0)
   if (directory) {
     await page.evaluate(() => window.setDark())
     await page.screenshot({ path: path.join(directory, 'reasoning-float-390-dark-hover.png'), fullPage: true })

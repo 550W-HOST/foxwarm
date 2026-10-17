@@ -279,7 +279,7 @@ const hasConversationImage = (part: Message['parts'][number]): boolean => (
   !!(part.inlineData || part.inlineDataRef || part.inlineDataUnavailable) && !part.toolUseId && !part.functionResponse
 )
 
-type ConversationRequest = { messages: Message[]; tools: boolean; complete: boolean }
+type ConversationRequest = { messages: Message[]; complete: boolean }
 
 /** Link only loaded segments within one CTX scope; never infer a work ID or change history. */
 const conversationRequests = (history: readonly Message[], visible: readonly Message[]) => {
@@ -290,37 +290,13 @@ const conversationRequests = (history: readonly Message[], visible: readonly Mes
     if (getContextBlockMetaFromMessage(message)) { requests = new Map(); continue }
     if (message.role !== 'model' || getLlmErrorMessageDetails(message)) continue
     const id = message.__meta?.llmRequestId
-    const request = id ? requests.get(id) || { messages: [], tools: false, complete: false } : { messages: [], tools: false, complete: false }
+    const request = id ? requests.get(id) || { messages: [], complete: false } : { messages: [], complete: false }
     if (id) requests.set(id, request)
     request.messages.push(message)
-    request.tools ||= message.parts.some(part => !!part.functionCall || !!getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem))
     request.complete ||= !message.__meta?.streaming && isCommittedHistoryMessage(message) && message.__meta?.llmSegment?.complete !== false
     byMessage.set(message, request)
   }
   return byMessage
-}
-
-const conversationTextKind = (message: Message, part: Message['parts'][number], request?: ConversationRequest): 'body' | 'process' => {
-  if (part.phase === 'final_answer') return 'body'
-  if (part.phase === 'commentary') return 'process'
-  if (message.__meta?.streaming || message.__meta?.llmSegment?.complete === false && !request?.complete) return 'process'
-  // Unknown old text remains readable; only the complete logical request's actual tools justify folding it.
-  return request?.tools ? 'process' : 'body'
-}
-
-/** A conservative display cut, not a task result: all loaded request segments must be accounted for. */
-const isClosedCommentaryRequest = (request: ConversationRequest | undefined): boolean => {
-  if (!request?.complete || request.tools || request.messages.some(message => message.__meta?.streaming || !isCommittedHistoryMessage(message))) return false
-  const text = request.messages.flatMap(message => message.parts.filter(hasConversationText))
-  if (!text.length || text.some(part => part.phase !== 'commentary')) return false
-  let covered = 0
-  for (const message of request.messages) {
-    const segment = message.__meta?.llmSegment
-    if (!segment) continue
-    if (segment.outputStart !== covered) return false
-    covered = segment.outputEndExclusive
-  }
-  return true
 }
 
 /** Ordinary model output breaks a tool run; tool-linked images stay with their tool response. */
@@ -787,11 +763,11 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
     const historyTailLlmError = historyMessages ? getHistoryTailLlmError(historyMessages) : undefined
     const requests = conversationRequests(historyMessages || messages, messages)
     const summaryForActivity = buildConversationActivitySummary(messages, historyMessages)
-    const isBody = (msg: Message, part: Message['parts'][number]) => hasConversationText(part) && conversationTextKind(msg, part, requests.get(msg)) === 'body'
+    // Every ordinary text part is a visible boundary, including commentary and streaming prefixes.
     const boundary = (msg: Message, partIndex?: number): 'visible' | 'context' | undefined => {
       if (getContextBlockMetaFromMessage(msg)) return 'context'
       if (msg.role === 'user' && getConversationInputKind(msg) !== 'activity') return 'visible'
-      if (msg.role === 'model' && !getLlmErrorMessageDetails(msg) && (partIndex === undefined ? msg.parts.some(part => isBody(msg, part)) : isBody(msg, msg.parts[partIndex]))) return 'visible'
+      if (msg.role === 'model' && !getLlmErrorMessageDetails(msg) && (partIndex === undefined ? msg.parts.some(hasConversationText) : hasConversationText(msg.parts[partIndex]))) return 'visible'
       return undefined
     }
     let activityStart = -1
@@ -876,16 +852,15 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       }
       const request = requests.get(msg)
       // A metadata-only completion contributes usage to its prefix's process, not an empty second process.
-      if (!msg.parts.length && request && requestOwners.has(request)) return
+      if (!msg.parts.length && request && (requestOwners.has(request) || request.messages.some(message => message.parts.some(hasConversationText)))) return
       if (activityStart >= 0) activitySources.add(msg)
       let visiblePartCount = 0
       msg.parts.forEach((part, partIndex) => {
-        const textBody = isBody(msg, part)
+        const textBody = hasConversationText(part)
         const image = hasConversationImage(part)
-        const processText = hasConversationText(part) && !textBody
         const technical = part.system || part.functionCall || part.functionResponse || part.toolUseId || isReasoningPart(part) || getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem) || !hasConversationText(part) && !image && part.text === undefined && Object.keys(part).length > 0
-        if (technical || processText) {
-          const fragment = textBody || image ? { ...part, text: processText ? part.text : undefined, inlineData: undefined, inlineDataRef: undefined, inlineDataUnavailable: undefined } : part
+        if (technical) {
+          const fragment = textBody || image ? { ...part, text: undefined, inlineData: undefined, inlineDataRef: undefined, inlineDataUnavailable: undefined } : part
           // Mixed-field technical fragments keep the original part's presentation ownership.
           if (fragment !== part && reasoningPresentation.has(part)) {
             const info = reasoningPresentation.get(part)!
@@ -906,7 +881,6 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       })
       if (!msg.parts.length && activityStart >= 0) activitySources.add(msg)
       if (!visiblePartCount && getModelMessageUsage(msg) && !requestOwners.has(request!)) beginActivity(index)
-      if (isClosedCommentaryRequest(request) && request?.messages.at(-1) === msg) flushActivity(false, msg)
     })
     flushActivity()
     if (showUsageBadge) {

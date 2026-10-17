@@ -20,7 +20,7 @@ before(async () => {
       import { createRoot } from 'react-dom/client'
       import { DndContext, PointerSensor, useSensors, useSensor, pointerWithin } from '@dnd-kit/core'
       import Core from './src/components/SessionListCore'
-      import ProcessingStatus from './src/components/ProcessingStatus'
+      import ProcessingStatus, { QueuedMessageStatus } from './src/components/ProcessingStatus'
       import CollapsedSidebar from './src/components/CollapsedSidebar'
       import { initializeThemeRuntime, setThemeSelection } from './src/theme'
       initializeThemeRuntime()
@@ -71,7 +71,8 @@ before(async () => {
             <div data-activity-rail><CollapsedSidebar sessions={fixtureSessions.map(session => session.id === 'demo/child' ? { ...session, pinned: true } : session)} currentSession={current} unreadSessionIds={new Set(['demo/main', 'demo/wait'])} onSelectSession={noop} onCreateSession={noop} onSelectSearch={noop} onSelectSetup={noop} onSelectLogs={noop} onToggleCollapsed={noop} /></div>
             <div data-activity-timeline style={{ width: 520 }}>
               {fixtureSessions.map(session => <div key={session.id} data-activity-case={session.id}>
-                <ProcessingStatus sessionBusy={!!session.busy} runtimeState={session.runtimeState} sessionQueueLength={session.id === 'demo/idle' ? 2 : 0} turnIncomplete={false} loading={false} isMobile={false} onStop={noop} />
+                <ProcessingStatus sessionBusy={!!session.busy} runtimeState={session.id === 'demo/child' ? {...session.runtimeState, tool: {name: 'read'}} : session.runtimeState} sessionQueueLength={session.id === 'demo/idle' ? 2 : 0} turnIncomplete={false} loading={false} isMobile={false} onStop={noop} />
+                <QueuedMessageStatus count={session.id === 'demo/idle' ? 2 : 0} alignment="left" isMobile={false} />
               </div>)}
             </div>
           </div>}
@@ -100,7 +101,7 @@ async function open(mobile = false) {
   await page.setViewport({ width: mobile ? 390 : 1000, height: 700, isMobile: mobile, hasTouch: mobile })
   await page.goto(url)
   await page.waitForSelector(toggle)
-  await page.evaluate(() => { localStorage.removeItem('foxwarm_session_list_compact_v1'); localStorage.removeItem('foxwarm_session_list_view_mode_v1') })
+  await page.evaluate(() => { localStorage.removeItem('foxwarm_session_list_compact_v1'); localStorage.removeItem('foxwarm_session_list_view_mode_v1'); localStorage.removeItem('foxwarm_session_list_mobile_view_mode_v1') })
   await page.reload()
   await page.waitForSelector(row('child'))
   return page
@@ -234,9 +235,13 @@ test('default normal drag keeps sibling, child, and root drop targets; touch rem
   const mobile = await open(true)
   try {
     assert.equal(await mobile.evaluate(() => matchMedia('(pointer: coarse)').matches), true)
-    assert.equal(await mobile.$eval(`${row('main')} .session-compact-pin`, e => getComputedStyle(e).opacity), '1')
-    await mobile.tap(`${row('wait')} .session-compact-pin`)
-    await mobile.waitForSelector(`${row('wait')} .session-compact-pin[aria-pressed="true"]`)
+    assert.equal(await mobile.$('.session-pin'), null)
+    await mobile.tap(`${row('wait')} .session-menu-trigger`)
+    await mobile.waitForSelector('[role="menu"]')
+    await mobile.click('[role="menu"] button')
+    await mobile.waitForFunction(() => window.fixturePinRequests.length === 1)
+    await mobile.click('button[aria-label="Session list mode: Flat"]')
+    await mobile.waitForSelector('button[aria-label="Session list mode: Default"]')
     assert.deepEqual(await mobile.evaluate(() => window.fixturePinRequests), [{ id: 'demo/wait', pinned: true, method: 'POST' }])
     assert.equal(await mobile.evaluate(() => window.fixtureSelected), undefined)
     assert.equal(await mobile.$eval(`${row('main')} button[aria-expanded]`, e => getComputedStyle(e).opacity), '1')
@@ -322,49 +327,33 @@ test('invalid or unreadable saved density defaults to normal in a real browser',
 })
 
 
-test('normal pin actions reserve a right-side slot and isolate navigation and dragging', async () => {
+test('normal row menus own pin actions without changing title space, navigation or dragging', async () => {
   const page = await open()
-  const pin = `${row('wait')} .session-compact-pin`
-  const title = `${row('wait')} span[title]`
+  const menu = `${row('wait')} .session-menu-trigger`
   try {
-    await page.mouse.move(800, 650)
-    const bounds = () => page.$eval(title, e => ({ x: e.getBoundingClientRect().x, width: e.getBoundingClientRect().width }))
-    const initialBounds = await bounds()
-    assert.equal(await page.$eval(pin, e => getComputedStyle(e).opacity), '0')
-    assert.equal(await page.$eval(pin, e => e.previousElementSibling.hasAttribute('title') && e.previousElementSibling.tagName === 'SPAN'), true)
+    assert.equal(await page.$('.session-pin'), null)
+    const bounds = () => page.$eval(`${row('wait')} span[title]`, e => ({x: e.getBoundingClientRect().x, width: e.getBoundingClientRect().width}))
+    const initial = await bounds()
     await page.hover(row('wait'))
-    assert.equal(await page.$eval(pin, e => getComputedStyle(e).opacity), '1')
-    assert.deepEqual(await bounds(), initialBounds)
-    const box = await (await page.$(pin)).boundingBox()
+    assert.deepEqual(await bounds(), initial)
+    const box = await (await page.$(menu)).boundingBox()
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
     await page.mouse.down()
-    await page.mouse.move(box.x + 60, box.y + box.height / 2, { steps: 8 })
+    await page.mouse.move(box.x + 60, box.y + box.height / 2, {steps: 8})
     assert.equal(await page.evaluate(() => [...document.querySelectorAll('span')].some(e => e.textContent === 'Drop here to detach to root')), false)
     await page.mouse.up()
     assert.deepEqual(await page.evaluate(() => window.fixtureDrops), [])
-    await page.mouse.move(800, 650)
-    await page.focus(pin)
-    assert.equal(await page.$eval(pin, e => getComputedStyle(e).opacity), '1')
-    assert.deepEqual(await bounds(), initialBounds)
-    await page.keyboard.press('Enter')
-    await page.waitForSelector(`${pin}[aria-pressed="true"]`)
-    await page.focus(toggle)
-    assert.equal(await page.$eval(pin, e => getComputedStyle(e).opacity), '1')
-    assert.equal(await page.$eval(pin, e => e.getAttribute('aria-label')), 'Unpin from top')
-    assert.deepEqual(await bounds(), initialBounds)
-    assert.equal(await page.evaluate(() => window.fixtureSelected), undefined)
-    await page.click(pin)
-    await page.waitForSelector(`${pin}[aria-pressed="false"]`)
-    assert.deepEqual(await page.evaluate(() => window.fixturePinRequests), [
-      { id: 'demo/wait', pinned: true, method: 'POST' },
-      { id: 'demo/wait', pinned: false, method: 'POST' },
-    ])
-    assert.equal(await page.evaluate(() => window.fixtureSelected), undefined)
-    await page.focus(toggle)
-    await page.mouse.move(800, 650)
-    assert.equal(await page.$eval(pin, e => getComputedStyle(e).opacity), '0')
-    await page.click(toggle)
-    assert.equal(await page.$('.session-compact-pin'), null)
+    for (const label of ['Pin to top', 'Unpin from top']) {
+      await page.focus(menu)
+      await page.keyboard.press('Enter')
+      await page.waitForSelector('[role="menu"]')
+      assert.equal(await page.$eval('[role="menu"] button', e => e.textContent.trim()), label)
+      await page.click('[role="menu"] button')
+      await page.waitForFunction(count => window.fixturePinRequests.length === count, {}, label === 'Pin to top' ? 1 : 2)
+      assert.deepEqual(await bounds(), initial)
+      assert.equal(await page.evaluate(() => window.fixtureSelected), undefined)
+    }
+    assert.deepEqual(await page.evaluate(() => window.fixturePinRequests), [{id:'demo/wait',pinned:true,method:'POST'},{id:'demo/wait',pinned:false,method:'POST'}])
   } finally { await page.close() }
 })
 
@@ -416,53 +405,28 @@ test('sections in both density modes partition visible roots without duplicating
   } finally { await page.close() }
 })
 
-test('detailed rows share right-side pin actions with stable title space and touch visibility', async () => {
+test('desktop and touch detailed rows use the same pin/unpin menu without inline pin buttons', async () => {
   for (const mobile of [false, true]) {
     const page = await open(mobile)
-    const pin = `${row('wait')} .session-pin`
-    const title = `${row('wait')} [data-session-title]`
     try {
       await page.click(toggle)
       assert.ok(await page.$('[data-session-list-density="detailed"]'))
-      assert.equal(await page.$('.session-compact-pin'), null)
-      const bounds = () => page.$eval(title, e => ({ x: e.getBoundingClientRect().x, width: e.getBoundingClientRect().width }))
-      const initialBounds = await bounds()
-      assert.equal(await page.$eval(pin, e => e.previousElementSibling.hasAttribute('data-session-title') && e.getBoundingClientRect().left >= e.previousElementSibling.getBoundingClientRect().right), true)
-      assert.equal(await page.$eval(pin, e => getComputedStyle(e).opacity), mobile ? '1' : '0')
-      if (!mobile) {
-        await page.hover(row('wait'))
-        assert.equal(await page.$eval(pin, e => getComputedStyle(e).opacity), '1')
-        assert.deepEqual(await bounds(), initialBounds)
-        const box = await (await page.$(pin)).boundingBox()
-        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
-        await page.mouse.down()
-        await page.mouse.move(box.x + 60, box.y + box.height / 2, { steps: 8 })
-        assert.equal(await page.evaluate(() => [...document.querySelectorAll('span')].some(e => e.textContent === 'Drop here to detach to root')), false)
-        await page.mouse.up()
-        await page.mouse.move(800, 650)
-        await page.focus(pin)
-        assert.equal(await page.$eval(pin, e => getComputedStyle(e).opacity), '1')
-        await page.keyboard.press('Enter')
-      } else {
-        assert.ok(await page.$eval(pin, e => e.getBoundingClientRect().height) >= 40)
-        await page.tap(pin)
+      assert.equal(await page.$('.session-pin'), null)
+      const menu = `${row('wait')} .session-menu-trigger`
+      const title = `${row('wait')} [data-session-title]`
+      const bounds = () => page.$eval(title, e => ({x:e.getBoundingClientRect().x,width:e.getBoundingClientRect().width}))
+      const initial = await bounds()
+      assert.ok(await page.$eval(menu, e => e.getBoundingClientRect().height) >= 40)
+      for (const [index, label] of ['Pin to top','Unpin from top'].entries()) {
+        if (mobile) await page.tap(menu); else await page.click(menu)
+        await page.waitForSelector('[role="menu"]')
+        assert.equal(await page.$eval('[role="menu"] button', e => e.textContent.trim()), label)
+        await page.click('[role="menu"] button')
+        await page.waitForFunction(count => window.fixturePinRequests.length === count, {}, index + 1)
+        assert.deepEqual(await bounds(), initial)
+        assert.equal(await page.evaluate(() => window.fixtureSelected), undefined)
       }
-      await page.waitForSelector(`${pin}[aria-pressed="true"]`)
-      await page.focus(toggle)
-      assert.equal(await page.$eval(pin, e => getComputedStyle(e).opacity), '1')
-      assert.deepEqual(await bounds(), initialBounds)
-      assert.equal(await page.$(`${row('wait')} [data-session-title] svg`), null)
-      assert.equal(await page.$eval(`${pin} svg`, e => e.getAttribute('stroke-width')), '1.5')
-      assert.equal(await page.evaluate(() => window.fixtureSelected), undefined)
-      if (mobile) await page.tap(pin)
-      else await page.click(pin)
-      await page.waitForSelector(`${pin}[aria-pressed="false"]`)
-      assert.deepEqual(await page.evaluate(() => window.fixturePinRequests), [
-        { id: 'demo/wait', pinned: true, method: 'POST' },
-        { id: 'demo/wait', pinned: false, method: 'POST' },
-      ])
-      assert.equal(await page.evaluate(() => window.fixtureSelected), undefined)
-      assert.deepEqual(await bounds(), initialBounds)
+      assert.deepEqual(await page.evaluate(() => window.fixturePinRequests), [{id:'demo/wait',pinned:true,method:'POST'},{id:'demo/wait',pinned:false,method:'POST'}])
     } finally { await page.close() }
   }
 })
@@ -512,7 +476,7 @@ test('normal descendant activity is separate from own status and persists on col
     await page.waitForSelector(`${row('main')} [data-session-status]`)
     assert.ok((await titleBounds()).width < initialBounds.width)
     assert.equal(await page.$eval(`${row('main')} [data-descendant-activity]`, e => e.title), '2 active descendant sessions')
-    assert.equal(await page.$eval(`${row('main')} [data-descendant-activity]`, e => e.previousElementSibling.matches('.session-pin') && e.nextElementSibling.matches('[data-session-status]')), true)
+    assert.equal(await page.$eval(`${row('main')} [data-descendant-activity]`, e => e.previousElementSibling.tagName === 'SPAN' && e.nextElementSibling.matches('[data-session-status]')), true)
     await page.click(toggle)
     assert.equal(await page.$('[data-descendant-activity]'), null)
     assert.ok(await page.$eval(row('main'), e => e.textContent.includes('2 active')))
@@ -533,21 +497,20 @@ test('normal trailing indicators pack to the right without absent-status slots',
       }, { descendants, own })
       await page.waitForFunction(({ descendants, own }) => !!document.querySelector('[data-descendant-activity]') === descendants && !!document.querySelector('[data-session-status]') === own, {}, { descendants, own })
       const geometry = await page.$eval(row('main'), row => {
-        const pin = row.querySelector('.session-pin')
-        const content = pin.parentElement
-        const title = pin.previousElementSibling
-        const items = [...content.children].slice([...content.children].indexOf(pin))
+        const title = row.querySelector('span[title]')
+        const content = title.parentElement
+        const items = [...content.children].slice([...content.children].indexOf(title) + 1)
         const expectedRight = content.getBoundingClientRect().right - parseFloat(getComputedStyle(content).paddingRight)
         return {
           items: items.map(e => e.matches('.session-pin') ? 'pin' : e.hasAttribute('data-descendant-activity') ? 'branch' : e.hasAttribute('data-session-status') ? 'own' : 'unexpected-slot'),
-          right: items.at(-1).getBoundingClientRect().right, expectedRight,
+          right: items.at(-1)?.getBoundingClientRect().right ?? expectedRight, expectedRight,
           gaps: items.slice(1).map((e, i) => e.getBoundingClientRect().left - items[i].getBoundingClientRect().right),
           width: title.getBoundingClientRect().width,
           overflow: row.scrollWidth > row.clientWidth,
           ellipsis: getComputedStyle(title).textOverflow,
         }
       })
-      assert.deepEqual(geometry.items, ['pin', ...(descendants ? ['branch'] : []), ...(own ? ['own'] : [])])
+      assert.deepEqual(geometry.items, [...(descendants ? ['branch'] : []), ...(own ? ['own'] : [])])
       assert.ok(Math.abs(geometry.right - geometry.expectedRight) < 0.5)
       assert.ok(geometry.gaps.every(gap => gap === 6))
       assert.equal(geometry.overflow, false)
@@ -589,10 +552,11 @@ test('remote node indicator shows only for non-master sessions in both densities
     assert.equal(await page.$(row('remote') + ' [data-session-status]'), null)
     assert.equal(await page.$eval(`${row('tool')} [data-session-node]`, e => e.dataset.sessionNode), 'gpu-box-2')
     assert.equal(await page.$eval(`${row('tool')} [data-session-status]`, e => e.getAttribute('aria-label')), 'Status: tool: exec')
-    assert.deepEqual(await indicators('long'), ['pin', 'node:visualdust-a6000-ws1', 'branch', 'own'])
+    assert.deepEqual(await indicators('long'), ['node:visualdust-a6000-ws1', 'branch', 'own'])
     const geometry = await page.$eval(row('long'), row => {
-      const content = row.querySelector('.session-pin').parentElement
-      const items = [...content.children].slice([...content.children].indexOf(row.querySelector('.session-pin')))
+      const node = row.querySelector('[data-session-node]')
+      const content = node.parentElement
+      const items = [...content.children].slice([...content.children].indexOf(node))
       const expectedRight = content.getBoundingClientRect().right - parseFloat(getComputedStyle(content).paddingRight)
       return { right: items.at(-1).getBoundingClientRect().right, expectedRight, overflow: row.scrollWidth > row.clientWidth,
         gaps: items.slice(1).map((e, i) => e.getBoundingClientRect().left - items[i].getBoundingClientRect().right) }
@@ -628,7 +592,7 @@ test('remote node indicator shows only for non-master sessions in both densities
 })
 
 
-test('busy rings retain stepped motion while model/exec use Fox loaders and waiting/unread stay dots', async () => {
+test('busy rings retain stepped motion while thinking uses Fox loaders and sidebar waiting/unread stay dots', async () => {
   const page = await browser.newPage()
   try {
     await page.setViewport({ width: 1080, height: 700 })
@@ -651,8 +615,8 @@ test('busy rings retain stepped motion while model/exec use Fox loaders and wait
     assert.equal(await page.$(`${railWaiting} [data-runtime-perimeter]`), null)
     for (const id of ['main', 'child', 'legacy']) {
       const selector = `${timeline} [data-activity-case="demo/${id}"]`
-      assert.equal(await page.$$eval(`${selector} ${id === 'main' ? '.runtime-busy-spinner' : '[data-fox-loader=thinking]'}`, nodes => nodes.length), 1)
-      assert.ok(await page.$(`${selector} button::-p-text(Stop)`))
+      assert.equal(await page.$$eval(`${selector} ${id === 'legacy' ? '[data-fox-loader=thinking]' : '.runtime-busy-spinner'}`, nodes => nodes.length), 1)
+      assert.equal(await page.$(`${selector} button::-p-text(Stop)`), null)
       assert.equal(await page.$(`${selector} .animate-bounce`), null)
     }
     assert.match(await page.$eval(`${timeline} [data-activity-case="demo/main"]`, e => e.textContent), /Compacting/)
@@ -692,5 +656,75 @@ test('busy rings retain stepped motion while model/exec use Fox loaders and wait
     assert.equal(await page.$(`${row('main')} .runtime-busy-spinner`), null)
     assert.equal(await page.$(`${railMain} .runtime-busy-spinner`), null)
     assert.equal(await page.$$eval(`${railMain} span.rounded-full`, nodes => nodes.length), 1, 'unread survives the busy-to-idle presentation change')
+  } finally { await page.close() }
+})
+
+test('bounded navigation preserves other expanded trees and nested disclosures while respecting manual collapse', async () => {
+  const page = await open()
+  const disclosure = id => `${row(id)} button[aria-expanded]`
+  try {
+    await page.goto(url + '?descendants')
+    await page.waitForSelector(row('wait'))
+    await page.evaluate(() => window.fixtureSetSessions([
+      { id: 'demo/main', displayName: 'First tree', childSessions: ['demo/child'], parentSessionId: null },
+      { id: 'demo/child', displayName: 'Nested branch', parentSessionId: 'demo/main', childSessions: ['demo/grandchild'] },
+      { id: 'demo/grandchild', displayName: 'Nested leaf', parentSessionId: 'demo/child' },
+      { id: 'demo/wait', displayName: 'Second tree', childSessions: ['demo/other-child'], parentSessionId: null },
+      { id: 'demo/other-child', displayName: 'Second leaf', parentSessionId: 'demo/wait' },
+    ].map((session, index) => ({messageCount: 1, lastMessageTime: 100 - index, ...session}))))
+    await page.waitForSelector(row('other-child'))
+    await page.click(disclosure('main'))
+    await page.waitForSelector(row('child'))
+    await page.click(disclosure('child'))
+    await page.waitForSelector(row('grandchild'))
+    for (const id of ['main', 'child', 'other-child', 'grandchild']) {
+      await page.click(`${row(id)} span[title$="· demo/${id}"]`)
+      await page.waitForFunction(id => window.fixtureSelected === 'demo/' + id, {}, id)
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+      for (const branch of ['main', 'child', 'wait']) assert.equal(await page.$eval(disclosure(branch), element => element.getAttribute('aria-expanded')), 'true', `${branch} stays expanded after selecting ${id}`)
+      assert.ok(await page.$(row('grandchild')))
+      assert.ok(await page.$(row('other-child')))
+    }
+    await page.click(disclosure('wait'))
+    await page.waitForSelector(row('other-child'), {hidden: true})
+    await page.click(`${row('child')} span[title$="· demo/child"]`)
+    await page.waitForFunction(() => window.fixtureSelected === 'demo/child')
+    await page.evaluate(() => window.fixtureSetSessions(sessions => sessions.map(session => ({...session, messageCount: session.messageCount + 1}))))
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    assert.equal(await page.$eval(disclosure('wait'), element => element.getAttribute('aria-expanded')), 'false', 'unrelated manual collapse survives navigation and metadata refresh')
+    await page.click(disclosure('main'))
+    await page.waitForSelector(row('child'), {hidden: true})
+    await page.evaluate(() => window.fixtureSetSessions(sessions => sessions.map(session => ({...session}))))
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    assert.equal(await page.$eval(disclosure('main'), element => element.getAttribute('aria-expanded')), 'false', 'same-active refresh respects an explicitly collapsed active ancestor')
+    await page.click(disclosure('main'))
+    await page.waitForSelector(row('child'))
+    assert.equal(await page.$eval(disclosure('child'), element => element.getAttribute('aria-expanded')), 'false', 'reopening one ancestor does not resurrect its pruned nested disclosure')
+  } finally { await page.close() }
+})
+
+
+test('mobile defaults to flat recent activity with no tree gutter and keeps its preference separate from desktop', async () => {
+  const page = await open(true)
+  try {
+    await page.waitForSelector('button[aria-label="Session list mode: Flat"]')
+    assert.equal(await page.$('.session-compact-disclosure'), null)
+    assert.equal(await page.$('.session-pin'), null)
+    await page.evaluate(() => window.fixtureSetSessions(sessions => sessions.map(session => ({...session, lastMessageTime: session.id === 'demo/child' ? 200 : session.lastMessageTime}))))
+    await page.waitForFunction(() => document.querySelector('[data-session-id]')?.dataset.sessionId === 'demo/child')
+    const inset = await page.$eval(row('main'), node => node.querySelector('span[title]').getBoundingClientRect().left - node.getBoundingClientRect().left)
+    assert.ok(inset >= 10 && inset <= 14)
+    await page.click('button[aria-label="Session list mode: Flat"]')
+    await page.waitForSelector('button[aria-label="Session list mode: Default"]')
+    await page.setViewport({width:1000,height:700,isMobile:false,hasTouch:false})
+    await page.waitForSelector('[data-session-list-mobile="true"]', {hidden:true})
+    await page.waitForSelector('button[aria-label="Session list mode: Default"]')
+    await page.click('button[aria-label="Session list mode: Default"]')
+    await page.waitForSelector('button[aria-label="Session list mode: Time"]')
+    await page.setViewport({width:390,height:700,isMobile:true,hasTouch:true})
+    await page.waitForSelector('button[aria-label="Session list mode: Default"]')
+    assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_session_list_view_mode_v1')), 'time')
+    await page.reload()
+    await page.waitForSelector('button[aria-label="Session list mode: Default"]')
   } finally { await page.close() }
 })

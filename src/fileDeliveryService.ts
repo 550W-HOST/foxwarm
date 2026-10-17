@@ -1,3 +1,4 @@
+import { parseFileDeliveryArtifact, type FileDeliveryArtifact } from '../packages/shared/dist/fileDelivery';
 import { defineRpcService, rpcMethod, RpcError, type RpcServiceHandler } from './rpc';
 import * as sessionManager from './sessionManager';
 import { executeSendFileMain } from './toolsSessionAgent/interSession';
@@ -9,7 +10,7 @@ export type FileDeliveryRequest = {
   intent: { sessionId?: string; channelTargetId?: string; filePath: string; caption?: string; text?: string };
   routing: { runtimeNodeId: string; currentNode: string; cwd?: string };
 };
-export type FileDeliveryResponse = { output: string; fullPath: string };
+export type FileDeliveryResponse = { output: string; fullPath: string; fileDelivery?: FileDeliveryArtifact };
 
 export const fileDeliveryServiceDescriptor = defineRpcService('file-delivery', 1, {
   deliver: rpcMethod<FileDeliveryRequest, FileDeliveryResponse>(),
@@ -77,7 +78,9 @@ export function createFileDeliveryServiceHandler(options: { expectedSourceSessio
         throw new RpcError('FILE_DELIVERY_INVALID_RESPONSE', 'File delivery returned an invalid result.');
       }
       if (result.fullPath.length > 4096) throw new RpcError('FILE_DELIVERY_INVALID_RESPONSE', 'File delivery fullPath exceeds 4096 characters.');
-      return { output: boundedUtf8(result.output, 16 * 1024), fullPath: result.fullPath };
+      const fileDelivery = parseFileDeliveryArtifact(result.fileDelivery);
+      if (result.fileDelivery !== undefined && (!fileDelivery || fileDelivery.downloadPath !== result.fullPath)) throw new RpcError('FILE_DELIVERY_INVALID_RESPONSE', 'File delivery receipt is invalid.');
+      return { output: boundedUtf8(result.output, 16 * 1024), fullPath: result.fullPath, ...(fileDelivery ? { fileDelivery } : {}) };
     },
   };
 }

@@ -140,3 +140,7 @@ The former custom workspace/file browser remains removed. Persisted records are 
 ## Canonical ownership
 
 Commit marker ownership: [D-code-model-commit-marker](../threads/code-integration.md#d-code-model-commit-marker). Chat follow ownership: [D-chat-user-follow-intent](../units/webui-chat.md#d-chat-user-follow-intent). Optimistic/history ordering ownership: [D-streaming-optimistic-message-identity](../threads/streaming-pipeline.md#d-streaming-optimistic-message-identity). YAML assistance ownership: [D-editor-local-yaml-assistance](../units/webui-editor.md#d-editor-local-yaml-assistance).
+
+Mobile presentation: [mobile shell](../threads/webui-mobile-shell.md). User attachments: [attachment presentation](../threads/webui-attachment-presentation.md).
+
+- [Reply file grids](../units/webui-reply-files.md) expose successful deliveries outside process disclosure.

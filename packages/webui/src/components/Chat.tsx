@@ -1,7 +1,7 @@
 import { useContentBeforeResize } from '../contentResize'
-import type { TimelineView } from '../chatPreferences'
+import { useMobileChatViewport, type TimelineView } from '../chatPreferences'
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronUp, Code2, MessageSquareText, Search, SquareTerminal, X } from 'lucide-react'
+import { SquarePen, ChevronDown, ChevronUp, Code2, MessageSquareText, Search, SquareTerminal, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
 import type { ModelOption } from './ChatComposer'
@@ -10,10 +10,11 @@ import { findRenderedMatchRange, findSearchSurface, findSessionSearchMatches, pr
 import ContextScrollbar from './ContextScrollbar'
 import type { CodeCommitTarget } from '../commitMarker'
 import ContentHeader from './ContentHeader'
-import ProcessingStatus from './ProcessingStatus'
+import ProcessingStatus, { QueuedMessageStatus } from './ProcessingStatus'
 import type { Message } from './chatShared'
 import { buildStreamingAssistantMessage } from '../streamingAssistantDraft'
 import { useChatConversationSync } from './useChatConversationSync'
+import { isSessionRuntimeActive } from '../sessionRuntimeState'
 import SessionDebugModal from './SessionDebugModal'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import { ThreadCardHeightContext } from './useThreadCardHeightTransition'
@@ -136,6 +137,7 @@ interface ChatProps {
   sessionDisplayName?: string
   webUiIdentityMode?: boolean
   onBack?: () => void
+  onNewSession?: () => Promise<void>
   onOpenTerminal?: () => void
   onOpenCode?: () => void
   onOpenCodeFile?: (filePath: string, lines?: { startLine?: number; endLine?: number }, target?: { nodeId: string; resolvedPath: string }) => void
@@ -159,7 +161,7 @@ type StreamingAsrSession = {
   cancel: () => void
 }
 
-const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', timelineView = 'detailed', showUsageBadge = true, showUserMessageMetadata = false, fullWidth = true, onFullWidthChange = () => {}, onSendKeyModeChange = () => {}, onTimelineViewChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onNewSession, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', timelineView = 'detailed', showUsageBadge = true, showUserMessageMetadata = false, fullWidth = true, onFullWidthChange = () => {}, onSendKeyModeChange = () => {}, onTimelineViewChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
   const {
     messages, queuedMessages, sessionRecord, sessionMissing, sessionBusy, sessionQueueLength,
     persistentMemorySnapshot, streamingAssistantDraft, toolScriptProgress,
@@ -169,6 +171,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   const [layout, setLayout] = useState({ isMobile: true, compactModelSelector: true, compactComposer: false })
   const layoutRef = useRef(layout)
   const { isMobile, compactModelSelector, compactComposer } = layout
+  const mobileUi = useMobileChatViewport()
+  const [creatingSession, setCreatingSession] = useState(false)
   const [followingBottom, setFollowingBottom] = useState(true)
   const [showScrollTopButton, setShowScrollTopButton] = useState(false)
   const [showDebugInfo, setShowDebugInfo] = useState(false)
@@ -299,6 +303,17 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     observer.observe(root)
     return () => observer.disconnect()
   }, [])
+
+  useLayoutEffect(() => {
+    const root = chatRootRef.current
+    const header = root?.querySelector<HTMLElement>('[data-mobile-chat-header]')
+    if (!root || !mobileUi || !header) return
+    const measure = () => root.style.setProperty('--chat-mobile-header-height', `${header.getBoundingClientRect().height}px`)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(header)
+    return () => { observer.disconnect(); root.style.removeProperty('--chat-mobile-header-height') }
+  }, [mobileUi])
 
   const setBottomFollow = useCallback((following: boolean, pendingUserLeave = false) => {
     shouldAutoScrollRef.current = following
@@ -1241,13 +1256,21 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
 
   const turnIncomplete = useMemo(() => isSessionTurnIncomplete(messages), [messages])
 
+  const renderQueuedFooter = (alignment: 'left' | 'right') => <QueuedMessageStatus
+    count={sessionQueueLength}
+    alignment={alignment}
+    isMobile={isMobile}
+    onRunQueued={webUiIdentityMode ? undefined : handleRunQueued}
+  />
+
   return (
-    <div ref={chatRootRef} data-compact-composer={compactComposer ? "true" : undefined} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
+    <div ref={chatRootRef} data-mobile-chat-ui={mobileUi || undefined} data-chat-connection-state={connectionState} data-compact-composer={compactComposer ? "true" : undefined} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
       {searchOpen && <style>{`::highlight(${searchHighlightName}) { background-color: #facc15; color: #171717; }`}</style>}
       <ContentHeader
         icon={<MessageSquareText className="h-5 w-5" />}
         title={sessionDisplayName || sessionRecord?.displayName || sessionId}
-        subtitle={webUiIdentityMode ? null : (
+        compact={mobileUi}
+        subtitle={webUiIdentityMode || mobileUi ? null : (
           <span data-session-header-subtitle className="font-mono text-[12px]" title={sessionRecord?.cwd || undefined}>
             {sessionHeaderSubtitle}
           </span>
@@ -1291,10 +1314,13 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         ) : undefined}
         actions={webUiIdentityMode ? null : (
           <>
-            <button type="button" onClick={() => activateSearch()} aria-label="Find in chat" title="Find in chat" className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover">
+            {mobileUi && onNewSession && <button type="button" aria-label="Start a new session" title="New session" disabled={creatingSession}
+              onClick={async () => { if (creatingSession) return; setCreatingSession(true); try { await onNewSession() } finally { setCreatingSession(false) } }}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-full text-fw-text-strong hover:bg-fw-hover disabled:opacity-50"><SquarePen size={20} /></button>}
+            {!mobileUi && <button type="button" onClick={() => activateSearch()} aria-label="Find in chat" title="Find in chat" className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover">
               <Search className="h-4 w-4" /><span className="foxwarm-chat-sm-label">Find</span>
-            </button>
-            {onOpenCode && (
+            </button>}
+            {!mobileUi && onOpenCode && (
               <button
                 onClick={onOpenCode}
                 className="foxwarm-chat-code-button inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover"
@@ -1304,7 +1330,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
                 <span className="foxwarm-chat-sm-label">Code</span>
               </button>
             )}
-            {onOpenTerminal && (
+            {!mobileUi && onOpenTerminal && (
               <button
                 onClick={onOpenTerminal}
                 className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-3 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover"
@@ -1315,6 +1341,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
               </button>
             )}
             <SessionUiSettingsMenu
+              mobile={mobileUi}
+              onFind={() => activateSearch()}
+              onOpenCode={onOpenCode}
+              onOpenTerminal={onOpenTerminal}
               sendKeyMode={sendKeyMode}
               onSendKeyModeChange={onSendKeyModeChange}
               timelineView={timelineView}
@@ -1332,7 +1362,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       />
 
       {connectionState !== 'connected' && (
-        <div className={`sticky top-0 z-20 px-4 py-2 text-sm ${
+        <div data-chat-connection-status className={`sticky top-0 z-20 px-4 py-2 text-sm ${
           connectionState === 'connecting' ? 'bg-fw-warning-surface dark:bg-fw-warning-surface-strong/20 text-fw-warning dark:text-fw-warning' :
           connectionState === 'reconnecting' ? 'bg-fw-warning-surface dark:bg-fw-warning-surface-strong/20 text-fw-warning dark:text-fw-warning' :
           'bg-fw-danger-surface dark:bg-fw-danger-surface-strong/20 text-fw-danger dark:text-fw-danger'
@@ -1382,7 +1412,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
             <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full">
               <ThreadCardHeightContext.Provider value={cardHeightContext}>
                 <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-                  <ChatTimeline sessionId={sessionId} historyMessages={messages} runtimeState={sessionRecord?.runtimeState} busyStartedAt={sessionRecord?.busyStartedAt} isRunningTool={sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} />
+                  <ChatTimeline sessionId={sessionId} historyMessages={messages} runtimeState={sessionRecord?.runtimeState} busyStartedAt={sessionRecord?.busyStartedAt} isRunningTool={sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} renderMessageFooter={sessionQueueLength > 0 && queuedMessages.length === 0 ? renderQueuedFooter : undefined} />
                 </ToolScriptProgressContext.Provider>
               </ThreadCardHeightContext.Provider>
             </div>
@@ -1394,13 +1424,11 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
               turnIncomplete={sessionRecord?.runtimeState?.state === 'idle' && turnIncomplete}
               loading={loading}
               isMobile={isMobile}
-              onStop={webUiIdentityMode ? undefined : handleStop}
-              onRunQueued={webUiIdentityMode ? undefined : handleRunQueued}
               onContinue={webUiIdentityMode ? undefined : handleContinue}
             />
             {queuedMessages.length > 0 && (
               <div className="foxwarm-queued-preview min-w-0 max-w-full" data-queued-preview="true" aria-label="Queued messages">
-                <ThreadCardHeightContext.Provider value={cardHeightContext}><ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} timelineView={timelineView} showUsageBadge={false} showTimeDividers={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} /></ThreadCardHeightContext.Provider>
+                <ThreadCardHeightContext.Provider value={cardHeightContext}><ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} timelineView={timelineView} showUsageBadge={false} showTimeDividers={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} renderMessageFooter={sessionQueueLength > 0 ? renderQueuedFooter : undefined} /></ThreadCardHeightContext.Provider>
               </div>
             )}
             <div aria-hidden="true" data-chat-composer-spacer style={{ height: 'calc(var(--chat-composer-offset, 224px) - 2.5rem)' }} />
@@ -1412,6 +1440,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
             onClick={scrollToTop}
             className="absolute right-4 top-4 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-fw-accent text-fw-accent-text shadow-lg transition-all hover:bg-fw-accent dark:bg-fw-accent dark:hover:bg-fw-accent"
             aria-label="Scroll to top"
+            style={mobileUi ? {top: 'calc(var(--chat-mobile-header-height, 60px) + 1rem)'} : undefined}
           >
             <svg className="h-[18px] w-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
@@ -1441,6 +1470,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         onChangeNode={updateSessionNode}
         sessionMissing={sessionMissing}
         loading={loading}
+        sessionRunning={isSessionRuntimeActive({runtimeState: sessionRecord?.runtimeState, busy: sessionBusy})}
+        onStop={webUiIdentityMode ? undefined : handleStop}
         asrAvailable={asrAvailable}
         modelOptions={modelOptions}
         currentModelKey={sessionRecord?.modelKey}
@@ -1505,6 +1536,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   prev.searchShortcutActive === next.searchShortcutActive &&
   prev.sessionDisplayName === next.sessionDisplayName &&
   Boolean(prev.onBack) === Boolean(next.onBack) &&
+  Boolean(prev.onNewSession) === Boolean(next.onNewSession) &&
   prev.onOpenTerminal === next.onOpenTerminal
   && prev.onOpenCode === next.onOpenCode
   && prev.onOpenCodeFile === next.onOpenCodeFile

@@ -49,9 +49,11 @@ function showRecovery(message: string, state: 'error' | 'notice') {
   screen.toggleAttribute('data-fox-splash', state === 'error')
   screen.setAttribute('role', 'alert')
   screen.removeAttribute('aria-label')
+  screen.setAttribute('aria-labelledby', 'foxwarm-boot-title')
+  screen.setAttribute('aria-describedby', 'foxwarm-boot-description')
   document.getElementById('foxwarm-boot-title')!.textContent = state === 'error' ? 'Foxwarm couldn’t load' : 'Some features couldn’t load'
   document.getElementById('foxwarm-boot-description')!.textContent = state === 'error'
-    ? 'Check your connection, then reload to try again.'
+    ? 'Reload to try again.'
     : 'You can keep working, or reload to try again.'
   document.getElementById('foxwarm-boot-error')!.textContent = message
   document.getElementById('foxwarm-boot-recovery')!.hidden = false

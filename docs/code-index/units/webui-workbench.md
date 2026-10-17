@@ -176,3 +176,5 @@ Responsive fixtures use one coherent geometry sample after the native scrollbar 
 Focused desktop panes retain neutral borders without the old accent ring. Focus ownership, routing, keyboard behavior, and active-tab indicators remain intact; this avoids a clipped colored outline appearing only at rounded pane corners. Chrome palette roles and the independent mode choices are owned by [D-webui-theme-v3-chrome](./webui-theme-system.md#d-webui-theme-v3-chrome).
 
 The status bar itself is transparent and does not paint a full-width plate. Individual controls retain hover/focus/open highlights; theme status-surface data is an interaction base, not a permanent footer fill. Gallery and detailed previews use the same transparent footer treatment.
+
+Mobile-specific navigation, headers, and preferences follow the [mobile shell contract](../threads/webui-mobile-shell.md); desktop data and workbench owners remain unchanged.

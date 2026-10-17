@@ -1,3 +1,4 @@
+import { useMobileChatViewport } from '../chatPreferences'
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ArrowUp, Check, ChevronDown, GitBranch, Link2, SlidersHorizontal, Mic, Paperclip, Plus, RefreshCw, Settings, Square } from 'lucide-react'
@@ -19,6 +20,7 @@ import { filterModelOptions, formatVirtualModelDetail, groupModelOptionsByProvid
 import { buildChildModelComposerState, type ChildPolicyChainEntry } from './childModelState'
 import InlineComposerEditor, { type InlineComposerEditorHandle } from './InlineComposerEditor'
 import NodePicker from './NodePicker'
+import ComposerAttachmentGrid from './ComposerAttachmentGrid'
 import {
   clearComposerDraft,
   getPlainComposerDraftText,
@@ -52,6 +54,8 @@ interface ChatComposerProps {
   onChangeNode?: (nodeId: string, signal: AbortSignal) => Promise<void>
   sessionMissing: boolean
   loading: boolean
+  sessionRunning?: boolean
+  onStop?: () => void
   asrAvailable: boolean
   modelOptions: ModelOption[]
   currentModelKey?: string
@@ -699,6 +703,8 @@ const ChatComposer = memo(function ChatComposer({
   onChangeNode,
   sessionMissing,
   loading,
+  sessionRunning = false,
+  onStop,
   asrAvailable,
   modelOptions,
   currentModelKey,
@@ -1004,6 +1010,10 @@ const ChatComposer = memo(function ChatComposer({
     () => draft.segments.filter((segment): segment is ComposerAttachmentSegment => segment.type === 'attachment'),
     [draft],
   )
+  const mobileUi = useMobileChatViewport()
+  const [pendingCompositionText, setPendingCompositionText] = useState(false)
+  const showStop = !pendingCompositionText && !!onStop && sessionRunning && !input.trim() && attachmentSegments.length === 0
+
   const availableAttachments = useMemo(() => attachmentSegments.flatMap(segment => {
     const file = getMessageAttachmentFile(sessionId, segment.ref)
     return file ? [{ ref: segment.ref, file }] : []
@@ -1485,6 +1495,13 @@ const ChatComposer = memo(function ChatComposer({
           }}
           className="hidden"
         />
+        <ComposerAttachmentGrid key={sessionId}
+          attachments={attachmentSegments}
+          resolveFile={ref => getMessageAttachmentFile(sessionId, ref)}
+          disabled={loading || sessionMissing || recordingLocked}
+          onOpen={ref => editorRef.current?.openAttachment(ref)}
+          onRemove={ref => editorRef.current?.removeAttachment(ref)}
+        />
         <InlineComposerEditor
           ref={editorRef}
           draftId={sessionId}
@@ -1492,7 +1509,7 @@ const ChatComposer = memo(function ChatComposer({
           disabled={loading || sessionMissing || recordingLocked}
           placeholder={sessionMissing
             ? 'Session not found'
-            : webUiIdentityMode ? 'Send a message' : 'Ask Foxwarm anything, + to add files, / for commands'}
+            : mobileUi ? '' : webUiIdentityMode ? 'Send a message' : 'Ask Foxwarm anything, + to add files, / for commands'}
           onChange={(nextDraft) => {
             commitDraft(nextDraft)
             setDismissedSlashQuery(null)
@@ -1507,6 +1524,7 @@ const ChatComposer = memo(function ChatComposer({
           }))}
           resolveAttachmentFile={(ref) => getMessageAttachmentFile(sessionId, ref)}
           onReattachFile={(ref, file) => setMessageAttachmentFile(sessionId, ref, file)}
+          onCompositionPresenceChange={setPendingCompositionText}
           onCommandKeyDown={handleCommandKeyDownBridge}
         />
         {draftPersistenceError && <div className="px-3 pb-1 text-xs text-fw-danger" role="alert">{draftPersistenceError}</div>}
@@ -1572,13 +1590,20 @@ const ChatComposer = memo(function ChatComposer({
             />}
           </div>
           <button
-            type="submit"
-            disabled={loading || sessionMissing || recordingLocked || (!input.trim() && attachmentSegments.length === 0)}
+            type={showStop ? 'button' : 'submit'}
+            onClick={showStop ? () => {
+              // A just-committed IME/paste transaction must never turn a send into cancellation.
+              const current = editorRef.current?.flushForSubmit() || draftRef.current
+              if (serializeComposerDraft(current).trim() || current.segments.some(segment => segment.type === 'attachment')) { void handleSubmit(); return }
+              if (!recordingLockRef.current && !sessionMissing) onStop?.()
+            } : undefined}
+            disabled={sessionMissing || recordingLocked || (!showStop && (loading || (!input.trim() && attachmentSegments.length === 0 && !pendingCompositionText)))}
             className="foxwarm-composer-send-button inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-fw-text-strong text-fw-surface transition hover:bg-fw-text disabled:bg-fw-border-strong disabled:text-fw-text-muted disabled:cursor-not-allowed"
-            aria-label="Send message"
-            title="Send message"
+            data-composer-action={showStop ? 'stop' : 'send'}
+            aria-label={showStop ? 'Stop session' : 'Send message'}
+            title={showStop ? 'Stop session' : 'Send message'}
           >
-            <ArrowUp size={18} />
+            {showStop ? <Square size={14} fill="currentColor" /> : <ArrowUp size={18} />}
           </button>
         </div>
           </form>

@@ -93,6 +93,13 @@ export function FoxThinking({ className = '', label, size = 20 }: { className?: 
   )
 }
 
+/** Quiet waiting indicator: the same curled fox, breathing softly with sleep marks. */
+export function FoxSleeping({ size = 24, className = '' }: { size?: number; className?: string }) {
+  return <span className={`fw-fox-dozing inline-flex shrink-0 ${className}`} style={{ width: size, height: size, fontSize: size }} data-fox-loader="sleeping" aria-hidden="true">
+    <svg viewBox={FOX_VIEWBOX} width={size} height={size} className="fw-fox"><FoxLines draw={false} /></svg>
+  </span>
+}
+
 /** Centered fox spinner + optional caption, for lazy views and panes. */
 export function FoxPaneLoader({ label }: { label?: string }) {
   return (

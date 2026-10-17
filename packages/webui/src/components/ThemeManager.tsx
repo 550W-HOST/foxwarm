@@ -17,24 +17,11 @@ function downloadTheme(serialized: string, name: string) {
 
 function ThemePreview({ variant }: { variant: ThemeVariant }) {
   return <span className="theme-card-preview theme-thumb" aria-hidden="true" style={themeVariantCssVariables(variant) as CSSProperties}>
-    <span className="theme-thumb-sidebar">
-      <span className="theme-thumb-brand"><i /><b /></span>
-      <span className="theme-thumb-nav"><i /><b /></span>
-      <span className="theme-thumb-nav theme-thumb-nav-selected"><i /><b /></span>
-      <span className="theme-thumb-nav"><i /><b /></span>
-      <span className="theme-thumb-sidebar-rule" />
-      <span className="theme-thumb-session"><i /><b /></span>
-      <span className="theme-thumb-session"><i /><b /></span>
-    </span>
+    <span className="theme-thumb-sidebar"><i /><b /></span>
     <span className="theme-thumb-workspace">
-      <span className="theme-thumb-tabs"><i /><b /><b /></span>
-      <span className="theme-thumb-chat">
-        <span className="theme-thumb-user"><i /><i /></span>
-        <span className="theme-thumb-assistant"><i /><i /><i /></span>
-        <span className="theme-thumb-tool"><b /><span><i /><i /></span></span>
-      </span>
-      <span className="theme-thumb-composer"><i /><span><i /><b /></span></span>
-      <span className="theme-thumb-status"><i /><i /></span>
+      <span className="theme-thumb-tabs"><i /></span>
+      <span className="theme-thumb-chat"><i className="theme-thumb-user" /><i className="theme-thumb-assistant" /><i className="theme-thumb-tool" /></span>
+      <span className="theme-thumb-composer" />
     </span>
   </span>
 }
@@ -164,7 +151,7 @@ export default function ThemeManager() {
                   <button type="button" data-theme-option={option.id} data-theme-option-mode={mode} data-theme-surface="medium" aria-pressed={selected} aria-label={`Use ${option.name} for ${mode === 'light' ? 'Light' : 'Dark'}`}
                     onClick={() => { theme.setThemeForMode(mode, option.id); setMessage(null) }} className="theme-option-select w-full text-left">
                     <ThemePreview variant={option.variants[mode]} />
-                    <span className="flex min-w-0 items-center gap-2 px-2 py-2.5"><span className="min-w-0 flex-1 truncate text-sm font-medium text-fw-text-strong">{option.name}</span>{!option.id.startsWith('foxwarm.') && <span className="text-[10px] text-fw-text-muted">Custom</span>}{selected && <Check className="h-4 w-4 shrink-0 text-fw-accent" aria-hidden="true" />}</span>
+                    <span className="theme-option-caption flex min-w-0 items-center gap-1 pl-1 pr-8"><span title={option.name} className="min-w-0 flex-1 truncate text-[13px] font-medium text-fw-text-strong">{option.name}</span>{selected && <Check className="h-3 w-3 shrink-0 text-fw-accent" aria-hidden="true" />}</span>
                   </button>
                   <button type="button" data-theme-preview={option.id} data-theme-preview-mode={mode} title="Preview theme" aria-label={`Preview ${option.name} · ${mode === 'light' ? 'Light' : 'Dark'}`}
                     onClick={event => { openerRef.current = event.currentTarget; setPreview({ id: option.id, mode }); setMessage(null) }} className="theme-preview-open"><Expand className="h-3.5 w-3.5" aria-hidden="true" /></button>

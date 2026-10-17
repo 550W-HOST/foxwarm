@@ -66,10 +66,10 @@ const screenshot = async name => {
   await page.screenshot({ path: `${process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR}/${name}.png`, fullPage: true })
 }
 
-test('a completed coordination sequence has one process, aggregate usage and original process cards', async () => {
-  assert.equal(await page.$$eval('[data-timeline-activity]', elements => elements.length), 1)
+test('a completed coordination sequence keeps every update visible with scoped usage and original technical cards', async () => {
+  assert.equal(await page.$$eval('[data-timeline-activity]', elements => elements.length), 4)
   assert.equal(await page.$$eval('[data-usage-badge-anchor]', elements => elements.length), 0)
-  assert.equal(await page.evaluate(() => window.fixture.matches('I will ask').length), 0)
+  assert.equal(await page.evaluate(() => window.fixture.matches('I will ask').length), 1)
   assert.equal(await page.evaluate(() => window.fixture.matches('implementation is consistent').length), 1)
   assert.equal(await page.$eval('.foxwarm-conversation-reply', element => getComputedStyle(element).borderTopWidth), '0px')
   await screenshot('completed-collapsed')
@@ -90,14 +90,14 @@ test('a completed coordination sequence has one process, aggregate usage and ori
     assert.ok(Math.abs(after.rowRight - after.tokenRight) <= 1)
     const details = await page.$eval('[data-conversation-usage-details]', element => ({ right: element.getBoundingClientRect().right, parentRight: element.closest('[data-conversation-usage]').getBoundingClientRect().right, text: element.textContent }))
     assert.ok(details.right <= details.parentRight + 1)
-    assert.ok(details.text.includes('Requests4') && !details.text.includes('pending'))
+    assert.ok(details.text.includes('Requests1') && !details.text.includes('pending'))
     if (theme === 'console') await screenshot('console-usage-expanded')
     await page.click('[aria-label="Hide process usage"]')
   }
-  await page.click('[aria-label="Expand activity"]')
+  await page.$$eval('[aria-label="Expand activity"]', buttons => buttons.forEach(button => button.click()))
   await page.waitForSelector('[data-activity-details] .foxwarm-tool-card')
   await page.waitForFunction(() => !document.querySelector('[data-timeline-activity]').style.height)
-  assert.ok((await page.$eval('[data-activity-details]', element => element.textContent)).includes('I will ask a child'))
+  assert.equal(await page.$$eval('[data-activity-details]', elements => elements.some(element => element.textContent.includes('I will ask a child'))),false)
   assert.equal(await page.$$eval('[data-conversation-step]', elements => elements.length), 0)
   assert.ok(!(await page.$eval('main', element => element.textContent)).includes('TOOL_OUTPUT_VISIBLE_ONLY_AFTER_OPEN'))
   assert.ok(await page.$('[data-activity-details] [data-system-message-kind="inter-agent"]'), 'Internal input uses its original system card')
@@ -127,33 +127,39 @@ test('a completed coordination sequence has one process, aggregate usage and ori
 
 })
 
-test('undecided streaming text begins in the process and completion keeps manual disclosure', async () => {
+test('streaming prose stays outside technical details and completion keeps manual disclosure', async () => {
   const input = user('Inspect this change and report the result.', 20, 200000)
-  const draft = { role: 'model', parts: [{ text: 'I am checking the implementation now.' }], __meta: { streaming: true, temporary: true, llmRequestId: 'live-request', synthetic: 'streamingAssistantDraft' } }
-  await page.evaluate((input, draft) => { window.fixture.setMessages([input, draft]); window.fixture.setRuntime({ state:'requesting-model', busy:true, since:Date.now() - 2000, queueLength:0 }) }, input, draft)
-  await page.waitForSelector('[data-conversation-preview]')
-  assert.equal(await page.$$eval('[aria-label="Show process usage"]', elements => elements.length), 0)
-  assert.equal(await page.$$eval('.foxwarm-conversation-reply:not([data-conversation-preview] *)', elements => elements.length), 0)
-  const proseStyle = selector => page.$eval(selector, element => {
-    const text = getComputedStyle(element.querySelector('.foxwarm-markdown')), card = getComputedStyle(element)
-    return { size: text.fontSize, color: text.color, opacity: card.opacity, padding: card.padding, left: element.getBoundingClientRect().left }
+  const thinking = {thinking:'Inspect the supported implementation path.'}
+  const text = {text:'I am checking the implementation now.'}
+  const draft = {role:'model',parts:[thinking,text],__meta:{streaming:true,temporary:true,llmRequestId:'live-request',synthetic:'streamingAssistantDraft'}}
+  await page.evaluate((input,draft) => {window.fixture.setMessages([input,draft]);window.fixture.setRuntime({state:'requesting-model',busy:true,since:Date.now()-2000,queueLength:0})},input,draft)
+  await page.waitForSelector('.foxwarm-conversation-reply')
+  assert.equal(await page.$$eval('[data-conversation-preview]',elements=>elements.length),0)
+  assert.equal(await page.$$eval('[aria-label="Show process usage"]',elements=>elements.length),0)
+  const proseStyle = () => page.$eval('.foxwarm-conversation-reply',element=>{
+    const text=getComputedStyle(element.querySelector('.foxwarm-markdown')),card=getComputedStyle(element)
+    return {size:text.fontSize,color:text.color,opacity:card.opacity,padding:card.padding,left:element.getBoundingClientRect().left}
   })
-  const previewStyle = await proseStyle('[data-conversation-preview] .foxwarm-conversation-reply')
-  await screenshot('live-preview')
-  await page.click('[aria-label="Expand activity"]')
-  const committed = model([{ text: 'I am checking the implementation now.' }, call('live-read', 'read', { filePath: 'src/example.ts' })], 21, 202000, 'live-request', { usage, llmRequestTiming: timing(200000, 202000) })
-  const pending = model([{ text: 'Searchable unfinished explanation.' }], 23, 203000, 'pending-request', { llmSegment: { outputStart: 0, outputEndExclusive: 1, complete: false } })
-  await page.evaluate(messages => window.fixture.setMessages(messages), [input, committed, result('live-read', 'read', 'Inspected.', 22, 202000, 202100), pending])
-  await page.waitForFunction(() => document.querySelector('[data-activity-details]')?.textContent.includes('Searchable unfinished'))
-  await page.waitForFunction(() => window.fixture.searchSurface('Searchable unfinished') === 'Searchable unfinished explanation.')
-  const final = model([{ text: 'The check is complete.', phase: 'final_answer' }], 23, 205000, 'final-request', { usage, llmRequestTiming: timing(203000, 205000) })
-  await page.evaluate(messages => { window.fixture.setMessages(messages); window.fixture.setRuntime({ state:'idle', busy:false, queueLength:0 }) }, [input, committed, result('live-read', 'read', 'Inspected.', 22, 202000, 202100), final])
-  await page.waitForFunction(() => document.querySelector('.foxwarm-conversation-reply:not([data-activity-details] *)')?.textContent.includes('The check is complete.'))
-  assert.equal(await page.$$eval('[data-timeline-activity]', elements => elements.length), 1)
-  assert.equal(await page.$eval('[data-timeline-activity]', element => element.dataset.activityExpanded), 'true')
-  assert.equal(await page.$$eval('[data-conversation-preview]', elements => elements.length), 0)
-  assert.deepEqual(await proseStyle('.foxwarm-conversation-reply:not([data-activity-details] *)'), previewStyle)
-  await page.evaluate(() => window.fixture.setRuntime({ state:'waiting', busy:true, queueLength:0, waiting:{ reason:'Reason retained in runtime metadata only.', waitingFor:'sessions' } }))
-  await page.waitForFunction(() => document.querySelector('[data-processing-runtime-state="waiting"]')?.textContent.includes('Waiting'))
+  const originalStyle=await proseStyle()
+  await page.evaluate(()=>{window.streamingProse=document.querySelector('.foxwarm-conversation-reply')})
+  await screenshot('live-visible-prose')
+  await page.click('[aria-label="Expand activity"]:not([disabled])')
+  const committed=model([thinking,text,call('live-read','read',{filePath:'src/example.ts'})],21,202000,'live-request',{usage,llmRequestTiming:timing(200000,202000)})
+  const pending=model([{text:'Searchable unfinished explanation.'}],23,203000,'pending-request',{llmSegment:{outputStart:0,outputEndExclusive:1,complete:false}})
+  await page.evaluate(messages=>window.fixture.setMessages(messages),[input,committed,result('live-read','read','Inspected.',22,202000,202100),pending])
+  await page.waitForFunction(()=>document.querySelector('main').textContent.includes('Searchable unfinished explanation.'))
+  const searchProbe=await page.evaluate(()=>({matches:window.fixture.matches('Searchable unfinished'),surface:window.fixture.searchSurface('Searchable unfinished')}))
+  assert.ok(searchProbe.surface?.includes('Searchable unfinished explanation.'),JSON.stringify(searchProbe))
+  assert.equal(await page.$$eval('[data-activity-details]',elements=>elements.some(element=>element.textContent.includes('Searchable unfinished'))),false)
+  assert.equal(await page.evaluate(()=>window.streamingProse.isConnected&&window.streamingProse===document.querySelector('.foxwarm-conversation-reply')),true)
+  const final=model([{text:'The check is complete.',phase:'final_answer'}],23,205000,'final-request',{usage,llmRequestTiming:timing(203000,205000)})
+  await page.evaluate(messages=>{window.fixture.setMessages(messages);window.fixture.setRuntime({state:'idle',busy:false,queueLength:0})},[input,committed,result('live-read','read','Inspected.',22,202000,202100),final])
+  await page.waitForFunction(()=>[...document.querySelectorAll('.foxwarm-conversation-reply')].some(element=>element.textContent.includes('The check is complete.')))
+  assert.equal(await page.$$eval('[data-timeline-activity]',elements=>elements.length),2)
+  assert.equal(await page.$eval('[data-timeline-activity]',element=>element.dataset.activityExpanded),'true')
+  assert.equal(await page.$$eval('[data-conversation-preview]',elements=>elements.length),0)
+  assert.deepEqual(await proseStyle(),originalStyle)
+  await page.evaluate(()=>window.fixture.setRuntime({state:'waiting',busy:true,queueLength:0,waiting:{reason:'Reason retained in runtime metadata only.',waitingFor:'sessions'}}))
+  await page.waitForFunction(()=>document.querySelector('[data-processing-runtime-state="waiting"]')?.textContent.includes('Waiting'))
   await screenshot('conversation-waiting')
 })

@@ -14,3 +14,5 @@ export * from './gitCommitDetails';
 export * from './applyPatch';
 export * from './configSchemas';
 export * from './foxwarmMarkup';
+
+export * from './fileDelivery';

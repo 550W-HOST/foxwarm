@@ -1,6 +1,6 @@
 import { memo } from 'react'
 import RuntimeBusySpinner from './RuntimeBusySpinner'
-import { FoxThinking } from './FoxLoaders'
+import { FoxThinking, FoxSleeping } from './FoxLoaders'
 import FoxThinkingText from './FoxThinkingText'
 import type { TimelineView } from '../chatPreferences'
 import { getRuntimeStateSummary, type SessionRuntimeState } from '../sessionRuntimeState'
@@ -13,8 +13,6 @@ interface ProcessingStatusProps {
   loading: boolean
   isMobile: boolean
   timelineView?: TimelineView
-  onStop?: () => void
-  onRunQueued?: () => void
   onContinue?: () => void
 }
 
@@ -28,8 +26,6 @@ const ProcessingStatus = memo(function ProcessingStatus({
   loading,
   isMobile,
   timelineView,
-  onStop,
-  onRunQueued,
   onContinue,
 }: ProcessingStatusProps) {
   const rowWidthClass = isMobile ? 'w-full' : 'w-full max-w-[80%]'
@@ -50,7 +46,6 @@ const ProcessingStatus = memo(function ProcessingStatus({
   const isExec = runtimeStateName === 'running-tool' && /(?:^|[.:/])exec$/.test(runtimeState?.tool?.name || '')
   const rotateStatusCopy = !loading && (rotateThinkingCopy || isExec)
   const execDetails = isExec ? [runtimeSummary, runtimeState?.tool?.executionNode, runtimeState?.tool?.argsPreview].filter(Boolean).join(' · ') : undefined
-  const isActive = runtimeStateName === 'requesting-model' || runtimeStateName === 'running-tool'
   const tone = runtimeStateName === 'running-tool'
     ? {
         text: 'text-fw-special dark:text-fw-special',
@@ -72,7 +67,7 @@ const ProcessingStatus = memo(function ProcessingStatus({
 
   return (
     <div data-processing-status-slot className={hasQueue ? 'flex min-h-14 items-end pt-4' : 'flex h-14 items-end'}>
-      {(loading || showStatusLabel || hasQueue) && (
+      {(loading || showStatusLabel) && (
         <div role="status" className={`fw-processing-control-group flex min-h-8 min-w-0 flex-wrap items-center gap-x-3 gap-y-1 ${rotateStatusCopy ? `fw-processing-animated ${isExec ? 'fw-processing-exec' : ''}` : ''} ${rowWidthClass}`}>
           {(loading || showStatusLabel) && (
             <div className="fw-processing-main flex min-w-0 max-w-full items-center gap-3">
@@ -80,7 +75,9 @@ const ProcessingStatus = memo(function ProcessingStatus({
                 data-processing-runtime-state={loading ? undefined : interrupted ? 'interrupted' : runtimeStateName}>
                 {loading ? <FoxThinking label="Loading" size={24} /> : (
                   <>
-                    {runtimeStateName === 'waiting' || interrupted ? (
+                    {runtimeStateName === 'waiting' ? (
+                      <FoxSleeping className={tone.text} />
+                    ) : interrupted ? (
                       <span className={`h-2 w-2 shrink-0 rounded-full ${tone.dot}`} data-processing-status-dot="static" />
                     ) : rotateStatusCopy ? (
                       <FoxThinking className="shrink-0" size={24} />
@@ -93,18 +90,31 @@ const ProcessingStatus = memo(function ProcessingStatus({
                   </>
                 )}
               </div>
-              {!loading && isActive && onStop && <button type="button" onClick={onStop} className={`${controlButtonClass} h-8 text-sm`}>Stop</button>}
+
               {interrupted && onContinue && <button type="button" onClick={onContinue} className={`${controlButtonClass} h-8 text-sm`}>Continue</button>}
             </div>
           )}
-          {hasQueue && (
-            <div data-processing-queue-status className="ml-auto flex max-w-full shrink-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-xs leading-5 text-fw-text-muted">
-              <span>{sessionQueueLength} queued</span>
-              {onRunQueued && <button type="button" onClick={onRunQueued} className={`${controlButtonClass} text-xs leading-5`}>Run queued</button>}
-            </div>
-          )}
+
         </div>
       )}
+    </div>
+  )
+})
+
+/** Queue controls belong to the final visible message, not the runtime status row. */
+export const QueuedMessageStatus = memo(function QueuedMessageStatus({ count, alignment, isMobile, onRunQueued }: {
+  count: number
+  alignment: 'left' | 'right'
+  isMobile: boolean
+  onRunQueued?: () => void
+}) {
+  if (count <= 0) return null
+  return (
+    <div data-processing-queue-footer data-alignment={alignment} className={`mt-1.5 flex w-full min-w-0 ${alignment === 'right' ? 'justify-end' : 'justify-start'}`}>
+      <div data-processing-queue-status role="status" className={`flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-xs leading-5 text-fw-text-muted ${isMobile ? 'max-w-full' : 'max-w-[80%]'} ${alignment === 'right' ? 'justify-end text-right' : 'justify-start text-left'}`}>
+        <span>{count} queued</span>
+        {onRunQueued && <button type="button" onClick={onRunQueued} className={`${controlButtonClass} text-xs leading-5`}>Run queued</button>}
+      </div>
     </div>
   )
 })

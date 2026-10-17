@@ -1,13 +1,13 @@
 import { createContext, memo, useContext, useState } from 'react'
 import type { MessagePart } from './chatShared'
 import { makeApiUrl } from '../config'
+import ImagePreviewDialog, { isSafeImagePreviewMime } from './ImagePreviewDialog'
 
 export const WebUiImageSessionContext = createContext<string | null>(null)
 
-const SAFE_RASTER_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
-
 export function ImageItem({ part, label, imageClassName = 'max-w-[300px] max-h-[200px]' }: { part: MessagePart; label: string; imageClassName?: string }) {
   const [failed, setFailed] = useState(false)
+  const [preview, setPreview] = useState(false)
   const webUiSessionId = useContext(WebUiImageSessionContext)
   const mimeType = part.inlineDataRef?.mimeType
     || part.inlineData?.mimeType
@@ -25,30 +25,33 @@ export function ImageItem({ part, label, imageClassName = 'max-w-[300px] max-h-[
   if (!src || failed) {
     return <div className="text-xs text-fw-text-muted">Image unavailable</div>
   }
-  if (!SAFE_RASTER_MIME_TYPES.has(mimeType)) {
+  if (!isSafeImagePreviewMime(mimeType)) {
     return (
-      <a className="text-xs text-fw-accent dark:text-fw-accent underline" href={src} target="_blank" rel="noopener noreferrer">
+      <a className="text-xs text-fw-accent dark:text-fw-accent underline" href={src} download={label} rel="noopener noreferrer">
         Download image attachment
       </a>
     )
   }
 
   return (
-    <button
-      type="button"
-      className="foxwarm-image-item relative cursor-pointer text-left"
-      aria-label={`Open ${label}`}
-      onClick={() => window.open(src, '_blank', 'noopener,noreferrer')}
-    >
-      <img
-        src={src}
-        alt={label}
-        loading="lazy"
-        onError={() => setFailed(true)}
-        className={`${imageClassName} rounded-lg border border-fw-border-strong hover:opacity-90 transition`}
-      />
-      <div className="foxwarm-image-hover-overlay absolute inset-0 bg-fw-overlay/0 transition rounded-lg pointer-events-none" />
-    </button>
+    <>
+      <button
+        type="button"
+        className="foxwarm-image-item relative cursor-pointer text-left"
+        aria-label={`Open ${label}`}
+        onClick={() => setPreview(true)}
+      >
+        <img
+          src={src}
+          alt={label}
+          loading="lazy"
+          onError={() => setFailed(true)}
+          className={`${imageClassName} rounded-lg border border-fw-border-strong hover:opacity-90 transition`}
+        />
+        <div className="foxwarm-image-hover-overlay absolute inset-0 bg-fw-overlay/0 transition rounded-lg pointer-events-none" />
+      </button>
+      {preview && <ImagePreviewDialog src={src} mimeType={mimeType} title={label} onClose={() => setPreview(false)} />}
+    </>
   )
 }
 

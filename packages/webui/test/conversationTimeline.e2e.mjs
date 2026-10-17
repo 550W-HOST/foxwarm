@@ -30,7 +30,7 @@ before(async () => {
     import React from 'react'
     import { createRoot } from 'react-dom/client'
     import ChatTimeline from './src/components/ChatTimeline'
-    import ProcessingStatus from './src/components/ProcessingStatus'
+    import ProcessingStatus, {QueuedMessageStatus} from './src/components/ProcessingStatus'
     import SessionUiSettingsMenu from './src/components/SessionUiSettingsMenu'
     import { useChatPreferences } from './src/chatPreferences'
     import { projectSessionSearchFields, findSessionSearchMatches } from './src/components/chatSessionSearch'
@@ -70,8 +70,8 @@ before(async () => {
       return <div className="foxwarm-chat-root">
         <SessionUiSettingsMenu {...prefs} onSendKeyModeChange={prefs.setSendKeyMode} onTimelineViewChange={prefs.setTimelineView} onShowUsageBadgeChange={prefs.setShowUsageBadge} onShowUserMessageMetadataChange={prefs.setShowUserMessageMetadata} onOpenDebugInfo={()=>{}} />
         <div id="timeline"><ChatTimeline sessionId="fixture/main" messages={[...messages.slice(...slice),...(draft?[draft]:[])]} historyMessages={messages} runtimeState={runtime} isRunningTool={runtime.state==='running-tool'} isMobile={false} timelineView={prefs.timelineView} showUsageBadge={prefs.showUsageBadge} showUserMessageMetadata={prefs.showUserMessageMetadata} /></div>
-        <div id="status"><ProcessingStatus timelineView={prefs.timelineView} runtimeState={runtime} sessionBusy={runtime.busy} sessionQueueLength={2} turnIncomplete={runtime.state==='idle'} loading={false} isMobile={false} onStop={()=>window.fixture.controls.push('stop')} onContinue={()=>window.fixture.controls.push('continue')} onRunQueued={()=>window.fixture.controls.push('queued')} /></div>
-        <div id="queue"><ChatTimeline sessionId="fixture/main" messages={queued} isMobile={false} timelineView={prefs.timelineView} showUsageBadge={false} showTimeDividers={false} /></div>
+        <div id="status"><ProcessingStatus timelineView={prefs.timelineView} runtimeState={runtime} sessionBusy={runtime.busy} sessionQueueLength={2} turnIncomplete={runtime.state==='idle'} loading={false} isMobile={false} onContinue={()=>window.fixture.controls.push('continue')} onRunQueued={()=>window.fixture.controls.push('queued')} /></div>
+        <div id="queue"><ChatTimeline sessionId="fixture/main" messages={queued} isMobile={false} timelineView={prefs.timelineView} showUsageBadge={false} showTimeDividers={false} renderMessageFooter={alignment=><QueuedMessageStatus count={2} alignment={alignment} isMobile={false} onRunQueued={()=>window.fixture.controls.push('queued')} />} /></div>
       </div>
     }
     createRoot(document.getElementById('root')).render(<Fixture />)
@@ -111,22 +111,22 @@ test('browser preferences read old values, prioritize the new mode, and write on
 })
 
 test('Conversation retains ordered commentary, final text, images and literal user quotes; activity never duplicates them', async () => {
-  assert.equal(await page.$eval('#timeline', root => root.querySelectorAll('[data-timeline-activity]').length), 5)
+  assert.equal(await page.$eval('#timeline', root => root.querySelectorAll('[data-timeline-activity]').length), 6)
   assert.equal(await page.$eval('#timeline [data-timeline-activity] [aria-label$="activity"] span:last-child', span => span.textContent), 'Activity', 'records without supported counts retain the neutral fallback')
   assert.equal(await page.$eval('#timeline', root => root.querySelectorAll('[data-activity-details]').length), 0)
-  assert.deepEqual(await page.$eval('#timeline', root => [...root.querySelectorAll('.foxwarm-assistant-message-card, img')].map(el => el.tagName === 'IMG' ? 'image' : el.textContent.trim())), ['image', 'COMMENTARY_BODY', 'image', 'AFTER_CALL_BODY', 'FINAL_BODY'])
+  assert.deepEqual(await page.$eval('#timeline', root => [...root.querySelectorAll('.foxwarm-assistant-message-card, img')].map(el => el.tagName === 'IMG' ? 'image' : el.textContent.trim())), ['image', 'COMMENTARY_BODY', 'image', 'MIDDLE_BODY', 'AFTER_CALL_BODY', 'FINAL_BODY'])
   const body = await page.$eval('#timeline', root => root.textContent)
   for (const text of ['QUOTED_USER_BODY', 'PASTED_USER_BODY', 'SUMMARY_40', '</foxwarm-system>']) assert.ok(body.includes(text), text)
   for (const text of ['TECHNICAL_', 'SECRET_REASONING', 'INTERNAL_']) assert.ok(!body.includes(text), text)
   assert.equal(await page.$eval('#timeline', root => root.querySelectorAll('[aria-label="Show process usage"]').length), 1)
   if (process.env.FOXWARM_E2E_SCREENSHOT_PATH) await page.screenshot({ path: process.env.FOXWARM_E2E_SCREENSHOT_PATH, fullPage: true })
   await page.$eval('#timeline', root => [...root.querySelectorAll('[aria-label="Expand activity"]')].forEach(button => button.click()))
-  await page.waitForFunction(() => document.querySelectorAll('#timeline [data-activity-details]').length === 5)
+  await page.waitForFunction(() => document.querySelectorAll('#timeline [data-activity-details]').length === 6)
   for (const text of ['COMMENTARY_BODY', 'MIDDLE_BODY', 'AFTER_CALL_BODY', 'FINAL_BODY']) {
     assert.equal(await page.$eval('#timeline', (root, text) => [...root.querySelectorAll('.foxwarm-assistant-message-card')].filter(card => card.textContent.includes(text)).length, text), 1)
   }
   assert.ok(!(await page.$eval('#timeline', root => root.textContent)).includes('INTERNAL_TOOL_RESULT'), 'opening a process leaves native tool bodies collapsed')
-  await page.$eval('#timeline [data-activity-details] [aria-label="Expand exec tool"]', button => button.click())
+  await page.$$eval('#timeline [data-activity-details] [aria-label="Expand exec tool"]', buttons => buttons.forEach(button => button.click()))
   await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('INTERNAL_TOOL_RESULT'))
   assert.equal(await page.$eval('#timeline', root => root.querySelectorAll('img:not([data-activity-details] img)').length), 2)
   assert.equal(await countMatches('TECHNICAL_mixed'), 0)
@@ -167,8 +167,8 @@ test('live status owns Working once; pending internal inputs do not become activ
   assert.ok((await page.$eval('#status', root => root.textContent)).includes('Working…'))
   assert.equal(await page.$eval('#root', root => (root.textContent.match(/Working…/g) || []).length), 1)
   assert.equal(await page.$eval('#queue', root => root.querySelectorAll('[data-timeline-activity]').length), 0)
-  assert.equal((await page.$eval('#queue', root => root.textContent)).trim(), 'QUEUED_USER')
-  await page.$eval('#status', root => [...root.querySelectorAll('button')].find(button => button.textContent === 'Stop').click())
+  assert.equal((await page.$eval('#queue .foxwarm-user-message-text', root => root.textContent)).trim(), 'QUEUED_USER')
+  assert.equal(await page.$('#status button::-p-text(Stop)'), null)
   await page.evaluate(() => window.fixture.setRuntime({ state: 'waiting', busy: false, queueLength: 2, waiting: { waitingFor: 'input', reason: 'Please choose a target' } }))
   await page.waitForSelector('#status [data-processing-runtime-state="waiting"]')
   assert.equal(await page.$eval('#status [data-processing-runtime-state="waiting"] [title]', label => label.textContent), 'Waiting')
@@ -179,7 +179,8 @@ test('live status owns Working once; pending internal inputs do not become activ
   await page.evaluate(() => window.fixture.setRuntime({ state: 'idle', busy: false, queueLength: 2 }))
   await page.waitForFunction(() => document.querySelector('#status').textContent.includes('Turn interrupted'))
   await page.$eval('#status', root => [...root.querySelectorAll('button')].forEach(button => button.click()))
-  assert.deepEqual(await page.evaluate(() => window.fixture.controls), ['stop', 'continue', 'queued'])
+  await page.click('#queue button::-p-text(Run queued)')
+  assert.deepEqual(await page.evaluate(() => window.fixture.controls), ['continue', 'queued'])
 })
 
 test('stream text stays visible and retains its DOM on canonical commit while the untouched tool tail stays collapsed', async () => {
@@ -268,13 +269,15 @@ test('Activity counts use direct recorded outcomes, not script code or asynchron
   await page.evaluate(records => { window.fixture.setMessages(records); window.fixture.setSlice([0,undefined]) }, records)
   await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('2 child sessions'))
   assert.deepEqual(await page.$$eval('#timeline [data-timeline-activity] [aria-label$="activity"]', buttons => buttons.map(button => button.textContent)), [
-    '6 calls · 2 child sessions · 1 sent · 3 received',
     '2 calls',
+    '4 calls · 2 child sessions · 1 sent · 3 received',
+    '1 call',
+    '1 call',
   ])
   assert.ok(!(await page.$eval('#timeline', root => root.textContent)).includes('Activity · Error'))
   await page.$eval('#timeline', root => { root.style.width = '220px' })
   const wrapped = await page.$$eval('#timeline [data-timeline-activity] [aria-label$="activity"]', buttons => {
-    const summary = buttons[0].lastElementChild
+    const summary = buttons.find(button => button.textContent.includes('child sessions')).lastElementChild
     const range = document.createRange()
     range.selectNodeContents(summary)
     return { align: getComputedStyle(summary).textAlign, lefts: [...range.getClientRects()].map(rect => rect.left) }
@@ -282,7 +285,7 @@ test('Activity counts use direct recorded outcomes, not script code or asynchron
   assert.equal(wrapped.align, 'left')
   assert.ok(wrapped.lefts.length > 1, 'the real summary wraps in a narrow container')
   assert.ok(wrapped.lefts.every(left => Math.abs(left - wrapped.lefts[0]) < 1), 'wrapped lines keep the same left edge')
-  await page.$eval('#timeline', root => [...root.querySelectorAll('[aria-label="Expand activity"]')][0].click())
+  await page.$eval('#timeline', root => [...root.querySelectorAll('[aria-label="Expand activity"]')].find(button => button.textContent.includes('child sessions')).click())
   await page.$$eval('[data-activity-details] [aria-label="Expand send_to_channel tool"]', buttons => buttons.forEach(button => button.click()))
   await page.waitForFunction(() => document.querySelector('[data-activity-details]').textContent.includes('SEND_FAILED'))
   assert.ok((await page.$eval('[data-activity-details]', root => root.textContent)).includes('SEND_FAILED'))
@@ -404,7 +407,7 @@ test('Shared logical request and parallel tools clip across text-plus-call and u
   ]
   await setRecords(records)
   await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('PARALLEL_DONE'))
-  assert.deepEqual(await headers(), ['Worked 5s · 2 calls','Worked 15s'])
+  assert.deepEqual(await headers(), ['Worked 3s','Worked 2s · 2 calls','Worked 15s'])
   await page.evaluate(() => window.fixture.setSlice([4,undefined]))
   await page.waitForFunction(() => document.querySelector('#timeline').querySelectorAll('[data-timeline-activity]').length === 1)
   assert.deepEqual(await headers(), ['Worked 15s'], 'viewport clipping retains the real left user boundary and does not recount calls')
@@ -616,9 +619,9 @@ test('Conversation clocks share logical request timing across a commentary prefi
   const expected = [base,base+1597055].map(value=>new Date(value).toISOString())
   assert.deepEqual(await dividerTimes(),expected,'neither a 75-second generation gap nor the suffix whole-request rewind is an idle separator')
   const unchanged = await headers()
-  assert.deepEqual(unchanged, ['Worked 3m17s · Waited 14m36s · 3 calls · 1 received', 'Worked 59s'])
+  assert.deepEqual(unchanged, ['Worked 1m14s', 'Worked 2m2s · Waited 14m36s · 3 calls · 1 received', 'Worked 59s'])
   await page.evaluate(() => { window.segmentBody=[...document.querySelectorAll('#timeline .foxwarm-assistant-message-card')].find(card => card.textContent.includes('SEGMENT_FINAL')); document.querySelectorAll('#timeline [aria-label="Expand activity"]').forEach(button=>button.click()) })
-  await page.waitForFunction(() => document.querySelectorAll('#timeline [data-activity-details]').length===2)
+  await page.waitForFunction(() => document.querySelectorAll('#timeline [data-activity-details]').length===3)
   assert.deepEqual(await dividerTimes(),expected)
   assert.deepEqual(await headers(),unchanged)
   assert.equal(await page.evaluate(() => window.segmentBody===[...document.querySelectorAll('#timeline .foxwarm-assistant-message-card')].find(card => card.textContent.includes('SEGMENT_FINAL'))),true)
@@ -631,7 +634,7 @@ test('Conversation clocks share logical request timing across a commentary prefi
   assert.deepEqual(await dividerTimes(),[new Date(base+68).toISOString()])
   await page.evaluate(() => window.fixture.setSlice([2,undefined]))
   await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('LATER_REPLY'))
-  assert.deepEqual(await dividerTimes(),expected,'folded commentary does not create a new visible boundary when its suffix enters the viewport')
+  assert.deepEqual(await dividerTimes(),[base+74953,base+1597055].map(value=>new Date(value).toISOString()),'a clipped suffix starts at its preceding visible commentary boundary without rewinding the shared request')
   // Existing source-oriented modes retain their original rules, including the raw prefix/suffix clocks.
   await page.evaluate(() => window.fixture.setSlice([0,undefined]))
   for (const value of ['detailed','grouped']) {
@@ -655,11 +658,54 @@ test('Conversation clocks share logical request timing across a commentary prefi
   await setRecords(truncated,undefined,base+1700000)
   await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('SUMMARY_121'))
   assert.deepEqual(await dividerTimes(),[base,base,base+1597055].map(value=>new Date(value).toISOString()))
-  // Untimed folded commentary does not replace the real persisted input/reply endpoints.
+  // Untimed visible commentary cannot supply either adjacent Activity endpoint.
 
   delete records[1].__meta.timestamp
   await setRecords(records,undefined,base+1700000)
   await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('SEGMENT_FINAL'))
-  assert.deepEqual(await headers(),unchanged)
+  assert.deepEqual(await headers(),['Activity','3 calls · 1 received','Worked 59s'])
   assert.deepEqual(await dividerTimes(),expected)
+})
+
+test('Every progress update separates adjacent technical spans, including early commentary and later tool suffixes', async () => {
+  await mode('conversation')
+  const first = 'I will check the existing implementation.'
+  const second = 'The update is in place; I am checking the behavior.'
+  const final = 'The review is complete.'
+  const prefix = [
+    timed(1201,0,'user',[{text:'Review the example.'}]),
+    timed(1202,5,'model',[{text:first,phase:'commentary'}],{id:'visible-prefix'}),
+  ]
+  await setRecords(prefix)
+  assert.deepEqual(await page.$$eval('#timeline .foxwarm-assistant-message-markdown', nodes => nodes.map(node => node.textContent.trim())),[first])
+  assert.equal(await page.$$eval('#timeline [data-timeline-activity]', nodes => nodes.length),0)
+  await page.evaluate(() => { window.visibleProgressNode = document.querySelector('#timeline .foxwarm-assistant-message-markdown') })
+  const records = [
+    ...prefix,
+    timed(1203,7,'model',[{thinking:'PRIVATE_FIRST_REASONING'},call('first-span')],{id:'visible-prefix',start:0,end:7,offset:1}),
+    timed(1204,8,'tool',[{functionResponse:{name:'exec',tool_use_id:'first-span',response:{output:'PRIVATE_FIRST_RESULT'}}}]),
+    timed(1205,12,'model',[{text:second,phase:'commentary'}],{id:'visible-second'}),
+    timed(1206,15,'model',[call('second-span')],{id:'visible-second',start:8,end:15,offset:1}),
+    timed(1207,16,'tool',[{functionResponse:{name:'exec',tool_use_id:'second-span',response:{output:'PRIVATE_SECOND_RESULT'}}}]),
+    timed(1208,20,'model',[{text:final,phase:'final_answer'}],{id:'visible-final',start:16,end:20}),
+  ]
+  await setRecords(records)
+  assert.equal(await page.evaluate(() => window.visibleProgressNode.isConnected && window.visibleProgressNode === document.querySelector('#timeline .foxwarm-assistant-message-markdown')),true,'later tool participation never moves or remounts the earlier update')
+  const readingOrder = () => page.$$eval('#timeline .foxwarm-assistant-message-markdown, #timeline [data-timeline-activity]', nodes => nodes.map(node => node.hasAttribute('data-timeline-activity') ? 'process' : node.textContent.trim()))
+  assert.deepEqual(await readingOrder(),[first,'process',second,'process',final])
+  assert.equal(await page.$eval('#timeline', node => node.textContent.includes('PRIVATE_')),false)
+  for (const text of [first,second,final]) assert.equal(await countMatches(text),1)
+  await page.$$eval('#timeline [aria-label="Expand activity"]', buttons => buttons.forEach(button => button.click()))
+  await page.waitForFunction(() => document.querySelectorAll('#timeline [data-activity-details]').length===2)
+  assert.equal(await page.$$eval('#timeline [data-activity-details] .foxwarm-assistant-message-markdown', nodes => nodes.length),0,'opening tools does not duplicate progress prose')
+  await page.$$eval('#timeline [aria-label="Collapse activity"]', buttons => buttons.forEach(button => button.click()))
+  // Completion-only metadata must not leave a new empty process below the final text.
+  const suffix = timed(1209,20,'model',[],{id:'visible-final',start:16,end:20,offset:1})
+  suffix.__meta.usage = {inputTokens:10,outputTokens:20}
+  await setRecords([...records,suffix])
+  assert.deepEqual(await readingOrder(),[first,'process',second,'process',final])
+  if (process.env.FOXWARM_CONVERSATION_PREVIEW_PATH) {
+    await page.setViewport({width:600,height:900})
+    await (await page.$('#timeline')).screenshot({path:process.env.FOXWARM_CONVERSATION_PREVIEW_PATH})
+  }
 })

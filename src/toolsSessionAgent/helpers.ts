@@ -1,4 +1,6 @@
 import { checkPathAccess } from '../utils/agentPathAccess';
+import { randomUUID } from 'node:crypto';
+import type { FileDeliveryArtifact } from '../../packages/shared/dist/fileDelivery';
 import path from 'path';
 import * as sessionManager from '../sessionManager';
 import * as timers from '../timers';
@@ -463,13 +465,16 @@ export async function prepareRemoteChannelFile(filePath: string, nodeId: string,
   await fs.ensureDir(tempDir);
   const ext = path.extname(payload.name || filePath);
   const tempPath = path.join(tempDir, `${Date.now()}_${Math.random().toString(36).slice(2, 10)}${ext}`);
-  await fs.writeFile(tempPath, Buffer.from(payload.dataBase64, 'base64'));
+  const bytes = Buffer.from(payload.dataBase64, 'base64');
+  await fs.writeFile(tempPath, bytes);
+  const name = (payload.name || filePath).split(/[\\/]/).filter(Boolean).pop()!;
+  const mimeType = payload.mimeType || detectMimeType(name);
   return {
     path: tempPath,
-    name: payload.name || path.basename(filePath),
-    mimeType: payload.mimeType,
-    sizeBytes: payload.sizeBytes,
-    isImage: payload.isImage,
+    name,
+    mimeType,
+    sizeBytes: bytes.length,
+    isImage: payload.isImage ?? mimeType.startsWith('image/'),
   };
 }
 
@@ -525,9 +530,13 @@ export function isWebUiUnsupportedFileDelivery(channelId: string, reason: string
   return channelId.startsWith('webui:') && reason === 'channel does not support file sending yet';
 }
 
-export function buildSendFileResult(output: string, file: ChannelFile) {
+export function buildSendFileResult(output: string, file: ChannelFile, target?: Pick<FileDeliveryArtifact, 'targetKind' | 'targetId' | 'sourceNodeId'>) {
   return {
     output,
     fullPath: file.path,
+    ...(target ? { fileDelivery: {
+      version: 1 as const, deliveryId: randomUUID(), ...target, fileName: file.name, mimeType: file.mimeType, sizeBytes: file.sizeBytes,
+      downloadPath: file.path, downloadNodeId: 'master' as const,
+    } } : {}),
   };
 }
