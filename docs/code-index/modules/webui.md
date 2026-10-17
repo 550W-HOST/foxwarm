@@ -77,11 +77,15 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 
 ## Design decisions
 
+### D-webui-conversation-scroll-display
+
+[2026-10-17] Conversation fixes the minimap off and native scrollbar on, independent of `historyMode`, without changing either stored preference. Detailed and Grouped continue to honor those preferences. Conversation's session menu shows Show minimap as disabled and off. The disabled minimap and its overlay are not mounted, and its column reservation is removed; Timeline/Composer shared widths and real native-gutter clearance remain unchanged.
+
 ### D-webui-shared-content-width
 
 [2026-10-13] `index.css` owns the shared reading-column geometry: `--foxwarm-content-width` is 1100px, `.foxwarm-content-column` bounds and centers a padding-free column, and `--foxwarm-content-gutter` supplies 16px outer horizontal spacing. Non-full-width Chat Timeline, Composer, History's search/results column, and Tasks' Table/Board column use that contract; individual cards and modal dialogs retain their own padding and sizing. Composer always keeps the reading cap, even when Full width removes only Timeline's cap.
 
-Desktop Chat reserves `--foxwarm-context-minimap-width` (32px) outside both columns before centering them, based on the existing minimap setting and the owning Chat's 768px layout band. Disabling the minimap removes both reservations; History and Tasks have no minimap reservation. Chat's existing content/scroller ResizeObserver publishes only the real native scrollbar gutter to `--foxwarm-chat-scrollbar-gutter`, so Composer also centers inside the scroller's usable width when a native scrollbar occupies space. Column sizing stays CSS-owned without another observer, React width state, or scroll owner. Tasks' filter row follows its main column, including the existing desktop inspector clearance; narrow details and New task remain independent modal layouts.
+Desktop Chat reserves `--foxwarm-context-minimap-width` (32px) outside both columns before centering them, based on the effective minimap visibility and the owning Chat's 768px layout band. View-specific visibility follows [Conversation scroll display](#d-webui-conversation-scroll-display). Disabling the minimap removes both reservations; History and Tasks have no minimap reservation. Chat's existing content/scroller ResizeObserver publishes only the real native scrollbar gutter to `--foxwarm-chat-scrollbar-gutter`, so Composer also centers inside the scroller's usable width when a native scrollbar occupies space. Column sizing stays CSS-owned without another observer, React width state, or scroll owner. Tasks' filter row follows its main column, including the existing desktop inspector clearance; narrow details and New task remain independent modal layouts.
 
 The focused `workbenchPreview.e2e.mjs` geometry case uses visible native scrollbars to check actual left/right edges through pane/window resizing and minimap changes, shared maximum widths, and narrow overflow containment. `tasksView.e2e.mjs` checks Table/Board widths and filter alignment beside the retained desktop inspector.
 

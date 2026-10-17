@@ -2063,6 +2063,8 @@ test('Timeline, Composer, History and Tasks share the reading column and pane-lo
       await aligned()
     }
     await page.setViewport({ width: 1800, height: 900 })
+    await page.waitForFunction(() => !!document.querySelector('.foxwarm-desktop-workbench-shell')
+      && document.querySelector('.foxwarm-chat-root')?.getBoundingClientRect().width > 1100)
     await page.evaluate(() => {
       localStorage.setItem('foxwarm.contextScrollbar.showScrollbar', 'true')
       localStorage.setItem('foxwarm.contextScrollbar.showMinimap', 'false')

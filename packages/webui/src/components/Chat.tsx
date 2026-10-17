@@ -10,6 +10,7 @@ import ChatTimeline from './ChatTimeline'
 import { buildTimelineRows } from './timelineRows'
 import { findRenderedMatchRange, findSearchSurface, findSessionSearchMatches, projectSessionSearchFields } from './chatSessionSearch'
 import ContextScrollbar from './ContextScrollbar'
+import { CONTEXT_SCROLLBAR_SETTINGS_EVENT, readContextScrollbarSettings } from '../contextScrollbarSettings'
 import type { CodeCommitTarget } from '../commitMarker'
 import ContentHeader from './ContentHeader'
 import ProcessingStatus, { QueuedMessageStatus } from './ProcessingStatus'
@@ -225,6 +226,19 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const messagesContentRef = useRef<HTMLDivElement>(null)
   const committedTimelineRef = useRef<HTMLDivElement>(null)
+  const [contextScrollbarSettings, setContextScrollbarSettings] = useState(readContextScrollbarSettings)
+  const showMinimap = timelineView !== 'conversation' && contextScrollbarSettings.showMinimap
+  const showScrollbar = timelineView === 'conversation' || contextScrollbarSettings.showScrollbar
+  useEffect(() => {
+    const sync = () => setContextScrollbarSettings(readContextScrollbarSettings())
+    window.addEventListener(CONTEXT_SCROLLBAR_SETTINGS_EVENT, sync)
+    window.addEventListener('storage', sync)
+    return () => {
+      window.removeEventListener(CONTEXT_SCROLLBAR_SETTINGS_EVENT, sync)
+      window.removeEventListener('storage', sync)
+    }
+  }, [])
+
   const chatRootRef = useRef<HTMLDivElement>(null)
   const shouldAutoScrollRef = useRef<boolean>(true)
   const pendingUserLeaveBottomRef = useRef(false)
@@ -1531,10 +1545,17 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       )}
 
       <div className="foxwarm-chat-message-region relative min-h-0 flex-1">
-        <div id={chatMessageContainerId} ref={messagesContainerRef} className="foxwarm-chat-messages foxwarm-content-gutter h-full overflow-x-hidden overflow-y-auto py-4">
-          {!isMobile && (
+        <div
+          id={chatMessageContainerId}
+          ref={messagesContainerRef}
+          data-show-system-scrollbar={showScrollbar}
+          data-show-context-minimap={showMinimap}
+          className="foxwarm-chat-messages foxwarm-content-gutter h-full overflow-x-hidden overflow-y-auto py-4"
+        >
+          {!isMobile && showMinimap && (
             <div className="foxwarm-context-scrollbar-overlay">
               <ContextScrollbar
+                settings={contextScrollbarSettings}
                 messages={messages}
                 contextMessages={activeMessages}
                 persistentMemorySnapshot={snapshotSystemMessage}
