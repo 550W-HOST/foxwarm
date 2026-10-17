@@ -22,6 +22,8 @@ The native dialog traps focus, supports Escape/platform cancellation and restore
 
 [2026-10-17] Touch input pinches the image around the fingers' midpoint and pans the enlarged image with one finger, without zooming or dragging the underlying page. Ending or cancelling a gesture does not toggle the image or dismiss the dialog; a subsequent deliberate tap and the existing fit/actual-size, close and download actions remain available. Mouse and keyboard inspection retain native scrolling.
 
+Image panning follows pointer movement one-to-one in CSS pixels, independent of image magnification or screen pixel density. Subpixel movement accumulates rather than being lost between scroll updates. The viewer disables native text/image selection and touch callouts so holding and then dragging remains an image gesture.
+
 ## D-reply-file-deliveries
 
 [2026-10-16] Successful `send_file` deliveries addressed to the current Session or its exact WebUI target render in a compact, left-aligned reply file grid after that reply span, before queued previews and runtime status. Delivery appears immediately and follows later reply text without depending on process disclosure or completion. Desktop/mobile and all main timeline views share the surface; nested process timelines do not duplicate it. Each input-bounded reply span keeps its own files. The renderer creates no canonical message and fetches no extra history.
