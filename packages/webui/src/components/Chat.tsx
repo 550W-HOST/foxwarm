@@ -214,6 +214,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   const touchScrollStartYRef = useRef<number | null>(null)
   const pointerScrollInteractionRef = useRef(false)
   const continuousPagingIntentRef = useRef<'earlier' | 'later' | null>(null)
+  const continuousPageWasLoadingRef = useRef(false)
   const lastNativeScrollTopRef = useRef(0)
   const composerHeightRef = useRef<number | null>(null)
   const initialViewportState = getStoredChatViewportState(viewportSessionId, historyMode) || { kind: 'bottom' as const }
@@ -660,6 +661,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
           }
         }
         if (event.deltaY) continuousPagingIntentRef.current = event.deltaY < 0 ? 'earlier' : 'later'
+        // A clamped edge still delivers input, but it cannot emit another scroll event.
+        if (historyMode === 'continuous' && event.deltaY < 0 && container.scrollTop <= 0) handleScroll()
       }
       const handleTouchStart = (event: TouchEvent) => {
         markUserViewportInteraction()
@@ -674,6 +677,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         if (typeof currentY === 'number') {
           if (typeof startY === 'number' && currentY !== startY) continuousPagingIntentRef.current = currentY > startY ? 'earlier' : 'later'
           touchScrollStartYRef.current = currentY
+          if (historyMode === 'continuous' && typeof startY === 'number' && currentY > startY && container.scrollTop <= 0) handleScroll()
         }
       }
       const handleTouchEnd = () => {
@@ -710,6 +714,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       window.addEventListener('pointerup', handlePointerEnd)
       window.addEventListener('pointercancel', handlePointerEnd)
       window.addEventListener('keydown', handleWindowKeyDown)
+      const finishedPage = continuousPageWasLoadingRef.current && !archivePage.loading
+      continuousPageWasLoadingRef.current = historyMode === 'continuous' && archivePage.loading
+      // A blocked upward gesture gets one fresh edge check, not an automatic page-draining loop.
+      if (historyMode === 'continuous' && finishedPage && !archivePage.error && continuousPagingIntentRef.current === 'earlier') handleScroll()
       return () => {
         container.removeEventListener('scroll', handleScroll)
         container.removeEventListener('wheel', handleWheel)

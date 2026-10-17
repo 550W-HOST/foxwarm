@@ -2237,3 +2237,139 @@ test('continuous Chat remount mounts its saved window even when a live burst out
     assert.ok(await chatPage.$$eval('[data-chat-message-anchor-key]', nodes => nodes.length <= 200))
   } finally { await chatPage.close() }
 })
+
+async function observeNativeHistoryInput(chatPage) {
+  await chatPage.evaluate(() => {
+    window.fixtureNativeHistoryInput = []
+    const container = document.querySelector('.foxwarm-chat-messages')
+    for (const type of ['wheel', 'touchmove', 'scroll']) container.addEventListener(type, event => {
+      window.fixtureNativeHistoryInput.push({ type, trusted: event.isTrusted, top: container.scrollTop })
+    }, { passive: true })
+  })
+  const rect = await chatPage.$eval('.foxwarm-chat-messages', element => {
+    const rect = element.getBoundingClientRect()
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+  })
+  await chatPage.mouse.move(rect.x, rect.y)
+  return rect
+}
+
+async function openContinuousTopEdge() {
+  const chatPage = await openContinuousChat()
+  await chatPage.waitForSelector('[aria-label="Scroll to top"]')
+  await chatPage.click('[aria-label="Scroll to top"]')
+  await chatPage.waitForFunction(() => document.querySelector('.foxwarm-chat-messages').scrollTop === 0)
+  await chatPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  return chatPage
+}
+
+test('continuous Chat rechecks a rapid upward gesture that reaches the top during a slow page', async () => {
+  const chatPage = await openContinuousChat()
+  try {
+    await observeNativeHistoryInput(chatPage)
+    await chatPage.evaluate(() => { window.fixtureDelayArchive = true })
+    await chatPage.mouse.wheel({ deltaY: -100000 })
+    await chatPage.waitForFunction(() => window.fixtureArchiveRequests.length === 2)
+    await chatPage.waitForFunction(() => document.querySelector('.foxwarm-chat-messages').scrollTop === 0)
+    await chatPage.mouse.wheel({ deltaY: -800 })
+    await chatPage.mouse.wheel({ deltaY: -800 })
+    await chatPage.waitForFunction(() => window.fixtureNativeHistoryInput.filter(event => event.type === 'wheel' && event.trusted).length >= 3)
+    assert.equal(await chatPage.evaluate(() => window.fixtureArchiveRequests.length), 2)
+    const reading = await readingAnchor(chatPage)
+    await chatPage.evaluate(() => { window.fixtureDelayArchive = false; window.resolveFixtureArchive() })
+    await chatPage.waitForFunction(() => !document.querySelector('[data-continuous-history]').textContent.includes('Loading messages'))
+    await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-401"]', { timeout: 5000 })
+    const result = await chatPage.evaluate(() => ({
+      top: document.querySelector('.foxwarm-chat-messages').scrollTop,
+      first: document.querySelector('[data-chat-message-anchor-key]')?.getAttribute('data-chat-message-anchor-key'),
+      requests: window.fixtureArchiveRequests.length,
+      inputs: window.fixtureNativeHistoryInput,
+    }))
+    console.log('RAPID_TOP_PAGE', JSON.stringify(result))
+    assert.equal(result.first, 'seq-local-401')
+    assert.equal(result.requests, 2, 'completing one page must not drain Archive without another gesture')
+    assert.ok(result.top > 0, 'earlier rows must become reachable without a downward gesture')
+    await chatPage.waitForFunction(expected => {
+      const container = document.querySelector('.foxwarm-chat-messages')
+      const anchor = container.querySelector('[data-chat-message-anchor-key="' + expected.key + '"]')
+      return anchor && Math.abs(anchor.getBoundingClientRect().top - container.getBoundingClientRect().top - expected.offset) < 3
+    }, { timeout: 5000 }, reading)
+    assert.ok(await chatPage.$$eval('[data-chat-message-anchor-key]', nodes => nodes.length <= 200))
+    await chatPage.mouse.wheel({ deltaY: -100000 })
+    await chatPage.waitForFunction(() => window.fixtureArchiveRequests.length === 3)
+    assert.equal(await chatPage.evaluate(() => new URL(window.fixtureArchiveRequests[2], location.href).searchParams.get('beforeSeq')), '401')
+  } finally { await chatPage.close() }
+})
+
+test('continuous Chat accepts an upward wheel at the top without a native scroll event', async () => {
+  const chatPage = await openContinuousTopEdge()
+  try {
+    await observeNativeHistoryInput(chatPage)
+    await chatPage.evaluate(() => { window.fixtureDelayArchive = true })
+    await chatPage.mouse.wheel({ deltaY: -800 })
+    await chatPage.waitForFunction(() => window.fixtureNativeHistoryInput.some(event => event.type === 'wheel' && event.trusted))
+    const result = await chatPage.evaluate(() => ({ requests: window.fixtureArchiveRequests.length, inputs: window.fixtureNativeHistoryInput }))
+    console.log('CLAMPED_TOP_WHEEL', JSON.stringify(result))
+    assert.equal(result.inputs.filter(event => event.type === 'scroll').length, 0)
+    assert.equal(result.requests, 2)
+    await chatPage.evaluate(() => { window.fixtureDelayArchive = false; window.resolveFixtureArchive() })
+    await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-401"]')
+  } finally { await chatPage.close() }
+})
+
+test('continuous Chat accepts an upward-history touch gesture at the clamped top', async () => {
+  const chatPage = await openContinuousTopEdge()
+  try {
+    const rect = await observeNativeHistoryInput(chatPage)
+    await chatPage.evaluate(() => { window.fixtureDelayArchive = true })
+    const client = await chatPage.createCDPSession()
+    await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 })
+    await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: rect.x, y: rect.y - 100 }] })
+    await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: rect.x, y: rect.y + 80 }] })
+    await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    await chatPage.waitForFunction(() => window.fixtureNativeHistoryInput.some(event => event.type === 'touchmove' && event.trusted))
+    const result = await chatPage.evaluate(() => ({ requests: window.fixtureArchiveRequests.length, inputs: window.fixtureNativeHistoryInput }))
+    console.log('CLAMPED_TOP_TOUCH', JSON.stringify(result))
+    assert.equal(result.inputs.filter(event => event.type === 'scroll').length, 0)
+    assert.equal(result.requests, 2)
+    await chatPage.evaluate(() => { window.fixtureDelayArchive = false; window.resolveFixtureArchive() })
+    await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-401"]')
+    await client.detach()
+  } finally { await chatPage.close() }
+})
+
+test('continuous Chat keeps top-edge failures explicit and retries without a reverse gesture', async () => {
+  const chatPage = await openContinuousTopEdge()
+  try {
+    await observeNativeHistoryInput(chatPage)
+    await chatPage.evaluate(() => { window.fixtureDelayArchive = true; window.fixtureFailArchive = true })
+    await chatPage.mouse.wheel({ deltaY: -800 })
+    await chatPage.waitForFunction(() => window.fixtureArchiveRequests.length === 2)
+    await chatPage.mouse.wheel({ deltaY: -800 })
+    await chatPage.evaluate(() => window.resolveFixtureArchive())
+    await chatPage.waitForFunction(() => document.querySelector('[data-continuous-history]').textContent.includes('Messages could not be loaded'))
+    await chatPage.mouse.wheel({ deltaY: -800 })
+    await chatPage.waitForFunction(() => window.fixtureNativeHistoryInput.filter(event => event.type === 'wheel' && event.trusted).length >= 3)
+    assert.equal(await chatPage.evaluate(() => window.fixtureArchiveRequests.length), 2, 'an upward gesture must not silently retry an error')
+    await chatPage.click('[data-continuous-history] button')
+    await chatPage.waitForFunction(() => window.fixtureArchiveRequests.length === 3)
+    const rect = await chatPage.$eval('.foxwarm-chat-messages', element => {
+      const rect = element.getBoundingClientRect()
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+    })
+    await chatPage.mouse.move(rect.x, rect.y)
+    await chatPage.mouse.wheel({ deltaY: -800 })
+    await chatPage.evaluate(() => {
+      const message = { role: 'model', parts: [{ text: 'Canonical live input during top-edge retry' }], __meta: { seq: 601, timestamp: 1700000000601 } }
+      window.fixtureArchive.push(message)
+      window.emitFixtureMessage(message)
+      window.fixtureDelayArchive = false
+      window.resolveFixtureArchive()
+    })
+    await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-401"]')
+    assert.equal(await chatPage.evaluate(() => window.fixtureArchiveRequests.length), 3)
+    assert.ok(await chatPage.$$eval('[data-chat-message-anchor-key]', nodes => nodes.length <= 200))
+    await chatPage.click('[aria-label="Scroll to bottom"]')
+    await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-601"]')
+  } finally { await chatPage.close() }
+})
