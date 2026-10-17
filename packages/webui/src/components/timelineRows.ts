@@ -135,6 +135,7 @@ export interface TimelineRowsInput {
   readonly nestedDepth: number
   readonly activityDetails?: boolean
   readonly timing?: ConversationTimingContext
+  readonly currentHistoryMessages?: readonly Message[]
   readonly historyMessages?: readonly Message[]
   readonly expandedGroupKeys: ReadonlySet<string>
 }
@@ -760,7 +761,8 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
   }
 
   if (timelineView === 'conversation') {
-    const historyTailLlmError = historyMessages ? getHistoryTailLlmError(historyMessages) : undefined
+    const authoritativeHistory = input.currentHistoryMessages ?? historyMessages
+    const historyTailLlmError = authoritativeHistory ? getHistoryTailLlmError(authoritativeHistory) : undefined
     const requests = conversationRequests(historyMessages || messages, messages)
     const summaryForActivity = buildConversationActivitySummary(messages, historyMessages)
     // Every ordinary text part is a visible boundary, including commentary and streaming prefixes.
@@ -831,7 +833,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
     }
     messages.forEach((msg, index) => {
       const contextBlock = msg.role === 'model' && getContextBlockMetaFromMessage(msg)
-      if (contextBlock || nestedDepth === 0 && msg === historyTailLlmError) {
+      if (contextBlock || nestedDepth === 0 && (msg === historyTailLlmError || historyTailLlmError?.__meta?.seq !== undefined && msg.__meta?.seq === historyTailLlmError.__meta.seq)) {
         flushActivity()
         emitRow(index, null, false, null, { key: messageKeys[index] })
         return

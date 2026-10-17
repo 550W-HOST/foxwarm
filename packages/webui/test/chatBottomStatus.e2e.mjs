@@ -63,7 +63,7 @@ before(async () => {
       theme(themeId) { setThemeSelection({ themeId, colorMode: 'dark' }) },
       append(text, role = 'model') { const message = { role, parts: [{ text }], __meta: { seq: messages.length + 1, timestamp: 1700000000100 + messages.length } }; messages.push(message); emit({ type: 'message', message }) }
     }
-    createRoot(document.getElementById('root')).render(<Chat sessionId="fixture/status" canonicalSessionId="fixture/status" sessionDisplayName="Mock preview · status and queue" timelineView={new URLSearchParams(location.search).get('view') || 'detailed'} />)
+    createRoot(document.getElementById('root')).render(<Chat historyMode="active" sessionId="fixture/status" canonicalSessionId="fixture/status" sessionDisplayName="Mock preview · status and queue" timelineView={new URLSearchParams(location.search).get('view') || 'detailed'} />)
   `
   const bundle = await build({ stdin: { contents: source, resolveDir: webui, sourcefile: 'chat-bottom-status-fixture.tsx', loader: 'tsx' }, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
   server = createServer((_request, response) => {

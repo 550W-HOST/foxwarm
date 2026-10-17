@@ -17,13 +17,11 @@ export function ImageItem({ part, label, imageClassName = 'max-w-[300px] max-h-[
     || part.inlineDataUnavailable?.mimeType
     || part.inlineDataUnavailable?.mime_type
     || 'application/octet-stream'
-  const src = part.inlineDataRef?.apiPath
-    ? makeApiUrl(webUiSessionId && part.inlineDataRef.blobId
-      ? `/sessions/${encodeURIComponent(webUiSessionId)}/blobs/${encodeURIComponent(part.inlineDataRef.blobId)}`
-      : part.inlineDataRef.apiPath).toString()
-    : part.inlineData
-      ? `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`
-      : null
+  const imageUrl = part.inlineDataRef?.apiPath ? makeApiUrl(part.inlineDataRef.apiPath) : null
+  if (imageUrl && webUiSessionId && part.inlineDataRef?.blobId) {
+    imageUrl.pathname = makeApiUrl(`/sessions/${encodeURIComponent(webUiSessionId)}/blobs/${encodeURIComponent(part.inlineDataRef.blobId)}`).pathname
+  }
+  const src = imageUrl?.toString() || (part.inlineData ? `data:${part.inlineData.mimeType};base64,${part.inlineData.data}` : null)
 
   if (!src || failed) {
     return <div className="text-xs text-fw-text-muted">Image unavailable</div>

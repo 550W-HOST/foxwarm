@@ -34,7 +34,7 @@ async function buildFixtureBundle() {
         React.createElement(ImageParts, { imageParts: [{ inlineDataRef: ref }], keyPrefix: id }))
     )
     render('safe', { blobId: '${pngId}', imageId: 'safe', mimeType: 'image/png', apiPath: '/blobs/${pngId}' })
-    render('scoped', { blobId: '${pngId}', imageId: 'scoped', mimeType: 'image/png', apiPath: '/blobs/${pngId}' }, 'reader/main')
+    render('scoped', { blobId: '${pngId}', imageId: 'scoped', mimeType: 'image/png', apiPath: '/blobs/${pngId}?archiveSeq=2' }, 'reader/main')
     render('unsafe', { blobId: '${svgId}', imageId: 'unsafe', mimeType: 'image/svg+xml', apiPath: '/blobs/${svgId}' })
     render('missing', { blobId: '${missingId}', imageId: 'missing', mimeType: 'image/png', apiPath: '/blobs/${missingId}' })
     window.renderLargeImage = () => {
@@ -70,6 +70,7 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
   const backend=new HttpServer(0,'fixture-token')
   backend.setWebUiIdentityVerifier(token=>token==='scoped-image-token'?{role:'webui',identityId:'reader',sessionIds:['reader/main']}:null)
   const signRequests=[]
+  const archiveAuthorizationInputs=[]
   backend.app.use((request,_response,next)=>{
     if(request.path.includes('/blobs/'))requests.push({url:request.originalUrl,cookie:request.headers.cookie||''})
     if(request.path.endsWith('/download'))signRequests.push({url:request.originalUrl,cookie:request.headers.cookie||''})
@@ -78,7 +79,9 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
   const signatures=registerWebUiFileDownloads(backend,'fixture-token')
   registerWebUiBlobDownloads(backend,signatures,async(req,res,sessionId,blobId)=>{
     const auth=await backend.getAuthContext(req)
-    if(auth?.role==='admin'||(auth?.role==='webui'&&sessionId==='reader/main'&&blobId===pngId))return true
+    const archiveSeq=req.query.archiveSeq??req.body?.archiveSeq
+    archiveAuthorizationInputs.push({method:req.method,archiveSeq})
+    if(auth?.role==='admin'||(auth?.role==='webui'&&sessionId==='reader/main'&&blobId===pngId&&archiveSeq==='2'))return true
     res.status(auth?403:401).json({error:'Forbidden'});return false
   })
   for(const [id,bytes]of[[pngId,pngBytes],[svgId,Buffer.from('<svg/>')]]){
@@ -156,7 +159,11 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
         assert.ok(signRequests.at(-1).cookie.includes('foxwarm_token='+token))
         const downloaded=requests.findLast(request=>request.url.includes('signature='))
         assert.ok(downloaded);assert.equal(downloaded.cookie,'')
-        if(id==='scoped')assert.ok(downloaded.url.startsWith('/nested/api/sessions/reader%2Fmain/blobs/'))
+        if(id==='scoped'){
+          assert.ok(downloaded.url.startsWith('/nested/api/sessions/reader%2Fmain/blobs/'))
+          assert.ok(requests.some(request=>request.url.includes('/sessions/reader%2Fmain/blobs/')&&request.url.includes('archiveSeq=2')))
+          assert.ok(archiveAuthorizationInputs.some(input=>input.method==='POST'&&input.archiveSeq==='2'),'Archive proof reaches signature issuance')
+        }
         await page.click('[aria-label="Close image preview"]')
       }
     }finally{
@@ -202,6 +209,127 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
       await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.querySelector('[data-image-preview]'))
       assert.equal(await page.evaluate(()=>document.documentElement.style.overflow),'','StrictMode cleanup releases every scroll lock')
     }
+    // CDP dispatches native browser touch input, not React handlers or DOM events.
+    await page.setViewport({width:390,height:844,isMobile:true,hasTouch:true})
+    await page.evaluate(()=>window.renderLargeImage())
+    await page.waitForSelector('#large button')
+    await page.click('#large button')
+    await page.waitForFunction(()=>document.querySelector('[data-image-preview] img')?.naturalWidth===1600)
+    const touch=await page.createCDPSession()
+    const input=async(type,points,settle=true)=>{
+      await touch.send('Input.dispatchTouchEvent',{type,touchPoints:points.map(([id,x,y])=>({id,x,y,radiusX:4,radiusY:4}))})
+      if(settle)await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))
+    }
+    const geometry=()=>page.$eval('.image-preview-stage',stage=>{
+      const img=stage.querySelector('img'),r=img.getBoundingClientRect()
+      return {left:r.left,top:r.top,width:r.width,height:r.height,x:stage.scrollLeft,y:stage.scrollTop,src:img.src,pageX:scrollX,pageY:scrollY,viewportScale:visualViewport.scale}
+    })
+    try {
+      const before=await geometry()
+      await input('touchStart',[[1,140,440],[2,200,440]])
+      for(let distance=40;distance<=120;distance+=20)await input('touchMove',[[1,170-distance,440],[2,170+distance,440]])
+      const zoomed=await geometry()
+      assert.ok(Math.abs(zoomed.width/before.width-4)<.02,'two fingers zoom the image itself')
+      assert.ok(Math.abs((170-before.left)/before.width-(170-zoomed.left)/zoomed.width)<.005,'pinch preserves the image point beneath its off-center midpoint')
+      assert.ok(Math.abs((440-before.top)/before.height-(440-zoomed.top)/zoomed.height)<.005)
+      await input('touchMove',[[1,40,430],[2,280,430]])
+      const translated=await geometry()
+      assert.ok(Math.abs(translated.width-zoomed.width)<1&&translated.x>zoomed.x+8&&translated.y>zoomed.y+8,'moving both fingers translates the image without changing scale')
+      await input('touchEnd',[[2,280,430]])
+      const panStart=await geometry()
+      await input('touchMove',[[1,10,390]])
+      await input('touchEnd',[])
+      const panned=await geometry()
+      assert.ok(Math.abs(panned.left-panStart.left+30)<1.5&&Math.abs(panned.top-panStart.top+40)<1.5,'remaining finger moves the image 1:1 in CSS pixels')
+      assert.ok(await page.$('[data-image-preview][open]'),'ending a gesture does not close the viewer')
+      assert.ok(await page.$('[data-actual-size]'),'ending a gesture does not trigger the image click toggle')
+      assert.equal(panned.src,before.src,'touch gestures retain the original image source')
+      assert.deepEqual([panned.pageX,panned.pageY,panned.viewportScale],[before.pageX,before.pageY,1],'the page neither pans nor zooms')
+      if(process.env.FOXWARM_IMAGE_PREVIEW_DIR)await page.screenshot({path:process.env.FOXWARM_IMAGE_PREVIEW_DIR+'/preview-touch-zoom-pan.png'})
+      // A fresh single-finger drag and cancellation remain inside the viewer.
+      await input('touchStart',[[1,200,460]])
+      await input('touchMove',[[1,150,430]])
+      await input('touchCancel',[])
+      assert.ok(await page.$('[data-actual-size]'))
+      const dragged=await geometry()
+      assert.ok(Math.abs(dragged.left-panned.left+50)<1.5&&Math.abs(dragged.top-panned.top+30)<1.5,'a fresh one-finger drag moves the image 1:1 in both axes')
+      const panMeasurements=[]
+      for(const zoom of ['pinched','intrinsic','fractional']) {
+        if(zoom==='intrinsic') {
+          await page.mouse.click(180,440)
+          await page.click('[aria-label="Actual size"]')
+          await page.setViewport({width:390,height:844,isMobile:true,hasTouch:true,deviceScaleFactor:3})
+        } else if(zoom==='fractional') {
+          await page.click('[aria-label="Fit image"]')
+          await input('touchStart',[[1,170,440],[2,220,440]])
+          await input('touchMove',[[1,40,440],[2,350,440]])
+          await input('touchEnd',[])
+        }
+        await input('touchStart',[[1,150,440]])
+        const fineStart=await geometry()
+        if(zoom==='fractional'&&process.env.FOXWARM_IMAGE_PREVIEW_DIR)await page.screenshot({path:process.env.FOXWARM_IMAGE_PREVIEW_DIR+'/preview-pan-before.png'})
+        for(let step=1;step<=80;step++)await input('touchMove',[[1,150+step*.25,440-step*.25]])
+        const fineEnd=await geometry()
+        await input('touchEnd',[])
+        assert.ok(Math.abs(fineEnd.left-fineStart.left-20)<1.5&&Math.abs(fineEnd.top-fineStart.top+20)<1.5,`${zoom} fractional pan stays 1:1: ${fineEnd.left-fineStart.left}, ${fineEnd.top-fineStart.top} for 20, -20 CSS pixels`)
+        assert.equal(fineEnd.viewportScale,1,'image zoom never becomes browser page zoom')
+        panMeasurements.push({zoom,width:fineEnd.width,dpr:await page.evaluate(()=>devicePixelRatio),finger:[20,-20],image:[fineEnd.left-fineStart.left,fineEnd.top-fineStart.top],pageScale:fineEnd.viewportScale})
+        if(zoom==='fractional'&&process.env.FOXWARM_IMAGE_PREVIEW_DIR)await page.screenshot({path:process.env.FOXWARM_IMAGE_PREVIEW_DIR+'/preview-pan-after.png'})
+      }
+      await input('touchStart',[[1,180,440]])
+      const burstStart=await geometry()
+      for(let step=1;step<=80;step++)await input('touchMove',[[1,180-step*.25,440+step*.25]],false)
+      await input('touchEnd',[])
+      const burstEnd=await geometry()
+      assert.ok(Math.abs(burstEnd.left-burstStart.left+20)<1.5&&Math.abs(burstEnd.top-burstStart.top-20)<1.5,'unpaced native touch moves also retain their cumulative 1:1 displacement')
+      panMeasurements.push({zoom:'unpaced',finger:[-20,20],image:[burstEnd.left-burstStart.left,burstEnd.top-burstStart.top]})
+      console.info('Image pan CSS-pixel measurements:',JSON.stringify(panMeasurements))
+      const selectionStyles=await page.$$eval('.image-preview-dialog, .image-preview-header h2, .image-preview-stage, .image-preview-stage img',els=>els.map(el=>getComputedStyle(el).webkitUserSelect))
+      assert.ok(selectionStyles.every(value=>value==='none'),'the entire viewer suppresses WebKit selection, not only the image')
+      await input('touchStart',[[1,180,440]])
+      await new Promise(resolve=>setTimeout(resolve,800))
+      const held=await geometry()
+      await input('touchMove',[[1,200,420]])
+      await input('touchEnd',[])
+      const afterHold=await geometry()
+      assert.ok(Math.abs(afterHold.left-held.left-20)<1.5&&Math.abs(afterHold.top-held.top+20)<1.5,'hold-then-drag remains 1:1')
+      assert.equal(await page.evaluate(()=>getSelection()?.toString()),'','native touch hold does not create a text selection in Chromium')
+      await page.evaluate(()=>document.addEventListener('contextmenu',event=>{window.contextMenuCancelled=event.defaultPrevented},{once:true}))
+      await page.mouse.click(180,440,{button:'right'})
+      assert.equal(await page.evaluate(()=>window.contextMenuCancelled),true,'the image stage cancels a native browser context menu')
+      if(process.env.FOXWARM_IMAGE_PREVIEW_DIR)await page.screenshot({path:process.env.FOXWARM_IMAGE_PREVIEW_DIR+'/preview-fractional-pan-dpr3.png'})
+      await page.mouse.click(180,440)
+      assert.equal(await page.$('[data-actual-size]'),null,'a deliberate mouse click also works after a touch gesture')
+      await page.click('[aria-label="Actual size"]')
+      await input('touchStart',[[1,70,440],[2,310,440]])
+      for(let distance=100;distance>=10;distance-=15)await input('touchMove',[[1,190-distance,440],[2,190+distance,440]])
+      await input('touchEnd',[])
+      assert.equal(await page.$('[data-actual-size]'),null,'pinch-in stops at fit rather than shrinking the image away')
+      assert.ok(await page.$('[data-image-preview][open]'),'ending pinch-in at fit does not close the viewer')
+      await page.click('[aria-label="Actual size"]')
+      assert.ok(Math.abs((await geometry()).width-1600)<1,'Actual size still uses intrinsic image pixels')
+      await page.setViewport({width:844,height:390,isMobile:true,hasTouch:true})
+      assert.ok(Math.abs((await geometry()).width-1600)<1,'resizing does not change actual pixel size')
+      await page.click('[aria-label="Fit image"]')
+      await page.waitForFunction(()=>!document.querySelector('[data-actual-size]'))
+      await page.setViewport({width:390,height:844,isMobile:true,hasTouch:true})
+      await page.waitForFunction(()=>document.querySelector('.image-preview-stage img').getBoundingClientRect().width<390)
+      const fitAgain=await geometry()
+      assert.ok(Math.abs(fitAgain.width-before.width)<1)
+      // Swiping fit-mode empty space must not become a backdrop click.
+      await input('touchStart',[[1,25,150]])
+      await input('touchMove',[[1,25,200]])
+      await input('touchEnd',[])
+      assert.ok(await page.$('[data-image-preview][open]'))
+      // A subsequent deliberate tap still toggles and can reset to fit.
+      await page.touchscreen.tap(180,440)
+      await page.waitForSelector('[data-actual-size]')
+      await page.click('[aria-label="Fit image"]')
+      await page.touchscreen.tap(25,150)
+      await page.waitForFunction(()=>!document.querySelector('[data-image-preview]'))
+      assert.equal(await page.evaluate(()=>document.activeElement===document.querySelector('#large button')),true)
+      assert.equal(await page.evaluate(()=>document.documentElement.style.overflow),'')
+    } finally { await touch.detach() }
   } finally {
     await browser?.close()
     for(const id of[pngId,svgId])await rm(resolveImageBlobPath(id),{force:true})

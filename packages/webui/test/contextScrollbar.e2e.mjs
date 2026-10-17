@@ -42,7 +42,11 @@ async function buildFixtureBundle() {
     class FixtureWebSocket { static CLOSED = 3; static instances = []; constructor() { this.readyState = 0; this.sessionId = 'fixture/main'; FixtureWebSocket.instances.push(this); queueMicrotask(() => { this.readyState = 1; this.onopen?.({}); this.emit({ type: 'connected' }) }) } close() { this.readyState = FixtureWebSocket.CLOSED } send(raw) { const payload = JSON.parse(raw); if (payload.type !== 'set-subscriptions') return; this.sessionId = payload.sessionIds[0] || this.sessionId; queueMicrotask(() => { this.emit({ type: 'subscriptions-accepted', revision: payload.revision, sessionListResolutions: {}, sessionResolutions: Object.fromEntries(payload.sessionIds.map(id => [id, id])) }); this.emit({ type: 'subscriptions-applied', revision: payload.revision }) }) } emit(payload) { const message = payload.type === 'session-event' ? { ...payload, sessionId: this.sessionId } : payload; this.onmessage?.({ data: JSON.stringify(message) }) } }
     window.WebSocket = FixtureWebSocket
     window.appendFixtureStream = () => FixtureWebSocket.instances.at(-1)?.emit({ type: 'session-event', event: { type: 'model-stream-update', streamId: 'stream', text: 'streaming '.repeat(100) } })
-    createRoot(document.getElementById('root')).render(React.createElement(Chat, { sessionId: 'fixture/main', canonicalSessionId: 'fixture/main', sessionDisplayName: 'Fixture' }))
+    const root = createRoot(document.getElementById('root'))
+    window.renderScrollbarChat = (timelineView = 'detailed', historyMode, fullWidth = true) => root.render(React.createElement(Chat, {
+      sessionId: 'fixture/main', canonicalSessionId: 'fixture/main', sessionDisplayName: 'Fixture', timelineView, historyMode, fullWidth,
+    }))
+    window.renderScrollbarChat()
   `
   const result = await build({ stdin: { contents: source, resolveDir: packageDir, sourcefile: 'context-scrollbar-fixture.tsx' }, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
   return result.outputFiles[0].text
@@ -174,6 +178,7 @@ test('a tall persistent snapshot has its own ContextScrollbar anchor and keeps a
     const snapshotAnchor = document.querySelector('[data-context-scrollbar-anchor-key="persistent-memory-snapshot"]')
     const firstMessage = document.querySelector('[data-chat-message-anchor-key="seq-local-1"]')
     return container?.scrollTop === 0 && snapshotAnchor?.getBoundingClientRect().height >= 1600 && !!firstMessage
+      && document.querySelector('.foxwarm-context-scrollbar-viewport')?.getBoundingClientRect().height > 1
   })
   const initial = await page.$eval('.foxwarm-context-scrollbar-viewport', element => ({ top: element.getBoundingClientRect().top, height: element.getBoundingClientRect().height }))
   assert.ok(initial.height > 1, 'both viewport edges inside the snapshot still interpolate a positive thumb span')
@@ -451,3 +456,64 @@ test('mobile leaves the native chat layout and hides the custom gutter', async (
   assert.equal(await page.$('.foxwarm-context-scrollbar-shell'), null)
   assert.equal(await page.$eval('.foxwarm-chat-message-region', element => getComputedStyle(element).display), 'block')
 })
+
+
+for (const preferences of [{ showScrollbar: false, showMinimap: true }, { showScrollbar: true, showMinimap: false }]) {
+  test(`Conversation overrides native=${preferences.showScrollbar}/minimap=${preferences.showMinimap} without changing preferences or column alignment`, async () => {
+    await mount(1440, 1000, 900)
+    await page.addStyleTag({ content: '.foxwarm-chat-root form{display:block !important}' })
+    await page.evaluate(preferences => {
+      localStorage.setItem('foxwarm.contextScrollbar.showScrollbar', String(preferences.showScrollbar))
+      localStorage.setItem('foxwarm.contextScrollbar.showMinimap', String(preferences.showMinimap))
+      window.dispatchEvent(new Event('foxwarm-context-scrollbar-settings'))
+    }, preferences)
+    await page.click('[aria-label="Open session options"]')
+    // Exercise both independent history sources and both shared column widths.
+    const fullWidth = preferences.showScrollbar
+    for (const timelineView of ['conversation', 'detailed', 'grouped', 'conversation']) {
+      const conversation = timelineView === 'conversation'
+      const historyMode = conversation === preferences.showScrollbar ? 'continuous' : 'active'
+      const native = conversation || preferences.showScrollbar
+      const minimap = !conversation && preferences.showMinimap
+      await page.evaluate(({ timelineView, historyMode, fullWidth }) => window.renderScrollbarChat(timelineView, historyMode, fullWidth), { timelineView, historyMode, fullWidth })
+      await page.waitForFunction(({ native, minimap, fullWidth, timelineView }) => {
+        const container = document.querySelector('.foxwarm-chat-messages')
+        const content = document.querySelector('.foxwarm-chat-messages-content').getBoundingClientRect()
+        const composer = document.querySelector('.foxwarm-chat-composer-inner').getBoundingClientRect()
+        const gutter = container.offsetWidth - container.clientWidth
+        return document.querySelector('[role="radiogroup"][aria-label="Timeline view"] [aria-checked="true"]')?.textContent.trim().toLowerCase() === timelineView
+          && !!container.querySelector('[data-chat-message-anchor-key]')
+          && container.dataset.showSystemScrollbar === String(native) && container.dataset.showContextMinimap === String(minimap)
+          && (fullWidth ? Math.abs(content.left + content.right - composer.left - composer.right) < 2
+            : Math.abs(content.left - composer.left) < 1 && Math.abs(content.right - composer.right) < 1)
+          && Number.parseFloat(getComputedStyle(document.querySelector('.foxwarm-chat-composer')).paddingRight) === (minimap ? 48 : 16) + gutter
+      }, {}, { native, minimap, fullWidth, timelineView })
+      const state = await page.evaluate(() => {
+        const container = document.querySelector('.foxwarm-chat-messages')
+        const toggle = [...document.querySelectorAll('[data-session-ui-settings-menu] button')].find(button => button.textContent.includes('Show minimap'))
+        const content = document.querySelector('.foxwarm-chat-messages-content').getBoundingClientRect()
+        return {
+          nativeWidth: getComputedStyle(container).scrollbarWidth,
+          webkitDisplay: getComputedStyle(container, '::-webkit-scrollbar').display,
+          padding: Number.parseFloat(getComputedStyle(container).paddingRight),
+          overlay: !!document.querySelector('.foxwarm-context-scrollbar-overlay'),
+          track: !!document.querySelector('.foxwarm-context-scrollbar-shell'),
+          toggle: { checked: toggle.getAttribute('aria-checked'), disabled: toggle.disabled },
+          preferences: [localStorage.getItem('foxwarm.contextScrollbar.showScrollbar'), localStorage.getItem('foxwarm.contextScrollbar.showMinimap')],
+          width: content.width,
+          scrollable: container.scrollHeight > container.clientHeight,
+        }
+      })
+      assert.equal(state.scrollable, true, 'the real committed timeline overflows and exercises the native gutter')
+      assert.equal(state.nativeWidth === 'none', !native)
+      assert.equal(state.webkitDisplay === 'none', !native)
+      assert.equal(state.padding, minimap ? 48 : 16, 'no unused minimap reservation')
+      assert.equal(state.overlay, minimap, 'disabled minimap is unmounted, not a hidden layout owner')
+      assert.equal(state.track, minimap)
+      assert.deepEqual(state.toggle, { checked: String(minimap), disabled: conversation || preferences.showMinimap && !preferences.showScrollbar })
+      assert.deepEqual(state.preferences, [String(preferences.showScrollbar), String(preferences.showMinimap)])
+      if (!fullWidth) assert.ok(Math.abs(state.width - 1100) < 1, 'constrained reading width remains shared')
+      else assert.ok(state.width > 1100, 'Full width removes only the Timeline cap, keeping the Composer centered')
+    }
+  })
+}

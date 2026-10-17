@@ -1,3 +1,4 @@
+import type { HistoryMode } from './continuousHistory'
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 
 export type SendKeyMode = 'modEnter' | 'enter'
@@ -101,4 +102,9 @@ export function useChatPreferences() {
     setShowUserMessageMetadata,
     setFullWidth,
   }
+}
+
+/** The initial settings UI couples these choices; data and rendering keep separate axes. */
+export function historyModeForTimelineView(view: TimelineView): HistoryMode {
+  return view === 'conversation' ? 'continuous' : 'active'
 }

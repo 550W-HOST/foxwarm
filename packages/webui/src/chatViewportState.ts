@@ -1,3 +1,4 @@
+import type { HistoryMode } from './continuousHistory'
 import type { Message } from './components/chatShared'
 
 export const CHAT_MESSAGE_ANCHOR_ATTRIBUTE = 'data-chat-message-anchor-key'
@@ -132,12 +133,19 @@ export function getChatViewportAnchorAdjustment(currentOffsetPx: number, savedOf
   return currentOffsetPx - savedOffsetPx
 }
 
-export function getStoredChatViewportState(sessionId: string): ChatViewportState | null {
-  return viewportStateBySession.get(sessionId) || null
+/** Continuous history anchors carry their canonical Archive sequence in the row key. */
+export function getChatViewportAnchorSeq(state: ChatViewportState | null): number | undefined {
+  const match = state?.kind === 'anchor' ? /^seq-.+-(\d+)$/.exec(state.messageKey) : null
+  const seq = match ? Number(match[1]) : 0
+  return Number.isSafeInteger(seq) && seq > 0 ? seq : undefined
 }
 
-export function storeChatViewportState(sessionId: string, state: ChatViewportState): void {
-  viewportStateBySession.set(sessionId, state)
+export function getStoredChatViewportState(sessionId: string, historyMode: HistoryMode = 'active'): ChatViewportState | null {
+  return viewportStateBySession.get(`${sessionId}\0${historyMode}`) || null
+}
+
+export function storeChatViewportState(sessionId: string, state: ChatViewportState, historyMode: HistoryMode = 'active'): void {
+  viewportStateBySession.set(`${sessionId}\0${historyMode}`, state)
 }
 
 export function clearStoredChatViewportStatesForTests(): void {

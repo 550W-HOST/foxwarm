@@ -109,7 +109,8 @@ export default function SessionList({
   const navClass = 'flex min-h-12 flex-1 flex-col items-center justify-center gap-1 rounded-lg px-2 text-xs hover:bg-fw-hover hover:text-fw-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring'
 
   return (
-    <div data-mobile-session-home className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell fixed inset-x-0 flex flex-col bg-fw-canvas">
+    <div data-mobile-session-home data-mobile-standalone={('standalone' in navigator && navigator.standalone === true) || undefined}
+      className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell fixed inset-x-0 flex flex-col bg-fw-canvas">
       <section id="mobile-panel-sessions" role="tabpanel" aria-labelledby="mobile-tab-sessions" className="min-h-0 flex-1 flex-col" style={{display: primaryTab === 'sessions' ? 'flex' : 'none'}}>
       <ContextMenu open={!!moreAnchor} entries={moreEntries} anchorRect={moreAnchor} preferredPlacement="bottom-end"
         onClose={() => { setMoreAnchor(null); if (moreRef.current?.isConnected) moreRef.current.focus() }} />
@@ -125,7 +126,7 @@ export default function SessionList({
         </button>
 
         )} toolbarContainerClassName="px-4 py-2" listContainerClassName="mobile-session-scroll px-4 pt-2" />
-        <div className="absolute right-4 z-20" style={{bottom: 'calc(var(--foxwarm-safe-area-bottom) + 88px)'}}>
+        <div className="fixed right-4 z-20" style={{bottom: 'calc(var(--foxwarm-home-safe-area-bottom) + 88px)'}}>
           <AgentCreationMenu agents={agents} currentAgent={currentSessionRecord?.agent} onCreateAgent={onCreateAgent} onCreateSession={onCreateSession}
             triggerLabel="New session" triggerClassName="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-fw-accent px-4 text-sm font-medium text-fw-accent-text shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring focus-visible:ring-offset-2" />
         </div>

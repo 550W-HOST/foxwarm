@@ -2468,15 +2468,24 @@ html .foxwarm-conversation-process .foxwarm-reasoning-card .foxwarm-reasoning-pr
   box-shadow: var(--foxwarm-panel-shadow);
 }
 .dark .mobile-glass-surface { background: color-mix(in srgb, var(--foxwarm-color-surface) 70%, transparent); }
+[data-mobile-session-home] {
+  --foxwarm-home-safe-area-bottom: var(--foxwarm-safe-area-bottom);
+}
+@supports (height: 100dvh) and (height: 100lvh) {
+  [data-mobile-session-home][data-mobile-standalone] {
+    /* Reserve only the safe-area band still inside the installed iOS viewport. */
+    --foxwarm-home-safe-area-bottom: max(0px, calc(var(--foxwarm-safe-area-bottom) + 100dvh - 100lvh));
+  }
+}
 .mobile-primary-nav {
   width: calc(100% - 24px);
   max-width: 440px;
   margin-inline: auto;
-  position: absolute;
+  position: fixed;
   z-index: 30;
   left: 12px;
   right: 12px;
-  bottom: calc(var(--foxwarm-safe-area-bottom) + 12px);
+  bottom: calc(var(--foxwarm-home-safe-area-bottom) + 12px);
   border-radius: calc(var(--foxwarm-radius-large-px) + 12px);
 }
 .mobile-primary-nav [role="tab"] { border-radius: calc(var(--foxwarm-radius-large-px) + 6px); }
@@ -2501,6 +2510,10 @@ html .foxwarm-conversation-process .foxwarm-reasoning-card .foxwarm-reasoning-pr
   padding-inline: var(--foxwarm-safe-area-left) var(--foxwarm-safe-area-right);
   background: transparent;
   border: 0;
+}
+/* Workbench slots already exclude these insets; independent Chat leaves do not. */
+[data-workbench-content-tab] .mobile-chat-floating-header {
+  padding: 0;
 }
 [data-mobile-chat-ui] .foxwarm-chat-messages { padding-top: calc(var(--chat-mobile-header-height, 60px) + 12px); scroll-padding-top: calc(var(--chat-mobile-header-height, 60px) + 1rem); }
 
@@ -2575,6 +2588,7 @@ html .foxwarm-inline-file-ref:focus-visible { outline: 2px solid currentColor; o
 /* A shared full-viewport viewer for composer, history/tool images and reply files. */
 .image-preview-dialog { position: fixed; inset: 0; width: 100%; height: 100dvh; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; border-radius: 0; overflow: hidden; overscroll-behavior: none; background: var(--foxwarm-color-canvas); color: var(--foxwarm-color-text); }
 .image-preview-dialog[open] { display: flex; flex-direction: column; }
+.image-preview-dialog, .image-preview-dialog * { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .image-preview-dialog::backdrop { background: var(--foxwarm-color-overlay); }
 .image-preview-header { display: flex; flex: none; align-items: center; gap: 4px; min-height: 60px; padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); border-bottom: 1px solid var(--foxwarm-color-border); background: var(--foxwarm-color-surface); }
 .image-preview-header h2 { min-width: 0; flex: 1; margin: 0 8px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 500; }
@@ -2582,10 +2596,12 @@ html .foxwarm-inline-file-ref:focus-visible { outline: 2px solid currentColor; o
 .image-preview-action:hover { background: var(--foxwarm-color-hover); }
 .image-preview-action:disabled { opacity: .4; cursor: default; }
 .image-preview-action:focus-visible { outline: 2px solid var(--foxwarm-color-focus-ring); outline-offset: -2px; }
-.image-preview-stage { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; align-items: center; justify-content: center; overflow: hidden; overscroll-behavior: contain; padding: 16px max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
-.image-preview-stage img { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; cursor: zoom-in; }
-.image-preview-stage[data-actual-size] { overflow: auto; align-items: flex-start; justify-content: flex-start; }
-.image-preview-stage[data-actual-size] img { flex: none; max-width: none; max-height: none; margin: auto; cursor: zoom-out; }
+.image-preview-stage { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; overscroll-behavior: contain; touch-action: none; padding: 16px max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+.image-preview-surface { position: relative; }
+.image-preview-stage img { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: block; max-width: none; max-height: none; object-fit: contain; cursor: zoom-in; }
+.image-preview-stage[data-actual-size] { overflow: auto; }
+.image-preview-stage[data-actual-size] img { cursor: zoom-out; }
+.image-preview-stage > [role="status"] { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
 .image-preview-loading { position: absolute; color: var(--foxwarm-color-text-muted); font-size: 14px; }
 .image-preview-error { flex: none; padding: 8px max(16px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); color: var(--foxwarm-color-warning); font-size: 12px; }
 @media (forced-colors: active) { .image-preview-dialog, .image-preview-header { background: Canvas; color: CanvasText; } .image-preview-action { border: 1px solid ButtonText; } }

@@ -95,7 +95,7 @@ before(async () => {
         window.fixture.compactHistory=messages;window.fixture.now=now;window.fixture.compactRuntime=runtime
         window.fixture.socket.onmessage({data:JSON.stringify({type:'session-state',sessionId:window.fixture.compactSessionId,session:{id:window.fixture.compactSessionId,busy:runtime.busy,busyStartedAt:window.fixture.compactBusyStartedAt,runtimeState:runtime,queueLength:0,messageCount:messages.length,historyVersion:0,modelKey:'fixture/model'}})})
       }
-      return React.createElement(Chat,{sessionId,timelineView,showUsageBadge:false,showUserMessageMetadata,onShowUserMessageMetadataChange:setMetadata})
+      return React.createElement(Chat,{sessionId,timelineView,historyMode:'active',showUsageBadge:false,showUserMessageMetadata,onShowUserMessageMetadataChange:setMetadata})
     }
     createRoot(document.getElementById('root')).render(React.createElement(Fixture))
   `

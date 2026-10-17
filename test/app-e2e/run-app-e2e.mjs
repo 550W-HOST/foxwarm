@@ -4,7 +4,8 @@ import { createWriteStream } from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
+import { promisify } from 'node:util'
 import puppeteer from 'puppeteer-core'
 import { startMockProvider } from './mock-provider.mjs'
 
@@ -80,6 +81,25 @@ async function seedData() {
     }, null, 2))
   }
   await fs.writeFile(path.join(stateRoot, 'sessions.json'), JSON.stringify({ sessions }, null, 2))
+  // Seed the same immutable raw records that normal Session appends create.
+  await promisify(execFile)(process.execPath, ['-e', `
+    const fs = require('fs-extra');
+    const path = require('node:path');
+    const store = require('./lib/session/archiveStore');
+    (async () => {
+      await store.initArchiveStore();
+      const directory = path.join(process.env.FOXWARM_DATA_DIR, 'state', 'sessions');
+      for (const file of await fs.readdir(directory)) {
+        const sessionId = file.slice(0, -5);
+        const authority = await fs.readJson(path.join(directory, file));
+        await store.ensureSessionBranch(sessionId);
+        await store.writeArchiveMessages(authority.history.map(message => ({
+          v: 1, kind: 'message', sessionId, agent: 'main', seq: message.__meta.seq,
+          timestamp: message.__meta.timestamp, role: message.role, message,
+        })));
+      }
+    })().catch(error => { console.error(error); process.exitCode = 1; });
+  `], { cwd: repoRoot, env: { ...process.env, FOXWARM_DATA_DIR: dataRoot } })
   await fs.writeFile(path.join(stateRoot, 'token'), token)
   await fs.writeFile(path.join(stateRoot, 'node_token'), 'synthetic-node-token')
   await fs.writeFile(path.join(stateRoot, 'mcp.json'), '{}')

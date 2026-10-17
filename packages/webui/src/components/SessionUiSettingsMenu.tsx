@@ -195,14 +195,16 @@ export default function SessionUiSettingsMenu({
               </button>}
               <button
                 type="button"
-                disabled={contextScrollbarSettings.showMinimap && !contextScrollbarSettings.showScrollbar}
+                role="switch"
+                aria-checked={timelineView !== 'conversation' && contextScrollbarSettings.showMinimap}
+                disabled={timelineView === 'conversation' || (contextScrollbarSettings.showMinimap && !contextScrollbarSettings.showScrollbar)}
                 onClick={() => {
                   const next = { ...contextScrollbarSettings, showMinimap: !contextScrollbarSettings.showMinimap }
                   setContextScrollbarSettings(writeContextScrollbarSettings(next))
                 }}
                 className={`${toggleRowClass} disabled:cursor-not-allowed disabled:opacity-50`}
               >
-                <span>Show minimap</span>{toggle(contextScrollbarSettings.showMinimap)}
+                <span>Show minimap</span>{toggle(timelineView !== 'conversation' && contextScrollbarSettings.showMinimap)}
               </button>
               <button type="button" onClick={() => onShowUserMessageMetadataChange(!showUserMessageMetadata)} className={toggleRowClass}>
                 <span>Show user message metadata</span>{toggle(showUserMessageMetadata)}

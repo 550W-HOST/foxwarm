@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
+import { appendContinuousCommits, mergeContinuousHistory, type HistoryMode } from '../continuousHistory'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { API_BASE_PATH } from '../config'
 import type { Message, MessagePart, SessionStreamEvent, ToolScriptSubCall } from './chatShared'
 import type { ChildPolicyChainEntry } from './childModelState'
@@ -23,6 +24,7 @@ import {
 } from '../chatHistoryState'
 
 const HISTORY_BOOTSTRAP_TAIL_LENGTH = 100
+type ArchivePageDirection = 'initial' | 'earlier' | 'later' | 'latest'
 
 type ChatSessionRecord = {
   id: string
@@ -76,16 +78,41 @@ type HistoryResponse = {
 type HistoryFetchMode = 'bootstrap' | 'full' | 'after' | 'reconcile'
 type PendingQueueAppend = { historyVersion: number; startSeq: number; endSeq: number }
 
-type TimelineState = { messages: Message[]; queuedMessages: Message[] }
+type TimelineState = { messages: Message[]; queuedMessages: Message[]; archiveMessages: Message[]; archivePendingMessages: Message[]; archiveStatus: 'idle' | 'loading' | 'loaded' }
 type TimelineAction =
-  | { type: 'messages'; update: Message[] | ((messages: Message[]) => Message[]) }
+  | { type: 'archive-start'; replace?: boolean }
+  | { type: 'archive'; messages: Message[]; reset?: boolean; replace?: boolean }
+  | { type: 'messages'; update: Message[] | ((messages: Message[]) => Message[]); archiveMessages?: Message[] }
   | { type: 'queue'; update: Message[] | ((messages: Message[]) => Message[]) }
-  | { type: 'atomic'; messages: Message[] | ((messages: Message[]) => Message[]); queuedMessages: Message[] }
+  | { type: 'atomic'; messages: Message[] | ((messages: Message[]) => Message[]); queuedMessages: Message[]; archiveMessages?: Message[] }
 
 function timelineReducer(state: TimelineState, action: TimelineAction): TimelineState {
-  if (action.type === 'atomic') return { messages: typeof action.messages === 'function' ? action.messages(state.messages) : action.messages, queuedMessages: action.queuedMessages }
-  if (action.type === 'messages') return { ...state, messages: typeof action.update === 'function' ? action.update(state.messages) : action.update }
-  return { ...state, queuedMessages: typeof action.update === 'function' ? action.update(state.queuedMessages) : action.update }
+  if (action.type === 'archive-start') {
+    return { ...state, archiveStatus: 'loading', archivePendingMessages: action.replace ? [] : state.archivePendingMessages }
+  }
+  if (action.type === 'archive') {
+    const originals = mergeContinuousHistory(action.replace ? [] : state.archiveMessages, action.messages)
+    return {
+      ...state,
+      archiveStatus: action.reset ? 'idle' : 'loaded',
+      archiveMessages: action.reset ? [] : appendContinuousCommits(originals, state.archivePendingMessages),
+      archivePendingMessages: [],
+    }
+  }
+  if (action.type === 'queue') {
+    return { ...state, queuedMessages: typeof action.update === 'function' ? action.update(state.queuedMessages) : action.update }
+  }
+  const update = action.type === 'atomic' ? action.messages : action.update
+  const messages = typeof update === 'function' ? update(state.messages) : update
+  return {
+    ...state,
+    messages,
+    archiveMessages: action.archiveMessages && state.archiveStatus !== 'idle'
+      ? appendContinuousCommits(state.archiveMessages, action.archiveMessages) : state.archiveMessages,
+    archivePendingMessages: action.archiveMessages && state.archiveStatus === 'loading'
+      ? mergeContinuousHistory(state.archivePendingMessages, action.archiveMessages) : state.archivePendingMessages,
+    ...(action.type === 'atomic' ? { queuedMessages: action.queuedMessages } : {}),
+  }
 }
 
 type ConfirmedSessionSettings = Partial<Pick<ChatSessionRecord,
@@ -97,11 +124,70 @@ type ConfirmedSessionSettings = Partial<Pick<ChatSessionRecord,
 >>
 
 /** One mounted Chat's history, queue, draft and send lifetime; viewport and physical transport stay separate. */
-export function useChatConversationSync(sessionId: string, webUiIdentityMode: boolean) {
-  const [timelineState, dispatchTimeline] = useReducer(timelineReducer, { messages: [], queuedMessages: [] })
+export function useChatConversationSync(sessionId: string, webUiIdentityMode: boolean, historyMode: HistoryMode = 'active', initialArchiveSeq?: number) {
+  const [timelineState, dispatchTimeline] = useReducer(timelineReducer, { messages: [], queuedMessages: [], archiveMessages: [], archivePendingMessages: [], archiveStatus: 'idle' })
   const messages = timelineState.messages
   const queuedMessages = timelineState.queuedMessages
-  const setMessages = useCallback((update: Message[] | ((messages: Message[]) => Message[])) => dispatchTimeline({ type: 'messages', update }), [])
+  const [archivePage, setArchivePage] = useState({ loaded: false, loading: false, error: false, hasEarlier: false, hasLater: false, direction: 'initial' as ArchivePageDirection })
+  const archiveRequestRef = useRef<AbortController | null>(null)
+  const archiveBoundaryRef = useRef<{ firstSeq?: number; lastSeq?: number }>({})
+  const [historySnapshotRevision, setHistorySnapshotRevision] = useState(0)
+  const archiveSnapshotRevisionRef = useRef(-1)
+  const loadArchivePage = useCallback(async (direction: ArchivePageDirection = 'initial', beforePublish?: (rows: Message[]) => void): Promise<Message[]> => {
+    if (archiveRequestRef.current) {
+      if (direction !== 'latest') return []
+      archiveRequestRef.current.abort()
+    }
+    const controller = new AbortController()
+    archiveRequestRef.current = controller
+    const restoringAnchor = direction === 'initial' && initialArchiveSeq !== undefined
+    setArchivePage(previous => ({ ...previous, loading: true, error: false, direction, ...(restoringAnchor ? { hasLater: true } : {}) }))
+    const boundary = archiveBoundaryRef.current
+    const replace = direction === 'initial' || direction === 'latest'
+    dispatchTimeline({ type: 'archive-start', replace })
+    const seq = direction === 'earlier' ? boundary.firstSeq : direction === 'later' ? boundary.lastSeq : undefined
+    const query = seq ? `?${direction === 'earlier' ? 'beforeSeq' : 'afterSeq'}=${seq}` : ''
+    const fetchPage = async (pageQuery: string) => {
+      const response = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/history/continuous${pageQuery}`, { signal: controller.signal })
+      if (!response.ok) throw new Error('History could not be loaded')
+      return response.json()
+    }
+    try {
+      // Two bounded pages surround the saved row, leaving room to restore its pixel offset.
+      // No previously loaded pages or whole-Archive scan are needed after a remount.
+      let data
+      if (restoringAnchor) {
+        const [earlier, later] = await Promise.all([
+          fetchPage(`?beforeSeq=${initialArchiveSeq! + 1}`),
+          fetchPage(`?afterSeq=${initialArchiveSeq}`),
+        ])
+        data = { messages: [...earlier.messages, ...later.messages],
+          firstSeq: earlier.firstSeq ?? later.firstSeq, lastSeq: later.lastSeq ?? earlier.lastSeq,
+          hasEarlier: earlier.hasMore, hasLater: later.hasMore }
+      } else data = await fetchPage(query)
+      if (controller.signal.aborted) return []
+      const rows = Array.isArray(data.messages) ? data.messages as Message[] : []
+      beforePublish?.(rows)
+      archiveBoundaryRef.current = {
+        firstSeq: direction === 'later' ? boundary.firstSeq ?? data.firstSeq : data.firstSeq ?? boundary.firstSeq,
+        lastSeq: direction === 'earlier' ? boundary.lastSeq ?? data.lastSeq : data.lastSeq ?? boundary.lastSeq,
+      }
+      dispatchTimeline({ type: 'archive', messages: rows, replace })
+      setArchivePage(previous => ({ loaded: true, loading: false, error: false, direction,
+        hasEarlier: restoringAnchor ? !!data.hasEarlier : direction === 'later' ? previous.hasEarlier : !!data.hasMore,
+        hasLater: restoringAnchor ? !!data.hasLater : direction === 'earlier' ? previous.hasLater : direction === 'later' && !!data.hasMore }))
+      return rows
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setArchivePage(previous => ({ ...previous, loading: false, error: true }))
+        controller.abort()
+      }
+      return []
+    } finally {
+      if (archiveRequestRef.current === controller) archiveRequestRef.current = null
+    }
+  }, [initialArchiveSeq, sessionId])
+  const setMessages = useCallback((update: Message[] | ((messages: Message[]) => Message[]), archiveMessages?: Message[]) => dispatchTimeline({ type: 'messages', update, archiveMessages }), [])
   const setQueuedMessages = useCallback((update: Message[] | ((messages: Message[]) => Message[])) => dispatchTimeline({ type: 'queue', update }), [])
   const [sessionMissing, setSessionMissing] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -152,6 +238,12 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
 
   useEffect(() => {
     setMessages([])
+    dispatchTimeline({ type: 'archive', messages: [], reset: true })
+    archiveRequestRef.current?.abort()
+    archiveRequestRef.current = null
+    archiveBoundaryRef.current = {}
+    archiveSnapshotRevisionRef.current = -1
+    setArchivePage({ loaded: false, loading: false, error: false, hasEarlier: false, hasLater: false, direction: 'initial' })
     setHistoryLoaded(false)
     setIsFullHistoryLoaded(false)
     setEarlierHistoryError(false)
@@ -274,6 +366,8 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
         if (response.status !== 404) return null
         if (historyStateEventVersionRef.current > stateEventVersionAtStart) return true
         setSessionMissing(true)
+        archiveRequestRef.current?.abort()
+        dispatchTimeline({ type: 'archive', messages: [], reset: true })
         setMessages([])
         setQueuedMessages([])
         setSessionQueueLength(0)
@@ -429,6 +523,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
         const snapshotMessages = Array.isArray(data.messages) ? data.messages : []
         if (!applyFullSnapshot(data, snapshotMessages)) return true
         maybeClearDraft(snapshotMessages)
+        setHistorySnapshotRevision(revision => revision + 1)
         historyGapDetectedRef.current = false
         reconnectAwaitingStateRef.current = false
         historyEventsRef.current = []
@@ -529,6 +624,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
         updateFrontier(data, appendedMessages, true)
         updateLastTimestamp(appendedMessages)
         maybeClearDraft(appendedMessages)
+        setHistorySnapshotRevision(revision => revision + 1)
         historyGapDetectedRef.current = false
         reconnectAwaitingStateRef.current = false
         historyEventsRef.current = []
@@ -639,6 +735,8 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
         }
 
         if (data.type === 'session-deleted') {
+          archiveRequestRef.current?.abort()
+          dispatchTimeline({ type: 'archive', messages: [], reset: true })
           historyRequestGateRef.current.invalidate()
           historyAbortControllerRef.current?.abort()
           historyAbortControllerRef.current = null
@@ -736,6 +834,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
           }
           dispatchTimeline({
             type: 'atomic',
+            archiveMessages: incomingMessages,
             messages: currentMessages => {
               const merged = mergeHistoryMessages(currentMessages, incomingMessages)
               representedMessageCountRef.current = countCommittedHistoryMessages(merged)
@@ -809,7 +908,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
             const next = reconcileHistoryMessage(prev, incomingMessage)
             representedMessageCountRef.current += countCommittedHistoryMessages(next) - beforeCount
             return next
-          })
+          }, [incomingMessage])
 
           if (fullHistoryLoadedRef.current && historyGapDetectedRef.current) scheduleHistoryRefresh()
 
@@ -982,7 +1081,25 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     return fetchHistory('full')
   }, [fetchHistory])
 
+  useEffect(() => {
+    if (historyMode !== 'continuous' || connectionState !== 'connected' || sessionMissing || archivePage.loading) return
+    if (archiveSnapshotRevisionRef.current === historySnapshotRevision) return
+    archiveSnapshotRevisionRef.current = historySnapshotRevision
+    void loadArchivePage(archiveBoundaryRef.current.firstSeq === undefined ? 'initial' : 'later')
+  }, [historyMode, connectionState, historySnapshotRevision, loadArchivePage, sessionMissing, archivePage.loading])
+
+  useEffect(() => () => { archiveRequestRef.current?.abort() }, [sessionId])
+
+  const continuousMessages = useMemo(() => {
+    const canonicalClientIds = new Set(timelineState.archiveMessages.map(getClientMessageId).filter(Boolean))
+    return [...timelineState.archiveMessages, ...messages.filter(message => message.__meta?.temporary
+      && (!getClientMessageId(message) || !canonicalClientIds.has(getClientMessageId(message))))]
+  }, [messages, timelineState.archiveMessages])
+
   return {
+    continuousMessages,
+    archivePage,
+    loadArchivePage,
     messages,
     queuedMessages,
     sessionRecord,

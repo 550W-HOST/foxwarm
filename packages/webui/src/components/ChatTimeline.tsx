@@ -1,7 +1,7 @@
 import ReplyFileGrid from './ReplyFileGrid'
 import { buildReplyFileGroups } from './replyFiles'
 import { useMobileChatViewport, type TimelineView } from '../chatPreferences'
-import { getMessageStableKey } from '../chatViewportState'
+import { getMessageViewportAnchorKey, getMessageStableKey } from '../chatViewportState'
 import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { File as FileIcon, Image as ImageIcon, Eye, Code, FileJson, Copy, Check, Cloud, ChevronRight } from 'lucide-react'
 import {
@@ -76,6 +76,7 @@ interface ChatTimelineProps {
   reasoningPresentation?: ReasoningPresentation
   isRunningTool?: boolean
   /** Supplied by Chat from full committed history, never inferred from a viewport or nested slice. */
+  currentHistoryMessages?: readonly Message[]
   historyMessages?: readonly Message[]
   activityDetails?: boolean
   runtimeState?: import('../sessionRuntimeState').SessionRuntimeState
@@ -1215,8 +1216,9 @@ const ConversationUsage = memo(function ConversationUsage({ badge, pendingReques
   </div>
 })
 
-const TimelineActivity = memo(function TimelineActivity({ row, expanded, onToggle, rowProps }: {
+const TimelineActivity = memo(function TimelineActivity({ row, identityKey, expanded, onToggle, rowProps }: {
   row: TimelineRowView
+  identityKey: string
   expanded: boolean
   onToggle: (key: string, expanded: boolean) => void
   rowProps: Omit<MessageRowProps, 'row'>
@@ -1232,16 +1234,17 @@ const TimelineActivity = memo(function TimelineActivity({ row, expanded, onToggl
   return (
     <div ref={ref} data-timeline-activity data-activity-expanded={expanded}
       data-chat-message-anchor-key={row.anchorKey} data-context-scrollbar-anchor-key={row.scrollbarAnchorKey}
+      data-chat-history-end-key={getMessageViewportAnchorKey(activity.sources?.at(-1) || activity.messages.at(-1) || row.msg)}
       className={`min-w-0 ${row.widthClass} ${row.marginClass}`}>
       <ConversationUsage badge={activity.usage} pendingRequests={activity.pendingRequests || 0} missingRequests={activity.missingRequests || 0} sessionId={rowProps.sessionId}>
         {activity.runtimeOnly ? <div className="px-2 py-1 text-left text-xs text-fw-text-muted">{activity.summary}</div> : <button type="button" aria-expanded={expanded} aria-label={expanded ? 'Collapse activity' : 'Expand activity'}
           className="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1 text-left text-xs text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong focus-visible:outline focus-visible:outline-fw-focus-ring"
-          onClick={() => { prepare(); onToggle(row.key, !expanded) }}>
+          onClick={() => { prepare(); onToggle(identityKey, !expanded) }}>
           <ChevronRight size={13} aria-hidden="true" className={`shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} /><span>{activity.summary}</span>
         </button>}
       </ConversationUsage>
       {expanded && !activity.runtimeOnly && <div className="foxwarm-conversation-process min-w-0 border-l border-fw-border py-1 pl-2" data-activity-details data-search-row={previewKey ? row.key : undefined} data-search-message-key={previewKey}>
-        {rowProps.renderNestedMessages(activity.messages, row.key, rowProps.nestedDepth + 1, 'detailed', previewSearch)}
+        {rowProps.renderNestedMessages(activity.messages, identityKey, rowProps.nestedDepth + 1, 'detailed', previewSearch)}
       </div>}
       {showPreview && <div data-conversation-preview data-search-row={row.key} className="min-w-0">
         <AssistantTextCard conversation text={preview.message.parts[preview.partIndex].text || ''} message={preview.message} searchPartIndex={preview.partIndex} searchReveal={rowProps.searchTarget?.rowKey === row.key} onOpenCodeCommit={rowProps.onOpenCodeCommit} />
@@ -1259,11 +1262,12 @@ const TimelineTimeSeparator = memo(function TimelineTimeSeparator({ marker }: { 
   )
 })
 
-const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, reasoningPresentation, isRunningTool = false, isMobile, timelineView, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget, historyMessages, activityDetails, runtimeState, busyStartedAt, renderMessageFooter }: ChatTimelineProps) {
+const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, reasoningPresentation, isRunningTool = false, isMobile, timelineView, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget, historyMessages, currentHistoryMessages, activityDetails, runtimeState, busyStartedAt, renderMessageFooter }: ChatTimelineProps) {
   const hideMetrics = useMobileChatViewport()
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
   const [expandedTools, setExpandedTools] = useState<ExpandedTools>(new Map())
   const rowsCacheRef = useRef<TimelineRowsCache | null>(null)
+  const activityMembersRef = useRef(new Map<object | string, string>())
   const [clockTick, setClockTick] = useState(0)
 
   const renderNestedMessages = useCallback((nestedMessages: Message[], keyPrefix: string, nextNestedDepth: number, overrideView?: TimelineView, nestedSearchTarget?: SessionSearchMatch | null) => (
@@ -1286,7 +1290,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
   ), [timelineView, isMobile, onOpenCodeCommit, onOpenCodeFile, sessionId, showUsageBadge, showUserMessageMetadata])
 
   const rows = useMemo(() => {
-    const input = { messages, reasoningPresentation, isRunningTool, isMobile, timelineView, showUsageBadge: showUsageBadge && !hideMetrics, showTimeDividers, nestedDepth, activityDetails, historyMessages, timing: { runtimeState, busyStartedAt, now: historyMessages && nestedDepth === 0 ? Date.now() : undefined }, expandedGroupKeys: expandedToolGroups }
+    const input = { messages, reasoningPresentation, isRunningTool, isMobile, timelineView, showUsageBadge: showUsageBadge && !hideMetrics, showTimeDividers, nestedDepth, activityDetails, historyMessages, currentHistoryMessages, timing: { runtimeState, busyStartedAt, now: historyMessages && nestedDepth === 0 ? Date.now() : undefined }, expandedGroupKeys: expandedToolGroups }
     let result = buildTimelineRows(input, rowsCacheRef.current)
     // A search reveal is transient: include only its owning group without changing manual expansion state.
     if (searchTarget && timelineView === 'grouped' && nestedDepth === 0) {
@@ -1301,7 +1305,28 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
     }
     rowsCacheRef.current = result.cache
     return result.rows
-  }, [expandedToolGroups, timelineView, isMobile, isRunningTool, messages, reasoningPresentation, nestedDepth, activityDetails, historyMessages, clockTick, runtimeState, busyStartedAt, searchTarget, showUsageBadge, showTimeDividers, hideMetrics])
+  }, [expandedToolGroups, timelineView, isMobile, isRunningTool, messages, reasoningPresentation, nestedDepth, activityDetails, historyMessages, currentHistoryMessages, clockTick, runtimeState, busyStartedAt, searchTarget, showUsageBadge, showTimeDividers, hideMetrics])
+
+
+  // A loaded predecessor can change the projected first row without changing the process being read.
+  // Retain its mounted identity (and nested disclosures), while Search keeps canonical row keys.
+  const activityKeys = useMemo(() => {
+    const keys = new Map<string, string>()
+    const members = new Map([...activityMembersRef.current].filter(([key, identity]) => typeof key === 'string' && expandedToolGroups.has(identity)))
+    const used = new Set<string>()
+    for (const row of rows) {
+      if (!row.activity) continue
+      const parts = row.activity.messages.flatMap(message => message.parts.map(part => part.functionCall || part.functionResponse || part))
+      const candidates = new Set([activityMembersRef.current.get(row.key), ...parts.map(part => activityMembersRef.current.get(part))].filter((key): key is string => !!key && !used.has(key)))
+      const identity = [...candidates].find(key => expandedToolGroups.has(key)) || candidates.values().next().value || row.key
+      used.add(identity)
+      keys.set(row.key, identity)
+      members.set(row.key, identity)
+      for (const part of parts) members.set(part, identity)
+    }
+    activityMembersRef.current = members
+    return keys
+  }, [rows, expandedToolGroups])
 
 
   const dynamicTiming = rows.some(row => row.activity?.dynamic)
@@ -1378,7 +1403,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
       {groupedRows.flatMap((item, index) => [
         ...(item.rows[0].timeMarker ? [<TimelineTimeSeparator key={`${item.key}-time`} marker={item.rows[0].timeMarker} />] : []),
         item.rows[0].activity
-          ? <TimelineActivity key={item.key} row={item.rows[0]} rowProps={rowProps} expanded={expandedToolGroups.has(item.key)} onToggle={handleGroupToggle} />
+          ? <TimelineActivity key={activityKeys.get(item.key) || item.key} identityKey={activityKeys.get(item.key) || item.key} row={item.rows[0]} rowProps={rowProps} expanded={expandedToolGroups.has(activityKeys.get(item.key) || item.key)} onToggle={handleGroupToggle} />
           : item.group
           ? <TimelineGroup key={item.key} group={item.group} rows={item.rows} rowProps={rowProps} onToggle={handleGroupToggle} />
           : <MessageRow key={item.key} row={item.rows[0]} {...rowProps} />,

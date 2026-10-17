@@ -86,32 +86,52 @@ async function openFixture(shape) {
   return { browser, page }
 }
 
-async function triggerLazyExpansion(page) {
-  return page.evaluate(() => {
-    const container = document.querySelector('.foxwarm-chat-messages')
-    const timeline = document.querySelector('[data-chat-timeline="committed"]')
-    if (!(container instanceof HTMLElement) || !(timeline instanceof HTMLElement)) return null
-    const viewport = container.getBoundingClientRect()
-    const anchors = () => Array.from(timeline.querySelectorAll('[data-chat-message-anchor-key]'))
-      .map(row => {
-        const rect = row.getBoundingClientRect()
-        return {
-          key: row.getAttribute('data-chat-message-anchor-key'),
-          offset: rect.top - viewport.top,
-          visible: rect.bottom > viewport.top && rect.top < viewport.bottom,
-        }
-      })
+async function triggerLazyExpansion(page, duringHostResize = false) {
+  const before = await page.evaluate(duringHostResize => {
+    const expand = () => {
+      const container = document.querySelector('.foxwarm-chat-messages')
+      const timeline = document.querySelector('[data-chat-timeline="committed"]')
+      if (!(container instanceof HTMLElement) || !(timeline instanceof HTMLElement)) return null
+      const viewport = container.getBoundingClientRect()
+      const anchors = () => Array.from(timeline.querySelectorAll('[data-chat-message-anchor-key]'))
+        .map(row => {
+          const rect = row.getBoundingClientRect()
+          return {
+            key: row.getAttribute('data-chat-message-anchor-key'),
+            offset: rect.top - viewport.top,
+            visible: rect.bottom > viewport.top && rect.top < viewport.bottom,
+          }
+        })
 
-    container.scrollTop = 115
-    const before = {
-      scrollTop: container.scrollTop,
-      scrollHeight: container.scrollHeight,
-      distanceFromBottom: container.scrollHeight - container.scrollTop - container.clientHeight,
-      anchors: anchors(),
+      container.scrollTop = 115
+      const before = {
+        scrollTop: container.scrollTop,
+        scrollHeight: container.scrollHeight,
+        distanceFromBottom: container.scrollHeight - container.scrollTop - container.clientHeight,
+        anchors: anchors(),
+      }
+      container.dispatchEvent(new Event('scroll'))
+      return before
     }
-    container.dispatchEvent(new Event('scroll'))
-    return before
-  })
+    if (!duringHostResize) return expand()
+    const host = document.querySelector('.foxwarm-chat-root')?.closest('[data-workbench-content-tab]')
+    if (!(host instanceof HTMLElement)) throw new Error('The resize fixture needs a workbench content host')
+    const width = host.getBoundingClientRect().width
+    window.lazyExpansionAfterResize = new Promise(resolve => {
+      const observer = new MutationObserver(() => {
+        if (host.getBoundingClientRect().width === width) return
+        observer.disconnect()
+        // The host has captured its old position; scroll before that resize correction settles.
+        resolve(expand())
+      })
+      observer.observe(host, { attributes: true, attributeFilter: ['style'] })
+    })
+    return null
+  }, duringHostResize)
+  if (!duringHostResize) return before
+  const viewport = page.viewport()
+  await page.setViewport({ ...viewport, width: viewport.width - 40 })
+  return page.evaluate(() => window.lazyExpansionAfterResize)
 }
 
 test('lazy prepend preserves a nearby stable row when the leading tool-response anchor is regrouped away', async () => {
@@ -164,4 +184,54 @@ test('lazy prepend uses scroll-height geometry when the visible slice has no sta
   } finally {
     await browser.close()
   }
+})
+
+
+test('lazy prepend geometry supersedes an older workbench resize correction', async () => {
+  const { browser, page } = await openFixture('missing-meta')
+  try {
+    const before = await triggerLazyExpansion(page, true)
+    assert.equal(before?.anchors.length, 0)
+    await page.waitForFunction(() => !document.body.textContent?.includes('Scroll upward to load'), { timeout: 15_000 })
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const after = await page.$eval('.foxwarm-chat-messages', container => ({
+      distanceFromBottom: container.scrollHeight - container.scrollTop - container.clientHeight,
+    }))
+    assert.ok(Math.abs(after.distanceFromBottom - before.distanceFromBottom) <= 2, `distance from bottom changed from ${before.distanceFromBottom} to ${after.distanceFromBottom}`)
+    assert.ok(after.distanceFromBottom > 500)
+  } finally {
+    await browser.close()
+  }
+})
+
+test('active recent-history expansion starts within 500px and keeps every native-scroll frame stable', async () => {
+  const { browser, page } = await openFixture('missing-meta')
+  try {
+    await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages').scrollTop > 500)
+    await page.evaluate(() => {
+      window.lazyNativeFrames = []
+      const container = document.querySelector('.foxwarm-chat-messages')
+      const start = event => {
+        if (!event.isTrusted || container.scrollTop >= 500 || container.scrollTop < 300) return
+        container.removeEventListener('scroll', start)
+        const sample = () => {
+          window.lazyNativeFrames.push({ distance: container.scrollHeight - container.scrollTop - container.clientHeight, height: container.scrollHeight })
+          if (window.lazyNativeFrames.length < 26) requestAnimationFrame(sample)
+        }
+        sample()
+      }
+      container.addEventListener('scroll', start)
+    })
+    const rect = await page.$eval('.foxwarm-chat-messages', container => {
+      const rect = container.getBoundingClientRect()
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, top: container.scrollTop }
+    })
+    await page.mouse.move(rect.x, rect.y)
+    await page.mouse.wheel({ deltaY: 400 - rect.top })
+    await page.waitForFunction(() => window.lazyNativeFrames.length === 26)
+    const frames = await page.evaluate(() => window.lazyNativeFrames)
+    assert.equal(await page.evaluate(() => document.body.textContent.includes('Scroll upward to load')), false)
+    assert.ok(frames.some(frame => frame.height > frames[0].height))
+    assert.ok(frames.every(frame => Math.abs(frame.distance - frames[0].distance) <= 2), JSON.stringify(frames))
+  } finally { await browser.close() }
 })
