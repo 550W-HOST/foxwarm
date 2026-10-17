@@ -11,6 +11,8 @@ internal sealed class MainHost : IAsyncDisposable
     private readonly SessionManager sessions;
     private readonly TerminalRegistry terminals;
     internal WebApplication App { get; }
+    private readonly object lifecycle = new();
+    private Task? disposal;
 
     private MainHost(SessionManager sessions, TerminalRegistry terminals, HttpServer server)
     {
@@ -71,6 +73,8 @@ internal sealed class MainHost : IAsyncDisposable
         }
         catch
         {
+            sessions.BeginShutdown();
+            await sessions.ShutdownAsync();
             if (server is not null)
                 await server.App.DisposeAsync();
             if (terminals is not null)
@@ -80,19 +84,37 @@ internal sealed class MainHost : IAsyncDisposable
         }
     }
 
-    public async ValueTask DisposeAsync()
+    internal async Task WaitForShutdownAsync()
+    {
+        var stopping = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registration = App.Lifetime.ApplicationStopping.Register(() => stopping.TrySetResult());
+        await stopping.Task.ConfigureAwait(false);
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        lock (lifecycle)
+            return new(disposal ??= DisposeCoreAsync());
+    }
+
+    private async Task DisposeCoreAsync()
     {
         sessions.BeginShutdown();
         try
         {
-            await App.StopAsync();
-            await sessions.ShutdownAsync();
+            // Do not let RunAsync dispose ASP.NET (including Node sockets) first.
+            await sessions.ShutdownAsync().ConfigureAwait(false);
         }
-        finally
+        catch (SessionTurnDrainException error)
         {
-            await App.DisposeAsync();
-            await terminals.DisposeAsync();
-            await sessions.DisposeAsync();
+            // Cross-platform, Main-only crash-like exit. No dependency teardown
+            // or process-tree kill beneath cancellation-ignoring accepted work.
+            Environment.FailFast("Accepted Session owners did not settle during shutdown.", error);
+            throw;
         }
+        await terminals.DisposeAsync().ConfigureAwait(false);
+        await App.StopAsync().ConfigureAwait(false);
+        await App.DisposeAsync().ConfigureAwait(false);
+        await sessions.DisposeAsync().ConfigureAwait(false);
     }
 }

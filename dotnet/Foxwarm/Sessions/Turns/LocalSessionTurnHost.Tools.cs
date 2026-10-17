@@ -63,6 +63,7 @@ public sealed partial class LocalSessionTurnHost
                         value.Preset is not null
                         || value.Call["argsParseError"] is not null
                         || token.IsCancellationRequested
+                        || Closing
                     )
                         continue;
                     preparation[index - start] = await preparing
@@ -199,12 +200,16 @@ public sealed partial class LocalSessionTurnHost
     )
     {
         var call = planned.Call;
-        if (token.IsCancellationRequested)
+        if (token.IsCancellationRequested || Closing)
             return new(
                 new JsonObject
                 {
                     ["canceled"] = true,
-                    ["message"] = "Tool call canceled before execution.",
+                    ["error"] = new JsonObject
+                    {
+                        ["type"] = "tool_call_cancelled",
+                        ["message"] = $"Tool call was not started because {(Closing && !entry.WithState(state => state.Stopping) ? "process shutdown" : entry.ToolCancellationSource)} cancelled it; it was not executed.",
+                    },
                 }
             );
         if (planned.Preset is JsonObject preset)
@@ -236,7 +241,7 @@ public sealed partial class LocalSessionTurnHost
             return new(
                 UnsupportedTurnToolExecutor.ToolError(
                     "tool_call_cancelled",
-                    "Tool request canceled. Started effects may have occurred and were not reversed."
+                    $"Tool request canceled by {entry.ToolCancellationSource} after dispatch. Started effects may have occurred and were not reversed."
                 )
             );
         }

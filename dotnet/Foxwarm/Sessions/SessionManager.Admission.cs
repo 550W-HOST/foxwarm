@@ -328,6 +328,8 @@ internal sealed partial class SessionManager
     {
         lock (lifecycle)
         {
+            if (!accepting)
+                owner.Registry.Runner.CloseAdmission();
             if (!slot.Creating)
                 admissionStop.Token.ThrowIfCancellationRequested();
             if (

@@ -423,6 +423,10 @@ internal sealed partial class SessionCompactor
                 $"Context compaction did not complete, so this turn stopped before another provider request (previous usage {UsageTotal(result)}, limit {limit})."
             );
         }
+        catch (SessionTurnShutdownException)
+        {
+            throw;
+        }
         catch (OperationCanceledException)
             when (token.IsCancellationRequested || hosted.Entry.WithState(state => state.Stopping))
         {

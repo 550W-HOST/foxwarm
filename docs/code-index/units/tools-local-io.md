@@ -17,7 +17,7 @@ Callers: `SessionToolExecutor`, `WebUIChannel.Files/Images`, Code services, and 
 
 ## Contract and side effects
 
-Path/cwd checks are security and data-loss boundaries, not convenience validation. Reads/writes are bounded; patch/write retries retain artifact lifetime and do not assume a failed transport erased a successful filesystem change. Exec output is truncation-aware and process termination is explicit. File delivery exposes deployment-relative/authenticated references, not local absolute paths.
+Path/cwd checks are security and data-loss boundaries, not convenience validation. Reads/writes are bounded; patch/write retries retain artifact lifetime and do not assume a failed transport erased a successful filesystem change. Exec output is truncation-aware and process termination is explicit. Lifecycle cancellation ends a launched local exec's foreground wait with a process-shutdown receipt; explicit Stop/Run queued retain their own cause. Neither cancellation kills the independent process, reverses its effects, or replaces its actual finished result. The executor stays available until foreground turn owners settle. File delivery exposes deployment-relative/authenticated references, not local absolute paths.
 
 ## Tests
 

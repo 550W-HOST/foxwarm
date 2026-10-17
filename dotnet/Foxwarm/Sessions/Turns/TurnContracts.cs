@@ -6,6 +6,12 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Sessions;
 
+internal sealed class SessionTurnShutdownException()
+    : OperationCanceledException("Session processing is shutting down.");
+
+internal sealed class SessionTurnDrainException(Exception? inner = null)
+    : TimeoutException("Accepted Session work did not settle during shutdown.", inner);
+
 public sealed class CancellationHandle : IDisposable
 {
     private int disposed;

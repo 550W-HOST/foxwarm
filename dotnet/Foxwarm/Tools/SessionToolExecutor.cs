@@ -263,8 +263,10 @@ internal sealed partial class SessionToolExecutor(
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var dispatched = false;
         try
         {
+            hosted.Registry.Runner.AssertCanContinue();
             var name = SessionWait.Text(functionCall["name"]) ?? "";
             var args =
                 functionCall["args"] as JsonObject
@@ -315,6 +317,8 @@ internal sealed partial class SessionToolExecutor(
                     break;
             }
             cancellationToken.ThrowIfCancellationRequested();
+            hosted.Registry.Runner.AssertCanContinue();
+            dispatched = true;
             hosted.BeginTool();
             var startedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var monotonic = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -369,11 +373,15 @@ internal sealed partial class SessionToolExecutor(
                 throw;
             return UnsupportedTurnToolExecutor.ToolError("tool_io_error", error.Message);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException error) when (cancellationToken.IsCancellationRequested || error is SessionTurnShutdownException)
         {
+            var source = hosted.Registry.Runner.Closing && !hosted.Entry.WithState(state => state.Stopping)
+                ? "process shutdown" : hosted.Entry.ToolCancellationSource;
             return UnsupportedTurnToolExecutor.ToolError(
                 "tool_call_cancelled",
-                "Tool request canceled. Started effects may have occurred and were not reversed."
+                dispatched
+                    ? $"Tool request canceled by {source} after dispatch. Started effects may have occurred and were not reversed."
+                    : $"Tool call was not started because {source} cancelled it; it was not executed."
             );
         }
         catch (Exception error)
@@ -444,7 +452,8 @@ internal sealed partial class SessionToolExecutor(
                 initial = start;
                 observed = end;
             },
-            programmatic: ScriptBudget
+            programmatic: ScriptBudget,
+            cancellationSource: () => hosted.Entry.ToolCancellationSource
         );
         if (observed is null)
             return response;

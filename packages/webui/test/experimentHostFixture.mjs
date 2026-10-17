@@ -79,10 +79,23 @@ export async function createHostFixture(name, options = {}) {
     assert.equal((await api('POST', '/api/setup/models', { yaml: raw })).status, 200)
     assert.equal(await readFile(modelPath, 'utf8'), raw)
   }
-  async function stop() {
+  async function waitForExit() {
+    let timeout
+    try {
+      const [code, signal] = host.child.exitCode !== null || host.child.signalCode !== null
+        ? [host.child.exitCode, host.child.signalCode]
+        : await Promise.race([once(host.child, 'exit'), new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Owned host did not exit: ' + host.output)), options.stopTimeout ?? 12000) })])
+      return { code, signal }
+    } finally { clearTimeout(timeout) }
+  }
+  function signalStop() {
+    assert(ownedListener && host?.child.exitCode === null && host.child.signalCode === null, 'Fixture shutdown requires its own live child.')
+    host.child.kill('SIGTERM')
+  }
+  async function stop(afterAdmission) {
     assert.equal((await api('POST', '/admin/shutdown')).status, 202)
-    const code = host.child.exitCode ?? await Promise.race([once(host.child, 'exit').then(([code]) => code), sleep(options.stopTimeout ?? 12000).then(() => 'timeout')])
-    assert.equal(code, 0, host.output)
+    await afterAdmission?.()
+    assert.deepEqual(await waitForExit(), { code: 0, signal: null }, host.output)
   }
   const sql = (statement, parameters = []) => JSON.parse(execFileSync('python3', ['-c', 'import sqlite3,json,sys; c=sqlite3.connect("file:"+sys.argv[1]+"?mode=ro",uri=True); print(json.dumps(c.execute(sys.argv[2],json.loads(sys.argv[3])).fetchall()))', join(data, 'state/archive-store.sqlite'), statement, JSON.stringify(parameters)], { encoding: 'utf8' }))
   async function crash() {
@@ -93,5 +106,5 @@ export async function createHostFixture(name, options = {}) {
     await crash()
     if (process.env.FOXWARM_KEEP_E2E_ROOT !== '1') await rm(root, { recursive: true, force: true }); else console.log('Retained owned root: ' + root)
   }
-  return { root, data, work, modelPath, origin, token, port, api, start, openApp, save, stop, crash, sql, cleanup, hostPids, get output() { return host?.output } }
+  return { root, data, work, modelPath, origin, token, port, api, start, openApp, save, stop, signalStop, waitForExit, crash, sql, cleanup, hostPids, get output() { return host?.output } }
 }

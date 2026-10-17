@@ -12,7 +12,7 @@ Builds the Main Session manager, initializes identity/catalog/archive services, 
 
 ## Contract and side effects
 
-The constructed manager pins independent journal and Archive data-root writers without opening their connections before startup evidence validation. Shutdown stops/drains producers and ordered Session saves before releasing those owners; accepted work resolves before connection closure. Disposal also awaits the idempotent shutdown path.
+The constructed manager pins independent journal and Archive data-root writers without opening their connections before startup evidence validation. `BeginShutdown` closes manager/runner admission synchronously and fences future timers/wait producers without tearing down effects dependencies. `ShutdownAsync` also invokes this boundary, drains accepted exact turn owners, finishes accepted publications and foreground wrappers, then cancels/drains independent planners before ToolScript/executor/MCP/Node/WebSocket teardown and final ordered saves. A creation already accepted at closure can publish only a fenced runner. Journal and Archive leases remain pinned through accepted saves and are released by disposal after successful shutdown. A failed foreground drain does not run dependency disposal; the shared host owns forced termination. See [Main-local lifecycle shutdown](../threads/session-lifecycle.md#d-lifecycle-main-local-shutdown).
 
 Stale busy recovery clears busy fields and stopping, adds one deduplicated resume event, saves strictly, and only then publishes. Stopping-only admission rejects. The catalog cannot reconstruct semantic JSON history or authorize a missing registered lifetime.
 
@@ -20,4 +20,4 @@ Admitted owners publish bounded local list projections on owner state/message ev
 
 ## Tests
 
-`SessionAdmissionTests.cs`; `SessionIdentityRecoveryTests.cs`; `SessionCatalogPublicationTests.cs`; startup/bootstrap tests.
+`SessionAdmissionTests.cs`; `SessionIdentityRecoveryTests.cs`; `SessionCatalogPublicationTests.cs`; startup/bootstrap tests; `SessionShutdownTests.cs`; `dotnet/scripts/qualify-shutdown-recovery.mjs`.

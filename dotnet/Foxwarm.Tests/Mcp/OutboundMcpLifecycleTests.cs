@@ -274,10 +274,11 @@ public sealed class OutboundMcpLifecycleTests
         await f.ConfigureAsync(peer.Url + "/mcp");
         var call = f.CallAsync(f.First, "hold", Args("shutdown"));
         await peer.WaitAsync("effect", "shutdown");
-        f.Manager.BeginShutdown();
+        var shutdown = f.Manager.ShutdownAsync();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             call.WaitAsync(TimeSpan.FromSeconds(10))
         );
+        await shutdown;
         await f.Mcp.DrainAsync();
         Assert.NotNull((await f.CallAsync(f.First, "probe"))!["error"]);
         await f.DisposeAsync();

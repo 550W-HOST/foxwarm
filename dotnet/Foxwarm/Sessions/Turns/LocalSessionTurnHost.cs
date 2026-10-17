@@ -17,6 +17,10 @@ public sealed partial class LocalSessionTurnHost
     private readonly Func<long> clock;
     private readonly Func<string?>? parentSessionResolver;
     private int releaseCommits;
+    private readonly Action? assertCanContinue;
+    private readonly Func<bool>? closing;
+    private bool Closing => closing?.Invoke() == true;
+    private void AssertCanContinue() => assertCanContinue?.Invoke();
     private readonly Func<Task>? safePoint;
     private readonly Func<Task>? retrySafePoint;
     private readonly Func<
@@ -36,7 +40,9 @@ public sealed partial class LocalSessionTurnHost
         Func<Task>? safePoint = null,
         Func<Task>? retrySafePoint = null,
         Func<string?>? parentSessionResolver = null,
-        Func<ChatResult, Func<Func<Task>, Task>, CancellationToken, Task>? beforeContinuation = null
+        Func<ChatResult, Func<Func<Task>, Task>, CancellationToken, Task>? beforeContinuation = null,
+        Action? assertCanContinue = null,
+        Func<bool>? closing = null
     )
     {
         this.entry = entry;
@@ -52,6 +58,8 @@ public sealed partial class LocalSessionTurnHost
         this.safePoint = safePoint;
         this.retrySafePoint = retrySafePoint;
         this.beforeContinuation = beforeContinuation;
+        this.assertCanContinue = assertCanContinue;
+        this.closing = closing;
     }
 
     internal Task SafePointAsync() => safePoint?.Invoke() ?? Task.CompletedTask;
@@ -106,8 +114,10 @@ public sealed partial class LocalSessionTurnHost
                 control.BeginTurn();
             for (var iteration = 0; iteration < maxToolIterations; iteration++)
             {
+                AssertCanContinue();
                 registered.Token.ThrowIfCancellationRequested();
                 await SafePointAsync().ConfigureAwait(false);
+                AssertCanContinue();
                 registered.Token.ThrowIfCancellationRequested();
                 var history = entry.WithState(state => state.History.Snapshot());
                 var result = chat is ISessionChatService ordinary
@@ -207,7 +217,8 @@ public sealed partial class LocalSessionTurnHost
                                 )
                                 .ConfigureAwait(false);
                         if (
-                            !entry.WithState(state =>
+                            Closing
+                            || !entry.WithState(state =>
                                 !state.Stopping
                                 && !state.Meta.ContainsKey("runQueuedAfterStop")
                                 && state.Queue.Any(SessionCompactor.Ordinary)
@@ -269,6 +280,7 @@ public sealed partial class LocalSessionTurnHost
                         throw new OperationCanceledException(registered.Token);
                     if (terminal)
                         return result with { Terminal = true };
+                    AssertCanContinue();
                     await ContinueAfterResultAsync(result, registered.Token).ConfigureAwait(false);
                     if (iteration + 1 >= maxToolIterations)
                         throw new ToolLoopLimitException(maxToolIterations);
@@ -300,6 +312,7 @@ public sealed partial class LocalSessionTurnHost
     {
         void AssertCanRetry()
         {
+            AssertCanContinue();
             token.ThrowIfCancellationRequested();
             if (
                 entry.WithState(state =>
@@ -358,6 +371,7 @@ public sealed partial class LocalSessionTurnHost
 
     private async Task ContinueAfterResultAsync(ChatResult result, CancellationToken token)
     {
+        AssertCanContinue();
         if (beforeContinuation is not null)
         {
             await beforeContinuation(
@@ -373,11 +387,14 @@ public sealed partial class LocalSessionTurnHost
 
     private async Task AppendQueuedFollowUpsAfterToolAsync(Func<Task>? continuationSafePoint = null)
     {
+        AssertCanContinue();
         await (continuationSafePoint?.Invoke() ?? SafePointAsync()).ConfigureAwait(false);
+        AssertCanContinue();
         if (entry.WithState(state => state.Stopping || !state.Queue.Any(SessionCompactor.Ordinary)))
             return;
         await entry.SaveLane.SaveBestEffortAsync().ConfigureAwait(false);
         await (continuationSafePoint?.Invoke() ?? SafePointAsync()).ConfigureAwait(false);
+        AssertCanContinue();
         entry.WithState(state => DeferredQueueInput.Mark(state.Queue));
         var batch = SessionTurnRunner.DrainLeading(entry);
         if (batch.Count > 0)

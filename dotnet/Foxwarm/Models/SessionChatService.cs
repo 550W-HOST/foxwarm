@@ -195,6 +195,10 @@ internal sealed class SessionChatService(
                 }
             );
         }
+        catch (SessionTurnShutdownException)
+        {
+            throw;
+        }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;

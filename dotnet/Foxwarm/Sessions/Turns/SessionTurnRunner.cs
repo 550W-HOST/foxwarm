@@ -17,17 +17,117 @@ public sealed class SessionTurnRunner
         this.hosts = hosts;
     }
 
+    private readonly object lifecycle = new();
+    private readonly Dictionary<SessionEntry, TaskCompletionSource> processors = new();
+    private volatile bool closing;
+    private Task? shutdown;
+
+    internal bool Closing => closing;
+
+    internal void CloseAdmission()
+    {
+        lock (lifecycle)
+            closing = true;
+    }
+
+    internal void AssertCanContinue()
+    {
+        if (closing)
+            throw new SessionTurnShutdownException();
+    }
+
+    internal Task ShutdownAsync(TimeSpan? grace = null, TimeSpan? cancellation = null)
+    {
+        lock (lifecycle)
+        {
+            closing = true;
+            return shutdown ??= DrainAsync(
+                processors.Values.Select(value => value.Task).ToArray(),
+                grace ?? TimeSpan.FromSeconds(5),
+                cancellation ?? TimeSpan.FromSeconds(5)
+            );
+        }
+    }
+
+    private async Task DrainAsync(Task[] accepted, TimeSpan grace, TimeSpan cancellation)
+    {
+        var settled = Task.WhenAll(accepted);
+        try
+        {
+            await settled.WaitAsync(grace).ConfigureAwait(false);
+            return;
+        }
+        catch (TimeoutException) { }
+        SessionEntry[] current;
+        lock (lifecycle)
+            current = processors.Keys.ToArray();
+        foreach (var entry in current)
+            entry.CancelForShutdown();
+        try
+        {
+            await settled.WaitAsync(cancellation).ConfigureAwait(false);
+        }
+        catch (TimeoutException error)
+        {
+            throw new SessionTurnDrainException(error);
+        }
+    }
+
     public async Task ProcessQueueAsync(string sessionId, bool retry = false)
     {
         var entry = registry.GetRequired(sessionId);
-        if (!entry.TryClaimProcessor())
+        if (closing)
         {
             if (retry)
-                throw new InvalidOperationException("Session is already running.");
+                throw new SessionTurnShutdownException();
             return;
         }
+        var admission = entry.AdmitMutation();
+        TaskCompletionSource? settled = null;
+        try
+        {
+            lock (lifecycle)
+            {
+                if (closing)
+                {
+                    if (retry)
+                        throw new SessionTurnShutdownException();
+                }
+                else if (entry.TryClaimAdmittedProcessor())
+                {
+                    settled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                    processors.Add(entry, settled);
+                }
+                else if (retry)
+                    throw new InvalidOperationException("Session is already running.");
+            }
+        }
+        catch
+        {
+            admission?.Dispose();
+            throw;
+        }
+        if (settled is null)
+        {
+            admission?.Dispose();
+            return;
+        }
+        admission?.Dispose();
+        await RunProcessorAsync(sessionId, entry, settled, retry).ConfigureAwait(false);
+    }
+
+    private async Task RunProcessorAsync(
+        string sessionId,
+        SessionEntry entry,
+        TaskCompletionSource settled,
+        bool retry
+    )
+    {
+        var turnScope = entry.EnterTurnScope();
         var claimed = false;
         var failed = false;
+        var interrupted = false;
+        var turnSelected = retry;
         try
         {
             if (retry)
@@ -52,11 +152,15 @@ public sealed class SessionTurnRunner
                 if (entry.WithState(state => state.Stopping))
                 {
                     if (await ResumeQueuedOverrideAsync(entry).ConfigureAwait(false))
+                    {
+                        AssertCanContinue();
                         continue;
+                    }
                     await host.FinalizeStoppedAsync().ConfigureAwait(false);
                     claimed = false;
                     break;
                 }
+                AssertCanContinue();
                 await host.SafePointAsync().ConfigureAwait(false);
                 if (retryPending)
                 {
@@ -78,27 +182,33 @@ public sealed class SessionTurnRunner
                         await registry.OnTurnStarting(entry).ConfigureAwait(false);
                     await entry.SaveLane.SaveBestEffortAsync().ConfigureAwait(false);
                     await host.SafePointAsync().ConfigureAwait(false);
+                    AssertCanContinue();
                     var batch = DrainLeading(entry);
                     if (batch.Count == 0)
                         break;
+                    turnSelected = true;
                     await host.AppendQueuedInputsAsync(batch).ConfigureAwait(false);
                 }
+                AssertCanContinue();
                 try
                 {
                     var result = await host.ChatAsync(Guid.NewGuid().ToString())
                         .ConfigureAwait(false);
                     if (
                         (result.AssistantMessage is not null || result.Usage is not null)
+                        && !closing
                         && registry.OnTurnCompleted is not null
                     )
                         await registry.OnTurnCompleted(entry, result).ConfigureAwait(false);
-                    if (result.Terminal)
+                    turnSelected = false;
+                    if (result.Terminal || closing)
                         break;
                 }
                 catch (OperationCanceledException) when (entry.WithState(state => state.Stopping))
                 {
                     if (await ResumeQueuedOverrideAsync(entry).ConfigureAwait(false))
                     {
+                        AssertCanContinue();
                         // Retry preparation may have committed the selected inputs before Run queued canceled it.
                         retryPending = entry.WithState(state =>
                             !state.Queue.Any(SessionCompactor.Ordinary)
@@ -108,6 +218,16 @@ public sealed class SessionTurnRunner
                     }
                     await host.FinalizeStoppedAsync().ConfigureAwait(false);
                     claimed = false;
+                    break;
+                }
+                catch (SessionTurnShutdownException)
+                {
+                    interrupted = true;
+                    break;
+                }
+                catch (OperationCanceledException) when (closing && entry.ShutdownCancellationRequested)
+                {
+                    interrupted = true;
                     break;
                 }
                 catch (Foxwarm.Tools.ToolAuthorizationUnavailableException error)
@@ -130,6 +250,20 @@ public sealed class SessionTurnRunner
                 }
             }
         }
+        catch (SessionTurnShutdownException)
+        {
+            if (
+                claimed
+                && entry.WithState(state => state.Stopping)
+                && !await ResumeQueuedOverrideAsync(entry).ConfigureAwait(false)
+            )
+            {
+                await hosts.For(entry).FinalizeStoppedAsync().ConfigureAwait(false);
+                claimed = false;
+            }
+            else
+                interrupted = claimed && turnSelected;
+        }
         catch
         {
             failed = true;
@@ -139,18 +273,34 @@ public sealed class SessionTurnRunner
         {
             try
             {
-                if (claimed)
+                if (claimed && !interrupted)
                     await hosts.For(entry).ReleaseBusyAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                failed = true;
+                throw;
             }
             finally
             {
                 entry.ReleaseProcessor();
-                if (
-                    !failed
-                    && entry.WithState(state => !state.Busy)
-                    && registry.HasRunnableWork(entry)
-                )
-                    registry.Trigger(sessionId);
+                lock (lifecycle)
+                    processors.Remove(entry);
+                try
+                {
+                    if (
+                        !closing
+                        && !failed
+                        && entry.WithState(state => !state.Busy)
+                        && registry.HasRunnableWork(entry)
+                    )
+                        registry.Trigger(sessionId);
+                }
+                finally
+                {
+                    turnScope.Dispose();
+                    settled.TrySetResult();
+                }
             }
         }
     }

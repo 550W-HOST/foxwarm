@@ -570,6 +570,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     public Task ShutdownAsync()
     {
+        BeginShutdown();
         lock (lifecycle)
             return shutdown ??= ShutdownCoreAsync();
     }
@@ -577,76 +578,72 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private async Task ShutdownCoreAsync()
     {
         SessionOwner[] current;
-        timers.StopFuture();
+        lock (lifecycle)
+            current = sessions.Values.ToArray();
+        // Start bounded foreground settlement immediately; accepted effects retain
+        // their dependencies throughout grace and cancellation.
+        await Task.WhenAll(current.Select(session => session.Registry.Runner.ShutdownAsync()));
         await timers.DisposeAsync();
-        ToolScript.BeginShutdown();
         await DrainPublicationsAsync();
         lock (lifecycle)
             current = sessions.Values.ToArray();
-        waitTimeouts.Stop();
-        waitLiveness.Stop();
+        // An accepted creation can publish during closure, but its runner is fenced.
+        await Task.WhenAll(current.Select(session => session.Registry.Runner.ShutdownAsync()));
+        await Task.WhenAll(current.Select(session => session.DrainForegroundAsync()));
         await waitTimeouts.DrainAsync();
         await waitLiveness.DrainAsync();
-        // Each Stop takes and cancels its own active handle synchronously before
-        // the host waits on any Session's best-effort persistence lane.
-        var compactStops = current
-            .Where(session => session.Compactor.Active)
-            .Select(session => session.Compactor.StopAsync())
-            .ToArray();
-        var stops = current
-            .Where(session => session.Entry.Snapshot().Busy)
-            .Select(session => session.Registry.Control.StopAsync(session.Id))
-            .ToArray();
-        await Task.WhenAll(compactStops.Select(task => (Task)task).Concat(stops));
+        // Planners are independently owned. Release foreground waits first, then
+        // cancel/drain planning without reclassifying interruption as user Stop.
+        await Task.WhenAll(current.Select(session => session.Compactor.StopAsync()));
         await Task.WhenAll(current.Select(session => session.DrainAsync()));
+        ToolScript.BeginShutdown();
+        executor.BeginShutdown();
+        mcp.BeginShutdown();
+        Nodes.BeginShutdown();
+        websockets.BeginShutdown();
         await ToolScript.DrainAsync();
         foreach (var session in current)
             if (!session.Entry.Retired)
                 await session.Entry.SaveLane.SaveStrictAsync();
+        foreach (var session in current)
+            session.CloseSubscribers();
     }
 
     public void BeginShutdown()
     {
         timers.StopFuture();
         lock (lifecycle)
+        {
             accepting = false;
+            foreach (var session in sessions.Values)
+                session.Registry.Runner.CloseAdmission();
+        }
         admissionStop.Cancel();
-        ToolScript.BeginShutdown();
-        executor.BeginShutdown();
-        mcp.BeginShutdown();
-        Nodes.BeginShutdown();
-        websockets.BeginShutdown();
         waitTimeouts.Stop();
         waitLiveness.Stop();
-        foreach (var session in sessions.Values)
-            session.CloseSubscribers();
+
     }
 
     public async ValueTask DisposeAsync()
     {
         BeginShutdown();
-        try
-        {
-            await ShutdownAsync();
-        }
-        finally
-        {
-            await timers.DisposeAsync();
-            await DrainPublicationsAsync();
-            await waitTimeouts.DisposeAsync();
-            await waitLiveness.DisposeAsync();
-            await ToolScript.DisposeAsync();
-            await executor.DisposeAsync();
-            await mcp.DisposeAsync();
-            Nodes.Dispose();
-            await websockets.DisposeAsync();
-            await Journal.DisposeAsync();
-            await archiveWriter.DisposeAsync();
-            Tasks.Dispose();
-            admissionStop.Dispose();
-            Catalog.Dispose();
-            http.Dispose();
-        }
+        // A failed drain is not permission to close dependencies beneath its owner.
+        await ShutdownAsync();
+        await timers.DisposeAsync();
+        await DrainPublicationsAsync();
+        await waitTimeouts.DisposeAsync();
+        await waitLiveness.DisposeAsync();
+        await ToolScript.DisposeAsync();
+        await executor.DisposeAsync();
+        await mcp.DisposeAsync();
+        Nodes.Dispose();
+        await websockets.DisposeAsync();
+        await Journal.DisposeAsync();
+        await archiveWriter.DisposeAsync();
+        Tasks.Dispose();
+        admissionStop.Dispose();
+        Catalog.Dispose();
+        http.Dispose();
     }
 
     internal static bool IsOwnedId(string id) => SessionIdentity.IsValid(id);

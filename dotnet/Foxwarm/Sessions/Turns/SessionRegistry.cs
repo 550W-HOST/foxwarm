@@ -16,6 +16,8 @@ public sealed class LocalSessionTurnHostFactory
     private readonly Func<SessionEntry, Task>? safePoint;
     private readonly Func<SessionEntry, Task>? retrySafePoint;
     private readonly Func<SessionEntry, string?>? parentSessionResolver;
+    private readonly Action? assertCanContinue;
+    private readonly Func<bool>? closing;
     private readonly Func<
         SessionEntry,
         ChatResult,
@@ -39,7 +41,9 @@ public sealed class LocalSessionTurnHostFactory
             Func<Func<Task>, Task>,
             CancellationToken,
             Task
-        >? beforeContinuation = null
+        >? beforeContinuation = null,
+        Action? assertCanContinue = null,
+        Func<bool>? closing = null
     )
     {
         this.store = store;
@@ -51,6 +55,8 @@ public sealed class LocalSessionTurnHostFactory
         this.retrySafePoint = retrySafePoint;
         this.parentSessionResolver = parentSessionResolver;
         this.beforeContinuation = beforeContinuation;
+        this.assertCanContinue = assertCanContinue;
+        this.closing = closing;
     }
 
     public LocalSessionTurnHost For(SessionEntry entry) =>
@@ -66,7 +72,9 @@ public sealed class LocalSessionTurnHostFactory
             parentSessionResolver is null ? null : () => parentSessionResolver(entry),
             beforeContinuation is null
                 ? null
-                : (result, consume, token) => beforeContinuation(entry, result, consume, token)
+                : (result, consume, token) => beforeContinuation(entry, result, consume, token),
+            assertCanContinue,
+            closing
         );
 }
 
@@ -118,7 +126,9 @@ public sealed class SessionRegistry
                     if (OnTurnCompleted is not null)
                         await OnTurnCompleted(entry, result);
                 }
-            }
+            },
+            () => Runner.AssertCanContinue(),
+            () => Runner.Closing
         );
         runner = new SessionTurnRunner(this, hosts);
         ingress = new SessionIngress(this);

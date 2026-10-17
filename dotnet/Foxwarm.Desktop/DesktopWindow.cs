@@ -249,7 +249,7 @@ internal sealed class DesktopWindow : Form
     {
         if (host is null)
             return;
-        await host.App.WaitForShutdownAsync();
+        await host.WaitForShutdownAsync();
         if (!exiting)
             ExitApplication();
     }

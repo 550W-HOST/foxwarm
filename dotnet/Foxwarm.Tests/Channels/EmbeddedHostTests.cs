@@ -8,6 +8,29 @@ namespace Foxwarm.Tests;
 public sealed class EmbeddedHostTests
 {
     [Fact]
+    public async Task Shared_host_closes_live_Session_streams_after_owner_settlement_before_HTTP_stop()
+    {
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        var work = Path.Combine(temp.Path, "work");
+        Directory.CreateDirectory(work);
+        var settings = await HttpServerSettings.CaptureDesktopAsync(data);
+        await using var host = await MainHost.CreateAsync([], data, work, new ModelConfiguration(data), settings, null);
+        await host.App.StartAsync();
+        using var client = new HttpClient { BaseAddress = new Uri(settings.Address.BaseUrl) };
+        client.DefaultRequestHeaders.Authorization = new("Bearer", settings.Token);
+        var created = await client.PostAsJsonAsync("api/sessions", new { agentId = "main", sessionId = "stream-owner" });
+        created.EnsureSuccessStatusCode();
+        var id = (await created.Content.ReadFromJsonAsync<JsonObject>())!["sessionId"]!.GetValue<string>();
+        using var stream = await client.GetAsync("api/sessions/" + Uri.EscapeDataString(id) + "/stream", HttpCompletionOption.ResponseHeadersRead);
+        stream.EnsureSuccessStatusCode();
+        Assert.Equal("text/event-stream", stream.Content.Headers.ContentType!.MediaType);
+        await host.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        var body = await stream.Content.ReadAsStringAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Contains("connected", body);
+    }
+
+    [Fact]
     public async Task Occupied_remembered_port_falls_back_during_the_same_host_start()
     {
         using var temp = new TempDirectory();

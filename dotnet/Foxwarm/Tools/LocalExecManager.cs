@@ -162,7 +162,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         CancellationToken ct,
         MainNativePaths? paths = null,
         Action<string, string>? observeCwd = null,
-        Foxwarm.ToolScript.ToolScriptDataBudget? programmatic = null
+        Foxwarm.ToolScript.ToolScriptDataBudget? programmatic = null,
+        Func<string>? cancellationSource = null
     )
     {
         if (!IsSupported)
@@ -267,7 +268,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         var running = new JsonObject
         {
             ["output"] =
-                $"Partial Output:\n{partial["output"]?.GetValue<string>()}\n---\n{(ct.IsCancellationRequested ? "[Foreground wait ended by Stop or Run queued]" : $"[Process running longer than {waitSeconds.ToString(CultureInfo.InvariantCulture)}s]")} Switched to background. A completion event will arrive in this Session.\n{warning}execId: {record.Id}\nElapsed: {ExecDuration.Format(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - record.StartedAt) ?? "unknown"}\nRead complete output with read_exec({{execId: \"{record.Id}\"}}).",
+                $"Partial Output:\n{partial["output"]?.GetValue<string>()}\n---\n{(ct.IsCancellationRequested ? $"[Foreground wait ended by {cancellationSource?.Invoke() ?? "Stop or Run queued"}]" : $"[Process running longer than {waitSeconds.ToString(CultureInfo.InvariantCulture)}s]")} Switched to background. A completion event will arrive in this Session.\n{warning}execId: {record.Id}\nElapsed: {ExecDuration.Format(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - record.StartedAt) ?? "unknown"}\nRead complete output with read_exec({{execId: \"{record.Id}\"}}).",
         };
         if (programmatic is not null)
             await AddProgrammaticAsync(running, record, null, programmatic);

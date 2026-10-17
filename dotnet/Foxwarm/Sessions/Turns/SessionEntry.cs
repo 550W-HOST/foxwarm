@@ -47,6 +47,29 @@ public sealed class SessionEntry
         return MutationAdmission?.Invoke();
     }
 
+    private static readonly AsyncLocal<TurnScope?> currentTurn = new();
+
+    private sealed class TurnScope(SessionEntry entry, TurnScope? previous) : IDisposable
+    {
+        internal readonly SessionEntry Entry = entry;
+        internal volatile bool Active = true;
+        public void Dispose()
+        {
+            Active = false;
+            currentTurn.Value = previous;
+        }
+    }
+
+    internal IDisposable EnterTurnScope()
+    {
+        var scope = new TurnScope(this, currentTurn.Value);
+        currentTurn.Value = scope;
+        return scope;
+    }
+
+    internal bool CanSettleDuringShutdown =>
+        currentTurn.Value is { Active: true } scope && ReferenceEquals(scope.Entry, this);
+
     public SessionState State { get; }
     public SessionSaveLane SaveLane { get; }
     public object StateGate => stateGate;
@@ -128,6 +151,11 @@ public sealed class SessionEntry
     public bool TryClaimProcessor()
     {
         using var admission = AdmitMutation();
+        return TryClaimAdmittedProcessor();
+    }
+
+    internal bool TryClaimAdmittedProcessor()
+    {
         lock (stateGate)
         {
             if (historyMutation != 0 || Interlocked.CompareExchange(ref processorClaim, 1, 0) != 0)
@@ -208,6 +236,34 @@ public sealed class SessionEntry
             var handle = new CancellationHandle(source);
             activeCancellation = handle;
             return handle;
+        }
+    }
+
+    internal bool ShutdownCancellationRequested { get; private set; }
+
+    internal string ToolCancellationSource => WithState(state =>
+        ShutdownCancellationRequested && !state.Stopping ? "process shutdown" : "Stop or Run queued"
+    );
+
+    internal void CancelForShutdown()
+    {
+        CancellationHandle? handle;
+        lock (stateGate)
+        {
+            if (State.Stopping || activeCancellation is null)
+                return;
+            ShutdownCancellationRequested = true;
+            handle = activeCancellation;
+            activeCancellation = null;
+            handle.TakenByStop = true;
+        }
+        try
+        {
+            handle.Cancel();
+        }
+        finally
+        {
+            handle.Dispose();
         }
     }
 

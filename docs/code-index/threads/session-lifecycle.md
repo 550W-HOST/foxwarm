@@ -45,6 +45,8 @@ A genuinely completed final, terminal handoff/wait or user Stop retains ordinary
 
 Dependency teardown waits for local owner drain. If accepted work does not settle within the bounded grace and cancellation phases, Main kills only its own process rather than claiming a successful drain or closing dependencies beneath an advancing runner. Native work can prevent `process.exit()` from completing. Service children retain existing IPC-loss cleanup; independent persistent user execs are not killed. Forced exit has crash-like service semantics, not a cross-Main child-exit acknowledgement: an immediate restart can overlap an old Vector child's final derived-index commit. See [Vector ownership](../units/src-vector.md#process-placement). Session-worker placement keeps its existing generation fences and supervisor drain/handback path and does not receive the Main-local runner shutdown hook.
 
+The .NET console and optional Desktop share this composition through `MainHost`: ApplicationStopping/admin shutdown close admission, then disposal drains Sessions before ASP.NET/terminal and effect dependencies. The console and Desktop observer wait for the stopping notification without ASP.NET's implicit stop/dispose helper. .NET uses `Environment.FailFast` for an unsettled foreground drain, not a POSIX-only signal or a process-tree kill. Its independent journal/Archive writer leases remain pinned until successful owner settlement and final saves. Forced exit retains the existing crash-like Archive/JSON boundary; it is not a cross-database atomicity guarantee or a new remote-process recovery contract.
+
 ## Context, archive, and recall
 
 - Final usage may trigger `checkAndCompactIfNeeded`.

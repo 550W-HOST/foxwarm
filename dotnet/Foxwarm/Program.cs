@@ -43,4 +43,5 @@ host.App.Lifetime.ApplicationStarted.Register(() =>
 {
     Console.WriteLine("Main HTTP listening: " + string.Join(", ", host.App.Urls));
 });
-await host.App.RunAsync();
+await host.App.StartAsync();
+await host.WaitForShutdownAsync();

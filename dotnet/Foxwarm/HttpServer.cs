@@ -84,7 +84,6 @@ internal sealed class HttpServer
             )
             : null;
         app.Lifetime.ApplicationStopping.Register(sessions.BeginShutdown);
-        app.Lifetime.ApplicationStopping.Register(() => _ = terminals.ShutdownAsync());
         app.Use(
             async (context, next) =>
             {

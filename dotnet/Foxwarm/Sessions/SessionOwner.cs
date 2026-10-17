@@ -121,6 +121,12 @@ internal sealed partial class SessionOwner
 
     public Task StartProcessing(bool retry = false)
     {
+        if (Registry.Runner.Closing)
+        {
+            if (retry)
+                throw new SessionTurnShutdownException();
+            return Task.CompletedTask;
+        }
         using var admission = Entry.AdmitMutation();
         var index = Interlocked.Increment(ref nextRun);
         var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
