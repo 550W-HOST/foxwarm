@@ -1931,7 +1931,7 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
                     if (!first)
                         builder.Append(',');
                     first = false;
-                    WriteString(builder, pair.Key);
+                    JsonStringQuoting.Append(builder, pair.Key);
                     builder.Append(':');
                     WriteValue(builder, pair.Value);
                 }
@@ -1953,7 +1953,7 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
             var json = value.ToJsonString();
             if (value is JsonValue scalar && scalar.TryGetValue<string>(out var text))
             {
-                WriteString(builder, text);
+                JsonStringQuoting.Append(builder, text);
                 return;
             }
             if (value is JsonValue number && number.TryGetValue<bool>(out var flag))
@@ -2056,48 +2056,6 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
             && !(key.Length > 1 && key[0] == '0');
 
         private static uint Index(string key) => uint.Parse(key, CultureInfo.InvariantCulture);
-
-        private static void WriteString(StringBuilder builder, string value)
-        {
-            builder.Append('"');
-            for (var i = 0; i < value.Length; i++)
-            {
-                var ch = value[i];
-                if (ch == '"')
-                    builder.Append("\\\"");
-                else if (ch == '\\')
-                    builder.Append("\\\\");
-                else if (ch == '\b')
-                    builder.Append("\\b");
-                else if (ch == '\f')
-                    builder.Append("\\f");
-                else if (ch == '\n')
-                    builder.Append("\\n");
-                else if (ch == '\r')
-                    builder.Append("\\r");
-                else if (ch == '\t')
-                    builder.Append("\\t");
-                else if (ch < 0x20)
-                    builder
-                        .Append("\\u")
-                        .Append(((int)ch).ToString("x4", CultureInfo.InvariantCulture));
-                else if (
-                    char.IsHighSurrogate(ch)
-                    && i + 1 < value.Length
-                    && char.IsLowSurrogate(value[i + 1])
-                )
-                {
-                    builder.Append(ch).Append(value[++i]);
-                }
-                else if (char.IsSurrogate(ch))
-                    builder
-                        .Append("\\u")
-                        .Append(((int)ch).ToString("x4", CultureInfo.InvariantCulture));
-                else
-                    builder.Append(ch);
-            }
-            builder.Append('"');
-        }
 
         private sealed class Parser(string text)
         {

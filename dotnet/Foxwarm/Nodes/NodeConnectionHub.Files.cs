@@ -21,7 +21,7 @@ internal sealed partial class NodeConnectionHub
         TaskCompletionSource<JsonObject> Result
     );
 
-    internal sealed record TransferFile(byte[] Bytes, string Path, string Name);
+    internal sealed record TransferFile(byte[] Bytes, string Path, string Name, string? MimeType = null);
 
     internal async Task<TransferFile> ReadFileAsync(
         string node,
@@ -71,7 +71,8 @@ internal sealed partial class NodeConnectionHub
         return new(
             bytes,
             SessionWait.Text(file["filePath"]) ?? path,
-            SessionWait.Text(file["name"]) ?? RemoteFileName(path)
+            SessionWait.Text(file["name"]) ?? RemoteFileName(path),
+            SessionWait.Text(file["mimeType"])
         );
     }
 

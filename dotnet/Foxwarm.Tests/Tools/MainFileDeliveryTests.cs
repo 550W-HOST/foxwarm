@@ -104,6 +104,17 @@ public sealed class MainFileDeliveryTests
         }
     }
 
+    [Theory]
+    [InlineData(null, "application/octet-stream")]
+    [InlineData("", "application/octet-stream")]
+    [InlineData("application/yaml", "application/yaml")]
+    public void Receipt_preserves_remote_MIME_or_uses_ordinary_fallback(string? remoteMime, string expected)
+    {
+        using var temp = new TempDirectory();
+        var receipt = FileDeliveryArtifact.Create("session", "main/target", "config.yaml", 12, Path.Combine(temp.Path, "config.yaml"), "two", remoteMime);
+        Assert.Equal(expected, SessionWait.Text(receipt["mimeType"]));
+    }
+
     [Fact]
     public async Task Default_readiness_requires_real_binding_adapter_regular_file_and_keeps_history_and_target_queue_unchanged()
     {

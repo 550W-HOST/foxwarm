@@ -11,7 +11,8 @@ internal static class FileDeliveryArtifact
         string name,
         long size,
         string path,
-        string sourceNode
+        string sourceNode,
+        string? mimeType = null
     )
     {
         foreach (
@@ -41,7 +42,7 @@ internal static class FileDeliveryArtifact
             ["targetKind"] = targetKind,
             ["targetId"] = targetId,
             ["fileName"] = name,
-            ["mimeType"] = Mime(name),
+            ["mimeType"] = string.IsNullOrEmpty(mimeType) ? Mime(name) : mimeType,
             ["sizeBytes"] = size,
             ["downloadPath"] = path,
             ["downloadNodeId"] = "master",

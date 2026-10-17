@@ -1,6 +1,7 @@
 # Unit: LLM request journal
 
 Files: `dotnet/Foxwarm/Models/LlmRequestJournal.cs`
+Secondary files: `dotnet/Foxwarm/JsonStringQuoting.cs`
 
 ## Purpose
 
@@ -8,6 +9,7 @@ Persists a reconstructable request manifest plus attempt-start/result metadata f
 
 ## Stable methods and callers
 
+- `JsonStringQuoting.Append` supplies the existing pure JSON.stringify-compatible string quoting to the journal codec and download capability signer; journal ordering, numbers, object bytes and persistence format remain unchanged.
 - `InitializeAsync` opens/migrates `state/llm-request-journal.sqlite` and validates the schema.
 - `EnqueueRequestAsync` allocates an identity and returns admission plus a separate committed completion; `BeginRequestAsync` retains the await-durability API for direct callers. It creates a request ID and stores the neutral repaired/visibility-filtered manifest: purpose/iteration, system prompt object, tool-schema object, message object IDs, requested route, prompt-cache hash, and delta/checkpoint links.
 - `AppendAttemptStartAsync` records concrete model/virtual route/provider, attempt number, effective-prompt override, and `semanticPayloadSha256`; it persists digest/metadata rather than the hydrated wire body, base64 image payload, auth headers, or WebSocket suffix.

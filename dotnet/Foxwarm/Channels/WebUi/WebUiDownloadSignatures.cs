@@ -3,7 +3,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
-using Foxwarm.Sessions;
 
 namespace Foxwarm.Channels.WebUi;
 
@@ -31,15 +30,21 @@ internal sealed class WebUiDownloadSignatures(string token, Func<long>? now = nu
         string? filename,
         string? preview,
         string expires
-    ) =>
-        HMACSHA256.HashData(
-            key,
-            Encoding.UTF8.GetBytes(
-                EcmaJson.Stringify(
-                    new JsonArray("download-v1", kind, resource, null, filename, preview, expires)
-                )
-            )
-        );
+    )
+    {
+        var input = new StringBuilder("[");
+        foreach (var value in new[] { "download-v1", kind, resource, null, filename, preview, expires })
+        {
+            if (input.Length > 1)
+                input.Append(',');
+            if (value is null)
+                input.Append("null");
+            else
+                JsonStringQuoting.Append(input, value);
+        }
+        input.Append(']');
+        return HMACSHA256.HashData(key, Encoding.UTF8.GetBytes(input.ToString()));
+    }
 
     internal (string Query, long ExpiresAt) Issue(string kind, string resource, JsonObject input)
     {

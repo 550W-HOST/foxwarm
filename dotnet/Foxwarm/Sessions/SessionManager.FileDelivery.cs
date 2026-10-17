@@ -70,6 +70,7 @@ internal sealed partial class SessionManager
             throw new InvalidDataException($"Session `{target}` has no attached channels.");
         string path;
         string name;
+        string? mimeType = null;
         if (node == "master")
         {
             path = files.Paths.FilePath(raw);
@@ -88,6 +89,7 @@ internal sealed partial class SessionManager
                 token
             );
             CheckFileDestinations(owner, target, direct, bindings);
+            mimeType = file.MimeType;
             name = Foxwarm.Nodes.NodeConnectionHub.RemoteFileName(file.Name);
             if (string.IsNullOrWhiteSpace(name) || name is "." or "..")
                 throw new InvalidDataException("Node file name is invalid.");
@@ -107,7 +109,8 @@ internal sealed partial class SessionManager
             name,
             new FileInfo(path).Length,
             path,
-            node
+            node,
+            mimeType
         );
         var delivered = new List<string>();
         var skipped = new List<string>();

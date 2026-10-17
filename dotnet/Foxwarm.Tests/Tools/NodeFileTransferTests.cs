@@ -160,8 +160,12 @@ public sealed class NodeFileTransferTests
         await Fixture.Send(one, new JsonObject { ["type"] = "ping" });
         Assert.Equal("pong", (await Fixture.Read(one))["type"]!.GetValue<string>());
         Assert.False(pending.IsCompleted);
-        await Fixture.Send(one, Fixture.Reply(request, bytes));
-        Assert.Equal(bytes, (await pending).Bytes);
+        var reply = Fixture.Reply(request, bytes);
+        reply["file"]!["mimeType"] = "application/yaml";
+        await Fixture.Send(one, reply);
+        var file = await pending;
+        Assert.Equal(bytes, file.Bytes);
+        Assert.Equal("application/yaml", file.MimeType);
         pending = f.Manager.Nodes.ReadFileAsync("one", "x", f.Owner, false, default);
         request = await Fixture.Read(one);
         var corrupt = Fixture.Reply(request, bytes);
