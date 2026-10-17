@@ -102,7 +102,7 @@ before(async () => {
     window.WebSocket = FixtureSocket
     window.emitStream = text => FixtureSocket.instances.at(-1)?.emit({ type: 'session-event', sessionId: 'fixture/height', event: { type: 'model-stream-update', streamId: 'fixture-stream', text } })
     createRoot(document.getElementById('root')).render(React.createElement(Chat, {
-      sessionId: 'fixture/height', canonicalSessionId: 'fixture/height', sessionDisplayName: 'Height test', timelineView: size.startsWith('conversation-') ? 'conversation' : size.startsWith('group') || size.startsWith('ctx') ? 'grouped' : 'detailed',
+      historyMode: 'active', sessionId: 'fixture/height', canonicalSessionId: 'fixture/height', sessionDisplayName: 'Height test', timelineView: size.startsWith('conversation-') ? 'conversation' : size.startsWith('group') || size.startsWith('ctx') ? 'grouped' : 'detailed',
     }))
   `
   const result = await build({ stdin: { contents: source, resolveDir: packageDir, sourcefile: 'height-fixture.tsx' }, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })

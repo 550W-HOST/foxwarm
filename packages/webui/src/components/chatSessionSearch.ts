@@ -50,7 +50,7 @@ const literalOccurrences = (text: string, query: string): Array<{ offset: number
 }
 
 /** Only called while Search is open; recompute on committed history changes, not on each keystroke. */
-export function projectSessionSearchFields(messages: Message[], timelineView: TimelineView): SearchField[] {
+export function projectSessionSearchFields(messages: Message[], timelineView: TimelineView, currentHistoryMessages: readonly Message[] = messages): SearchField[] {
   const committed: Message[] = []
   const sourceIndices = new Map<Message, number>()
   messages.forEach((message, index) => {
@@ -58,7 +58,7 @@ export function projectSessionSearchFields(messages: Message[], timelineView: Ti
     committed.push(message)
     sourceIndices.set(message, index)
   })
-  const input = { messages: committed, isMobile: false, timelineView, showUsageBadge: false, showTimeDividers: false, nestedDepth: 0, historyMessages: messages, expandedGroupKeys: new Set<string>() }
+  const input = { messages: committed, isMobile: false, timelineView, showUsageBadge: false, showTimeDividers: false, nestedDepth: 0, historyMessages: messages, currentHistoryMessages, expandedGroupKeys: new Set<string>() }
   const initial = buildTimelineRows(input, null)
   // The normal collapsed render omits whole Event/Goal reminder rows inside groups.
   // Reuse the same row builder in data-only expanded mode so their own row/group keys survive.

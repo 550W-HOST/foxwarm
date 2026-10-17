@@ -1,5 +1,6 @@
+import { CONTINUOUS_HISTORY_WINDOW_SIZE, type HistoryMode } from '../continuousHistory'
 import { useContentBeforeResize } from '../contentResize'
-import { useMobileChatViewport, type TimelineView } from '../chatPreferences'
+import { historyModeForTimelineView, useMobileChatViewport, type TimelineView } from '../chatPreferences'
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { SquarePen, ChevronDown, ChevronUp, Code2, MessageSquareText, Search, SquareTerminal, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
@@ -28,6 +29,9 @@ import {
   CONTEXT_SCROLLBAR_ANCHOR_SELECTOR,
   chooseChatViewportState,
   getChatViewportAnchorAdjustment,
+  getChatViewportAnchorSeq,
+  getMessageStableKey,
+  getMessageViewportAnchorKey,
   getStoredChatViewportState,
   storeChatViewportState,
   updateChatBottomFollow,
@@ -144,6 +148,7 @@ interface ChatProps {
   onOpenCodeCommit?: (target: CodeCommitTarget) => void | Promise<void>
   onOpenModelSettings?: () => void
   sendKeyMode?: 'modEnter' | 'enter'
+  historyMode?: HistoryMode
   timelineView?: TimelineView
   showUsageBadge?: boolean
   showUserMessageMetadata?: boolean
@@ -161,13 +166,18 @@ type StreamingAsrSession = {
   cancel: () => void
 }
 
-const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onNewSession, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', timelineView = 'detailed', showUsageBadge = true, showUserMessageMetadata = false, fullWidth = true, onFullWidthChange = () => {}, onSendKeyModeChange = () => {}, onTimelineViewChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onNewSession, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', timelineView = 'detailed', historyMode = historyModeForTimelineView(timelineView), showUsageBadge = true, showUserMessageMetadata = false, fullWidth = true, onFullWidthChange = () => {}, onSendKeyModeChange = () => {}, onTimelineViewChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
+  const viewportSessionId = canonicalSessionId || sessionId
+  const initialContinuousAnchorSeq = useMemo(() => getChatViewportAnchorSeq(getStoredChatViewportState(viewportSessionId, 'continuous')), [viewportSessionId])
   const {
-    messages, queuedMessages, sessionRecord, sessionMissing, sessionBusy, sessionQueueLength,
+    messages: activeMessages, continuousMessages, archivePage, loadArchivePage, queuedMessages, sessionRecord, sessionMissing, sessionBusy, sessionQueueLength,
     persistentMemorySnapshot, streamingAssistantDraft, toolScriptProgress,
     historyLoaded, isFullHistoryLoaded, earlierHistoryError, connectionState, reconnectCountdown,
     loading, retryEarlierHistory, sendMessage: handleSend, sendSessionCommand, mergeConfirmedSettings,
-  } = useChatConversationSync(sessionId, webUiIdentityMode)
+  } = useChatConversationSync(sessionId, webUiIdentityMode, historyMode, initialContinuousAnchorSeq)
+  const messages = historyMode === 'continuous' ? continuousMessages : activeMessages
+  const [continuousWindowKey, setContinuousWindowKey] = useState<string | null>(null)
+  const continuousWindowAtLatestRef = useRef(true)
   const [layout, setLayout] = useState({ isMobile: true, compactModelSelector: true, compactComposer: false })
   const layoutRef = useRef(layout)
   const { isMobile, compactModelSelector, compactComposer } = layout
@@ -195,7 +205,6 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   const sessionHeaderSubtitle = formatSessionHeaderSubtitle(sessionId, sessionRecord?.cwd)
   const chatMessageContainerId = `foxwarm-chat-messages-${useId()}`
 
-  const viewportSessionId = canonicalSessionId || sessionId
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const messagesContentRef = useRef<HTMLDivElement>(null)
   const committedTimelineRef = useRef<HTMLDivElement>(null)
@@ -204,8 +213,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   const pendingUserLeaveBottomRef = useRef(false)
   const touchScrollStartYRef = useRef<number | null>(null)
   const pointerScrollInteractionRef = useRef(false)
+  const continuousPagingIntentRef = useRef<'earlier' | 'later' | null>(null)
+  const lastNativeScrollTopRef = useRef(0)
   const composerHeightRef = useRef<number | null>(null)
-  const initialViewportState = getStoredChatViewportState(viewportSessionId) || { kind: 'bottom' as const }
+  const initialViewportState = getStoredChatViewportState(viewportSessionId, historyMode) || { kind: 'bottom' as const }
   const currentViewportStateRef = useRef<ChatViewportState>(initialViewportState)
   const pendingViewportRestoreRef = useRef<PendingViewportRestore | null>({
     kind: 'state',
@@ -330,9 +341,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       currentViewportStateRef.current = state
       currentViewportGeometryRef.current = null
       setBottomFollow(true)
-      storeChatViewportState(viewportSessionId, state)
+      storeChatViewportState(viewportSessionId, state, historyMode)
     }
-  }, [setBottomFollow, viewportSessionId])
+  }, [setBottomFollow, viewportSessionId, historyMode])
 
   useEffect(() => () => {
     cardHeightChangesRef.current.clear()
@@ -376,7 +387,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
 
   const updateBottomFollowState = useCallback((userIntent: 'none' | 'leave' | 'toward-bottom' = 'none') => {
     const container = messagesContainerRef.current
-    const distanceFromBottom = container
+    const distanceFromBottom = historyMode === 'continuous' && !continuousWindowAtLatestRef.current ? Number.POSITIVE_INFINITY : container
       ? container.scrollHeight - container.scrollTop - container.clientHeight
       : Number.POSITIVE_INFINITY
     const next = updateChatBottomFollow({
@@ -387,7 +398,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     })
     setBottomFollow(next.following, next.pendingUserLeave)
     return next
-  }, [setBottomFollow])
+  }, [historyMode, setBottomFollow])
 
   const captureCurrentViewportState = useCallback((): ChatViewportState | null => {
     if (pendingContentResizeRef.current) return pendingContentResizeRef.current.state
@@ -404,9 +415,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     currentViewportStateRef.current = state
     currentViewportGeometryRef.current = null
     capturedInteractionVersionRef.current = userInteractionVersionRef.current
-    storeChatViewportState(viewportSessionId, state)
+    storeChatViewportState(viewportSessionId, state, historyMode)
     return state
-  }, [readCurrentViewportState, updateBottomFollowState, viewportSessionId])
+  }, [readCurrentViewportState, updateBottomFollowState, viewportSessionId, historyMode])
 
   useContentBeforeResize(useCallback(() => {
     // Do not acknowledge detached user input before its native scroll captures position.
@@ -424,7 +435,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       currentViewportStateRef.current = state
       currentViewportGeometryRef.current = null
       setBottomFollow(true)
-      storeChatViewportState(viewportSessionId, state)
+      storeChatViewportState(viewportSessionId, state, historyMode)
       return true
     }
 
@@ -443,9 +454,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     currentViewportStateRef.current = state
     currentViewportGeometryRef.current = null
     setBottomFollow(false)
-    storeChatViewportState(viewportSessionId, state)
+    storeChatViewportState(viewportSessionId, state, historyMode)
     return true
-  }, [setBottomFollow, viewportSessionId])
+  }, [setBottomFollow, viewportSessionId, historyMode])
 
   const applyViewportAnchorCandidates = useCallback((anchors: Array<{ messageKey: string; offsetPx: number }>): boolean => {
     for (const candidate of anchors) {
@@ -465,6 +476,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   }, [applyViewportState])
 
   const markUserViewportInteraction = useCallback(() => {
+    continuousPagingIntentRef.current = null
     pendingContentResizeRef.current = null
     userInteractionVersionRef.current += 1
     pendingViewportRestoreRef.current = null
@@ -472,17 +484,22 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   }, [])
 
   const handleBottomNavigation = useCallback(() => {
+    if (historyMode === 'continuous' && archivePage.hasLater) void loadArchivePage('latest')
+    if (historyMode === 'continuous') setContinuousWindowKey(null)
     markUserViewportInteraction()
     pendingContextScrollbarNavigationRef.current = null
     pendingScrollToTrueTopRef.current = false
     capturedInteractionVersionRef.current = userInteractionVersionRef.current
     scrollToBottom()
-  }, [markUserViewportInteraction, scrollToBottom])
+  }, [archivePage.hasLater, historyMode, loadArchivePage, markUserViewportInteraction, scrollToBottom])
 
   const leaveBottomFollow = useCallback(() => {
+    if (historyMode === 'continuous' && continuousWindowKey === null && messages.length) {
+      setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, messages.length - CONTINUOUS_HISTORY_WINDOW_SIZE)], 0))
+    }
     markUserViewportInteraction()
     updateBottomFollowState('leave')
-  }, [markUserViewportInteraction, updateBottomFollowState])
+  }, [continuousWindowKey, historyMode, messages, markUserViewportInteraction, updateBottomFollowState])
 
   const prepareCardHeight = useCallback(() => {
     const token = {}
@@ -512,14 +529,18 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     if (container) {
       markUserViewportInteraction()
       setBottomFollow(false)
-      if (!showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
+      if (historyMode === 'active' && !showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
         pendingScrollToTrueTopRef.current = true
         setShowFullTimeline(true)
         return
       }
+      if (historyMode === 'continuous' && messages.length) {
+        pendingScrollToTrueTopRef.current = true
+        setContinuousWindowKey(getMessageStableKey(messages[0], 0))
+      }
       container.scrollTop = 0
     }
-  }, [markUserViewportInteraction, messages.length, setBottomFollow, showFullTimeline])
+  }, [historyMode, markUserViewportInteraction, messages, setBottomFollow, showFullTimeline])
 
   const scrollToContextScrollbarAnchor = useCallback((anchorKey: string, fraction: number): boolean => {
     const container = messagesContainerRef.current
@@ -539,8 +560,11 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     leaveBottomFollow()
     if (scrollToContextScrollbarAnchor(anchorKey, fraction)) return
     pendingContextScrollbarNavigationRef.current = { anchorKey, fraction }
-    setShowFullTimeline(true)
-  }, [leaveBottomFollow, scrollToContextScrollbarAnchor])
+    if (historyMode === 'continuous') {
+      const index = messages.findIndex(message => getMessageViewportAnchorKey(message) === anchorKey)
+      if (index >= 0) setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, index - 20)], 0))
+    } else setShowFullTimeline(true)
+  }, [leaveBottomFollow, scrollToContextScrollbarAnchor, historyMode, messages])
 
   useEffect(() => {
     const handleScroll = () => {
@@ -551,6 +575,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       const scrollHeight = container.scrollHeight
       const clientHeight = container.clientHeight
       const distanceFromBottom = scrollHeight - scrollTop - clientHeight
+      const pagingIntent = continuousPagingIntentRef.current || (pointerScrollInteractionRef.current
+        ? scrollTop < lastNativeScrollTopRef.current ? 'earlier' : scrollTop > lastNativeScrollTopRef.current ? 'later' : null
+        : null)
+      lastNativeScrollTopRef.current = scrollTop
 
       if (pointerScrollInteractionRef.current && distanceFromBottom > CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX) {
         leaveBottomFollow()
@@ -559,7 +587,13 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       setShowScrollTopButton(scrollTop > 200)
       captureCurrentViewportState()
 
-      if (!showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES && scrollTop < 120) {
+      const windowStart = continuousWindowKey === null ? Math.max(0, messages.length - CONTINUOUS_HISTORY_WINDOW_SIZE)
+        : Math.max(0, messages.findIndex(message => getMessageStableKey(message, 0) === continuousWindowKey))
+      const earlierContinuous = historyMode === 'continuous' && pagingIntent === 'earlier' && scrollTop < 120 && !archivePage.loading && !archivePage.error
+        && (windowStart > 0 || archivePage.hasEarlier)
+      const laterContinuous = historyMode === 'continuous' && pagingIntent === 'later' && distanceFromBottom < 120
+        && windowStart + CONTINUOUS_HISTORY_WINDOW_SIZE < messages.length
+      if (earlierContinuous || laterContinuous || (historyMode === 'active' && !showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES && scrollTop < 120)) {
         const containerRect = container.getBoundingClientRect()
         const anchors = committedTimelineRef.current
           ? Array.from(committedTimelineRef.current.querySelectorAll<HTMLElement>(CHAT_MESSAGE_ANCHOR_SELECTOR))
@@ -588,7 +622,22 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
           scrollHeight,
           interactionVersion: userInteractionVersionRef.current,
         }
-        setShowFullTimeline(true)
+        if (earlierContinuous || laterContinuous) continuousPagingIntentRef.current = null
+        if (earlierContinuous) {
+          if (windowStart > 0) setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, windowStart - 100)], 0))
+          else {
+            const pending = pendingViewportRestoreRef.current
+            pendingViewportRestoreRef.current = null
+            void loadArchivePage('earlier').then(rows => {
+              if (pending?.interactionVersion === userInteractionVersionRef.current) {
+                pendingViewportRestoreRef.current = pending
+                if (rows.length) setContinuousWindowKey(getMessageStableKey(rows[0], 0))
+              }
+            })
+          }
+        } else if (laterContinuous) {
+          setContinuousWindowKey(getMessageStableKey(messages[Math.min(messages.length - 1, windowStart + 100)], 0))
+        } else setShowFullTimeline(true)
       }
     }
 
@@ -607,6 +656,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
             captureCurrentViewportState()
           }
         }
+        if (event.deltaY) continuousPagingIntentRef.current = event.deltaY < 0 ? 'earlier' : 'later'
       }
       const handleTouchStart = (event: TouchEvent) => {
         markUserViewportInteraction()
@@ -619,6 +669,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
           leaveBottomFollow()
         }
         if (typeof currentY === 'number') {
+          if (typeof startY === 'number' && currentY !== startY) continuousPagingIntentRef.current = currentY > startY ? 'earlier' : 'later'
           touchScrollStartYRef.current = currentY
         }
       }
@@ -643,6 +694,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
           const leavesBottom = ['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey)
           if (leavesBottom) leaveBottomFollow()
           else markUserViewportInteraction()
+          continuousPagingIntentRef.current = leavesBottom ? 'earlier' : 'later'
         }
       }
       container.addEventListener('scroll', handleScroll)
@@ -668,7 +720,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         window.removeEventListener('keydown', handleWindowKeyDown)
       }
     }
-  }, [captureCurrentViewportState, leaveBottomFollow, markUserViewportInteraction, messages.length, setBottomFollow, showFullTimeline, updateBottomFollowState])
+  }, [captureCurrentViewportState, leaveBottomFollow, markUserViewportInteraction, messages, historyMode, continuousWindowKey, archivePage, loadArchivePage, setBottomFollow, showFullTimeline, updateBottomFollowState])
 
   const updateSessionModel = useCallback(async (model: string | null) => {
     setModelBusy(true)
@@ -760,7 +812,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   }, [messages, scrollToBottom, streamingAssistantDraft])
 
   const snapshotSystemMessage = useMemo<Message | null>(() => {
-    const snapshotText = webUiIdentityMode ? '' : persistentMemorySnapshot.trim()
+    const snapshotText = webUiIdentityMode || historyMode === 'continuous' ? '' : persistentMemorySnapshot.trim()
 
     if (!snapshotText) {
       return null
@@ -774,18 +826,30 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         synthetic: 'persistentMemorySnapshot',
       },
     }
-  }, [webUiIdentityMode, persistentMemorySnapshot])
+  }, [webUiIdentityMode, historyMode, persistentMemorySnapshot])
 
+  const continuousWindowStart = continuousWindowKey === null
+    ? Math.max(0, messages.length - CONTINUOUS_HISTORY_WINDOW_SIZE)
+    : Math.max(0, messages.findIndex(message => getMessageStableKey(message, 0) === continuousWindowKey))
   const visibleMessages = useMemo(() => {
+    if (historyMode === 'continuous') return messages.slice(continuousWindowStart, continuousWindowStart + CONTINUOUS_HISTORY_WINDOW_SIZE)
     if (showFullTimeline || messages.length <= DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
       return messages
     }
     return messages.slice(-DEFAULT_VISIBLE_TIMELINE_MESSAGES)
-  }, [messages, showFullTimeline])
+  }, [continuousWindowStart, historyMode, messages, showFullTimeline])
 
+  const displayingLatest = historyMode === 'active' || !archivePage.hasLater && continuousWindowStart + visibleMessages.length >= messages.length
+  continuousWindowAtLatestRef.current = displayingLatest
   const hiddenMessageCount = messages.length - visibleMessages.length
 
-  const searchFields = useMemo(() => searchOpen ? projectSessionSearchFields(messages, timelineView) : [], [timelineView, messages, searchOpen])
+  useEffect(() => {
+    if (historyMode !== 'continuous' || !archivePage.hasLater) return
+    setBottomFollow(false)
+    setContinuousWindowKey(previous => previous ?? (messages.length ? getMessageStableKey(messages[continuousWindowStart], 0) : null))
+  }, [archivePage.hasLater, continuousWindowStart, historyMode, messages, setBottomFollow])
+
+  const searchFields = useMemo(() => searchOpen ? projectSessionSearchFields(messages, timelineView, activeMessages) : [], [activeMessages, timelineView, messages, searchOpen])
   const searchMatches = useMemo(() => findSessionSearchMatches(searchFields, searchQuery), [searchFields, searchQuery])
   const currentSearchIndex = searchMatches.findIndex(match => match.id === searchMatchId)
   const selectedSearchMatch = searchMatches[currentSearchIndex >= 0 ? currentSearchIndex : 0] || null
@@ -809,18 +873,19 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
 
   const timelineMessages = useMemo(() => {
     const baseMessages = snapshotSystemMessage ? [snapshotSystemMessage, ...visibleMessages] : visibleMessages
-    return streamingAssistantMessage ? [...baseMessages, streamingAssistantMessage] : baseMessages
-  }, [snapshotSystemMessage, streamingAssistantMessage, visibleMessages])
+    return streamingAssistantMessage && displayingLatest ? [...baseMessages, streamingAssistantMessage] : baseMessages
+  }, [snapshotSystemMessage, streamingAssistantMessage, visibleMessages, displayingLatest])
 
   const navigateSearch = useCallback((match: typeof selectedSearchMatch) => {
     if (!match) return
     leaveBottomFollow()
     const inGroup = match.groupKey && (match.surface === 'call' || match.surface === 'response' || match.surface === 'reasoning' || match.surface === 'system')
     const requiredIndex = inGroup ? Math.min(match.sourceIndex, match.groupStartIndex ?? match.sourceIndex) : match.sourceIndex
-    if (!showFullTimeline && requiredIndex < messages.length - DEFAULT_VISIBLE_TIMELINE_MESSAGES) setShowFullTimeline(true)
+    if (historyMode === 'continuous') setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, requiredIndex - 20)], 0))
+    else if (!showFullTimeline && requiredIndex < messages.length - DEFAULT_VISIBLE_TIMELINE_MESSAGES) setShowFullTimeline(true)
     setSearchMatchId(match.id)
     setSearchNavigation(value => value + 1)
-  }, [leaveBottomFollow, messages.length, showFullTimeline])
+  }, [leaveBottomFollow, messages, historyMode, showFullTimeline])
 
   const closeSearch = useCallback(() => {
     recordSearchHistory(searchQuery)
@@ -943,13 +1008,14 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   useLayoutEffect(() => {
     if (!pendingScrollToTrueTopRef.current) return
     const container = messagesContainerRef.current
-    if (!container || !showFullTimeline) return
+    if (!container || (historyMode === 'active' && !showFullTimeline)) return
     container.scrollTop = 0
+    captureCurrentViewportState()
     pendingScrollToTrueTopRef.current = false
-  }, [showFullTimeline, timelineMessages])
+  }, [captureCurrentViewportState, historyMode, showFullTimeline, timelineMessages])
 
   useEffect(() => {
-    if (showFullTimeline || !historyLoaded || messages.length <= DEFAULT_VISIBLE_TIMELINE_MESSAGES) return
+    if (historyMode === 'continuous' || showFullTimeline || !historyLoaded || messages.length <= DEFAULT_VISIBLE_TIMELINE_MESSAGES) return
     const container = messagesContainerRef.current
     const content = messagesContentRef.current
     if (!container || !content) return
@@ -961,6 +1027,20 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     observer.observe(content)
     return () => observer.disconnect()
   }, [historyLoaded, messages.length, showFullTimeline, timelineMessages])
+
+  useLayoutEffect(() => {
+    userInteractionVersionRef.current += 1
+    continuousPagingIntentRef.current = null
+    capturedInteractionVersionRef.current = userInteractionVersionRef.current
+    pendingContextScrollbarNavigationRef.current = null
+    pendingScrollToTrueTopRef.current = false
+    const state = getStoredChatViewportState(viewportSessionId, historyMode) || { kind: 'bottom' as const }
+    currentViewportStateRef.current = state
+    pendingContentResizeRef.current = null
+    currentViewportGeometryRef.current = null
+    pendingViewportRestoreRef.current = { kind: 'state', state, interactionVersion: userInteractionVersionRef.current }
+    setBottomFollow(state.kind === 'bottom')
+  }, [historyMode, viewportSessionId, setBottomFollow])
 
   useLayoutEffect(() => {
     const pending = pendingViewportRestoreRef.current
@@ -977,12 +1057,21 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         return
       }
 
-      if (pending.state.kind === 'anchor' && !showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
+      if (historyMode === 'continuous' && pending.state.kind === 'anchor') {
+        const messageKey = pending.state.messageKey
+        const index = messages.findIndex(message => getMessageViewportAnchorKey(message) === messageKey)
+        if (index >= 0 && (index < continuousWindowStart || index >= continuousWindowStart + visibleMessages.length)) {
+          setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, index - 20)], 0))
+          return
+        }
+      }
+
+      if (historyMode === 'active' && pending.state.kind === 'anchor' && !showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
         setShowFullTimeline(true)
         return
       }
 
-      if (!historyLoaded) return
+      if (!historyLoaded || (historyMode === 'continuous' && !archivePage.loaded)) return
       const fallbackState: ChatViewportState = { kind: 'bottom' }
       pendingViewportRestoreRef.current = null
       applyViewportState(fallbackState)
@@ -994,7 +1083,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       return
     }
 
-    if (!showFullTimeline || !historyLoaded) return
+    if ((historyMode === 'active' && !showFullTimeline) || !historyLoaded) return
 
     const container = messagesContainerRef.current
     if (!container) return
@@ -1007,7 +1096,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       currentViewportStateRef.current = nextState
       currentViewportGeometryRef.current = null
       capturedInteractionVersionRef.current = userInteractionVersionRef.current
-      storeChatViewportState(viewportSessionId, nextState)
+      storeChatViewportState(viewportSessionId, nextState, historyMode)
     } else {
       currentViewportGeometryRef.current = {
         scrollTop: container.scrollTop,
@@ -1015,7 +1104,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       }
       capturedInteractionVersionRef.current = userInteractionVersionRef.current
     }
-  }, [applyViewportAnchorCandidates, applyViewportState, historyLoaded, messages.length, readCurrentViewportState, setBottomFollow, showFullTimeline, timelineMessages, viewportSessionId])
+  }, [applyViewportAnchorCandidates, applyViewportState, historyLoaded, messages.length, readCurrentViewportState, setBottomFollow, showFullTimeline, timelineMessages, viewportSessionId, historyMode, archivePage.loaded, continuousWindowStart, visibleMessages.length])
 
   useLayoutEffect(() => {
     const pending = pendingContextScrollbarNavigationRef.current
@@ -1095,8 +1184,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   }, [applyViewportAnchorCandidates, applyViewportState])
 
   useLayoutEffect(() => () => {
-    captureCurrentViewportState()
-  }, [captureCurrentViewportState])
+    // A mode switch has already changed the rendered source by cleanup time.
+    // Save the last owned position, never measure the replacement mode's DOM.
+    storeChatViewportState(viewportSessionId, currentViewportStateRef.current, historyMode)
+  }, [historyMode, viewportSessionId])
 
   const handleOpenDebugInfo = useCallback(() => {
     setShowDebugInfo(true)
@@ -1131,7 +1222,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     onError: (message: string) => void
     onDebug: (message: string) => void
   }): Promise<StreamingAsrSession> => {
-    const context = buildAsrContext(messages, draftText)
+    const context = buildAsrContext(activeMessages, draftText)
 
     return await new Promise<StreamingAsrSession>((resolve, reject) => {
       const socket = new WebSocket(getAsrStreamUrl())
@@ -1247,14 +1338,14 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         }
       }
     })
-  }, [messages])
+  }, [activeMessages])
 
   const contextLimit = useMemo(() => {
     const currentModelKey = sessionRecord?.modelKey
     return modelOptions.find(option => option.key === currentModelKey)?.contextLimit ?? null
   }, [modelOptions, sessionRecord?.modelKey])
 
-  const turnIncomplete = useMemo(() => isSessionTurnIncomplete(messages), [messages])
+  const turnIncomplete = useMemo(() => isSessionTurnIncomplete(activeMessages), [activeMessages])
 
   const renderQueuedFooter = (alignment: 'left' | 'right') => <QueuedMessageStatus
     count={sessionQueueLength}
@@ -1379,6 +1470,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
             <div className="foxwarm-context-scrollbar-overlay">
               <ContextScrollbar
                 messages={messages}
+                contextMessages={activeMessages}
                 persistentMemorySnapshot={snapshotSystemMessage}
                 contextLimit={contextLimit}
                 historyComplete={isFullHistoryLoaded}
@@ -1390,12 +1482,12 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
             </div>
           )}
           <div ref={messagesContentRef} data-full-width={fullWidth} className="foxwarm-chat-messages-content foxwarm-content-column">
-            {hiddenMessageCount > 0 && !showFullTimeline && (
+            {historyMode === 'active' && hiddenMessageCount > 0 && !showFullTimeline && (
               <div className="mb-3 rounded-lg border border-fw-border bg-fw-surface/80 px-3 py-2 text-xs text-fw-text-muted shadow-sm dark:border-fw-border dark:bg-fw-surface/80 dark:text-fw-text">
                 Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.
               </div>
             )}
-            {earlierHistoryError && !isFullHistoryLoaded && (
+            {historyMode === 'active' && earlierHistoryError && !isFullHistoryLoaded && (
               <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-fw-border bg-fw-surface/80 px-3 py-2 text-xs text-fw-text-muted shadow-sm dark:border-fw-border dark:bg-fw-surface/80 dark:text-fw-text">
                 <span>Earlier messages could not be loaded.</span>
                 <button
@@ -1409,14 +1501,28 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
                 </button>
               </div>
             )}
+            {historyMode === 'continuous' && <div className="mb-3 flex items-center justify-between gap-3 text-xs text-fw-text-muted" data-continuous-history>
+              <span>{archivePage.loading ? 'Loading messages…' : archivePage.error ? 'Messages could not be loaded.' : archivePage.hasEarlier || continuousWindowStart > 0 ? 'Scroll up for earlier messages.' : ''}</span>
+              {(archivePage.error || archivePage.hasEarlier) && <button type="button" disabled={archivePage.loading} className="text-fw-accent hover:underline" onClick={() => {
+                const state = captureCurrentViewportState()
+                const interactionVersion = userInteractionVersionRef.current
+                const direction = archivePage.error ? archivePage.direction : archivePage.loaded ? 'earlier' : 'initial'
+                void loadArchivePage(direction).then(rows => {
+                  if (interactionVersion !== userInteractionVersionRef.current) return
+                  if (state) pendingViewportRestoreRef.current = { kind: 'state', state, interactionVersion }
+                  if (rows.length && direction !== 'later' && direction !== 'latest') setContinuousWindowKey(getMessageStableKey(rows[0], 0))
+                })
+              }}>{archivePage.error ? 'Retry' : 'Load earlier messages'}</button>}
+            </div>}
             <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full">
               <ThreadCardHeightContext.Provider value={cardHeightContext}>
                 <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-                  <ChatTimeline sessionId={sessionId} historyMessages={messages} runtimeState={sessionRecord?.runtimeState} busyStartedAt={sessionRecord?.busyStartedAt} isRunningTool={sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} renderMessageFooter={sessionQueueLength > 0 && queuedMessages.length === 0 ? renderQueuedFooter : undefined} />
+                  <ChatTimeline sessionId={sessionId} historyMessages={messages} currentHistoryMessages={activeMessages} runtimeState={displayingLatest ? sessionRecord?.runtimeState : undefined} busyStartedAt={displayingLatest ? sessionRecord?.busyStartedAt : undefined} isRunningTool={displayingLatest && sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} renderMessageFooter={displayingLatest && sessionQueueLength > 0 && queuedMessages.length === 0 ? renderQueuedFooter : undefined} />
                 </ToolScriptProgressContext.Provider>
               </ThreadCardHeightContext.Provider>
             </div>
-            <ProcessingStatus
+            {historyMode === 'continuous' && archivePage.hasLater && <button type="button" disabled={archivePage.loading} className="my-3 text-xs text-fw-accent hover:underline" onClick={() => { void loadArchivePage('later') }}>Load newer messages</button>}
+            {displayingLatest && <ProcessingStatus
               timelineView={timelineView}
               sessionBusy={sessionBusy}
               runtimeState={sessionRecord?.runtimeState}
@@ -1425,8 +1531,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
               loading={loading}
               isMobile={isMobile}
               onContinue={webUiIdentityMode ? undefined : handleContinue}
-            />
-            {queuedMessages.length > 0 && (
+            />}
+            {displayingLatest && queuedMessages.length > 0 && (
               <div className="foxwarm-queued-preview min-w-0 max-w-full" data-queued-preview="true" aria-label="Queued messages">
                 <ThreadCardHeightContext.Provider value={cardHeightContext}><ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} timelineView={timelineView} showUsageBadge={false} showTimeDividers={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} renderMessageFooter={sessionQueueLength > 0 ? renderQueuedFooter : undefined} /></ThreadCardHeightContext.Provider>
               </div>
@@ -1448,7 +1554,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
           </button>
         )}
 
-        {!followingBottom && (
+        {(!followingBottom || historyMode === 'continuous' && archivePage.hasLater) && (
           <button
             onClick={handleBottomNavigation}
             className="absolute bottom-4 right-4 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-fw-accent text-fw-accent-text shadow-lg transition-all hover:bg-fw-accent dark:bg-fw-accent dark:hover:bg-fw-accent"
@@ -1510,7 +1616,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
             sessionId,
             sessionDisplayName,
             sessionRecord,
-            messages,
+            messages: activeMessages,
             connectionState,
             reconnectCountdown,
             sessionMissing,
@@ -1543,6 +1649,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   && prev.onOpenCodeCommit === next.onOpenCodeCommit
   && prev.onOpenModelSettings === next.onOpenModelSettings
   && prev.sendKeyMode === next.sendKeyMode
+  && prev.historyMode === next.historyMode
   && prev.timelineView === next.timelineView
   && prev.showUsageBadge === next.showUsageBadge
   && prev.webUiIdentityMode === next.webUiIdentityMode

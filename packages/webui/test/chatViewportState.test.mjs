@@ -137,3 +137,25 @@ test('a new toward-bottom gesture can finish a small pending leave without weake
   assert.deepEqual(updateChatBottomFollow({ ...pending, distanceFromBottom: 0.4, userIntent: 'toward-bottom' }), { following: true, pendingUserLeave: false })
   assert.deepEqual(updateChatBottomFollow({ ...pending, distanceFromBottom: 80, userIntent: 'toward-bottom' }), { following: false, pendingUserLeave: false }, 'a deliberate return still must reach actual bottom tolerance')
 })
+
+test('active and continuous reading positions are independent for one canonical Session', async () => {
+  const { getStoredChatViewportState, storeChatViewportState } = await loadTypeScriptModule('../src/chatViewportState.ts')
+  const active = { kind: 'anchor', messageKey: 'seq-local-900', offsetPx: 24 }
+  const continuous = { kind: 'anchor', messageKey: 'seq-local-100', offsetPx: -8 }
+  storeChatViewportState('same-session', active)
+  storeChatViewportState('same-session', continuous, 'continuous')
+  assert.deepEqual(getStoredChatViewportState('same-session'), active)
+  assert.deepEqual(getStoredChatViewportState('same-session', 'continuous'), continuous)
+  storeChatViewportState('same-session', { kind: 'bottom' }, 'active')
+  assert.deepEqual(getStoredChatViewportState('same-session', 'continuous'), continuous)
+})
+
+
+test('continuous remount targets only canonical sequence anchors', async () => {
+  const { getChatViewportAnchorSeq } = await loadTypeScriptModule('../src/chatViewportState.ts')
+  assert.equal(getChatViewportAnchorSeq({ kind: 'anchor', messageKey: 'seq-local-312', offsetPx: -29.5 }), 312)
+  assert.equal(getChatViewportAnchorSeq({ kind: 'anchor', messageKey: 'seq-source-session-12', offsetPx: 24 }), 12)
+  assert.equal(getChatViewportAnchorSeq({ kind: 'bottom' }), undefined)
+  assert.equal(getChatViewportAnchorSeq({ kind: 'anchor', messageKey: 'ctx-block-local-312', offsetPx: 0 }), undefined)
+  assert.equal(getChatViewportAnchorSeq({ kind: 'anchor', messageKey: 'seq-local-0', offsetPx: 0 }), undefined)
+})

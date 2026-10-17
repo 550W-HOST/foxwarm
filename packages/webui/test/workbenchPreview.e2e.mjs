@@ -139,6 +139,14 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
         window.__sent.push({ path: pathname, body: options.body })
         return json({ ok: true })
       }
+      if (pathname.includes('/api/sessions/') && pathname.endsWith('/history/continuous')) {
+        const messages = (chatMessages || (responsiveChat ? Array.from({ length: 35 }, (_, index) => ({ role: index % 2 ? 'model' : 'user', parts: [{ text: 'Responsive message ' + index + '\n\n' + 'Pane-local content wraps normally. '.repeat(8) }], __meta: { seq: index + 1, timestamp: 1700000000000 + index } })) : [])).filter(message => !message.__meta?.contextBlock)
+        const before = Number(url.searchParams.get('beforeSeq')) || Infinity
+        const after = Number(url.searchParams.get('afterSeq')) || 0
+        const candidates = messages.filter(message => message.__meta?.seq < before && message.__meta?.seq > after)
+        const rows = after ? candidates.slice(0, 100) : candidates.slice(-100)
+        return json({ messages: rows, firstSeq: rows[0]?.__meta?.seq, lastSeq: rows.at(-1)?.__meta?.seq, hasMore: candidates.length > 100 })
+      }
       if (pathname.includes('/api/sessions/') && pathname.endsWith('/history')) {
         window.__historyReads.push(pathname + url.search)
         const messages = chatMessages || (responsiveChat ? Array.from({ length: 35 }, (_, index) => ({ role: index % 2 ? 'model' : 'user', parts: [{ text: 'Responsive message ' + index + '\n\n' + 'Pane-local content wraps normally. '.repeat(8) }], __meta: { seq: index + 1, timestamp: 1700000000000 + index } })) : [])
