@@ -74,6 +74,10 @@ test('Session node routes use canonical selection, preserve cwd, and reject unav
       assert.equal((await sessionRuntime.getSession(sessionId)).currentNode, nodeId);
       assert.equal((await sessionRuntime.getSession(otherId)).currentNode || 'master', 'master');
     }
+    const selectionHistory = await sessionRuntime.getHistory(sessionId);
+    assert.equal(selectionHistory.queue.length, 0);
+    assert.equal((await request('node', { nodeId: 'master' })).status, 200);
+    assert.equal((await sessionRuntime.getHistory(sessionId)).queue.length, 0, 'setters never enqueue a raw notice');
     for (const nodeId of ['offline-node', 'upgrade-required', 'missing-node']) {
       const response = await request('node', { nodeId });
       assert.equal(response.status, 400);
@@ -88,6 +92,7 @@ test('Session node routes use canonical selection, preserve cwd, and reject unav
     assert.ok(locked.nodes.every((node: any) => !node.selectable));
     assert.equal((await request('node', { nodeId: 'exec-only' })).status, 400);
     assert.equal((await sessionRuntime.getSession(sessionId)).currentNode, 'master');
+    assert.equal((await sessionRuntime.getHistory(sessionId)).queue.length, 0, 'setters do not enqueue execution notices');
   } finally {
     (sessionManager as any).getAgentIsolationNode = originalIsolationNode;
     await server.stop().catch(() => {});

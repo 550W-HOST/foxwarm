@@ -1,3 +1,5 @@
+import type { Message } from './types';
+import { executeTools } from './toolExecutor';
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
 import { shutdownToolScriptRuntime } from './toolscript';
@@ -14,7 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { executeTools } from './llm';
+
 import * as sessionManager from './sessionManager';
 import * as mcpClient from './mcpClient';
 import * as mcp from './mcpExternalService';
@@ -125,7 +127,7 @@ async function fixture(run: (root: string, remote: Awaited<ReturnType<typeof loo
 function mcpCall(tag: string): FunctionCall {
   return { id: tag, name: 'call_tool', args: { toolId: 'mcp:stop-fixture/probe', args: { tag } } };
 }
-function responses(result: any) {
+function responses(result: Message) {
   return result.parts.filter((part: any) => part.functionResponse).map((part: any) => part.functionResponse);
 }
 
@@ -141,7 +143,7 @@ test('Stop reaches a real HTTP MCP request, closes only its caller binding, skip
       await remote.started('slow-local');
       session.stopping = true;
       assert.equal(sessionManager.abortSessionInFlight(session.id), true);
-      const result = responses(await running);
+      const result = responses((await running).message);
       assert.deepEqual(result.map((item: any) => item.tool_use_id), ['slow-local', 'write']);
       assert.match(result[0].response.error, /abort|cancel/i);
       assert.match(result[1].response.error, /not started/);
@@ -153,7 +155,7 @@ test('Stop reaches a real HTTP MCP request, closes only its caller binding, skip
       assert.equal(remote.initialized(), 2, 'the other caller remains on its original binding');
       session.stopping = false;
       const fresh = await executeTools([mcpCall('fresh')], { sessionId: session.id, session }, session);
-      assert.equal(responses(fresh)[0].response.output, 'fresh');
+      assert.equal(responses(fresh.message)[0].response.output, 'fresh');
       assert.equal(remote.initialized(), 3);
       assert.equal(remote.calls.filter(tag => tag === 'slow-local').length, 1, 'possibly executed tools are never replayed');
     } finally {
@@ -174,7 +176,7 @@ test('Stop cancels one request but preserves an independent in-flight request on
       await remote.started('slow-shared');
       session.stopping = true;
       assert.equal(sessionManager.abortSessionInFlight(session.id), true);
-      assert.match(responses(await running)[0].response.error, /abort|cancel/i);
+      assert.match(responses((await running).message)[0].response.error, /abort|cancel/i);
       assert.equal(remote.deleted(), 0);
       assert.deepEqual(remote.cancelled, ['slow-shared']);
       remote.release('independent');
@@ -202,7 +204,7 @@ test('foreground ToolScript cannot swallow Stop and start another host tool', { 
       await remote.started('slow-script');
       session.stopping = true;
       sessionManager.abortSessionInFlight(session.id);
-      const stopped = responses(await running)[0].response;
+      const stopped = responses((await running).message)[0].response;
       assert.equal(stopped.status, 'failed');
       assert.equal(await fs.pathExists(forbidden), false);
     } finally {
@@ -238,7 +240,7 @@ test('Main Stop ends shared MCP setup waiting before dispatch without interrupti
       assert.equal(sessionManager.abortSessionInFlight(session.id), true);
       const fallback = setTimeout(() => connecting.resolve(), 1000);
       let result: any;
-      try { result = responses(await foreground)[0]; }
+      try { result = responses((await foreground).message)[0]; }
       finally { clearTimeout(fallback); }
       assert(Date.now() - before < 200, 'Stop must not wait for a shared connection to finish setup');
       assert.match(result.response.error, /not.*executed|not started/i);

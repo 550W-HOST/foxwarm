@@ -13,7 +13,7 @@ Renders the compact global UI dropdown for color mode, Setup, reload, and Logs p
 - `clampAnchoredMenuHorizontally` — pure preferred-alignment + viewport-gutter clamp helper
 - `readHorizontalViewportBounds` — intersects the layout/body bounds with the current visual viewport
 - Both menus use the existing send-mode union (`'modEnter' | 'enter'`) at their component boundary.
-- `TimelineView` — the single display-mode union shared by every Timeline consumer; `readChatPreferences` reads valid new values before the old boolean preference, and `setTimelineView` writes only `foxwarm_timeline_view_v1`. See [D-webui-timeline-view](../modules/webui.md#d-webui-timeline-view).
+- `TimelineView` — the single display-mode union shared by every Timeline consumer; `readChatPreferences` reads valid new values before the old boolean preference, and `setTimelineView` writes only `foxwarm_timeline_view_v1`. See [D-webui-timeline-view](../modules/webui-timeline.md#d-webui-timeline-view).
 - `GlobalUiSettingsMenuProps` — props interface for Setup/Logs activation and preferred menu alignment
 
 ## Function Index
@@ -33,7 +33,7 @@ Renders the compact global UI dropdown for color mode, Setup, reload, and Logs p
 
 - Manages open/closed state of the dropdown menu with click-outside and Escape key dismissal via document event listeners.
 - Provides only the frequent `Auto` / `Light` / `Dark` color-mode control. Setup's Appearance tab repeats color mode above its palette preview and exclusively owns theme-family and portable file management.
-- The session-header menu provides the Detailed / Grouped / Conversation `timelineView` radio group, `showUsageBadge`, browser-local `Full width` (default on), `Show minimap`, and `Show user message metadata`. Minimap remains disabled only when it is the sole enabled context display, so scrollbar/minimap preferences cannot become both disabled.
+- The session-header menu provides the Detailed / Grouped / Conversation `timelineView` radio group, `showUsageBadge`, browser-local `Full width` (default on), `Show minimap`, and `Show user message metadata`. Conversation follows the [fixed scroll display](../modules/webui.md#d-webui-conversation-scroll-display), including its disabled/off minimap toggle. Detailed and Grouped disable that toggle only when minimap is the sole enabled context display, so their scrollbar/minimap preferences cannot become both disabled.
 - The session-header menu detects macOS/iOS to display the correct modifier key label (Cmd vs Ctrl) for the send-key option.
 - `Full width` is stored with the other browser-local Chat preferences and synchronized through storage events across App, popup, and embedded roots. Turning it off bounds and centers the common message column at 1100px; it does not resize the viewport, minimap, or individual timeline cards.
 - `useChatPreferences` is the single browser-local owner used by ordinary and embedded Chat roots. Setters write the established keys and update their own root; `storage` events update other roots without writeback effects or stale echoes.
@@ -59,3 +59,5 @@ Renders the compact global UI dropdown for color mode, Setup, reload, and Logs p
 ## Design Decisions
 
 - [2026-07-22] Global UI settings placement is preferred-alignment plus viewport clamping: preserve the current start/end alignment when there is room, but if either horizontal edge would leave the body/visual viewport, shift the whole menu inside an 8px safe gutter even though it no longer aligns with the trigger corner. Apply this to ordinary desktop/mobile and Code-embedded sidebars without changing other popovers or iframe stacking.
+
+Mobile-specific navigation, headers, and preferences follow the [mobile shell contract](../threads/webui-mobile-shell.md); desktop data and workbench owners remain unchanged.

@@ -1,3 +1,4 @@
+import MobilePageHeader from './MobilePageHeader'
 import type { TimelineView } from '../chatPreferences'
 import { WorkbenchHeaderDragArea, WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader, WorkbenchTabHeaderProvider, type WorkbenchTabHeaderValue } from './WorkbenchTabHeader'
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
@@ -92,7 +93,8 @@ function HistoryRangeRow({ result, direction, onLoad }: {
 
 export type HistorySearchDraft = { query: string; agentName: string; sessionId: string }
 
-export default function HistorySearchView({ tabId, isMobile, timelineView, showUsageBadge, showUserMessageMetadata, knownSessions = [], onBack, onOpenSession, initialDraft, onDraftChange, onSearchStarted, header }: {
+export default function HistorySearchView({ mobileHome = false, tabId, isMobile, timelineView, showUsageBadge, showUserMessageMetadata, knownSessions = [], onBack, onOpenSession, initialDraft, onDraftChange, onSearchStarted, header }: {
+  mobileHome?: boolean
   tabId?: string
   isMobile: boolean
   timelineView: TimelineView
@@ -261,19 +263,19 @@ export default function HistorySearchView({ tabId, isMobile, timelineView, showU
   const view = (
     <div className="foxwarm-content-gutter h-full min-h-0 overflow-y-auto bg-fw-canvas py-5 text-fw-text" data-history-search-view data-history-tab-id={tabId}>
       <div className="foxwarm-content-column space-y-5">
-        <WorkbenchHeaderDragArea className="flex items-center gap-3">
+        {!mobileHome && <WorkbenchHeaderDragArea className="flex items-center gap-3">
           {tabHeader ? <>
             <WorkbenchTabClose className="rounded p-1 text-fw-text-muted hover:bg-fw-hover" iconClassName="h-5 w-5" />
             <WorkbenchTabIcon className="inline-flex items-center text-fw-text-muted"><History className="h-5 w-5" /></WorkbenchTabIcon>
           </> : onBack && <button type="button" onClick={onBack} className="rounded px-2 py-1 hover:bg-fw-hover">Back</button>}
           <h2 className="text-lg font-semibold text-fw-text-strong">Search history</h2>
           <WorkbenchPaneControls />
-        </WorkbenchHeaderDragArea>
-        <form onSubmit={submit} className="space-y-3 rounded-lg border border-fw-border bg-fw-surface p-4">
+        </WorkbenchHeaderDragArea>}
+        <form id={`history-form-${instanceId}`} onSubmit={submit} className="space-y-3 rounded-lg border border-fw-border bg-fw-surface p-4">
           <label className="block text-sm font-medium" htmlFor={queryInputId}>Search or message reference</label>
           <div className="flex gap-2">
             <input id={queryInputId} data-history-query-input value={query} onChange={event => { const value = event.target.value; setQuery(value); onDraftChange?.({ query: value, agentName, sessionId }) }} placeholder="Search conversations or paste sessionId=… msg#123" className="min-w-0 flex-1 rounded border border-fw-border bg-fw-canvas px-3 py-2 text-fw-text-strong" />
-            <button type="submit" disabled={loading} className="inline-flex items-center gap-1 rounded bg-fw-accent px-3 py-2 text-fw-accent-text disabled:opacity-50"><Search size={16} /> Search</button>
+            {!mobileHome && <button type="submit" disabled={loading} className="inline-flex items-center gap-1 rounded bg-fw-accent px-3 py-2 text-fw-accent-text disabled:opacity-50"><Search size={16} /> Search</button>}
           </div>
           <div className="flex flex-wrap gap-2">
             <label className="min-w-36 flex-1 text-xs">Agent (optional)
@@ -324,5 +326,9 @@ export default function HistorySearchView({ tabId, isMobile, timelineView, showU
     </div>
   )
 
-  return header === undefined ? view : <WorkbenchTabHeaderProvider value={header}>{view}</WorkbenchTabHeaderProvider>
+  const mobileView = mobileHome ? <div className="mobile-page-root mobile-history-page relative h-full min-h-0">
+    <MobilePageHeader title="Search" actions={<button type="submit" form={`history-form-${instanceId}`} disabled={loading} aria-label="Search history" className="mobile-header-circle"><Search size={20}/></button>} />
+    {view}
+  </div> : view
+  return header === undefined ? mobileView : <WorkbenchTabHeaderProvider value={header}>{mobileView}</WorkbenchTabHeaderProvider>
 }

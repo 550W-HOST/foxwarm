@@ -88,6 +88,7 @@ await writeFile(entryPath, `
     window.fixtureSetSession = setSessionId
     window.fixtureSetLoading = setLoading
     window.fixtureSetSendKeyMode = setSendKeyMode
+    window.fixtureSendKeyMode = sendKeyMode
     window.fixtureRedraw = () => redraw(value => value + 1)
     const props = {
       sessionId, sessionMissing: false, loading, sendKeyMode, asrAvailable: true,
@@ -95,7 +96,16 @@ await writeFile(entryPath, `
       childModelDefault: 'model/current', effectiveChildModelKey: 'model/current', effectiveEffort: 'medium', effectiveChildEffort: 'medium',
       onChangeModel: noop, onChangeChildModel: noop, onChangeEffort: noop, onChangeChildEffort: noop,
       onRefreshModels: noop, onOpenModelSettings: () => {},
-      onSend: async value => { window.fixtureSends.push(value); return window.fixtureAccept },
+      onSend: async value => {
+        window.fixtureSendActiveElement = document.activeElement?.getAttribute('aria-label')
+        window.fixtureSends.push(value)
+        if (window.fixtureHoldSend) {
+          setLoading(true)
+          await new Promise(resolve => { window.fixtureReleaseSend = resolve })
+          setLoading(false)
+        }
+        return window.fixtureAccept
+      },
       onCreateStreamingTranscriber: async callbacks => {
         if (window.fixtureStreamMode === 'reject') throw new Error('Streaming setup unavailable')
         const session = { callbacks, sent: [], stopped: false, cancelled: false,
@@ -104,7 +114,11 @@ await writeFile(entryPath, `
         return session
       },
     }
-    return <div id="host"><ChatComposer {...props} /></div>
+    return <><div id="host"><ChatComposer {...props} /></div>
+      <input aria-label="Other pane input" />
+      <div id="other-pane" style={{ height: 40 }}>Other pane</div>
+      <button aria-label="Switch fixture Session" onClick={() => setSessionId('fixture/other')}>Switch session</button>
+    </>
   }
   // Observe the canonical persisted draft rather than a production edit callback.
   Object.defineProperty(window, 'fixtureDraft', {
@@ -230,6 +244,114 @@ const browsers = [
   { name: 'Chromium', path: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', args: ['--no-sandbox', '--disable-setuid-sandbox'] },
   { name: 'Firefox', browser: 'firefox', path: process.env.FOXWARM_E2E_FIREFOX || '/usr/bin/firefox' },
 ].filter(browser => selectedBrowser === 'all' || browser.name.toLowerCase() === selectedBrowser)
+
+async function settleSend(page) {
+  await page.waitForFunction(() => window.fixtureEditor().contentEditable === 'true')
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+}
+
+for (const spec of browsers) {
+  test(`${spec.name} accepted sends return focus only after the editor is editable`, async () => withBrowser(spec, async page => {
+    const editor = '[role="textbox"][aria-label="Message"]'
+    await page.evaluate(() => {
+      window.fixtureAccept = true
+      window.fixtureHoldSend = true
+      window.fixtureOriginalEditor = window.fixtureEditor()
+    })
+    // A real Send pointer click blurs the editor before onSend disables both controls.
+    await page.click(editor)
+    await page.keyboard.type('pointer send')
+    await page.click('button[aria-label="Send message"]')
+    await page.waitForFunction(() => window.fixtureEditor().contentEditable === 'false')
+    // Chromium can retain focus on the disabled Send control; the editor must not take it while noneditable.
+    assert.equal(await page.evaluate(() => {
+      const active = document.activeElement
+      return active === document.body || active instanceof HTMLButtonElement && active.disabled && active.getAttribute('aria-label') === 'Send message'
+    }), true)
+    await page.evaluate(() => window.fixtureReleaseSend())
+    await settleSend(page)
+    assert.equal(await page.evaluate(() => window.fixtureEditor() === window.fixtureOriginalEditor), true)
+    assert.equal(await page.evaluate(() => document.activeElement === window.fixtureEditor()), true)
+    await page.keyboard.type('next without refocusing')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), 'next without refocusing')
+
+    // Exercise both configured keyboard send paths, including an immediate acceptance.
+    for (const [mode, held] of [['enter', false], ['modEnter', true]]) {
+      await page.evaluate((mode, held) => {
+        window.fixtureSetSendKeyMode(mode)
+        window.fixtureHoldSend = held
+      }, mode, held)
+      await page.waitForFunction(mode => window.fixtureSendKeyMode === mode, {}, mode)
+      const count = await page.evaluate(() => window.fixtureSends.length)
+      if (mode === 'modEnter') await page.keyboard.down('Control')
+      await page.keyboard.press('Enter')
+      if (mode === 'modEnter') await page.keyboard.up('Control')
+      await page.waitForFunction(count => window.fixtureSends.length === count + 1, { timeout: 3000 }, count)
+      if (held) {
+        await page.waitForFunction(() => window.fixtureEditor().contentEditable === 'false')
+        await page.evaluate(() => window.fixtureReleaseSend())
+      }
+      await settleSend(page)
+      assert.equal(await page.evaluate(() => document.activeElement === window.fixtureEditor()), true)
+      assert.equal(await page.evaluate(() => window.fixtureDraft), '')
+      await page.keyboard.type('continued ' + mode)
+      assert.equal(await page.evaluate(() => window.fixtureDraft), 'continued ' + mode)
+    }
+  }))
+
+  test(`${spec.name} delayed sends do not reclaim an abandoned focus or a different Session`, async () => withBrowser(spec, async page => {
+    const editor = '[role="textbox"][aria-label="Message"]'
+    const begin = async text => {
+      await page.evaluate(() => { window.fixtureAccept = true; window.fixtureHoldSend = true })
+      await page.click(editor)
+      await page.keyboard.type(text)
+      await page.click('button[aria-label="Send message"]')
+      await page.waitForFunction(() => window.fixtureEditor().contentEditable === 'false')
+    }
+    await begin('focus elsewhere')
+    await page.click('input[aria-label="Other pane input"]')
+    await page.keyboard.type('other')
+    await page.evaluate(() => window.fixtureReleaseSend())
+    await settleSend(page)
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), 'Other pane input')
+    await page.keyboard.type(' pane')
+    assert.equal(await page.$eval('input[aria-label="Other pane input"]', node => node.value), 'other pane')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), '')
+
+    // A pointer on a nonfocusable pane is still an intentional departure from Send.
+    await begin('nonfocusable pane')
+    await page.click('#other-pane')
+    await page.evaluate(() => window.fixtureReleaseSend())
+    await settleSend(page)
+    assert.equal(await page.evaluate(() => document.activeElement.tagName), 'BODY')
+    await page.keyboard.type('must not enter composer')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), '')
+
+    await begin('old Session')
+    await page.click('button[aria-label="Switch fixture Session"]')
+    await page.waitForFunction(() => window.fixtureCurrentSession === 'fixture/other')
+    await page.evaluate(() => { window.fixtureSetLoading(false); window.fixtureSetSession('fixture/main') })
+    await settleSend(page)
+    await page.click('input[aria-label="Other pane input"]')
+    await page.evaluate(() => window.fixtureReleaseSend())
+    await settleSend(page)
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), 'Other pane input')
+  }))
+
+  test(`${spec.name} rejected sends retain the draft without moving focus`, async () => withBrowser(spec, async page => {
+    await page.evaluate(() => { window.fixtureAccept = false; window.fixtureHoldSend = true })
+    await page.click('[role="textbox"][aria-label="Message"]')
+    await page.keyboard.type('keep my draft')
+    await page.click('button[aria-label="Send message"]')
+    await page.waitForFunction(() => window.fixtureEditor().contentEditable === 'false')
+    await page.click('input[aria-label="Other pane input"]')
+    await page.evaluate(() => window.fixtureReleaseSend())
+    await settleSend(page)
+    assert.equal(await page.evaluate(() => window.fixtureDraft), 'keep my draft')
+    assert.equal(await page.evaluate(() => window.fixtureEditor().textContent), 'keep my draft')
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), 'Other pane input')
+  }))
+}
 
 for (const spec of browsers) {
   test(`${spec.name} edits pasted-text blocks without resetting native text flow`, async () => withBrowser(spec, async page => {
@@ -885,7 +1007,7 @@ for (const spec of [browsers[0]]) {
     await page.reload({ waitUntil: 'load' })
     await page.waitForSelector(editor)
     await page.waitForFunction(() => document.querySelectorAll('.foxwarm-composer-attachment-chip').length === 2)
-    assert.deepEqual(await page.$$eval('.foxwarm-composer-attachment-chip', chips => chips.map(chip => chip.textContent.includes('Reattach required'))), [true, true])
+    assert.deepEqual(await page.$$eval('.foxwarm-composer-attachment-chip', chips => chips.map(chip => chip.dataset.attachmentMissing === 'true')), [true, true])
     await page.locator('.foxwarm-composer-caret-anchor').click()
     await page.waitForFunction(() => document.querySelector('.foxwarm-composer-caret-anchor')?.contains(getSelection()?.anchorNode))
     await page.keyboard.press('ArrowRight')
@@ -904,7 +1026,7 @@ for (const spec of [browsers[0]]) {
       Object.defineProperty(input, 'files', { configurable: true, value: transfer.files })
       input.dispatchEvent(new Event('change', { bubbles: true }))
     })
-    await page.waitForFunction(() => !document.querySelector('.foxwarm-composer-attachment-chip')?.textContent.includes('Reattach required'))
+    await page.waitForFunction(() => document.querySelector('.foxwarm-composer-attachment-chip')?.dataset.attachmentMissing === 'false')
     assert.deepEqual(await page.$$eval('.foxwarm-composer-attachment-chip', chips => chips.map(chip => chip.dataset.composerAttachmentRef)), refs)
     await page.$$eval('.foxwarm-composer-attachment-chip', chips => chips[1].click())
     await page.waitForSelector('[role="dialog"][aria-label="Attachment information"]')
@@ -1045,7 +1167,7 @@ for (const spec of browsers) {
     })
     const selectedStyles = await page.$$eval('[data-composer-block-selected]', chips => chips.map(chip => {
       const style = getComputedStyle(chip)
-      const remove = chip.querySelector('[data-composer-block-remove]')
+      const remove = chip.querySelector('[data-composer-block-remove]') || (chip.dataset.composerAttachmentRef && document.querySelector(`[data-attachment-preview-ref="${chip.dataset.composerAttachmentRef}"] .composer-attachment-remove`))
       const image = chip.querySelector('img')
       const preview = chip.querySelector('.foxwarm-composer-pasted-text-preview')
       return {
@@ -1110,11 +1232,12 @@ for (const spec of browsers) {
       })
       const consoleStyles = await page.$$eval('[data-composer-block-selected]', chips => chips.map(chip => {
         const style = getComputedStyle(chip)
-        return { shadow: style.boxShadow, color: style.color, remove: !!chip.querySelector('[data-composer-block-remove]') }
+        return { shadow: style.boxShadow, color: style.color, remove: !!(chip.querySelector('[data-composer-block-remove]') || (chip.dataset.composerAttachmentRef && document.querySelector(`[data-attachment-preview-ref="${chip.dataset.composerAttachmentRef}"] .composer-attachment-remove`))) }
       }))
       assert.equal(consoleStyles.every(style => style.shadow !== 'none' && style.remove && style.color !== 'rgba(0, 0, 0, 0)'), true, JSON.stringify(consoleStyles))
     }
-    await page.mouse.click(points.end.x, points.end.y)
+    await page.focus(editor)
+    await page.keyboard.press('ArrowRight')
     await page.focus('[data-composer-block-remove]')
     await page.waitForFunction(() => document.querySelectorAll('[data-composer-block-selected]').length === 0)
     await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
@@ -1162,8 +1285,8 @@ test('Chromium removes image, file, and missing-file blocks without opening thei
     await page.evaluate(sessionId => window.fixtureSetSession(sessionId), sessionId)
     await page.waitForFunction((sessionId) => window.fixtureCurrentSession === sessionId
       && document.querySelector('button[aria-label="Remove attachment notes.txt"]')
-      && [...document.querySelectorAll('.foxwarm-composer-attachment-chip')].every(node => node.textContent.includes('Reattach required')), {}, sessionId)
-    assert.equal(await page.$eval('.foxwarm-composer-attachment-chip', node => node.textContent.includes('Reattach required')), true)
+      && [...document.querySelectorAll('.foxwarm-composer-attachment-chip')].every(node => node.dataset.attachmentMissing === 'true'), {}, sessionId)
+    assert.equal(await page.$eval('.foxwarm-composer-attachment-chip', node => node.dataset.attachmentMissing === 'true'), true)
     const missingDraft = attachmentDraft
     await page.locator('button[aria-label="Remove attachment notes.txt"]').click()
     assert.notEqual(await page.evaluate(() => window.fixtureDraft), missingDraft)
@@ -1320,17 +1443,23 @@ test('Chromium Send pointer click synchronously submits composition committed on
   assert.equal(await page.evaluate(() => window.fixtureDraft), 'prefix ')
 
   await switchSession('fixture/ime-send-accepted')
-  await page.evaluate(() => { window.fixtureSends = []; window.fixtureAccept = true })
+  await page.evaluate(() => { window.fixtureSends = []; window.fixtureAccept = true; window.fixtureHoldSend = true })
   await page.click(editor)
   await page.keyboard.type('accepted ')
   await observeOrder()
   await client.send('Input.imeSetComposition', { text: 'n', selectionStart: 1, selectionEnd: 1 })
   await client.send('Input.imeSetComposition', { text: '你', selectionStart: 1, selectionEnd: 1 })
   await page.click(sendButton)
-  await page.waitForFunction(() => window.fixtureSends.length === 1 && window.fixtureEditor()?.textContent === '')
+  await page.waitForFunction(() => window.fixtureSends.length === 1 && window.fixtureEditor()?.contentEditable === 'false')
+  assert.equal(await page.evaluate(() => window.fixtureSendActiveElement), 'Send message')
+  await page.evaluate(() => window.fixtureReleaseSend())
+  await settleSend(page)
   await assertBlurCommitOrder()
   assert.equal(await page.evaluate(() => window.fixtureSends[0].text), 'accepted 你')
   assert.equal(await page.evaluate(() => localStorage.getItem('composer_draft_v1_fixture/ime-send-accepted')), null)
+  assert.equal(await page.evaluate(() => document.activeElement === window.fixtureEditor()), true)
+  await page.keyboard.type('after composition send')
+  assert.equal(await page.evaluate(() => window.fixtureDraft), 'after composition send')
   await client.detach()
 }))
 

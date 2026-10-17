@@ -18,7 +18,7 @@ Defines the model-facing `submit_compact_plan` schema, candidate/policy types, c
 - `normalizeMemoryFacts` — best-effort per-block fact parsing/sanitization with plan-wide caps and deduplication.
 - `validateCompactPlanArgs` — structural, range, overlap, barrier, and quota validation.
 - `buildCompactPlanValidationFeedback` — actionable retry text.
-- `CompactPlanRepairFile` — create, read, bounded current-content preview, exact edit/patch, and best-effort cleanup of a private planning artifact.
+- `CompactPlanRepairFile` — create, read, bounded current-content preview, exact edit/patch, and best-effort cleanup of a private planning artifact. Pure edit matching comes directly from shared `exactReplacement`; patch matching comes from shared `applyPatch`, while exact invocation-bound descriptor I/O remains here.
 - `compactPlanSubmissionUsesFile` — enforce the exclusive file/direct submission forms before plan validation.
 
 ## Stable-symbol index

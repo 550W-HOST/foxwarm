@@ -7,7 +7,7 @@ Foxwarm materializes each memory-backed Session system-prompt snapshot for one c
 ## Source assembly
 
 - [src-conditional-memory](../units/src-conditional-memory.md) owns the pure conditional grammar and current-model header format.
-- [src-llm](../units/src-llm.md) applies conditional filtering independently to each selected source body before adding provenance wrappers. The root framework source and its legacy framework fallback remain raw-content sources, so frontmatter-looking bytes stay model-visible; ordinary inherited, current-agent, and configured custom memory files retain Session frontmatter parsing before conditional filtering.
+- [Session prompt state](../units/src-session-prompt.md) applies conditional filtering independently to each selected source body before adding provenance wrappers. The root framework source and its legacy framework fallback remain raw-content sources, so frontmatter-looking bytes stay model-visible; ordinary inherited, current-agent, and configured custom memory files retain Session frontmatter parsing before conditional filtering.
 - Skill catalog text, generated directory/recall guidance, tool instructions, and chat history are not scanned for conditional blocks.
 - A materialized snapshot always starts with the exact canonical concrete model identity. Snapshot construction does not select a virtual route.
 
@@ -15,7 +15,7 @@ Foxwarm materializes each memory-backed Session system-prompt snapshot for one c
 
 - The existing model-routing loop selects one concrete `ModelConfigEntry` and derives its canonical identity through the same concrete attribution helper used for assistant metadata.
 - Immediately before concrete request-plan construction, a narrow optional prompt resolver receives that selected identity. Fixed low-level, CLI, and setup callers omit the resolver and keep their supplied prompt unchanged.
-- Memory-backed `chat` compares the selected identity with the snapshot's first-line marker. A match reuses the exact bytes without file reads, persistence, or cache-key rotation. A missing or different marker rebuilds from the configured memory sources for that concrete identity.
+- Memory-backed `chat` compares the selected identity with the snapshot's first-line marker. A match reuses the exact bytes without rereading memory files, persisting the snapshot again, or rotating the cache key. Normal effective-selection metadata persistence is independent of snapshot materialization. A missing or different marker rebuilds from the configured memory sources for that concrete identity.
 - The first selected attempt's effective prompt becomes the request journal prompt. Later attempts pass their effective prompt to the existing optional per-attempt prompt reference boundary. Routing selection, retries, request identity, and assistant attribution remain one logical request.
 
 ## Ownership and detached work

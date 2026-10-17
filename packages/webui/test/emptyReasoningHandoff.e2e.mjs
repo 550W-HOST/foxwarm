@@ -18,6 +18,9 @@ const retry = (seq, final = false) => ({ role: 'model', modelVisible: false, par
 const scenarios = {
   tool: [model([empty, call('first'), call('second')], 1, 42), result('first')],
   text: [model([empty, { text: 'The result is ready. This answer remains readable beside its reasoning information.' }], 2, 128)],
+  longText: [model([empty, { text: 'The opening line leaves room for reasoning information, while later lines return to the full reading width. '.repeat(8) }], 31, 128)],
+  shortText: [model([empty, { text: 'Ready.' }], 32, 128)],
+  shortPlain: [model([{ text: 'Ready.' }], 33)],
   missing: [model([empty, { text: 'No token estimate.' }], 3)],
   zero: [model([empty, { text: 'Zero is a real value.' }], 4, 0)],
   content: [model([{ thinking: 'Visible summary one.' }, { thinking: 'Visible summary two.' }, { text: 'A normal answer.' }], 5, 21)],
@@ -187,31 +190,87 @@ test('Grouped and expanded Conversation reuse ownership, including a reply outsi
   assert.deepEqual((await state('mixedConversation')).tokens, ['78 tokens'])
 })
 
-test('wide and narrow headers preserve text, duration and action geometry', async () => {
+test('wide and narrow prose wraps a right float while original hover controls overlay it without moving', async () => {
   const directory = process.env.FOXWARM_E2E_SCREENSHOT_DIR
   if (directory) await mkdir(directory, { recursive: true })
-  await page.addStyleTag({ content: 'section:not([data-case="tool"]):not([data-case="text"]):not([data-case="content"]):not([data-case="partOrder"]):not([data-case="stream"]) {display:none}' })
+  await page.addStyleTag({ content: 'section:not([data-case="tool"]):not([data-case="longText"]):not([data-case="shortText"]):not([data-case="shortPlain"]):not([data-case="conversation"]) {display:none}' })
   await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }])
   for (const width of [1100, 390]) {
-    await page.setViewport({ width, height: 900 })
-    for (const id of ['tool', 'text', 'content', 'partOrder']) await page.evaluate(id => window.renderScenario(id), id)
-    await page.waitForFunction(() => [...document.querySelectorAll('#tool .foxwarm-tool-card')].every(el => !el.style.height))
-    await page.hover('#text .foxwarm-assistant-message-card')
-    await page.waitForFunction(() => getComputedStyle(document.querySelector('#text .foxwarm-assistant-action-buttons')).opacity === '1')
+    // Narrow desktop panes keep metrics/actions; root-mobile hiding is checked separately below.
+    await page.setViewport({ width:1100, height:900 })
+    await page.$eval('main',(main,width)=>{main.style.maxWidth=`${width-48}px`},width)
+    for (const id of ['tool', 'longText', 'shortText', 'shortPlain', 'conversation']) await page.evaluate(id => window.renderScenario(id), id)
+    await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-tool-card, [data-timeline-activity]')].every(el => !el.style.height))
+    await page.evaluate(() => document.activeElement?.blur())
+    await page.mouse.move(0, 0)
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('#shortText .foxwarm-assistant-action-buttons')).opacity === '0')
     const geometry = await page.evaluate(() => {
       const rect = selector => document.querySelector(selector).getBoundingClientRect()
       const badge = rect('#tool [data-reasoning-handoff]')
       const duration = rect('#tool [data-tool-execution-time]')
-      const body = rect('#text .foxwarm-assistant-message-markdown')
-      const textBadge = rect('#text [data-reasoning-handoff]')
-      const actions = rect('#text .foxwarm-assistant-action-buttons')
-      return { noPageOverflow: document.documentElement.scrollWidth <= innerWidth, toolFits: badge.right <= rect('#tool .foxwarm-tool-card').right + 1, durationBeforeBadge: duration.right <= badge.left, bodyBelowBadge: body.top >= textBadge.bottom, actionsBeforeBadge: actions.right <= textBadge.left }
+      const prose = id => {
+        const root = document.querySelector('#' + id)
+        const marker = root.querySelector('[data-reasoning-handoff]')
+        const markerRect = marker.getBoundingClientRect()
+        const range = document.createRange()
+        range.selectNodeContents(root.querySelector('.foxwarm-markdown p'))
+        const lines = [...range.getClientRects()]
+        return {
+          rightFloat: getComputedStyle(marker.parentElement).float === 'right',
+          firstLineBesideBadge: lines[0].top < markerRect.bottom && lines[0].bottom > markerRect.top && lines[0].right <= markerRect.left + 1,
+          laterLineUsesFullWidth: lines.some(line => line.top >= markerRect.bottom && line.right > markerRect.left + 20),
+        }
+      }
+      const actionOffset = id => {
+        const card = rect('#' + id + ' .foxwarm-assistant-message-card')
+        const actions = rect('#' + id + ' .foxwarm-assistant-action-buttons')
+        return { top: actions.top - card.top, right: card.right - actions.right }
+      }
+      const shortCard = rect('#shortText .foxwarm-assistant-message-card')
+      const plainCard = rect('#shortPlain .foxwarm-assistant-message-card')
+      const conversation = document.querySelector('#conversation .foxwarm-conversation-reply')
+      const conversationActions = conversation.querySelector('.foxwarm-assistant-action-buttons')
+      return {
+        noPageOverflow: document.documentElement.scrollWidth <= innerWidth,
+        toolFits: badge.right <= rect('#tool .foxwarm-tool-card').right + 1,
+        durationBeforeBadge: duration.right <= badge.left,
+        short: prose('shortText'), long: prose('longText'),
+        shortHeightUnchanged: Math.abs(shortCard.height - plainCard.height) <= 1,
+        actionOffset: actionOffset('shortText'), plainActionOffset: actionOffset('shortPlain'),
+        conversationActionsBelowBody: conversationActions.getBoundingClientRect().top >= conversation.querySelector('.foxwarm-assistant-message-markdown').getBoundingClientRect().bottom,
+        conversationActionsPosition: getComputedStyle(conversationActions).position,
+      }
     })
-    assert.deepEqual(geometry, { noPageOverflow: true, toolFits: true, durationBeforeBadge: true, bodyBelowBadge: true, actionsBeforeBadge: true })
-    if (directory) await page.screenshot({ path: path.join(directory, `empty-reasoning-${width}.png`), fullPage: true })
+    assert.ok(geometry.noPageOverflow && geometry.toolFits && geometry.durationBeforeBadge, JSON.stringify(geometry))
+    assert.deepEqual(geometry.short, { rightFloat: true, firstLineBesideBadge: true, laterLineUsesFullWidth: false })
+    assert.deepEqual(geometry.long, { rightFloat: true, firstLineBesideBadge: true, laterLineUsesFullWidth: true })
+    assert.ok(geometry.shortHeightUnchanged)
+    assert.deepEqual(geometry.actionOffset, geometry.plainActionOffset)
+    assert.equal(geometry.conversationActionsPosition, 'static')
+    assert.ok(geometry.conversationActionsBelowBody)
+    if (directory) await page.screenshot({ path: path.join(directory, `reasoning-float-${width}.png`), fullPage: true })
+    await page.$eval('#shortText .foxwarm-assistant-message-card', card => card.scrollIntoView({ block: 'center' }))
+    const buttons = await page.$('#shortText .foxwarm-assistant-action-buttons')
+    const before = await buttons.boundingBox()
+    await page.hover('#shortText .foxwarm-assistant-message-card')
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('#shortText .foxwarm-assistant-action-buttons')).opacity === '1')
+    assert.deepEqual(await buttons.boundingBox(), before)
+    assert.equal(await page.$eval('#shortText button[title="Raw Text"]', button => {
+      const rect = button.getBoundingClientRect()
+      const badge = button.closest('.foxwarm-assistant-message-card').querySelector('[data-reasoning-handoff]').getBoundingClientRect()
+      const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2
+      return x >= badge.left && x <= badge.right && y >= badge.top && y <= badge.bottom && button.contains(document.elementFromPoint(x, y))
+    }), true, 'the actual button stays clickable over the badge')
+    if (directory) await page.screenshot({ path: path.join(directory, `reasoning-float-${width}-hover.png`), fullPage: true })
+    await page.click('#shortText button[title="Raw Text"]')
+    assert.equal(await page.$eval('#shortText .foxwarm-assistant-message-raw', element => element.textContent), 'Ready.')
+    await page.click('#shortText button[title="Rendered (Markdown)"]')
   }
+  await page.setViewport({width:390,height:900})
+  await page.waitForFunction(()=>!document.querySelector('#shortText .foxwarm-assistant-action-buttons'))
+  assert.equal(await page.$$eval('[data-reasoning-handoff]',elements=>elements.length),0)
   if (directory) {
     await page.evaluate(() => window.setDark())
-    await page.screenshot({ path: path.join(directory, 'empty-reasoning-390-dark.png'), fullPage: true })
+    await page.screenshot({ path: path.join(directory, 'reasoning-float-390-dark-hover.png'), fullPage: true })
   }
 })

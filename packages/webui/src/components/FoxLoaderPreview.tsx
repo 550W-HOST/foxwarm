@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { RotateCcw, Expand } from 'lucide-react'
-import { FoxCub, FoxSplashScreen, FoxSpinner, FoxThinking } from './FoxLoaders'
+import { FoxCub, FoxSplashScreen, FoxSpinner, FoxThinking, FoxSleeping } from './FoxLoaders'
 import FoxThinkingText from './FoxThinkingText'
 
 function PreviewCard({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
@@ -41,7 +41,6 @@ export default function FoxLoaderPreview() {
   return (
     <section data-fox-loader-preview className="mt-6 border-t border-fw-border pt-5 dark:border-fw-border-muted">
       <h2 className="text-base font-semibold text-fw-text-strong">Loading animations</h2>
-      <p className="mt-1 text-sm text-fw-text">The fox shown while Foxwarm starts and while a model is thinking. It follows the theme's accent color.</p>
 
       <div className="mt-4 grid gap-4 md:grid-cols-3">
         <PreviewCard
@@ -53,11 +52,11 @@ export default function FoxLoaderPreview() {
         >
           <FoxCub key={replay} size={120} />
         </PreviewCard>
-        <PreviewCard title="Thinking status">
-          <div className="inline-flex min-w-0 max-w-full items-center gap-2.5 text-lg text-fw-accent">
+        <PreviewCard title="Runtime status">
+          <div className="flex min-w-0 flex-col gap-3"><div className="inline-flex min-w-0 max-w-full items-center gap-2.5 text-lg text-fw-accent">
             <FoxThinking className="shrink-0" size={24} />
             <FoxThinkingText />
-          </div>
+          </div><div className="inline-flex items-center gap-2.5 text-lg text-fw-warning"><FoxSleeping /><span>Waiting</span></div></div>
         </PreviewCard>
         <PreviewCard title="Spinner">
           <div className="flex items-end gap-5">

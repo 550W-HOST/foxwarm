@@ -2,11 +2,12 @@
 
 ## Responsibility
 
-Owns reusable cross-package implementations for patch application, file/exec/browser node tools, fixed Code node services, terminal-helper IPC, persistent command management, and Unicode/line-aware output excerpts. Higher layers provide session/permission/protocol policy around these implementations.
+Owns reusable cross-package implementations for patch application, file/exec/browser node tools, fixed Code node services, terminal-helper IPC, persistent command management, Unicode/line-aware output excerpts, exact text replacement, and browser-safe committed-history continuation classification. Higher layers provide session/permission/protocol policy around these implementations.
 
 ## Units
 
 - [shared-apply-patch](../units/shared-apply-patch.md) — patch envelope parsing and add/update/delete content operations.
+- [shared-session-continuation](../units/shared-session-continuation.md) — pure committed-history continuation and canonical compact maintenance classification for Main and WebUI.
 - [shared-node-tools](../units/shared-node-tools.md) — shared file core, node tool registry/schemas, transfer, cwd, browser, token, and formatting helpers.
 - [shared-node-protocol](../units/shared-node-protocol.md) — core Master/Node protocol range validation, legacy classification, negotiation, and diagnostics.
 - [shared-vscode-node-service](../units/shared-vscode-node-service.md) — fixed filesystem/read-only Git service and advertised versions.
@@ -22,7 +23,8 @@ Durable JSON semantics are canonical in [src-utils](../units/src-utils.md#d-disk
 - `nodeTools`, `CLI_NODE_CAPABILITIES`.
 - `CURRENT_NODE_PROTOCOL_RANGE`, `resolveAdvertisedNodeProtocol()`, and `negotiateNodeProtocol()`.
 - shared low-level native file/process backends, file read/write/patch semantic core, and node transfer/path helpers.
-- patch parsing/content-application functions plus per-operation change-count summaries.
+- patch parsing/content-application functions plus per-operation change-count summaries; `applyExactReplacement` from `exactReplacement`.
+- `isSessionTurnIncomplete`, `isCompactCompletionMaintenanceMessage`, and their structural history input types from `sessionContinuation`.
 - `PersistentExecManager` and shared timeout/cwd resolution.
 - `truncateOutputForDisplay`.
 - `formatToolResponsePayload`, `formatStructuredValue`, `formatToolScriptExecutionResponse`, token estimation, Foxwarm attribute/attachment markup formatting, and small WebUI rendering helpers.
@@ -35,7 +37,7 @@ Durable JSON semantics are canonical in [src-utils](../units/src-utils.md#d-disk
 - Patch matching normalizes LF internally and restores original line endings; exact edit replacement rejects multiple occurrences.
 - Master and node patch results share per-file add/update counts; the exact counting and display contract is canonical in [D-apply-patch-change-counts](../units/shared-apply-patch.md#d-apply-patch-change-counts).
 - Write refuses overwrite by default and creates parents only with `createDirs=true`; it attempts the real write before enriching parent errors.
-- Main and Node read/write/patch wrappers reuse shared semantics; local target-specific system calls sit behind the small file/process contracts. Exact edit replacement remains a separate implementation in the two existing wrappers. The implementation ownership rule is canonical in [D-shared-package-boundary](#d-shared-package-boundary).
+- Main and Node read/write/edit/patch wrappers reuse shared semantics; local target-specific system calls sit behind the small file/process contracts. Exact replacement is pure shared logic also used by compact repair. The implementation ownership rule is canonical in [D-shared-package-boundary](#d-shared-package-boundary).
 - Exec cwd expands home, must exist, and must be a directory before spawn.
 - Finite exec timeouts above the runtime maximum clamp with a separate warning; invalid/below-minimum values reject.
 - Persistent exec owns atomic status/log/cwd metadata, can reconcile registry awareness after restart, and uses bounded binary-safe excerpts for oversized logs; canonical details: [D-persistent-exec-bounded-log-excerpts](../units/shared-persistent-exec.md#d-persistent-exec-bounded-log-excerpts).
@@ -69,7 +71,7 @@ When output overflows, shorten extreme individual lines and omit whole middle li
 
 Wrappers retain only environment-specific roots/namespaces, permission and ownership checks, transport, interactive approval, and result/presentation metadata. The patch parser/matcher is `packages/shared/src/applyPatch.ts`; the file patch executor is `packages/shared/src/fileToolCore.ts` over `FileOperations`, including provider-owned asynchronous parents. Main file/memory, native CLI, and primitive Provider calls use these same implementations. Compact repair reuses pure patch semantics while retaining its exact pending-file descriptor boundary.
 
-This ownership rule is not a claim that all historical implementations have already converged: existing exact edit replacement remains separate and requires its own assessment. Current file composition is mapped by [D-dispatch-shared-file-semantics](../threads/tool-dispatch-node-execution.md#d-dispatch-shared-file-semantics).
+Pure exact replacement is owned by `packages/shared/src/exactReplacement.ts`; Main, Node, and compact repair import it directly. Current file composition is mapped by [D-dispatch-shared-file-semantics](../threads/tool-dispatch-node-execution.md#d-dispatch-shared-file-semantics).
 
 ## Canonical cross-module ownership
 

@@ -85,6 +85,14 @@ export const tool_node_create_auth_token = async (args: ToolArgs, ctx: ToolConte
     }
 };
 
+export const tool_node_remove = async (args: ToolArgs, ctx: ToolContext): Promise<{ nodeId: string; disconnected: boolean }> => {
+    if (!ctx?.sessionId) throw new Error('node_remove requires session context.');
+    if (ctx.sessionPlacement === 'session-worker') return executeMainManagementTool('node_remove', args, ctx);
+    if (typeof args?.nodeId !== 'string' || !args.nodeId.trim()) throw new Error('node_remove nodeId is required.');
+    await checkToolPermission({ source: 'builtin', tool: 'node_remove' }, ctx.sessionId, 'master', args);
+    return nodesManager.removeApprovedNode(args.nodeId);
+};
+
 export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) {
     const { sourceNode, sourcePath, targetNode, targetPath, overwrite = false } = args;
 
@@ -184,7 +192,7 @@ export const tool_change_current_node = async (args: ToolArgs, ctx: ToolContext)
     }
     
     const validated = await validateNodeSelection(ctx.sessionId, nodeId);
-    await sessionRuntime.updateSettings(ctx.sessionId, { currentNode: nodeId, cwd: null });
+    await sessionRuntime.updateSettings(ctx.sessionId, { currentNode: validated.nodeId, cwd: null });
     return `Current node changed to \`${validated.nodeId}\`. Session cwd cleared. Subsequent exec calls will use the node default cwd: \`${validated.defaultCwd}\`.`;
 };
 

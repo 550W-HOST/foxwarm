@@ -98,3 +98,5 @@ Models save success/errors belong beside or immediately below the Models Save bu
 ## Canonical ownership
 
 Saving app/channel configuration invokes the canonical full managed-channel restart behavior: [D-channel-managed-reload](../modules/channels.md#d-channel-managed-reload).
+
+Mobile-specific navigation, headers, and preferences follow the [mobile shell contract](../threads/webui-mobile-shell.md); desktop data and workbench owners remain unchanged.

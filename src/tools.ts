@@ -42,6 +42,7 @@ import {
     tool_update_timer,
     tool_delete_timer,
     tool_set_config,
+    tool_node_remove,
 } from './mainManagementTools';
 
 // Re-export types from helpers
@@ -186,6 +187,7 @@ export const cancel_toolscript_run = tool_cancel_toolscript_run;
 export const node = tool_node;
 export const node_bootstrap_info = tool_node_bootstrap_info;
 export const node_create_auth_token = (args: any, ctx: any) => tool_node_create_auth_token(args, ctx);
+export const node_remove: typeof tool_node_remove = (args, ctx) => tool_node_remove(args, ctx);
 export const node_pair_approve = tool_node_pair_approve;
 export const node_pair_list = tool_node_pair_list;
 export const set_config: typeof tool_set_config = (args, ctx) => tool_set_config(args, ctx);

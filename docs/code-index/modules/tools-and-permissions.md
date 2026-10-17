@@ -8,6 +8,8 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 
 ## Key units
 
+- [src-tool-executor](../units/src-tool-executor.md) — typed model tool batches, scheduling, owner/signal lifecycle and shared local effects contracts.
+
 - [src-tasks](../units/src-tasks.md) — small Session-shared task tool, atomic claim ownership and bounded persistent output.
 - [src-tools](../units/src-tools.md) — registry, schemas, builtin implementations, and unified discovery/dispatch.
 - [src-mcp-inbound-catalog](../units/src-mcp-inbound-catalog.md) — authenticated external MCP discovery/call wrappers over Main's existing outbound MCP client and exact generic policy.
@@ -24,6 +26,8 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 - [src-exec-manager](../units/src-exec-manager.md) — persistent command execution integration.
 
 ## Public interfaces
+
+- `executeTools` and `ToolBatchResult` — canonical tool Message plus separate typed transient turn controls/post-actions.
 
 - `definitions` and `modelFacingDefinitions` — builtin tool registry and default model schema.
 - `BUILTIN_TOOL_PLACEMENTS` and `resolveBuiltinToolPlacement` — exhaustive process-ownership metadata and current-node routing, independent of permission policy.
@@ -51,6 +55,7 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 - The single `task` builtin uses Main-owned persistent storage and context-derived Session ownership; see [task contracts](../units/src-tasks.md).
 - Timer builtins remain discoverable but are not injected into the default model schema.
 - MCP server configuration/listing builtins remain discoverable but are not injected into the default model schema.
+- Approved-Node credential tools `node_create_auth_token` and `node_remove` remain discoverable but are not injected by default. Both execute through Main-owned management; removal requires an explicit Node ID and retains generic authorization and isolated capability checks.
 - Patch application preserves the source line-ending convention.
 - Master and node patch results use the shared per-file add/update count formatter; the exact contract is canonical in [D-apply-patch-change-counts](../units/shared-apply-patch.md#d-apply-patch-change-counts).
 

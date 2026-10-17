@@ -1,12 +1,16 @@
 import type { TimelineView } from '../chatPreferences'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Menu } from 'lucide-react'
+import { Code2, Menu, MoreVertical, Search, SquareTerminal } from 'lucide-react'
 import { CONTEXT_SCROLLBAR_SETTINGS_EVENT, readContextScrollbarSettings, writeContextScrollbarSettings } from '../contextScrollbarSettings'
 import { MENU_VIEWPORT_GUTTER, clampAnchoredMenuHorizontally, readHorizontalViewportBounds } from './menuPositioning'
 
 type SendKeyMode = 'modEnter' | 'enter'
 
 interface SessionUiSettingsMenuProps {
+  mobile?: boolean
+  onFind?: () => void
+  onOpenCode?: () => void
+  onOpenTerminal?: () => void
   sendKeyMode: SendKeyMode
   onSendKeyModeChange: (mode: SendKeyMode) => void
   timelineView: TimelineView
@@ -21,6 +25,10 @@ interface SessionUiSettingsMenuProps {
 }
 
 export default function SessionUiSettingsMenu({
+  mobile = false,
+  onFind,
+  onOpenCode,
+  onOpenTerminal,
   sendKeyMode,
   onSendKeyModeChange,
   timelineView,
@@ -122,20 +130,28 @@ export default function SessionUiSettingsMenu({
       <button
         type="button"
         onClick={() => setOpen(current => !current)}
-        className="rounded-lg p-2 text-fw-text hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse"
+        className={`${mobile ? 'inline-flex h-11 w-11 items-center justify-center' : 'p-2'} rounded-lg text-fw-text hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse`}
         title="Session options"
         aria-label="Open session options"
         aria-expanded={open}
       >
-        <Menu size={20} />
+        {mobile ? <MoreVertical size={20} /> : <Menu size={20} />}
       </button>
       {open && (
         <div
           ref={menuRef}
           data-session-ui-settings-menu
-          className="absolute right-0 z-50 mt-2 max-h-[min(36rem,calc(100vh-5rem))] w-72 overflow-y-auto rounded-lg border border-fw-border bg-fw-surface text-fw-text-strong shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong"
+          className="absolute right-0 z-50 mt-2 max-h-[min(36rem,calc(var(--foxwarm-app-height,100vh)-5rem))] w-72 overflow-y-auto rounded-lg border border-fw-border bg-fw-surface text-fw-text-strong shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong"
           style={{ transform: `translateX(${menuOffset}px)`, visibility: menuPositioned ? 'visible' : 'hidden' }}
         >
+          {mobile && <div className="border-b border-fw-border p-2">
+            {[
+              {key: 'find', label: 'Find in chat', icon: Search, action: onFind},
+              {key: 'code', label: 'Code', icon: Code2, action: onOpenCode},
+              {key: 'terminal', label: 'Terminal', icon: SquareTerminal, action: onOpenTerminal},
+            ].filter(item => item.action).map(({key, label, icon: Icon, action}) => <button key={key} type="button" onClick={() => {setOpen(false); action?.()}}
+              className="flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-left text-sm text-fw-text hover:bg-fw-hover"><Icon size={16} />{label}</button>)}
+          </div>}
           <div className="border-b border-fw-border px-4 py-3 dark:border-fw-border">
             <div className="mb-2 text-xs font-medium text-fw-text-muted">Input</div>
             <div className="flex gap-1">
@@ -174,19 +190,21 @@ export default function SessionUiSettingsMenu({
               <button type="button" role="switch" aria-checked={fullWidth} onClick={() => onFullWidthChange(!fullWidth)} className={toggleRowClass}>
                 <span>Full width</span>{toggle(fullWidth)}
               </button>
-              <button type="button" onClick={() => onShowUsageBadgeChange(!showUsageBadge)} className={toggleRowClass}>
+              {!mobile && <button type="button" onClick={() => onShowUsageBadgeChange(!showUsageBadge)} className={toggleRowClass}>
                 <span>Show usage badges</span>{toggle(showUsageBadge)}
-              </button>
+              </button>}
               <button
                 type="button"
-                disabled={contextScrollbarSettings.showMinimap && !contextScrollbarSettings.showScrollbar}
+                role="switch"
+                aria-checked={timelineView !== 'conversation' && contextScrollbarSettings.showMinimap}
+                disabled={timelineView === 'conversation' || (contextScrollbarSettings.showMinimap && !contextScrollbarSettings.showScrollbar)}
                 onClick={() => {
                   const next = { ...contextScrollbarSettings, showMinimap: !contextScrollbarSettings.showMinimap }
                   setContextScrollbarSettings(writeContextScrollbarSettings(next))
                 }}
                 className={`${toggleRowClass} disabled:cursor-not-allowed disabled:opacity-50`}
               >
-                <span>Show minimap</span>{toggle(contextScrollbarSettings.showMinimap)}
+                <span>Show minimap</span>{toggle(timelineView !== 'conversation' && contextScrollbarSettings.showMinimap)}
               </button>
               <button type="button" onClick={() => onShowUserMessageMetadataChange(!showUserMessageMetadata)} className={toggleRowClass}>
                 <span>Show user message metadata</span>{toggle(showUserMessageMetadata)}

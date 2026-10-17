@@ -1357,6 +1357,24 @@ function getProviderType(providerEntry: ProviderConfigEntry): string {
   return providerEntry.providerType || providerEntry.provider || 'openai';
 }
 
+export function getModelIdForMetadata(modelEntry: ModelConfigEntry | undefined, fallbackModelKey: string): string {
+    const canonicalModelKey = typeof modelEntry?.canonicalModelKey === 'string' ? modelEntry.canonicalModelKey.trim() : '';
+    if (canonicalModelKey) return canonicalModelKey;
+
+    const providerKey = typeof modelEntry?.providerKey === 'string' ? modelEntry.providerKey.trim() : '';
+    const modelName = typeof modelEntry?.model === 'string' ? modelEntry.model.trim() : '';
+
+    if (providerKey && modelName) {
+        return `${providerKey}/${modelName}`;
+    }
+
+    if (providerKey) {
+        return providerKey;
+    }
+
+    return fallbackModelKey;
+}
+
 export function isVirtualProviderType(providerType: unknown): providerType is VirtualProviderType {
   return providerType === 'session-hash' || providerType === 'failover';
 }

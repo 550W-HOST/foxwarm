@@ -1,3 +1,4 @@
+import * as toolExecutor from '../toolExecutor';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
@@ -420,7 +421,7 @@ test('WeWork stream card shows model text and running tools before tools finish'
   });
   const router = new MessageRouter([{ platform: 'wework', userId: 'user-1' }]);
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   let releaseTool!: () => void;
   let toolStarted!: () => void;
   const releaseToolPromise = new Promise<void>(resolve => { releaseTool = resolve; });
@@ -460,12 +461,13 @@ test('WeWork stream card shows model text and running tools before tools finish'
       return { text: 'done', allParts: [{ text: 'done' }] };
     };
 
-    (llm as any).executeTools = async () => {
+    (toolExecutor as any).executeTools = async () => {
       toolStarted();
       await releaseToolPromise;
       return {
-        role: 'tool',
-        parts: [{ functionResponse: { tool_use_id: 'call-1', name: 'read', response: { output: 'ok' } } }],
+        message: {
+          role: 'tool', parts: [{ functionResponse: { tool_use_id: 'call-1', name: 'read', response: { output: 'ok' } } }]
+        }
       };
     };
 
@@ -485,7 +487,7 @@ test('WeWork stream card shows model text and running tools before tools finish'
     await handlerRuns[0];
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
     unregisterChannel(channelId);
     const cleanupSession = await sessionManager.getSession(sessionId).catch((_err: unknown): null => null);
     if (cleanupSession) {
@@ -580,7 +582,7 @@ test('busy WeWork follow-up joins the active tool loop and moves delivery to the
   });
   const router = new MessageRouter([{ platform: 'wework', userId: 'user-1' }]);
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   let toolStarted!: () => void;
   let releaseTool!: () => void;
   const toolStartedPromise = new Promise<void>(resolve => { toolStarted = resolve; });
@@ -616,12 +618,13 @@ test('busy WeWork follow-up joins the active tool loop and moves delivery to the
       });
       return { text: 'combined answer' };
     };
-    (llm as any).executeTools = async () => {
+    (toolExecutor as any).executeTools = async () => {
       toolStarted();
       await releaseToolPromise;
       return {
-        role: 'tool',
-        parts: [{ functionResponse: { tool_use_id: 'call-1', name: 'read', response: { output: 'ok' } } }],
+        message: {
+          role: 'tool', parts: [{ functionResponse: { tool_use_id: 'call-1', name: 'read', response: { output: 'ok' } } }]
+        }
       };
     };
 
@@ -679,7 +682,7 @@ test('busy WeWork follow-up joins the active tool loop and moves delivery to the
     assert.equal(userMessages.some(message => message.parts.some(part => part.system?.includes('second steering'))), true);
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
     unregisterChannel(channelId);
     const cleanupSession = await sessionManager.getSession(sessionId).catch((_err: unknown): null => null);
     if (cleanupSession) {

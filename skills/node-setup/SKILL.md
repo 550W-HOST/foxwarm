@@ -18,6 +18,8 @@ Examples in this area include:
 - `node_bootstrap_info`
 - `node_pair_list`
 - `node_pair_approve`
+- `node_create_auth_token`
+- `node_remove`
 - `node({ action: "list" })`
 - general inspection tools such as `search_tools`, `skill({ action: "load", ... })`, file tools, etc.
 
@@ -171,7 +173,7 @@ Two supported paths are available. For a Node created before the remote client r
 /node create my-node
 ```
 
-It reserves `my-node` and returns the per-node auth token once. Do not confuse this with the shared pairing token. The token is not a six-digit pairing code; the server stores only its hash. Use it on a new host with `--node-id=my-node --auth-token=YOUR_PER_NODE_AUTH_TOKEN` (Windows `-NodeId my-node -AuthToken YOUR_PER_NODE_AUTH_TOKEN`). The client saves credentials on successful registration; later runs use the credentials file. For URLs with a deployment path also pass `--host=YOUR_REACHABLE_URL` or `-HostUrl`. `/node remove my-node` revokes the credential. The command is user-facing, not a model tool.
+It reserves `my-node` and returns the per-node auth token once. Do not confuse this with the shared pairing token. The token is not a six-digit pairing code; the server stores only its hash. Use it on a new host with `--node-id=my-node --auth-token=YOUR_PER_NODE_AUTH_TOKEN` (Windows `-NodeId my-node -AuthToken YOUR_PER_NODE_AUTH_TOKEN`). The client saves credentials on successful registration; later runs use the credentials file. For URLs with a deployment path also pass `--host=YOUR_REACHABLE_URL` or `-HostUrl`. `/node remove my-node` is the user-facing credential-revocation command; agent workflows use the discoverable `node_remove` tool below.
 
 For an agent-managed setup, discover `builtin:node_create_auth_token` with
 `search_tools` and call it through `call_tool`. This is separate from
@@ -226,6 +228,30 @@ Approval establishes trust in a new execution host. Even though the tool path
 can automate it, keep a human confirmation step when the operator's policy
 requires one. Do not approve an unexplained pending request merely because it
 appears in the list.
+
+### Remove an approved Node
+
+For agent-managed credential revocation, discover the hidden builtin and pass the
+approved Node ID explicitly:
+
+```javascript
+search_tools({ query: "node_remove", sources: ["builtin"], limit: 1 })
+call_tool({ toolId: "builtin:node_remove", args: { nodeId: "my-node" } })
+```
+
+It returns `{ nodeId, disconnected }`. Main removes the approved credential and
+any unclaimed approved pairing handoff, then disconnects the active connection
+if present. The old credential can no longer authenticate. Offline approved
+Nodes can also be removed; `disconnected: false` means no runtime connection
+was present. Reserved, invalid, and unknown IDs fail rather than selecting the
+current Node.
+
+This does not stop the client process, delete files or containers, remove Agents
+or Sessions, or change their Node bindings. Provider resource destruction is a
+separate `node({ action: "destroy", ... })` operation. Review affected bindings
+before revocation and handle any authorized deployment cleanup separately.
+Use this tool rather than injecting `/node remove` through a WebUI/API command
+entry point. The `/node remove <node-id>` command remains available for users.
 
 ### User-facing approval
 
@@ -376,7 +402,7 @@ Use the normal Node selector or `/node my-shell`; ordinary `exec` then targets t
 
 The foreground wait defaults to 15 seconds, clamps above 60, and rounds fractions upward to a whole second. Timeout returns an exec ID without killing the command. Normal `wait` can use that ID; completion goes to the originating Session and includes bounded first/last 4096-byte samples, total output bytes and exit code. The initial background response contains the continuation notice, not a running-output snapshot. Full logs and a read-exec API do not exist. The FIFO collector continuously drains output without growing a full log or closing the command pipe during truncation.
 
-Each command's wrapper owns its foreground budget, background transition and report retries independently; the main loop keeps polling while jobs run. There is no additional client concurrency cap; Main bounds unfinished dispatches and output stays bounded per command. Network errors retry reports only, never the command itself. Main/client restart can leave an unknown outcome; there is no durable queue, outbox or crash continuation. Revocation/stop does not kill active commands. The existing 24-hour completion boundary stops reporting but does not remove a still-running FIFO/collector. Restart the client explicitly after a lost registration. Revoke credentials through `/node remove my-shell` when finished. See [Node client quick start](../../docs/node-client.md#shell-only-node) for the complete limitations.
+Each command's wrapper owns its foreground budget, background transition and report retries independently; the main loop keeps polling while jobs run. There is no additional client concurrency cap; Main bounds unfinished dispatches and output stays bounded per command. Network errors retry reports only, never the command itself. Main/client restart can leave an unknown outcome; there is no durable queue, outbox or crash continuation. Revocation/stop does not kill active commands. The existing 24-hour completion boundary stops reporting but does not remove a still-running FIFO/collector. Restart the client explicitly after a lost registration. For agent-managed revocation when finished, use `call_tool({ toolId: "builtin:node_remove", args: { nodeId: "my-shell" } })`; users can still run `/node remove my-shell`. See [Node client quick start](../../docs/node-client.md#shell-only-node) for the complete limitations.
 
 ## Manual docker-compose template flow
 

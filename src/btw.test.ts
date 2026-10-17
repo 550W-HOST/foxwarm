@@ -1,3 +1,4 @@
+import * as toolExecutor from './toolExecutor';
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import axios from 'axios';
@@ -233,7 +234,7 @@ test('/btw command acks immediately and writes async result as display-only hist
 
 test('/btw does not execute tool calls returned by the model', async () => {
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   const originalArchiveIndex = (vector as any).scheduleSessionArchiveIndex;
   const sessionId = makeId('btw_tool');
   let executeToolsCalled = false;
@@ -260,7 +261,7 @@ test('/btw does not execute tool calls returned by the model', async () => {
         toolCalls: [{ id: 'call_1', name: 'exec', args: { command: 'echo should-not-run' } }],
       };
     };
-    (llm as any).executeTools = async () => {
+    (toolExecutor as any).executeTools = async () => {
       executeToolsCalled = true;
       throw new Error('executeTools should not be called for /btw');
     };
@@ -280,7 +281,7 @@ test('/btw does not execute tool calls returned by the model', async () => {
     assert.match(broadcasts[0], /`exec`/);
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
     (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;
     await sessionManager.deleteSession(sessionId).catch(() => false);
   }

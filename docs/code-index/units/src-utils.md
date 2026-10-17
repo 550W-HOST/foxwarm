@@ -17,6 +17,7 @@ Core utility functions for durable JSON file persistence with write coalescing a
 - `formatLocalTimestamp`, `formatLocalTimeRange` — local time formatting with numeric UTC offset
 - `buildSystemMessageParts`, `isSystemPayloadTextPart` — split system messages into header + payload parts
 - `buildTimestampedSystemMessageParts`, `withInputTimePart` — freeze source-boundary timestamps on one model-visible input wrapper without standalone time parts
+- `withQueueInputHint` — copy an existing outer source/event wrapper to set its independent `queueInputHint` attribute, preserving its original hint and other attributes, raw body, multipart boundaries and paired/self-closing shape; skip preceding Session/channel-mode/time metadata, and never wrap bare input or search bodies
 - `escapeFoxwarmAttributeValue`, `escapeFoxwarmTextContent`, `formatFoxwarmSystemTag`, `formatFoxwarmMessageOpen`, `formatFoxwarmMessageClose`, `formatSystemPartForModel`, `parseFoxwarmTagLine` — build/parse Foxwarm XML-ish prompt wrapper tags with escaped attrs, opt-in escaped nested text, and raw outer message bodies
 - `replaceLoneSurrogates`, `containsLoneSurrogate`, `containsAnySurrogate` — surrogate detection/replacement
 - `takeUnicodeSafe`, `takeUnicodeSafeEnd`, `truncateUnicodeSafe`, `truncateUnicodeSafeWithEllipsis` — grapheme-count-aware truncation
@@ -66,6 +67,7 @@ Core utility functions for durable JSON file persistence with write coalescing a
 | `formatLocalTimeRange(startInput, endInput, options)` | ~26 | Range or single timestamp |
 | `buildSystemMessageParts(message)` | ~3 | Splits system message at first newline |
 | `isSystemPayloadTextPart(part)` | ~18 | Checks if part is a system payload text |
+| `withQueueInputHint(parts, queueInputHint)` | systemMessageParts | Clones only an existing outer source opening to set `queueInputHint` without concatenating its original `hint`; preserves original parts/count/order and skips unwrapped input |
 | `escapeFoxwarmAttributeValue(value)` | promptWrappers | Escapes `& < > " '`, control chars, and newlines for tag attribute values |
 | `escapeFoxwarmTextContent(value)` | promptWrappers | Escapes `& < >` and controls while preserving line boundaries for explicitly structured nested text |
 | `formatFoxwarmSystemTag(attrs)` / `formatFoxwarmSystemHint(hint, attrs)` | promptWrappers | Formats pure metadata as `<foxwarm-system ... />` |

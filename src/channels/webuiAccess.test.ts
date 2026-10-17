@@ -2,6 +2,9 @@ import { getAgentDir } from '../config';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'fs-extra';
+import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 import { once } from 'node:events';
 import { WebSocket } from 'ws';
 import { HttpServer, setHttpServer } from '../httpServer';
@@ -154,6 +157,73 @@ function socketFrame(socket: WebSocket, type: string): Promise<any> {
   });
 }
 
+test('authenticated multipart uploads preserve files and clean rejected or interrupted uploads', { timeout: 15_000 }, async () => {
+  await sessionManager.loadSessions();
+  await initializeSessionRuntime();
+  const bound = `upload_bound_${Math.random().toString(36).slice(2, 9)}`;
+  await sessionManager.createEmptySession(bound);
+  const accessConfig = normalizeAccessConfig({ identities: {
+    webui: { token: 'synthetic-webui-token', surfaces: { webui: { sessions: [bound] } } },
+  } });
+  const uploadDir = path.join(os.tmpdir(), 'foxwarm-uploads');
+  await fs.ensureDir(uploadDir);
+  const originalFiles = (await fs.readdir(uploadDir)).sort();
+  const waitForFiles = async (check: (files: string[]) => boolean): Promise<void> => {
+    for (let attempt = 0; attempt < 200; attempt++) {
+      if (check(await fs.readdir(uploadDir))) return;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.fail('Upload files did not settle');
+  };
+  try {
+    await withWebUiServer(accessConfig, async (baseUrl, _adminToken, webUiToken) => {
+      const upload = (token: string | undefined, sessionId: string, field = 'file') => {
+        const form = new FormData();
+        form.append('sessionId', sessionId);
+        form.append(field, new Blob(['attachment contents']), '中文附件.txt');
+        return fetch(`${baseUrl}/api/upload`, {
+          method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {}, body: form,
+        });
+      };
+      assert.equal((await upload(undefined, bound)).status, 401);
+      assert.equal((await upload(webUiToken, 'unbound-session')).status, 403);
+      assert.equal((await upload(webUiToken, bound, 'unexpected')).status, 400);
+      assert.deepEqual((await fs.readdir(uploadDir)).sort(), originalFiles);
+
+      const accepted = await upload(webUiToken, bound);
+      assert.equal(accepted.status, 200);
+      const file = await accepted.json() as { path: string; filename: string; size: number };
+      try {
+        assert.equal(file.filename, '中文附件.txt');
+        assert.equal(file.size, Buffer.byteLength('attachment contents'));
+        assert.equal(await fs.readFile(file.path, 'utf8'), 'attachment contents');
+      } finally {
+        await fs.remove(file.path);
+      }
+
+      const request = http.request(`${baseUrl}/api/upload`, {
+        method: 'POST', headers: {
+          Authorization: `Bearer ${webUiToken}`,
+          'Content-Type': 'multipart/form-data; boundary=upload-test-boundary',
+        },
+      });
+      request.on('error', () => {});
+      try {
+        request.write('--upload-test-boundary\r\nContent-Disposition: form-data; name="file"; filename="partial.txt"\r\nContent-Type: text/plain\r\n\r\n');
+        request.write(Buffer.alloc(64 * 1024, 'a'));
+        await waitForFiles(files => files.length > originalFiles.length);
+      } finally {
+        request.destroy();
+      }
+      await waitForFiles(files => files.length === originalFiles.length);
+      assert.deepEqual((await fs.readdir(uploadDir)).sort(), originalFiles);
+    });
+  } finally {
+    await sessionManager.deleteSession(bound).catch(() => {});
+    await shutdownSessionRuntime().catch(() => {});
+  }
+});
+
 async function subscribeSocket(baseUrl: string, token: string, sessionId: string): Promise<WebSocket> {
   const socket = new WebSocket(`${baseUrl.replace('http:', 'ws:')}/api/webui/stream`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -223,6 +293,47 @@ test('Agent scopes follow real ownership across creation and moves on HTTP, WS, 
       assert.match((await rejectedLogs).message, /not bound/);
       const imageRoute = (id: string) => `/api/sessions/${encodeURIComponent(id)}/blobs/${blobId}`;
       assert.equal((await get(imageRoute(initial))).status, 200);
+      const issueImage = (route: string, token = webUiToken) => fetch(`${baseUrl}${route}/download`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: 'original image.png', preview: '0' }),
+      });
+      const scopedGrant = await issueImage(imageRoute(initial));
+      assert.equal(scopedGrant.status, 200);
+      const scopedUrl = new URL((await scopedGrant.json() as any).url, `${baseUrl}${imageRoute(initial)}`);
+      const cookieLess = await fetch(scopedUrl);
+      assert.equal(cookieLess.status, 200);
+      assert.equal(cookieLess.headers.get('content-type'), 'image/png');
+      assert.match(cookieLess.headers.get('content-disposition')!, /attachment; filename="original image.png"/);
+      assert.ok((await cookieLess.arrayBuffer()).byteLength > 0);
+      const head = await fetch(scopedUrl, { method: 'HEAD' });
+      assert.equal(head.status, 200); assert.equal((await head.arrayBuffer()).byteLength, 0);
+      const globalRoute = `/api/blobs/${blobId}`;
+      assert.equal((await issueImage(globalRoute)).status, 403);
+      assert.equal((await issueImage(imageRoute(child))).status, 403, 'being bound does not grant unreferenced blobs');
+      assert.equal((await issueImage(imageRoute(`${otherAgent}/main`))).status, 403);
+      const unauthenticatedIssuer = await fetch(`${baseUrl}${imageRoute(initial)}/download`, { method: 'POST' });
+      assert.equal(unauthenticatedIssuer.status, 401);
+      // A Session grant cannot become a global, different-Session, different-blob or path grant.
+      for (const target of [globalRoute, imageRoute(child), imageRoute(initial).replace(blobId, `${'f'.repeat(64)}.png`), '/download']) {
+        const swapped = new URL(target, baseUrl); swapped.search = scopedUrl.search;
+        if (target === '/download') swapped.searchParams.set('path', '/not-authorized');
+        assert.equal((await fetch(swapped)).status, 401);
+      }
+      for (const [key, value] of [['filename', 'changed.png'], ['preview', '1'], ['signature', 'wrong']]) {
+        const tampered = new URL(scopedUrl); tampered.searchParams.set(key, value);
+        assert.equal((await fetch(tampered)).status, 401);
+        const validScope = await fetch(tampered, { headers: { Authorization: `Bearer ${webUiToken}` } });
+        assert.equal(validScope.status, 200, 'bad grants do not veto valid Session credentials');
+        await validScope.arrayBuffer();
+      }
+      const globalGrant = await issueImage(globalRoute, adminToken);
+      assert.equal(globalGrant.status, 200);
+      const globalUrl = new URL((await globalGrant.json() as any).url, `${baseUrl}${globalRoute}`);
+      const globalDownload = await fetch(globalUrl);
+      assert.equal(globalDownload.status, 200); await globalDownload.arrayBuffer();
+      const swappedGlobal = new URL(imageRoute(initial), baseUrl); swappedGlobal.search = globalUrl.search;
+      assert.equal((await fetch(swappedGlobal)).status, 401);
+
       const form = new FormData();
       form.append('sessionId', initial);
       form.append('file', new Blob(['private attachment']), 'attachment.txt');
@@ -247,6 +358,9 @@ test('Agent scopes follow real ownership across creation and moves on HTTP, WS, 
       assert.equal((await get(history(movedOut))).status, 403);
       assert.equal((await get(imageRoute(initial))).status, 403);
       assert.equal((await get(imageRoute(movedOut))).status, 403);
+      assert.equal((await issueImage(imageRoute(initial))).status, 403, 'issuance rechecks moved Session ownership');
+      assert.equal((await issueImage(imageRoute(movedOut))).status, 403);
+      assert.equal((await issueImage(imageRoute(initial), exactToken)).status, 200, 'exact bindings retain alias-based issuance');
       assert.equal((await get(history(initial), exactToken)).status, 200, 'exact binding follows its alias across Agents');
       assert.deepEqual(await projected(exactToken), [movedOut]);
       assert.equal((await projected()).includes(movedOut), false);

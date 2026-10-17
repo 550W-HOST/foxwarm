@@ -1,49 +1,39 @@
+import { CONTINUOUS_HISTORY_WINDOW_SIZE, type HistoryMode } from '../continuousHistory'
 import { useContentBeforeResize } from '../contentResize'
-import type { TimelineView } from '../chatPreferences'
-import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { ChevronDown, ChevronUp, Code2, MessageSquareText, Search, SquareTerminal, X } from 'lucide-react'
+import { historyModeForTimelineView, useMobileChatViewport, type TimelineView } from '../chatPreferences'
+import { Component, memo, type ReactNode, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { SquarePen, ChevronDown, ChevronUp, Code2, MessageSquareText, Search, SquareTerminal, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
 import type { ModelOption } from './ChatComposer'
-import type { ChildPolicyChainEntry } from './childModelState'
 import ChatTimeline from './ChatTimeline'
+import { buildTimelineRows } from './timelineRows'
 import { findRenderedMatchRange, findSearchSurface, findSessionSearchMatches, projectSessionSearchFields } from './chatSessionSearch'
 import ContextScrollbar from './ContextScrollbar'
+import { CONTEXT_SCROLLBAR_SETTINGS_EVENT, readContextScrollbarSettings } from '../contextScrollbarSettings'
 import type { CodeCommitTarget } from '../commitMarker'
 import ContentHeader from './ContentHeader'
-import ProcessingStatus from './ProcessingStatus'
-import type { Message, MessagePart, SessionStreamEvent, ToolScriptSubCall } from './chatShared'
-import { applyModelStreamEvent, applyModelStreamSnapshot, buildStreamingAssistantMessage, reconcileCommittedModelDraft, shouldClearDraftAfterHistory, type StreamingAssistantDraft } from '../streamingAssistantDraft'
+import ProcessingStatus, { QueuedMessageStatus } from './ProcessingStatus'
+import type { Message } from './chatShared'
+import { buildStreamingAssistantMessage } from '../streamingAssistantDraft'
+import { useChatConversationSync } from './useChatConversationSync'
+import { isSessionRuntimeActive } from '../sessionRuntimeState'
 import SessionDebugModal from './SessionDebugModal'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import { ThreadCardHeightContext } from './useThreadCardHeightTransition'
-import { isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
-import { isSessionTurnIncomplete } from '../sessionContinuation'
-import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
-import { buildReferencedAttachmentParts } from '../attachmentRefs'
-import { postReferencedMessage, toLegacyUploadedFiles, uploadReferencedFiles } from '../attachmentSend'
+import { isSessionTurnIncomplete } from '../../../shared/src/sessionContinuation'
 import { formatSessionHeaderSubtitle } from '../sessionHeader'
 import { createLatestRequestGate, loadPageOnce, MODEL_OPTIONS_CHANGED_EVENT, refreshModelOptions, runLatestModelOptionsRequest } from '../modelOptionsLoader'
-import { webUiRealtime } from '../realtime'
 import SessionUiSettingsMenu from './SessionUiSettingsMenu'
-import {
-  advanceHistorySeqFrontier,
-  buildOptimisticUserMessage,
-  countCommittedHistoryMessages,
-  decideHistoryReconciliation,
-  getClientMessageId,
-  getLatestCommittedMessageSeq,
-  hasStableHistoryIdentity,
-  mergeHistoryMessages,
-  mergeHistorySnapshot,
-  reconcileHistoryMessage,
-} from '../chatHistoryState'
 import {
   CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX,
   CHAT_MESSAGE_ANCHOR_SELECTOR,
   CONTEXT_SCROLLBAR_ANCHOR_SELECTOR,
   chooseChatViewportState,
   getChatViewportAnchorAdjustment,
+  getChatViewportAnchorSeq,
+  getMessageStableKey,
+  getMessageViewportAnchorKey,
   getStoredChatViewportState,
   storeChatViewportState,
   updateChatBottomFollow,
@@ -58,6 +48,7 @@ function getAsrStreamUrl() {
 const ASR_CONTEXT_MAX_CHARS = 2400
 const ASR_CONTEXT_MAX_MESSAGES = 8
 const DEFAULT_VISIBLE_TIMELINE_MESSAGES = 100
+const HISTORY_PRELOAD_DISTANCE_PX = 500
 const SEARCH_HISTORY_STORAGE_KEY = 'foxwarm.chat.search-history'
 const SEARCH_HISTORY_LIMIT = 20
 
@@ -95,39 +86,21 @@ function getSelectedFindText(): string | null {
   return text || null
 }
 
-type HistoryResponse = {
-  session?: SessionListRecord
-  messages?: Message[]
-  persistentMemorySnapshot?: string
-  queuedMessages?: Message[]
-  queueLength?: number
-  latestSeq?: number
-  historyVersion?: number
-  prefixLength?: number
-  historyComplete?: boolean
-  code?: string
-  error?: string
-}
-
-type HistoryFetchMode = 'bootstrap' | 'full' | 'after' | 'reconcile'
-type PendingQueueAppend = { historyVersion: number; startSeq: number; endSeq: number }
-
-type TimelineState = { messages: Message[]; queuedMessages: Message[] }
-type TimelineAction =
-  | { type: 'messages'; update: Message[] | ((messages: Message[]) => Message[]) }
-  | { type: 'queue'; update: Message[] | ((messages: Message[]) => Message[]) }
-  | { type: 'atomic'; messages: Message[] | ((messages: Message[]) => Message[]); queuedMessages: Message[] }
-
-function timelineReducer(state: TimelineState, action: TimelineAction): TimelineState {
-  if (action.type === 'atomic') return { messages: typeof action.messages === 'function' ? action.messages(state.messages) : action.messages, queuedMessages: action.queuedMessages }
-  if (action.type === 'messages') return { ...state, messages: typeof action.update === 'function' ? action.update(state.messages) : action.update }
-  return { ...state, queuedMessages: typeof action.update === 'function' ? action.update(state.queuedMessages) : action.update }
+// Capture immediately before React mutates the old history DOM, not when a request starts.
+class HistoryCommit extends Component<{ revision: unknown; beforeCommit: () => void; children: ReactNode }> {
+  getSnapshotBeforeUpdate(previous: Readonly<{ revision: unknown }>) {
+    if (previous.revision !== this.props.revision) this.props.beforeCommit()
+    return null
+  }
+  componentDidUpdate() {}
+  render() { return this.props.children }
 }
 
 type PendingViewportRestore =
   | { kind: 'state'; state: ChatViewportState; interactionVersion: number }
   | {
       kind: 'prepend'
+      visibleEndKey?: string
       anchors: Array<{ messageKey: string; offsetPx: number }>
       scrollTop: number
       scrollHeight: number
@@ -184,12 +157,14 @@ interface ChatProps {
   sessionDisplayName?: string
   webUiIdentityMode?: boolean
   onBack?: () => void
+  onNewSession?: () => Promise<void>
   onOpenTerminal?: () => void
   onOpenCode?: () => void
   onOpenCodeFile?: (filePath: string, lines?: { startLine?: number; endLine?: number }, target?: { nodeId: string; resolvedPath: string }) => void
   onOpenCodeCommit?: (target: CodeCommitTarget) => void | Promise<void>
   onOpenModelSettings?: () => void
   sendKeyMode?: 'modEnter' | 'enter'
+  historyMode?: HistoryMode
   timelineView?: TimelineView
   showUsageBadge?: boolean
   showUserMessageMetadata?: boolean
@@ -207,73 +182,35 @@ type StreamingAsrSession = {
   cancel: () => void
 }
 
-type SessionListRecord = {
-  id: string
-  agent?: string
-  messageCount?: number
-  historyVersion?: number
-  lastMessageTime?: number
-  parentSessionId?: string | null
-  childSessions?: string[]
-  aliases?: string[]
-  busy?: boolean
-  busyStartedAt?: number | null
-  queueLength?: number
-  runtimeState?: SessionRuntimeState
-  displayName?: string | null
-  archived?: boolean
-  currentNode?: string
-  cwd?: string | null
-  model?: string | null
-  modelKey?: string
-  defaultModelKey?: string
-  childModelDefault?: string | null
-  childModelPolicySource?: 'explicit' | 'follow-parent'
-  childPolicyChain?: ChildPolicyChainEntry[]
-  effectiveChildModelKey?: string
-  effort?: string | null
-  effectiveEffort?: string
-  effortAllowed?: string[]
-  effortDefault?: string | null
-  childEffortDefault?: string | null
-  effectiveChildEffort?: string
-  childEffortAllowed?: string[]
-  childModelEffortDefault?: string | null
-  isolated?: boolean
-}
-
-const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experimentalTextOnly = false, experimentalAttachments = false, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', timelineView = 'detailed', showUsageBadge = true, showUserMessageMetadata = false, fullWidth = true, onFullWidthChange = () => {}, onSendKeyModeChange = () => {}, onTimelineViewChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
-  const [timelineState, dispatchTimeline] = useReducer(timelineReducer, { messages: [], queuedMessages: [] })
-  const messages = timelineState.messages
-  const queuedMessages = timelineState.queuedMessages
-  const setMessages = useCallback((update: Message[] | ((messages: Message[]) => Message[])) => dispatchTimeline({ type: 'messages', update }), [])
-  const setQueuedMessages = useCallback((update: Message[] | ((messages: Message[]) => Message[])) => dispatchTimeline({ type: 'queue', update }), [])
-  const [sessionMissing, setSessionMissing] = useState(false)
-  const [loading, setLoading] = useState(false)
-  const [sessionBusy, setSessionBusy] = useState(false)
-  const [sessionQueueLength, setSessionQueueLength] = useState(0)
+const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experimentalTextOnly = false, experimentalAttachments = false, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onNewSession, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', timelineView = 'detailed', historyMode = historyModeForTimelineView(timelineView), showUsageBadge = true, showUserMessageMetadata = false, fullWidth = true, onFullWidthChange = () => {}, onSendKeyModeChange = () => {}, onTimelineViewChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
+  const viewportSessionId = canonicalSessionId || sessionId
+  const initialContinuousAnchorSeq = useMemo(() => getChatViewportAnchorSeq(getStoredChatViewportState(viewportSessionId, 'continuous')), [viewportSessionId])
+  const {
+    messages: activeMessages, continuousMessages, archivePage, loadArchivePage, queuedMessages, sessionRecord, sessionMissing, sessionBusy, sessionQueueLength,
+    persistentMemorySnapshot, streamingAssistantDraft, toolScriptProgress,
+    historyLoaded, isFullHistoryLoaded, earlierHistoryError, connectionState, reconnectCountdown,
+    loading, retryEarlierHistory, sendMessage: handleSend, sendSessionCommand, mergeConfirmedSettings,
+  } = useChatConversationSync(sessionId, webUiIdentityMode, historyMode, initialContinuousAnchorSeq)
+  const messages = historyMode === 'continuous' ? continuousMessages : activeMessages
+  const [continuousWindowKey, setContinuousWindowKey] = useState<string | null>(null)
+  const [continuousWindowEndKey, setContinuousWindowEndKey] = useState<string | null>(null)
+  const currentHistoryRef = useRef({ mode: historyMode, messages })
+  currentHistoryRef.current = { mode: historyMode, messages }
+  const continuousWindowRangeRef = useRef({ start: 0, count: CONTINUOUS_HISTORY_WINDOW_SIZE })
+  const continuousWindowAtLatestRef = useRef(true)
   const [layout, setLayout] = useState({ isMobile: true, compactModelSelector: true, compactComposer: false })
   const layoutRef = useRef(layout)
   const { isMobile, compactModelSelector, compactComposer } = layout
-  const [connectionState, setConnectionState] = useState<'connected' | 'connecting' | 'disconnected' | 'reconnecting'>('connecting')
-  const [reconnectCountdown, setReconnectCountdown] = useState<number>(0)
+  const mobileUi = useMobileChatViewport()
+  const [creatingSession, setCreatingSession] = useState(false)
   const [followingBottom, setFollowingBottom] = useState(true)
   const [showScrollTopButton, setShowScrollTopButton] = useState(false)
   const [showDebugInfo, setShowDebugInfo] = useState(false)
-  const [streamingAssistantDraft, setStreamingAssistantDraft] = useState<StreamingAssistantDraft | null>(null)
-  const streamingAssistantDraftRef = useRef<StreamingAssistantDraft | null>(null)
-  const clearStreamingAssistantDraft = useCallback(() => {
-    streamingAssistantDraftRef.current = null
-    setStreamingAssistantDraft(null)
-  }, [])
-  const [toolScriptProgress, setToolScriptProgress] = useState<Record<string, ToolScriptSubCall[]>>({})
   const [asrAvailable, setAsrAvailable] = useState(false)
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [modelBusy, setModelBusy] = useState(false)
   const [modelsRefreshing, setModelsRefreshing] = useState(false)
   const [modelError, setModelError] = useState<string | null>(null)
-  const [sessionRecord, setSessionRecord] = useState<SessionListRecord | null>(null)
-  const [persistentMemorySnapshot, setPersistentMemorySnapshot] = useState('')
   const [showFullTimeline, setShowFullTimeline] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -285,42 +222,34 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
   const searchHistoryIndexRef = useRef<number | null>(null)
   const searchHistoryDraftRef = useRef('')
   const searchHighlightName = `foxwarm-chat-search-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
-  const [historyLoaded, setHistoryLoaded] = useState(false)
-  const [isFullHistoryLoaded, setIsFullHistoryLoaded] = useState(false)
-  const [earlierHistoryError, setEarlierHistoryError] = useState(false)
   const sessionHeaderSubtitle = formatSessionHeaderSubtitle(sessionId, sessionRecord?.cwd)
   const chatMessageContainerId = `foxwarm-chat-messages-${useId()}`
 
-  const viewportSessionId = canonicalSessionId || sessionId
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const messagesContentRef = useRef<HTMLDivElement>(null)
   const committedTimelineRef = useRef<HTMLDivElement>(null)
+  const [contextScrollbarSettings, setContextScrollbarSettings] = useState(readContextScrollbarSettings)
+  const showMinimap = timelineView !== 'conversation' && contextScrollbarSettings.showMinimap
+  const showScrollbar = timelineView === 'conversation' || contextScrollbarSettings.showScrollbar
+  useEffect(() => {
+    const sync = () => setContextScrollbarSettings(readContextScrollbarSettings())
+    window.addEventListener(CONTEXT_SCROLLBAR_SETTINGS_EVENT, sync)
+    window.addEventListener('storage', sync)
+    return () => {
+      window.removeEventListener(CONTEXT_SCROLLBAR_SETTINGS_EVENT, sync)
+      window.removeEventListener('storage', sync)
+    }
+  }, [])
+
   const chatRootRef = useRef<HTMLDivElement>(null)
-  const lastKnownTimestampRef = useRef<number>(0)
   const shouldAutoScrollRef = useRef<boolean>(true)
   const pendingUserLeaveBottomRef = useRef(false)
   const touchScrollStartYRef = useRef<number | null>(null)
   const pointerScrollInteractionRef = useRef(false)
-  const pendingSentMessageIdsRef = useRef<Set<string>>(new Set())
-  const sessionBusyRef = useRef(false)
-  const sessionQueueLengthRef = useRef(0)
-  const sessionMessageCountRef = useRef(0)
-  const sessionHistoryVersionRef = useRef(0)
-  const representedMessageCountRef = useRef(0)
-  const representedHistoryVersionRef = useRef(0)
-  const latestCommittedSeqRef = useRef(0)
-  const hasTrustedHistoryFrontierRef = useRef(false)
-  const historyBootstrapStartedRef = useRef(false)
-  const fullHistoryLoadedRef = useRef(false)
-  const reconnectAwaitingStateRef = useRef(false)
-  const queueRefreshNeededRef = useRef(false)
-  const historyGapDetectedRef = useRef(false)
-  const pendingQueueAppendRef = useRef<PendingQueueAppend | null>(null)
-  const atomicRecoveryScheduledRef = useRef(false)
-  const queuedMessagesRef = useRef<Message[]>([])
-  const sessionStateInitializedRef = useRef(false)
+  const continuousPagingIntentRef = useRef<'earlier' | 'later' | null>(null)
+  const lastNativeScrollTopRef = useRef(0)
   const composerHeightRef = useRef<number | null>(null)
-  const initialViewportState = getStoredChatViewportState(viewportSessionId) || { kind: 'bottom' as const }
+  const initialViewportState = getStoredChatViewportState(viewportSessionId, historyMode) || { kind: 'bottom' as const }
   const currentViewportStateRef = useRef<ChatViewportState>(initialViewportState)
   const pendingViewportRestoreRef = useRef<PendingViewportRestore | null>({
     kind: 'state',
@@ -336,70 +265,11 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
   const pendingContextScrollbarNavigationRef = useRef<{ anchorKey: string; fraction: number } | null>(null)
   const pendingScrollToTrueTopRef = useRef(false)
   const modelRequestGateRef = useRef(createLatestRequestGate())
-  const historyRequestGateRef = useRef(createLatestRequestGate())
-  const historyAbortControllerRef = useRef<AbortController | null>(null)
-  const historyInFlightRef = useRef<{ sessionId: string; promise: Promise<boolean>; controller: AbortController } | null>(null)
-  const historyTrailingRefreshRef = useRef(false)
-  const historyEventVersionRef = useRef(0)
-  const historyStateEventVersionRef = useRef(0)
-  const historyModelStreamEventVersionRef = useRef(0)
-  const historyEventsRef = useRef<Array<{ version: number; message: Message }>>([])
-  const historyRefreshTimeoutRef = useRef<number | null>(null)
 
   useEffect(() => {
-    setMessages([])
-    setHistoryLoaded(false)
-    setIsFullHistoryLoaded(false)
-    setEarlierHistoryError(false)
-    clearStreamingAssistantDraft()
-    setToolScriptProgress({})
-    setQueuedMessages([])
-    setSessionRecord(null)
-    setSessionBusy(false)
-    setSessionQueueLength(0)
-    sessionBusyRef.current = false
-    sessionQueueLengthRef.current = 0
-    sessionMessageCountRef.current = 0
-    sessionHistoryVersionRef.current = 0
-    representedMessageCountRef.current = 0
-    representedHistoryVersionRef.current = 0
-    latestCommittedSeqRef.current = 0
-    hasTrustedHistoryFrontierRef.current = false
-    historyBootstrapStartedRef.current = false
-    fullHistoryLoadedRef.current = false
-    reconnectAwaitingStateRef.current = false
-    queueRefreshNeededRef.current = false
-    historyGapDetectedRef.current = false
-    pendingQueueAppendRef.current = null
-    atomicRecoveryScheduledRef.current = false
-    queuedMessagesRef.current = []
-    pendingSentMessageIdsRef.current.clear()
-    sessionStateInitializedRef.current = false
-    historyRequestGateRef.current.invalidate()
-    historyAbortControllerRef.current?.abort()
-    historyAbortControllerRef.current = null
-    historyInFlightRef.current = null
-    historyTrailingRefreshRef.current = false
-    historyEventVersionRef.current = 0
-    historyStateEventVersionRef.current = 0
-    historyModelStreamEventVersionRef.current = 0
-    historyEventsRef.current = []
-    setPersistentMemorySnapshot('')
     pendingContextScrollbarNavigationRef.current = null
     pendingScrollToTrueTopRef.current = false
-  }, [clearStreamingAssistantDraft, sessionId])
-
-  useEffect(() => {
-    sessionBusyRef.current = sessionBusy
-  }, [sessionBusy])
-
-  useEffect(() => {
-    sessionQueueLengthRef.current = sessionQueueLength
-  }, [sessionQueueLength])
-
-  useEffect(() => {
-    queuedMessagesRef.current = queuedMessages
-  }, [queuedMessages])
+  }, [sessionId])
 
   useEffect(() => {
     setShowDebugInfo(false)
@@ -460,12 +330,6 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     }
   }, [fetchModels, webUiIdentityMode])
 
-  useEffect(() => {
-    if (!sessionBusy) {
-      clearStreamingAssistantDraft()
-    }
-  }, [clearStreamingAssistantDraft, sessionBusy])
-
   useLayoutEffect(() => {
     const root = chatRootRef.current
     if (!root) return
@@ -484,6 +348,17 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     return () => observer.disconnect()
   }, [])
 
+  useLayoutEffect(() => {
+    const root = chatRootRef.current
+    const header = root?.querySelector<HTMLElement>('[data-mobile-chat-header]')
+    if (!root || !mobileUi || !header) return
+    const measure = () => root.style.setProperty('--chat-mobile-header-height', `${header.getBoundingClientRect().height}px`)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(header)
+    return () => { observer.disconnect(); root.style.removeProperty('--chat-mobile-header-height') }
+  }, [mobileUi])
+
   const setBottomFollow = useCallback((following: boolean, pendingUserLeave = false) => {
     shouldAutoScrollRef.current = following
     pendingUserLeaveBottomRef.current = pendingUserLeave
@@ -499,9 +374,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       currentViewportStateRef.current = state
       currentViewportGeometryRef.current = null
       setBottomFollow(true)
-      storeChatViewportState(viewportSessionId, state)
+      storeChatViewportState(viewportSessionId, state, historyMode)
     }
-  }, [setBottomFollow, viewportSessionId])
+  }, [setBottomFollow, viewportSessionId, historyMode])
 
   useEffect(() => () => {
     cardHeightChangesRef.current.clear()
@@ -545,7 +420,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
 
   const updateBottomFollowState = useCallback((userIntent: 'none' | 'leave' | 'toward-bottom' = 'none') => {
     const container = messagesContainerRef.current
-    const distanceFromBottom = container
+    const distanceFromBottom = historyMode === 'continuous' && !continuousWindowAtLatestRef.current ? Number.POSITIVE_INFINITY : container
       ? container.scrollHeight - container.scrollTop - container.clientHeight
       : Number.POSITIVE_INFINITY
     const next = updateChatBottomFollow({
@@ -556,9 +431,12 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     })
     setBottomFollow(next.following, next.pendingUserLeave)
     return next
-  }, [setBottomFollow])
+  }, [historyMode, setBottomFollow])
 
   const captureCurrentViewportState = useCallback((): ChatViewportState | null => {
+    // A pending restore owns the position until its rows arrive or user input cancels it.
+    const pending = pendingViewportRestoreRef.current
+    if (pending?.kind === 'state') return pending.state
     if (pendingContentResizeRef.current) return pendingContentResizeRef.current.state
     const followState = updateBottomFollowState()
     const bottomThresholdPx = followState.pendingUserLeave
@@ -573,9 +451,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     currentViewportStateRef.current = state
     currentViewportGeometryRef.current = null
     capturedInteractionVersionRef.current = userInteractionVersionRef.current
-    storeChatViewportState(viewportSessionId, state)
+    storeChatViewportState(viewportSessionId, state, historyMode)
     return state
-  }, [readCurrentViewportState, updateBottomFollowState, viewportSessionId])
+  }, [readCurrentViewportState, updateBottomFollowState, viewportSessionId, historyMode])
 
   useContentBeforeResize(useCallback(() => {
     // Do not acknowledge detached user input before its native scroll captures position.
@@ -593,7 +471,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       currentViewportStateRef.current = state
       currentViewportGeometryRef.current = null
       setBottomFollow(true)
-      storeChatViewportState(viewportSessionId, state)
+      storeChatViewportState(viewportSessionId, state, historyMode)
       return true
     }
 
@@ -612,9 +490,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     currentViewportStateRef.current = state
     currentViewportGeometryRef.current = null
     setBottomFollow(false)
-    storeChatViewportState(viewportSessionId, state)
+    storeChatViewportState(viewportSessionId, state, historyMode)
     return true
-  }, [setBottomFollow, viewportSessionId])
+  }, [setBottomFollow, viewportSessionId, historyMode])
 
   const applyViewportAnchorCandidates = useCallback((anchors: Array<{ messageKey: string; offsetPx: number }>): boolean => {
     for (const candidate of anchors) {
@@ -634,6 +512,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
   }, [applyViewportState])
 
   const markUserViewportInteraction = useCallback(() => {
+    continuousPagingIntentRef.current = null
     pendingContentResizeRef.current = null
     userInteractionVersionRef.current += 1
     pendingViewportRestoreRef.current = null
@@ -641,17 +520,22 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
   }, [])
 
   const handleBottomNavigation = useCallback(() => {
+    if (historyMode === 'continuous' && archivePage.hasLater) void loadArchivePage('latest')
+    if (historyMode === 'continuous') setContinuousWindowKey(null)
     markUserViewportInteraction()
     pendingContextScrollbarNavigationRef.current = null
     pendingScrollToTrueTopRef.current = false
     capturedInteractionVersionRef.current = userInteractionVersionRef.current
     scrollToBottom()
-  }, [markUserViewportInteraction, scrollToBottom])
+  }, [archivePage.hasLater, historyMode, loadArchivePage, markUserViewportInteraction, scrollToBottom])
 
   const leaveBottomFollow = useCallback(() => {
+    if (historyMode === 'continuous' && continuousWindowKey === null && messages.length) {
+      setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, messages.length - CONTINUOUS_HISTORY_WINDOW_SIZE)], 0))
+    }
     markUserViewportInteraction()
     updateBottomFollowState('leave')
-  }, [markUserViewportInteraction, updateBottomFollowState])
+  }, [continuousWindowKey, historyMode, messages, markUserViewportInteraction, updateBottomFollowState])
 
   const prepareCardHeight = useCallback(() => {
     const token = {}
@@ -681,14 +565,18 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     if (container) {
       markUserViewportInteraction()
       setBottomFollow(false)
-      if (!showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
+      if (historyMode === 'active' && !showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
         pendingScrollToTrueTopRef.current = true
         setShowFullTimeline(true)
         return
       }
+      if (historyMode === 'continuous' && messages.length) {
+        pendingScrollToTrueTopRef.current = true
+        setContinuousWindowKey(getMessageStableKey(messages[0], 0))
+      }
       container.scrollTop = 0
     }
-  }, [markUserViewportInteraction, messages.length, setBottomFollow, showFullTimeline])
+  }, [historyMode, markUserViewportInteraction, messages, setBottomFollow, showFullTimeline])
 
   const scrollToContextScrollbarAnchor = useCallback((anchorKey: string, fraction: number): boolean => {
     const container = messagesContainerRef.current
@@ -708,8 +596,57 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     leaveBottomFollow()
     if (scrollToContextScrollbarAnchor(anchorKey, fraction)) return
     pendingContextScrollbarNavigationRef.current = { anchorKey, fraction }
-    setShowFullTimeline(true)
-  }, [leaveBottomFollow, scrollToContextScrollbarAnchor])
+    if (historyMode === 'continuous') {
+      const index = messages.findIndex(message => getMessageViewportAnchorKey(message) === anchorKey)
+      if (index >= 0) setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, index - 20)], 0))
+    } else setShowFullTimeline(true)
+  }, [leaveBottomFollow, scrollToContextScrollbarAnchor, historyMode, messages])
+
+  const readVisibleHistoryEnd = useCallback(() => {
+    const container = messagesContainerRef.current
+    const viewport = container?.getBoundingClientRect()
+    if (!container || !viewport) return null
+    const keys = new Set(Array.from(container.querySelectorAll<HTMLElement>(CHAT_MESSAGE_ANCHOR_SELECTOR)).filter(element => {
+      const rect = element.getBoundingClientRect()
+      return rect.bottom > viewport.top && rect.top < viewport.bottom
+    }).map(element => element.getAttribute('data-chat-history-end-key') || element.getAttribute('data-chat-message-anchor-key')))
+    const end = currentHistoryRef.current.messages.findLast(message => keys.has(getMessageViewportAnchorKey(message)))
+    return end ? getMessageViewportAnchorKey(end) : null
+  }, [])
+
+  const captureHistoryCommit = useCallback(() => {
+    if (shouldAutoScrollRef.current || pendingViewportRestoreRef.current || pendingScrollToTrueTopRef.current
+      || pendingContextScrollbarNavigationRef.current || searchAppliedNavigationRef.current !== searchNavigation) return
+    const container = messagesContainerRef.current
+    const timeline = committedTimelineRef.current
+    if (!container || !timeline || !timeline.querySelector('[data-search-row], [data-chat-message-anchor-key]')) return
+    const resizing = pendingContentResizeRef.current
+    const resizeAnchor = resizing?.interactionVersion === userInteractionVersionRef.current && resizing.state.kind === 'anchor' ? resizing.state : null
+    pendingContentResizeRef.current = null
+    const viewport = container.getBoundingClientRect()
+    const anchors = Array.from(timeline.querySelectorAll<HTMLElement>(CHAT_MESSAGE_ANCHOR_SELECTOR)).map((element, index) => {
+      const rect = element.getBoundingClientRect()
+      return { messageKey: element.getAttribute('data-chat-message-anchor-key') || '', offsetPx: rect.top - viewport.top,
+        distance: Math.max(viewport.top - rect.bottom, rect.top - viewport.bottom, 0), index }
+    }).filter(anchor => anchor.messageKey).sort((a, b) => a.distance - b.distance || a.index - b.index)
+    const visibleEndKey = readVisibleHistoryEnd()
+    if (resizeAnchor) anchors.unshift({ messageKey: resizeAnchor.messageKey, offsetPx: resizeAnchor.offsetPx, distance: -1, index: -1 })
+    const current = resizeAnchor || readCurrentViewportState(-1)
+    if (current?.kind === 'anchor') currentViewportStateRef.current = current
+    pendingViewportRestoreRef.current = { kind: 'prepend', visibleEndKey: visibleEndKey || undefined, anchors: anchors.slice(0, 8).map(({ messageKey, offsetPx }) => ({ messageKey, offsetPx })),
+      scrollTop: container.scrollTop, scrollHeight: container.scrollHeight, interactionVersion: userInteractionVersionRef.current }
+  }, [readCurrentViewportState, readVisibleHistoryEnd, searchNavigation])
+
+  const showEarlierWindow = useCallback((key: string) => {
+    const visibleEndKey = readVisibleHistoryEnd()
+    continuousPagingIntentRef.current = null
+    setContinuousWindowEndKey(visibleEndKey)
+    setContinuousWindowKey(key)
+  }, [readVisibleHistoryEnd])
+
+  const loadEarlierArchivePage = useCallback(() => loadArchivePage('earlier', rows => {
+    if (currentHistoryRef.current.mode === 'continuous' && rows.length && !shouldAutoScrollRef.current) showEarlierWindow(getMessageStableKey(rows[0], 0))
+  }), [loadArchivePage, showEarlierWindow])
 
   useEffect(() => {
     const handleScroll = () => {
@@ -720,6 +657,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       const scrollHeight = container.scrollHeight
       const clientHeight = container.clientHeight
       const distanceFromBottom = scrollHeight - scrollTop - clientHeight
+      const pagingIntent = continuousPagingIntentRef.current || (pointerScrollInteractionRef.current
+        ? scrollTop < lastNativeScrollTopRef.current ? 'earlier' : scrollTop > lastNativeScrollTopRef.current ? 'later' : null
+        : null)
+      lastNativeScrollTopRef.current = scrollTop
 
       if (pointerScrollInteractionRef.current && distanceFromBottom > CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX) {
         leaveBottomFollow()
@@ -728,36 +669,28 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       setShowScrollTopButton(scrollTop > 200)
       captureCurrentViewportState()
 
-      if (!showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES && scrollTop < 120) {
-        const containerRect = container.getBoundingClientRect()
-        const anchors = committedTimelineRef.current
-          ? Array.from(committedTimelineRef.current.querySelectorAll<HTMLElement>(CHAT_MESSAGE_ANCHOR_SELECTOR))
-            .map((element, index) => {
-              const rect = element.getBoundingClientRect()
-              return {
-                messageKey: element.getAttribute('data-chat-message-anchor-key') || '',
-                offsetPx: rect.top - containerRect.top,
-                distancePx: rect.bottom <= containerRect.top
-                  ? containerRect.top - rect.bottom
-                  : rect.top >= containerRect.bottom
-                    ? rect.top - containerRect.bottom
-                    : 0,
-                index,
-              }
-            })
-            .filter((anchor) => anchor.messageKey)
-            .sort((left, right) => left.distancePx - right.distancePx || left.index - right.index)
-            .slice(0, 8)
-            .map(({ messageKey, offsetPx }) => ({ messageKey, offsetPx }))
-          : []
-        pendingViewportRestoreRef.current = {
-          kind: 'prepend',
-          anchors,
-          scrollTop,
-          scrollHeight,
-          interactionVersion: userInteractionVersionRef.current,
+      const { start: windowStart, count: windowCount } = continuousWindowRangeRef.current
+      const earlierContinuous = historyMode === 'continuous' && pagingIntent === 'earlier' && scrollTop < HISTORY_PRELOAD_DISTANCE_PX && !archivePage.loading && !archivePage.error
+        && (windowStart > 0 || archivePage.hasEarlier)
+      const laterContinuous = historyMode === 'continuous' && pagingIntent === 'later' && distanceFromBottom < 120
+        && windowStart + windowCount < messages.length
+      if (earlierContinuous || laterContinuous || (historyMode === 'active' && !showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES && scrollTop < HISTORY_PRELOAD_DISTANCE_PX)) {
+        // This reading navigation supersedes an older host-resize correction.
+        pendingContentResizeRef.current = null
+        setBottomFollow(false)
+        if (earlierContinuous || laterContinuous) continuousPagingIntentRef.current = null
+        if (earlierContinuous) {
+          if (windowStart > 0) showEarlierWindow(getMessageStableKey(messages[Math.max(0, windowStart - 100)], 0))
+          else {
+            void loadEarlierArchivePage()
+          }
+        } else if (laterContinuous) {
+          setContinuousWindowKey(getMessageStableKey(messages[Math.min(messages.length - 1, windowStart + Math.max(100, windowCount - 100))], 0))
+        } else {
+          // Active context is local: retain its existing native-event geometry priority.
+          captureHistoryCommit()
+          setShowFullTimeline(true)
         }
-        setShowFullTimeline(true)
       }
     }
 
@@ -776,6 +709,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
             captureCurrentViewportState()
           }
         }
+        if (event.deltaY) continuousPagingIntentRef.current = event.deltaY < 0 ? 'earlier' : 'later'
+        // Also handle upward input when the native scroller cannot move further.
+        if (historyMode === 'continuous' && event.deltaY < 0 && container.scrollTop < HISTORY_PRELOAD_DISTANCE_PX) handleScroll()
       }
       const handleTouchStart = (event: TouchEvent) => {
         markUserViewportInteraction()
@@ -788,7 +724,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
           leaveBottomFollow()
         }
         if (typeof currentY === 'number') {
+          if (typeof startY === 'number' && currentY !== startY) continuousPagingIntentRef.current = currentY > startY ? 'earlier' : 'later'
           touchScrollStartYRef.current = currentY
+          if (historyMode === 'continuous' && typeof startY === 'number' && currentY > startY && container.scrollTop < HISTORY_PRELOAD_DISTANCE_PX) handleScroll()
         }
       }
       const handleTouchEnd = () => {
@@ -812,6 +750,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
           const leavesBottom = ['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey)
           if (leavesBottom) leaveBottomFollow()
           else markUserViewportInteraction()
+          continuousPagingIntentRef.current = leavesBottom ? 'earlier' : 'later'
         }
       }
       container.addEventListener('scroll', handleScroll)
@@ -837,642 +776,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
         window.removeEventListener('keydown', handleWindowKeyDown)
       }
     }
-  }, [captureCurrentViewportState, leaveBottomFollow, markUserViewportInteraction, messages.length, setBottomFollow, showFullTimeline, updateBottomFollowState])
-
-  const applySessionState = useCallback((session: SessionListRecord | null | undefined) => {
-    if (!session || typeof session.id !== 'string') return
-    const nextBusy = isSessionRuntimeActive(session)
-    const nextQueueLength = typeof session.queueLength === 'number' ? session.queueLength : 0
-    const nextMessageCount = typeof session.messageCount === 'number' ? session.messageCount : 0
-    const nextHistoryVersion = typeof session.historyVersion === 'number' ? session.historyVersion : 0
-    sessionBusyRef.current = nextBusy
-    sessionQueueLengthRef.current = nextQueueLength
-    sessionMessageCountRef.current = nextMessageCount
-    sessionHistoryVersionRef.current = nextHistoryVersion
-    sessionStateInitializedRef.current = true
-    setSessionRecord(session)
-    setSessionBusy(nextBusy)
-    setSessionQueueLength(nextQueueLength)
-  }, [])
-
-  const fetchHistory = useCallback(async (requestedMode: HistoryFetchMode = 'full') => {
-    let mode = requestedMode
-    if (mode === 'reconcile') {
-      if (!historyBootstrapStartedRef.current) return true
-      const decision = decideHistoryReconciliation({
-        fullHistoryLoaded: fullHistoryLoadedRef.current,
-        serverMessageCount: sessionMessageCountRef.current,
-        representedMessageCount: representedMessageCountRef.current,
-        serverHistoryVersion: sessionHistoryVersionRef.current,
-        representedHistoryVersion: representedHistoryVersionRef.current,
-        hasTrustedFrontier: hasTrustedHistoryFrontierRef.current,
-        queueRefreshNeeded: queueRefreshNeededRef.current,
-        gapDetected: historyGapDetectedRef.current,
-      })
-      if (decision === 'none') {
-        reconnectAwaitingStateRef.current = false
-        return true
-      }
-      mode = decision
-    }
-
-    const activeRequest = historyInFlightRef.current
-    if (activeRequest?.sessionId === sessionId) {
-      historyTrailingRefreshRef.current = true
-      return activeRequest.promise
-    }
-
-    const requestSequence = historyRequestGateRef.current.begin()
-    const eventVersionAtStart = historyEventVersionRef.current
-    const stateEventVersionAtStart = historyStateEventVersionRef.current
-    const modelStreamEventVersionAtStart = historyModelStreamEventVersionRef.current
-    const modelStreamDraftAtStart = streamingAssistantDraftRef.current
-    const controller = new AbortController()
-    historyAbortControllerRef.current = controller
-
-    const requestJson = async (query = ''): Promise<{ response: Response; data: HistoryResponse }> => {
-      const response = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/history${query}`, {
-        signal: controller.signal,
-      })
-      const data = await response.json().catch(() => ({})) as HistoryResponse
-      return { response, data }
-    }
-
-    const requestPromise = (async () => {
-      const isCurrent = () => historyRequestGateRef.current.isCurrent(requestSequence)
-      const handleMissing = (response: Response): boolean | null => {
-        if (response.status !== 404) return null
-        if (historyStateEventVersionRef.current > stateEventVersionAtStart) return true
-        setSessionMissing(true)
-        setMessages([])
-        setQueuedMessages([])
-        setSessionQueueLength(0)
-        setPersistentMemorySnapshot('')
-        lastKnownTimestampRef.current = 0
-        representedMessageCountRef.current = 0
-        latestCommittedSeqRef.current = 0
-        hasTrustedHistoryFrontierRef.current = false
-        pendingQueueAppendRef.current = null
-        atomicRecoveryScheduledRef.current = false
-        fullHistoryLoadedRef.current = true
-        setIsFullHistoryLoaded(true)
-        setHistoryLoaded(true)
-        return false
-      }
-      const concurrentMessages = () => historyEventsRef.current
-        .filter(entry => entry.version > eventVersionAtStart)
-        .map(entry => entry.message)
-      const updateFrontier = (data: HistoryResponse, snapshotMessages: Message[], complete: boolean) => {
-        const version = typeof data.historyVersion === 'number'
-          ? data.historyVersion
-          : typeof data.session?.historyVersion === 'number' ? data.session.historyVersion : 0
-        representedHistoryVersionRef.current = version
-        const responseLatestSeq = typeof data.latestSeq === 'number' ? data.latestSeq : getLatestCommittedMessageSeq(snapshotMessages)
-        const hasAuthoritativeFrontier = typeof data.latestSeq === 'number'
-        if (hasAuthoritativeFrontier) {
-          let contiguousLatestSeq = responseLatestSeq
-          const concurrentSeqs = concurrentMessages()
-            .map(message => message.__meta?.seq)
-            .filter((seq): seq is number => Number.isSafeInteger(seq))
-          for (const seq of [...new Set(concurrentSeqs)].sort((left, right) => left - right)) {
-            contiguousLatestSeq = advanceHistorySeqFrontier(contiguousLatestSeq, seq).latestSeq
-          }
-          latestCommittedSeqRef.current = contiguousLatestSeq
-        } else {
-          latestCommittedSeqRef.current = Math.max(responseLatestSeq, getLatestCommittedMessageSeq(concurrentMessages()))
-        }
-        hasTrustedHistoryFrontierRef.current = hasAuthoritativeFrontier
-        if (complete) {
-          fullHistoryLoadedRef.current = true
-          setIsFullHistoryLoaded(true)
-          setEarlierHistoryError(false)
-        }
-      }
-      const applyMetadata = (data: HistoryResponse, deferTimeline = false): boolean => {
-        const hasNewerStreamState = historyStateEventVersionRef.current > stateEventVersionAtStart
-        const historyQueueLength = typeof data.queueLength === 'number' ? data.queueLength : null
-        const hasNewerMismatchedQueue = hasNewerStreamState
-          && historyQueueLength !== null
-          && historyQueueLength !== sessionQueueLengthRef.current
-        if (!hasNewerStreamState) {
-          setSessionMissing(false)
-          applySessionState(data.session)
-        }
-        if (hasNewerMismatchedQueue) {
-          queueRefreshNeededRef.current = true
-          historyTrailingRefreshRef.current = true
-        } else if (!deferTimeline) {
-          setQueuedMessages(Array.isArray(data.queuedMessages) ? data.queuedMessages : [])
-          queueRefreshNeededRef.current = false
-        }
-        setPersistentMemorySnapshot(typeof data.persistentMemorySnapshot === 'string' ? data.persistentMemorySnapshot : '')
-        if (!hasNewerStreamState && typeof data.queueLength === 'number') setSessionQueueLength(data.queueLength)
-        return hasNewerMismatchedQueue
-      }
-      const maybeClearDraft = (snapshotMessages: Message[]) => {
-        const current = streamingAssistantDraftRef.current
-        if (current) {
-          const reconciled = snapshotMessages
-            .filter(message => message.role === 'model' && message.__meta?.llmSegment
-              && message.__meta?.llmRequestId === current.llmRequestId)
-            .sort((a, b) => (a.__meta?.llmSegment?.outputEndExclusive || 0) - (b.__meta?.llmSegment?.outputEndExclusive || 0))
-            .reduce<StreamingAssistantDraft | null>(reconcileCommittedModelDraft, current)
-          if (reconciled !== current) {
-            streamingAssistantDraftRef.current = reconciled
-            setStreamingAssistantDraft(reconciled)
-          }
-        }
-        if (shouldClearDraftAfterHistory({
-          draftAtRequestStart: modelStreamDraftAtStart,
-          currentDraft: streamingAssistantDraftRef.current,
-          hasNewerStreamEvent: historyModelStreamEventVersionRef.current > modelStreamEventVersionAtStart,
-          snapshotMessages,
-        })) clearStreamingAssistantDraft()
-      }
-      const updateLastTimestamp = (snapshotMessages: Message[]) => {
-        const lastTimestamp = snapshotMessages.reduce((latest, message) => Math.max(latest, message.__meta?.timestamp || 0), 0)
-        lastKnownTimestampRef.current = Math.max(lastKnownTimestampRef.current, lastTimestamp)
-      }
-      const applyFullSnapshot = (data: HistoryResponse, snapshotMessages: Message[]) => {
-        const concurrent = concurrentMessages()
-        const pending = pendingQueueAppendRef.current
-        const responseLatestSeq = typeof data.latestSeq === 'number' ? data.latestSeq : getLatestCommittedMessageSeq(snapshotMessages)
-        const responseVersion = typeof data.historyVersion === 'number' ? data.historyVersion : 0
-        const pendingCovered = !pending || responseVersion !== pending.historyVersion || responseLatestSeq >= pending.endSeq
-        const queueMismatch = applyMetadata(data, true)
-        if (!pendingCovered || queueMismatch) {
-          historyTrailingRefreshRef.current = true
-          return false
-        }
-        dispatchTimeline({
-          type: 'atomic',
-          messages: currentMessages => {
-            const merged = mergeHistorySnapshot({ snapshot: snapshotMessages, concurrentMessages: concurrent, currentMessages, pendingClientMessageIds: pendingSentMessageIdsRef.current })
-            representedMessageCountRef.current = countCommittedHistoryMessages(merged)
-            return merged
-          },
-          queuedMessages: Array.isArray(data.queuedMessages) ? data.queuedMessages : [],
-        })
-        queuedMessagesRef.current = Array.isArray(data.queuedMessages) ? data.queuedMessages : []
-        if (pending) {
-          pendingQueueAppendRef.current = null
-          atomicRecoveryScheduledRef.current = false
-        }
-        queueRefreshNeededRef.current = false
-        for (const message of snapshotMessages) {
-          const clientMessageId = getClientMessageId(message)
-          if (clientMessageId) pendingSentMessageIdsRef.current.delete(clientMessageId)
-        }
-        updateFrontier(data, snapshotMessages, true)
-        updateLastTimestamp(snapshotMessages)
-        return true
-      }
-      const applySnapshotBeforePendingQueueAppend = (data: HistoryResponse, snapshotMessages: Message[]) => {
-        const pending = pendingQueueAppendRef.current
-        if (!pending) return false
-        const responseLatestSeq = typeof data.latestSeq === 'number' ? data.latestSeq : getLatestCommittedMessageSeq(snapshotMessages)
-        const responseVersion = typeof data.historyVersion === 'number' ? data.historyVersion : 0
-        if (responseVersion !== pending.historyVersion || responseLatestSeq >= pending.startSeq) return false
-        const concurrent = concurrentMessages()
-        setMessages(currentMessages => {
-          const merged = mergeHistorySnapshot({ snapshot: snapshotMessages, concurrentMessages: concurrent, currentMessages, pendingClientMessageIds: pendingSentMessageIdsRef.current })
-          representedMessageCountRef.current = countCommittedHistoryMessages(merged)
-          return merged
-        })
-        for (const message of snapshotMessages) {
-          const clientMessageId = getClientMessageId(message)
-          if (clientMessageId) pendingSentMessageIdsRef.current.delete(clientMessageId)
-        }
-        updateFrontier(data, snapshotMessages, true)
-        updateLastTimestamp(snapshotMessages)
-        historyGapDetectedRef.current = true
-        queueRefreshNeededRef.current = true
-        historyTrailingRefreshRef.current = true
-        return true
-      }
-      const fetchAndApplyFull = async (): Promise<boolean> => {
-        const { response, data } = await requestJson()
-        if (!isCurrent()) return true
-        const missing = handleMissing(response)
-        if (missing !== null) return missing
-        if (!response.ok) throw new Error(data.error || `Failed to fetch history (${response.status})`)
-        const snapshotMessages = Array.isArray(data.messages) ? data.messages : []
-        if (!applyFullSnapshot(data, snapshotMessages)) return true
-        maybeClearDraft(snapshotMessages)
-        historyGapDetectedRef.current = false
-        reconnectAwaitingStateRef.current = false
-        historyEventsRef.current = []
-        if (historyStateEventVersionRef.current > stateEventVersionAtStart) historyTrailingRefreshRef.current = true
-        setHistoryLoaded(true)
-        return true
-      }
-
-      try {
-        if (mode === 'bootstrap') {
-          const { response, data } = await requestJson(`?tail=${DEFAULT_VISIBLE_TIMELINE_MESSAGES}`)
-          if (!isCurrent()) return true
-          const missing = handleMissing(response)
-          if (missing !== null) return missing
-          if (!response.ok) throw new Error(data.error || `Failed to fetch recent history (${response.status})`)
-          const tailMessages = Array.isArray(data.messages) ? data.messages : []
-          applyMetadata(data)
-          const concurrent = concurrentMessages()
-          setMessages(currentMessages => mergeHistorySnapshot({
-            snapshot: tailMessages,
-            concurrentMessages: concurrent,
-            currentMessages,
-            pendingClientMessageIds: pendingSentMessageIdsRef.current,
-          }))
-          updateFrontier(data, tailMessages, false)
-          updateLastTimestamp(tailMessages)
-          maybeClearDraft(tailMessages)
-
-          const prefixLength = typeof data.prefixLength === 'number' ? data.prefixLength : 0
-          const historyVersion = typeof data.historyVersion === 'number'
-            ? data.historyVersion
-            : typeof data.session?.historyVersion === 'number' ? data.session.historyVersion : 0
-          if (prefixLength > 0) {
-            const prefixResult = await requestJson(`?prefixLength=${prefixLength}&historyVersion=${historyVersion}`)
-            if (!isCurrent()) return true
-            if (prefixResult.response.status === 409 && prefixResult.data.code === 'SESSION_HISTORY_BOUNDARY_STALE') {
-              return fetchAndApplyFull()
-            }
-            if (!prefixResult.response.ok) {
-              setEarlierHistoryError(true)
-              return true
-            }
-            const prefixMessages = Array.isArray(prefixResult.data.messages) ? prefixResult.data.messages : []
-            const assembledSnapshot = [...prefixMessages, ...tailMessages]
-            if (!applyFullSnapshot(data, assembledSnapshot)
-              && !applySnapshotBeforePendingQueueAppend(data, assembledSnapshot)) return true
-          } else {
-            setMessages(currentMessages => {
-              representedMessageCountRef.current = countCommittedHistoryMessages(currentMessages)
-              return currentMessages
-            })
-            updateFrontier(data, tailMessages, true)
-          }
-          historyEventsRef.current = []
-          if (historyStateEventVersionRef.current > stateEventVersionAtStart) historyTrailingRefreshRef.current = true
-          setHistoryLoaded(true)
-          return true
-        }
-
-        if (mode === 'full') return fetchAndApplyFull()
-
-        const historyVersion = representedHistoryVersionRef.current
-        const afterSeq = latestCommittedSeqRef.current
-        const { response, data } = await requestJson(`?afterSeq=${afterSeq}&historyVersion=${historyVersion}`)
-        if (!isCurrent()) return true
-        const missing = handleMissing(response)
-        if (missing !== null) return missing
-        if (response.status === 409 && data.code === 'SESSION_HISTORY_BOUNDARY_STALE') return fetchAndApplyFull()
-        if (!response.ok) throw new Error(data.error || `Failed to reconcile history (${response.status})`)
-        const appendedMessages = Array.isArray(data.messages) ? data.messages : []
-        const pending = pendingQueueAppendRef.current
-        const responseLatestSeq = typeof data.latestSeq === 'number' ? data.latestSeq : getLatestCommittedMessageSeq(appendedMessages)
-        const responseVersion = typeof data.historyVersion === 'number' ? data.historyVersion : historyVersion
-        const queueMismatch = applyMetadata(data, true)
-        if (queueMismatch || pending && responseVersion === pending.historyVersion && responseLatestSeq < pending.endSeq) {
-          historyTrailingRefreshRef.current = true
-          return true
-        }
-        dispatchTimeline({
-          type: 'atomic',
-          messages: currentMessages => {
-            const merged = mergeHistoryMessages(currentMessages, appendedMessages)
-            representedMessageCountRef.current = countCommittedHistoryMessages(merged)
-            return merged
-          },
-          queuedMessages: Array.isArray(data.queuedMessages) ? data.queuedMessages : [],
-        })
-        queuedMessagesRef.current = Array.isArray(data.queuedMessages) ? data.queuedMessages : []
-        if (pending) {
-          pendingQueueAppendRef.current = null
-          atomicRecoveryScheduledRef.current = false
-        }
-        queueRefreshNeededRef.current = false
-        for (const message of appendedMessages) {
-          const clientMessageId = getClientMessageId(message)
-          if (clientMessageId) pendingSentMessageIdsRef.current.delete(clientMessageId)
-        }
-        updateFrontier(data, appendedMessages, true)
-        updateLastTimestamp(appendedMessages)
-        maybeClearDraft(appendedMessages)
-        historyGapDetectedRef.current = false
-        reconnectAwaitingStateRef.current = false
-        historyEventsRef.current = []
-        if (historyStateEventVersionRef.current > stateEventVersionAtStart) historyTrailingRefreshRef.current = true
-        setHistoryLoaded(true)
-        return true
-      } catch (error) {
-        if (controller.signal.aborted) return true
-        if (pendingQueueAppendRef.current) atomicRecoveryScheduledRef.current = false
-        console.error('Failed to fetch history:', error)
-        if (mode === 'bootstrap') {
-          setEarlierHistoryError(true)
-          setHistoryLoaded(true)
-        }
-        return true
-      } finally {
-        if (historyAbortControllerRef.current === controller) historyAbortControllerRef.current = null
-      }
-    })()
-
-    historyInFlightRef.current = { sessionId, promise: requestPromise, controller }
-    void requestPromise.finally(() => {
-      if (historyInFlightRef.current?.controller !== controller) return
-      historyInFlightRef.current = null
-      if (!historyTrailingRefreshRef.current || !historyRequestGateRef.current.isCurrent(requestSequence)) return
-      historyTrailingRefreshRef.current = false
-      historyRefreshTimeoutRef.current = window.setTimeout(() => {
-        historyRefreshTimeoutRef.current = null
-        void fetchHistory('reconcile')
-      }, 0)
-    })
-    return requestPromise
-  }, [applySessionState, clearStreamingAssistantDraft, sessionId])
-
-  const scheduleAtomicRecovery = useCallback(() => {
-    if (atomicRecoveryScheduledRef.current) return
-    atomicRecoveryScheduledRef.current = true
-    if (historyRefreshTimeoutRef.current !== null) window.clearTimeout(historyRefreshTimeoutRef.current)
-    historyRefreshTimeoutRef.current = window.setTimeout(() => {
-      historyRefreshTimeoutRef.current = null
-      void fetchHistory('reconcile')
-    }, 0)
-  }, [fetchHistory])
-
-  const scheduleHistoryRefresh = useCallback((delay = 100) => {
-    if (pendingQueueAppendRef.current) {
-      scheduleAtomicRecovery()
-      return
-    }
-    if (historyRefreshTimeoutRef.current !== null) window.clearTimeout(historyRefreshTimeoutRef.current)
-    historyRefreshTimeoutRef.current = window.setTimeout(() => {
-      historyRefreshTimeoutRef.current = null
-      void fetchHistory('reconcile')
-    }, delay)
-  }, [fetchHistory, scheduleAtomicRecovery])
-
-  const subscribeRealtime = useCallback(() => {
-    let unsubscribe = () => {}
-    unsubscribe = webUiRealtime.subscribeSession(sessionId, {
-      onOpen: () => {
-        setConnectionState('connected')
-        setReconnectCountdown(0)
-        if (historyBootstrapStartedRef.current) {
-          reconnectAwaitingStateRef.current = true
-          return
-        }
-        historyBootstrapStartedRef.current = true
-        void fetchHistory('bootstrap').then((sessionExists) => {
-          if (sessionExists) return
-          unsubscribe()
-          setConnectionState('disconnected')
-        })
-      },
-      onStatus: (status, retryInSeconds) => {
-        setConnectionState(status)
-        setReconnectCountdown(retryInSeconds || 0)
-      },
-      onMessage: data => {
-        try {
-        if (data.type === 'session-state') {
-          historyStateEventVersionRef.current += 1
-          const hadSessionState = sessionStateInitializedRef.current
-          const previousQueueLength = sessionQueueLengthRef.current
-          const previousMessageCount = sessionMessageCountRef.current
-          const previousHistoryVersion = sessionHistoryVersionRef.current
-          const nextQueueLength = typeof data.session?.queueLength === 'number' ? data.session.queueLength : 0
-          const nextMessageCount = typeof data.session?.messageCount === 'number' ? data.session.messageCount : 0
-          const nextHistoryVersion = typeof data.session?.historyVersion === 'number' ? data.session.historyVersion : 0
-          setSessionMissing(false)
-          applySessionState(data.session)
-          if (!hadSessionState) return
-          if (!fullHistoryLoadedRef.current) {
-            if (reconnectAwaitingStateRef.current && historyInFlightRef.current === null) scheduleHistoryRefresh()
-            return
-          }
-          if (nextQueueLength !== previousQueueLength
-            || (nextQueueLength === 0 && queuedMessagesRef.current.length > 0)) {
-            queueRefreshNeededRef.current = true
-          }
-          if (reconnectAwaitingStateRef.current
-            || nextMessageCount !== previousMessageCount
-            || nextHistoryVersion !== previousHistoryVersion
-            || queueRefreshNeededRef.current) {
-            if (pendingQueueAppendRef.current) scheduleAtomicRecovery()
-            else scheduleHistoryRefresh()
-          }
-          return
-        }
-
-        if (data.type === 'session-deleted') {
-          historyRequestGateRef.current.invalidate()
-          historyAbortControllerRef.current?.abort()
-          historyAbortControllerRef.current = null
-          historyInFlightRef.current = null
-          historyTrailingRefreshRef.current = false
-          historyEventsRef.current = []
-          if (historyRefreshTimeoutRef.current !== null) {
-            window.clearTimeout(historyRefreshTimeoutRef.current)
-            historyRefreshTimeoutRef.current = null
-          }
-          setSessionMissing(true)
-          setSessionBusy(false)
-          setSessionQueueLength(0)
-          setQueuedMessages([])
-          setMessages([])
-          setPersistentMemorySnapshot('')
-          clearStreamingAssistantDraft()
-          setHistoryLoaded(true)
-          lastKnownTimestampRef.current = 0
-          sessionBusyRef.current = false
-          sessionQueueLengthRef.current = 0
-          sessionMessageCountRef.current = 0
-          sessionHistoryVersionRef.current = 0
-          representedMessageCountRef.current = 0
-          representedHistoryVersionRef.current = 0
-          latestCommittedSeqRef.current = 0
-          hasTrustedHistoryFrontierRef.current = false
-          fullHistoryLoadedRef.current = true
-          setIsFullHistoryLoaded(true)
-          queuedMessagesRef.current = []
-          pendingQueueAppendRef.current = null
-          atomicRecoveryScheduledRef.current = false
-          unsubscribe()
-          setConnectionState('disconnected')
-          return
-        }
-
-        if (data.type === 'model-stream-snapshot') {
-          historyModelStreamEventVersionRef.current += 1
-          const next = applyModelStreamSnapshot(data.draft || null)
-          streamingAssistantDraftRef.current = next
-          setStreamingAssistantDraft(next)
-          return
-        }
-
-        if (data.type === 'session-event') {
-          const sessionEvent = data.event as SessionStreamEvent
-          if (sessionEvent.type === 'model-stream-reset') {
-            historyModelStreamEventVersionRef.current += 1
-            const next = applyModelStreamEvent(streamingAssistantDraftRef.current, sessionEvent)
-            streamingAssistantDraftRef.current = next
-            setStreamingAssistantDraft(next)
-          } else if (sessionEvent.type === 'model-stream-update') {
-            historyModelStreamEventVersionRef.current += 1
-            const next = applyModelStreamEvent(streamingAssistantDraftRef.current, sessionEvent)
-            streamingAssistantDraftRef.current = next
-            setStreamingAssistantDraft(next)
-          } else if (sessionEvent.type === 'toolscript-progress' && sessionEvent.toolUseId) {
-            setToolScriptProgress(prev => ({
-              ...prev,
-              [sessionEvent.toolUseId!]: sessionEvent.subCalls || [],
-            }))
-          }
-          return
-        }
-
-        if (data.type === 'history-append') {
-          const incomingMessages = Array.isArray(data.messages) ? data.messages as Message[] : []
-          const seqs = incomingMessages.map(message => message.__meta?.seq).filter((seq): seq is number => Number.isSafeInteger(seq))
-          const startSeq = seqs.length ? Math.min(...seqs) : 0
-          const endSeq = seqs.length ? Math.max(...seqs) : 0
-          const historyVersion = Number.isSafeInteger(data.historyVersion) ? data.historyVersion : 0
-          if (historyVersion === representedHistoryVersionRef.current && hasTrustedHistoryFrontierRef.current && endSeq > 0 && endSeq <= latestCommittedSeqRef.current) return
-          let batchFrontier = latestCommittedSeqRef.current
-          let batchHasGap = false
-          if (hasTrustedHistoryFrontierRef.current) {
-            for (const seq of [...new Set(seqs)].sort((left, right) => left - right)) {
-              const next = advanceHistorySeqFrontier(batchFrontier, seq)
-              batchFrontier = next.latestSeq
-              batchHasGap ||= next.gapDetected
-            }
-          }
-          const stateMatches = historyVersion === sessionHistoryVersionRef.current
-            && data.messageCount === sessionMessageCountRef.current
-            && data.queueLength === sessionQueueLengthRef.current
-          if (!stateMatches || batchHasGap || pendingQueueAppendRef.current || historyInFlightRef.current?.sessionId === sessionId) {
-            const existing = pendingQueueAppendRef.current
-            pendingQueueAppendRef.current = existing && existing.historyVersion === historyVersion
-              ? { historyVersion, startSeq: Math.min(existing.startSeq, startSeq), endSeq: Math.max(existing.endSeq, endSeq) }
-              : { historyVersion, startSeq, endSeq }
-            historyGapDetectedRef.current = true
-            queueRefreshNeededRef.current = true
-            scheduleAtomicRecovery()
-            return
-          }
-          dispatchTimeline({
-            type: 'atomic',
-            messages: currentMessages => {
-              const merged = mergeHistoryMessages(currentMessages, incomingMessages)
-              representedMessageCountRef.current = countCommittedHistoryMessages(merged)
-              return merged
-            },
-            queuedMessages: Array.isArray(data.queuedMessages) ? data.queuedMessages : [],
-          })
-          queuedMessagesRef.current = Array.isArray(data.queuedMessages) ? data.queuedMessages : []
-          for (const message of incomingMessages) {
-            const clientMessageId = getClientMessageId(message)
-            if (clientMessageId) pendingSentMessageIdsRef.current.delete(clientMessageId)
-          }
-          representedHistoryVersionRef.current = historyVersion
-          latestCommittedSeqRef.current = hasTrustedHistoryFrontierRef.current ? batchFrontier : Math.max(latestCommittedSeqRef.current, endSeq)
-          hasTrustedHistoryFrontierRef.current = endSeq > 0 || hasTrustedHistoryFrontierRef.current
-          queueRefreshNeededRef.current = false
-          historyGapDetectedRef.current = false
-          return
-        }
-
-        if (data.type === 'message') {
-          const incomingMessage = data.message as Message
-          const pendingQueueAppend = pendingQueueAppendRef.current
-          if (pendingQueueAppend && Number.isSafeInteger(incomingMessage.__meta?.seq)
-            && (incomingMessage.__meta?.seq as number) >= pendingQueueAppend.startSeq) {
-            historyGapDetectedRef.current = true
-            scheduleAtomicRecovery()
-            return
-          }
-          const msgTimestamp = data.message.__meta?.timestamp
-          const isCommandResponse = data.message.__meta?.isCommandResponse
-          const isUpdateExisting = data.message.__meta?.updateExisting
-
-          if (data.message.role === 'model') {
-            const next = reconcileCommittedModelDraft(streamingAssistantDraftRef.current, incomingMessage)
-            if (next !== streamingAssistantDraftRef.current) {
-              streamingAssistantDraftRef.current = next
-              setStreamingAssistantDraft(next)
-            }
-          }
-
-          if (sessionQueueLengthRef.current > 0 || queuedMessagesRef.current.length > 0) {
-            queueRefreshNeededRef.current = true
-            scheduleHistoryRefresh()
-          }
-
-          const hasStableIdentity = hasStableHistoryIdentity(incomingMessage)
-          if (!isCommandResponse && !isUpdateExisting && !hasStableIdentity
-            && msgTimestamp && msgTimestamp <= lastKnownTimestampRef.current) {
-            return
-          }
-
-          const clientMessageId = getClientMessageId(incomingMessage)
-          if (clientMessageId) pendingSentMessageIdsRef.current.delete(clientMessageId)
-          historyEventVersionRef.current += 1
-          if (historyAbortControllerRef.current) {
-            historyEventsRef.current.push({
-              version: historyEventVersionRef.current,
-              message: incomingMessage,
-            })
-          }
-
-          if (fullHistoryLoadedRef.current && !isCommandResponse && !isUpdateExisting) {
-            const frontier = advanceHistorySeqFrontier(latestCommittedSeqRef.current, incomingMessage.__meta?.seq)
-            latestCommittedSeqRef.current = frontier.latestSeq
-            if (frontier.gapDetected) historyGapDetectedRef.current = true
-          }
-
-          setMessages(prev => {
-            const beforeCount = countCommittedHistoryMessages(prev)
-            const next = reconcileHistoryMessage(prev, incomingMessage)
-            representedMessageCountRef.current += countCommittedHistoryMessages(next) - beforeCount
-            return next
-          })
-
-          if (fullHistoryLoadedRef.current && historyGapDetectedRef.current) scheduleHistoryRefresh()
-
-          if (msgTimestamp && !isCommandResponse && !isUpdateExisting) {
-            lastKnownTimestampRef.current = Math.max(lastKnownTimestampRef.current, msgTimestamp)
-          }
-
-          // Clean up toolscript progress when tool response message arrives
-          if (data.message.role === 'tool') {
-            const responseIds = (data.message.parts || [])
-              .filter((p: MessagePart) => p.functionResponse)
-              .map((p: MessagePart) => p.functionResponse!.tool_use_id)
-              .filter(Boolean) as string[]
-            if (responseIds.length > 0) {
-              setToolScriptProgress(prev => {
-                const hasMatch = responseIds.some(id => prev[id])
-                if (!hasMatch) return prev
-                const next = { ...prev }
-                for (const id of responseIds) {
-                  delete next[id]
-                }
-                return next
-              })
-            }
-          }
-        }
-        } catch (e) {
-          console.error('Failed to process realtime message:', e)
-        }
-      },
-    })
-    return unsubscribe
-  }, [applySessionState, clearStreamingAssistantDraft, fetchHistory, scheduleAtomicRecovery, scheduleHistoryRefresh, sessionId])
+  }, [captureCurrentViewportState, captureHistoryCommit, leaveBottomFollow, markUserViewportInteraction, messages, historyMode, continuousWindowKey, archivePage, loadEarlierArchivePage, showEarlierWindow, setBottomFollow, showFullTimeline, updateBottomFollowState])
 
   const updateSessionModel = useCallback(async (model: string | null) => {
     setModelBusy(true)
@@ -1485,7 +789,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.error || `Failed to update model (${res.status})`)
-      setSessionRecord(previous => ({ ...(previous || { id: sessionId }), ...data }))
+      mergeConfirmedSettings(data)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to update model'
       setModelError(message)
@@ -1493,7 +797,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     } finally {
       setModelBusy(false)
     }
-  }, [sessionId])
+  }, [mergeConfirmedSettings, sessionId])
 
   const updateSessionNode = useCallback(async (nodeId: string, signal: AbortSignal) => {
     const response = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/node`, {
@@ -1505,12 +809,11 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     const data = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(data?.error || 'Could not switch node.')
     signal.throwIfAborted()
-    setSessionRecord(previous => ({
-      ...(previous || { id: sessionId }),
+    mergeConfirmedSettings({
       currentNode: data.session.currentNode,
       cwd: data.session.cwd,
-    }))
-  }, [sessionId])
+    })
+  }, [mergeConfirmedSettings, sessionId])
 
   const updateChildModel = useCallback(async (model: string | null) => {
     setModelBusy(true)
@@ -1523,7 +826,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.error || `Failed to update child default model (${res.status})`)
-      setSessionRecord(previous => ({ ...(previous || { id: sessionId }), ...data }))
+      mergeConfirmedSettings(data)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to update child default model'
       setModelError(message)
@@ -1531,7 +834,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     } finally {
       setModelBusy(false)
     }
-  }, [sessionId])
+  }, [mergeConfirmedSettings, sessionId])
 
   const updateSessionEffort = useCallback(async (effort: string | null) => {
     setModelBusy(true); setModelError(null)
@@ -1541,10 +844,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.error || `Failed to update effort (${res.status})`)
-      setSessionRecord(previous => ({ ...(previous || { id: sessionId }), ...data }))
+      mergeConfirmedSettings(data)
     } catch (error) { setModelError(error instanceof Error ? error.message : 'Failed to update effort'); throw error }
     finally { setModelBusy(false) }
-  }, [sessionId])
+  }, [mergeConfirmedSettings, sessionId])
 
   const updateChildEffort = useCallback(async (effort: string | null) => {
     setModelBusy(true); setModelError(null)
@@ -1554,27 +857,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.error || `Failed to update child effort (${res.status})`)
-      setSessionRecord(previous => ({ ...(previous || { id: sessionId }), ...data }))
+      mergeConfirmedSettings(data)
     } catch (error) { setModelError(error instanceof Error ? error.message : 'Failed to update child effort'); throw error }
     finally { setModelBusy(false) }
-  }, [sessionId])
-
-  useEffect(() => {
-    const unsubscribe = subscribeRealtime()
-
-    return () => {
-      unsubscribe()
-      if (historyRefreshTimeoutRef.current !== null) {
-        window.clearTimeout(historyRefreshTimeoutRef.current)
-        historyRefreshTimeoutRef.current = null
-      }
-      historyRequestGateRef.current.invalidate()
-      historyAbortControllerRef.current?.abort()
-      historyAbortControllerRef.current = null
-      historyInFlightRef.current = null
-      historyTrailingRefreshRef.current = false
-    }
-  }, [subscribeRealtime])
+  }, [mergeConfirmedSettings, sessionId])
 
   useEffect(() => {
     if (pendingViewportRestoreRef.current || !shouldAutoScrollRef.current) return
@@ -1582,7 +868,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
   }, [messages, scrollToBottom, streamingAssistantDraft])
 
   const snapshotSystemMessage = useMemo<Message | null>(() => {
-    const snapshotText = webUiIdentityMode ? '' : persistentMemorySnapshot.trim()
+    const snapshotText = webUiIdentityMode || historyMode === 'continuous' ? '' : persistentMemorySnapshot.trim()
 
     if (!snapshotText) {
       return null
@@ -1596,18 +882,40 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
         synthetic: 'persistentMemorySnapshot',
       },
     }
-  }, [webUiIdentityMode, persistentMemorySnapshot])
+  }, [webUiIdentityMode, historyMode, persistentMemorySnapshot])
 
+  const { start: continuousWindowStart, end: continuousWindowEnd } = useMemo(() => {
+    const start = continuousWindowKey === null ? Math.max(0, messages.length - CONTINUOUS_HISTORY_WINDOW_SIZE)
+      : Math.max(0, messages.findIndex(message => getMessageStableKey(message, 0) === continuousWindowKey))
+    let end = Math.min(messages.length, Math.max(start + CONTINUOUS_HISTORY_WINDOW_SIZE,
+      continuousWindowEndKey ? messages.findIndex(message => getMessageViewportAnchorKey(message) === continuousWindowEndKey) + 1 : 0))
+    if (historyMode === 'continuous' && end - start > CONTINUOUS_HISTORY_WINDOW_SIZE) {
+      const rows = buildTimelineRows({ messages: messages.slice(start, end), isMobile, timelineView, showUsageBadge: false,
+        showTimeDividers: false, nestedDepth: 0, expandedGroupKeys: new Set<string>() }, null).rows
+      if (rows.length > CONTINUOUS_HISTORY_WINDOW_SIZE) end = Math.min(messages.length, start + CONTINUOUS_HISTORY_WINDOW_SIZE)
+    }
+    return { start, end }
+  }, [continuousWindowKey, continuousWindowEndKey, historyMode, messages, timelineView, isMobile])
+  continuousWindowRangeRef.current = { start: continuousWindowStart, count: continuousWindowEnd - continuousWindowStart }
   const visibleMessages = useMemo(() => {
+    if (historyMode === 'continuous') return messages.slice(continuousWindowStart, continuousWindowEnd)
     if (showFullTimeline || messages.length <= DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
       return messages
     }
     return messages.slice(-DEFAULT_VISIBLE_TIMELINE_MESSAGES)
-  }, [messages, showFullTimeline])
+  }, [continuousWindowStart, continuousWindowEnd, historyMode, messages, showFullTimeline])
 
+  const displayingLatest = historyMode === 'active' || !archivePage.hasLater && continuousWindowStart + visibleMessages.length >= messages.length
+  continuousWindowAtLatestRef.current = displayingLatest
   const hiddenMessageCount = messages.length - visibleMessages.length
 
-  const searchFields = useMemo(() => searchOpen ? projectSessionSearchFields(messages, timelineView) : [], [timelineView, messages, searchOpen])
+  useEffect(() => {
+    if (historyMode !== 'continuous' || !archivePage.hasLater) return
+    setBottomFollow(false)
+    setContinuousWindowKey(previous => previous ?? (messages.length ? getMessageStableKey(messages[continuousWindowStart], 0) : null))
+  }, [archivePage.hasLater, continuousWindowStart, historyMode, messages, setBottomFollow])
+
+  const searchFields = useMemo(() => searchOpen ? projectSessionSearchFields(messages, timelineView, activeMessages) : [], [activeMessages, timelineView, messages, searchOpen])
   const searchMatches = useMemo(() => findSessionSearchMatches(searchFields, searchQuery), [searchFields, searchQuery])
   const currentSearchIndex = searchMatches.findIndex(match => match.id === searchMatchId)
   const selectedSearchMatch = searchMatches[currentSearchIndex >= 0 ? currentSearchIndex : 0] || null
@@ -1631,18 +939,19 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
 
   const timelineMessages = useMemo(() => {
     const baseMessages = snapshotSystemMessage ? [snapshotSystemMessage, ...visibleMessages] : visibleMessages
-    return streamingAssistantMessage ? [...baseMessages, streamingAssistantMessage] : baseMessages
-  }, [snapshotSystemMessage, streamingAssistantMessage, visibleMessages])
+    return streamingAssistantMessage && displayingLatest ? [...baseMessages, streamingAssistantMessage] : baseMessages
+  }, [snapshotSystemMessage, streamingAssistantMessage, visibleMessages, displayingLatest])
 
   const navigateSearch = useCallback((match: typeof selectedSearchMatch) => {
     if (!match) return
     leaveBottomFollow()
     const inGroup = match.groupKey && (match.surface === 'call' || match.surface === 'response' || match.surface === 'reasoning' || match.surface === 'system')
     const requiredIndex = inGroup ? Math.min(match.sourceIndex, match.groupStartIndex ?? match.sourceIndex) : match.sourceIndex
-    if (!showFullTimeline && requiredIndex < messages.length - DEFAULT_VISIBLE_TIMELINE_MESSAGES) setShowFullTimeline(true)
+    if (historyMode === 'continuous') setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, requiredIndex - 20)], 0))
+    else if (!showFullTimeline && requiredIndex < messages.length - DEFAULT_VISIBLE_TIMELINE_MESSAGES) setShowFullTimeline(true)
     setSearchMatchId(match.id)
     setSearchNavigation(value => value + 1)
-  }, [leaveBottomFollow, messages.length, showFullTimeline])
+  }, [leaveBottomFollow, messages, historyMode, showFullTimeline])
 
   const closeSearch = useCallback(() => {
     recordSearchHistory(searchQuery)
@@ -1765,13 +1074,14 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
   useLayoutEffect(() => {
     if (!pendingScrollToTrueTopRef.current) return
     const container = messagesContainerRef.current
-    if (!container || !showFullTimeline) return
+    if (!container || (historyMode === 'active' && !showFullTimeline)) return
     container.scrollTop = 0
+    captureCurrentViewportState()
     pendingScrollToTrueTopRef.current = false
-  }, [showFullTimeline, timelineMessages])
+  }, [captureCurrentViewportState, historyMode, showFullTimeline, timelineMessages])
 
   useEffect(() => {
-    if (showFullTimeline || !historyLoaded || messages.length <= DEFAULT_VISIBLE_TIMELINE_MESSAGES) return
+    if (historyMode === 'continuous' || showFullTimeline || !historyLoaded || messages.length <= DEFAULT_VISIBLE_TIMELINE_MESSAGES) return
     const container = messagesContainerRef.current
     const content = messagesContentRef.current
     if (!container || !content) return
@@ -1783,6 +1093,20 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     observer.observe(content)
     return () => observer.disconnect()
   }, [historyLoaded, messages.length, showFullTimeline, timelineMessages])
+
+  useLayoutEffect(() => {
+    userInteractionVersionRef.current += 1
+    continuousPagingIntentRef.current = null
+    capturedInteractionVersionRef.current = userInteractionVersionRef.current
+    pendingContextScrollbarNavigationRef.current = null
+    pendingScrollToTrueTopRef.current = false
+    const state = getStoredChatViewportState(viewportSessionId, historyMode) || { kind: 'bottom' as const }
+    currentViewportStateRef.current = state
+    pendingContentResizeRef.current = null
+    currentViewportGeometryRef.current = null
+    pendingViewportRestoreRef.current = { kind: 'state', state, interactionVersion: userInteractionVersionRef.current }
+    setBottomFollow(state.kind === 'bottom')
+  }, [historyMode, viewportSessionId, setBottomFollow])
 
   useLayoutEffect(() => {
     const pending = pendingViewportRestoreRef.current
@@ -1799,16 +1123,41 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
         return
       }
 
-      if (pending.state.kind === 'anchor' && !showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
+      if (historyMode === 'continuous' && pending.state.kind === 'anchor') {
+        const messageKey = pending.state.messageKey
+        const index = messages.findIndex(message => getMessageViewportAnchorKey(message) === messageKey)
+        if (index >= 0 && (index < continuousWindowStart || index >= continuousWindowStart + visibleMessages.length)) {
+          setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, index - 20)], 0))
+          return
+        }
+      }
+
+      if (historyMode === 'active' && pending.state.kind === 'anchor' && !showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
         setShowFullTimeline(true)
         return
       }
 
-      if (!historyLoaded) return
+      if (historyMode === 'continuous' ? !archivePage.loaded : !historyLoaded) return
       const fallbackState: ChatViewportState = { kind: 'bottom' }
       pendingViewportRestoreRef.current = null
       applyViewportState(fallbackState)
       return
+    }
+
+    if (historyMode === 'continuous' && pending.visibleEndKey && !visibleMessages.some(message => getMessageViewportAnchorKey(message) === pending.visibleEndKey)) {
+      if (pending.visibleEndKey !== continuousWindowEndKey) {
+        setContinuousWindowEndKey(pending.visibleEndKey)
+        return
+      }
+      const state = currentViewportStateRef.current
+      const index = state.kind === 'anchor' ? messages.findIndex(message => getMessageViewportAnchorKey(message) === state.messageKey) : -1
+      if (index >= 0) {
+        const key = getMessageStableKey(messages[Math.max(0, index - 20)], 0)
+        if (key !== continuousWindowKey) {
+          setContinuousWindowKey(key)
+          return
+        }
+      }
     }
 
     if (applyViewportAnchorCandidates(pending.anchors)) {
@@ -1816,7 +1165,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       return
     }
 
-    if (!showFullTimeline || !historyLoaded) return
+    if (historyMode === 'active' ? !showFullTimeline || !historyLoaded : !archivePage.loaded) return
 
     const container = messagesContainerRef.current
     if (!container) return
@@ -1829,7 +1178,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       currentViewportStateRef.current = nextState
       currentViewportGeometryRef.current = null
       capturedInteractionVersionRef.current = userInteractionVersionRef.current
-      storeChatViewportState(viewportSessionId, nextState)
+      storeChatViewportState(viewportSessionId, nextState, historyMode)
     } else {
       currentViewportGeometryRef.current = {
         scrollTop: container.scrollTop,
@@ -1837,7 +1186,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       }
       capturedInteractionVersionRef.current = userInteractionVersionRef.current
     }
-  }, [applyViewportAnchorCandidates, applyViewportState, historyLoaded, messages.length, readCurrentViewportState, setBottomFollow, showFullTimeline, timelineMessages, viewportSessionId])
+  }, [applyViewportAnchorCandidates, applyViewportState, historyLoaded, messages.length, readCurrentViewportState, setBottomFollow, showFullTimeline, timelineMessages, viewportSessionId, historyMode, archivePage.loaded, continuousWindowStart, continuousWindowKey, continuousWindowEndKey, visibleMessages])
 
   useLayoutEffect(() => {
     const pending = pendingContextScrollbarNavigationRef.current
@@ -1917,8 +1266,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
   }, [applyViewportAnchorCandidates, applyViewportState])
 
   useLayoutEffect(() => () => {
-    captureCurrentViewportState()
-  }, [captureCurrentViewportState])
+    // A mode switch has already changed the rendered source by cleanup time.
+    // Save the last owned position, never measure the replacement mode's DOM.
+    storeChatViewportState(viewportSessionId, currentViewportStateRef.current, historyMode)
+  }, [historyMode, viewportSessionId])
 
   const handleOpenDebugInfo = useCallback(() => {
     setShowDebugInfo(true)
@@ -1927,117 +1278,6 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
   const handleCloseDebugInfo = useCallback(() => {
     setShowDebugInfo(false)
   }, [])
-
-  const handleSend = useCallback(async ({ text, attachments }: { text: string; attachments: Array<{ ref: string; file: File }> }) => {
-    if (sessionMissing || (!text.trim() && attachments.length === 0) || loading) return false
-
-    setLoading(true)
-
-    const userMessage = text.trim()
-    const isSlashCommand = /^\/[a-zA-Z_\-.]+(?:\s+.*)?$/s.test(userMessage)
-    const files = [...attachments]
-    const sendTimestamp = Date.now()
-    const clientMessageId = globalThis.crypto?.randomUUID?.()
-      || `webui-${sendTimestamp}-${Math.random().toString(36).slice(2)}`
-
-    const parts: any[] = []
-    let messageText = userMessage
-    let requestText = userMessage
-    let uploadedFiles
-    try {
-      uploadedFiles = await uploadReferencedFiles(files, `${API_BASE_PATH}/upload`, fetch, webUiIdentityMode ? sessionId : undefined)
-    } catch (err) {
-      console.error('File upload failed:', err)
-      setLoading(false)
-      setMessages(prev => [...prev, { role: 'model', parts: [{ text: `Error: ${err instanceof Error ? err.message : 'Failed to upload attachment'}` }], __meta: { temporary: true, timestamp: Date.now() } }])
-      return false
-    }
-
-    const attachmentDisplays = uploadedFiles.map(file => ({
-      ref: file.ref,
-      name: file.filename,
-      mimeType: file.mimeType,
-      size: file.size,
-      kind: file.mimeType.startsWith('image/') ? 'image' : 'file',
-    } as const))
-
-    if (requestText) {
-      parts.push({ text: requestText })
-    }
-
-    const previewParts = buildReferencedAttachmentParts(messageText, attachmentDisplays)
-
-    const appendOptimistic = !isSlashCommand
-      && shouldAppendOptimisticMessage(sessionBusyRef.current, sessionQueueLengthRef.current)
-    if (appendOptimistic) {
-      pendingSentMessageIdsRef.current.add(clientMessageId)
-      setMessages(prev => [...prev, buildOptimisticUserMessage({
-        clientMessageId,
-        parts: previewParts,
-        timestamp: sendTimestamp,
-      })])
-    }
-
-    try {
-      await postReferencedMessage(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/message`, {
-          parts,
-          uploadedFiles: toLegacyUploadedFiles(uploadedFiles),
-          ...(!isSlashCommand ? { clientMessageId } : {}),
-      })
-      if (!appendOptimistic && !isSlashCommand) {
-        queueRefreshNeededRef.current = true
-        scheduleHistoryRefresh()
-      }
-    } catch (e) {
-      console.error('Failed to send message:', e)
-      pendingSentMessageIdsRef.current.delete(clientMessageId)
-      setMessages(prev => {
-          const hasReconciledRow = prev.some(message => (
-            !message.__meta?.optimistic
-            && getClientMessageId(message) === clientMessageId
-          ))
-          const hasPendingOptimisticRow = prev.some(message => (
-            message.__meta?.optimistic
-            && getClientMessageId(message) === clientMessageId
-          ))
-          if (appendOptimistic && (hasReconciledRow || !hasPendingOptimisticRow)) return prev
-          return [
-            ...prev.filter(message => !(
-              message.__meta?.optimistic
-              && getClientMessageId(message) === clientMessageId
-            )),
-            { role: 'model', parts: [{ text: 'Error: Failed to send message' }], __meta: { temporary: true, timestamp: Date.now() } },
-          ]
-      })
-      setLoading(false)
-      return false
-    }
-
-    setLoading(false)
-    return true
-  }, [loading, scheduleHistoryRefresh, sessionId, sessionMissing])
-
-  const sendSessionCommand = useCallback(async (command: string) => {
-    if (sessionMissing) return
-    try {
-      const response = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/message`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: command }),
-      })
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}))
-        throw new Error(data?.error || `Command failed (${response.status})`)
-      }
-    } catch (error) {
-      console.error(`Failed to send ${command}:`, error)
-      setMessages(prev => [...prev, {
-        role: 'model',
-        parts: [{ text: `Error: ${error instanceof Error ? error.message : `Failed to send ${command}`}` }],
-        __meta: { temporary: true, timestamp: Date.now() },
-      }])
-    }
-  }, [sessionId, sessionMissing])
 
   const handleStop = useCallback(() => {
     void sendSessionCommand('/stop')
@@ -2064,7 +1304,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     onError: (message: string) => void
     onDebug: (message: string) => void
   }): Promise<StreamingAsrSession> => {
-    const context = buildAsrContext(messages, draftText)
+    const context = buildAsrContext(activeMessages, draftText)
 
     return await new Promise<StreamingAsrSession>((resolve, reject) => {
       const socket = new WebSocket(getAsrStreamUrl())
@@ -2180,22 +1420,30 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
         }
       }
     })
-  }, [messages])
+  }, [activeMessages])
 
   const contextLimit = useMemo(() => {
     const currentModelKey = sessionRecord?.modelKey
     return modelOptions.find(option => option.key === currentModelKey)?.contextLimit ?? null
   }, [modelOptions, sessionRecord?.modelKey])
 
-  const turnIncomplete = useMemo(() => isSessionTurnIncomplete(messages), [messages])
+  const turnIncomplete = useMemo(() => isSessionTurnIncomplete(activeMessages), [activeMessages])
+
+  const renderQueuedFooter = (alignment: 'left' | 'right') => <QueuedMessageStatus
+    count={sessionQueueLength}
+    alignment={alignment}
+    isMobile={isMobile}
+    onRunQueued={webUiIdentityMode ? undefined : handleRunQueued}
+  />
 
   return (
-    <div ref={chatRootRef} data-compact-composer={compactComposer ? "true" : undefined} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
+    <div ref={chatRootRef} data-mobile-chat-ui={mobileUi || undefined} data-chat-connection-state={connectionState} data-compact-composer={compactComposer ? "true" : undefined} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
       {searchOpen && <style>{`::highlight(${searchHighlightName}) { background-color: #facc15; color: #171717; }`}</style>}
       <ContentHeader
         icon={<MessageSquareText className="h-5 w-5" />}
         title={sessionDisplayName || sessionRecord?.displayName || sessionId}
-        subtitle={webUiIdentityMode ? null : (
+        compact={mobileUi}
+        subtitle={webUiIdentityMode || mobileUi ? null : (
           <span data-session-header-subtitle className="font-mono text-[12px]" title={sessionRecord?.cwd || undefined}>
             {sessionHeaderSubtitle}
           </span>
@@ -2239,10 +1487,13 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
         ) : undefined}
         actions={webUiIdentityMode ? null : (
           <>
-            <button type="button" onClick={() => activateSearch()} aria-label="Find in chat" title="Find in chat" className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover">
+            {mobileUi && onNewSession && <button type="button" aria-label="Start a new session" title="New session" disabled={creatingSession}
+              onClick={async () => { if (creatingSession) return; setCreatingSession(true); try { await onNewSession() } finally { setCreatingSession(false) } }}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-full text-fw-text-strong hover:bg-fw-hover disabled:opacity-50"><SquarePen size={20} /></button>}
+            {!mobileUi && <button type="button" onClick={() => activateSearch()} aria-label="Find in chat" title="Find in chat" className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover">
               <Search className="h-4 w-4" /><span className="foxwarm-chat-sm-label">Find</span>
-            </button>
-            {onOpenCode && (
+            </button>}
+            {!mobileUi && onOpenCode && (
               <button
                 onClick={onOpenCode}
                 className="foxwarm-chat-code-button inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover"
@@ -2252,7 +1503,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
                 <span className="foxwarm-chat-sm-label">Code</span>
               </button>
             )}
-            {onOpenTerminal && (
+            {!mobileUi && onOpenTerminal && (
               <button
                 onClick={onOpenTerminal}
                 className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-3 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover"
@@ -2263,6 +1514,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
               </button>
             )}
             <SessionUiSettingsMenu
+              mobile={mobileUi}
+              onFind={() => activateSearch()}
+              onOpenCode={onOpenCode}
+              onOpenTerminal={onOpenTerminal}
               sendKeyMode={sendKeyMode}
               onSendKeyModeChange={onSendKeyModeChange}
               timelineView={timelineView}
@@ -2280,7 +1535,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       />
 
       {connectionState !== 'connected' && (
-        <div className={`sticky top-0 z-20 px-4 py-2 text-sm ${
+        <div data-chat-connection-status className={`sticky top-0 z-20 px-4 py-2 text-sm ${
           connectionState === 'connecting' ? 'bg-fw-warning-surface dark:bg-fw-warning-surface-strong/20 text-fw-warning dark:text-fw-warning' :
           connectionState === 'reconnecting' ? 'bg-fw-warning-surface dark:bg-fw-warning-surface-strong/20 text-fw-warning dark:text-fw-warning' :
           'bg-fw-danger-surface dark:bg-fw-danger-surface-strong/20 text-fw-danger dark:text-fw-danger'
@@ -2292,11 +1547,19 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       )}
 
       <div className="foxwarm-chat-message-region relative min-h-0 flex-1">
-        <div id={chatMessageContainerId} ref={messagesContainerRef} className="foxwarm-chat-messages foxwarm-content-gutter h-full overflow-x-hidden overflow-y-auto py-4">
-          {!isMobile && (
+        <div
+          id={chatMessageContainerId}
+          ref={messagesContainerRef}
+          data-show-system-scrollbar={showScrollbar}
+          data-show-context-minimap={showMinimap}
+          className="foxwarm-chat-messages foxwarm-content-gutter h-full overflow-x-hidden overflow-y-auto py-4"
+        >
+          {!isMobile && showMinimap && (
             <div className="foxwarm-context-scrollbar-overlay">
               <ContextScrollbar
+                settings={contextScrollbarSettings}
                 messages={messages}
+                contextMessages={activeMessages}
                 persistentMemorySnapshot={snapshotSystemMessage}
                 contextLimit={contextLimit}
                 historyComplete={isFullHistoryLoaded}
@@ -2308,34 +1571,50 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
             </div>
           )}
           <div ref={messagesContentRef} data-full-width={fullWidth} className="foxwarm-chat-messages-content foxwarm-content-column">
-            {hiddenMessageCount > 0 && !showFullTimeline && (
+            {historyMode === 'active' && hiddenMessageCount > 0 && !showFullTimeline && (
               <div className="mb-3 rounded-lg border border-fw-border bg-fw-surface/80 px-3 py-2 text-xs text-fw-text-muted shadow-sm dark:border-fw-border dark:bg-fw-surface/80 dark:text-fw-text">
                 Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.
               </div>
             )}
-            {earlierHistoryError && !isFullHistoryLoaded && (
+            {historyMode === 'active' && earlierHistoryError && !isFullHistoryLoaded && (
               <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-fw-border bg-fw-surface/80 px-3 py-2 text-xs text-fw-text-muted shadow-sm dark:border-fw-border dark:bg-fw-surface/80 dark:text-fw-text">
                 <span>Earlier messages could not be loaded.</span>
                 <button
                   type="button"
                   className="font-medium text-fw-accent hover:underline"
                   onClick={() => {
-                    setEarlierHistoryError(false)
-                    void fetchHistory('full')
+                    void retryEarlierHistory()
                   }}
                 >
                   Retry
                 </button>
               </div>
             )}
+            {historyMode === 'continuous' && <div className="mb-3 flex items-center justify-between gap-3 text-xs text-fw-text-muted" data-continuous-history>
+              <span>{archivePage.loading ? 'Loading messages…' : archivePage.error ? 'Messages could not be loaded.' : archivePage.hasEarlier || continuousWindowStart > 0 ? 'Scroll up for earlier messages.' : ''}</span>
+              {(archivePage.error || archivePage.hasEarlier) && <button type="button" disabled={archivePage.loading} className="text-fw-accent hover:underline" onClick={() => {
+                const state = captureCurrentViewportState()
+                const interactionVersion = userInteractionVersionRef.current
+                const direction = archivePage.error ? archivePage.direction : archivePage.loaded ? 'earlier' : 'initial'
+                if (direction === 'earlier') { void loadEarlierArchivePage(); return }
+                void loadArchivePage(direction).then(rows => {
+                  if (interactionVersion !== userInteractionVersionRef.current) return
+                  if (state) pendingViewportRestoreRef.current = { kind: 'state', state, interactionVersion }
+                  if (rows.length && direction !== 'later' && direction !== 'latest') setContinuousWindowKey(getMessageStableKey(rows[0], 0))
+                })
+              }}>{archivePage.error ? 'Retry' : 'Load earlier messages'}</button>}
+            </div>}
+            <HistoryCommit revision={historyMode === 'continuous' ? visibleMessages : showFullTimeline} beforeCommit={captureHistoryCommit}>
             <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full">
               <ThreadCardHeightContext.Provider value={cardHeightContext}>
                 <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-                  <ChatTimeline sessionId={sessionId} historyMessages={messages} runtimeState={sessionRecord?.runtimeState} busyStartedAt={sessionRecord?.busyStartedAt} isRunningTool={sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} />
+                  <ChatTimeline sessionId={sessionId} historyMessages={messages} currentHistoryMessages={activeMessages} runtimeState={displayingLatest ? sessionRecord?.runtimeState : undefined} busyStartedAt={displayingLatest ? sessionRecord?.busyStartedAt : undefined} isRunningTool={displayingLatest && sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} renderMessageFooter={displayingLatest && sessionQueueLength > 0 && queuedMessages.length === 0 ? renderQueuedFooter : undefined} />
                 </ToolScriptProgressContext.Provider>
               </ThreadCardHeightContext.Provider>
             </div>
-            <ProcessingStatus
+            </HistoryCommit>
+            {historyMode === 'continuous' && archivePage.hasLater && <button type="button" disabled={archivePage.loading} className="my-3 text-xs text-fw-accent hover:underline" onClick={() => { void loadArchivePage('later') }}>Load newer messages</button>}
+            {displayingLatest && <ProcessingStatus
               timelineView={timelineView}
               sessionBusy={sessionBusy}
               runtimeState={sessionRecord?.runtimeState}
@@ -2343,13 +1622,11 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
               turnIncomplete={sessionRecord?.runtimeState?.state === 'idle' && turnIncomplete}
               loading={loading}
               isMobile={isMobile}
-              onStop={webUiIdentityMode ? undefined : handleStop}
-              onRunQueued={webUiIdentityMode ? undefined : handleRunQueued}
               onContinue={webUiIdentityMode ? undefined : handleContinue}
-            />
-            {queuedMessages.length > 0 && (
+            />}
+            {displayingLatest && queuedMessages.length > 0 && (
               <div className="foxwarm-queued-preview min-w-0 max-w-full" data-queued-preview="true" aria-label="Queued messages">
-                <ThreadCardHeightContext.Provider value={cardHeightContext}><ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} timelineView={timelineView} showUsageBadge={false} showTimeDividers={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} /></ThreadCardHeightContext.Provider>
+                <ThreadCardHeightContext.Provider value={cardHeightContext}><ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} timelineView={timelineView} showUsageBadge={false} showTimeDividers={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} renderMessageFooter={sessionQueueLength > 0 ? renderQueuedFooter : undefined} /></ThreadCardHeightContext.Provider>
               </div>
             )}
             <div aria-hidden="true" data-chat-composer-spacer style={{ height: 'calc(var(--chat-composer-offset, 224px) - 2.5rem)' }} />
@@ -2361,6 +1638,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
             onClick={scrollToTop}
             className="absolute right-4 top-4 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-fw-accent text-fw-accent-text shadow-lg transition-all hover:bg-fw-accent dark:bg-fw-accent dark:hover:bg-fw-accent"
             aria-label="Scroll to top"
+            style={mobileUi ? {top: 'calc(var(--chat-mobile-header-height, 60px) + 1rem)'} : undefined}
           >
             <svg className="h-[18px] w-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
@@ -2368,7 +1646,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
           </button>
         )}
 
-        {!followingBottom && (
+        {(!followingBottom || historyMode === 'continuous' && archivePage.hasLater) && (
           <button
             onClick={handleBottomNavigation}
             className="absolute bottom-4 right-4 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-fw-accent text-fw-accent-text shadow-lg transition-all hover:bg-fw-accent dark:bg-fw-accent dark:hover:bg-fw-accent"
@@ -2392,6 +1670,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
         onChangeNode={updateSessionNode}
         sessionMissing={sessionMissing}
         loading={loading}
+        sessionRunning={isSessionRuntimeActive({runtimeState: sessionRecord?.runtimeState, busy: sessionBusy})}
+        onStop={webUiIdentityMode ? undefined : handleStop}
         asrAvailable={asrAvailable}
         modelOptions={modelOptions}
         currentModelKey={sessionRecord?.modelKey}
@@ -2430,7 +1710,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
             sessionId,
             sessionDisplayName,
             sessionRecord,
-            messages,
+            messages: activeMessages,
             connectionState,
             reconnectCountdown,
             sessionMissing,
@@ -2458,12 +1738,14 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
   prev.experimentalAttachments === next.experimentalAttachments &&
   prev.sessionDisplayName === next.sessionDisplayName &&
   Boolean(prev.onBack) === Boolean(next.onBack) &&
+  Boolean(prev.onNewSession) === Boolean(next.onNewSession) &&
   prev.onOpenTerminal === next.onOpenTerminal
   && prev.onOpenCode === next.onOpenCode
   && prev.onOpenCodeFile === next.onOpenCodeFile
   && prev.onOpenCodeCommit === next.onOpenCodeCommit
   && prev.onOpenModelSettings === next.onOpenModelSettings
   && prev.sendKeyMode === next.sendKeyMode
+  && prev.historyMode === next.historyMode
   && prev.timelineView === next.timelineView
   && prev.showUsageBadge === next.showUsageBadge
   && prev.webUiIdentityMode === next.webUiIdentityMode

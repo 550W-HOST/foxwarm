@@ -1,6 +1,6 @@
 # Unit: src-misc
 
-Files: src/common.ts, src/common.test.ts, src/startupUtils.ts, src/jsonObjectArgs.ts, src/asrClient.ts, src/logRotation.ts, src/nodeFileTransfer.ts, src/nodeFileTransferPathVariables.test.ts, src/guestAgent.test.ts, src/session/sessionSystemPromptFiles.test.ts
+Files: src/common.ts, src/common.test.ts, src/startupUtils.ts, src/jsonObjectArgs.ts, src/asrClient.ts, src/logRotation.ts, src/nodeFileTransfer.ts, src/nodeFileTransferPathVariables.test.ts, src/guestAgent.test.ts
 
 ## Purpose
 
@@ -74,6 +74,7 @@ This unit provides miscellaneous infrastructure utilities: logging setup, startu
 - `./toolsSessionAgent` — `tool_create_session` (tests)
 - `./types` — `MessagePart`, `Session`
 
+- `decodeNodeTransferFile` validates the existing complete transfer base64, declared size and SHA-256 contract for compound copy and source-file consumption; it never reconstructs source from display output.
 - Master-side `nodeFileTransfer` resolves leading Agent path tokens against the Main Agent directory for local copy/delivery legs, independently of remote CLI transfer resolution; see [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch-node-execution.md#d-dispatch-native-agent-paths-and-code-targets).
 
 ## Behavior

@@ -1,54 +1,68 @@
 import { createContext, memo, useContext, useState } from 'react'
 import type { MessagePart } from './chatShared'
 import { makeApiUrl } from '../config'
+import ImagePreviewDialog, { isSafeImagePreviewMime } from './ImagePreviewDialog'
+import { requestImageDownloadUrl, triggerBrowserDownload } from './downloadShared'
 
 export const WebUiImageSessionContext = createContext<string | null>(null)
 
-const SAFE_RASTER_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
-
 export function ImageItem({ part, label, imageClassName = 'max-w-[300px] max-h-[200px]' }: { part: MessagePart; label: string; imageClassName?: string }) {
   const [failed, setFailed] = useState(false)
+  const [preview, setPreview] = useState(false)
+  const [downloadPending, setDownloadPending] = useState(false)
+  const [downloadError, setDownloadError] = useState('')
   const webUiSessionId = useContext(WebUiImageSessionContext)
   const mimeType = part.inlineDataRef?.mimeType
     || part.inlineData?.mimeType
     || part.inlineDataUnavailable?.mimeType
     || part.inlineDataUnavailable?.mime_type
     || 'application/octet-stream'
-  const src = part.inlineDataRef?.apiPath
-    ? makeApiUrl(webUiSessionId && part.inlineDataRef.blobId
-      ? `/sessions/${encodeURIComponent(webUiSessionId)}/blobs/${encodeURIComponent(part.inlineDataRef.blobId)}`
-      : part.inlineDataRef.apiPath).toString()
-    : part.inlineData
-      ? `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`
-      : null
+  const imageUrl = part.inlineDataRef?.apiPath ? makeApiUrl(part.inlineDataRef.apiPath) : null
+  if (imageUrl && webUiSessionId && part.inlineDataRef?.blobId) {
+    imageUrl.pathname = makeApiUrl(`/sessions/${encodeURIComponent(webUiSessionId)}/blobs/${encodeURIComponent(part.inlineDataRef.blobId)}`).pathname
+  }
+  const src = imageUrl?.toString() || (part.inlineData ? `data:${part.inlineData.mimeType};base64,${part.inlineData.data}` : null)
 
   if (!src || failed) {
     return <div className="text-xs text-fw-text-muted">Image unavailable</div>
   }
-  if (!SAFE_RASTER_MIME_TYPES.has(mimeType)) {
+  if (!isSafeImagePreviewMime(mimeType)) {
+    const download = async () => {
+      if (downloadPending) return
+      setDownloadPending(true); setDownloadError('')
+      try { triggerBrowserDownload(await requestImageDownloadUrl(src, label), label) }
+      catch (err) { setDownloadError(err instanceof Error ? err.message : 'Download unavailable') }
+      finally { setDownloadPending(false) }
+    }
     return (
-      <a className="text-xs text-fw-accent dark:text-fw-accent underline" href={src} target="_blank" rel="noopener noreferrer">
-        Download image attachment
-      </a>
+      <span>
+        <button type="button" className="text-xs text-fw-accent dark:text-fw-accent underline" disabled={downloadPending} onClick={() => { void download() }}>
+          Download image attachment
+        </button>
+        {downloadError && <span role="alert" className="ml-2 text-xs text-fw-warning">{downloadError}</span>}
+      </span>
     )
   }
 
   return (
-    <button
-      type="button"
-      className="foxwarm-image-item relative cursor-pointer text-left"
-      aria-label={`Open ${label}`}
-      onClick={() => window.open(src, '_blank', 'noopener,noreferrer')}
-    >
-      <img
-        src={src}
-        alt={label}
-        loading="lazy"
-        onError={() => setFailed(true)}
-        className={`${imageClassName} rounded-lg border border-fw-border-strong hover:opacity-90 transition`}
-      />
-      <div className="foxwarm-image-hover-overlay absolute inset-0 bg-fw-overlay/0 transition rounded-lg pointer-events-none" />
-    </button>
+    <>
+      <button
+        type="button"
+        className="foxwarm-image-item relative cursor-pointer text-left"
+        aria-label={`Open ${label}`}
+        onClick={() => setPreview(true)}
+      >
+        <img
+          src={src}
+          alt={label}
+          loading="lazy"
+          onError={() => setFailed(true)}
+          className={`${imageClassName} rounded-lg border border-fw-border-strong hover:opacity-90 transition`}
+        />
+        <div className="foxwarm-image-hover-overlay absolute inset-0 bg-fw-overlay/0 transition rounded-lg pointer-events-none" />
+      </button>
+      {preview && <ImagePreviewDialog src={src} mimeType={mimeType} title={label} onClose={() => setPreview(false)} />}
+    </>
   )
 }
 

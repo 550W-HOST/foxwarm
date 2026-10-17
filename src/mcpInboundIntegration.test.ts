@@ -137,8 +137,15 @@ function callResultText(result: any): string {
   return (result.content?.[0] as { text: string })?.text || '';
 }
 
+type ClosedPostResponse = {
+  initialListenerCount: number;
+  listenerCount: number;
+  onceListenerCount: number;
+  writableFinished: boolean;
+};
+
 async function withIntegratedServices(run: (data: {
-  url: URL; configuredUrl: string; calls: Record<string, number>; methods: string[]; wasCancelled: () => boolean; responses: Array<{ listenerCount: number }>;
+  url: URL; configuredUrl: string; calls: Record<string, number>; methods: string[]; wasCancelled: () => boolean; responses: Array<Promise<ClosedPostResponse>>;
 }) => Promise<void>, deadlineMs = 60_000) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-inbound-integration-'));
   const fake = await fakeOutbound();
@@ -147,9 +154,21 @@ async function withIntegratedServices(run: (data: {
   setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(POLICY));
   const port = await availablePort();
   const app = new HttpServer(port, 'instance-token');
-  const responses: Array<{ listenerCount: number }> = [];
-  app.app.use('/mcp', (_req, res, next) => {
-    res.once('close', () => { responses.push({ listenerCount: res.listenerCount('close') }); });
+  const responses: Array<Promise<ClosedPostResponse>> = [];
+  app.app.use('/mcp', (req, res, next) => {
+    if (req.method === 'POST') {
+      const initialListenerCount = res.listenerCount('close');
+      responses.push(new Promise(resolve => {
+        // Observe after all close callbacks and their promise cleanup, not inside
+        // the first callback. GET SSE streams have a different listener lifecycle.
+        res.once('close', () => setImmediate(() => resolve({
+          initialListenerCount,
+          listenerCount: res.listenerCount('close'),
+          onceListenerCount: res.rawListeners('close').filter(listener => 'listener' in listener).length,
+          writableFinished: res.writableFinished,
+        })));
+      }));
+    }
     next();
   });
   const inbound = new McpInboundHttpService(inboundConfig, new McpInboundMcpCatalog(), 60_000, 32, deadlineMs);
@@ -273,13 +292,20 @@ test('real SDK inbound → Main outbound MCP enforces owner/rules and preserves 
       assert.equal(cookie.status, 401);
       const foreign = await fetch(url, { headers: { Authorization: `Bearer ${beta}`, 'Mcp-Session-Id': a.transport.sessionId!, Accept: 'text/event-stream' } });
       assert.equal(foreign.status, 404);
+      const firstRepeatedPost = responses.length;
       for (let index = 0; index < 20; index++) {
         const response = await a.client.callTool({ name: 'foxwarm_call', arguments: { toolId: 'mcp:local/echo_text', args: { message: 'repeat' } } });
         assert.equal(callResultText(response), 'repeat');
       }
-      await wait(10);
-      assert.ok(responses.length >= 20);
-      assert.ok(responses.every(entry => entry.listenerCount < 6), 'POST close listeners must not grow across requests');
+      const repeatedPosts = await Promise.all(responses.slice(firstRepeatedPost));
+      assert.equal(repeatedPosts.length, 20);
+      for (const response of repeatedPosts) {
+        assert.equal(response.writableFinished, true);
+        assert.equal(response.onceListenerCount, 0, 'POST cancellation and close-race callbacks must be released');
+        // The pinned SDK's Hono adapter leaves one ordinary close callback on
+        // each completed response; middleware listeners were already present.
+        assert.equal(response.listenerCount, response.initialListenerCount + 1, 'POST close listeners must return to the middleware and SDK baseline');
+      }
       const previousCalls = calls.echo_text;
       setToolAuthorizationPolicyForTests(undefined);
       const noPolicy = await a.client.callTool({ name: 'foxwarm_call', arguments: { toolId: 'mcp:local/echo_text' } });

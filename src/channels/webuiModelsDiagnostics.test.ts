@@ -4,7 +4,7 @@ import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 import { loadModelsConfigFromObject } from '../config';
-import { buildWebUiModelsPayloadFromConfig, getModelsSetupDiagnostics } from './webuiChannel';
+import { buildWebUiModelsPayloadFromConfig, getModelsSetupDiagnostics } from './webuiSetup';
 
 test('WebUI model options expose exact provider/model identity and ordered virtual targets without secrets', () => {
   const modelsConfig = loadModelsConfigFromObject({

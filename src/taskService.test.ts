@@ -21,7 +21,7 @@ test('assign transfer and release use creator/owner authority and existing Sessi
   await assert.rejects(() => service.execute({ action: 'assign', taskId, ownerSessionId: 'first' }, 'second'), /creator or owner required/);
   assert.equal((await service.execute({ action: 'assign', taskId, ownerSessionId: 'first' }, 'creator')).task.ownerSessionId, 'first');
   assert.equal((await service.execute({ action: 'assign', taskId, ownerSessionId: 'second' }, 'first')).task.ownerSessionId, 'second');
-  await assert.rejects(() => service.execute({ action: 'update', taskId, description: 'Lost ownership' }, 'first'), /owner required/);
+  await assert.rejects(() => service.execute({ action: 'update', taskId, status: 'open' }, 'first'), /owner required/);
   const released = (await service.execute({ action: 'assign', taskId, ownerSessionId: null }, 'creator')).task;
   assert.equal(released.ownerSessionId, null);
   assert.equal(released.status, 'open');
@@ -29,7 +29,7 @@ test('assign transfer and release use creator/owner authority and existing Sessi
   await assert.rejects(() => service.execute({ action: 'assign', taskId }, 'creator'), /ownerSessionId or null/);
 });
 
-test('note-only updates notify a different owner only when requested, without changing note access', async t => {
+test('shared description and note updates notify a different owner only for an opted-in note', async t => {
   const sends: any[] = [];
   let fail = false;
   const service = fixture(t, async (target, message, source, options) => {
@@ -38,6 +38,10 @@ test('note-only updates notify a different owner only when requested, without ch
   });
   const owned = (await service.execute({ action: 'create', title: 'Shared notes' }, 'creator')).task.id;
   await service.execute({ action: 'claim', taskId: owned }, 'first');
+  const revised = await service.execute({ action: 'update', taskId: owned, description: 'Revised scope', notifySession: true }, 'second');
+  assert.equal(revised.task.description, 'Revised scope');
+  assert.equal(revised.sentNotifications, 0);
+  assert.equal(sends.length, 0, 'description-only edits never notify, even when requested');
   const silent = await service.execute({ action: 'update', taskId: owned, note: 'Reviewer update' }, 'creator');
   assert.equal(silent.warning, undefined);
   assert.equal(silent.sentNotifications, 0);
@@ -46,7 +50,8 @@ test('note-only updates notify a different owner only when requested, without ch
   await service.execute({ action: 'update', taskId: owned, note: 'Opted out', notifySession: false }, 'creator');
   assert.equal(sends.length, 0, 'false saves the note without notifying');
 
-  const noted = await service.execute({ action: 'update', taskId: owned, note: 'Notify owner', notifySession: true }, 'creator');
+  const noted = await service.execute({ action: 'update', taskId: owned, description: 'Final scope', note: 'Notify owner', notifySession: true }, 'creator');
+  assert.equal(service.get(owned).task.description, 'Final scope');
   assert.equal(noted.warning, undefined);
   assert.equal(noted.sentNotifications, 1);
   assert.equal(sends.length, 1);

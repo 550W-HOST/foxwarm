@@ -153,7 +153,7 @@ export function WorkbenchContentLayer({ children }: { children: ReactNode }) {
 }
 
 type ContentHostProps = Pick<WorkbenchPaneProps,
-  'paneId' | 'focused' | 'collapseDirection' | 'tabs' | 'dragEnabled' | 'hideTabStrip' | 'canClosePane' |
+  'paneId' | 'focused' | 'collapseDirection' | 'tabs' | 'dragEnabled' | 'hideTabStrip' | 'showPaneControls' | 'canClosePane' |
   'onFocusPane' | 'onSetCollapsed' | 'onClosePane' | 'onCloseTab' | 'onKeepTab' | 'onMoveTabToNewWindow' |
   'canMoveTabToNewWindow' | 'onCloseOtherTabs' | 'onCloseAllTabs'> & {
   tab: WorkbenchTab
@@ -175,7 +175,7 @@ export default function WorkbenchContentHost(props: ContentHostProps) {
     if (element) positions.measure()
   }, [positions])
   const { openContextMenu, openMenuAtElement, menu } = useWorkbenchTabMenu(props)
-  const header = visible && hideTabStrip && tabs.length === 1 ? {
+  const header = visible && hideTabStrip && props.showPaneControls !== false && tabs.length === 1 ? {
     tab, paneId, dragEnabled, canMovePane: props.canClosePane, onCloseTab, onKeepTab: props.onKeepTab, openContextMenu, openMenuAtElement,
     paneControls: <WorkbenchPaneToolbar paneId={paneId} collapsed={false}
       verticalRail={props.collapseDirection === 'row'} canClosePane={props.canClosePane}

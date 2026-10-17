@@ -1,4 +1,4 @@
-base_dir = args.get("baseDir", "examples/toolscript").rstrip("/")
+base_dir = args["baseDir"].rstrip("/")
 
 print("starting automation example")
 

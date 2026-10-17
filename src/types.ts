@@ -319,7 +319,16 @@ export interface TokenUsage {
   outputTokens: number;
 }
 
+/** Last configuration adopted by a normal authoritative LLM attempt, not a delivery receipt. */
+export interface EffectiveRequestSelection {
+  modelId: string;
+  nodeId: string;
+  effort: ModelEffort;
+  missingModelKey?: string;
+}
+
 export interface SessionMeta {
+  lastEffectiveRequest?: EffectiveRequestSelection;
   lastMessageTime: number;
   messageCount?: number; // Cached message count for quick access
   /** Newest 32 authoritative receipts for externally acknowledged session events. */
@@ -365,6 +374,8 @@ export interface SessionDeliveryOptions extends SessionEnqueueOptions {
 }
 
 export interface QueueItem {
+  /** Set only by the canonical runner for deferred model-visible input or events. */
+  queuedInput?: true;
   /** Internal passive ingress: stays durable but does not independently start processing. */
   trigger?: false;
   type: 'user' | 'intersession' | 'background' | 'trigger' | 'onboot' | 'compact-commit';

@@ -1,5 +1,5 @@
 import { MessagePart } from '../types';
-import { formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystemOpen, formatFoxwarmSystemTag, formatSystemPartForModel, parseFoxwarmOpeningTag } from './promptWrappers';
+import { formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystemOpen, formatFoxwarmSystemTag, formatSystemPartForModel, parseFoxwarmOpeningTag, parseFoxwarmTagLine } from './promptWrappers';
 import { formatLocalTimestamp } from './localTime';
 
 function addInputTimeToSystemWrapper(message: string, timestamp: Date | number): string {
@@ -47,6 +47,33 @@ export function withInputTimePart(parts: MessagePart[], timestamp: Date | number
     ...parts.map(part => ({ ...part })),
     { system: formatFoxwarmMessageClose() },
   ];
+}
+
+/** Copy an existing outer source wrapper to set queueInputHint, preserving its body and other attributes. */
+export function withQueueInputHint(parts: MessagePart[], queueInputHint: string): MessagePart[] {
+  for (let index = 0; index < parts.length; index++) {
+    const system = parts[index].system;
+    const opening = parseFoxwarmOpeningTag(system);
+    if (!opening || typeof system !== 'string') return parts;
+    if (opening.tagName === 'foxwarm-system' && ['session', 'channel-mode', 'time'].includes(opening.attrs.kind)) {
+      // Metadata can precede the input, but its body is never searched for one.
+      if (!parseFoxwarmTagLine(system) || !/\/\s*>\s*$/.test(system)) return parts;
+      continue;
+    }
+    if (opening.tagName === 'foxwarm-message' || opening.tagName === 'foxwarm-system') {
+      const match = system.match(/^(\s*)<foxwarm-(?:message|system)\b[^>]*>/i)!;
+      const attrs = { ...opening.attrs, queueInputHint };
+      const formattedOpen = opening.tagName === 'foxwarm-message'
+        ? formatFoxwarmMessageOpen(attrs)
+        : formatFoxwarmSystemOpen(attrs);
+      const replacement = /\/\s*>$/.test(match[0]) ? `${formattedOpen.slice(0, -1)} />` : formattedOpen;
+      return parts.map((part, partIndex) => partIndex === index
+        ? { ...part, system: `${match[1]}${replacement}${system.slice(match[0].length)}` }
+        : part);
+    }
+    return parts;
+  }
+  return parts;
 }
 
 export function buildSystemMessageParts(message: string): MessagePart[] {

@@ -42,4 +42,4 @@ To make Foxwarm itself an MCP server, use the separate [external MCP client guid
 
 ToolScript lets the agent coordinate several tool calls in one script and work with their structured results. It is useful when a task needs repeated reads, transformations, or a sequence of dependent actions.
 
-Load the `toolscript-automation` Skill for the calling conventions, or see the repository's [ToolScript examples](https://github.com/550W-HOST/foxwarm/tree/main/examples/toolscript).
+Load the `toolscript-automation` Skill for the calling conventions, or see the repository's [ToolScript examples](https://github.com/550W-HOST/foxwarm/tree/main/skills/toolscript-automation/examples).

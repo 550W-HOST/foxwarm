@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { Check } from 'lucide-react'
 import { CONTEXT_SCROLLBAR_ANCHOR_SELECTOR } from '../chatViewportState'
-import { CONTEXT_SCROLLBAR_SETTINGS_EVENT, readContextScrollbarSettings, writeContextScrollbarSettings, type ContextScrollbarSettings } from '../contextScrollbarSettings'
+import { writeContextScrollbarSettings, type ContextScrollbarSettings } from '../contextScrollbarSettings'
 import ContextMenu, { type ContextMenuEntry } from './ContextMenu'
 import {
   buildContextScrollbarSegments,
@@ -16,7 +16,9 @@ import {
 import type { Message } from './chatShared'
 
 type ContextScrollbarProps = {
+  settings: ContextScrollbarSettings
   messages: Message[]
+  contextMessages?: Message[]
   persistentMemorySnapshot?: Message | null
   contextLimit: number | null | undefined
   historyComplete?: boolean
@@ -64,18 +66,17 @@ const getBoundaryToken = (segments: ContextScrollbarSegment[], timeline: HTMLEle
  * Desktop context overview.  It deliberately reads the native scroll geometry
  * and asks Chat to perform scrolling; it never becomes a scroll container.
  */
-const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMemorySnapshot, contextLimit, historyComplete = true, containerId, containerRef, timelineRef, onNavigate }: ContextScrollbarProps) {
+const ContextScrollbar = memo(function ContextScrollbar({ settings, messages, contextMessages = messages, persistentMemorySnapshot, contextLimit, historyComplete = true, containerId, containerRef, timelineRef, onNavigate }: ContextScrollbarProps) {
   const rawSegments = useMemo(() => buildContextScrollbarSegments(messages, persistentMemorySnapshot), [messages, persistentMemorySnapshot])
   const [verticalScale, setVerticalScale] = useState<ContextScrollbarVerticalScale>(() => {
     const value = window.localStorage.getItem(VERTICAL_SCALE_STORAGE_KEY)
     return value === 'tokens-logarithmic' || value === 'rendered-height' ? value : 'tokens'
   })
-  const [settings, setSettings] = useState<ContextScrollbarSettings>(readContextScrollbarSettings)
   const [measuredAnchorHeights, setMeasuredAnchorHeights] = useState<Record<string, number>>({})
   const [scaleMenu, setScaleMenu] = useState<{ x: number; y: number } | null>(null)
   const segments = useMemo(() => buildContextScrollbarScaleSegments(rawSegments, verticalScale, measuredAnchorHeights), [measuredAnchorHeights, rawSegments, verticalScale])
   const legendStats = useMemo(() => getContextScrollbarLegendStats(rawSegments), [rawSegments])
-  const contextUsage = useMemo(() => getContextScrollbarContextUsage(messages, contextLimit), [contextLimit, messages])
+  const contextUsage = useMemo(() => getContextScrollbarContextUsage(contextMessages, contextLimit), [contextLimit, contextMessages])
   const effectiveContextUsage = verticalScale === 'rendered-height' ? null : contextUsage
   const totalEstimatedTokens = segments[segments.length - 1]?.endTokens || 0
   const [viewportRange, setViewportRange] = useState<ViewportRange>(null)
@@ -89,9 +90,6 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
     setVerticalScale(next)
     setScaleMenu(null)
   }, [])
-  const updateSettings = useCallback((next: ContextScrollbarSettings) => {
-    setSettings(writeContextScrollbarSettings(next))
-  }, [])
   const scaleMenuEntries = useMemo<ContextMenuEntry[]>(() => [
     ...(Object.keys(verticalScaleLabels) as ContextScrollbarVerticalScale[]).map(scale => ({
       key: scale,
@@ -101,30 +99,9 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
       onSelect: () => selectVerticalScale(scale),
     })),
     { key: 'display-separator', type: 'separator' as const },
-    { key: 'show-scrollbar', label: 'Show scrollbar', icon: settings.showScrollbar ? <Check size={14} /> : null, checked: settings.showScrollbar, disabled: settings.showScrollbar && !settings.showMinimap, onSelect: () => updateSettings({ ...settings, showScrollbar: !settings.showScrollbar }) },
-    { key: 'show-minimap', label: 'Show minimap', icon: settings.showMinimap ? <Check size={14} /> : null, checked: settings.showMinimap, disabled: settings.showMinimap && !settings.showScrollbar, onSelect: () => updateSettings({ ...settings, showMinimap: !settings.showMinimap }) },
-  ], [selectVerticalScale, settings, updateSettings, verticalScale])
-
-  useEffect(() => {
-    const sync = () => setSettings(readContextScrollbarSettings())
-    window.addEventListener(CONTEXT_SCROLLBAR_SETTINGS_EVENT, sync)
-    window.addEventListener('storage', sync)
-    return () => {
-      window.removeEventListener(CONTEXT_SCROLLBAR_SETTINGS_EVENT, sync)
-      window.removeEventListener('storage', sync)
-    }
-  }, [])
-
-  useEffect(() => {
-    const container = containerRef.current
-    if (!container) return
-    container.dataset.showSystemScrollbar = String(settings.showScrollbar)
-    container.dataset.showContextMinimap = String(settings.showMinimap)
-    return () => {
-      delete container.dataset.showSystemScrollbar
-      delete container.dataset.showContextMinimap
-    }
-  }, [containerRef, historyComplete, settings.showMinimap, settings.showScrollbar])
+    { key: 'show-scrollbar', label: 'Show scrollbar', icon: settings.showScrollbar ? <Check size={14} /> : null, checked: settings.showScrollbar, disabled: settings.showScrollbar && !settings.showMinimap, onSelect: () => writeContextScrollbarSettings({ ...settings, showScrollbar: !settings.showScrollbar }) },
+    { key: 'show-minimap', label: 'Show minimap', icon: settings.showMinimap ? <Check size={14} /> : null, checked: settings.showMinimap, disabled: settings.showMinimap && !settings.showScrollbar, onSelect: () => writeContextScrollbarSettings({ ...settings, showMinimap: !settings.showMinimap }) },
+  ], [selectVerticalScale, settings, verticalScale])
 
   const updateViewportRange = useCallback(() => {
     const container = containerRef.current
@@ -323,7 +300,7 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
   const viewportTop = viewportRange?.top ?? 0
   const viewportBottom = viewportRange?.bottom ?? viewportTop
 
-  if (!settings.showMinimap || !historyComplete) return null
+  if (!historyComplete) return null
 
   return (
     <div className="foxwarm-context-scrollbar-shell" data-context-scrollbar-dragging={isDragging || undefined} aria-label="Context overview" onContextMenu={(event) => { event.preventDefault(); setScaleMenu({ x: event.clientX, y: event.clientY }) }}>

@@ -373,13 +373,11 @@ export class TaskStore {
       if (!task.ownerSessionId) db.prepare("UPDATE tasks SET ownerSessionId=?,status='active',updatedAt=?,reminderLastSeq=?,reminderMessageCount=0 WHERE id=?")
         .run(sessionId, now, anchorSeq ?? null, task.id);
     } else {
-      const noteOnlyUpdate = args.action === 'update'
-        && Object.prototype.hasOwnProperty.call(args, 'note')
-        && !Object.prototype.hasOwnProperty.call(args, 'description')
+      const sharedContentUpdate = args.action === 'update'
         && !Object.prototype.hasOwnProperty.call(args, 'status');
       const permitted = args.action === 'cancel' || args.action === 'assign'
         ? sessionId === task.createdBySessionId || sessionId === task.ownerSessionId
-        : noteOnlyUpdate || sessionId === (task.ownerSessionId ?? task.createdBySessionId);
+        : sharedContentUpdate || sessionId === (task.ownerSessionId ?? task.createdBySessionId);
       if (actor.kind !== 'user' && !permitted) throw new TaskError('TASK_FORBIDDEN', `Session ${sessionId} cannot ${args.action} task ${task.id} (${state}); ${args.action === 'cancel' || args.action === 'assign' ? 'creator or owner' : task.ownerSessionId ? 'owner' : 'creator'} required.`, 403);
       this.writeReferences(db, task);
       if (args.action === 'assign') {

@@ -75,6 +75,7 @@ Optional remote and compatibility components:
 
 | Component | Current role and status |
 |---|---|
+| [WebUI timeline](./modules/webui-timeline.md) | Browser rendering modes, pane-local Search, Reasoning presentation, and Activity accounting. |
 | [React WebUI](./modules/webui.md) | Current browser client. The .NET host serves its built assets when configured; route and payload compatibility is shared across the boundary. |
 | [Shared and Nodes](./modules/shared-and-nodes.md) | TypeScript protocol/utilities plus CLI, browser, Android, and sandbox Node implementations. These remain real execution components while the .NET Main migration proceeds. |
 | [TypeScript compatibility source](./modules/typescript-compatibility.md) | Older Main implementation and migration readers. It is not the active .NET architecture, but selected files still explain persisted or external compatibility. |

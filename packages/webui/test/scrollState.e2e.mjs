@@ -68,12 +68,28 @@ async function readAnchorOffset(messageKey) {
   }, messageKey)
 }
 
+async function wheelChat(deltaY) {
+  await page.evaluate(() => {
+    window.chatWheelFrame = false
+    document.querySelector('.foxwarm-chat-messages').addEventListener('wheel', () => {
+      requestAnimationFrame(() => { window.chatWheelFrame = true })
+    }, { once: true })
+  })
+  const box = await page.$eval('.foxwarm-chat-messages', (container) => {
+    const rect = container.getBoundingClientRect()
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+  })
+  await page.mouse.move(box.x, box.y)
+  await page.mouse.wheel({ deltaY })
+  await page.waitForFunction(() => window.chatWheelFrame)
+}
+
 async function waitForTimelineScrollHandler() {
   await page.waitForFunction(() => {
     const container = document.querySelector('.foxwarm-chat-messages')
     if (!(container instanceof HTMLElement)) return false
     if (document.querySelector('button[aria-label="Scroll to top"]')) return true
-    container.scrollTop = 250
+    container.scrollTop = 600
     container.dispatchEvent(new Event('scroll'))
     return false
   }, { timeout: 5_000 })
@@ -279,7 +295,10 @@ test('continued user scrolling cancels the stale prepend restore target', async 
 test('tab remount restores an old message anchor and bottom-follow state', async () => {
   await openPersistentChat(secondarySessionId)
   await selectTab(primarySessionId)
-  await page.waitForFunction(() => document.querySelectorAll('[data-chat-timeline="committed"] [data-chat-message-anchor-key]').length > 10, { timeout: 15_000 })
+  await page.waitForSelector('[aria-label="Context overview"]', { timeout: 15_000 })
+  // Choose a new reading point after bootstrap restoration, with real leave intent.
+  await wheelChat(-1)
+  await page.waitForSelector('[aria-label="Scroll to bottom"]')
 
   const expectedAnchor = await page.evaluate(() => {
     const container = document.querySelector('.foxwarm-chat-messages')
@@ -320,4 +339,54 @@ test('tab remount restores an old message anchor and bottom-follow state', async
   await new Promise((resolve) => setTimeout(resolve, 100))
   const distanceFromBottom = await page.$eval('.foxwarm-chat-messages', (container) => container.scrollHeight - container.scrollTop - container.clientHeight)
   assert.ok(distanceFromBottom <= 2, `expected bottom restore, got distance ${distanceFromBottom}`)
+})
+
+
+test('an old active anchor survives switching away again while its return prefix is pending', async () => {
+  await openPersistentChat(primarySessionId)
+  await page.waitForSelector('[aria-label="Context overview"]', { timeout: 15_000 })
+  await waitForTimelineScrollHandler()
+  await page.click('[aria-label="Scroll to top"]')
+  await page.waitForFunction(() => !!document.querySelector('[data-chat-message-anchor-key="seq-local-1"]')
+    && !document.querySelector('[aria-label="Scroll to top"]'))
+  await wheelChat(500)
+  await page.waitForSelector('[aria-label="Scroll to top"]')
+  const expected = await readTopAnchor()
+  assert.ok(expected?.key && Number(expected.key.split('-').at(-1)) < 41, 'reading point is outside the 100-message bootstrap tail')
+
+  let heldPrefix
+  let interceptPrefix = true
+  let prefixStarted
+  const prefixHeld = new Promise(resolve => { prefixStarted = resolve })
+  const intercept = request => {
+    if (interceptPrefix && request.url().includes(`/sessions/${encodeURIComponent(primarySessionId)}/history?prefixLength=`)) {
+      interceptPrefix = false
+      heldPrefix = request
+      prefixStarted()
+    } else void request.continue()
+  }
+  await page.setRequestInterception(true)
+  page.on('request', intercept)
+  try {
+    await openPersistentChat(secondarySessionId)
+    await selectTab(primarySessionId)
+    await prefixHeld
+    await page.waitForFunction(() => document.querySelectorAll('[data-chat-timeline="committed"] [data-chat-message-anchor-key]').length === 100)
+    assert.equal(await readAnchorOffset(expected.key), null, 'the saved old anchor has not arrived yet')
+
+    // Do not choose a different reading point during this intermediate mount.
+    await selectTab(secondarySessionId)
+    await heldPrefix.continue()
+    heldPrefix = null
+    await selectTab(primarySessionId)
+    await page.waitForSelector('[aria-label="Context overview"]', { timeout: 15_000 })
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const restored = await readAnchorOffset(expected.key)
+    assert.notEqual(restored, null, 'a transient tail must not replace the saved old anchor with bottom')
+    assert.ok(Math.abs(restored - expected.offset) <= 2, `old anchor changed from ${expected.offset} to ${restored}`)
+  } finally {
+    if (heldPrefix) await heldPrefix.continue()
+    page.off('request', intercept)
+    await page.setRequestInterception(false)
+  }
 })

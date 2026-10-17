@@ -1,8 +1,10 @@
+import type { ToolBatchResult } from './toolExecutor';
+import { executeTools } from './toolExecutor';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 
-import { executeTools } from './llm';
+
 import * as nodeExecution from './nodeExecution';
 import { nodesManager } from './nodes/manager';
 import * as sessionManager from './sessionManager';
@@ -417,7 +419,7 @@ test('direct remote builtin and dynamic node calls share the Node execution serv
       { sessionId: sourceId, session },
       session,
     );
-    assert.deepEqual(direct.parts.find(part => part.functionResponse)?.functionResponse?.response, { ok: true, tool: 'read' });
+    assert.deepEqual(direct.message.parts.find(part => part.functionResponse)?.functionResponse?.response, { ok: true, tool: 'read' });
 
     const dynamic = await call_tool({
       source: 'node',
@@ -546,7 +548,7 @@ test('master-currentNode node tools bypass Node execution RPC', async () => {
       { sessionId: sourceId, session },
       session,
     );
-    assert.equal(result.parts.find(part => part.functionResponse)?.functionResponse?.response.error, undefined);
+    assert.equal(result.message.parts.find(part => part.functionResponse)?.functionResponse?.response.error, undefined);
     assert.equal(remoteCalls, 0);
   } finally {
     (nodeExecution as any).executeNodeTool = originalRemoteExecute;
@@ -682,14 +684,14 @@ test('Node execution clones results and preserves remote image/error handling', 
       [{ id: 'remote-image', name: 'read', args: { filePath: 'image.png' } }],
       { sessionId: sourceId, session }, session,
     );
-    assert.equal(imageResult.parts.some(part => part.inlineData?.mimeType === 'image/png'), true);
+    assert.equal(imageResult.message.parts.some(part => part.inlineData?.mimeType === 'image/png'), true);
 
     (nodesManager as any).executeTool = async () => { throw new Error('remote execution failed'); };
     const errorResult = await executeTools(
       [{ id: 'remote-error', name: 'read', args: { filePath: 'missing' } }],
       { sessionId: sourceId, session }, session,
     );
-    assert.match(String(errorResult.parts.find(part => part.functionResponse)?.functionResponse?.response.error), /remote execution failed/);
+    assert.match(String(errorResult.message.parts.find(part => part.functionResponse)?.functionResponse?.response.error), /remote execution failed/);
   } finally {
     (nodesManager as any).getNode = originalGetNode;
     (nodesManager as any).executeTool = originalExecuteTool;
@@ -773,8 +775,8 @@ test('trusted script data crosses exact-owner Node RPC without accepting an argu
   } finally { await resetToolScriptRunsForTests(); await transport.drain(); transport.close(); await cleanup(sessionId); }
 });
 
-function batchResponses(message: any): any[] {
-  return message.parts.filter((part: any) => part.functionResponse).map((part: any) => part.functionResponse);
+function batchResponses(message: ToolBatchResult): any[] {
+  return message.message.parts.filter((part: any) => part.functionResponse).map((part: any) => part.functionResponse);
 }
 
 test('select and subsequent exec/file calls share the newly selected environment in Main and Worker batches', async () => {
@@ -895,12 +897,12 @@ test('select failures in validation, availability, authorization, and canonical 
       assert.equal(session.cwd, '/previous/cwd');
       assert.equal(persists, 0);
       if (scenario.unavailablePolicy) {
-        assert.equal((result as any).__toolLoopControl?.fatalError.code, TOOL_AUTH_POLICY_UNAVAILABLE,
+        assert.equal(result.control?.fatalError.code, TOOL_AUTH_POLICY_UNAVAILABLE,
           'existing fatal policy-unavailability behavior is preserved');
       } else {
-        assert.equal((result as any).__toolLoopControl, undefined, 'selection failure is not a fatal turn boundary');
+        assert.equal(result.control, undefined, 'selection failure is not a fatal turn boundary');
       }
-      assert.equal((result as any).__toolPostAction, undefined, 'skipped wait must not arm or stop the turn');
+      assert.equal(result.postActions, undefined, 'skipped wait must not arm or stop the turn');
     }
   } finally {
     setToolAuthorizationPolicyForTests(undefined);

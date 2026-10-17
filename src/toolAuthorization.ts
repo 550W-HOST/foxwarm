@@ -1,3 +1,4 @@
+import { builtinNodeArgumentSelectsFileSource } from './tools/placement';
 import fs from 'fs-extra';
 import { replaceConfigFile } from './configFile';
 import path from 'path';
@@ -565,6 +566,10 @@ export function buildToolAuthorizationRequest(options: {
     addPath(paths, { arg: 'filePath', raw: args.filePath, targetNode, agentName, session: options.session });
   }
   if (options.tool.source === 'builtin' && BUILTIN_FILE_PATH_TOOLS.has(options.tool.name)) {
+    addPath(paths, { arg: 'filePath', raw: args.filePath, targetNode, agentName, session: options.session });
+  }
+  if (options.tool.source === 'builtin' && builtinNodeArgumentSelectsFileSource(options.tool.name)
+    && !(typeof args.code === 'string' && args.code.trim())) {
     addPath(paths, { arg: 'filePath', raw: args.filePath, targetNode, agentName, session: options.session });
   }
   if (options.tool.source === 'builtin' && MEMORY_PATH_TOOLS.has(options.tool.name)) {

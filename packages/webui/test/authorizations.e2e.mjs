@@ -13,21 +13,29 @@ async function fixture() {
   let output = ''
   let errors = ''
   process.stderr.on('data', chunk => { errors += chunk })
-  const ready = await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error(`OAuth fixture did not start: ${errors}`)), 30000)
-    process.once('exit', () => { clearTimeout(timeout); reject(new Error(`OAuth fixture exited: ${errors}`)) })
-    process.stdout.on('data', chunk => {
-      output += chunk
-      for (const line of output.split('\n')) {
-        try { const data = JSON.parse(line); if (data.ready) { clearTimeout(timeout); resolve(data) } } catch {}
-      }
-    })
-  })
-  return { ...ready, close: async () => {
-    if (process.exitCode !== null) return
+  const exited = new Promise(resolve => process.once('exit', resolve))
+  const close = async () => {
+    if (!process.pid || process.exitCode !== null || process.signalCode !== null) return
     process.kill('SIGTERM')
-    await new Promise(resolve => process.once('exit', resolve))
-  } }
+    await exited
+  }
+  try {
+    const ready = await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error(`OAuth fixture did not start: ${errors}`)), 30000)
+      process.once('error', error => { clearTimeout(timeout); reject(error) })
+      process.once('exit', () => { clearTimeout(timeout); reject(new Error(`OAuth fixture exited: ${errors}`)) })
+      process.stdout.on('data', chunk => {
+        output += chunk
+        for (const line of output.split('\n')) {
+          try { const data = JSON.parse(line); if (data.ready) { clearTimeout(timeout); resolve(data) } } catch {}
+        }
+      })
+    })
+    return { ...ready, close }
+  } catch (error) {
+    await close()
+    throw error
+  }
 }
 async function articleButton(page, text) {
   const handles = await page.$$('article button')
@@ -85,8 +93,9 @@ for (const browserName of ['chromium', 'firefox']) {
     : process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
   test(`${browserName}: administrator OAuth, cross-site Strict cookie completion, prefix/CIMD and scoped denial`, {
     skip: !existsSync(executablePath), timeout: 180000,
-  }, async () => {
+  }, async t => {
     const env = await fixture()
+    t.after(() => env.close())
     const browser = await puppeteer.launch({ browser: browserName === 'firefox' ? 'firefox' : 'chrome', executablePath,
       headless: true, acceptInsecureCerts: true, args: browserName === 'firefox' ? [] : ['--no-sandbox', '--disable-dev-shm-usage'] })
     try {
@@ -155,6 +164,6 @@ for (const browserName of ['chromium', 'firefox']) {
       await page.click('button[aria-label="Refresh authorizations"]')
       await page.waitForFunction(() => document.querySelector('[data-authorizations-fixture]')?.textContent.includes('Set url in Config'))
       assert.equal(await page.$eval('article', element => [...element.querySelectorAll('button')].find(button => /^(Authorize|Reauthorize)$/.test(button.textContent.trim())).disabled), true)
-    } finally { await browser.close(); await env.close() }
+    } finally { await browser.close() }
   })
 }

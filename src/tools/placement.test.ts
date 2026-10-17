@@ -85,12 +85,12 @@ test('placement resolution routes only node-environment tools to currentNode', (
   });
 });
 
-test('only file source/target node arguments select builtin placement', async () => {
+test('file Node selectors remain distinct from semantic Node arguments', async () => {
   const rootNodeSchemas = definitions
     .filter(definition => Object.prototype.hasOwnProperty.call(definition.parameters?.properties || {}, 'node'))
     .map(definition => definition.name)
     .sort();
-  assert.deepEqual(rootNodeSchemas, ['create_child_session', 'create_session', 'image_write_to_file', 'send_file']);
+  assert.deepEqual(rootNodeSchemas, ['create_child_session', 'create_session', 'image_write_to_file', 'run_script', 'send_file', 'start_toolscript_run']);
   assert.equal(builtinNodeArgumentSelectsPlacement('image_write_to_file'), true);
   assert.equal(builtinNodeArgumentSelectsPlacement('send_file'), true);
   assert.equal(builtinNodeArgumentSelectsPlacement('create_child_session'), false);

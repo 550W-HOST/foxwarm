@@ -10,7 +10,7 @@ import { NodeTransferFilePayload, NodeTransferWriteResult, readNodeTransferFile,
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
 import { WebSocket } from 'ws';
-import { isReservedNodeId } from './registry';
+import { isReservedNodeId, removeApprovedNode } from './registry';
 import { adaptLegacyRemoteNodeToolResult } from './legacyToolResultCompatibility';
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from '../tools/placement';
 import { issueRemoteExecCompletionCapability, verifyRemoteExecCompletionCapability } from './sessionEventCapability';
@@ -358,6 +358,13 @@ export class NodesManager {
       this.nodes.delete(nodeId);
       logger.info({ nodeId }, 'Node unregistered');
     }
+  }
+
+  /** Revoke approved credentials before disconnecting the current runtime. */
+  async removeApprovedNode(nodeId: string): Promise<{ nodeId: string; disconnected: boolean }> {
+    const removed = await removeApprovedNode(nodeId);
+    const disconnected = this.disconnectNode(removed.nodeId, 'Node credentials removed');
+    return { nodeId: removed.nodeId, disconnected };
   }
 
   /**

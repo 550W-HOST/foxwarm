@@ -174,7 +174,7 @@ test('Stop aborts a held stream and later input can run as a new turn', async ()
   await openSession(sessionId)
   await sendMessage('APP_E2E_STOP')
   await page.waitForFunction(() => document.body.textContent?.includes('held stream'), { timeout: 15_000 })
-  await page.click('button::-p-text(Stop)')
+  await page.locator('button[aria-label="Stop session"]').click()
   await waitForIdle(sessionId)
   await waitForProvider(state => state.stopAborted === true)
   await sendMessage('APP_E2E_AFTER_STOP')
@@ -363,6 +363,22 @@ test('WS compact planning and BTW use purpose-scoped request keys without replac
   const syncStoredKey = syncAuthority.promptCacheKey
   assert.equal(syncStoredKey, syncBefore.promptCacheKey)
   assertCommittedCompaction(syncAuthority, syncBefore, 'compact_sync summary')
+
+  // Conversation browses raw Archive; the ordinary context route still owns the summary.
+  await page.click('[aria-label="Open session options"]')
+  await page.$$eval('[role="radio"]', buttons => buttons.find(button => button.textContent === 'Conversation').click())
+  await page.keyboard.press('Escape')
+  await page.waitForSelector('[data-continuous-history]')
+  await page.waitForSelector('[data-chat-message-anchor-key="seq-local-1"]')
+  const raw = await api(`/api/sessions/${encodeURIComponent(syncId)}/history/continuous`)
+  assert.deepEqual(raw.messages.slice(0, 20).map(message => message.__meta.seq), Array.from({ length: 20 }, (_, index) => index + 1))
+  assert.equal(raw.messages.some(message => message.__meta?.contextBlock), false)
+  assert.equal((await history(syncId)).messages[0].__meta.contextBlock.id, 1)
+  assert.equal(await page.$('[aria-label="Expand CTX-BLOCK B#1"]'), null)
+  await page.click('[aria-label="Open session options"]')
+  await page.$$eval('[role="radio"]', buttons => buttons.find(button => button.textContent === 'Detailed').click())
+  await page.keyboard.press('Escape')
+  await page.waitForSelector('[aria-label="Expand CTX-BLOCK B#1"]')
 
   const backgroundId = 'core-compact-background'
   const backgroundBefore = JSON.parse(await fs.readFile(path.join(dataRoot, 'state', 'sessions', `${backgroundId}.json`), 'utf8'))

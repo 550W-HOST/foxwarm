@@ -1,3 +1,4 @@
+import * as toolExecutor from './toolExecutor';
 import { taskService } from './tools/taskTools';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -24,7 +25,7 @@ import { sessionWorkerControlServiceDescriptor } from './sessionWorkerControlSer
 import { SessionWorkerHost } from './sessionWorkerHost';
 import { sessionWorkerRuntimeServiceDescriptor } from './sessionWorkerRuntimeService';
 import { SessionWorkerStore } from './sessionWorkerStore';
-import type { InlineDataRef, Session } from './types';
+import type { InlineDataRef, QueueItem, Session } from './types';
 import * as llm from './llm';
 import * as sessionManager from './sessionManager';
 import { getAgentDir, SESSIONS_FILE, TIMERS_FILE } from './config';
@@ -38,6 +39,10 @@ import { createSessionWorkerPublicationServiceHandler, sessionWorkerPublicationS
 import { createSessionTurnDeliveryServiceHandler, sessionTurnDeliveryServiceDescriptor } from './sessionTurnDelivery';
 import { normalizeSessionWorkerIngressRequest } from './sessionWorkerIngress';
 import { registerChannel, unregisterChannel } from './channel';
+import { MessageRouter } from './messageRouter';
+import type { MessagePart } from './types';
+import { formatFoxwarmMessage, formatFoxwarmSystemTag, parseFoxwarmOpeningTag } from './utils/promptWrappers';
+import { issueRemoteExecCompletionCapability } from './nodes/sessionEventCapability';
 
 function baseSession(id: string): Session {
   return {
@@ -518,7 +523,7 @@ test('worker publishes a no-tool result once when a different-source follow-up a
 
 test('worker keeps tool call/result adjacent while delivering text before appending a compatible follow-up', async () => {
   const initial = baseSession('worker-tool-followup-adjacency');
-  const originalChat = llm.chat; const originalExecuteTools = llm.executeTools;
+  const originalChat = llm.chat; const originalExecuteTools = toolExecutor.executeTools;
   const source = {
     platform: 'qqbot', channelId: 'qq-instance', channelType: 'qqbot',
     channelUserId: 'c2c:openid', conversationId: 'c2c:openid', qqbotMessageId: 'qq-first',
@@ -542,9 +547,10 @@ test('worker keeps tool call/result adjacent while delivering text before append
     await options.appendMessage({ role: 'model', parts: [{ text: 'tool follow-up final' }] });
     return { text: 'tool follow-up final' };
   };
-  (llm as any).executeTools = async () => ({
-    role: 'tool',
-    parts: [{ functionResponse: { tool_use_id: 'adjacent-tool', name: 'session', response: { output: 'ok' } } }],
+  (toolExecutor as any).executeTools = async () => ({
+    message: {
+      role: 'tool', parts: [{ functionResponse: { tool_use_id: 'adjacent-tool', name: 'session', response: { output: 'ok' } } }]
+    }
   });
   try {
     await withLocalHost(initial, async ({ host, store, readDurable }) => {
@@ -561,11 +567,11 @@ test('worker keeps tool call/result adjacent while delivering text before append
         assert.deepEqual(readDurableRef!().history.map((message: any) => message.role), ['user', 'model']);
         intermediate.push(text);
       });
-  } finally { (llm as any).chat = originalChat; (llm as any).executeTools = originalExecuteTools; }
+  } finally { (llm as any).chat = originalChat; (toolExecutor as any).executeTools = originalExecuteTools; }
 });
 
 test('tool terminal paths never resend model text and close an active Worker WeWork stream', async t => {
-  const originalChat = llm.chat; const originalExecuteTools = llm.executeTools;
+  const originalChat = llm.chat; const originalExecuteTools = toolExecutor.executeTools;
   let mode: 'wait' | 'stop' | 'stop-empty' | 'managed' | 'tool-stop' = 'wait';
   (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
     if (parts) await options.appendMessage({ role: 'user', parts });
@@ -574,17 +580,16 @@ test('tool terminal paths never resend model text and close an active Worker WeW
     await options.appendMessage({ role: 'model', parts: [{ text }, { functionCall: toolCall }] });
     return { text, toolCalls: [toolCall], allParts: [{ text }, { functionCall: toolCall }] };
   };
-  (llm as any).executeTools = async (_calls: any, _context: any, session: Session) => {
+  (toolExecutor as any).executeTools = async (_calls: any, _context: any, session: Session) => {
     if (mode === 'stop' || mode === 'stop-empty') session.stopping = true;
     if (mode === 'managed') (session.meta as any).managedSession = {
       ownerSessionId: 'owner', leaseId: 'lease', revision: 1, pendingInbox: [], openedAt: 1, leaseTouchedAt: 1,
       currentStep: { stepId: 'step', runMode: 'tool' },
     };
     return {
-      role: 'tool',
-      parts: [{ functionResponse: { tool_use_id: `terminal-${mode}`, name: 'session', response: { output: 'ok' } } }],
-      ...(mode === 'wait' ? { __toolPostAction: { waitForReply: true } } : {}),
-      ...(mode === 'tool-stop' ? { __toolLoopControl: { stopCurrentTurn: true } } : {}),
+      message: {
+        role: 'tool', parts: [{ functionResponse: { tool_use_id: `terminal-${mode}`, name: 'session', response: { output: 'ok' } } }]
+      }, ...(mode === 'wait' ? { postActions: { waitForReply: true } } : {}), ...(mode === 'tool-stop' ? { control: { stopCurrentTurn: true } } : {})
     };
   };
   try {
@@ -610,7 +615,7 @@ test('tool terminal paths never resend model text and close an active Worker WeW
           async (_source, text) => { intermediates.push(text); });
       });
     }
-  } finally { (llm as any).chat = originalChat; (llm as any).executeTools = originalExecuteTools; }
+  } finally { (llm as any).chat = originalChat; (toolExecutor as any).executeTools = originalExecuteTools; }
 });
 
 test('worker intermediate delivery failure is swallowed without poisoning later turns', async () => {
@@ -644,7 +649,7 @@ test('worker intermediate delivery failure is swallowed without poisoning later 
 
 test('worker tool-stop finalizes the iteration without a duplicate model-text delivery', async () => {
   const initial = baseSession('worker-intermediate-no-duplicate-final');
-  const originalChat = llm.chat; const originalExecuteTools = llm.executeTools;
+  const originalChat = llm.chat; const originalExecuteTools = toolExecutor.executeTools;
   let intermediateCalls = 0; let finalCalls = 0;
   (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
     if (parts) await options.appendMessage({ role: 'user', parts });
@@ -652,7 +657,11 @@ test('worker tool-stop finalizes the iteration without a duplicate model-text de
     await options.appendMessage({ role: 'model', parts: [{ text: 'already sent', }, { functionCall: toolCall }] });
     return { text: 'already sent', toolCalls: [toolCall], allParts: [{ text: 'already sent' }, { functionCall: toolCall }] };
   };
-  (llm as any).executeTools = async () => ({ parts: [{ functionResponse: { name: 'session', response: 'stopped' } }], __toolLoopControl: { stopCurrentTurn: true } });
+  (toolExecutor as any).executeTools = async () => ({
+    message: {
+      role: 'tool', parts: [{ functionResponse: { name: 'session', response: 'stopped' } }]
+    }, control: { stopCurrentTurn: true }
+  });
   try {
     await withLocalHost(initial, async ({ host, store, readDurable }) => {
       store.enqueueIntent(initial.id, 'stop-after-text', 'enqueue', { type: 'user', source: { platform: 'qqbot', channelId: 'qq', channelType: 'qqbot', channelUserId: 'c2c:openid', conversationId: 'c2c:openid', qqbotMessageId: 'inbound' }, parts: [{ text: 'stop' }] });
@@ -661,12 +670,12 @@ test('worker tool-stop finalizes the iteration without a duplicate model-text de
     }, true, undefined,
       async () => { finalCalls += 1; },
       async () => { intermediateCalls += 1; });
-  } finally { (llm as any).chat = originalChat; (llm as any).executeTools = originalExecuteTools; }
+  } finally { (llm as any).chat = originalChat; (toolExecutor as any).executeTools = originalExecuteTools; }
 });
 
 test('fatal tool-loop metadata preserves pairing, delivers one terminal error, and releases busy', async () => {
   const initial = baseSession(`worker-tool-policy-fatal-${Date.now()}`);
-  const originalChat = llm.chat; const originalExecuteTools = llm.executeTools;
+  const originalChat = llm.chat; const originalExecuteTools = toolExecutor.executeTools;
   const finals: Array<{ text: string; outcome: string }> = [];
   (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
     if (parts) await options.appendMessage({ role: 'user', parts });
@@ -674,10 +683,10 @@ test('fatal tool-loop metadata preserves pairing, delivers one terminal error, a
     await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
     return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
   };
-  (llm as any).executeTools = async () => ({
-    role: 'tool',
-    parts: [{ functionResponse: { tool_use_id: 'policy-fatal', name: 'session', response: { error: 'policy unavailable', code: 'TOOL_AUTH_POLICY_UNAVAILABLE' } } }],
-    __toolLoopControl: { stopCurrentTurn: true, fatalError: { code: 'TOOL_AUTH_POLICY_UNAVAILABLE', message: 'policy unavailable' } },
+  (toolExecutor as any).executeTools = async () => ({
+    message: {
+      role: 'tool', parts: [{ functionResponse: { tool_use_id: 'policy-fatal', name: 'session', response: { error: 'policy unavailable', code: 'TOOL_AUTH_POLICY_UNAVAILABLE' } } }]
+    }, control: { stopCurrentTurn: true, fatalError: { code: 'TOOL_AUTH_POLICY_UNAVAILABLE', message: 'policy unavailable' } }
   });
   try {
     await withLocalHost(initial, async ({ host, store, readDurable }) => {
@@ -687,7 +696,7 @@ test('fatal tool-loop metadata preserves pairing, delivers one terminal error, a
       assert.equal(readDurable().busy, false);
       assert.deepEqual(finals, [{ text: 'Error: policy unavailable', outcome: 'error' }]);
     }, true, undefined, async (_source, text, outcome) => { finals.push({ text, outcome }); });
-  } finally { (llm as any).chat = originalChat; (llm as any).executeTools = originalExecuteTools; }
+  } finally { (llm as any).chat = originalChat; (toolExecutor as any).executeTools = originalExecuteTools; }
 });
 
 test('automatic compact maintenance failure after a delivered success resyncs without a second final', async () => {
@@ -1104,8 +1113,8 @@ test('real Worker retry ingests durable mailbox input and honors Stop or dequeue
           (axios as any).post = async (_url: string, body: any) => {
             bodies.push(body);
             if (bodies.length === 1) {
-              store.enqueueIntent(initial.id, 'retry-correction-A', 'enqueue', { type: 'user', parts: [{ text: 'mailbox correction A' }] });
-              store.enqueueIntent(initial.id, 'retry-correction-B', 'enqueue', { type: 'background', parts: [{ text: 'mailbox correction B' }] });
+              store.enqueueIntent(initial.id, 'retry-correction-A', 'enqueue', { type: 'user', parts: [{ system: formatFoxwarmMessage({ type: 'channel', channelType: 'webui', time: 'original', hint: 'direct user message via channel' }, 'mailbox correction A') }] });
+              store.enqueueIntent(initial.id, 'retry-correction-B', 'enqueue', { type: 'background', parts: [{ system: formatFoxwarmMessage({ type: 'background', time: 'original', hint: 'background guidance' }, 'mailbox correction B') }] });
               assert.equal(session.queue.length, 0, 'new Worker input is durable only in the mailbox before the retry safe point');
               throw new Error('mock provider retry failure');
             }
@@ -1137,6 +1146,22 @@ test('real Worker retry ingests durable mailbox input and honors Stop or dequeue
           assert.equal(!!durable.stopping, false);
           assert.equal(durable.queue.length, 0);
           assert.equal(durable.meta.runQueuedAfterStop, undefined);
+          assert.doesNotMatch(JSON.stringify(bodies[0].messages.filter((message: any) => message.role === 'user')), /queueInputHint=/);
+          const correction = durable.history.find((message: any) => message.parts.some((part: any) => part.system?.includes('mailbox correction A')));
+          assert.equal(correction.parts.length, 1);
+          const correctionAttrs = parseFoxwarmOpeningTag(correction.parts[0].system)!.attrs;
+          assert.equal(correctionAttrs.hint, 'direct user message via channel');
+          assert.match(correctionAttrs.queueInputHint, /^Queued input:/,
+            'retry, passive Stop and Run queued commit queueInputHint in the source wrapper');
+          assert.equal((correction.parts[0].system.match(/queueInputHint=/g) || []).length, 1);
+          const event = durable.history.find((message: any) => message.parts.some((part: any) => part.system?.includes('mailbox correction B')));
+          const eventAttrs = parseFoxwarmOpeningTag(event.parts[0].system)!.attrs;
+          assert.equal(eventAttrs.hint, 'background guidance');
+          assert.match(eventAttrs.queueInputHint, /^Queued input: this message or event/);
+          if (control !== 'stop') {
+            assert.equal((JSON.stringify(bodies[1].messages.filter((message: any) => message.role === 'user')).match(/queueInputHint=/g) || []).length, 2);
+            assert.equal(bodies[1].messages.some((message: any) => message.content === correction.parts[0].system), true);
+          }
           for (const text of ['mailbox correction A', 'mailbox correction B']) {
             assert.equal(JSON.stringify(durable.history).split(text).length - 1, 1);
             if (control !== 'stop') assert.equal(JSON.stringify(bodies[1]).split(text).length - 1, 1);
@@ -1144,6 +1169,16 @@ test('real Worker retry ingests durable mailbox input and honors Stop or dequeue
           const assistant = durable.history.find((message: any) => message.parts[0]?.text === 'worker retry answer');
           if (control !== 'stop') assert.equal(assistant.__meta.llmAttempt, 1);
           assert.equal(durable.history.some((message: any) => message.parts[0]?.text?.startsWith('Error:')), false);
+          if (control === 'stop') {
+            store.enqueueIntent(initial.id, 'after-stop-idle-input', 'enqueue', { type: 'user', clientMessageId: 'after-stop', parts: [{ text: 'new idle input' }] });
+            await host.runPending(8);
+            assert.equal(bodies.length, 2);
+            const userPayload = JSON.stringify(bodies[1].messages.filter((message: any) => message.role === 'user'));
+            assert.equal((userPayload.match(/queueInputHint=/g) || []).length, 2, 'passively committed message and event retain their hints on the next real request');
+            assert.equal(bodies[1].messages.some((message: any) => message.content === correction.parts[0].system), true);
+            const newInput = readDurable().history.find((message: any) => message.__meta?.clientMessageId === 'after-stop');
+            assert.doesNotMatch(JSON.stringify(newInput.parts), /queueInputHint=/, 'a later idle turn is not itself queued input');
+          }
         }, true);
       } finally {
         (axios as any).post = originalPost;
@@ -1153,10 +1188,156 @@ test('real Worker retry ingests durable mailbox input and honors Stop or dequeue
   }
 });
 
+test('Worker channel mailbox follow-ups reach real provider requests with hints independently of Main busy projections', async t => {
+  const initial = baseSession(`worker-queued-hint-${Date.now()}`);
+  await sessionManager.loadSessions();
+  await sessionManager.getSession(initial.id);
+  const source = await sessionManager.getSession(`${initial.id}-sender`);
+  let taskId: string | undefined;
+  initial.model = 'fixture/model';
+  initial.persistentMemorySnapshot = '<foxwarm-current-model model-id="fixture/model" />\n\nworker prompt';
+  const models = loadModelsConfigFromObject({ default: 'fixture/model', providers: {
+    fixture: { providerType: 'openai-completions', baseUrl: 'https://example.test/v1', apiKey: 'test-key', models: ['model'] },
+  } });
+  t.mock.method(configModule, 'resolveModelConfig', () => ({ modelsConfig: models, defaultKey: models.default,
+    currentKey: models.default, modelEntry: models.models[models.default], contextLimit: models.models[models.default].contextLimit }));
+  try {
+    await withLocalHost(initial, async ({ host, store, session, readDurable }) => {
+      let ingressId = 0;
+      const asynchronousItems: QueueItem[] = [];
+      sessionManager.setSessionWorkerEnqueueSink(async (sessionId, item, options, assertActive) => {
+        assert.equal(sessionId, initial.id);
+        assertActive?.();
+        const { trigger: _trigger, ...ordinary } = item;
+        const normalized = normalizeSessionWorkerIngressRequest({ sessionId, item: ordinary });
+        asynchronousItems.push(structuredClone(normalized.item));
+        store.enqueueIntent(sessionId, `event-input-${++ingressId}`, 'enqueue', options?.trigger === false
+          ? { ...normalized.item, trigger: false } : normalized.item);
+      });
+      const originalParts = new Map<string, MessagePart[]>();
+      const router = new MessageRouter(undefined, async (sessionId, item) => {
+        const normalized = normalizeSessionWorkerIngressRequest({ sessionId, item });
+        if (item.clientMessageId) originalParts.set(item.clientMessageId, structuredClone(normalized.item.parts!));
+        const intent = store.enqueueIntent(sessionId, `channel-input-${++ingressId}`, 'enqueue', normalized.item);
+        return { accepted: true, mailboxIntentId: intent.id, generation: 1, lastAppliedMailboxId: 0, messageCount: 0, busy: false };
+      });
+      // The real owner is busy during subsequent input; Main's presentation
+      // projection deliberately remains idle for every channel admission.
+      t.mock.method(router as any, 'resolveSessionForIncomingMessage', async (): Promise<{ sessionId: string; session: Session }> => ({
+        sessionId: initial.id, session: { ...initial, busy: false, queue: [], meta: { lastMessageTime: 0 } },
+      }));
+      const ctx = { channelId: 'webui', channelType: 'webui', platform: 'webui', channelUserId: initial.id,
+        conversationId: initial.id, reply: async () => {}, sendTyping: async () => {} };
+      const send = (id: string, parts: MessagePart[]) => router.handleMessage(ctx, { channelUserId: initial.id, parts, clientMessageId: id });
+      const bodies: any[] = [];
+      t.mock.method(axios, 'post', async (_url: string, body: any) => {
+        bodies.push(body);
+        if (bodies.length === 1) {
+          await send('provider-A', [{ text: 'worker correction A' }]);
+          await send('provider-B', [{ text: 'worker correction B' }]);
+          await sessionManager.sendToSession(initial.id, 'Worker inter-agent update', source.id);
+          const task = await taskService.execute({ action: 'create', title: 'Worker queued Task assignment', ownerSessionId: initial.id, notifySession: true }, source.id);
+          taskId = task.task.id;
+          assert.equal(task.sentNotifications, 1);
+          const timer = await timers.createTimer({ sessionId: initial.id, message: 'Worker queued timer work', afterSeconds: 3600 }, models);
+          await timers.fireTimerForTests(timer.id, models);
+          const nodeId = 'queued-event-node';
+          const execId = 'queued-remote-exec';
+          await nodesManager.handleSessionEvent(nodeId, initial.id,
+            'Background Process Finished\nexecId: queued-remote-exec\nExit code: 0\nremote output retained', 'background', {
+              eventId: `remote-exec-completion:${execId}`, execId, eventTimestamp: 1700000000000,
+              completionCapability: issueRemoteExecCompletionCapability(nodeId, initial.id, execId),
+            });
+          await sessionManager.queueSessionSystemEvent(initial.id,
+            formatFoxwarmSystemTag({ kind: 'event', type: 'node-online', nodeId, hint: 'Node availability event' }));
+          await sessionManager.queueSessionEvent(initial.id, 'Worker queued trigger event', 'trigger');
+          assert.equal(session.queue.length, 0, 'input is still mailbox-only during provider execution');
+        }
+        const delta = bodies.length === 2
+          ? { tool_calls: [{ index: 0, id: 'worker-queue-tool', type: 'function', function: { name: 'session', arguments: '{"action":"status"}' } }] }
+          : { content: bodies.length === 1 ? 'first worker result' : 'worker finished' };
+        const stream = new PassThrough();
+        process.nextTick(() => stream.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: bodies.length === 2 ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`));
+        return { status: 200, statusText: 'OK', headers: {}, data: stream };
+      });
+      t.mock.method(toolExecutor, 'executeTools', async () => {
+        await send('tool', [{ text: 'worker tool correction' }, { text: '<foxwarm-file name="worker-notes.txt" node="master" path="worker-notes.txt" mime="text/plain" />' }]);
+        await sessionManager.queueSessionEvent(initial.id, 'Worker tool-period background event');
+        return {
+          message: {
+            role: 'tool', parts: [{ functionResponse: { tool_use_id: 'worker-queue-tool', name: 'session', response: { output: 'ok' } } }]
+          }
+        };
+      });
+      await send('initial-A', [{ text: 'worker initial A' }]);
+      await send('initial-B', [{ text: 'worker initial B' }]);
+      await host.runPending(8);
+      assert.equal(bodies.length, 3);
+      assert.equal(asynchronousItems.length, 7);
+      assert.deepEqual(bodies.map(body => (JSON.stringify(body.messages.filter((message: any) => message.role === 'user')).match(/queueInputHint=/g) || []).length), [0, 8, 10]);
+      const history = readDurable().history;
+      const userRows = history.filter((message: any) => message.__meta?.clientMessageId);
+      assert.deepEqual(userRows.map((message: any) => [message.__meta.clientMessageId, JSON.stringify(message.parts).includes('queueInputHint=')]), [
+        ['initial-A', false], ['initial-B', false], ['provider-A', true], ['provider-B', true], ['tool', true],
+      ]);
+      for (const message of userRows) {
+        const original = originalParts.get(message.__meta.clientMessageId)!;
+        if (JSON.stringify(message.parts).includes('queueInputHint=')) {
+          assert.equal(message.parts.length, original.length);
+          assert.deepEqual(message.parts.slice(1), original.slice(1));
+          const bodyText = original.map(part => part.text || part.system || '').join('\n');
+          const canonicalText = message.parts.map((part: MessagePart) => part.text || part.system || '').join('\n');
+          const marker = message.__meta.clientMessageId === 'tool' ? 'worker tool correction'
+            : `worker correction ${message.__meta.clientMessageId.endsWith('A') ? 'A' : 'B'}`;
+          const payload = bodies[2].messages.find((row: any) => row.role === 'user' && row.content.includes(marker));
+          assert.equal(payload.content, canonicalText, 'provider reads the committed wrapper and body without adding another hint');
+          assert.match(payload.content, /^<foxwarm-message /, 'no standalone system part precedes the source');
+          const expectedAttrs = parseFoxwarmOpeningTag(original[0].system)!.attrs;
+          const actualAttrs = parseFoxwarmOpeningTag(payload.content)!.attrs;
+          const { queueInputHint, ...originalAttrs } = actualAttrs;
+          assert.match(queueInputHint, /^Queued input:/);
+          assert.deepEqual(originalAttrs, expectedAttrs, 'the original hint is not concatenated with queued guidance');
+          assert.equal((payload.content.match(/queueInputHint=/g) || []).length, 1);
+          assert.equal(payload.content.slice(payload.content.indexOf('>') + 1), bodyText.slice(bodyText.indexOf('>') + 1));
+        } else {
+          // Only the first initial input receives the existing session header.
+          assert.deepEqual(message.parts.slice(-original.length), original);
+        }
+      }
+      for (const item of asynchronousItems) {
+        const original = item.parts![0].system!;
+        const expectedAttrs = parseFoxwarmOpeningTag(original)!.attrs;
+        const suffix = original.slice(original.indexOf('>') + 1);
+        const message = history.find((row: any) => {
+          const attrs = parseFoxwarmOpeningTag(row.parts[0]?.system)?.attrs;
+          return attrs && Object.entries(expectedAttrs).every(([key, value]) => attrs[key] === value)
+            && row.parts[0].system.endsWith(suffix);
+        });
+        const { queueInputHint, ...attrs } = parseFoxwarmOpeningTag(message.parts[0].system)!.attrs;
+        assert.match(queueInputHint, /^Queued input: this message or event/);
+        assert.deepEqual(attrs, expectedAttrs);
+        assert.equal((message.parts[0].system.match(/queueInputHint=/g) || []).length, 1);
+        assert.equal(bodies[2].messages.some((row: any) => row.content === message.parts[0].system), true);
+        if (original.endsWith('/>')) assert.equal(message.parts[0].system.endsWith('/>'), true);
+      }
+      assert.equal(history.filter((message: any) => message.role === 'user').length, 12);
+      const toolIndex = history.findIndex((message: any) => message.role === 'tool');
+      assert.equal(history[toolIndex - 1].parts.some((part: any) => !!part.functionCall), true);
+      assert.equal(history[toolIndex + 1].__meta.clientMessageId, 'tool');
+      assert.equal(readDurable().queue.length, 0);
+    }, true);
+  } finally {
+    sessionManager.setSessionWorkerEnqueueSink(undefined);
+    if (taskId) await taskService.execute({ action: 'cancel', taskId }, source.id).catch(() => {});
+    await sessionManager.deleteSession(initial.id).catch(() => {});
+    await sessionManager.deleteSession(source.id).catch(() => {});
+  }
+});
+
 test('dequeue during post-tool ingestion leaves new rows for the same outer action loop', async () => {
   const initial = baseSession('worker-dequeue-tool-phase');
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   let storeRef: SessionWorkerStore | undefined;
   let chatCalls = 0;
   const finalDeliveries: Array<{ text: string; outcome: string }> = [];
@@ -1171,13 +1352,14 @@ test('dequeue during post-tool ingestion leaves new rows for the same outer acti
     await options.appendMessage({ role: 'model', parts: [{ text: 'queued turn final' }] });
     return { text: 'queued turn final' };
   };
-  (llm as any).executeTools = async () => {
+  (toolExecutor as any).executeTools = async () => {
     storeRef!.enqueueIntent(initial.id, 'queued-during-tool', 'enqueue', {
       type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'queued after tool' }],
     });
     return {
-      role: 'tool',
-      parts: [{ functionResponse: { tool_use_id: 'held-tool', name: 'session', response: { output: 'ok' } } }],
+      message: {
+        role: 'tool', parts: [{ functionResponse: { tool_use_id: 'held-tool', name: 'session', response: { output: 'ok' } } }]
+      }
     };
   };
   try {
@@ -1228,7 +1410,7 @@ test('dequeue during post-tool ingestion leaves new rows for the same outer acti
     });
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
   }
 });
 
@@ -1237,13 +1419,13 @@ test('idle worker BTW snapshots exact owner state, persists cache lineage, and a
   initial.history = [{ role: 'user', parts: [{ text: 'immutable owner prefix' }] }];
   initial.nextMessageSeq = 2;
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   let executeToolsCalled = false;
   let readDurable!: () => Record<string, any>;
   let hotOwner!: Session;
   let calls = 0;
   const deliveries: Array<{ source: any; text: string }> = [];
-  (llm as any).executeTools = async () => { executeToolsCalled = true; throw new Error('BTW must not execute tools'); };
+  (toolExecutor as any).executeTools = async () => { executeToolsCalled = true; throw new Error('BTW must not execute tools'); };
   (llm as any).chat = async (parts: any, snapshot: Session, _iteration: number, options: any) => {
     calls += 1;
     assert.notEqual(snapshot, hotOwner);
@@ -1293,7 +1475,7 @@ test('idle worker BTW snapshots exact owner state, persists cache lineage, and a
     }, false, undefined, undefined, async (source, text) => { deliveries.push({ source, text }); });
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
   }
 });
 
@@ -1638,19 +1820,20 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     assert.deepEqual(externalCalls[0].slice(1, 5), ['reverse-node', 'read', { filePath: 'reverse.txt' }, sessionId]);
     assert.equal(externalCalls[1][1], 'reverse-mcp');
     assert.equal(externalCalls[2][1], 'reverse vector query');
-    assert.match(afterWait.history.at(-1).parts[0].text, /"fenceErrors":\["NODE_EXECUTION_SOURCE_MISMATCH","NODE_EXECUTION_SOURCE_MISMATCH","FILE_DELIVERY_SOURCE_MISMATCH","SESSION_TURN_DELIVERY_SOURCE_MISMATCH","MCP_EXTERNAL_SOURCE_MISMATCH"\]/);
-    assert.match(afterWait.history.at(-1).parts[0].text, /"defaultCwd":"node process cwd/);
-    assert.match(afterWait.history.at(-1).parts[0].text, new RegExp(`"sha256":"${'a'.repeat(64)}"`));
-    assert.match(afterWait.history.at(-1).parts[0].text, /ready for WebUI target/);
-    assert.match(afterWait.history.at(-1).parts[0].text, /Delivered: 1/);
-    assert.match(afterWait.history.at(-1).parts[0].text, /telegram:room/);
+    const reverseResult = afterWait.history.find((message: any) => message.parts.some((part: any) => part.text?.includes('fenceErrors'))).parts[0].text;
+    assert.match(reverseResult, /"fenceErrors":\["NODE_EXECUTION_SOURCE_MISMATCH","NODE_EXECUTION_SOURCE_MISMATCH","FILE_DELIVERY_SOURCE_MISMATCH","SESSION_TURN_DELIVERY_SOURCE_MISMATCH","MCP_EXTERNAL_SOURCE_MISMATCH"\]/);
+    assert.match(reverseResult, /"defaultCwd":"node process cwd/);
+    assert.match(reverseResult, new RegExp(`"sha256":"${'a'.repeat(64)}"`));
+    assert.match(reverseResult, /ready for WebUI target/);
+    assert.match(reverseResult, /Delivered: 1/);
+    assert.match(reverseResult, /telegram:room/);
     assert.equal(projectionRegistry.get(sessionId)?.projection?.currentNode, 'reverse-node');
     assert.equal(projectionRegistry.get(sessionId)?.projection?.lastAppliedMailboxId, afterWait.lastAppliedMailboxId);
     assert.equal(projectionRegistry.get(sessionId)?.projection?.queueLength, afterWait.queue.length);
     assert.deepEqual(projectionRegistry.get(sessionId)?.projection?.stats, afterWait.stats);
-    assert.doesNotMatch(afterWait.history.at(-1).parts[0].text, /c2VjcmV0LWJ5dGVz/);
-    assert.match(afterWait.history.at(-1).parts[0].text, /reverse-hit/);
-    assert.match(afterWait.history.at(-1).parts[0].text, /"loadedLocalVectorOwner":false/);
+    assert.doesNotMatch(reverseResult, /c2VjcmV0LWJ5dGVz/);
+    assert.match(reverseResult, /reverse-hit/);
+    assert.match(reverseResult, /"loadedLocalVectorOwner":false/);
     if (waitTimer) await timers.deleteTimer(waitTimer.id, sessionId);
 
     const accessor: Record<string, unknown> = { type: 'user' };
@@ -1663,7 +1846,7 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     const committedBeforeDisconnect = await fs.readJson(statePath);
     assert.equal(committedBeforeDisconnect.lastAppliedMailboxId, ambiguous.id);
     assert.equal(committedBeforeDisconnect.compactThresholdTokens, 4243);
-    assert.equal(committedBeforeDisconnect.history.length, afterWait.history.length + 1);
+    assert.equal(committedBeforeDisconnect.history.length, afterWait.history.length + 1, 'the new input is the only appended row; settings do not queue raw notices');
     const archiveAfterFailure = new DatabaseSync(path.join(root, 'state', 'archive-store.sqlite'), { readOnly: true });
     const archiveCount = Number((archiveAfterFailure.prepare('SELECT COUNT(*) AS count FROM archive_messages WHERE session_id=?').get(sessionId) as any).count);
     archiveAfterFailure.close();

@@ -1,3 +1,4 @@
+import { checkPathAccess } from '../utils/agentPathAccess';
 import fs from 'fs-extra';
 import path from 'path';
 import {
@@ -6,7 +7,7 @@ import {
     resolveAgentPath,
     shouldEnforceIsolatedMasterPathAccess,
 } from './helpers';
-import { checkPathAccess } from '../isolatedCheck';
+
 import { cropImageById, cropImageForSession, resolveImageById, resolveImageForSession } from '../toolImages';
 import { nodesManager } from '../nodes/manager';
 import { getAgentDir } from '../config';

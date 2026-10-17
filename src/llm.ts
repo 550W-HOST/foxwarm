@@ -1,26 +1,25 @@
-import { STOPPED_TOOL_NOT_STARTED_MESSAGE } from './toolCallControls';
+import { generatePromptCacheKey, ensurePromptCacheKey } from './session/promptCache';
+import { buildSessionSystemPromptSnapshot } from './session/promptSnapshot';
+import type { CurrentSessionEffects } from './session/currentSessionEffects';
+import { createDefaultCurrentSessionEffects } from './session/defaultCurrentSessionEffects';
+import { buildEffectiveSelectionNotice, readEffectiveRequestSelection } from './session/effectiveSelection';
 import axios, { AxiosResponse } from 'axios';
 import crypto, { randomUUID } from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
-import yaml from 'js-yaml';
 import { StringDecoder } from 'string_decoder';
 import zlib from 'zlib';
 import * as tools from './tools';
 import { logger } from './common';
-import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, ToolScriptSubCall, LinkedTaskCompletion, TokenUsage, ToolDefinition, ModelStreamPart, ModelStreamPartDelta, ModelStreamToolCall } from './types';
+import { EffectiveRequestSelection, MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, TokenUsage, ToolDefinition, ModelStreamPart, ModelStreamPartDelta, ModelStreamToolCall } from './types';
 import { clearModelStreamDraft, resetModelStreamDraft, updateModelStreamDraft } from './modelStreamDraft';
-import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig, NormalizedOpenAIImageGenerationConfig, ModelEffort, MODEL_EFFORTS, getConcreteModelEffortConfig, HANDOFF_CONFIRMATION_ENABLED, PROVIDER_IMAGE_OUTPUT_FORMAT } from './config';
+import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, getModelIdForMetadata, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig, NormalizedOpenAIImageGenerationConfig, ModelEffort, MODEL_EFFORTS, getConcreteModelEffortConfig, PROVIDER_IMAGE_OUTPUT_FORMAT } from './config';
 import * as sessionManager from './sessionManager';
 import { listNodeTopology } from './nodeExecution';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
-import { listSkills } from './skills';
-import { checkGenericToolAuthorizationForSession, checkPathAccess, isToolVisibleForSession } from './isolatedCheck';
+import { isToolVisibleForSession } from './isolatedCheck';
 import { isPermissionNeutralBuiltinDispatcher } from './permissions';
-import { builtinNodeArgumentSelectsPlacement, NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './tools/placement';
-import type { ResolvedTool } from './tools/resolvedTools';
-import { executeResolvedTool, parseUnifiedToolCall, resolveDirectTool } from './tools/resolvedTools';
-import { expandHomePath } from './utils/pathResolve';
+import { builtinHasOptionalFileNode, NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './tools/placement';
 import {
     collectOpenAIChatCompletionsStream as collectOpenAIChatCompletionsStreamProvider,
     collectOpenAIResponsesStream as collectOpenAIResponsesStreamProvider,
@@ -47,22 +46,12 @@ import { createDisplayOnlyModelMessage } from './session/messageVisibility';
 import { formatToolResponsePayload, formatToolScriptExecutionResponse } from '../packages/shared/dist/toolResponseFormatting';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 import { formatFoxwarmSystemTag, formatSystemPartForModel, isFoxwarmMetadataLine } from './utils/promptWrappers';
-import { formatLocalTimestamp } from './utils/localTime';
-import { appendImageGuidanceText, buildImageGuidanceText, normalizeToolResultImages } from './toolImages';
+import { appendImageGuidanceText, buildImageGuidanceText } from './toolImages';
 import { hydrateMessagesForProvider, stripReservedProviderImageHelperFields } from './imageBlobs';
 import { deduplicateProviderRequestImages } from './providerImageDedup';
-import { guardToolOutputForModel } from './toolOutputGuard';
-import { isToolAuthorizationPolicyUnavailable, TOOL_AUTH_POLICY_UNAVAILABLE } from './toolAuthorization';
 import { sanitizeLoneSurrogatesInPayload, truncateUnicodeSafeWithEllipsis } from './utils/unicode';
 import { isModelVisibleMessage } from './session/messageVisibility';
-import {
-    addToolCancellationSchema,
-    getToolCancellationArgumentError,
-    isSingleToolCancellationRequested,
-    isWholeBatchCancellationRequested,
-    stripToolCancellationArguments,
-    validateInterAgentHandoffConfirmationForMode,
-} from './toolCallControls';
+import { addToolCancellationSchema } from './toolCallControls';
 import {
     beginVirtualRoutingRequest,
     clearVirtualRoutingState,
@@ -79,11 +68,7 @@ import {
     LlmRequestPurpose,
 } from './llmRequestJournal';
 import { toPersistedLlmRequestTiming } from './llmRequestTiming';
-import {
-    buildCurrentModelSnapshot,
-    filterConditionalMemorySource,
-    readCurrentModelSnapshotId,
-} from './conditionalMemory';
+import { readCurrentModelSnapshotId } from './conditionalMemory';
 import { isSessionAuthorityPostCommitError } from './session/stateFile';
 
 type LlmInteractionLogFiles = {
@@ -149,24 +134,6 @@ export function isAbortError(error: any): boolean {
         || error?.name === 'AbortError'
         || error?.name === 'CanceledError'
     );
-}
-
-function isValidStoredPromptCacheKey(value: unknown): value is string {
-    return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
-}
-
-export function generatePromptCacheKey(): string {
-    return randomUUID();
-}
-
-export function ensurePromptCacheKey(session: Session): string {
-    if (isValidStoredPromptCacheKey(session.promptCacheKey)) {
-        return session.promptCacheKey;
-    }
-
-    const promptCacheKey = generatePromptCacheKey();
-    session.promptCacheKey = promptCacheKey;
-    return promptCacheKey;
 }
 
 function getPromptCacheKeyForSessionId(sessionId?: string): string {
@@ -279,66 +246,6 @@ function settleHistoryAppendFinalizer(
     } catch (error) {
         logger.warn({ err: error }, context);
     }
-}
-
-/** In-process current-session effects used by the normal turn path. Not an RPC contract. */
-export interface CurrentSessionEffects {
-    placement: 'local' | 'session-worker';
-    appendMessage(session: Session, message: Message): Promise<void>;
-    persistSession(session: Session): Promise<void>;
-    persistSessionStrict?(session: Session): Promise<void>;
-    notifySessionEvent(sessionId: string, event: import('./types').SessionStreamEvent): void;
-    registerAbortController(sessionId: string, controller: AbortController): void;
-    clearAbortController(sessionId: string, controller: AbortController): void;
-    clearWaitById(sessionId: string | undefined, waitId: string): Promise<boolean>;
-    execRuntime?: import('./execManager').ExecRuntime;
-}
-
-export interface CurrentSessionTurnEffects extends CurrentSessionEffects {
-    appendMessages(session: Session, messages: Message[]): Promise<void>;
-    appendQueuedMessages(session: Session, messages: Message[]): Promise<void>;
-    updateBusy(session: Session, busy: boolean): Promise<void>;
-    startWait(session: Session, options?: Parameters<typeof sessionManager.startSessionWaitForSession>[1]): Promise<sessionManager.SessionWaitState>;
-    notifyHistoryUpdate(sessionId: string, message: Message): void;
-    setRuntimeState: typeof sessionManager.setActiveSessionRuntimeState;
-    clearRuntimeState: typeof sessionManager.clearActiveSessionRuntimeState;
-}
-
-export function createDefaultCurrentSessionEffects(): CurrentSessionTurnEffects {
-    const clearRuntimeState = (sessionId: string) => sessionManager.clearActiveSessionRuntimeState(sessionId);
-    const persistSession = async (session: Session) => {
-        if (session.id && sessionManager.getAllSessions().get(session.id) === session) {
-            await sessionManager.saveSession(session);
-        }
-    };
-    const persistSessionStrict = async (session: Session) => {
-        if (session.id && sessionManager.getAllSessions().get(session.id) === session) {
-            await sessionManager.saveSessionForSessionCritical(session);
-        }
-    };
-    return {
-        placement: 'local',
-        appendMessage: (session, message) => sessionManager.appendSessionMessage(session, message),
-        appendMessages: (session, messages) => sessionManager.appendSessionMessages(session, messages),
-        appendQueuedMessages: (session, messages) => sessionManager.appendQueuedSessionMessages(session, messages),
-        persistSession,
-        persistSessionStrict,
-        updateBusy: (session, busy) => {
-            if (busy) sessionManager.assertSessionDestructiveMutationAllowed([session.id], 'start new work');
-            return sessionManager.updateSessionBusyStateForSession(
-                session, busy, () => persistSession(session), clearRuntimeState,
-            );
-        },
-        startWait: (session, options) => sessionManager.startSessionWaitForSession(session, options, () => persistSession(session)),
-        notifyHistoryUpdate: (sessionId, message) => sessionManager.notifyHistoryUpdate(sessionId, message),
-        notifySessionEvent: (sessionId, event) => sessionManager.notifySessionEvent(sessionId, event),
-        setRuntimeState: (sessionId, state) => sessionManager.setActiveSessionRuntimeState(sessionId, state),
-        clearRuntimeState,
-        registerAbortController: (sessionId, controller) => sessionManager.registerSessionAbortController(sessionId, controller),
-        clearAbortController: (sessionId, controller) => sessionManager.clearSessionAbortController(sessionId, controller),
-        clearWaitById: (sessionId, waitId) => sessionManager.clearSessionWaitById(sessionId, waitId),
-        execRuntime: require('./execManager').getDefaultExecRuntime(),
-    };
 }
 
 export type LlmRetryEvent = {
@@ -904,60 +811,6 @@ export function getOpenAIRequestApi(providerType: string): 'responses' | 'chat-c
     return null;
 }
 
-function getModelIdForMetadata(modelEntry: ModelConfigEntry | undefined, fallbackModelKey: string): string {
-    const canonicalModelKey = typeof modelEntry?.canonicalModelKey === 'string' ? modelEntry.canonicalModelKey.trim() : '';
-    if (canonicalModelKey) return canonicalModelKey;
-
-    const providerKey = typeof modelEntry?.providerKey === 'string' ? modelEntry.providerKey.trim() : '';
-    const modelName = typeof modelEntry?.model === 'string' ? modelEntry.model.trim() : '';
-
-    if (providerKey && modelName) {
-        return `${providerKey}/${modelName}`;
-    }
-
-    if (providerKey) {
-        return providerKey;
-    }
-
-    return fallbackModelKey;
-}
-
-/**
- * Resolves a truthful concrete snapshot identity without selecting a virtual
- * route. Virtual sessions without a recorded generation identity defer until
- * an actual provider attempt selects a leaf.
- */
-export function resolveSessionSnapshotModelId(session: Pick<Session, 'model' | 'persistentMemorySnapshot'>): string | undefined {
-    const recordedModelId = readCurrentModelSnapshotId(session.persistentMemorySnapshot || '');
-    if (recordedModelId) return recordedModelId;
-
-    return resolveConcreteModelIdForSnapshot(session.model);
-}
-
-export function resolveConcreteModelIdForSnapshot(model?: string, modelsConfigOverride?: ModelsConfig): string | undefined {
-    const resolved = modelsConfigOverride
-        ? (() => {
-            const currentKey = model && modelsConfigOverride.models[model] ? model : modelsConfigOverride.default;
-            return { currentKey, modelEntry: modelsConfigOverride.models[currentKey] };
-        })()
-        : resolveModelConfig(model);
-    if (!resolved.modelEntry || isVirtualModelConfigEntry(resolved.modelEntry)) return undefined;
-    return getModelIdForMetadata(resolved.modelEntry, resolved.currentKey);
-}
-
-export async function buildSessionSystemPromptSnapshotForSession(
-    session: Pick<Session, 'agent' | 'id' | 'model' | 'persistentMemorySnapshot' | 'systemPromptFiles'>,
-): Promise<string | undefined> {
-    const modelId = resolveSessionSnapshotModelId(session);
-    if (!modelId) return undefined;
-    return buildSessionSystemPromptSnapshot({
-        agentName: session.agent || 'main',
-        sessionId: session.id,
-        systemPromptFiles: session.systemPromptFiles,
-        modelId,
-    });
-}
-
 function readStreamAsText(stream: any, signal: AbortSignal): Promise<string> {
     if (signal.aborted) {
         return Promise.reject(makeAbortError());
@@ -1041,295 +894,6 @@ function extractAnthropicThinkingTaggedParts(text: string): MessagePart[] | null
 
     return parts.length > 0 ? parts : null;
 }
-
-function formatMemoryBlock(filePath: string, agentName: string, kind: 'self' | 'inherited', content: string): string {
-    return `\n<memory_file agent=${agentName}; ownership=${kind}; path=${filePath}>\n${content}\n</memory_file>`;
-}
-
-function escapeXmlText(value: string): string {
-    return value
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-}
-
-export function normalizeSystemPromptFiles(value: unknown): string[] | undefined {
-    if (Array.isArray(value)) {
-        const normalized = value
-            .filter((entry): entry is string => typeof entry === 'string')
-            .map(entry => entry.trim())
-            .filter(entry => entry.length > 0);
-        return normalized;
-    }
-
-    if (typeof value === 'string') {
-        const normalized = value
-            .split(/[,\n]/)
-            .map(entry => entry.trim())
-            .filter(entry => entry.length > 0 && !entry.startsWith('#'));
-        return normalized;
-    }
-
-    return undefined;
-}
-
-function resolveSystemPromptFilePath(agentName: string, fileReference: string): string {
-    const expandedPath = expandHomePath(fileReference);
-    if (path.isAbsolute(expandedPath)) {
-        return path.resolve(expandedPath);
-    }
-
-    return path.resolve(getAgentDir(agentName), expandedPath);
-}
-
-type MemoryFileFrontMatter = Record<string, unknown>;
-
-function parseMemoryFileFrontMatter(content: string, filePath: string): { metadata: MemoryFileFrontMatter; body: string } {
-    const match = content.match(/^---[ \t]*(?:\r?\n)([\s\S]*?)(?:\r?\n)---[ \t]*(?:\r?\n|$)/);
-    if (!match) {
-        return { metadata: {}, body: content };
-    }
-
-    const body = content.slice(match[0].length);
-    try {
-        const parsed = yaml.load(match[1]);
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-            return { metadata: {}, body };
-        }
-        return { metadata: parsed as MemoryFileFrontMatter, body };
-    } catch (err) {
-        logger.warn({ err, filePath }, 'Failed to parse memory file frontmatter; ignoring metadata and injecting body');
-        return { metadata: {}, body };
-    }
-}
-
-function normalizeSessionGlobList(value: unknown, key: string, filePath: string): string[] | undefined {
-    if (value === undefined || value === null) {
-        return undefined;
-    }
-
-    if (typeof value === 'string') {
-        return value.trim() ? [value.trim()] : [];
-    }
-
-    if (Array.isArray(value)) {
-        const patterns: string[] = [];
-        for (const entry of value) {
-            if (typeof entry !== 'string') {
-                logger.warn({ filePath, key }, 'Invalid memory file frontmatter session glob entry; ignoring metadata key');
-                return undefined;
-            }
-            const trimmed = entry.trim();
-            if (trimmed) {
-                patterns.push(trimmed);
-            }
-        }
-        return patterns;
-    }
-
-    logger.warn({ filePath, key }, 'Invalid memory file frontmatter session glob value; ignoring metadata key');
-    return undefined;
-}
-
-function escapeRegExpChar(ch: string): string {
-    return /[\\^$+?.()|{}\[\]]/.test(ch) ? `\\${ch}` : ch;
-}
-
-function globMatchesSessionId(pattern: string, sessionId?: string): boolean {
-    if (!sessionId) {
-        return false;
-    }
-
-    let regex = '^';
-    for (let i = 0; i < pattern.length; i++) {
-        const ch = pattern[i];
-        if (ch === '*') {
-            if (pattern[i + 1] === '*') {
-                while (pattern[i + 1] === '*') i++;
-                regex += '.*';
-            } else {
-                regex += '[^/]*';
-            }
-        } else if (ch === '?') {
-            regex += '[^/]';
-        } else {
-            regex += escapeRegExpChar(ch);
-        }
-    }
-    regex += '$';
-    return new RegExp(regex).test(sessionId);
-}
-
-function shouldInjectMemoryFileForSession(metadata: MemoryFileFrontMatter, filePath: string, sessionId?: string): boolean {
-    const includeSession = normalizeSessionGlobList(metadata['include-session'], 'include-session', filePath);
-    const excludeSession = normalizeSessionGlobList(metadata['exclude-session'], 'exclude-session', filePath);
-
-    if (excludeSession?.some(pattern => globMatchesSessionId(pattern, sessionId))) {
-        return false;
-    }
-
-    if (includeSession !== undefined) {
-        return includeSession.some(pattern => globMatchesSessionId(pattern, sessionId));
-    }
-
-    return true;
-}
-
-async function readSessionFilteredMemoryFile(filePath: string, sessionId: string | undefined, modelId: string): Promise<string | null> {
-    const content = await fs.readFile(filePath, 'utf8');
-    const { metadata, body } = parseMemoryFileFrontMatter(content, filePath);
-    return shouldInjectMemoryFileForSession(metadata, filePath, sessionId)
-        ? filterConditionalMemorySource(body, modelId)
-        : null;
-}
-
-async function appendConfiguredMemoryFiles(agentName: string, systemPromptFiles: string[], modelId: string, sessionId?: string): Promise<string> {
-    let combined = '';
-    const restrictToAgentDir = sessionManager.isAgentIsolated(agentName);
-
-    for (const fileReference of systemPromptFiles) {
-        const filePath = resolveSystemPromptFilePath(agentName, fileReference);
-        if (restrictToAgentDir) {
-            checkPathAccess(filePath, agentName);
-        }
-        if (!await fs.pathExists(filePath)) {
-            throw new Error(`systemPromptFiles entry \`${fileReference}\` not found for agent \`${agentName}\`.`);
-        }
-
-        const stats = await fs.stat(filePath);
-        if (!stats.isFile()) {
-            throw new Error(`systemPromptFiles entry \`${fileReference}\` is not a file.`);
-        }
-
-        const content = await readSessionFilteredMemoryFile(filePath, sessionId, modelId);
-        if (content !== null) {
-            combined += formatMemoryBlock(filePath, agentName, 'self', content);
-        }
-    }
-
-    return combined;
-}
-
-async function appendSkillCatalogForAgent(agentName: string): Promise<string> {
-    const visibleSkills = await listSkills({ agentName });
-    if (visibleSkills.length === 0) {
-        return '';
-    }
-
-    let combined = '';
-    combined += 'The following skills provide specialized instructions for specific tasks.\n';
-    combined += 'When a task matches a skill\'s description, call skill with action="load"\n';
-    combined += 'and the skill\'s name to load its full instructions and resource list.\n';
-    combined += 'Read listed resources only when the loaded skill or current task needs them:\n';
-    combined += '<available_skills>\n';
-
-    for (const skill of visibleSkills) {
-        combined += '  <skill>';
-        combined += `<name>${escapeXmlText(skill.name)}</name>`;
-        combined += `<description>${escapeXmlText(skill.description || '')}</description>`;
-        combined += `<source>${escapeXmlText(skill.sourceType)}</source>`;
-        combined += '</skill>\n';
-    }
-
-    combined += '</available_skills>\n';
-    return combined;
-}
-
-async function appendDefaultMemoryFiles(agentName: string, modelId: string, sessionId?: string): Promise<string> {
-    const mainMemoryDir = MAIN_AGENT_MEMORY_DIR;
-    let combined = '';
-
-    if (await fs.pathExists(AGENTS_SYSTEM_PROMPT_PATH)) {
-        const content = filterConditionalMemorySource(await fs.readFile(AGENTS_SYSTEM_PROMPT_PATH, 'utf8'), modelId);
-        combined += formatMemoryBlock(AGENTS_SYSTEM_PROMPT_PATH, 'framework', 'inherited', content);
-    } else {
-        const mainSystemPath = path.join(mainMemoryDir, '00_SYSTEM.md');
-        if (await fs.pathExists(mainSystemPath)) {
-            const content = filterConditionalMemorySource(await fs.readFile(mainSystemPath, 'utf8'), modelId);
-            const kind = agentName === 'main' ? 'self' : 'inherited';
-            combined += formatMemoryBlock(mainSystemPath, 'main', kind, content);
-        }
-    }
-
-    const inheritChain = sessionManager.getAgentInheritanceChain(agentName);
-    for (const inheritedAgentName of inheritChain) {
-        const kind = inheritedAgentName === agentName ? 'self' : 'inherited';
-        combined += await appendMemoryFilesForAgent(inheritedAgentName, kind, modelId, sessionId);
-    }
-
-    return combined;
-}
-
-export async function buildSessionSystemPromptSnapshot(options: {
-    agentName?: string;
-    sessionId?: string;
-    systemPromptFiles?: string[] | string;
-    modelId: string;
-}): Promise<string> {
-    const agentName = options.agentName || 'main';
-    const sessionId = options.sessionId;
-    const normalizedSystemPromptFiles = normalizeSystemPromptFiles(options.systemPromptFiles);
-    const hasCustomMemorySources = options.systemPromptFiles !== undefined;
-
-    const memoryBlocks = hasCustomMemorySources
-        ? await appendConfiguredMemoryFiles(agentName, normalizedSystemPromptFiles || [], options.modelId, sessionId)
-        : await appendDefaultMemoryFiles(agentName, options.modelId, sessionId);
-    const skillCatalog = await appendSkillCatalogForAgent(agentName);
-    const dirInfo = '\n\n--- DIRECTORIES ---\n- agent_folder: ' + getAgentDir(agentName) + '\n';
-    const archiveInfo = [
-        '',
-        '',
-        '--- EARLIER CONTEXT RECALL ---',
-        '- Long sessions use layered context: older conversation is archived and may be compacted into CTX-BLOCK summaries to keep the active prompt small.',
-        '- Compaction is system-initiated: Foxwarm forks a temporary compact thread to generate summary blocks, then the main session gets a `<foxwarm-system kind="session-boundary" event="compact-completed" ... />` identity notice and continues the agent task.',
-        '- Block levels are hierarchical: lower/newer blocks are closer to raw messages; higher/older blocks are coarser summaries. Drill down step by step with `recall`.',
-        '- Use `recall({"target":"overview"})` for archived ranges/examples, and `recall({"target":"B#123"})` for a CTX-BLOCK; use `msg:B#123` or `msg#100-120` only when you need raw detail.',
-        '- Compaction/recall preserves traceable session history; it is not agent memory. Do not write routine process notes, temporary progress, or completed details to memory just to preserve context.',
-        '- Use memory files only for long-lived stable rules, preferences, environment facts, and confirmed design decisions.',
-        '- If you need lower-level archive helpers, use `search_tools(...)` and then `call_tool(...)`.',
-        '',
-    ].join('\n');
-    const body = [memoryBlocks.trim(), skillCatalog.trim(), `${dirInfo}${archiveInfo}`.trim()]
-        .filter(Boolean)
-        .join('\n\n');
-    return buildCurrentModelSnapshot(options.modelId, body);
-}
-
-function buildInvalidToolArgsResult(call: FunctionCall): { error: { type: string; message: string } } {
-    // Do NOT send rawArgsText in the tool response — the call's arguments
-    // already carry it, so no need to duplicate.
-    return {
-        error: {
-            type: 'invalid_tool_arguments',
-            message: call.argsParseError || 'Invalid tool arguments JSON',
-        }
-    };
-}
-
-async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inherited', modelId: string, sessionId?: string): Promise<string> {
-    const agentMemoryDir = getAgentMemoryDir(agentName);
-    if (!await fs.pathExists(agentMemoryDir)) {
-        return '';
-    }
-
-    const files = await fs.readdir(agentMemoryDir);
-    const mdFiles = files.sort().filter(f => f.endsWith('.md') && f !== '00_SYSTEM.md');
-    let combined = '';
-
-    for (const file of mdFiles) {
-        // ONBOOT.md is a retired startup trigger. Keep legacy files out of
-        // model memory so deleting its producer does not change old installs.
-        if (file.toLowerCase() === 'onboot.md') continue;
-        const filePath = path.join(agentMemoryDir, file);
-        const content = await readSessionFilteredMemoryFile(filePath, sessionId, modelId);
-        if (content !== null) {
-            combined += formatMemoryBlock(filePath, agentName, kind, content);
-        }
-    }
-
-    return combined;
-}
-
 
 async function logRequest(data: any, iteration = 0): Promise<LlmInteractionLogFiles | null> {
     try {
@@ -1734,655 +1298,6 @@ export function convertToAnthropicFormat(contents: Message[], config: ModelConfi
     return anthropicMessages;
 }
 
-/**
- * Convert internal message format to OpenAI format
- * Internal format: { role: 'user'|'model'|'tool', parts: [{ text, thinking, functionCall, functionResponse }] }
- * OpenAI format: { role: 'user'|'assistant'|'tool', content: string | array, tool_calls?: array, reasoning_content?: string }
- */
-/**
- * Convert internal message format to OpenAI Responses API input items.
- * - user messages => input_text / input_image message items
- * - assistant messages => output_text message items + function_call items
- * - tool messages => function_call_output items
- */
-/**
- * Execute tools and return results as a single message with multiple parts
- */
-const PARALLEL_EXEC_LIMIT = 4;
-
-type ToolExecutionSnapshot = {
-    currentNode: string;
-    cwd?: string;
-};
-
-type PreparedToolCall = {
-    call: FunctionCall;
-    index: number;
-    toolId: string;
-    resolved?: ResolvedTool;
-    toolArgs: Record<string, any>;
-    sessionId: string;
-    executionNode: string;
-    result?: any;
-    sessionSnapshot?: ToolExecutionSnapshot;
-    placementError?: any;
-};
-
-type ExecutedToolCall = PreparedToolCall & {
-    result: any;
-    executionTiming?: { startedAt: number; completedAt: number; durationMs: number };
-    resolvedPaths?: Array<{ raw: string; resolved: string; nodeId: string }>;
-    toolScriptSubCalls?: ToolScriptSubCall[];
-    imageParts: MessagePart[];
-    stopCurrentTurn: boolean;
-    waitForReply: boolean;
-    explicitWaitId?: string;
-    successfulSendToSessionTarget?: string;
-    successfulWaitAfterSendTarget?: string;
-    successfulFinishAfterSend: boolean;
-    completedLinkedTask?: LinkedTaskCompletion;
-    deferredExecCwdSync?: { nextCwd: string };
-    fatalCurrentTurn?: { code: string; message: string };
-};
-
-function normalizeExecutedToolResult(rawResult: any): any {
-    if (rawResult === undefined) return { output: '(No output)' };
-    if (rawResult === null) return { output: null };
-    if (typeof rawResult === 'string' || typeof rawResult === 'number' || typeof rawResult === 'boolean') {
-        return { output: rawResult };
-    }
-    if (typeof rawResult === 'object') return rawResult;
-    return { output: String(rawResult) };
-}
-
-function formatToolArgPreviewValue(value: unknown): string {
-    if (typeof value === 'string') return value;
-    if (value === undefined) return 'undefined';
-    try {
-        const serialized = JSON.stringify(value);
-        return typeof serialized === 'string' ? serialized : String(value);
-    } catch {
-        return String(value);
-    }
-}
-
-function buildToolArgsPreview(call: FunctionCall): string {
-    let argValue: unknown = '';
-    if (call.argsParseError && typeof call.rawArgsText === 'string') {
-        argValue = call.rawArgsText;
-    } else if (call.name === 'exec') {
-        argValue = call.args?.command;
-    } else if (call.name === 'edit' || call.name === 'write' || call.name === 'edit_memory' || call.name === 'write_memory' || call.name === 'delete_memory') {
-        argValue = call.args?.filePath;
-    } else if (call.name === 'apply_patch' || call.name === 'apply_patch_memory') {
-        argValue = typeof call.args?.input === 'string' ? call.args.input : '';
-    } else if (call.name === 'read' || call.name === 'read_memory') {
-        const { filePath, startLine, endLine } = call.args || {};
-        argValue = (filePath ?? '') + (startLine ? ` (lines ${startLine}-${endLine})` : '');
-    } else if (call.args) {
-        const keys = Object.keys(call.args);
-        if (keys.length === 1) {
-            argValue = call.args[keys[0]];
-        } else {
-            argValue = keys.map(key => `${key}: ${formatToolArgPreviewValue(call.args[key])}`).join('\n');
-        }
-    }
-    const argStr = formatToolArgPreviewValue(argValue);
-    return argStr.length > 200 ? `${argStr.substring(0, 197)}...` : argStr;
-}
-
-async function prepareToolCall(
-    call: FunctionCall,
-    index: number,
-    total: number,
-    toolContext: any,
-    session: Session,
-    snapshot?: ToolExecutionSnapshot,
-    notifyStart = true,
-    presetResult?: any,
-): Promise<PreparedToolCall> {
-    if (presetResult === undefined && (toolContext.signal?.aborted || session.stopping)) {
-        presetResult = { error: STOPPED_TOOL_NOT_STARTED_MESSAGE };
-    }
-    const toolId = call.id || `tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const argsPreview = buildToolArgsPreview(call);
-    const sessionId = session.id;
-    let placementError: any;
-    let resolved: ResolvedTool | undefined;
-    if (presetResult === undefined) {
-        try {
-            if (call.argsParseError) tools.assertToolAvailableForPlacement(call.name, call.args || {}, toolContext);
-            else {
-                resolved = await resolveDirectTool(call.name, call.args || {}, toolContext, snapshot);
-                const permissionIdentity = resolved.source === 'node'
-                    ? { source: 'node' as const, node: resolved.executionNode, tool: resolved.name }
-                    : resolved.source === 'mcp'
-                        ? { source: 'mcp' as const, server: resolved.server, tool: resolved.name }
-                        : { source: 'builtin' as const, tool: resolved.name };
-                await checkGenericToolAuthorizationForSession(session, permissionIdentity, resolved.permissionNode, resolved.args,
-                    toolContext.sessionPlacement === 'session-worker');
-            }
-        } catch (error) { placementError = error; }
-    }
-    if (presetResult === undefined && (toolContext.signal?.aborted || session.stopping)) {
-        presetResult = { error: STOPPED_TOOL_NOT_STARTED_MESSAGE };
-    }
-    const toolArgs = resolved?.args || { ...(call.args || {}) };
-    const executionNode = resolved?.executionNode || snapshot?.currentNode || session.currentNode || 'master';
-    if (notifyStart && !placementError && presetResult === undefined) {
-        logger.info({ tool: call.name, args: argsPreview }, 'Executing tool');
-        if (toolContext.broadcast && session.verbose) {
-            toolContext.broadcast(`🛠 *[${call.name}]*: \`${argsPreview}\``, { excludePlatforms: ['webui'] });
-        }
-        const startedAt = Date.now();
-        await Promise.resolve(toolContext.onToolStart?.({
-            id: toolId,
-            name: call.name,
-            index,
-            total,
-            executionNode,
-            argsPreview: argsPreview.length > 500 ? `${argsPreview.slice(0, 500)}…` : argsPreview,
-            startedAt,
-        }));
-    }
-
-    return {
-        call,
-        index,
-        toolId,
-        resolved,
-        toolArgs,
-        sessionId,
-        executionNode,
-        result: presetResult !== undefined ? presetResult : (call.argsParseError ? buildInvalidToolArgsResult(call) : undefined),
-        sessionSnapshot: resolved?.routingSnapshot,
-        placementError,
-    };
-}
-
-function buildCanceledToolResult(): { canceled: true; message: string } {
-    return { canceled: true, message: 'Tool call canceled before execution.' };
-}
-
-function buildToolControlArgumentError(message: string): { error: { type: string; message: string } } {
-    return { error: { type: 'invalid_tool_control_argument', message } };
-}
-
-function buildHandoffConfirmationError(error: any): { error: { type: string; message: string } } {
-    return {
-        error: {
-            type: 'invalid_inter_agent_handoff_confirmation',
-            message: error?.message || String(error),
-        },
-    };
-}
-
-type PlannedToolCall = {
-    call: FunctionCall;
-    presetResult?: any;
-};
-
-function planToolCalls(functionCalls: FunctionCall[]): PlannedToolCall[] {
-    if (isWholeBatchCancellationRequested(functionCalls)) {
-        return functionCalls.map(call => ({
-            call: { ...call, args: stripToolCancellationArguments(call.args) },
-            presetResult: buildCanceledToolResult(),
-        }));
-    }
-
-    return functionCalls.map(call => {
-        const executionCall = { ...call, args: stripToolCancellationArguments(call.args) };
-        const controlError = getToolCancellationArgumentError(call);
-        if (controlError) return { call: executionCall, presetResult: buildToolControlArgumentError(controlError) };
-        if (isSingleToolCancellationRequested(call)) return { call: executionCall, presetResult: buildCanceledToolResult() };
-        if (!call.argsParseError && (call.name === 'send_to_session' || call.name === 'create_child_session')) {
-            try {
-                validateInterAgentHandoffConfirmationForMode(executionCall.args, HANDOFF_CONFIRMATION_ENABLED, call.name);
-            } catch (error) {
-                return { call: executionCall, presetResult: buildHandoffConfirmationError(error) };
-            }
-        }
-        return { call: executionCall };
-    });
-}
-
-async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any): Promise<ExecutedToolCall> {
-    let result = prepared.result;
-    let executionTiming: ExecutedToolCall['executionTiming'];
-    let resolvedPaths: ExecutedToolCall['resolvedPaths'];
-    let toolScriptSubCalls: ToolScriptSubCall[] | undefined;
-    let imageParts: MessagePart[] = [];
-    let stopCurrentTurn = false;
-    let waitForReply = false;
-    let explicitWaitId: string | undefined;
-    let successfulSendToSessionTarget: string | undefined;
-    let successfulWaitAfterSendTarget: string | undefined;
-    let successfulFinishAfterSend = false;
-    let completedLinkedTask: LinkedTaskCompletion | undefined;
-    let deferredExecCwdSync: { nextCwd: string } | undefined;
-    let fatalCurrentTurn: { code: string; message: string } | undefined;
-
-    try {
-        if (prepared.placementError) throw prepared.placementError;
-        if (result === undefined && (toolContext.signal?.aborted || toolContext.session?.stopping)) {
-            return buildSkippedToolCall(prepared, STOPPED_TOOL_NOT_STARTED_MESSAGE);
-        }
-        if (result === undefined && prepared.resolved) {
-            const runtimeContext = { ...toolContext, toolUseId: prepared.toolId };
-            const localToolContext = prepared.sessionSnapshot
-                ? {
-                    ...runtimeContext,
-                    toolExecutionSnapshot: prepared.sessionSnapshot,
-                    deferSessionCwdSync: prepared.call.name === 'exec',
-                }
-                : runtimeContext;
-            const startedAt = Date.now();
-            const monotonicStart = performance.now();
-            try {
-                const isToolScriptExecution = prepared.resolved.source === 'builtin'
-                    && ['run_script', 'continue_script', 'start_toolscript_run'].includes(prepared.resolved.name);
-                result = normalizeExecutedToolResult(await executeResolvedTool(prepared.resolved, {
-                    ...localToolContext,
-                    ...(isToolScriptExecution ? { onToolScriptSubCalls: (subCalls: ToolScriptSubCall[]) => {
-                        toolScriptSubCalls = subCalls.map(subCall => ({ ...subCall }));
-                    } } : {}),
-                    onResolvedPaths: (paths: Array<{ raw: string; resolved: string }>) => {
-                        resolvedPaths = paths.map(path => ({ ...path, nodeId: prepared.resolved!.executionNode }));
-                    },
-                }));
-            } finally {
-                executionTiming = {
-                    startedAt,
-                    completedAt: Math.max(startedAt, Date.now()),
-                    durationMs: Math.max(0, performance.now() - monotonicStart),
-                };
-            }
-        } else if (result === undefined) {
-            result = { error: `Unknown tool: ${prepared.call.name}` };
-        }
-
-        if (result && typeof result === 'object') {
-            if (result.__toolLoopControl && typeof result.__toolLoopControl === 'object') {
-                stopCurrentTurn = !!result.__toolLoopControl.stopCurrentTurn;
-            }
-            if (result.__toolPostAction && typeof result.__toolPostAction === 'object') {
-                const taskCall = prepared.resolved?.source === 'builtin' && prepared.resolved.name === 'task';
-                const taskScriptCall = prepared.resolved?.source === 'builtin' && ['run_script', 'continue_script', 'start_toolscript_run'].includes(prepared.resolved.name);
-                const completion = result.__toolPostAction.completedLinkedTask;
-                if ((taskCall || taskScriptCall) && completion?.attachedSessionId === prepared.sessionId) completedLinkedTask = completion;
-                waitForReply = result.__toolPostAction.waitForReply === true;
-                explicitWaitId = typeof result.__toolPostAction.explicitWaitId === 'string'
-                    ? result.__toolPostAction.explicitWaitId
-                    : undefined;
-                successfulSendToSessionTarget = (prepared.call.name === 'send_to_session' || prepared.call.name === 'create_child_session' || taskCall)
-                    && typeof result.__toolPostAction.successfulSendToSessionTarget === 'string'
-                    ? result.__toolPostAction.successfulSendToSessionTarget
-                    : undefined;
-                successfulWaitAfterSendTarget = successfulSendToSessionTarget
-                    && (prepared.call.args?.afterSend === 'wait' || prepared.call.args?.waitAfterHandoff === true)
-                    && waitForReply
-                    ? successfulSendToSessionTarget : undefined;
-                successfulFinishAfterSend = (prepared.call.name === 'send_to_session' || prepared.call.name === 'create_child_session')
-                    && result.__toolPostAction.finishAfterSend === true;
-            }
-            if (result.__execBatchCwdSync && typeof result.__execBatchCwdSync.nextCwd === 'string') {
-                deferredExecCwdSync = { nextCwd: result.__execBatchCwdSync.nextCwd };
-            }
-            const { __toolLoopControl, __toolPostAction, __execBatchCwdSync, ...visibleResult } = result;
-            result = visibleResult;
-        }
-
-        const normalizedImages = await normalizeToolResultImages(
-            result,
-            prepared.toolId,
-            `[Inline data returned by ${prepared.call.name}]`,
-        );
-        imageParts = normalizedImages.imageParts;
-        result = normalizedImages.result;
-    } catch (error: any) {
-        if (isToolAuthorizationPolicyUnavailable(error)) {
-            fatalCurrentTurn = { code: TOOL_AUTH_POLICY_UNAVAILABLE, message: error?.message || 'Tool authorization policy is unavailable.' };
-        }
-        result = { error: error?.message || String(error), ...(error?.code ? { code: error.code } : {}),
-            ...(error?.retryable === true ? { retryable: true } : {}) };
-        imageParts = [];
-        resolvedPaths = undefined;
-    }
-
-    return {
-        ...prepared,
-        result: normalizeExecutedToolResult(result),
-        ...(executionTiming ? { executionTiming } : {}),
-        ...(resolvedPaths?.length ? { resolvedPaths } : {}),
-        ...(toolScriptSubCalls !== undefined ? { toolScriptSubCalls } : {}),
-        imageParts,
-        stopCurrentTurn,
-        waitForReply,
-        explicitWaitId,
-        successfulSendToSessionTarget,
-        successfulWaitAfterSendTarget,
-        successfulFinishAfterSend,
-        completedLinkedTask,
-        deferredExecCwdSync,
-        fatalCurrentTurn,
-    };
-}
-
-async function runBoundedToolCalls(
-    planned: PlannedToolCall[],
-    toolContext: any,
-    session: Session,
-    snapshot: ToolExecutionSnapshot,
-    offset: number,
-    total: number,
-): Promise<ExecutedToolCall[]> {
-    const results: ExecutedToolCall[] = new Array(planned.length);
-    let nextIndex = 0;
-    let fatal = false;
-    const workers = Array.from({ length: Math.min(PARALLEL_EXEC_LIMIT, planned.length) }, async () => {
-        while (true) {
-            const index = nextIndex++;
-            if (index >= planned.length) return;
-            const item = planned[index];
-            const prepared = await prepareToolCall(item.call, offset + index, total, toolContext, session, snapshot, true, item.presetResult
-                ?? (fatal ? { error: 'Tool call was not started because tool authorization policy was unavailable.' } : undefined));
-            try {
-                results[index] = await runPreparedToolCall(prepared, toolContext);
-                fatal = fatal || !!results[index].fatalCurrentTurn;
-            } catch (error: any) {
-                results[index] = buildFailedToolCall(prepared, error);
-                fatal = fatal || !!results[index].fatalCurrentTurn;
-            }
-        }
-    });
-    await Promise.allSettled(workers);
-    return results;
-}
-
-function buildFailedToolCall(prepared: PreparedToolCall, error: any): ExecutedToolCall {
-    return {
-        ...prepared,
-        result: { error: error?.message || String(error) },
-        imageParts: [],
-        stopCurrentTurn: false,
-        waitForReply: false,
-        successfulFinishAfterSend: false,
-        ...(isToolAuthorizationPolicyUnavailable(error) ? {
-            fatalCurrentTurn: { code: TOOL_AUTH_POLICY_UNAVAILABLE, message: error?.message || 'Tool authorization policy is unavailable.' },
-        } : {}),
-    };
-}
-
-function buildSkippedToolCall(prepared: PreparedToolCall, message = STOPPED_TOOL_NOT_STARTED_MESSAGE): ExecutedToolCall {
-    return {
-        ...prepared,
-        result: { error: message },
-        imageParts: [],
-        stopCurrentTurn: false,
-        waitForReply: false,
-        successfulFinishAfterSend: false,
-    };
-}
-
-function isFailedNodeSelection(execution: ExecutedToolCall, planned: PlannedToolCall): boolean {
-    if (planned.presetResult !== undefined || !execution.result?.error) return false;
-    try {
-        // Resolution itself can reject arguments before returning a target.
-        // Reuse the canonical unified parser, without resolving or executing again.
-        const target = execution.resolved || (execution.call.name === 'call_tool'
-            ? parseUnifiedToolCall(execution.call.args || {})
-            : { source: 'builtin', name: execution.call.name, args: execution.call.args || {} });
-        return target.source === 'builtin' && target.name === 'node'
-            && typeof target.args.action === 'string' && target.args.action.trim().toLowerCase() === 'select';
-    } catch { return false; }
-}
-
-async function replayDeferredExecCwd(execution: ExecutedToolCall, toolContext: any): Promise<ExecutedToolCall> {
-    if (!execution.deferredExecCwdSync) return execution;
-    try {
-        const { applyDeferredExecCwdSync } = await import('./tools/execTools');
-        return {
-            ...execution,
-            result: await applyDeferredExecCwdSync(toolContext, execution.result, execution.deferredExecCwdSync),
-            deferredExecCwdSync: undefined,
-        };
-    } catch (error: any) {
-        return {
-            ...execution,
-            result: { error: error?.message || String(error) },
-            deferredExecCwdSync: undefined,
-        };
-    }
-}
-
-/**
- * Execute tools and return results as a single message with multiple parts.
- * Adjacent direct exec calls share a node/cwd snapshot and run concurrently;
- * every other tool is a serial ordering barrier.
- */
-export async function executeTools(
-    functionCalls: FunctionCall[],
-    toolContext: any,
-    session: any,
-    options?: { currentSessionEffects?: CurrentSessionEffects },
-): Promise<Message> {
-    const requestedSourceId = typeof toolContext?.sessionId === 'string' && toolContext.sessionId.trim()
-        ? toolContext.sessionId.trim()
-        : undefined;
-    let sourceSession: Session;
-    if (options?.currentSessionEffects) {
-        if (!session || typeof session.id !== 'string' || !session.id.trim()) {
-            throw new Error('Tool execution with current-session effects requires an authoritative Session.');
-        }
-        if (requestedSourceId && requestedSourceId !== session.id) {
-            throw new Error(`Tool execution source session \`${requestedSourceId}\` does not match authoritative Session \`${session.id}\`.`);
-        }
-        sourceSession = session;
-    } else {
-        if (!requestedSourceId) {
-            throw new Error('Tool execution requires a source session ID when current-session effects are absent.');
-        }
-        const existing = await sessionManager.getExistingSession(requestedSourceId);
-        if (!existing) {
-            throw new Error(`Tool execution source session \`${requestedSourceId}\` was not found.`);
-        }
-        sourceSession = existing;
-    }
-    toolContext = {
-        ...toolContext,
-        sessionId: sourceSession.id,
-        session: sourceSession,
-        persistCurrentSession: options?.currentSessionEffects
-            ? () => options.currentSessionEffects!.persistSession(sourceSession)
-            : undefined,
-        sessionPlacement: options?.currentSessionEffects?.placement || 'local',
-        ...(options?.currentSessionEffects?.execRuntime ? { execRuntime: options.currentSessionEffects.execRuntime } : {}),
-    };
-    const abortController = new AbortController();
-    const parentSignal: AbortSignal | undefined = toolContext.signal;
-    const abortFromParent = () => abortController.abort(parentSignal?.reason);
-    if (parentSignal?.aborted || sourceSession.stopping) abortFromParent();
-    else parentSignal?.addEventListener('abort', abortFromParent, { once: true });
-    const effects = options?.currentSessionEffects;
-    if (effects) effects.registerAbortController(sourceSession.id, abortController);
-    else sessionManager.registerSessionAbortController(sourceSession.id, abortController);
-    toolContext = { ...toolContext, signal: abortController.signal };
-    try {
-        return await executeToolBatch(functionCalls, toolContext, sourceSession, effects);
-    } finally {
-        parentSignal?.removeEventListener('abort', abortFromParent);
-        if (effects) effects.clearAbortController(sourceSession.id, abortController);
-        else sessionManager.clearSessionAbortController(sourceSession.id, abortController);
-    }
-}
-
-async function executeToolBatch(
-    functionCalls: FunctionCall[],
-    toolContext: any,
-    session: Session,
-    effects?: CurrentSessionEffects,
-): Promise<Message> {
-    const plannedCalls = planToolCalls(functionCalls);
-    const executions: ExecutedToolCall[] = [];
-    let cursor = 0;
-    let fatalCurrentTurn = false;
-
-    while (cursor < plannedCalls.length) {
-        if (session?.stopping || toolContext.signal.aborted) {
-            for (; cursor < plannedCalls.length; cursor++) {
-                const planned = plannedCalls[cursor];
-                const prepared = await prepareToolCall(planned.call, cursor, plannedCalls.length, toolContext, session, undefined, false, planned.presetResult ?? { error: STOPPED_TOOL_NOT_STARTED_MESSAGE });
-                executions.push(planned.presetResult !== undefined
-                    ? await runPreparedToolCall(prepared, toolContext)
-                    : buildSkippedToolCall(prepared));
-            }
-            break;
-        }
-
-        if (plannedCalls[cursor].call.name !== 'exec') {
-            const planned = plannedCalls[cursor];
-            const prepared = await prepareToolCall(planned.call, cursor, plannedCalls.length, toolContext, session, undefined, true, planned.presetResult);
-            const execution = await runPreparedToolCall(prepared, toolContext);
-            executions.push(execution);
-            cursor++;
-            if (isFailedNodeSelection(execution, planned)) {
-                fatalCurrentTurn = !!execution.fatalCurrentTurn;
-                const message = 'Tool call was not started because Node selection failed earlier in this batch.';
-                for (; cursor < plannedCalls.length; cursor++) {
-                    const skipped = plannedCalls[cursor];
-                    const skippedPrepared = await prepareToolCall(skipped.call, cursor, plannedCalls.length, toolContext, session,
-                        undefined, false, skipped.presetResult ?? { error: message });
-                    executions.push(skipped.presetResult !== undefined
-                        ? await runPreparedToolCall(skippedPrepared, toolContext)
-                        : buildSkippedToolCall(skippedPrepared, message));
-                }
-                break;
-            }
-            if (execution.fatalCurrentTurn) {
-                fatalCurrentTurn = true;
-                for (; cursor < plannedCalls.length; cursor++) {
-                    const skipped = plannedCalls[cursor];
-                    const skippedPrepared = await prepareToolCall(skipped.call, cursor, plannedCalls.length, toolContext, session, undefined, false, skipped.presetResult);
-                    executions.push(skipped.presetResult !== undefined
-                        ? await runPreparedToolCall(skippedPrepared, toolContext)
-                        : buildSkippedToolCall(skippedPrepared, 'Tool call was not started because tool authorization policy was unavailable.'));
-                }
-                break;
-            }
-            continue;
-        }
-
-        const segmentStart = cursor;
-        while (cursor < plannedCalls.length && plannedCalls[cursor].call.name === 'exec') cursor++;
-        const snapshot: ToolExecutionSnapshot = {
-            currentNode: session.currentNode || 'master',
-            cwd: typeof session.cwd === 'string' ? session.cwd : undefined,
-        };
-        const settled = await runBoundedToolCalls(plannedCalls.slice(segmentStart, cursor), toolContext,
-            session, snapshot, segmentStart, plannedCalls.length);
-        for (const execution of settled) {
-            executions.push(await replayDeferredExecCwd(execution, toolContext));
-        }
-        if (settled.some(execution => execution.fatalCurrentTurn)) {
-            fatalCurrentTurn = true;
-            for (; cursor < plannedCalls.length; cursor++) {
-                const skipped = plannedCalls[cursor];
-                const skippedPrepared = await prepareToolCall(skipped.call, cursor, plannedCalls.length, toolContext, session, undefined, false, skipped.presetResult);
-                executions.push(skipped.presetResult !== undefined
-                    ? await runPreparedToolCall(skippedPrepared, toolContext)
-                    : buildSkippedToolCall(skippedPrepared, 'Tool call was not started because tool authorization policy was unavailable.'));
-            }
-            break;
-        }
-    }
-
-    const parts: MessagePart[] = [];
-    let stopCurrentTurn = false;
-    let batchHasError = false;
-    let waitForReply = false;
-    const explicitWaitIds: string[] = [];
-    let completedLinkedTask: LinkedTaskCompletion | undefined;
-    const successfulSendToSessionTargets: string[] = [];
-    const successfulWaitAfterSendTargets: string[] = [];
-    let successfulFinishAfterSend = false;
-    let fatalError: { code: string; message: string } | undefined;
-
-    for (const execution of executions) {
-        let result = execution.result;
-        try {
-            result = await guardToolOutputForModel(result, {
-                sessionId: execution.sessionId,
-                session,
-                toolName: execution.call.name,
-                toolUseId: execution.toolId,
-                nodeId: execution.executionNode,
-                toolScriptExecution: execution.toolScriptSubCalls !== undefined,
-            });
-        } catch (error: any) {
-            result = { error: error?.message || String(error) };
-        }
-        const resolvedPaths = !result?.error && execution.resolvedPaths?.length ? execution.resolvedPaths : undefined;
-        parts.push(...execution.imageParts, {
-            functionResponse: {
-                tool_use_id: execution.toolId,
-                name: execution.call.name,
-                ...(execution.executionTiming ? { executionTiming: execution.executionTiming } : {}),
-                ...(resolvedPaths || execution.toolScriptSubCalls !== undefined ? { __meta: {
-                    ...(resolvedPaths ? { resolvedPaths } : {}),
-                    ...(execution.toolScriptSubCalls !== undefined ? { toolScriptSubCalls: execution.toolScriptSubCalls } : {}),
-                } } : {}),
-                ...(execution.index === 0 && toolContext.previousLlmRequest ? {
-                    previousLlmRequest: {
-                        time: formatLocalTimestamp(toolContext.previousLlmRequest.completedAt),
-                        durationMs: toolContext.previousLlmRequest.durationMs,
-                    },
-                } : {}),
-                response: result,
-            },
-        });
-        stopCurrentTurn = stopCurrentTurn || execution.stopCurrentTurn;
-        batchHasError = batchHasError || !!(result && typeof result === 'object' && result.error !== undefined && result.error !== null);
-        waitForReply = waitForReply || execution.waitForReply;
-        if (execution.explicitWaitId) explicitWaitIds.push(execution.explicitWaitId);
-        if (execution.successfulSendToSessionTarget) successfulSendToSessionTargets.push(execution.successfulSendToSessionTarget);
-        if (execution.successfulWaitAfterSendTarget && !successfulWaitAfterSendTargets.includes(execution.successfulWaitAfterSendTarget)) {
-            successfulWaitAfterSendTargets.push(execution.successfulWaitAfterSendTarget);
-        }
-        successfulFinishAfterSend = successfulFinishAfterSend || execution.successfulFinishAfterSend;
-        completedLinkedTask = completedLinkedTask || execution.completedLinkedTask;
-        fatalError = fatalError || execution.fatalCurrentTurn;
-    }
-
-    if (stopCurrentTurn && batchHasError) {
-        for (const waitId of explicitWaitIds) {
-            if (effects) {
-                await effects.clearWaitById(toolContext.sessionId || session?.id, waitId);
-            } else {
-                await sessionManager.clearSessionWaitById(toolContext.sessionId || session?.id, waitId);
-            }
-        }
-    }
-
-    const toolMessage: Message = { role: 'tool', parts };
-    if (fatalCurrentTurn && fatalError) {
-        (toolMessage as any).__toolLoopControl = { stopCurrentTurn: true, fatalError };
-    } else if ((stopCurrentTurn && !batchHasError) || successfulFinishAfterSend) {
-        (toolMessage as any).__toolLoopControl = { stopCurrentTurn: true };
-    } else if (stopCurrentTurn) {
-        logger.debug({ sessionId: toolContext.sessionId || session?.id, toolCount: functionCalls.length }, 'Suppressing stopCurrentTurn because a tool in the batch returned an error');
-    }
-    if (waitForReply || successfulFinishAfterSend || completedLinkedTask || successfulSendToSessionTargets.length || successfulWaitAfterSendTargets.length) {
-        (toolMessage as any).__toolPostAction = {
-            ...(completedLinkedTask ? { completedLinkedTask } : {}),
-            ...(waitForReply ? { waitForReply: true } : {}),
-            ...(successfulFinishAfterSend ? { finishAfterSend: true } : {}),
-            ...(successfulSendToSessionTargets.length ? { successfulSendToSessionTargets } : {}),
-            ...(successfulWaitAfterSendTargets.length ? { successfulWaitAfterSendTargets } : {}),
-        };
-    }
-    return toolMessage;
-}
-
 /** Project default tools for this Session and preserve the selected Shell exec schema. */
 export async function resolveSessionToolDefinitions(session: Session, override?: ToolDefinition[]): Promise<ToolDefinition[]> {
     if (override) return override;
@@ -2395,7 +1310,7 @@ export async function resolveSessionToolDefinitions(session: Session, override?:
         }
         const placement = resolveBuiltinToolPlacement(tool.name, undefined, currentNode);
         return isToolVisibleForSession(session, { source: 'builtin', tool: tool.name }, placement.executionNode,
-            { targetNodeUnknown: builtinNodeArgumentSelectsPlacement(tool.name) });
+            { targetNodeUnknown: builtinHasOptionalFileNode(tool.name) });
     });
     if (!session.currentNode || session.currentNode === 'master') return definitions;
     let node;
@@ -2496,10 +1411,10 @@ export async function chat(
     const contentsForLlm = getCommittedHistoryForRetry();
     const partialCommitEnabled = (options?.purpose || 'normal-turn') === 'normal-turn'
         && options?.snapshotAuthority !== 'detached' && !!options?.onIntermediateAssistantText;
-    const prepareRetry = normalOwnedRequest && (options?.prepareRetry || options?.requestContext)
+    const prepareRetry = normalOwnedRequest
         ? async (signal: AbortSignal): Promise<boolean> => {
-            const changed = options.prepareRetry ? await options.prepareRetry(signal) : false;
-            if (!options.requestContext) return changed;
+            const changed = options?.prepareRetry ? await options.prepareRetry(signal) : false;
+            if (!options?.requestContext) return changed;
             const nextContext = await options.requestContext();
             const contextChanged = JSON.stringify(nextContext) !== JSON.stringify(requestContext);
             requestContext = nextContext;
@@ -2531,7 +1446,26 @@ export async function chat(
         currentSessionEffects: options?.currentSessionEffects,
         resolveSystemPromptForModel,
         ...((partialCommitEnabled || prepareRetry) ? { getCommittedHistoryForRetry } : {}),
-        ...(prepareRetry ? { prepareRetry } : {}),
+        ...(prepareRetry ? {
+            prepareRetry,
+            getSelectionForRetry: () => ({ model: session.model, effort: session.effort }),
+            prepareEffectiveSelection: async (adopted: AdoptedAttemptSelection): Promise<boolean> => {
+                const previous = readEffectiveRequestSelection(session.meta.lastEffectiveRequest);
+                const current: EffectiveRequestSelection = {
+                    modelId: adopted.modelId, nodeId: session.currentNode || 'master', effort: adopted.effectiveEffort,
+                    ...(adopted.missingModelKey ? { missingModelKey: adopted.missingModelKey } : {}),
+                };
+                if (previous && previous.modelId === current.modelId && previous.nodeId === current.nodeId
+                    && previous.effort === current.effort && previous.missingModelKey === current.missingModelKey) return false;
+                const notice = buildEffectiveSelectionNotice(previous, current, adopted.reason);
+                if (notice) await appendMessage(notice);
+                // Only normal-owned adoption writes this small semantic baseline.
+                // Snapshot refresh and detached requests cannot manufacture it.
+                session.meta.lastEffectiveRequest = current;
+                await currentSessionEffects.persistSession(session);
+                return !!notice;
+            },
+        } : {}),
         ...(partialCommitEnabled ? {
             onPartialAssistantCommit: async (segment: Parameters<NonNullable<RequestLlmOnceOptions['onPartialAssistantCommit']>>[0]) => {
                 const message: Message = {
@@ -2925,10 +1859,7 @@ function buildConcreteRequestPlan(options: {
         ? modelEntry.imageGeneration
         : undefined;
     const imageGenerationTool = buildOpenAIImageGenerationTool(imageGenerationConfig);
-    const effortConfig = getConcreteModelEffortConfig(modelEntry);
-    const effectiveEffort = requestedEffort && effortConfig.allowed.includes(requestedEffort)
-        ? requestedEffort
-        : effortConfig.default;
+    const effectiveEffort = resolveEffectiveRequestEffort(modelEntry, requestedEffort);
     const effortFallback = requestedEffort !== undefined && requestedEffort !== effectiveEffort;
 
     if (!baseUrl) {
@@ -3531,9 +2462,23 @@ function createResponsesPrefixCommitLane(args: {
     };
 }
 
+type AdoptedAttemptSelection = {
+    modelId: string;
+    effectiveEffort: ModelEffort;
+    missingModelKey?: string;
+    reason: 'effective-selection' | 'failover';
+};
+
+function resolveEffectiveRequestEffort(modelEntry: ModelConfigEntry, requestedEffort?: ModelEffort): ModelEffort {
+    const config = getConcreteModelEffortConfig(modelEntry);
+    return requestedEffort && config.allowed.includes(requestedEffort) ? requestedEffort : config.default;
+}
+
 async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
     /** Exact normal-turn owner safe point; true rebuilds committed request context. */
     prepareRetry?: (signal: AbortSignal) => Promise<boolean>;
+    getSelectionForRetry?: () => { model?: string; effort?: ModelEffort };
+    prepareEffectiveSelection?: (adopted: AdoptedAttemptSelection) => Promise<boolean>;
 }): Promise<InternalLlmResult> {
     // Repair the provider-neutral source form first. This exact canonical
     // array is journaled before clone-only provider hydration, so durable
@@ -3541,7 +2486,8 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
     let canonicalContents = stripRequestDisplayMeta(stripReservedProviderImageHelperFields(
         fixToolCalls(structuredClone(options.contents || [])),
     ));
-    const resolvedModel = options.modelsConfigOverride
+    let selectedModel = options.model;
+    let resolvedModel = options.modelsConfigOverride
         ? (() => {
             const modelsConfig = options.modelsConfigOverride!;
             const defaultKey = modelsConfig.default;
@@ -3554,8 +2500,8 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
             };
         })()
         : resolveModelConfig(options.model);
-    const routeEntry = options.modelEntryOverride || resolvedModel.modelEntry;
-    const routeKey = options.modelEntryOverride
+    let routeEntry = options.modelEntryOverride || resolvedModel.modelEntry;
+    let routeKey = options.modelEntryOverride
         ? `${options.modelEntryOverride.providerKey || 'setup'}/${options.modelEntryOverride.model || 'model'}`
         : resolvedModel.currentKey;
     if (!routeEntry) {
@@ -3565,9 +2511,10 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
         throw new Error('modelEntryOverride does not support virtual model routing; select a configured model key instead.');
     }
 
-    // Activation is an independent-request boundary. Retries use this captured
-    // generation and cannot reactivate an obsolete configuration fingerprint.
-    const virtualRoutingRequest: VirtualRoutingRequest | undefined = isVirtualModelConfigEntry(routeEntry)
+    // Capture one generation for this explicit selection. Ordinary retries
+    // cannot reactivate an obsolete configuration fingerprint; only a later
+    // explicit owner model selection establishes a new boundary below.
+    let virtualRoutingRequest: VirtualRoutingRequest | undefined = isVirtualModelConfigEntry(routeEntry)
         ? beginVirtualRoutingRequest(routeKey, routeEntry)
         : undefined;
     if (!virtualRoutingRequest) clearVirtualRoutingState(routeKey);
@@ -3581,10 +2528,10 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
     // for this whole request so retries expand `${TURN_ID}` consistently;
     // normal session turns provide their own value from SessionTurnRunner.
     const turnId = options.turnId || randomUUID();
-    // Resolve the provider-neutral requested effort once for this entire outer
-    // request. Each physical concrete attempt may fall back independently to
-    // its leaf default when the selected leaf does not allow that request.
-    const requestedEffort = normalizeRequestedEffort(options.effort);
+    // Capture requested effort with this selection. An explicit model change
+    // below refreshes the normalized pair; effort-only edits do not. Each leaf
+    // may independently fall back to its configured default.
+    let requestedEffort = normalizeRequestedEffort(options.effort);
     // Allocate the stable outer-request identity before streaming setup. The
     // manifest is written after attempt 1 selects its concrete model and
     // resolves the exact effective prompt, but still before provider send.
@@ -3631,6 +2578,22 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
         }
     };
 
+    const rebuildCommittedRequestContext = () => {
+        canonicalContents = stripRequestDisplayMeta(stripReservedProviderImageHelperFields(
+            fixToolCalls(structuredClone(options.getCommittedHistoryForRetry!())),
+        ));
+        // A notice can join an already-rebuilt, not-yet-journaled request. Keep
+        // its allocated identity instead of creating another empty generation.
+        if (!requestJournalStarted) return;
+        modelStreamEmitter.close();
+        requestId = randomUUID();
+        requestJournalStarted = false;
+        journalAttempt = 0;
+        requestStartedAt = undefined;
+        logFiles = null;
+        modelStreamEmitter = makeModelStreamEmitter(requestId);
+    };
+
     if (shouldRegisterAbortController) {
         if (options.currentSessionEffects) options.currentSessionEffects.registerAbortController(options.sessionId!, abortController);
         else sessionManager.registerSessionAbortController(options.sessionId!, abortController);
@@ -3639,6 +2602,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
 
     try {
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            let explicitSelectionChanged = false;
             if (attempt > 1) {
                 // The previous lane/checkpoint and abortable backoff have settled.
                 // Owner preparation is local work, outside provider classification,
@@ -3649,23 +2613,29 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
                     const contextChanged = await options.prepareRetry(abortController.signal);
                     if (abortController.signal.aborted) throw makeAbortError();
                     resumeFromCommittedHistory ||= contextChanged;
+                    const selection = options.getSelectionForRetry?.();
+                    if (selection && selection.model !== selectedModel) {
+                        explicitSelectionChanged = true;
+                        // Only an explicit owner model change crosses the captured
+                        // configuration boundary. Effort-only edits and ordinary
+                        // config reloads retain this request's original snapshot.
+                        selectedModel = selection.model;
+                        resolvedModel = resolveModelConfig(selectedModel);
+                        routeEntry = resolvedModel.modelEntry;
+                        routeKey = resolvedModel.currentKey;
+                        if (!routeEntry) throw new Error(`Unable to resolve model config for \`${routeKey}\`.`);
+                        virtualRoutingRequest = isVirtualModelConfigEntry(routeEntry)
+                            ? beginVirtualRoutingRequest(routeKey, routeEntry) : undefined;
+                        if (!virtualRoutingRequest) clearVirtualRoutingState(routeKey);
+                        requestedEffort = normalizeRequestedEffort(selection.effort);
+                        resumeFromCommittedHistory = true;
+                    }
                 }
                 if (resumeFromCommittedHistory) {
-                    modelStreamEmitter.close();
-                    canonicalContents = stripRequestDisplayMeta(stripReservedProviderImageHelperFields(
-                        fixToolCalls(structuredClone(options.getCommittedHistoryForRetry!())),
-                    ));
-                    requestId = randomUUID();
-                    requestJournalStarted = false;
-                    journalAttempt = 0;
-                    requestStartedAt = undefined;
-                    logFiles = null;
-                    modelStreamEmitter = makeModelStreamEmitter(requestId);
+                    rebuildCommittedRequestContext();
                     resumeFromCommittedHistory = false;
                 }
-                if (shouldNotifySessionEvents) modelStreamEmitter.reset();
             }
-            journalAttempt += 1;
 
             let selection: VirtualTargetSelection | undefined;
             let modelEntry = routeEntry;
@@ -3681,6 +2651,18 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
             }
 
             const concreteModelId = getModelIdForMetadata(modelEntry, modelKey);
+            if (options.prepareEffectiveSelection && !abortController.signal.aborted) {
+                const contextChanged = await options.prepareEffectiveSelection({
+                    modelId: concreteModelId,
+                    effectiveEffort: resolveEffectiveRequestEffort(modelEntry, requestedEffort),
+                    ...(selectedModel && !resolvedModel.modelsConfig.models[selectedModel] ? { missingModelKey: selectedModel } : {}),
+                    reason: attempt > 1 && !explicitSelectionChanged && routeEntry.providerType === 'failover'
+                        ? 'failover' : 'effective-selection',
+                });
+                if (contextChanged) rebuildCommittedRequestContext();
+            }
+            if (attempt > 1 && shouldNotifySessionEvents) modelStreamEmitter.reset();
+            journalAttempt += 1;
             const requestApi = getOpenAIRequestApi(modelEntry.providerType || 'openai');
             const providerContents = prepareHistoryForConcreteModel(canonicalContents, concreteModelId);
             // This runs outside the transport retry catch: unreadable original

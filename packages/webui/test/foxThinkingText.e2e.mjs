@@ -1,7 +1,7 @@
 import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { readdir, readFile } from 'node:fs/promises'
+import { readdir, readFile, mkdir } from 'node:fs/promises'
 import { build } from './browserFixtureBundle.mjs'
 import { webuiReactAliases } from './reactRendererAliases.mjs'
 import puppeteer from 'puppeteer-core'
@@ -15,7 +15,7 @@ before(async () => {
     stdin: { contents: `
       import React, { StrictMode, useState } from 'react'
       import { createRoot } from 'react-dom/client'
-      import ProcessingStatus from './src/components/ProcessingStatus'
+      import ProcessingStatus, { QueuedMessageStatus } from './src/components/ProcessingStatus'
       import { initializeThemeRuntime } from './src/theme'
       initializeThemeRuntime()
       function Fixture() {
@@ -23,12 +23,13 @@ before(async () => {
         const [queue, setQueue] = useState(0)
         window.fixture.setQueue = setQueue
         window.fixture.setState = setState
-        return <ProcessingStatus sessionBusy={state !== 'idle'} sessionQueueLength={queue} turnIncomplete={state === 'interrupted'} timelineView="grouped"
+        return <><ProcessingStatus sessionBusy={state !== 'idle'} sessionQueueLength={queue} turnIncomplete={state === 'interrupted'} timelineView="grouped"
           loading={state === 'loading'} isMobile={innerWidth < 768}
           runtimeState={{state: state === 'interrupted' ? 'idle' : state === 'compacting' ? 'requesting-model' : state === 'exec' ? 'running-tool' : state,
             active: {phase: state === 'compacting' ? 'compaction' : 'normal-turn'},
             tool: {name: state === 'exec' ? 'exec' : 'read', index: 0, total: 2, executionNode: 'fixture-node', argsPreview: 'echo WORK', startedAt: 1}}}
-          onContinue={() => window.fixture.continues++} onStop={() => window.fixture.stops++} onRunQueued={() => window.fixture.runs++} />
+          onContinue={() => window.fixture.continues++} onStop={() => window.fixture.stops++} />
+          <QueuedMessageStatus count={queue} alignment="left" isMobile={innerWidth < 768} onRunQueued={() => window.fixture.runs++} /></>
       }
       window.fixture = {stops: 0, runs: 0, continues: 0}
       createRoot(document.getElementById('root')).render(<StrictMode><Fixture /></StrictMode>)
@@ -75,25 +76,43 @@ async function geometry(page) {
       const { x, y, width, height } = document.querySelector(selector).getBoundingClientRect()
       return { x, y, width, height }
     }
-    return { badge: box('[data-processing-runtime-state]'), stop: box('button'), slot: box('[data-processing-status-slot]') }
+    return { badge: box('[data-processing-runtime-state]'), slot: box('[data-processing-status-slot]') }
   })
 }
 
-test('phrases wipe without moving text while Stop smoothly follows the actual caption width', async () => {
+test('fox highlight holds between steps without changing loop speed', async () => {
+  const page = await open()
+  try {
+    const progression = await page.$eval('.fw-fox-comet', element => {
+      const animation = element.getAnimations()[0]
+      animation.pause()
+      const offsetAt = time => {
+        animation.currentTime = time
+        return getComputedStyle(element).strokeDashoffset
+      }
+      return {
+        duration: animation.effect.getTiming().duration,
+        start: offsetAt(0),
+        withinStep: offsetAt(35),
+        nextStep: offsetAt(105),
+      }
+    })
+    assert.equal(progression.duration, 1400)
+    assert.equal(progression.start, progression.withinStep)
+    assert.notEqual(progression.start, progression.nextStep)
+  } finally { await page.close() }
+})
+
+test('phrases wipe and resize without moving text or rendering a runtime Stop action', async () => {
   const page = await open()
   try {
     const before = await geometry(page)
-    assert.equal(before.stop.x, before.badge.x + before.badge.width + 12)
-    assert.equal(before.stop.height, before.badge.height)
     const style = await page.$eval('.fw-processing-badge', element => {
       const style = getComputedStyle(element)
       return { border: style.borderTopWidth, background: style.backgroundColor, font: getComputedStyle(element.querySelector('[data-fox-thinking-copy]')).fontSize }
     })
     assert.deepEqual(style, { border: '0px', background: 'rgba(0, 0, 0, 0)', font: '18px' })
-    assert.equal(await page.$eval('button', button => getComputedStyle(button).borderTopWidth), '0px')
     assert.equal(await page.$eval('.fw-fox-thinking-phrases', element => parseFloat(getComputedStyle(element).lineHeight) / parseFloat(getComputedStyle(element).fontSize)), 1.5)
-    assert.equal(await page.$eval('button', button => !!button.closest('[role="status"]')), true)
-    await page.focus('button')
     await page.waitForSelector('[data-thinking-phrase="outgoing"]')
     const layers = await page.evaluate(() => {
       for (const animation of document.getAnimations()) {
@@ -119,21 +138,16 @@ test('phrases wipe without moving text while Stop smoothly follows the actual ca
       return !copy.querySelector('[data-thinking-phrase="outgoing"]') && Math.abs(copy.getBoundingClientRect().width - Math.ceil(copy.querySelector('.fw-fox-thinking-measure').getBoundingClientRect().width)) < 0.5
     })
     const after = await geometry(page)
-    assert.ok(after.stop.x < before.stop.x, 'shorter phrases bring Stop closer')
-    assert.ok(middle.stop.x <= before.stop.x && middle.stop.x >= after.stop.x)
-    assert.equal(after.stop.width, before.stop.width)
-    assert.equal(after.stop.y, before.stop.y)
+    assert.ok(after.badge.width < before.badge.width, 'shorter phrases use less space')
+    assert.equal(await page.$('.fw-processing-main > button'), null)
     assert.equal(after.slot.height, before.slot.height)
-    assert.ok(Math.abs(after.stop.x - after.badge.x - after.badge.width - 12) < 1)
-    assert.equal(await page.$eval('button', element => element === document.activeElement), true)
-    await page.click('button')
-    assert.equal(await page.evaluate(() => window.fixture.stops), 1)
   } finally { await page.close() }
 })
 
 test('reduced motion changes copy without animation or duplicate visible layers', async () => {
   const page = await open({ reduced: true })
   try {
+    assert.equal(await page.$eval('.fw-fox-comet', element => getComputedStyle(element).animationName), 'none')
     await page.waitForSelector('[data-thinking-phrase="outgoing"]')
     assert.equal(await page.$eval('[data-thinking-phrase="outgoing"]', element => getComputedStyle(element).display), 'none')
     const style = await page.$eval('[data-thinking-phrase="incoming"]', element => {
@@ -144,13 +158,11 @@ test('reduced motion changes copy without animation or duplicate visible layers'
   } finally { await page.close() }
 })
 
-test('narrow rows preserve Stop, fixed status height, and timer cleanup across real states', async () => {
+test('narrow caption-only rows preserve fixed status height and timer cleanup across real states', async () => {
   const page = await open({ width: 240 })
   try {
     const boxes = await geometry(page)
     assert.equal(boxes.slot.height, 56)
-    assert.ok(boxes.stop.x + boxes.stop.width <= 240 - 16)
-    assert.ok(Math.abs(boxes.badge.x + boxes.badge.width + 12 - boxes.stop.x) < 1)
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
     for (const state of ['compacting', 'running-tool', 'waiting', 'loading', 'idle']) {
       await page.evaluate(state => window.fixture.setState(state), state)
@@ -177,8 +189,6 @@ test('exec gets borderless action copy, distinct semantic color, and real detail
     assert.equal(await page.$eval('[data-fox-copy-mode="exec"] .sr-only', element => element.textContent), 'tool: exec 1/2')
     assert.equal(await page.$('[data-processing-tool-tag]'), null)
     assert.equal(await page.evaluate(() => window.thinkingTimers.size), 1)
-    await page.click('button')
-    assert.equal(await page.evaluate(() => window.fixture.stops), 1)
     await page.evaluate(() => window.fixture.setState('requesting-model'))
     await page.waitForFunction(() => document.querySelector('[data-fox-copy-mode="thinking"]') && window.thinkingTimers.size === 1)
     assert.equal(await page.$eval('[data-fox-thinking-copy] .sr-only', el => el.textContent), 'Thinking...')
@@ -214,13 +224,13 @@ test('all runtime states and queue copy are borderless, with smaller muted queue
       const muted = getComputedStyle(expected).color
       expected.remove()
       return {size: style.fontSize, color: style.color, muted, border: style.borderTopWidth, background: style.backgroundColor,
-        right: element.getBoundingClientRect().left >= document.querySelector('.fw-processing-main').getBoundingClientRect().right}
+        left: Math.abs(element.getBoundingClientRect().left - document.querySelector('[data-processing-queue-footer]').getBoundingClientRect().left) < 1}
     })
     assert.equal(metadata.size, '12px')
     assert.equal(metadata.color, metadata.muted)
     assert.equal(metadata.border, '0px')
     assert.equal(metadata.background, 'rgba(0, 0, 0, 0)')
-    assert.equal(metadata.right, true)
+    assert.equal(metadata.left, true)
     await page.click('[data-processing-queue-status] button')
     assert.equal(await page.evaluate(() => window.fixture.runs), 1)
   } finally { await page.close() }
@@ -241,18 +251,54 @@ test('short queued count and real actions remain visible in wide and narrow stat
         }, {}, state)
         await page.waitForFunction(() => document.querySelector('[data-processing-queue-status]')?.textContent.includes('3 queued'))
         assert.equal(await page.$eval('[data-processing-queue-status] span', el => el.textContent), '3 queued')
+        const alignment = await page.evaluate(() => {
+          const queue = document.querySelector('[data-processing-queue-status]').getBoundingClientRect()
+          const group = document.querySelector('[data-processing-queue-footer]').getBoundingClientRect()
+          return { left: queue.left, expected: group.left }
+        })
+        assert.ok(Math.abs(alignment.left - alignment.expected) < 1, `queue stays in left-aligned flow: ${JSON.stringify(alignment)}`)
         assert.doesNotMatch(await page.$eval('[role="status"]', el => el.textContent), /will be inserted|pending/)
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
         assert.ok(await page.$$eval('[role="status"] button', buttons => buttons.every(button => {
           const box = button.getBoundingClientRect()
           return box.width > 0 && box.left >= 16 && box.right <= innerWidth - 16
         })))
-        if (state === 'requesting-model' || state === 'exec' || state === 'interrupted') {
+        if (state === 'interrupted') {
           await page.click('.fw-processing-main > button')
         }
         await page.click('[data-processing-queue-status] button')
       }
-      assert.deepEqual(await page.evaluate(() => [window.fixture.stops, window.fixture.continues, window.fixture.runs]), [2, 1, 6])
+      assert.deepEqual(await page.evaluate(() => [window.fixture.stops, window.fixture.continues, window.fixture.runs]), [0, 1, 6])
     } finally { await page.close() }
   }
+})
+
+test('waiting sleeps in warning color without a caption timer and respects reduced motion', async () => {
+  const page=await open({width:390})
+  try {
+    await page.evaluate(()=>window.fixture.setState('waiting'))
+    await page.waitForSelector('[data-fox-loader="sleeping"]')
+    assert.equal(await page.$('[data-processing-status-dot]'),null)
+    assert.equal(await page.$('[data-fox-loader="spinner"]'),null)
+    assert.equal(await page.evaluate(()=>window.thinkingTimers.size),0)
+    const normal=await page.$eval('[data-fox-loader="sleeping"]',el=>({
+      color:getComputedStyle(el).color,caption:getComputedStyle(el.nextElementSibling).color,
+      body:getComputedStyle(el.querySelector('.fw-fox-body')).animationName,
+      sleep:getComputedStyle(el,'::after').animationName,
+      slot:el.closest('[data-processing-status-slot]').getBoundingClientRect().height,
+    }))
+    assert.equal(normal.color,normal.caption)
+    assert.equal(normal.body,'fw-fox-breathe')
+    assert.equal(normal.sleep,'fw-fox-snooze')
+    assert.equal(normal.slot,56)
+    const dir=process.env.FOXWARM_E2E_SCREENSHOT_DIR
+    if(dir){await mkdir(dir,{recursive:true});await page.screenshot({path:`${dir}/sleeping-waiting-mobile.png`,clip:{x:0,y:0,width:390,height:120}})}
+    await page.emulateMediaFeatures([{name:'prefers-reduced-motion',value:'reduce'}])
+    assert.deepEqual(await page.$eval('[data-fox-loader="sleeping"]',el=>[
+      getComputedStyle(el.querySelector('.fw-fox-body')).animationName,getComputedStyle(el,'::after').animationName,
+    ]),['none','none'])
+    await page.evaluate(()=>window.fixture.setState('interrupted'))
+    await page.waitForSelector('[data-processing-status-dot="static"]')
+    assert.equal(await page.$('[data-fox-loader="sleeping"]'),null)
+  }finally{await page.close()}
 })

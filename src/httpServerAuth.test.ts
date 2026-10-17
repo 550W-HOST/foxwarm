@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import test from 'node:test';
+import zlib from 'node:zlib';
 import { HttpServer } from './httpServer';
 
 async function withServer(fn: (server: HttpServer, baseUrl: string) => Promise<void>) {
-  const port = 32180 + Math.floor(Math.random() * 1000);
-  const server = new HttpServer(port, 'secret-token');
+  const server = new HttpServer(0, 'secret-token');
   await server.start();
   try {
-    await fn(server, `http://127.0.0.1:${port}`);
+    const address = server['httpServer'].address();
+    assert.ok(address && typeof address !== 'string');
+    await fn(server, `http://127.0.0.1:${address.port}`);
   } finally {
     await server.stop();
   }
@@ -118,5 +121,64 @@ test('webui auth routes allow restricted identities while admin routes reject th
       headers: { Authorization: 'Bearer secret-token' },
     });
     assert.equal(adminAllowed.status, 200);
+  });
+});
+
+test('authenticated HTTP responses preserve their body through gzip compression', async () => {
+  await withServer(async (server, baseUrl) => {
+    const body = 'compressed application response\n'.repeat(1000);
+    server.addRoute({
+      path: '/api/compressed', method: 'GET',
+      handler: async (_req, res) => { res.type('text/plain').send(body); },
+    });
+    const response = await fetch(`${baseUrl}/api/compressed`, {
+      headers: { Authorization: 'Bearer secret-token', 'Accept-Encoding': 'gzip' },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-encoding'), 'gzip');
+    assert.equal(await response.text(), body);
+  });
+});
+
+test('closing a compressed response early releases its gzip stream', { timeout: 5000 }, async (t) => {
+  const descriptor = Object.getOwnPropertyDescriptor(zlib, 'createGzip')!;
+  const createGzip = zlib.createGzip;
+  let gzip: ReturnType<typeof createGzip> | undefined;
+  Object.defineProperty(zlib, 'createGzip', {
+    ...descriptor,
+    value: (...args: Parameters<typeof createGzip>) => {
+      gzip = createGzip(...args);
+      return gzip;
+    },
+  });
+  t.after(() => {
+    gzip?.destroy();
+    Object.defineProperty(zlib, 'createGzip', descriptor);
+  });
+  await withServer(async (server, baseUrl) => {
+    let responseClosed: Promise<void> | undefined;
+    server.addRoute({
+      path: '/api/compressed', method: 'GET',
+      handler: async (_req, res) => {
+        responseClosed = new Promise(resolve => res.once('close', resolve));
+        res.type('text/plain');
+        res.write('unfinished application response\n'.repeat(1000));
+        res.flush();
+      },
+    });
+    const request = http.get(`${baseUrl}/api/compressed`, {
+      headers: { Authorization: 'Bearer secret-token', 'Accept-Encoding': 'gzip' },
+    });
+    t.after(() => request.destroy());
+    await new Promise<void>((resolve, reject) => {
+      request.once('error', reject);
+      request.once('response', response => {
+        assert.equal(response.headers['content-encoding'], 'gzip');
+        response.once('data', () => { response.destroy(); resolve(); });
+      });
+    });
+    assert.ok(gzip, 'the request used a real gzip stream');
+    await responseClosed;
+    assert.equal(gzip.destroyed, true);
   });
 });

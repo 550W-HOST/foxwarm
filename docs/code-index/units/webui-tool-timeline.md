@@ -25,7 +25,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 |----------|------|-------------|
 | `formatToolResponseText(resp)` | ~1 | Delegates to shared WebUI response formatter for the full response payload |
 | `getSendFileDownload(call, resp)` | ~20 | Extracts download URL/filename for send_file tool responses |
-| `ToolDownloadButton({ url, fileName })` | ~15 | Renders a styled download button that triggers browser download |
+| `ToolDownloadButton({ url, fileName })` | ~35 | Requests an action-local signed URL before native download, with pending/error state |
 | `ToolGroupSummaryCard({ items, onExpand, expanded?, children? })` | ~15 | Neutral Tool-style group card with a persistent counted-tag header (`exec ×4`; failures separate, most frequent first), shared header/line toggle, and nested member body when expanded |
 | `getToolDisplayLabel(call)` | ~1 | Formats a human-readable label for a tool call |
 | `getToolPairStatus(responses, imageParts)` | ~7 | Derives tone (success/error/neutral) for a call-response pair |
@@ -65,7 +65,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 - `../../../shared/src/webuiToolRendering` — pure helpers for streaming partial-tool guards and session-link text parsing tests
 - `./ImageParts` — renders image message parts
 - `./SyntaxHighlightedText` — code syntax highlighting component
-- `./downloadShared` — `buildPathDownloadUrl`, `triggerBrowserDownload`
+- `./downloadShared` — `buildPathDownloadUrl`, `requestPathDownloadUrl`, `triggerBrowserDownload`
 - `./DiffPreview` — renders diff/patch previews
 - `./ThreadLineButton` — collapsible thread line toggle
 
@@ -78,7 +78,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 - Conversation process callers supply `hideCollapsedContent` to remove result/progress previews while collapsed, retaining the normal concise call header and one-click full body. Grouped and Conversation supply the existing `neutralSuccess` presentation to shared native blocks, including ToolScript subcall tags: successful pairs use neutral cards, headers and thread lines; genuine errors and running indicators retain their normal emphasis. Grouped counted headers neutralize successful real-tool tags after counting, without changing recorded status, failure separation or counts. Detailed retains its success palette. Native JSON action overlay the shrinkable summary area before the trailing duration, preserving JSON access without covering the time or reserving empty summary width while hidden.
 - Tool items are collapsible: clicking the thread line or the top tag/call-summary row toggles expanded/collapsed state; the surrounding card, expanded call arguments, and result content are not collapse targets. ChatTimeline supplies controlled manual disclosure so the same call retains its choice across pending/result pairing and tail/historical regrouping; standalone block callers retain local disclosure.
 - A finalized tail call without any response or result image shows `Running...` in the existing collapsed preview or expanded result area only while the current Session runtime is `running-tool`. Empty real responses count as returned; streaming argument drafts and historical unmatched calls do not show it. The label coexists with ToolScript progress and does not alter response data or JSON inspection object. Tail/runtime ownership is described in [webui-chat-timeline](./webui-chat-timeline.md).
-- A valid persisted `executionTiming` adds a small invocation duration at the far right of the existing header, after its shrinkable command/path/argument summary and JSON action; malformed or legacy responses show none. This is the call-to-return duration, not the lifetime of a background process or the interval between model requests. The duration remains non-shrinking, including with header controls visible. ToolScript sub-call list durations use the same trailing position. Timing data and duration semantics do not change.
+- Valid persisted invocation timing may add a non-shrinking duration after the header's command/path/argument summary and JSON action, following [D-webui-tool-header-duration](#d-webui-tool-header-duration). ToolScript sub-call list durations retain their separate existing trailing display.
 - The JSON action captures the complete `{ modelMessage, call, responses, imageParts }` object in the [shared inspector](./webui-editor.md#d-editor-json-inspection), without replacing the formatted body or changing disclosure. There is no Default/JSON view-mode state or Default toggle.
 - Default tool response rendering formats the whole `functionResponse.response` object via the shared WebUI formatter. Single-key objects (for example `{ output: "ok" }` or `{ error: "bad" }`) display the single value, while multi-key objects stay structured/YAML-like. Special renderers such as exec/read still use this formatter as their fallback for non-standard or error-shaped results.
 - Streaming/partial tool calls are intentionally lightweight: when the parent model message is the synthetic streaming draft, call previews and expanded bodies show the latest raw argument text without parsing heavy or incomplete inputs (for example `apply_patch`). Provider updates are throttled to at most once per second, and rich patch/diff rendering remains deferred until the finalized tool call arrives.
@@ -105,9 +105,13 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 - `ToolScriptProgressContext` is provided by a parent component and consumed here to show real-time tool script progress
 - Relies on `chatShared` for the core message/part type system and formatting utilities shared across the chat UI
 - `DiffPreview` and `SyntaxHighlightedText` handle rich code rendering within tool bodies
-- Download functionality connects to the authenticated `/download?path=...` route used by WebUI `send_file` results
+- Download functionality requests an administrator-authorized signature before handing the `/download?path=...` resource to the native browser; errors remain next to the tool action. Canonical authority: [D-webui-download-capabilities](../modules/webui.md#d-webui-download-capabilities).
 
 ## Design Decisions
+
+### D-webui-tool-header-duration
+
+[2026-10-15] The tool invocation header's upper-right duration appears only for valid `executionTiming.durationMs` values of at least 1000ms. Values below one second stay hidden; missing, malformed, or legacy timing remains unavailable rather than estimated. The shared native tool card applies this display threshold in every timeline mode and disclosure state. The duration is call-to-return time, not background-process lifetime or an inter-request interval. Keep the existing non-shrinking slot alongside header controls and any Reasoning badge. This does not change recorded/calculated timing, exec result-body Duration/Elapsed, Activity Worked/Waited, or ToolScript sub-call durations.
 
 ### D-webui-tool-group-collapse
 

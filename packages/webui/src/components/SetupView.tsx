@@ -1,3 +1,5 @@
+import MobilePageHeader from './MobilePageHeader'
+import ContextMenu, {type ContextMenuAnchorRect} from './ContextMenu'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Bot, CheckCircle2, Palette, RefreshCw, Settings, SlidersHorizontal, XCircle } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
@@ -47,6 +49,7 @@ type SetupStatus = {
 }
 
 interface SetupViewProps {
+  mobileHome?: boolean
   forced?: boolean
   onClose?: () => void
   onSetupChanged?: () => void
@@ -119,9 +122,12 @@ function normalizeWeixinQrPayload(value: string): { imageSrc: string | null; raw
   return { imageSrc: null, raw: trimmed }
 }
 
-export default function SetupView({ forced = false, onClose, onSetupChanged, focusModelsRequest = 0, onFocusModelsRequestHandled, webUiSettings, onInstanceNameChange, onTabIconChange }: SetupViewProps) {
+export default function SetupView({ mobileHome = false, forced = false, onClose, onSetupChanged, focusModelsRequest = 0, onFocusModelsRequestHandled, webUiSettings, onInstanceNameChange, onTabIconChange }: SetupViewProps) {
   const tabHeader = useWorkbenchTabHeader()
   const [activeTab, setActiveTab] = useState<SetupTab>('appearance')
+  const [mobileOptions, setMobileOptions] = useState<ContextMenuAnchorRect | null>(null)
+  const mobileOptionsRef = useRef<HTMLButtonElement>(null)
+
   const setupRootRef = useRef<HTMLDivElement | null>(null)
   const [verticalSections, setVerticalSections] = useState(false)
   useEffect(() => {
@@ -428,7 +434,8 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
   }
 
   return (
-    <div ref={setupRootRef} className="foxwarm-setup-root flex h-full min-h-0 flex-col bg-fw-canvas">
+    <div ref={setupRootRef} className={`foxwarm-setup-root flex h-full min-h-0 flex-col bg-fw-canvas ${mobileHome ? 'mobile-page-root mobile-setup-page' : ''}`}>
+      {mobileHome ? <MobilePageHeader title="Settings" actions={<button ref={mobileOptionsRef} type="button" className="mobile-header-circle" aria-label="Settings sections" aria-haspopup="menu" aria-expanded={!!mobileOptions} onClick={() => setMobileOptions(mobileOptionsRef.current!.getBoundingClientRect())}><SlidersHorizontal size={20} /></button>} /> : (
       <ContentHeader
         icon={<Settings className="h-5 w-5" />}
         title={forced ? 'Foxwarm first-time setup' : 'Foxwarm Setup'}
@@ -454,6 +461,13 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
           </div>
         }
       />
+      )}
+      <ContextMenu open={!!mobileOptions} anchorRect={mobileOptions} preferredPlacement="bottom-end" onClose={() => {setMobileOptions(null);mobileOptionsRef.current?.focus({preventScroll:true})}} entries={[
+        {key:'appearance',label:'Appearance',checked:activeTab==='appearance',icon:<Palette size={16}/>,onSelect:()=>activateTab('appearance')},
+        {key:'models',label:'Models',checked:activeTab==='models',icon:<Bot size={16}/>,onSelect:()=>activateTab('models')},
+        {key:'config',label:'Config',checked:activeTab==='config',icon:<SlidersHorizontal size={16}/>,onSelect:()=>activateTab('config')},
+        {key:'sep',type:'separator'}, {key:'refresh',label:'Refresh',icon:<RefreshCw size={16}/>,onSelect:()=>{void loadStatus()}},
+      ]} />
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex min-h-0 w-full flex-1 flex-col">

@@ -1,7 +1,9 @@
-import type { TimelineView } from '../chatPreferences'
-import { getMessageStableKey } from '../chatViewportState'
+import ReplyFileGrid from './ReplyFileGrid'
+import { buildReplyFileGroups } from './replyFiles'
+import { useMobileChatViewport, type TimelineView } from '../chatPreferences'
+import { getMessageViewportAnchorKey, getMessageStableKey } from '../chatViewportState'
 import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Eye, Code, FileJson, Copy, Check, Cloud, ChevronRight } from 'lucide-react'
+import { File as FileIcon, Image as ImageIcon, Eye, Code, FileJson, Copy, Check, Cloud, ChevronRight } from 'lucide-react'
 import {
   IconToggleButton,
   copyTextToClipboard,
@@ -74,6 +76,7 @@ interface ChatTimelineProps {
   reasoningPresentation?: ReasoningPresentation
   isRunningTool?: boolean
   /** Supplied by Chat from full committed history, never inferred from a viewport or nested slice. */
+  currentHistoryMessages?: readonly Message[]
   historyMessages?: readonly Message[]
   activityDetails?: boolean
   runtimeState?: import('../sessionRuntimeState').SessionRuntimeState
@@ -87,6 +90,7 @@ interface ChatTimelineProps {
   onOpenCodeCommit?: OpenCodeCommitHandler
   nestedDepth?: number
   searchTarget?: SessionSearchMatch | null
+  renderMessageFooter?: (alignment: 'left' | 'right') => ReactNode
 }
 
 const getUsageTotalTokens = (usage: NormalizedTokenUsage) => (
@@ -526,6 +530,10 @@ function UserWrapperBoundaryBreak({ afterMetadata }: { afterMetadata: boolean })
   )
 }
 
+function isOmittedAttachmentPreview(part: Message['parts'][number]): boolean {
+  return typeof part.text === 'string' && /^\[[^\]\r\n]+ attachment preview omitted\]$/.test(part.text.trim())
+}
+
 export function findAttachmentCorrelations(parts: Message['parts']): Map<string, AttachmentCorrelation> {
   const correlations = new Map<string, AttachmentCorrelation>()
   const activeRefs = new Set<string>()
@@ -536,6 +544,7 @@ export function findAttachmentCorrelations(parts: Message['parts']): Map<string,
     }
   }
   parts.forEach((part, partIndex) => {
+    let attachmentOffset = 1
     for (const segment of parsePastedTextSegments(getPartDisplayText(part))) {
       if (segment.kind !== 'text') continue
       for (const line of segment.text.split('\n')) {
@@ -544,14 +553,15 @@ export function findAttachmentCorrelations(parts: Message['parts']): Map<string,
         if (!parsed || parsed.closing || (parsed.tagName !== 'foxwarm-image' && parsed.tagName !== 'foxwarm-file')) continue
         const generated = splitGeneratedAttachmentName(parsed.attrs.name || '')
         if (!generated || !activeRefs.has(generated.ref) || correlations.has(generated.ref)) continue
-        const imagePart = parsed.tagName === 'foxwarm-image' ? parts[partIndex + 1] : undefined
+        const imagePart = parts[partIndex + attachmentOffset]
+        if (imagePart && (imagePart.inlineData || imagePart.inlineDataRef || imagePart.inlineDataUnavailable || isOmittedAttachmentPreview(imagePart))) attachmentOffset++
         correlations.set(generated.ref, {
           ref: generated.ref,
           kind: parsed.tagName === 'foxwarm-image' ? 'image' : 'file',
           name: generated.originalName,
           mimeType: parsed.attrs.mime || imagePart?.inlineDataRef?.mimeType || imagePart?.inlineData?.mimeType || '',
           descriptorText,
-          ...(imagePart && (imagePart.inlineData || imagePart.inlineDataRef || imagePart.inlineDataUnavailable) ? { imagePart } : {}),
+          ...(imagePart && (imagePart.inlineData || imagePart.inlineDataRef || imagePart.inlineDataUnavailable || isOmittedAttachmentPreview(imagePart)) ? { imagePart } : {}),
         })
       }
     }
@@ -566,34 +576,36 @@ export function stripGeneratedDescriptorLines(text: string, correlations: Map<st
     : segment.text.split('\n').filter(line => !descriptors.has(line.trim())).join('\n')).join('')
 }
 
-function AttachmentHistoryBlock({ correlation }: { correlation: AttachmentCorrelation }) {
-  const { ref, kind, name, mimeType: mime, imagePart } = correlation
-  return (
-    <span data-search-exclude className="foxwarm-inline-history-attachment my-1 inline-flex max-w-full items-center gap-2 rounded-md border border-fw-border bg-fw-surface-raised px-2 py-1.5 align-middle text-sm shadow-sm" data-attachment-ref={ref}>
-      {kind === 'image' && imagePart
-        ? <ImageItem part={imagePart} label={name} imageClassName="h-12 w-12 shrink-0 object-cover" />
-        : <span aria-hidden="true">{kind === 'image' ? '🖼' : '📎'}</span>}
-      <span className="min-w-0">
-        <span className="block truncate font-medium">{name}</span>
-        {mime && <span className="block truncate text-xs text-fw-text-muted">{mime}</span>}
-      </span>
-    </span>
-  )
+function AttachmentHistoryGrid({ correlations, imageParts, pending }: { correlations: Map<string, AttachmentCorrelation>; imageParts: Message['parts']; pending: boolean }) {
+  const files = [
+    ...[...correlations.values()].map(item => ({ ...item, key: item.ref })),
+    ...imageParts.map((imagePart, index) => ({ key: `image-${index}`, ref: undefined, kind: 'image' as const, name: `Image ${index + 1}`, mimeType: '', imagePart })),
+  ]
+  if (!files.length) return null
+  return <div data-search-exclude role="list" aria-label="Message attachments" className="foxwarm-history-attachment-grid" style={{gridTemplateColumns: `repeat(${Math.min(files.length, 3)}, minmax(0, 96px))`}}>
+    {files.map(({key, ref, kind, name, mimeType, imagePart}, index) => <div key={key} role="listitem" data-attachment-ref={ref} className="foxwarm-history-attachment" title={`${name}${mimeType ? ` · ${mimeType}` : ''}`}>
+      {kind === 'image' && imagePart && !isOmittedAttachmentPreview(imagePart)
+        ? <ImageItem part={imagePart} label={name} imageClassName="h-full w-full object-contain" />
+        : <span className="flex flex-col items-center gap-1 text-fw-text-muted">{kind === 'image' ? <ImageIcon size={24} aria-hidden="true" /> : <FileIcon size={24} aria-hidden="true" />}{kind === 'image' && <span className="text-[10px]">{pending ? 'Queued' : 'Unavailable'}</span>}</span>}
+      <span className="composer-attachment-number" aria-hidden="true">{index + 1}</span>
+      <span className="composer-attachment-filename">{name}</span>
+    </div>)}
+  </div>
 }
 
 const CollapsibleUserText = memo(function CollapsibleUserText({ part, showUserMessageMetadata, correlations, inlineFlow = false, conversationText, searchReveal = false, searchSurface, searchPartIndex, searchPastedIndex }: { part: Message['parts'][number]; showUserMessageMetadata: boolean; correlations: Map<string, AttachmentCorrelation>; inlineFlow?: boolean; conversationText?: ReturnType<typeof getConversationUserPartText>; searchReveal?: boolean; searchSurface?: SessionSearchMatch['surface']; searchPartIndex?: number; searchPastedIndex?: number }) {
   const text = stripGeneratedDescriptorLines(conversationText?.text ?? getPartDisplayText(part), correlations)
   const literalText = conversationText?.literalText ?? false
   const wrapper = conversationText?.wrapper
-  const segments = useMemo<Array<PastedTextSegment | { kind: 'attachment'; tagText: string; ref: string }>>(() => {
-    const output: Array<PastedTextSegment | { kind: 'attachment'; tagText: string; ref: string }> = []
+  const segments = useMemo<Array<PastedTextSegment | {kind: 'attachment'; ref: string}>>(() => {
+    const output: Array<PastedTextSegment | {kind: 'attachment'; ref: string}> = []
     for (const segment of parsePastedTextSegments(text)) {
       if (segment.kind === 'pasted-text') { output.push(segment); continue }
       let cursor = 0
       for (const match of segment.text.matchAll(/<attachment-ref\s+ref="(attachment[1-9]\d*)"\s*\/>/g)) {
         const index = match.index || 0
         if (index > cursor) output.push({ kind: 'text', text: segment.text.slice(cursor, index) })
-        if (correlations.has(match[1])) output.push({ kind: 'attachment', tagText: match[0], ref: match[1] })
+        if (correlations.has(match[1])) output.push({kind: 'attachment', ref: match[1]})
         else output.push({ kind: 'text', text: match[0] })
         cursor = index + match[0].length
       }
@@ -619,7 +631,14 @@ const CollapsibleUserText = memo(function CollapsibleUserText({ part, showUserMe
       <div className={`${shouldCollapse ? 'overflow-hidden' : ''} ${inlineFlow ? 'contents' : ''}`} style={shouldCollapse ? { maxHeight: 'calc(1.5em * 4)' } : {}}>
         <pre data-search-surface="user" data-search-part-index={searchPartIndex} className={`foxwarm-user-message-text foxwarm-user-line-layout max-w-full whitespace-pre-wrap break-words font-sans ${inlineFlow ? 'inline' : ''}`} style={{ lineHeight: 0 }}>
           {segments.map((segment, segmentIndex) => segment.kind === 'attachment'
-            ? <AttachmentHistoryBlock key={`attachment-${segmentIndex}`} correlation={correlations.get(segment.ref)!} />
+            ? <button key={`attachment-${segmentIndex}`} type="button" className="foxwarm-inline-file-ref" data-search-exclude aria-label={`Attachment ${[...correlations.keys()].indexOf(segment.ref) + 1}: ${correlations.get(segment.ref)?.name}`} data-attachment-ref-marker={segment.ref}
+                title={correlations.get(segment.ref)?.name}
+                onClick={event => {
+                  const tile = event.currentTarget.closest('[data-search-row]')?.querySelector<HTMLElement>(`[data-attachment-ref="${segment.ref}"]`)
+                  const open = tile?.querySelector<HTMLElement>('button, a')
+                  if (open) open.click()
+                  else tile?.scrollIntoView({block: 'nearest', inline: 'nearest'})
+                }}>FILE {[...correlations.keys()].indexOf(segment.ref) + 1}</button>
             : segment.kind === 'pasted-text'
             ? <PastedTextBlock key={`pasted-${segmentIndex}`} text={segment.text} searchPartIndex={searchPartIndex} searchPastedIndex={pastedOrdinalBySegment[segmentIndex]} searchReveal={searchReveal && searchSurface === 'pasted' && searchPastedIndex === pastedOrdinalBySegment[segmentIndex]} />
             : (
@@ -800,6 +819,7 @@ const WebSearchCitationLinks = memo(function WebSearchCitationLinks({ annotation
 })
 
 const AssistantTextCard = memo(function AssistantTextCard({ text, message, annotations, onOpenCodeCommit, searchReveal = false, searchPartIndex, conversation = false, reasoningBadges }: { reasoningBadges?: readonly ReasoningBadgeInfo[]; conversation?: boolean; text: string; message: Message; annotations?: OpenAIResponsesAnnotation[]; onOpenCodeCommit?: OpenCodeCommitHandler; searchReveal?: boolean; searchPartIndex?: number }) {
+  const mobileUi = useMobileChatViewport()
   const [viewMode, setViewMode] = useState<ViewMode>('rendered')
   const displayedViewMode = searchReveal ? 'rendered' : viewMode
   const [copied, setCopied] = useState(false)
@@ -834,7 +854,7 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
   }, [text])
 
   const actionButtons = (
-    <div className={`foxwarm-assistant-action-buttons ${conversation ? 'order-last mt-1 self-start' : reasoningBadges?.length ? '' : 'absolute right-1 top-1'} flex shrink-0 gap-0.5 opacity-0 transition-opacity`}>
+    <div className={`foxwarm-assistant-action-buttons ${conversation ? 'order-last mt-1 self-start' : 'absolute right-1 top-1 z-10'} flex shrink-0 gap-0.5 opacity-0 transition-opacity`}>
       <IconToggleButton onClick={() => setViewMode('rendered')} active={displayedViewMode === 'rendered'} title="Rendered (Markdown)">
         <Eye size={12} />
       </IconToggleButton>
@@ -853,32 +873,33 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
   return (
     <div className={`foxwarm-assistant-message-card ${conversation ? 'foxwarm-conversation-reply flex flex-col' : ''} min-w-0 max-w-full bg-fw-assistant-surface text-fw-assistant-text border border-fw-border px-2 py-2 rounded-lg cursor-text relative group`}
       style={message.__meta?.streaming ? { overflowAnchor: 'none' } : undefined}>
-      {reasoningBadges?.length ? <div data-search-exclude className="foxwarm-assistant-message-header flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1">
-        {!conversation && actionButtons}
-        <ReasoningTokenBadge badges={reasoningBadges} />
-      </div> : null}
-      {(!reasoningBadges?.length || conversation) && actionButtons}
+      {!mobileUi && actionButtons}
+      <div className="flow-root min-w-0 max-w-full">
+        {reasoningBadges?.length ? <div data-search-exclude className="float-right ml-2">
+          <ReasoningTokenBadge badges={reasoningBadges} />
+        </div> : null}
 
-      {displayedViewMode === 'rendered' ? (
-        <div data-search-surface="model" data-search-part-index={searchPartIndex} className="foxwarm-assistant-message-markdown">
-          {renderedSegments.map((segment, index) => segment.kind === 'markdown' ? (
-            <MarkdownContent
-              key={`markdown-${index}`}
-              text={segment.text}
-              className="foxwarm-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-fw-assistant-code-surface prose-pre:text-fw-assistant-code-text prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0"
-            />
-          ) : segment.kind === 'commit' ? (
-            <div key={`commit-${index}-${segment.target.commitId}`} data-search-exclude className="contents"><CommitMarkerCard target={segment.target} onOpen={onOpenCodeCommit} /></div>
-          ) : (
-            <pre key={`invalid-commit-${index}`} className="my-2 whitespace-pre-wrap rounded border border-fw-warning-border bg-fw-warning-surface px-2 py-1.5 font-mono text-xs text-fw-warning dark:border-fw-warning-border dark:bg-fw-warning-surface-strong/30 dark:text-fw-warning" title="Invalid Foxwarm commit marker">
-              {segment.raw}
-            </pre>
-          ))}
-          <div data-search-exclude className="contents"><WebSearchCitationLinks annotations={annotations} /></div>
-        </div>
-      ) : (
-        <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-fw-text-strong">{text}</pre>
-      )}
+        {displayedViewMode === 'rendered' ? (
+          <div data-search-surface="model" data-search-part-index={searchPartIndex} className="foxwarm-assistant-message-markdown">
+            {renderedSegments.map((segment, index) => segment.kind === 'markdown' ? (
+              <MarkdownContent
+                key={`markdown-${index}`}
+                text={segment.text}
+                className="foxwarm-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-fw-assistant-code-surface prose-pre:text-fw-assistant-code-text prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0"
+              />
+            ) : segment.kind === 'commit' ? (
+              <div key={`commit-${index}-${segment.target.commitId}`} data-search-exclude className="contents"><CommitMarkerCard target={segment.target} onOpen={onOpenCodeCommit} /></div>
+            ) : (
+              <pre key={`invalid-commit-${index}`} className="my-2 whitespace-pre-wrap rounded border border-fw-warning-border bg-fw-warning-surface px-2 py-1.5 font-mono text-xs text-fw-warning dark:border-fw-warning-border dark:bg-fw-warning-surface-strong/30 dark:text-fw-warning" title="Invalid Foxwarm commit marker">
+                {segment.raw}
+              </pre>
+            ))}
+            <div data-search-exclude className="contents"><WebSearchCitationLinks annotations={annotations} /></div>
+          </div>
+        ) : (
+          <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-fw-text-strong">{text}</pre>
+        )}
+      </div>
       {jsonSnapshot !== null && <JsonInspectorDialog text={jsonSnapshot} onClose={() => setJsonSnapshot(null)} />}
     </div>
   )
@@ -892,6 +913,7 @@ interface MessageRowProps {
   expandedTools: ExpandedTools
   onToolToggle: ToolToggleHandler
   row: TimelineRowView
+  hideMetrics: boolean
   isMobile: boolean
   showUserMessageMetadata: boolean
   sessionId: string
@@ -909,6 +931,7 @@ interface MessageRowProps {
 const MessageRow = memo(function MessageRow({
   row,
   isMobile,
+  hideMetrics,
   showUserMessageMetadata,
   sessionId,
   nestedDepth,
@@ -945,7 +968,7 @@ const MessageRow = memo(function MessageRow({
     hideCollapsedContent: conversationDetails,
     neutralSuccess: conversationDetails || neutralToolSuccess,
     expandedToolKeys: expandedTools.get(messageKey) || EMPTY_TOOL_KEYS,
-    reasoningBadges: msg.parts.filter(part => part.functionCall).map(part => {
+    reasoningBadges: hideMetrics ? [] : msg.parts.filter(part => part.functionCall).map(part => {
       const info = row.reasoningPresentation[msg.parts.indexOf(part)]
       return info?.target === 'tool' ? info.badges : undefined
     }),
@@ -975,9 +998,9 @@ const MessageRow = memo(function MessageRow({
     }
     return visible
   }, [msg.parts, msg.role, reasoningRuns, row.conversationPartIndex, row.conversationImageOnly])
-  const textLikeParts = useMemo(() => visibleModelParts.filter(item => !item.reasoningRun).map(item => item.part), [visibleModelParts])
   const attachmentCorrelations = useMemo(() => findAttachmentCorrelations(msg.parts), [msg.parts])
   const associatedImageParts = useMemo(() => new Set([...attachmentCorrelations.values()].flatMap(item => item.imagePart ? [item.imagePart] : [])), [attachmentCorrelations])
+  const textLikeParts = useMemo(() => visibleModelParts.filter(item => !item.reasoningRun && !(msg.__meta?.queuedPreview && associatedImageParts.has(item.part) && isOmittedAttachmentPreview(item.part))).map(item => item.part), [visibleModelParts, associatedImageParts, msg.__meta?.queuedPreview])
   const hasInlineAttachmentFlow = msg.role === 'user' && attachmentCorrelations.size > 0
   const inlineUserWrapperBoundaries = useMemo(
     () => hasInlineAttachmentFlow ? getInlineUserWrapperBoundaries(textLikeParts) : null,
@@ -1003,6 +1026,12 @@ const MessageRow = memo(function MessageRow({
   const ordinaryParts = surface === 'all' ? visibleModelParts : visibleModelParts.filter(belongsToOrdinarySurface)
   const groupedParts = surface === 'all' ? visibleModelParts : visibleModelParts.filter(item => !belongsToOrdinarySurface(item))
   const displayedParts = surface === 'ordinary' ? ordinaryParts : groupedParts
+  const hasUserBody = textLikeParts.some(part => {
+    const text = stripGeneratedDescriptorLines(getPartDisplayText(part), attachmentCorrelations)
+    return parsePastedTextSegments(text).some(segment => segment.kind === 'pasted-text' || segment.text
+      .replace(/<attachment-ref\s+ref="(attachment[1-9]\d*)"\s*\/>/g, (tag, ref: string) => attachmentCorrelations.has(ref) ? 'FILE' : tag)
+      .split('\n').some(line => !!line.trim() && (showUserMessageMetadata || !parseFoxwarmMetadataLine(line.trim()))))
+  })
   const ordinaryContent = msg.role === 'model' && (ordinaryParts.length > 0 || imageParts.length > 0)
   if (surface === 'ordinary' && !ordinaryContent) return null
   if (surface === 'grouped' && msg.role === 'model' && groupedParts.length === 0 && !msg.parts.some(part => part.functionCall || part.functionResponse)) return null
@@ -1018,14 +1047,16 @@ const MessageRow = memo(function MessageRow({
       <div
         className={`min-w-0 ${surface !== 'all' ? 'w-full' : widthClass} ${
           !systemLikeMessage && msg.role === 'user'
-            ? `${row.literalUserText !== undefined ? 'foxwarm-conversation-user' : ''} foxwarm-user-message-bubble bg-fw-user-surface text-fw-user-text px-3 py-2 rounded-lg`
+            ? 'flex flex-col items-end'
             : ''
         }`}
       >
         {systemLikeMessage ? (
           <SystemLikeMessageCard msg={msg} messageKey={messageKey} searchReveal={rowSearchTarget?.surface === 'system'} />
         ) : msg.role === 'user' ? (
-          <div className={hasInlineAttachmentFlow ? 'min-w-0' : 'flex min-w-0 flex-col'}>
+          <>
+          <AttachmentHistoryGrid correlations={attachmentCorrelations} imageParts={imageParts} pending={!!msg.__meta?.queuedPreview} />
+          {hasUserBody && <div className={`${row.literalUserText !== undefined ? 'foxwarm-conversation-user' : ''} foxwarm-user-message-bubble min-w-0 max-w-full rounded-lg bg-fw-user-surface px-3 py-2 text-fw-user-text`}>
             {textLikeParts.map((part, partIdx) => (
               <div key={`user-part-${partIdx}`} className={hasInlineAttachmentFlow ? 'contents' : undefined}>
                 {showUserMessageMetadata && inlineUserWrapperBoundaries?.close === partIdx && <UserWrapperBoundaryBreak afterMetadata={false} />}
@@ -1037,8 +1068,8 @@ const MessageRow = memo(function MessageRow({
                 {showUserMessageMetadata && inlineUserWrapperBoundaries?.open === partIdx && <UserWrapperBoundaryBreak afterMetadata />}
               </div>
             ))}
-            <ImageParts imageParts={imageParts} keyPrefix={`user-${messageKey}`} />
-          </div>
+          </div>}
+          </>
         ) : (
           <div className={`flex min-w-0 max-w-full flex-col ${usageAnchorRelative ? 'relative' : ''}`}>
             {displayedParts.map(({ part, webSearchAction, partIndex, reasoningRun }, partIdx) => {
@@ -1057,7 +1088,7 @@ const MessageRow = memo(function MessageRow({
                 const tokens = partIndex === reasoningRuns[0]?.[0].partIndex
                   && typeof reasoningTokens === 'number' && Number.isFinite(reasoningTokens) && reasoningTokens >= 0
                     ? reasoningTokens : undefined
-                return <ReasoningCard key={`thinking-${partIndex}`} thinking={reasoningRun.map(item => item.thinking).join('\n')} parts={reasoningRun} reasoningTokens={tokens} tone="message" searchReveal={rowSearchTarget?.surface === 'reasoning' && reasoningRun.some(item => item.partIndex === rowSearchTarget.partIndex)} />
+                return <ReasoningCard key={`thinking-${partIndex}`} thinking={reasoningRun.map(item => item.thinking).join('\n')} parts={reasoningRun} reasoningTokens={hideMetrics ? undefined : tokens} tone="message" searchReveal={rowSearchTarget?.surface === 'reasoning' && reasoningRun.some(item => item.partIndex === rowSearchTarget.partIndex)} />
               }
               if (part.system) {
                 return <InlineMetaPart key={`model-system-${partIdx}`} systemText={formatStructuredSystemText(part.system)} isUser={false} />
@@ -1067,7 +1098,7 @@ const MessageRow = memo(function MessageRow({
               if (contextBlock && partIndex === firstTextPartIndex && part.text) {
                 return <ContextBlockCard key={`ctx-block-${contextBlock.id}`} sessionId={sessionId} messageKey={messageKey} block={contextBlock} text={part.text} nestedDepth={nestedDepth} renderNestedMessages={renderNestedMessages} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'ctx' && rowSearchTarget.partIndex === partIndex} />
               }
-              return <AssistantTextCard reasoningBadges={row.reasoningPresentation[partIndex]?.target === 'text' ? row.reasoningPresentation[partIndex]?.badges : undefined} conversation={conversationDetails || row.conversationPartIndex !== undefined} key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={part.providerMeta?.openaiResponses?.annotations} onOpenCodeCommit={onOpenCodeCommit} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'model' && rowSearchTarget.partIndex === partIndex} />
+              return <AssistantTextCard reasoningBadges={!hideMetrics && row.reasoningPresentation[partIndex]?.target === 'text' ? row.reasoningPresentation[partIndex]?.badges : undefined} conversation={conversationDetails || row.conversationPartIndex !== undefined} key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={part.providerMeta?.openaiResponses?.annotations} onOpenCodeCommit={onOpenCodeCommit} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'model' && rowSearchTarget.partIndex === partIndex} />
             })}
             {(surface !== 'grouped' || msg.role !== 'model') && <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />}
             {row.conversationPartIndex === undefined && surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup && pairedToolResponse ? <InterleavedToolGroup {...toolDisclosure} runningTool={runningTool} msg={msg} nextMsg={pairedToolResponse} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} /> : <ToolCallsBlock {...toolDisclosure} runningTool={runningTool} msg={msg} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} />)}
@@ -1091,6 +1122,7 @@ const MessageRow = memo(function MessageRow({
   (prev.searchTarget?.rowKey === prev.row.key ? prev.searchTarget.id : null) === (next.searchTarget?.rowKey === next.row.key ? next.searchTarget.id : null) &&
   prev.sessionId === next.sessionId &&
   prev.nestedDepth === next.nestedDepth &&
+  prev.hideMetrics === next.hideMetrics &&
   prev.onOpenCodeFile === next.onOpenCodeFile &&
   prev.onOpenCodeCommit === next.onOpenCodeCommit &&
   (!getContextBlockMetaFromMessage(prev.row.msg) || prev.renderNestedMessages === next.renderNestedMessages)
@@ -1184,8 +1216,9 @@ const ConversationUsage = memo(function ConversationUsage({ badge, pendingReques
   </div>
 })
 
-const TimelineActivity = memo(function TimelineActivity({ row, expanded, onToggle, rowProps }: {
+const TimelineActivity = memo(function TimelineActivity({ row, identityKey, expanded, onToggle, rowProps }: {
   row: TimelineRowView
+  identityKey: string
   expanded: boolean
   onToggle: (key: string, expanded: boolean) => void
   rowProps: Omit<MessageRowProps, 'row'>
@@ -1201,16 +1234,17 @@ const TimelineActivity = memo(function TimelineActivity({ row, expanded, onToggl
   return (
     <div ref={ref} data-timeline-activity data-activity-expanded={expanded}
       data-chat-message-anchor-key={row.anchorKey} data-context-scrollbar-anchor-key={row.scrollbarAnchorKey}
+      data-chat-history-end-key={getMessageViewportAnchorKey(activity.sources?.at(-1) || activity.messages.at(-1) || row.msg)}
       className={`min-w-0 ${row.widthClass} ${row.marginClass}`}>
       <ConversationUsage badge={activity.usage} pendingRequests={activity.pendingRequests || 0} missingRequests={activity.missingRequests || 0} sessionId={rowProps.sessionId}>
         {activity.runtimeOnly ? <div className="px-2 py-1 text-left text-xs text-fw-text-muted">{activity.summary}</div> : <button type="button" aria-expanded={expanded} aria-label={expanded ? 'Collapse activity' : 'Expand activity'}
           className="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1 text-left text-xs text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong focus-visible:outline focus-visible:outline-fw-focus-ring"
-          onClick={() => { prepare(); onToggle(row.key, !expanded) }}>
+          onClick={() => { prepare(); onToggle(identityKey, !expanded) }}>
           <ChevronRight size={13} aria-hidden="true" className={`shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} /><span>{activity.summary}</span>
         </button>}
       </ConversationUsage>
       {expanded && !activity.runtimeOnly && <div className="foxwarm-conversation-process min-w-0 border-l border-fw-border py-1 pl-2" data-activity-details data-search-row={previewKey ? row.key : undefined} data-search-message-key={previewKey}>
-        {rowProps.renderNestedMessages(activity.messages, row.key, rowProps.nestedDepth + 1, 'detailed', previewSearch)}
+        {rowProps.renderNestedMessages(activity.messages, identityKey, rowProps.nestedDepth + 1, 'detailed', previewSearch)}
       </div>}
       {showPreview && <div data-conversation-preview data-search-row={row.key} className="min-w-0">
         <AssistantTextCard conversation text={preview.message.parts[preview.partIndex].text || ''} message={preview.message} searchPartIndex={preview.partIndex} searchReveal={rowProps.searchTarget?.rowKey === row.key} onOpenCodeCommit={rowProps.onOpenCodeCommit} />
@@ -1228,10 +1262,12 @@ const TimelineTimeSeparator = memo(function TimelineTimeSeparator({ marker }: { 
   )
 })
 
-const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, reasoningPresentation, isRunningTool = false, isMobile, timelineView, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget, historyMessages, activityDetails, runtimeState, busyStartedAt }: ChatTimelineProps) {
+const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, reasoningPresentation, isRunningTool = false, isMobile, timelineView, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget, historyMessages, currentHistoryMessages, activityDetails, runtimeState, busyStartedAt, renderMessageFooter }: ChatTimelineProps) {
+  const hideMetrics = useMobileChatViewport()
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
   const [expandedTools, setExpandedTools] = useState<ExpandedTools>(new Map())
   const rowsCacheRef = useRef<TimelineRowsCache | null>(null)
+  const activityMembersRef = useRef(new Map<object | string, string>())
   const [clockTick, setClockTick] = useState(0)
 
   const renderNestedMessages = useCallback((nestedMessages: Message[], keyPrefix: string, nextNestedDepth: number, overrideView?: TimelineView, nestedSearchTarget?: SessionSearchMatch | null) => (
@@ -1254,7 +1290,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
   ), [timelineView, isMobile, onOpenCodeCommit, onOpenCodeFile, sessionId, showUsageBadge, showUserMessageMetadata])
 
   const rows = useMemo(() => {
-    const input = { messages, reasoningPresentation, isRunningTool, isMobile, timelineView, showUsageBadge, showTimeDividers, nestedDepth, activityDetails, historyMessages, timing: { runtimeState, busyStartedAt, now: historyMessages && nestedDepth === 0 ? Date.now() : undefined }, expandedGroupKeys: expandedToolGroups }
+    const input = { messages, reasoningPresentation, isRunningTool, isMobile, timelineView, showUsageBadge: showUsageBadge && !hideMetrics, showTimeDividers, nestedDepth, activityDetails, historyMessages, currentHistoryMessages, timing: { runtimeState, busyStartedAt, now: historyMessages && nestedDepth === 0 ? Date.now() : undefined }, expandedGroupKeys: expandedToolGroups }
     let result = buildTimelineRows(input, rowsCacheRef.current)
     // A search reveal is transient: include only its owning group without changing manual expansion state.
     if (searchTarget && timelineView === 'grouped' && nestedDepth === 0) {
@@ -1269,7 +1305,28 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
     }
     rowsCacheRef.current = result.cache
     return result.rows
-  }, [expandedToolGroups, timelineView, isMobile, isRunningTool, messages, reasoningPresentation, nestedDepth, activityDetails, historyMessages, clockTick, runtimeState, busyStartedAt, searchTarget, showUsageBadge, showTimeDividers])
+  }, [expandedToolGroups, timelineView, isMobile, isRunningTool, messages, reasoningPresentation, nestedDepth, activityDetails, historyMessages, currentHistoryMessages, clockTick, runtimeState, busyStartedAt, searchTarget, showUsageBadge, showTimeDividers, hideMetrics])
+
+
+  // A loaded predecessor can change the projected first row without changing the process being read.
+  // Retain its mounted identity (and nested disclosures), while Search keeps canonical row keys.
+  const activityKeys = useMemo(() => {
+    const keys = new Map<string, string>()
+    const members = new Map([...activityMembersRef.current].filter(([key, identity]) => typeof key === 'string' && expandedToolGroups.has(identity)))
+    const used = new Set<string>()
+    for (const row of rows) {
+      if (!row.activity) continue
+      const parts = row.activity.messages.flatMap(message => message.parts.map(part => part.functionCall || part.functionResponse || part))
+      const candidates = new Set([activityMembersRef.current.get(row.key), ...parts.map(part => activityMembersRef.current.get(part))].filter((key): key is string => !!key && !used.has(key)))
+      const identity = [...candidates].find(key => expandedToolGroups.has(key)) || candidates.values().next().value || row.key
+      used.add(identity)
+      keys.set(row.key, identity)
+      members.set(row.key, identity)
+      for (const part of parts) members.set(part, identity)
+    }
+    activityMembersRef.current = members
+    return keys
+  }, [rows, expandedToolGroups])
 
 
   const dynamicTiming = rows.some(row => row.activity?.dynamic)
@@ -1317,18 +1374,42 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
     if (expanded && groupKey) handleGroupToggle(groupKey, true)
   }, [handleGroupToggle])
 
-  const rowProps = { conversationDetails: activityDetails, neutralToolSuccess: timelineView === 'grouped', expandedTools, onToolToggle: handleToolToggle, isMobile, showUserMessageMetadata, sessionId, nestedDepth, onOpenCodeFile, onOpenCodeCommit, renderNestedMessages, searchTarget }
+  const replyFileSlots = useMemo(() => {
+    const slots = new Map<number, ReturnType<typeof buildReplyFileGroups>>()
+    if (nestedDepth > 0 || activityDetails) return slots
+    const indices = new Map(messages.map((message, index) => [message, index]))
+    const itemEnds = groupedRows.map(item => {
+      const owned = item.rows.flatMap(row => row.activity?.sources || [row.msg]).map(message => indices.get(message)).filter((value): value is number => value !== undefined)
+      return owned.length ? Math.max(...owned) : Infinity
+    })
+    let slot = -1
+    for (const group of buildReplyFileGroups(messages, sessionId)) {
+      while (slot + 1 < itemEnds.length && itemEnds[slot + 1] <= group.endIndex) slot++
+      slots.set(slot, [...slots.get(slot) || [], group])
+    }
+    return slots
+  }, [messages, groupedRows, sessionId, nestedDepth, activityDetails])
+  const renderReplyFiles = (slot: number) => (replyFileSlots.get(slot) || []).map(group => <ReplyFileGrid key={group.key} files={group.files} />)
+
+  const lastGroup = groupedRows[groupedRows.length - 1]
+  const lastRow = lastGroup?.rows[lastGroup.rows.length - 1]
+  const footerAlignment = lastRow?.msg.role === 'user' && !lastRow.systemLikeMessage && !lastRow.activity && !lastGroup.group ? 'right' : 'left'
+
+  const rowProps = { hideMetrics, conversationDetails: activityDetails, neutralToolSuccess: timelineView === 'grouped', expandedTools, onToolToggle: handleToolToggle, isMobile, showUserMessageMetadata, sessionId, nestedDepth, onOpenCodeFile, onOpenCodeCommit, renderNestedMessages, searchTarget }
 
   return (
     <div className="foxwarm-chat-timeline min-w-0 max-w-full">
-      {groupedRows.flatMap(item => [
+      {renderReplyFiles(-1)}
+      {groupedRows.flatMap((item, index) => [
         ...(item.rows[0].timeMarker ? [<TimelineTimeSeparator key={`${item.key}-time`} marker={item.rows[0].timeMarker} />] : []),
         item.rows[0].activity
-          ? <TimelineActivity key={item.key} row={item.rows[0]} rowProps={rowProps} expanded={expandedToolGroups.has(item.key)} onToggle={handleGroupToggle} />
+          ? <TimelineActivity key={activityKeys.get(item.key) || item.key} identityKey={activityKeys.get(item.key) || item.key} row={item.rows[0]} rowProps={rowProps} expanded={expandedToolGroups.has(activityKeys.get(item.key) || item.key)} onToggle={handleGroupToggle} />
           : item.group
           ? <TimelineGroup key={item.key} group={item.group} rows={item.rows} rowProps={rowProps} onToggle={handleGroupToggle} />
           : <MessageRow key={item.key} row={item.rows[0]} {...rowProps} />,
+        ...renderReplyFiles(index),
       ])}
+      {renderMessageFooter?.(footerAlignment)}
     </div>
   )
 })

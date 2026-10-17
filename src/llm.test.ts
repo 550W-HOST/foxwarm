@@ -1,3 +1,7 @@
+import { ensurePromptCacheKey } from './session/promptCache';
+import * as toolExecutor from './toolExecutor';
+import type { CurrentSessionEffects } from './session/currentSessionEffects';
+import { createDefaultCurrentSessionEffects } from './session/defaultCurrentSessionEffects';
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import axios from 'axios';
@@ -8,7 +12,7 @@ import sharp from 'sharp';
 import path from 'path';
 import os from 'os';
 
-import { createDefaultCurrentSessionEffects, createModelStreamEventEmitter, CurrentSessionEffects, DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, convertToAnthropicFormat, ensurePromptCacheKey, getLlmRetryDelayMs, redactProviderImagesForLog, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
+import { createModelStreamEventEmitter, DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, convertToAnthropicFormat, getLlmRetryDelayMs, redactProviderImagesForLog, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
 import { loadModelsConfigFromObject, LOGS_DIR, MAX_OUTPUT } from './config';
 import * as configModule from './config';
 import { formatDate } from './logRotation';
@@ -26,7 +30,7 @@ import { nodesManager } from './nodes/manager';
 import { getModelStreamDraft } from './modelStreamDraft';
 import { collectOpenAIResponsesStream, convertToOpenAIResponsesFormat } from './llmProviders/openai';
 import { mergeModelStreamDeltaEvents } from './sessionWorkerHost';
-import { isSessionTurnIncomplete } from './sessionContinuation';
+import { isSessionTurnIncomplete } from '../packages/shared/dist/sessionContinuation';
 import { clearOpenAIWsCompletedChains, getOpenAIWsCompletedChainCountForTests, setOpenAIWsTransportTestHooks } from './llmProviders/openaiWsTransport';
 import { isToolAuthorizationPolicyUnavailable, parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests, setToolAuthorizationPolicyPathForTests } from './toolAuthorization';
 import { makeAnthropicMessageStream } from './testFixtures/anthropicMessageStream';
@@ -2229,7 +2233,7 @@ test('a truncated-response notice failure does not undo the committed assistant 
       { sessionId: session.id, session },
       session,
     );
-    assert.match(String((dispatched.parts[0].functionResponse?.response as any)?.output), /dispatch proof/);
+    assert.match(String((dispatched.message.parts[0].functionResponse?.response as any)?.output), /dispatch proof/);
   } finally {
     (axios as any).post = originalPost;
     await fs.remove(dirPath);
@@ -3219,7 +3223,8 @@ test('LocalSessionTurnHost runs detached normal chat through explicit current-se
     });
     assert.equal(result.text, 'detached answer');
     assert.deepEqual(appended.map(message => message.role), ['user', 'model']);
-    assert.equal(persistCount, 1);
+    assert.ok(persistCount > 0);
+    assert.equal(session.meta.lastEffectiveRequest?.modelId, result.modelId);
     assert.equal(events.some(event => event.type === 'model-stream-reset'), true);
     assert.equal(events.some(event => event.type === 'model-stream-update'), true);
     assert.equal(registered.length, 1);
@@ -3296,7 +3301,7 @@ test('LocalSessionTurnHost clears explicit wait through injected effects when a 
       { id: 'sibling-error', name: 'read', args: { filePath: `/missing-effects-${Date.now()}` } },
     ], { sessionId, session }, session);
     assert.deepEqual(cleared, [{ sessionId, waitId: 'detached-wait-token' }]);
-    assert.equal((message as any).__toolLoopControl, undefined);
+    assert.equal(message.control, undefined);
   } finally {
     (tools as any).wait = originalWait;
     await sessionManager.deleteSession(sessionId).catch(() => false);
@@ -3336,8 +3341,8 @@ test('LocalSessionTurnHost executes detached read and compact setting without gl
     ], { sessionId: session.id, session }, session);
     assert.equal(session.compactThresholdTokens, 12345);
     assert.equal(persisted, 1);
-    assert.match(String((message.parts[0].functionResponse?.response as any)?.output), /12345/);
-    assert.match(String((message.parts[1].functionResponse?.response as any)?.output), /detached read ok/);
+    assert.match(String((message.message.parts[0].functionResponse?.response as any)?.output), /12345/);
+    assert.match(String((message.message.parts[1].functionResponse?.response as any)?.output), /detached read ok/);
     assert.equal(sessionManager.getAllSessions().has(session.id), false);
   } finally {
     Object.assign(sessionManager, {
@@ -3372,13 +3377,13 @@ test('executeTools without effects resolves and uses the exact global source Ses
   };
 
   try {
-    const message = await llmModule.executeTools([
+    const message = await toolExecutor.executeTools([
       { id: 'legacy-read', name: 'read', args: { filePath: 'probe.txt' } },
       { id: 'legacy-explicit', name: 'image_write_to_file', args: { id: 'image-id', filePath: '/tmp/image.png', node: 'remote-explicit' } },
     ], { sessionId, session: clone }, clone as any);
-    assert.match(String((message.parts[0].functionResponse?.response as any)?.output), /authoritative owner read/);
-    assert.doesNotMatch(String((message.parts[0].functionResponse?.response as any)?.output), /untrusted clone read/);
-    assert.deepEqual(message.parts[1].functionResponse?.response, { output: 'explicit owner route' });
+    assert.match(String((message.message.parts[0].functionResponse?.response as any)?.output), /authoritative owner read/);
+    assert.doesNotMatch(String((message.message.parts[0].functionResponse?.response as any)?.output), /untrusted clone read/);
+    assert.deepEqual(message.message.parts[1].functionResponse?.response, { output: 'explicit owner route' });
   } finally {
     (nodesManager as any).getCurrentNode = originalGetCurrentNode;
     (tools as any).image_write_to_file = originalImageWrite;
@@ -3399,10 +3404,10 @@ test('executeTools without effects cannot bypass authoritative isolation with a 
   const clone = { ...session, agent: 'main', currentNode: 'master' };
 
   try {
-    const message = await llmModule.executeTools([
+    const message = await toolExecutor.executeTools([
       { id: 'isolated-clone-read', name: 'read', args: { filePath: '/tmp/outside-owner.txt' } },
     ], { sessionId, session: clone }, clone as any);
-    assert.match(String((message.parts[0].functionResponse?.response as any)?.error), /[Ii]solated/);
+    assert.match(String((message.message.parts[0].functionResponse?.response as any)?.error), /[Ii]solated/);
   } finally {
     await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
     await sessionManager.deleteSession(sessionId).catch(() => false);
@@ -3441,7 +3446,7 @@ test('executeTools without effects rejects a missing source without creating it'
   const clone = createOpenAITestSession(missingId);
   assert.equal(sessionManager.getAllSessions().has(missingId), false);
   await assert.rejects(
-    () => llmModule.executeTools([
+    () => toolExecutor.executeTools([
       { id: 'missing-read', name: 'read', args: { filePath: '/tmp/missing-owner.txt' } },
     ], { sessionId: missingId, session: clone }, clone),
     new RegExp(`source session .*${missingId}.* was not found`),
@@ -4128,6 +4133,47 @@ test('unchanged retry preparation preserves logical identity and the existing ph
   } finally { (axios as any).post = originalPost; }
 });
 
+test('an unchanged explicit model keeps its captured virtual snapshot and effort across retry preparation', async () => {
+  const originalPost = axios.post;
+  const originalResolve = configModule.resolveModelConfig;
+  const snapshot = (target: string) => configModule.loadModelsConfigFromObject({ default: 'selected-route', providers: {
+    fixture: { providerType: 'openai-completions', baseUrl: `https://${target}.example.test/v1`,
+      apiKey: 'synthetic-key', models: ['a', 'b'] },
+    'selected-route': { providerType: 'session-hash', targets: [`fixture/${target}`] },
+  } });
+  let active = snapshot('a');
+  let resolutions = 0;
+  (configModule as any).resolveModelConfig = () => {
+    resolutions++;
+    return { modelsConfig: active, defaultKey: active.default, currentKey: active.default,
+      modelEntry: active.models[active.default] };
+  };
+  const session = createOpenAITestSession(makeId('unchanged_selection_snapshot'));
+  session.model = 'selected-route'; session.effort = 'high';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="fixture/a" />\n\noriginal memory';
+  const requests: Array<{ url: string; body: any }> = [];
+  (axios as any).post = async (url: string, body: any) => {
+    requests.push({ url, body });
+    if (requests.length === 1) throw new Error('retry unchanged selection');
+    return { status: 200, statusText: 'OK', headers: {}, data: makeChatCompletionStream('captured selection') };
+  };
+  try {
+    const result = await chat([{ text: 'input' }], session, 0, {
+      toolDefinitions: [], maxRetries: 2, notifySessionEvents: false, registerAbortController: false,
+      appendMessage: async message => { session.history.push(message); },
+      prepareRetry: async () => { active = snapshot('b'); session.effort = 'none'; return false; },
+    });
+    assert.equal(resolutions, 1, 'a config reload or effort-only edit is not a model selection');
+    assert.deepEqual(requests.map(request => [request.url, request.body.model, request.body.reasoning_effort]), [
+      ['https://a.example.test/v1/chat/completions', 'a', 'high'],
+      ['https://a.example.test/v1/chat/completions', 'a', 'high'],
+    ]);
+    assert.equal(result.modelId, 'fixture/a');
+    assert.equal(result.virtualModelKey, 'selected-route');
+    assert.equal(result.llmAttempt, 2);
+  } finally { (axios as any).post = originalPost; (configModule as any).resolveModelConfig = originalResolve; }
+});
+
 test('retry preparation is awaited, propagates local failure, and rechecks cancellation without another provider send', async t => {
   for (const cancelled of [false, true]) {
     await t.test(cancelled ? 'cancel while awaiting owner' : 'strict preparation failure', async () => {
@@ -4238,6 +4284,28 @@ test('changed retry input does not reset the exhausted provider attempt budget',
     }), (error: unknown) => error instanceof LlmRequestError && error.attempt === 2);
     assert.equal(requests, 2);
     assert.equal(prepared, 1, 'terminal exhaustion cannot consume another batch');
+  } finally { (axios as any).post = originalPost; }
+});
+
+test('an explicit model switch does not replenish the remaining physical attempt budget', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession(makeId('retry_selected_model_budget'));
+  let requests = 0;
+  let prepared = 0;
+  (axios as any).post = async () => { requests++; throw new Error('persistent outage after selection'); };
+  try {
+    await assert.rejects(() => chat([{ text: 'input' }], session, 0, {
+      toolDefinitions: [], registerAbortController: false, notifySessionEvents: false, maxRetries: 2,
+      appendMessage: async message => { session.history.push(message); },
+      prepareRetry: async () => {
+        prepared++;
+        session.model = 'anthropic/claude-sonnet-4-5'; session.effort = 'none';
+        return false;
+      },
+      currentSessionEffects: { ...createDefaultCurrentSessionEffects(), persistSession: async () => {} },
+    }), (error: unknown) => error instanceof LlmRequestError && error.attempt === 2);
+    assert.equal(requests, 2);
+    assert.equal(prepared, 1);
   } finally { (axios as any).post = originalPost; }
 });
 

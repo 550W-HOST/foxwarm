@@ -17,6 +17,8 @@ interface CodeLaunchButtonProps {
   onPathChange: (path: string) => void
   onOpenInNewWindowChange: (enabled: boolean) => void
   onRefreshNodeTargets?: () => void
+  inlineOptions?: boolean
+  onCancel?: () => void
 }
 
 export default function CodeLaunchButton({
@@ -31,8 +33,10 @@ export default function CodeLaunchButton({
   onPathChange,
   onOpenInNewWindowChange,
   onRefreshNodeTargets,
+  inlineOptions = false,
+  onCancel,
 }: CodeLaunchButtonProps) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(inlineOptions)
   const [draftPath, setDraftPath] = useState(path)
   const [draftNodeId, setDraftNodeId] = useState(nodeId)
   const [pathError, setPathError] = useState('')
@@ -46,13 +50,13 @@ export default function CodeLaunchButton({
   }, [nodeId, open, path])
 
   useEffect(() => {
-    if (!open) return
+    if (!open || inlineOptions) return
     const handleClickOutside = (event: MouseEvent) => {
       if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false)
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [open])
+  }, [open, inlineOptions])
 
   const baseClass = active
     ? 'bg-fw-accent-surface text-fw-accent hover:bg-fw-accent-surface-strong dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent dark:hover:bg-fw-accent-surface-strong/60'
@@ -84,7 +88,7 @@ export default function CodeLaunchButton({
 
   return (
     <div className="relative" ref={rootRef}>
-      <div className="flex w-full items-stretch gap-1">
+      {!inlineOptions && <div className="flex w-full items-stretch gap-1">
         <button
           type="button"
           onClick={() => onOpen(nodeId, path)}
@@ -110,11 +114,11 @@ export default function CodeLaunchButton({
         >
           <ChevronDown className={`h-4 w-4 transition-transform ${open ? 'rotate-180' : ''}`} />
         </button>
-      </div>
+      </div>}
 
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-fw-border bg-fw-surface p-3 shadow-xl dark:border-fw-border dark:bg-fw-surface">
-          <div className="text-sm font-semibold text-fw-text-strong">Open code</div>
+        <div className={inlineOptions ? 'min-w-0' : 'absolute left-0 top-full z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-fw-border bg-fw-surface p-3 shadow-xl dark:border-fw-border dark:bg-fw-surface'}>
+          {!inlineOptions && <div className="text-sm font-semibold text-fw-text-strong">Open code</div>}
           <div className="mt-3 space-y-3">
             <div>
               <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-fw-text-muted">Node</label>
@@ -158,7 +162,7 @@ export default function CodeLaunchButton({
             <div className="flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setOpen(false)}
+                onClick={() => { setOpen(false); onCancel?.() }}
                 className="rounded-lg border border-fw-border-strong px-3 py-2 text-sm text-fw-text hover:bg-fw-hover dark:text-fw-text dark:hover:bg-fw-hover"
               >
                 Cancel

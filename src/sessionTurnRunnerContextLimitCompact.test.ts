@@ -1,3 +1,7 @@
+import * as promptSnapshot from './session/promptSnapshot';
+import * as promptCache from './session/promptCache';
+import * as toolExecutor from './toolExecutor';
+import type { CurrentSessionTurnEffects } from './session/currentSessionEffects';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -26,7 +30,7 @@ const TURN_TOOL_CALL = { id: 'limit-guard-tool', name: 'read', args: { action: '
 type Harness = {
   session: Session;
   deps: sessionHistory.SessionHistoryDeps;
-  effects: llm.CurrentSessionTurnEffects;
+  effects: CurrentSessionTurnEffects;
   abortControllers: Map<string, AbortController>;
   deliveries: string[];
   /** Broadcasts flagged as turn-final, the terminal deliveries of a turn. */
@@ -64,7 +68,7 @@ function makeSession(sessionId: string): Session {
     nextMessageSeq: 1,
     nextBlockId: 1,
     historyVersion: 0,
-    promptCacheKey: llm.generatePromptCacheKey(),
+    promptCacheKey: promptCache.generatePromptCacheKey(),
   } as Session;
 }
 
@@ -85,7 +89,7 @@ async function createHarness(sessionId: string): Promise<Harness> {
   const appendMessages = async (owner: Session, messages: Message[]) => { await sessionManager.appendSessionMessagesForSession(
     owner, messages, () => persistSession(owner), notifyHistoryUpdate,
   ); };
-  const effects: llm.CurrentSessionTurnEffects = {
+  const effects: CurrentSessionTurnEffects = {
     placement: 'local',
     appendMessage: (owner, message) => appendMessages(owner, [message]),
     appendMessages,
@@ -150,8 +154,8 @@ async function appendPlanSubmission(options: any, toolCall: any) {
 
 function stubProviderSurface() {
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
-  const originalSnapshot = llm.buildSessionSystemPromptSnapshotForSession;
+  const originalExecuteTools = toolExecutor.executeTools;
+  const originalSnapshot = promptSnapshot.buildSessionSystemPromptSnapshotForSession;
   const originalResolve = configModule.resolveModelConfig;
   const models = loadModelsConfigFromObject({
     default: 'fixture/context-limit',
@@ -164,15 +168,16 @@ function stubProviderSurface() {
     modelEntry: models.models[models.default],
     contextLimit: CONTEXT_LIMIT_TOKENS,
   });
-  (llm as any).buildSessionSystemPromptSnapshotForSession = async (activeSession: Session) => activeSession.persistentMemorySnapshot;
-  (llm as any).executeTools = async (functionCalls: Array<{ id?: string; name: string }>) => ({
-    role: 'tool',
-    parts: functionCalls.map(call => ({ functionResponse: { tool_use_id: call.id, name: call.name, response: { output: 'ok' } } })),
+  (promptSnapshot as any).buildSessionSystemPromptSnapshotForSession = async (activeSession: Session) => activeSession.persistentMemorySnapshot;
+  (toolExecutor as any).executeTools = async (functionCalls: Array<{ id?: string; name: string }>) => ({
+    message: {
+      role: 'tool', parts: functionCalls.map(call => ({ functionResponse: { tool_use_id: call.id, name: call.name, response: { output: 'ok' } } }))
+    }
   });
   return () => {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
-    (llm as any).buildSessionSystemPromptSnapshotForSession = originalSnapshot;
+    (toolExecutor as any).executeTools = originalExecuteTools;
+    (promptSnapshot as any).buildSessionSystemPromptSnapshotForSession = originalSnapshot;
     (configModule as any).resolveModelConfig = originalResolve;
   };
 }
@@ -365,6 +370,61 @@ test('failed compact planning ends the turn without another provider request and
   }
 });
 
+test('shutdown cancels the real planner wait without finalizing unfinished work as user Stop', async () => {
+  const harness = await createHarness(`limit_shutdown_wait_${Date.now()}`);
+  const restoreProvider = stubProviderSurface();
+  await appendOlderHistory(harness);
+  let normalCalls = 0;
+  let releasePlanning = () => {};
+  const planningReleased = new Promise<void>(resolve => { releasePlanning = resolve; });
+  let planningEntered = () => {};
+  const planningStarted = new Promise<void>(resolve => { planningEntered = resolve; });
+  (llm as any).chat = async (_parts: any, _owner: Session, _iteration: number, options: any) => {
+    if (options?.purpose === 'compact-plan') {
+      planningEntered();
+      await planningReleased;
+      return appendPlanSubmission(options, submittedPlanToolCall('shutdown-wait-plan'));
+    }
+    normalCalls += 1;
+    assert.equal(normalCalls, 1, 'shutdown cannot send another normal request');
+    await options.appendMessage({ role: 'model', parts: [{ functionCall: TURN_TOOL_CALL }] });
+    return { text: '', toolCalls: [TURN_TOOL_CALL], allParts: [{ functionCall: TURN_TOOL_CALL }], usage: OVER_LIMIT_USAGE };
+  };
+
+  try {
+    const running = harness.runner.processSessionQueue(harness.session.id);
+    await planningStarted;
+    await waitFor(() => harness.abortControllers.has(harness.session.id), 'the real compact wait registers its controller');
+    harness.session.queue.push({ type: 'user', parts: [{ text: 'follow-up while planner is waiting' }] });
+    await harness.effects.persistSession(harness.session);
+    await harness.runner.shutdown((id, reason) => {
+      const controller = harness.abortControllers.get(id);
+      if (!controller) return false;
+      harness.abortControllers.delete(id);
+      controller.abort(reason);
+      return true;
+    }, { graceMs: 0, cancelMs: 1000 });
+    await running;
+
+    assert.equal(normalCalls, 1);
+    assert.equal(harness.session.busy, true);
+    assert.equal(harness.session.queue.length, 1);
+    assert.equal(historyContains(harness.session, 'follow-up while planner is waiting'), false,
+      'shutdown must not passively consume later input as if the user had stopped');
+    assert.equal(harness.deliveries.some(text => text.includes('Execution stopped by user')), false);
+    assert.equal(sessionHistory.getCompactOperationPhase(harness.session.id), 'planning');
+    assert.equal(harness.abortControllers.size, 0);
+
+    releasePlanning();
+    await waitFor(() => sessionHistory.hasCompletedCompactJob(harness.session.id), 'planning can settle independently of the exited turn');
+    assert.equal(harness.session.busy, true, 'planner readiness does not depend on owner commit or clear its busy checkpoint');
+  } finally {
+    releasePlanning();
+    restoreProvider();
+    sessionHistory.discardPendingCompactWork(harness.session.id);
+  }
+});
+
 test('Stop releases the continuation wait without cancelling the running compaction', async () => {
   const harness = await createHarness(`limit_stop_release_${Date.now()}`);
   const restoreProvider = stubProviderSurface();
@@ -407,6 +467,56 @@ test('Stop releases the continuation wait without cancelling the running compact
     releasePlanning();
     await waitFor(() => sessionHistory.hasCompletedCompactJob(harness.session.id), 'the released compaction still finishes');
     assert.equal(sessionHistory.hasCompletedCompactJob(harness.session.id), true);
+  } finally {
+    releasePlanning();
+    restoreProvider();
+    sessionHistory.discardPendingCompactWork(harness.session.id);
+  }
+});
+
+test('Run queued releases the real compact wait and processes queued input without cancelling planning', async () => {
+  const harness = await createHarness(`limit_run_queued_release_${Date.now()}`);
+  const restoreProvider = stubProviderSurface();
+  await appendOlderHistory(harness);
+  let normalCalls = 0;
+  let releasePlanning = () => {};
+  const planningReleased = new Promise<void>(resolve => { releasePlanning = resolve; });
+  let planningEntered = () => {};
+  const planningStarted = new Promise<void>(resolve => { planningEntered = resolve; });
+  (llm as any).chat = async (_parts: any, _owner: Session, _iteration: number, options: any) => {
+    if (options?.purpose === 'compact-plan') {
+      planningEntered();
+      await planningReleased;
+      return appendPlanSubmission(options, submittedPlanToolCall('run-queued-release-plan'));
+    }
+    normalCalls += 1;
+    if (normalCalls === 1) {
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: TURN_TOOL_CALL }] });
+      return { text: '', toolCalls: [TURN_TOOL_CALL], allParts: [{ functionCall: TURN_TOOL_CALL }], usage: OVER_LIMIT_USAGE };
+    }
+    await options.appendMessage({ role: 'model', parts: [{ text: 'answer after Run queued' }] });
+    return { text: 'answer after Run queued', allParts: [{ text: 'answer after Run queued' }] };
+  };
+
+  try {
+    const running = harness.runner.processSessionQueue(harness.session.id);
+    await planningStarted;
+    await waitFor(() => harness.abortControllers.has(harness.session.id), 'the real compact wait registers its controller');
+    harness.session.queue.push({ type: 'user', parts: [{ text: 'active input for Run queued' }] });
+    harness.session.stopping = true;
+    harness.session.meta.runQueuedAfterStop = true;
+    harness.abortControllers.get(harness.session.id)!.abort();
+    await running;
+
+    assert.equal(normalCalls, 2, 'Run queued still starts the queued turn');
+    assert.equal(harness.session.busy, false);
+    assert.equal(harness.session.queue.length, 0);
+    assert.equal(historyContains(harness.session, 'active input for Run queued'), true);
+    assert.equal(harness.session.history.at(-1)!.parts[0].text, 'answer after Run queued');
+    assert.equal(sessionHistory.getCompactOperationPhase(harness.session.id), 'planning');
+
+    releasePlanning();
+    await waitFor(() => sessionHistory.hasCompletedCompactJob(harness.session.id), 'the planner still settles after Run queued');
   } finally {
     releasePlanning();
     restoreProvider();

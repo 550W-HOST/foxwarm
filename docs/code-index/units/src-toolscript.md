@@ -1,6 +1,6 @@
 # Unit: src-toolscript
 
-Files: src/toolscript.ts, src/toolscript.test.ts, src/toolscriptImageParts.test.ts
+Files: src/toolscript.ts, src/toolscript.test.ts, src/toolscriptImageParts.test.ts, src/toolscriptSource.test.ts, src/toolscriptSourceRouting.test.ts
 Secondary files: src/toolscriptSkills.test.ts, package.json, package-lock.json
 
 ## Purpose
@@ -9,7 +9,7 @@ Implements persisted foreground/background ToolScript runs in the Monty 0.0.19 P
 
 ## Actual exports
 
-- `tool_run_script(args, ctx)` — start a run; mode may be foreground or background.
+- `tool_run_script(args, ctx)` — start an inline run or load complete file source from `node` plus `filePath`; mode may be foreground or background.
 - `tool_start_toolscript_run(args, ctx)` — hidden compatibility-only background starter; current callers use `tool_run_script` with background mode.
 - `tool_continue_script(args, ctx)` — resume an agent-input or timeout-checkpoint wait owned by the current session.
 - `tool_list_toolscript_runs`, `tool_get_toolscript_run`, `tool_cancel_toolscript_run` — hidden management handlers.
@@ -55,11 +55,12 @@ Unknown external function names are returned to Monty as runtime exceptions that
 - Default slice timeout is 30 seconds; memory, recursion, and duration limits are passed to Monty. Monty 0.0.19 has no allocation-count limit.
 - Timeout is checked at safe host-call boundaries and does not interrupt an in-progress host call. When exceeded, the run stores the pending return/exception plus snapshot and returns a continuable timeout state.
 - Host-call failures are injected back into the suspended script only at the host-call boundary. Once a host result has been returned, later script/runtime errors propagate as their original Monty traceback without attempting a second resume of the consumed snapshot.
+- If native Monty rejects an exception payload while `resumeError` is delivering a host-call exception, the execution error retains that protocol failure and adds the exact exception being delivered. Timeout continuation uses its saved pending exception, not the latest host-call diagnostics. This is a presentation workaround for Monty 0.0.19's multiline traceback decoding; it cannot recover the rejected Python traceback and does not replace unrelated VM errors.
 - Foreground and background runs both execute the initial slice inside `run_script`. Automatic wake is limited to background managed-event waits; agent-input and timeout waits require `continue_script`.
 - `ask_agent` and managed-event waits persist snapshots together with the exact VM/snapshot-format identity; completed/current-runtime failed/cancelled runs clear resumable snapshots.
 - A snapshot is loaded into a fresh pool session when a run continues, so waiting runs survive a Foxwarm process restart. Native and WASM pools share the same Monty 0.0.19 snapshot format and persisted runtime identity, so a waiting run can resume after the selected backend changes. Old or unknown snapshot formats fail with a deterministic restart-the-run error while retaining the historical record and incompatible snapshot. Completed historical records remain readable without conversion.
 - Monty OS functions and mounts are not exposed. Filesystem, environment, clock, and process effects remain behind normal `call_tool` permissions.
-- Run records live under the state data root and are accessible only from the owner session.
+- Run records live under the state data root and are accessible only from the owner session. New file-backed records retain the resolved `sourceNode`; older records without it remain readable and resumable.
 - `activeBackgroundRuns` prevents concurrent execution/resume of one background run.
 - Managed leases acquired by a run are recorded. Controllers normally release them explicitly; cancellation and incompatible-snapshot terminalization perform best-effort cleanup. Failed releases remain recorded so calling `cancel_toolscript_run` on the terminal record retries cleanup.
 - `call_tool` subcalls publish live progress and remain in run diagnostics. `run_script` and `continue_script` expose only lean execution results; an in-process hook carries nested activity into model-invisible response metadata. See [D-dispatch-toolscript-execution-projection](../threads/tool-dispatch-node-execution.md#d-dispatch-toolscript-execution-projection). Nested calls do not append ordinary outer-session tool history.
@@ -86,7 +87,7 @@ Unknown external function names are returned to Monty as runtime exceptions that
 
 ### D-toolscript-dynamic-dispatch
 
-Nested tool execution dynamically calls the exported `./tools.call_tool` wrapper. It does not call `llm.executeTools` and does not maintain a parallel registry.
+Nested tool execution dynamically calls the exported `./tools.call_tool` wrapper. It does not call `toolExecutor.executeTools` and does not maintain a parallel registry.
 
 ### D-toolscript-safe-timeout
 
@@ -119,3 +120,15 @@ Unknown external calls are not described as supported host APIs. The runtime lis
 ### D-toolscript-top-level-source
 
 [2026-10-03] New runs feed ordinary top-level source directly to Monty with `args` as input, without requiring `main(args)`. Native top-level return, final-expression behavior and normal host suspensions are preserved. Explicitly permitted legacy compatibility retains the existing multiline regex for a source that looks like `def main(args)` and appends `main(args)` only for that form. Installed MontySession has no direct named-function invocation API; there is no second feed or new persistence lifecycle. Existing waiting snapshots continue their recorded execution without source rewrite or reparse. Current small examples favor top-level source; real legacy file-backed generator coverage remains. Local/neighbor module import is not implemented.
+
+### D-toolscript-authorized-file-source
+
+[2026-10-15] `run_script` and the hidden compatibility starter accept `node` plus `filePath`. Omitted, blank, or `current` Node selectors use the Session's selected Node at invocation; explicit `master` reads Main. Source selection does not move the Monty VM, mutate the Session Node/cwd, or alter nested tools' default Node. Nonblank inline code still wins over filePath, but an explicit Node selector with inline code is rejected. Inline execution retains the existing master builtin-policy target without acquiring a fictional file source.
+
+A file-backed starter is authorized as its own builtin against the actual source `targetNode` and source-aware filePath facts, then independently requires that Node's canonical `read` permission and existing structural restrictions before loading any source. Main source paths reuse Agent/cwd/home/token resolution and generic realpath containment; only this source entry trims surrounding path whitespace, identically for authorization and I/O. Remote path facts retain exact Node identity without imposing Main containment on an opaque namespace. Optional-source discovery remains conservative for explicit permitted Nodes.
+
+The resolved starter captures one source-only Node/cwd tuple before outer authorization. Both model preflight and canonical starter checks derive file facts from that tuple without rewriting raw arguments; the loader uses the same tuple for read permission and I/O. A concurrent Session cwd settings update can change the live VM/nested-tool context but cannot retarget an already resolved source. This transient capture is consumed only by source loading and is not persisted as VM routing, a lock, or a filesystem snapshot.
+
+Main reads complete UTF-8 source directly. Non-master reads use the source-fenced `node-execution` readonly file facade. Primitive providers supply complete filesystem bytes. Authenticated CLI source reads first execute canonical `read`, retaining its local approval hook; denial or error never proceeds to transfer. Programmatic content is used only when metadata proves full-file coverage (`selectedBytes == sizeBytes` and `truncated: false`); otherwise the same source is obtained through existing complete-file transfer, using the actual resolved path when available. Display text and partial content are never executed. Read capability, availability, provider restrictions and complete-transfer/primitive-result checks remain authoritative; unsupported backends fail without fallback. There is no new shared source-size limit, distribution cache or remote VM. Snapshot continuation resumes the owner-scoped saved VM state without reopening or reauthorizing historical source; newly executed nested tool calls retain their own current authorization.
+
+Legacy CLI peers without resolved-path metadata retain target-native absolute/rooted/home/Agent-token handling and same-target cwd for ordinary relative source paths. A Windows cwd plus a drive-relative path on another drive is ambiguous without the target runtime's per-drive cwd; source loading fails with a request for a drive-absolute path instead of guessing. A colon in a POSIX or provider-owned path does not imply Windows semantics.

@@ -1,3 +1,4 @@
+import { executeTools } from '../toolExecutor';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
@@ -6,7 +7,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import { executeTools } from '../llm';
+
 import * as nodeExecution from '../nodeExecution';
 import { createNodeExecutionServiceHandler, nodeExecutionServiceDescriptor } from '../nodeExecutionService';
 import { LocalRpcTransport, RpcClient, RpcServiceRegistry } from '../rpc';
@@ -176,6 +177,11 @@ test('configured executable provider derives canonical tools and preserves exact
     assert.equal(scripted.status, 'completed');
     assert.match(JSON.stringify(scripted.result), /fixture-read/);
 
+    await fs.writeJson(`${logPath}.files.json`, { 'memfs://fixture/source.py': 'return "EXECUTABLE_SOURCE"' });
+    const fileBacked = await callTool('run_script', { filePath: 'memfs://fixture/source.py' }, ctx);
+    assert.equal(fileBacked.status, 'completed');
+    assert.equal(fileBacked.result, 'EXECUTABLE_SOURCE');
+
     const callsBeforeUnsupported = (await readLog(logPath)).filter(entry => entry.request.operation === 'filesystem').length;
     await assert.rejects(
       () => tool_call_tool({ source: 'node', nodeId: 'fixture-sandbox', name: 'exec', args: { command: 'must-not-run-on-master' } }, ctx),
@@ -212,7 +218,7 @@ test('configured executable provider derives canonical tools and preserves exact
 
     const primitives = (await readLog(logPath)).filter(entry => entry.request.operation === 'filesystem').map(entry => entry.request.request);
     assert.equal(primitives.length >= 8, true);
-    assert.equal(primitives.filter(primitive => primitive.context.programmatic === true).length, 2, 'only the script read prepares retained data');
+    assert.equal(primitives.filter(primitive => primitive.context.programmatic === true).length, 2, 'only the nested script read prepares retained data');
     for (const primitive of primitives) {
       assert.equal(primitive.sourceSessionId, sourceId);
       assert.equal(primitive.nodeId, 'fixture-sandbox');

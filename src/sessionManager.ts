@@ -3,13 +3,15 @@
  * A session can be attached to multiple channels
  */
 
+import * as promptSnapshot from './session/promptSnapshot';
+import * as promptCache from './session/promptCache';
+import * as sessionAgentSettings from './session/agentSettings';
 import fs from 'fs-extra';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { CompactionRequest, isQueueItem, SessionDeliveryOptions, SessionEnqueueOptions, Session, Message, MessagePart, QueueItem, TokenUsage, SessionStreamEvent } from './types';
 import { logger } from './common';
 import { ChannelFile, ChannelSendFileOptions } from './channel';
-import * as llm from './llm';
 import { RpcError } from './rpc';
 import { clearRemoteExecStateForSession, rebindRemoteExecSessionAgent } from './nodes/remoteExecLiveness';
 import { buildChildCompletionInstruction } from './session/childSessionReminder';
@@ -158,11 +160,11 @@ function clearSessionWaitState(session: Session): boolean {
   return true;
 }
 
-function isWaitNeutralMaintenanceQueueItem(item: QueueItem): boolean {
-  // This item represents internal compaction maintenance, not external input.
-  // It may be processed while a session is waiting, but should not consume the
-  // wait token or make a later wait-timeout event stale.
-  return item.type === 'compact-commit';
+function isWaitNeutralQueueItem(item: QueueItem): boolean {
+  // Trusted passive input and internal compaction maintenance may be consumed
+  // at an existing safe point, but cannot satisfy/cancel a wait or stale its
+  // later matching timeout. Ordinary ingress strips untrusted passive flags.
+  return item.trigger === false || item.type === 'compact-commit';
 }
 
 function getWaitAllState(wait: SessionWaitState): SessionWaitAllState | undefined {
@@ -274,8 +276,8 @@ export function applyQueuedItemToWaitState(session: Session, item: QueueItem): W
     return { action: 'enqueue', items: [item] };
   }
 
-  if (isWaitNeutralMaintenanceQueueItem(item)) {
-    logger.debug({ sessionId: session.id, waitId: wait.id, queuedType: item.type }, 'Leaving active wait state unchanged for maintenance queue item');
+  if (isWaitNeutralQueueItem(item)) {
+    logger.debug({ sessionId: session.id, waitId: wait.id, queuedType: item.type }, 'Leaving active wait state unchanged for passive or maintenance queue item');
     return { action: 'enqueue', items: [item] };
   }
 
@@ -809,14 +811,14 @@ export function clearSessionAbortController(sessionId: string, controller?: Abor
   sessionAbortControllers.delete(sessionId);
 }
 
-export function abortSessionInFlight(sessionId: string): boolean {
+export function abortSessionInFlight(sessionId: string, reason?: unknown): boolean {
   const controller = sessionAbortControllers.get(sessionId);
   if (!controller) {
     return false;
   }
 
   sessionAbortControllers.delete(sessionId);
-  controller.abort();
+  controller.abort(reason);
   return true;
 }
 
@@ -869,6 +871,7 @@ export async function requestSessionDequeue(sessionId: string): Promise<{
     return { queuedItems, stoppedCurrent: true, abortedInFlight };
   }
 
+  if (clearSessionWaitForDirectTurn(session, 'run-queued')) await saveSession(sessionId);
   await triggerSessionProcessing(sessionId);
   return { queuedItems, stoppedCurrent: false, abortedInFlight: false };
 }
@@ -958,7 +961,7 @@ async function getSessionUnlocked(sessionId: string, persistNew: boolean = true)
       id: realId,
       history: [],
       persistentMemorySnapshot: '',
-      promptCacheKey: llm.generatePromptCacheKey(),
+      promptCacheKey: promptCache.generatePromptCacheKey(),
       stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
       busy: false,
       queue: [],
@@ -1016,9 +1019,9 @@ async function getSessionUnlocked(sessionId: string, persistNew: boolean = true)
       session.agent = 'main';
     }
   }
-  session.systemPromptFiles = llm.normalizeSystemPromptFiles(session.systemPromptFiles);
+  session.systemPromptFiles = promptSnapshot.normalizeSystemPromptFiles(session.systemPromptFiles);
   if (!session.persistentMemorySnapshot) {
-    session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshotForSession(session) || '';
+    session.persistentMemorySnapshot = await promptSnapshot.buildSessionSystemPromptSnapshotForSession(session) || '';
   }
   if (!session.stats) session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
   if (session.stats.totalCachedTokens === null) session.stats.totalCachedTokens = 0;
@@ -1185,7 +1188,7 @@ async function createSessionUnlocked(sessionId: string, sessionData: any): Promi
   assertSessionDestructiveMutationAllowed([sessionData?.parentSessionId], 'receive a new child session');
   if (sessionData && typeof sessionData === 'object') {
     delete sessionData.isolated;
-    llm.ensurePromptCacheKey(sessionData as Session);
+    promptCache.ensurePromptCacheKey(sessionData as Session);
   }
   sessions.set(sessionId, sessionData);
   try {
@@ -1323,7 +1326,7 @@ export async function setAgentMetadata(agentName: string, meta: sessionAgentMeta
 }
 
 export async function refreshSessionSnapshot(sessionId: string): Promise<{ sessionId: string; agentName: string }> {
-  return sessionAgentMetadata.refreshSessionSnapshot(getAgentMetadataDeps(), sessionId);
+  return sessionAgentSettings.refreshSessionSnapshot(getAgentMetadataDeps(), sessionId);
 }
 
 export function getAgentInheritanceChain(agentName: string): string[] {
@@ -1336,7 +1339,7 @@ export function getAgentToolRules(agentName: string) {
 
 export async function setAgentInherit(agentName: string, inheritAgentName?: string, refreshSnapshots: boolean = false): Promise<{ affectedSessions: string[] }> {
   assertAgentMetadataMutationAllowed('Agent inheritance changes');
-  return sessionAgentMetadata.setAgentInherit(getAgentMetadataDeps(), agentName, inheritAgentName, refreshSnapshots);
+  return sessionAgentSettings.setAgentInherit(getAgentMetadataDeps(), agentName, inheritAgentName, refreshSnapshots);
 }
 
 export async function setAgentIsolation(agentName: string, isolatedNode?: string, toolRules?: unknown): Promise<{ affectedSessions: string[]; isolated: boolean; node?: string; toolRuleCount: number }> {
@@ -1348,7 +1351,7 @@ export async function setAgentIsolation(agentName: string, isolatedNode?: string
     return { affectedSessions: [], isolated: !!normalizedNode, node: normalizedNode, toolRuleCount };
   }
   assertAgentMetadataMutationAllowed('Agent isolation changes');
-  return sessionAgentMetadata.setAgentIsolation(getAgentMetadataDeps(), agentName, normalizedNode, toolRules);
+  return sessionAgentSettings.setAgentIsolation(getAgentMetadataDeps(), agentName, normalizedNode, toolRules);
 }
 
 export async function deleteAgent(
@@ -1460,7 +1463,7 @@ export async function createAgentWithMainSession(options: {
   return withSessionIdentityLock(async () => {
     const result = await sessionAgentOps.createAgentWithMainSession(createOptions, getSessionAgentOpsDeps(true));
     if (normalizedIsolatedNode !== undefined) {
-      await sessionAgentMetadata.setAgentIsolation(getAgentMetadataDeps(true), options.agentName, normalizedIsolatedNode, normalizedToolRules);
+      await sessionAgentSettings.setAgentIsolation(getAgentMetadataDeps(true), options.agentName, normalizedIsolatedNode, normalizedToolRules);
     } else if (normalizedToolRules !== undefined) {
       await sessionAgentMetadata.setAgentMetadata(options.agentName, {
         ...sessionAgentMetadata.getAgentMetadata(options.agentName),
@@ -1468,9 +1471,9 @@ export async function createAgentWithMainSession(options: {
       });
     }
     if (normalizedInherit !== undefined) {
-      await sessionAgentMetadata.setAgentInherit(getAgentMetadataDeps(true), options.agentName, normalizedInherit);
+      await sessionAgentSettings.setAgentInherit(getAgentMetadataDeps(true), options.agentName, normalizedInherit);
       if (result.createdMainSession) {
-        await sessionAgentMetadata.refreshSessionSnapshot(getAgentMetadataDeps(true), result.mainSessionId);
+        await sessionAgentSettings.refreshSessionSnapshot(getAgentMetadataDeps(true), result.mainSessionId);
       }
     }
     return result;
@@ -1737,7 +1740,7 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
   const realSourceSessionId = sourceSession.id || sourceSessionId;
   const newSessionId = await allocateForkSessionId(realSourceSessionId, suffix, isChildSession);
   const sourcePreviousPromptCacheKey = sourceSession.promptCacheKey;
-  const promptCacheKey = llm.ensurePromptCacheKey(sourceSession);
+  const promptCacheKey = promptCache.ensurePromptCacheKey(sourceSession);
   if (sourceSession.promptCacheKey !== sourcePreviousPromptCacheKey && !detachedSource) {
     await saveSession(sourceSession.id);
   }
@@ -1941,9 +1944,9 @@ async function createChildSessionUnlocked(parentSessionId: string, suffix: strin
     const spawnedSettings = resolveSpawnedSessionModelEffort(parentSession, options?.model, options?.effort);
 
     const inheritedSystemPromptFiles = crossAgent ? undefined : parentSession.systemPromptFiles;
-    const snapshotModelId = llm.resolveConcreteModelIdForSnapshot(spawnedSettings.model);
+    const snapshotModelId = promptSnapshot.resolveConcreteModelIdForSnapshot(spawnedSettings.model);
     const snapshot = snapshotModelId
-      ? await llm.buildSessionSystemPromptSnapshot({
+      ? await promptSnapshot.buildSessionSystemPromptSnapshot({
           agentName: targetAgentName,
           sessionId: childSessionId,
           systemPromptFiles: inheritedSystemPromptFiles,
@@ -1964,7 +1967,7 @@ async function createChildSessionUnlocked(parentSessionId: string, suffix: strin
       // Non-fork children start a fresh model-facing prefix, so they should not
       // share the parent's prompt-cache routing key. Forked children do share it
       // because their inherited prefix begins with the parent's existing history.
-      promptCacheKey: llm.generatePromptCacheKey(),
+      promptCacheKey: promptCache.generatePromptCacheKey(),
       stats: {
         totalCachedTokens: 0,
         totalInputTokens: 0,
@@ -2335,7 +2338,7 @@ export async function loadSessions(): Promise<void> {
         ...metadataWithoutPromptCacheKey,
         persistentMemorySnapshot: metadataWithoutPromptCacheKey.persistentMemorySnapshot || '',
         stats: metadataWithoutPromptCacheKey.stats || { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
-        systemPromptFiles: llm.normalizeSystemPromptFiles(metadataWithoutPromptCacheKey.systemPromptFiles),
+        systemPromptFiles: promptSnapshot.normalizeSystemPromptFiles(metadataWithoutPromptCacheKey.systemPromptFiles),
         history: [], // Empty, will be loaded when getSession is called
         queue: Array.isArray(metadataWithoutPromptCacheKey.queue)
           ? metadataWithoutPromptCacheKey.queue.filter(isQueueItem)

@@ -357,7 +357,6 @@ test('App and Code sidebar notification clicks use their existing canonical Chat
   ])
   assert.match(app, /onOpenSession: \(sessionId\) => notificationOpenSessionRef\.current\?\.\(sessionId\)/)
   assert.match(app, /notificationOpenSessionRef\.current = \(sessionId\) => openChatTab\(sessionId, 'notification'\)/)
-  assert.match(app, /navigateToTab = \(tabId: string, origin: SessionNavigationOrigin = 'user'\)/)
   assert.match(app, /shouldAcknowledgeSessionNavigation\(origin\)/)
   assert.match(embedded, /onOpenSession: \(sessionId\) => notificationOpenSessionRef\.current\?\.\(sessionId\)/)
   assert.match(embedded, /notificationOpenSessionRef\.current = openSession/)

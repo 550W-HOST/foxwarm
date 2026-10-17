@@ -1,6 +1,7 @@
+import { executeTools } from '../toolExecutor';
 import { DatabaseSync } from 'node:sqlite';
 import { taskService } from './taskTools';
-import { executeTools } from '../llm';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TASK_ACTIONS, TASK_LIST_SCOPES, TASK_STATUSES } from '../taskStore';
@@ -8,7 +9,7 @@ import { definitions } from './definitions';
 import { BUILTIN_TOOL_PLACEMENTS } from './placement';
 import * as sessionManager from '../sessionManager';
 import { task, callTool, call_tool, modelFacingDefinitions, create_child_session } from '../tools';
-import { resetMainManagementToolsForTests, shutdownMainManagementTools } from '../mainManagementTools';
+import { executeMainManagementTool, resetMainManagementToolsForTests, shutdownMainManagementTools } from '../mainManagementTools';
 import { tool_create_child_session as directCreateChildSession } from '../toolsSessionAgent/interSession';
 import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from '../toolAuthorization';
 import { parseFoxwarmWrappedContent } from '../utils/promptWrappers';
@@ -100,6 +101,52 @@ rules:
 });
 
 
+test('shared description edits cross Agent boundaries but task update policy still applies at dispatch and Main effect', async () => {
+  const prefix = `task_description_${Date.now()}`;
+  const creator = await sessionManager.getSession(`${prefix}_creator`);
+  const owner = await sessionManager.getSession(`${prefix}_owner`);
+  const outsider = await sessionManager.getSession(`${prefix}/reviewer`);
+  const creatorCtx = { sessionId: creator.id };
+  const outsiderCtx: any = { sessionId: outsider.id, session: outsider, sessionPlacement: 'session-worker', persistCurrentSession: async () => { throw new Error('Task must not persist Session state'); } };
+  try {
+    assert.notEqual(sessionManager.getSessionCatalog(outsider.id).agent, creator.agent);
+    const taskId = readResult(await task({ action: 'create', title: 'Shared scope', description: 'Original', ownerSessionId: owner.id }, creatorCtx)).taskId;
+    await task({ action: 'update', taskId, description: 'Creator revision' }, creatorCtx);
+    assert.equal(taskService.get(taskId).task.description, 'Creator revision');
+    assert.equal(readResult(await task({ action: 'list' }, outsiderCtx)).tasks.some((entry: any) => entry.id === taskId), false, 'list scope is not an authorization boundary');
+    await callTool('task', { action: 'update', taskId, description: 'Other Agent revision' }, { sessionId: outsider.id });
+    assert.equal(taskService.get(taskId).task.description, 'Other Agent revision');
+    const update = { action: 'update', taskId, description: 'Worker revision', note: 'Scope clarified' };
+    await call_tool({ source: 'builtin', name: 'task', args: update }, outsiderCtx);
+    const before = taskService.get(taskId);
+    assert.equal(before.task.description, 'Worker revision');
+    assert.equal(before.notes.at(-1).sessionId, outsider.id);
+    await assert.rejects(() => task({ ...update, description: 'Forbidden', status: 'active' }, outsiderCtx), /owner required/);
+    assert.deepEqual(taskService.get(taskId), before);
+
+    setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
+version: 1
+defaultAction: allow
+rules:
+- id: deny-task-updates
+  match:
+    tool: { source: builtin, name: task }
+    args: { action: update }
+  action: deny
+`));
+    await assert.rejects(() => callTool('task', update, creatorCtx), /denies/i);
+    await assert.rejects(() => call_tool({ source: 'builtin', name: 'task', args: update }, outsiderCtx), /denies/i);
+    await assert.rejects(() => executeMainManagementTool('task', update, outsiderCtx), /denies/i);
+    assert.deepEqual(taskService.get(taskId), before, 'denied calls do not change persisted task fields or notes');
+    assert.equal(readResult(await task({ action: 'get', taskId }, creatorCtx)).task.description, 'Worker revision', 'the action-specific rule does not deny get');
+  } finally {
+    setToolAuthorizationPolicyForTests(undefined);
+    await shutdownMainManagementTools();
+    resetMainManagementToolsForTests();
+    for (const session of [creator, owner, outsider]) await sessionManager.deleteSession(session.id);
+  }
+});
+
 test('create_child_session taskId assigns or transfers the real child before delivery and rejects unauthorized or terminal tasks before creation', async () => {
   const prefix = `task_child_${Date.now()}`;
   const parent = await sessionManager.getSession(`${prefix}_parent`);
@@ -146,7 +193,7 @@ test('create_child_session taskId assigns or transfers the real child before del
     assert.equal(sessionManager.getAllSessions().size, count);
     const completion = await executeTools([{ id: 'child-task-complete', name: 'task', args: { action: 'complete', taskId, result: 'Finished delegated work' } }],
       { sessionId: replacement.id, session: replacement }, replacement);
-    assert.deepEqual((completion as any).__toolPostAction, { successfulSendToSessionTargets: [parent.id], completedLinkedTask: { taskId, attachedSessionId: transferredId } });
+    assert.deepEqual(completion.postActions, { successfulSendToSessionTargets: [parent.id], completedLinkedTask: { taskId, attachedSessionId: transferredId } });
     assert.equal(readResult(await task({ action: 'get', taskId }, ctx)).task.status, 'completed');
     await assert.rejects(() => create_child_session({ suffix: 'terminal', taskId }, ctx), /terminal/);
     assert.equal(sessionManager.getAllSessions().size, count);
@@ -235,8 +282,8 @@ test('real Session moves preserve task owner/creator/attached identities, notifi
     const completed = await executeTools([{ id: 'complete-renamed-child', name: 'call_tool', args: {
       toolId: 'builtin:task', args: { action: 'complete', taskId, result: 'Done after rename' },
     } }], currentCtx, child);
-    assert.deepEqual((completed as any).__toolPostAction.completedLinkedTask, { taskId, attachedSessionId: child.id });
-    assert.deepEqual((completed as any).__toolPostAction.successfulSendToSessionTargets, [currentCreator.id]);
+    assert.deepEqual(completed.postActions.completedLinkedTask, { taskId, attachedSessionId: child.id });
+    assert.deepEqual(completed.postActions.successfulSendToSessionTargets, [currentCreator.id]);
     assert.equal(currentCreator.queue.length, 1, 'notification reaches the real moved creator');
     assert.equal(currentCreator.queue[0].sourceSessionId, child.id);
     assert.equal(parent.queue.length, 0, 'no fabricated routine report to actual parent');

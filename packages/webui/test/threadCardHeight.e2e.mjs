@@ -49,12 +49,14 @@ before(async () => {
     }
 
     if (size === 'conversation-completed') {
+      // One tool/reasoning process exercises height retention; commentary-separated
+      // activity and replies are covered by the Conversation projection fixtures.
       messages.splice(0, messages.length,
         { role: 'user', parts: [{ system: '<foxwarm-system kind="session-boundary" event="new-child" parentSessionId="fixture/main" currentSessionId="fixture/worker">\\nComplete the assigned investigation.\\n</foxwarm-system>' }], __meta: { seq: 1, timestamp: Date.now() - 60000 } },
         { role: 'user', parts: [{ system: '<foxwarm-message type="task" event="assigned" taskId="fixture-task">\\nInspect the supported implementation.\\n</foxwarm-message>' }], __meta: { seq: 2, timestamp: Date.now() - 59000 } },
         { role: 'user', parts: [{ system: '<foxwarm-message type="inter-agent" sourceSessionId="fixture/main">\\nKeep the original behavior while checking the implementation.\\n</foxwarm-message>' }], __meta: { seq: 3, timestamp: Date.now() - 58000 } },
         ...Array.from({ length: 28 }, (_, index) => [
-          { role: 'model', parts: [{ thinking: '**Inspecting batch ' + index + '**\\n\\nCheck the existing caller.' }, { text: 'Checking worker file batch ' + index, phase: 'commentary' }, { functionCall: { name: 'read', id: 'worker-' + index, args: { filePath: 'src/worker-' + index + '.ts' } } }], __meta: { seq: 4 + index * 2, timestamp: Date.now() - 57000 + index * 1800, llmRequestId: 'worker-request-' + index } },
+          { role: 'model', parts: [{ thinking: '**Inspecting batch ' + index + '**\\n\\nCheck the existing caller.' }, { functionCall: { name: 'read', id: 'worker-' + index, args: { filePath: 'src/worker-' + index + '.ts' } } }], __meta: { seq: 4 + index * 2, timestamp: Date.now() - 57000 + index * 1800, llmRequestId: 'worker-request-' + index } },
           { role: 'tool', parts: [{ functionResponse: { name: 'read', tool_use_id: 'worker-' + index, response: { output: ('worker result ' + index + '\\n').repeat(65) } } }], __meta: { seq: 5 + index * 2, timestamp: Date.now() - 56000 + index * 1800 } },
         ]).flat())
     }
@@ -100,7 +102,7 @@ before(async () => {
     window.WebSocket = FixtureSocket
     window.emitStream = text => FixtureSocket.instances.at(-1)?.emit({ type: 'session-event', sessionId: 'fixture/height', event: { type: 'model-stream-update', streamId: 'fixture-stream', text } })
     createRoot(document.getElementById('root')).render(React.createElement(Chat, {
-      sessionId: 'fixture/height', canonicalSessionId: 'fixture/height', sessionDisplayName: 'Height test', timelineView: size.startsWith('conversation-') ? 'conversation' : size.startsWith('group') || size.startsWith('ctx') ? 'grouped' : 'detailed',
+      historyMode: 'active', sessionId: 'fixture/height', canonicalSessionId: 'fixture/height', sessionDisplayName: 'Height test', timelineView: size.startsWith('conversation-') ? 'conversation' : size.startsWith('group') || size.startsWith('ctx') ? 'grouped' : 'detailed',
     }))
   `
   const result = await build({ stdin: { contents: source, resolveDir: packageDir, sourcefile: 'height-fixture.tsx' }, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
@@ -546,18 +548,17 @@ test('mobile chevron treatment keeps the outer card header and contained disclos
   const beforeHeader = await page.$eval('[data-tool-group] .foxwarm-tool-group-header', node => node.textContent)
   await page.click('[data-tool-group] [aria-label="Expand tool group"]')
   await wait(350)
-  await page.$eval('[data-tool-group] [data-usage-badge]', node => node.scrollIntoView({ block: 'center', inline: 'nearest' }))
+  await page.$eval('[data-tool-group] .foxwarm-tool-group-header', node => node.scrollIntoView({ block: 'center', inline: 'nearest' }))
   const result = await page.$eval('[data-tool-group]', node => {
     const outer = node.querySelector('[data-tool-group-card]')
     const line = outer.querySelector(':scope > .foxwarm-thread-line-button')
     const stroke = line.querySelector('.foxwarm-thread-line-stroke')
     const icon = line.querySelector('.foxwarm-thread-disclosure-icon')
     const header = outer.querySelector('.foxwarm-tool-group-header')
-    const badge = node.querySelector('[data-usage-badge]')
     const view = document.querySelector('.foxwarm-chat-messages')
     return { stroke: getComputedStyle(stroke).display, icon: getComputedStyle(icon).display, header: header.textContent,
       lineRect: line.getBoundingClientRect().toJSON(), headerRect: header.getBoundingClientRect().toJSON(),
-      badgeRect: badge?.getBoundingClientRect().toJSON(), badgeHit: badge ? document.elementFromPoint(badge.getBoundingClientRect().left + badge.getBoundingClientRect().width / 2, badge.getBoundingClientRect().top + badge.getBoundingClientRect().height / 2)?.closest('[data-usage-badge]') === badge : false, viewRect: view.getBoundingClientRect().toJSON(),
+      usageCount: node.querySelectorAll('[data-usage-badge]').length, viewRect: view.getBoundingClientRect().toJSON(),
       horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth }
   })
   assert.equal(result.stroke, 'none')
@@ -565,9 +566,7 @@ test('mobile chevron treatment keeps the outer card header and contained disclos
   assert.equal(result.header, beforeHeader)
   assert.ok(result.lineRect.left >= result.viewRect.left - 1 && result.lineRect.right <= result.viewRect.right, 'contained chevron remains clickable')
   assert.ok(result.horizontalOverflow <= 1)
-  assert.ok(result.badgeRect, 'group member usage remains available inside the expanded card')
-  assert.ok(result.badgeRect.right <= result.viewRect.right + 1, 'usage stays in viewport')
-  assert.ok(result.badgeHit, `usage badge remains painted and clickable: ${JSON.stringify(result)}`)
+  assert.equal(result.usageCount, 0, 'root-mobile presentation hides usage without removing the disclosure')
   await page.click('[data-tool-group] .foxwarm-tool-group-header')
   await wait(350)
   assert.equal(await page.$eval('[data-tool-group]', node => node.dataset.toolGroupExpanded), 'false')

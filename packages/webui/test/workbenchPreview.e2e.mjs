@@ -111,7 +111,13 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
         terminal = null
         return json({ ok: true })
       }
-      if (pathname.includes('/api/terminals/') && terminal) return json({ terminal })
+      if (pathname.includes('/api/terminals/') && terminal) {
+        if (window.__failNextTerminalLookup) {
+          window.__failNextTerminalLookup = false
+          return Promise.reject(new Error('Terminal lookup unavailable'))
+        }
+        return json({ terminal })
+      }
       if (pathname.endsWith('/api/terminals')) return json({ terminals: terminal ? [terminal] : [] })
       if (pathname.endsWith('/api/tasks')) return json({ tasks: [], omitted: 0 })
       if (pathname.endsWith('/api/nodes')) return json({ nodes: nodeDirectory })
@@ -133,10 +139,18 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
         window.__sent.push({ path: pathname, body: options.body })
         return json({ ok: true })
       }
+      if (pathname.includes('/api/sessions/') && pathname.endsWith('/history/continuous')) {
+        const messages = (chatMessages || (responsiveChat ? Array.from({ length: 35 }, (_, index) => ({ role: index % 2 ? 'model' : 'user', parts: [{ text: 'Responsive message ' + index + '\n\n' + 'Pane-local content wraps normally. '.repeat(8) }], __meta: { seq: index + 1, timestamp: 1700000000000 + index } })) : [])).filter(message => !message.__meta?.contextBlock)
+        const before = Number(url.searchParams.get('beforeSeq')) || Infinity
+        const after = Number(url.searchParams.get('afterSeq')) || 0
+        const candidates = messages.filter(message => message.__meta?.seq < before && message.__meta?.seq > after)
+        const rows = after ? candidates.slice(0, 100) : candidates.slice(-100)
+        return json({ messages: rows, firstSeq: rows[0]?.__meta?.seq, lastSeq: rows.at(-1)?.__meta?.seq, hasMore: candidates.length > 100 })
+      }
       if (pathname.includes('/api/sessions/') && pathname.endsWith('/history')) {
         window.__historyReads.push(pathname + url.search)
         const messages = chatMessages || (responsiveChat ? Array.from({ length: 35 }, (_, index) => ({ role: index % 2 ? 'model' : 'user', parts: [{ text: 'Responsive message ' + index + '\n\n' + 'Pane-local content wraps normally. '.repeat(8) }], __meta: { seq: index + 1, timestamp: 1700000000000 + index } })) : [])
-        return json({ messages, queuedMessages: [], session: { id: decodeURIComponent(pathname.split('/').at(-2)), messageCount: messages.length, historyVersion: 1, ...(responsiveChat ? { modelKey: 'fixture/model', childModelDefault: 'fixture/model', childModelPolicySource: 'explicit' } : {}) }, latestSeq: messages.length, historyVersion: 1, historyComplete: true })
+        return json({ messages, queuedMessages: [], queueLength: window.__historySessionState?.queueLength || 0, session: { id: decodeURIComponent(pathname.split('/').at(-2)), messageCount: messages.length, historyVersion: 1, ...(responsiveChat ? { modelKey: 'fixture/model', childModelDefault: 'fixture/model', childModelPolicySource: 'explicit' } : {}), ...window.__historySessionState }, latestSeq: messages.length, historyVersion: 1, historyComplete: true })
       }
       return json({})
     }
@@ -147,13 +161,16 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       readyState = 1
       onopen = null; onmessage = null; onclose = null; onerror = null
       constructor(url) {
+        this.url = String(url)
+        this.sent = []
         FixtureWebSocket.instances.push(this)
         if (new URL(url).pathname.endsWith('/terminals/stream')) window.__terminalConnections.push(url)
         queueMicrotask(() => {
         this.onopen?.({})
-        if (new URL(url).pathname.endsWith('/terminals/stream') && terminal) this.onmessage?.({ data: JSON.stringify({ type: 'ready', terminal, backlog: '' }) })
+        if (new URL(url).pathname.endsWith('/terminals/stream') && terminal && !window.__holdTerminalReady) this.onmessage?.({ data: JSON.stringify({ type: 'ready', terminal, backlog: '' }) })
       }) }
       send(raw) {
+        this.sent.push(JSON.parse(raw))
         if (!responsiveChat) return
         const data = JSON.parse(raw)
         if (data.type === 'set-subscriptions') window.__subscriptions.push(data.sessionIds)
@@ -409,6 +426,127 @@ test('collapsing Terminal detaches without closing resources and kept Code stays
     await codePage.waitForSelector('[data-foxwarm-vscode-web-frame="true"]')
     assert.equal(await codePage.$eval('[data-foxwarm-vscode-web-frame="true"]', frame => frame.dataset.testFrameIdentity), codeFrameIdentity, 'expansion reuses the same iframe object')
   } finally { await codePage.close() }
+})
+
+test('Terminal disconnect puts a compact red reconnect action after PID and restores the same remote PTY', async () => {
+  const terminal = { id: 'term-reconnect', nodeId: 'remote-fixture', cwd: '/workspace/project', pid: 4242, cols: 80, rows: 24 }
+  const terminalTab = { id: 'terminal:term-reconnect', type: 'terminal', terminalId: terminal.id, nodeId: terminal.nodeId, cwd: terminal.cwd, title: 'Terminal' }
+  const layout = { id: 'split-main', kind: 'split', direction: 'column', sizes: [65, 35], children: [
+    { id: 'pane-other', kind: 'pane', tabIds: ['chat:e2e-a'], activeTabId: 'chat:e2e-a' },
+    { id: 'pane-main', kind: 'pane', tabIds: [terminalTab.id], activeTabId: terminalTab.id },
+  ] }
+  const page = await openFixture({ tabs: [terminalTab, chat('e2e-a', false)], activeTabId: terminalTab.id, hash: `#tab/${encodeURIComponent(terminalTab.id)}`, terminal, layout })
+  const action = '[data-terminal-header] [role="status"] + button'
+  try {
+    await page.waitForFunction(() => document.querySelector('[data-terminal-header]')?.textContent.includes('status ready'))
+    assert.equal(await page.$('[data-terminal-header] [role="status"]'), null, 'connected terminals add no disconnect notice')
+    const initialHeight = await page.$eval('[data-terminal-header]', header => header.getBoundingClientRect().height)
+    await page.evaluate(() => {
+      window.__reconnectTextarea = document.querySelector('.xterm-helper-textarea')
+      window.__disconnectedSocket = window.WebSocket.instances.find(socket => socket.url.includes('/terminals/stream'))
+      window.__disconnectedSocket.close()
+    })
+    await page.waitForSelector(action)
+    const header = await page.$eval('[data-terminal-header]', header => {
+      const notice = header.querySelector('[role="status"]')
+      const button = notice.nextElementSibling
+      return {
+        preceding: notice.parentElement.previousElementSibling.textContent,
+        text: notice.textContent,
+        color: getComputedStyle(notice).color,
+        height: header.getBoundingClientRect().height,
+        buttonHeight: button.getBoundingClientRect().height,
+      }
+    })
+    assert.equal(header.preceding, 'pid 4242')
+    assert.equal(header.text, 'Disconnected')
+    assert.doesNotMatch(await page.$eval('[data-terminal-header]', header => header.textContent), /status disconnected/)
+    assert.ok(header.buttonHeight <= 22, JSON.stringify(header))
+    assert.equal(header.height, initialHeight, 'the existing wide status row keeps its height')
+    assert.ok(await page.$eval('[data-terminal-header] [role="status"]', notice => {
+      const [r, g, b] = getComputedStyle(notice).color.match(/[\d.]+/g).map(Number)
+      return r > g && r > b
+    }), `danger text is red: ${header.color}`)
+    assert.deepEqual(await page.evaluate(() => window.__terminalDeletes), [])
+    await workbenchScreenshot(page, 'terminal-disconnected-wide.png')
+    const buttonBox = await (await page.$(action)).boundingBox()
+    await page.mouse.move(buttonBox.x + 5, buttonBox.y + buttonBox.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(buttonBox.x + 20, buttonBox.y + buttonBox.height / 2, { steps: 4 })
+    assert.equal(await page.$('[data-pane-drag-overlay]'), null, 'Reconnect pointer motion does not start pane dragging')
+    await page.mouse.move(buttonBox.x + buttonBox.width + 10, buttonBox.y + buttonBox.height / 2)
+    await page.mouse.up()
+
+    await page.setViewport({ width: 390, height: 844 })
+    await page.waitForFunction(() => document.querySelector('[data-terminal-header]').getBoundingClientRect().right <= innerWidth)
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
+    assert.ok(await page.$eval(action, button => button.getBoundingClientRect().right <= innerWidth))
+    await workbenchScreenshot(page, 'terminal-disconnected-narrow.png')
+
+    await page.evaluate(() => { window.__failNextTerminalLookup = true })
+    await page.click(action)
+    await page.waitForFunction(() => document.querySelector('[data-terminal-header]')?.textContent.includes('Terminal lookup unavailable'))
+    assert.equal(await page.$eval(action, button => button.disabled), false, 'a failed reconnect can be retried')
+    assert.doesNotMatch(await page.$eval('[data-terminal-header]', header => header.textContent), /status error/)
+    assert.deepEqual(await page.evaluate(() => window.__terminalCreates), [])
+    await page.evaluate(() => { window.__holdTerminalReady = true })
+    await page.click(action)
+    await page.waitForFunction(() => window.__terminalConnections.length === 2)
+    assert.equal(await page.$eval(action, button => button.disabled), true)
+    assert.doesNotMatch(await page.$eval('[data-terminal-header]', header => header.textContent), /status connecting/)
+    await page.evaluate(terminal => {
+      const previous = window.__disconnectedSocket
+      previous.onclose?.({})
+      previous.onerror?.({})
+      previous.onmessage?.({ data: JSON.stringify({ type: 'exit', exitCode: 0 }) })
+      const current = window.WebSocket.instances.filter(socket => socket.url.includes('/terminals/stream')).at(-1)
+      current.onmessage?.({ data: JSON.stringify({ type: 'ready', terminal, backlog: 'restored remote prompt\r\n\x1b[6n' }) })
+    }, terminal)
+    await page.waitForFunction(() => document.querySelector('[data-terminal-header]')?.textContent.includes('status ready'))
+    await page.waitForFunction(() => document.querySelector('.xterm-screen')?.textContent.includes('restored remote prompt'))
+    assert.equal(await page.$('[data-terminal-header] [role="status"]'), null)
+    assert.equal(await page.evaluate(() => window.__reconnectTextarea === document.querySelector('.xterm-helper-textarea')), true, 'reconnect reuses xterm')
+    assert.deepEqual(await page.evaluate(() => window.__terminalConnections.map(url => new URL(url).searchParams.get('terminalId'))), [terminal.id, terminal.id])
+    assert.deepEqual(await page.evaluate(() => window.__terminalCreates), [], 'reconnect never creates a second surviving PTY')
+    assert.deepEqual(await page.evaluate(() => window.WebSocket.instances.filter(socket => socket.url.includes('/terminals/stream')).at(-1).sent.filter(message => message.type === 'input')), [], 'backlog query replies stay suppressed')
+    await page.focus('.xterm-helper-textarea')
+    await page.keyboard.type('x')
+    assert.deepEqual(await page.evaluate(() => window.WebSocket.instances.filter(socket => socket.url.includes('/terminals/stream')).flatMap(socket => socket.sent.filter(message => message.type === 'input'))), [{ type: 'input', data: 'x' }], 'one key sends once after reconnect')
+    await page.evaluate(() => {
+      const current = window.WebSocket.instances.filter(socket => socket.url.includes('/terminals/stream')).at(-1)
+      current.sent.length = 0
+    })
+    await page.setViewport({ width: 1400, height: 900 })
+    await page.waitForFunction(() => window.WebSocket.instances.filter(socket => socket.url.includes('/terminals/stream')).at(-1).sent.some(message => message.type === 'resize' && message.cols > 80))
+    assert.ok(await page.$('[data-workbench-pane-drag-area="pane-main"]'), 'the existing pane drag area remains available')
+    await workbenchScreenshot(page, 'terminal-reconnected-wide.png')
+  } finally { await page.close() }
+})
+
+test('a newly created Terminal reconnects its remembered ID and PTY exit never offers reconnect', async () => {
+  const terminal = { id: 'term-template', nodeId: 'remote-fixture', cwd: '/workspace/new', pid: 4243, cols: 80, rows: 24 }
+  const terminalTab = { id: 'terminal:draft', type: 'terminal', nodeId: terminal.nodeId, cwd: terminal.cwd, createMode: 'new', title: 'Terminal' }
+  const page = await openFixture({ tabs: [terminalTab], activeTabId: terminalTab.id, hash: `#tab/${encodeURIComponent(terminalTab.id)}`, terminal })
+  try {
+    await page.waitForFunction(() => document.querySelector('[data-terminal-header]')?.textContent.includes('status ready'))
+    assert.deepEqual(await page.evaluate(() => window.__terminalCreates.map(request => ({ nodeId: request.nodeId, cwd: request.cwd }))), [{ nodeId: terminal.nodeId, cwd: terminal.cwd }])
+    await page.evaluate(() => window.WebSocket.instances.find(socket => socket.url.includes('/terminals/stream')).close())
+    await page.waitForSelector('[data-terminal-header] [role="status"] + button')
+    await page.click('[data-terminal-header] [role="status"] + button')
+    await page.waitForFunction(() => window.__terminalConnections.length === 2 && document.querySelector('[data-terminal-header]')?.textContent.includes('status ready'))
+    assert.deepEqual(await page.evaluate(() => window.__terminalConnections.map(url => new URL(url).searchParams.get('terminalId'))), ['term-reopened', 'term-reopened'])
+    assert.equal(await page.evaluate(() => window.__terminalCreates.length), 1)
+    await page.evaluate(() => {
+      const current = window.WebSocket.instances.filter(socket => socket.url.includes('/terminals/stream')).at(-1)
+      current.onmessage?.({ data: JSON.stringify({ type: 'exit', exitCode: 0 }) })
+      current.close()
+      current.onerror?.({})
+    })
+    await page.waitForFunction(() => !document.querySelector('[data-terminal-header]') || document.querySelector('[data-terminal-header]').textContent.includes('status closed'))
+    assert.equal(await page.$('[data-terminal-header] [role="status"]'), null)
+    assert.equal(await page.evaluate(() => window.__terminalCreates.length), 1, 'PTY exit never creates a replacement')
+    assert.equal(await page.evaluate(() => window.__terminalConnections.length), 2)
+  } finally { await page.close() }
 })
 
 function findFixturePane(root, paneId) {
@@ -793,7 +931,9 @@ async function mousePressAt(page, point, button = 'left') {
 }
 
 async function tabToControl(page, selector) {
-  for (let index = 0; index < 256; index++) {
+  // Enter the target strip before walking native Tab order, not every Chat's controls.
+  await page.$eval(selector, element => element.closest('.foxwarm-workbench-tab-row').querySelector('[data-tab-id]').focus())
+  for (let index = 0; index < 120; index++) {
     if (await page.evaluate(selector => document.activeElement?.matches(selector), selector)) return
     await page.keyboard.press('Tab')
   }
@@ -1127,14 +1267,25 @@ test('History tabs keep independent drafts/results across entries, pane collapse
     assert.equal(await page.$eval(`[data-history-tab-id="${firstTabId}"] [data-history-query-input]`, input => input.value), 'draft')
 
     await page.setViewport({ width: 390, height: 800 })
-    await page.waitForSelector('[data-sidebar-footer] button[aria-label="Search history"]')
-    await page.click('[data-sidebar-footer] button[aria-label="Search history"]')
-    await page.waitForSelector('[data-history-search-view]')
-    assert.deepEqual((await page.$$eval('[data-history-search-view] [data-history-query-input]', inputs => inputs.map(input => input.value).sort())), ['', 'draft'], 'mobile hiding keeps both History tab drafts')
+    await page.waitForSelector('.foxwarm-desktop-workbench-shell', { hidden: true })
+    await page.evaluate(() => window.foxwarmTest.switchToSession('e2e-a'))
+    await page.locator('button[aria-label="Back to sessions"]').click()
+    await page.locator('#mobile-tab-search').click()
+    await page.waitForSelector('#mobile-panel-search [data-history-search-view]')
+    await page.type('#mobile-panel-search [data-history-query-input]', 'mobile draft')
+    assert.equal(await page.$eval(`[data-history-tab-id="${firstTabId}"] [data-history-query-input]`, input => input.value), 'draft')
+    assert.equal(await page.$eval(`[data-history-tab-id="${secondTabId}"] [data-history-query-input]`, input => input.value), '')
+    await page.locator('#mobile-tab-sessions').click()
+    await page.locator('#mobile-tab-search').click()
+    assert.equal(await page.$eval('#mobile-panel-search [data-history-query-input]', input => input.value), 'mobile draft')
+    await page.setViewport({ width: 1400, height: 900 })
+    await page.locator(`[data-tab-id="${firstTabId}"]`).click()
+    await page.waitForSelector(`[data-history-tab-id="${firstTabId}"] [data-history-result="history-outside/main"]`)
+    assert.equal(await page.$eval(`[data-history-tab-id="${firstTabId}"] [data-history-query-input]`, input => input.value), 'draft')
   } finally { await page.close() }
 })
 
-test('collapsed rail and mobile Session list place the Search icon in their footers', async () => {
+test('collapsed rail keeps its Search footer and mobile uses its primary Search tab', async () => {
   const page = await openFixture()
   try {
     await page.click('button[title="Collapse sidebar"]')
@@ -1145,12 +1296,14 @@ test('collapsed rail and mobile Session list place the Search icon in their foot
     assert.equal(await page.$('.w-12 > div:first-child button[aria-label="Open UI settings"]'), null)
     assert.ok(await page.$('.w-12 [data-sidebar-footer] button[aria-label="Open UI settings"]'))
     await page.setViewport({ width: 390, height: 800 })
-    await page.waitForSelector('[data-sidebar-footer] button[aria-label="Open UI settings"]')
-    assert.deepEqual(await page.$$eval('[data-sidebar-footer] button', buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Open tasks', 'Search history', 'Open UI settings'])
-    assert.equal(await page.$eval('[data-sidebar-footer] button[aria-label="Search history"]', button => button.textContent.trim()), '')
-    assert.ok(await page.$('[data-sidebar-footer] button[aria-label="Search history"] svg.lucide-history'))
-    await page.click('[data-sidebar-footer] button[aria-label="Search history"]')
-    await page.waitForSelector('[data-history-search-view]')
+    await page.waitForSelector('.foxwarm-desktop-workbench-shell', { hidden: true })
+    await page.evaluate(() => window.foxwarmTest.switchToSession('e2e-a'))
+    await page.locator('button[aria-label="Back to sessions"]').click()
+    await page.waitForSelector('#mobile-tab-search')
+    assert.deepEqual(await page.$$eval('[role="tablist"][aria-label="Main navigation"] button', buttons => buttons.map(button => button.textContent.trim())), ['Sessions', 'Tasks', 'Search', 'Settings'])
+    assert.ok(await page.$('#mobile-tab-search svg.lucide-search'))
+    await page.locator('#mobile-tab-search').click()
+    await page.waitForSelector('#mobile-panel-search [data-history-search-view]')
   } finally { await page.close() }
 })
 
@@ -1714,11 +1867,22 @@ test('Chat composer uses a smaller empty editor below 600px content height in De
   }
 })
 
-test('direct Tasks navigation opens one singleton from expanded, collapsed, and mobile footers', async () => {
+test('Tasks uses desktop singleton footers and an independent retained mobile primary page', async () => {
   for (const surface of ['expanded', 'collapsed', 'mobile']) {
     const page = await openFixture({ width: surface === 'mobile' ? 320 : 1400 })
     try {
       if (surface === 'collapsed') await page.click('button[title="Collapse sidebar"]')
+      if (surface === 'mobile') {
+        const before = await state(page)
+        await page.locator('#mobile-tab-tasks').click()
+        await page.waitForSelector('#mobile-panel-tasks [data-tasks-view]')
+        assert.deepEqual((await state(page)).root, before.root, 'mobile primary navigation does not create a desktop Tasks tab')
+        assert.deepEqual((await state(page)).tabsById, before.tabsById)
+        await page.locator('#mobile-tab-sessions').click()
+        await page.locator('#mobile-tab-tasks').click()
+        assert.equal(await page.$$eval('#mobile-panel-tasks [data-tasks-view]', nodes => nodes.length), 1)
+        continue
+      }
       const entry = '[data-sidebar-footer] button[aria-label="Open tasks"]'
       await page.waitForSelector(entry)
       assert.ok(await page.$(`${entry} svg.lucide-clipboard-list`))
@@ -1740,13 +1904,7 @@ test('direct Tasks navigation opens one singleton from expanded, collapsed, and 
       await page.click(entry)
       await page.waitForSelector('[data-tasks-view]')
       assert.equal((await state(page)).root.activeTabId, 'system:tasks')
-      if (surface === 'mobile') {
-        await page.goto(baseUrl, { waitUntil: 'domcontentloaded' })
-        await waitForWebUiReady(page)
-        await page.waitForSelector(entry)
-      } else {
-        await page.click('[data-tab-id="system:agents"]')
-      }
+      await page.click('[data-tab-id="system:agents"]')
       await page.click(entry)
       await page.waitForSelector('[data-tasks-view]')
       assert.equal((await state(page)).root.activeTabId, 'system:tasks')
@@ -1905,6 +2063,8 @@ test('Timeline, Composer, History and Tasks share the reading column and pane-lo
       await aligned()
     }
     await page.setViewport({ width: 1800, height: 900 })
+    await page.waitForFunction(() => !!document.querySelector('.foxwarm-desktop-workbench-shell')
+      && document.querySelector('.foxwarm-chat-root')?.getBoundingClientRect().width > 1100)
     await page.evaluate(() => {
       localStorage.setItem('foxwarm.contextScrollbar.showScrollbar', 'true')
       localStorage.setItem('foxwarm.contextScrollbar.showMinimap', 'false')
@@ -1994,7 +2154,8 @@ async function clickStatusPageEntry(page, section) {
   const popup = '[data-workbench-status-popup]'
   await page.click(`[data-workbench-status-bar] button[aria-label^="${section === 'Tasks' ? 'Tasks:' : 'Nodes:'}"]`)
   await page.waitForSelector(popup, { visible: true })
-  await page.locator('[data-workbench-status-popup] button').click()
+  // Loading preview rows can move the action after the popup first appears.
+  await page.locator(`${popup} button::-p-text(Open ${section})`).click()
   await page.waitForSelector(popup, { hidden: true })
 }
 
@@ -2006,6 +2167,7 @@ test('Tasks and Nodes popup entries close the preview and activate singleton pag
     await page.waitForSelector('[data-workbench-status-popup]', { visible: true })
     await workbenchScreenshot(page, 'status-tasks-popup.png')
     await page.keyboard.press('Escape')
+    await page.waitForSelector('[data-workbench-status-popup]', { hidden: true })
     await clickStatusPageEntry(page, 'Tasks')
     await page.waitForFunction(() => location.hash.includes('system%3Atasks'))
     await page.waitForSelector('[data-tab-id="system:tasks"]')
@@ -2021,6 +2183,7 @@ test('Tasks and Nodes popup entries close the preview and activate singleton pag
     await page.waitForFunction(() => document.querySelector('[data-workbench-status-popup]')?.textContent.includes('Open Nodes'))
     await workbenchScreenshot(page, 'status-nodes-popup.png')
     await page.keyboard.press('Escape')
+    await page.waitForSelector('[data-workbench-status-popup]', { hidden: true })
     await clickStatusPageEntry(page, 'Nodes')
     await page.waitForSelector('[data-node-surface]')
     await workbenchScreenshot(page, 'nodes-workbench-wide.png')
@@ -2044,7 +2207,8 @@ test('Tasks and Nodes popup entries close the preview and activate singleton pag
     assert.equal(await page.$('[data-workbench-status-bar]'), null)
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false)
     assert.ok(await page.$('[data-node-surface]'))
-    await page.evaluate(() => document.querySelector('[data-tab-id="system:agents"]').click())
+    await page.setViewport({ width: 1400, height: 900 })
+    await page.locator('[data-tab-id="system:agents"]').click()
     await page.waitForSelector('.foxwarm-architecture-surface-tab')
     await page.evaluate(() => [...document.querySelectorAll('header button')].find(button => button.textContent.includes('protocol-compatible execution')).click())
     await page.waitForSelector('[data-node-surface]')
@@ -2231,7 +2395,9 @@ test('Footer Terminal is a reusable bottom pane that collapses without PTY delet
     await page.setViewport({ width: 390, height: 844 })
     await page.waitForSelector('[data-workbench-status-bar]', { hidden: true })
     await page.evaluate(() => window.foxwarmTest.switchToSession('e2e-a'))
-    await page.waitForSelector('.foxwarm-chat-root button[title="Terminal"]', { visible: true })
+    await page.locator('.foxwarm-chat-root button[aria-label="Open session options"]').click()
+    await page.waitForSelector('[data-session-ui-settings-menu]')
+    assert.ok(await page.$('[data-session-ui-settings-menu] button::-p-text(Terminal)'))
     assert.equal(await page.$('[data-workbench-status-bar]'), null)
   } finally { await page.close() }
 })
@@ -2306,7 +2472,7 @@ test('visible Chat keeps its DOM and initialization across split and normalizati
     assert.equal(await page.evaluate(() => window.__historyReads.length), await page.evaluate(() => window.__originalHistoryCount))
     await waitForAnchor()
     await page.setViewport({ width: 390, height: 844 })
-    await page.waitForSelector('.foxwarm-fixed-viewport-shell', { visible: true })
+    await page.waitForSelector('.foxwarm-desktop-workbench-shell', { hidden: true })
     assert.ok(await page.evaluate(() => window.__originalChat.isConnected), 'desktop/mobile shell changes retain the visible Chat')
     assert.equal(await page.$eval('[role="textbox"][aria-label="Message"]', element => element.textContent), 'retained draft')
   } finally { await page.close() }
@@ -2358,7 +2524,7 @@ test('Code retains its iframe/window across split, docking, collapse and desktop
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
     await page.waitForFunction(id => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.focusedPaneId === id, {}, codePane.id)
     await page.setViewport({ width: 390, height: 844 })
-    await page.waitForSelector('.foxwarm-fixed-viewport-shell')
+    await page.waitForSelector('.foxwarm-desktop-workbench-shell', { hidden: true })
     await assertFrame()
     await page.setViewport({ width: 1400, height: 900 })
     await page.waitForSelector('.foxwarm-desktop-workbench-shell')
@@ -2368,9 +2534,10 @@ test('Code retains its iframe/window across split, docking, collapse and desktop
     // Close pane migrates tabs and selects its last tab, hiding but retaining Code.
     await assertFrame()
     await page.click('[data-tab-id="vscode-web"]')
-    await page.setViewport({ width: 390, height: 844 })
-    await page.waitForSelector('.foxwarm-fixed-viewport-shell')
+    await assertFrame()
     await page.locator('[data-tab-id="chat:e2e-a"]').click()
+    await page.setViewport({ width: 390, height: 844 })
+    await page.waitForSelector('.foxwarm-desktop-workbench-shell', { hidden: true })
     await page.waitForSelector('.foxwarm-chat-root button[title="Back"]')
     await page.evaluate(() => { window.__ordinaryChat = document.querySelector('.foxwarm-chat-root') })
     await page.click('.foxwarm-chat-root button[title="Back"]')
@@ -2465,7 +2632,7 @@ test('full-page Tasks and Chat modals block Sidebar navigation without losing th
     await chatPage.waitForFunction(() => !document.querySelector('[aria-label="Attachment information"]'))
     assert.equal(await chatPage.evaluate(() => decodeURIComponent(location.hash)), '#tab/chat:e2e-a')
     assert.ok(await originalChat.evaluate(element => element.isConnected))
-    assert.equal(await chatPage.$eval('[data-composer-attachment-ref]', chip => chip.textContent.includes('draft.txt')), true, 'backdrop dismissal retains the attachment draft')
+    assert.equal(await chatPage.$eval('[data-attachment-preview-ref]', tile => tile.textContent.includes('draft.txt')), true, 'backdrop dismissal retains the attachment draft')
   } finally { await chatPage.close() }
 })
 
@@ -2840,11 +3007,11 @@ async function conversationScrollPosition(page) {
 }
 
 for (const phase of ['final_answer', undefined]) {
-  test(`Conversation ${phase || 'unknown-phase preview'} text does not pull an upward wheel reader forward during continued streaming`, async () => {
+  test(`Conversation ${phase || 'unknown-phase'} text does not pull an upward wheel reader forward during continued streaming`, async () => {
     const page = await openConversationScrollFixture(phase)
     try {
       const attached = await conversationScrollPosition(page)
-      assert.equal(attached.preview, !phase)
+      assert.equal(attached.preview, false)
       assert.equal(attached.expanded, false)
       await page.evaluate(() => {
         window.__conversationOriginalCard = [...document.querySelectorAll('.foxwarm-assistant-message-card')].find(card => card.textContent.includes('CONVERSATION_SCROLL'))
@@ -2873,7 +3040,7 @@ for (const phase of ['final_answer', undefined]) {
       const reader = await conversationScrollPosition(page)
       assert.ok(reader.distance > 4)
       assert.ok(reader.sameCard)
-      assert.equal(reader.preview, !phase)
+      assert.equal(reader.preview, false)
       assert.equal(reader.expanded, false)
       // Explicit rejoin restores attached follow, including subsequent streaming.
       await clickReadyControl(page, '[aria-label="Scroll to bottom"]')
@@ -3111,19 +3278,27 @@ test('cross-window theme changes close a deleted preview and release the backgro
 
 
 test('playful runtime and short right-side queue work in App and Appearance', async () => {
-  const page = await openFixture({ responsiveChat: true, hash: '#tab/chat:e2e-a', themeId: 'foxwarm.default', colorMode: 'dark', width: 1400 })
-  const publish = () => page.evaluate(() => window.__emitRealtime({
-    type: 'session-state', sessionId: 'e2e-a', session: { id: 'e2e-a', busy: true, queueLength: 3, messageCount: 35, historyVersion: 1,
-      runtimeState: { state: 'requesting-model', busy: true, queueLength: 3 } },
-  }))
+  const page = await openFixture({ responsiveChat: true, chatMessages: idleViewportMessages.slice(0, 35), timelineView: 'detailed', hash: '#tab/chat:e2e-a', themeId: 'foxwarm.default', colorMode: 'dark', width: 1400 })
+  const publish = () => page.evaluate(() => {
+    const session = { id: 'e2e-a', busy: true, queueLength: 3, messageCount: 35, historyVersion: 1,
+      runtimeState: { state: 'requesting-model', busy: true, queueLength: 3 } }
+    window.__historySessionState = session
+    window.__emitRealtime({ type: 'session-state', sessionId: 'e2e-a', session })
+  })
   try {
     await page.waitForSelector('.foxwarm-chat-composer-textarea')
+    await page.click('[role="textbox"][aria-label="Message"]')
+    await page.keyboard.down('Control')
+    await page.keyboard.press('A')
+    await page.keyboard.up('Control')
+    await page.keyboard.press('Backspace')
     await publish()
     await page.waitForFunction(() => document.querySelector('[data-processing-queue-status]')?.textContent.includes('3 queued'))
     assert.equal(await page.$eval('[data-fox-thinking-copy] .sr-only', el => el.textContent), 'Thinking...')
-    await page.click('[data-processing-queue-status] button')
-    await page.click('.fw-processing-main > button')
-    await page.waitForFunction(() => window.__sent.length >= 2)
+    await page.locator('[data-processing-queue-status] button').click()
+    await page.waitForFunction(() => window.__sent.length === 1)
+    await page.locator('button[aria-label="Stop session"]').click()
+    await page.waitForFunction(() => window.__sent.length === 2)
     assert.deepEqual(await page.evaluate(() => window.__sent.map(item => JSON.parse(item.body).text)), ['/dequeue', '/stop'])
     await publish()
     const bottom = await page.$('[aria-label="Scroll to bottom"]')
@@ -3137,7 +3312,7 @@ test('playful runtime and short right-side queue work in App and Appearance', as
     assert.ok(await page.$eval('[data-processing-queue-status]', el => el.getBoundingClientRect().left > document.querySelector('.fw-processing-main').getBoundingClientRect().right))
     if (process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR}/app-status-wide.png` })
     await page.setViewport({ width: 390, height: 844 })
-    await page.waitForSelector('.foxwarm-fixed-viewport-shell')
+    await page.waitForSelector('.foxwarm-desktop-workbench-shell', { hidden: true })
     await page.waitForSelector('.foxwarm-chat-composer-textarea')
     await publish()
     await page.waitForFunction(() => document.querySelector('[data-processing-queue-status]')?.textContent.includes('3 queued'))
@@ -3160,4 +3335,153 @@ test('playful runtime and short right-side queue work in App and Appearance', as
     assert.equal(await appearance.evaluate(() => !!window.foxwarmBoot && !document.querySelector('[data-fox-splash]')), true)
     if (process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR) await appearance.screenshot({ path: `${process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR}/appearance-playful-status.png` })
   } finally { await appearance.close() }
+})
+
+test('mobile home is a flat session-first layout and mobile Chats omit desktop tabs without deleting them', async () => {
+  const page = await openFixture({width: 390, height: 844, themeId: 'foxwarm.foxwarm', tabs: [system, chat('e2e-a', false), chat('e2e-b', false)]})
+  try {
+    await page.waitForSelector('[data-mobile-session-home]')
+    await page.waitForSelector('button[aria-label="Session display options"]')
+    assert.deepEqual(await page.$$eval('[data-sidebar-footer] button', buttons => buttons.map(button => button.textContent.trim())), ['Sessions', 'Tasks', 'Search', 'Settings'])
+    assert.equal(await page.$('[data-mobile-session-home] button[title="Create terminal tab"]'), null)
+    assert.equal(await page.$('[data-mobile-session-home] button[title="Open code"]'), null)
+    assert.equal(await page.$('.session-pin'), null)
+    const primaryWorkspace = Object.keys((await state(page)).tabsById).sort()
+    for (const tab of ['tasks', 'search', 'setup', 'sessions']) {
+      await page.click(`#mobile-tab-${tab}`)
+      await page.waitForFunction(tab => document.getElementById(`mobile-tab-${tab}`)?.getAttribute('aria-selected') === 'true' && document.getElementById(`mobile-panel-${tab}`)?.getBoundingClientRect().height > 0, {}, tab)
+      assert.ok(await page.$('[data-mobile-session-home] [data-sidebar-footer]'))
+      assert.deepEqual(Object.keys((await state(page)).tabsById).sort(), primaryWorkspace, 'mobile primary tabs do not create desktop workbench pages')
+      assert.ok(await page.$eval('.mobile-primary-nav', el => { const c=getComputedStyle(el),r=el.getBoundingClientRect(); return parseFloat(c.borderRadius)>=20 && c.backdropFilter==='blur(5px)' && c.backgroundColor.includes('/ 0.75)') && r.left>=12 && r.right<=innerWidth-12 && r.bottom<=innerHeight-12 }), `floating frosted navigation on ${tab}`)
+      await workbenchScreenshot(page, `mobile-primary-${tab}.png`)
+
+    }
+    const spacing = await page.$eval('[data-session-id="e2e-a"]', row => {
+      const title = row.querySelector('span[title]'), bounds = row.getBoundingClientRect()
+      return {inset: title.getBoundingClientRect().left - bounds.left, disclosure: !!row.querySelector('.session-compact-disclosure'), height: bounds.height}
+    })
+    assert.ok(spacing.inset >= 10 && spacing.inset <= 14 && !spacing.disclosure && spacing.height >= 56, JSON.stringify(spacing))
+    await workbenchScreenshot(page, 'mobile-session-home.png')
+    await page.click('button[aria-label="Workspace tools"]')
+    await page.waitForSelector('[role="menu"]')
+    await page.click('[role="menu"] button::-p-text(Code)')
+    await page.waitForSelector('dialog[open]')
+    assert.equal(await page.$eval('dialog', node => node.querySelector('#mobile-tool-title').textContent), 'Code')
+    assert.ok(await page.$('dialog select'))
+    await workbenchScreenshot(page, 'mobile-code-tools.png')
+    await page.keyboard.press('Escape')
+    await page.waitForSelector('dialog', {hidden: true})
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), 'Workspace tools')
+    await page.click('button[aria-label="New session"]')
+    await page.waitForSelector('[role="dialog"][aria-labelledby="creation-dialog-title"]')
+    await page.keyboard.press('Escape')
+    await page.waitForSelector('[role="dialog"][aria-labelledby="creation-dialog-title"]', {hidden: true})
+    const before = Object.keys((await state(page)).tabsById).sort()
+    await page.click('[data-session-id="e2e-a"]')
+    await page.waitForSelector('.foxwarm-chat-root')
+    const header = '.foxwarm-chat-root > div:first-of-type'
+    assert.equal(await page.$('.foxwarm-chat-root button[aria-label="Find in chat"]'), null)
+    assert.equal(await page.$('.foxwarm-chat-root button[title="Code"]'), null)
+    assert.equal(await page.$('.foxwarm-chat-root button[title="Terminal"]'), null)
+    assert.equal(await page.$eval('.foxwarm-chat-root [data-session-header-subtitle]', node => !!node).catch(() => false), false)
+    await page.click('.foxwarm-chat-root button[aria-label="Open session options"]')
+    await page.waitForSelector('[data-session-ui-settings-menu]')
+    assert.equal(await page.$$eval('[data-session-ui-settings-menu] button', buttons => buttons.some(button => button.textContent.includes('Show usage badges'))), false)
+    await page.click('[data-session-ui-settings-menu] button::-p-text(Find in chat)')
+    await page.waitForSelector('[data-chat-search] input')
+    await page.click('button[aria-label="Close search"]')
+    assert.ok(await page.$(header))
+    assert.equal(await page.$('[data-tab-id]'), null)
+    assert.equal(await page.$('[role="tablist"][aria-label="Pane tabs"]'), null)
+    assert.equal(await page.$('[data-workbench-tab-close]'), null)
+    assert.deepEqual(Object.keys((await state(page)).tabsById).sort(), before)
+    await workbenchScreenshot(page, 'mobile-chat-without-tabs.png')
+    await page.click('.foxwarm-chat-root button[title="Back"]')
+    await page.waitForSelector('[data-mobile-session-home]')
+    await page.setViewport({width: 1400, height: 900})
+    await page.waitForSelector('[data-tab-id="chat:e2e-a"]')
+    assert.equal(await page.$('[data-mobile-session-home]'), null)
+    assert.deepEqual(Object.keys((await state(page)).tabsById).sort(), before)
+  } finally { await page.close() }
+})
+
+
+test('mobile suppresses per-round and reasoning token statistics without changing desktop usage preference', async () => {
+  const messages = [
+    {role:'user',parts:[{text:'A small fixture request'}],__meta:{seq:1,timestamp:1700000000000}},
+    {role:'model',parts:[{thinking:'A short fixture analysis.'},{text:'A complete fixture answer.'}],__meta:{seq:2,timestamp:1700000001000,usage:{cachedTokens:120,inputTokens:40,outputTokens:20,reasoningTokens:10}}},
+  ]
+  const page = await openFixture({responsiveChat:true,chatMessages:messages,hash:'#tab/chat:e2e-a',tabs:[chat('e2e-a',false)]})
+  try {
+    await page.waitForSelector('[data-usage-badge-anchor]')
+    const preference = await page.evaluate(() => localStorage.getItem('foxwarm_show_usage_badge_v1'))
+    await page.setViewport({width:390,height:844})
+    await page.waitForSelector('[data-usage-badge-anchor]', {hidden:true})
+    assert.equal(await page.$('[data-reasoning-token-badge]'), null)
+    assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_show_usage_badge_v1')), preference)
+    await page.waitForFunction(()=>document.querySelector('.foxwarm-assistant-message-card')&&!document.querySelector('.foxwarm-assistant-action-buttons'))
+    await page.setViewport({width:1400,height:900})
+    await page.waitForSelector('.foxwarm-assistant-action-buttons')
+    await page.waitForSelector('[data-usage-badge-anchor]')
+  } finally {await page.close()}
+})
+
+test('mobile navigation is capped on tablet widths and mobile Conversation preferences stay independent', async () => {
+  const page = await openFixture({width:390,height:844,chatMessages:[{role:'model',parts:[{text:'A visible answer.'}],__meta:{seq:1,timestamp:1}}],timelineView:'grouped'})
+  const options = async () => {
+    await waitForWebUiReady(page)
+    if (await page.$eval('[data-mobile-session-home]', el => !!el.getClientRects().length).catch(() => false)) await clickReadyControl(page, '[data-session-id="e2e-a"]')
+    await page.waitForSelector('.foxwarm-chat-root button[aria-label="Open session options"]', {visible:true})
+    if (!await page.$('[data-session-ui-settings-menu]')) await clickReadyControl(page, '.foxwarm-chat-root button[aria-label="Open session options"]')
+    await page.waitForSelector('[data-session-ui-settings-menu]')
+  }
+  try {
+    await page.waitForSelector('.mobile-primary-nav')
+    await page.setViewport({width:740,height:900})
+    await page.waitForFunction(()=>Math.abs(document.querySelector('.mobile-primary-nav')?.getBoundingClientRect().width-440)<1)
+    assert.ok(await page.$eval('.mobile-primary-nav',el=>{const r=el.getBoundingClientRect();return Math.abs(r.left-(innerWidth-r.width)/2)<1}))
+    await workbenchScreenshot(page,'mobile-nav-tablet.png')
+    await page.setViewport({width:390,height:844})
+    await options()
+    await page.waitForFunction(()=>document.querySelector('[role="radiogroup"][aria-label="Timeline view"] [aria-checked="true"]')?.textContent==='Conversation')
+    await page.click('[role="radio"]::-p-text(Detailed)')
+    assert.deepEqual(await page.evaluate(()=>[localStorage.getItem('foxwarm_mobile_timeline_view_v1'),localStorage.getItem('foxwarm_timeline_view_v1')]),['detailed','grouped'])
+    await page.keyboard.press('Escape')
+    const header=await page.$eval('[data-mobile-chat-header]',el=>{const css=getComputedStyle(el),back=el.querySelector('.mobile-header-back'),capsule=el.querySelector('.mobile-header-capsule');return {position:css.position,background:css.backgroundColor,image:css.backgroundImage,border:css.borderTopWidth,backRadius:getComputedStyle(back).borderRadius,capsuleRadius:getComputedStyle(capsule).borderRadius,blur:getComputedStyle(capsule).backdropFilter}})
+    assert.deepEqual(header,{position:'absolute',background:'rgba(0, 0, 0, 0)',image:'none',border:'0px',backRadius:'50%',capsuleRadius:'28px',blur:'blur(5px)'})
+    await page.reload({waitUntil:'load'});await options()
+    await page.waitForFunction(()=>document.querySelector('[role="radio"][aria-checked="true"]')?.textContent==='Detailed')
+    await page.keyboard.press('Escape')
+    await page.setViewport({width:1400,height:900})
+    await page.waitForSelector('[data-tab-id="chat:e2e-a"]')
+    await options()
+    await page.waitForFunction(()=>document.querySelector('[role="radio"][aria-checked="true"]')?.textContent==='Grouped')
+    assert.equal(await page.$('[data-mobile-chat-header]'),null)
+    assert.equal(await page.evaluate(()=>localStorage.getItem('foxwarm_mobile_timeline_view_v1')),'detailed')
+  } finally {await page.close()}
+})
+
+test('compact theme swatches retain direct selection and independent preview on desktop and mobile', async () => {
+  const setup = {id:'system:setup',type:'setup',title:'Setup'}
+  for (const width of [1400,390]) {
+    const page=await openFixture(width<768 ? {width,height:900} : {tabs:[setup],activeTabId:setup.id,hash:'#setup',width,height:900})
+    try {
+      if(width<768){await clickReadyControl(page,'#mobile-tab-setup')}
+      await page.waitForSelector('[data-theme-manager]',{visible:true})
+      const geometry=await page.$eval('[data-theme-manager]',root=>{
+        const grid=root.querySelector('.theme-card-grid'),card=grid.querySelector('.theme-option-card'),preview=card.querySelector('.theme-card-preview'),rect=card.getBoundingClientRect()
+        return {height:rect.height,width:rect.width,previewHeight:preview.getBoundingClientRect().height,columns:getComputedStyle(grid).gridTemplateColumns.split(' ').length,overflow:root.scrollWidth>root.clientWidth}
+      })
+      assert.ok(geometry.height<=135&&geometry.previewHeight<90&&!geometry.overflow,JSON.stringify({width,geometry}))
+      if(width<768)assert.equal(geometry.columns,2)
+      await workbenchScreenshot(page,`compact-theme-gallery-${width}.png`)
+      const selection=await page.evaluate(()=>localStorage.getItem('foxwarm_theme_selection_v3'))
+      await clickReadyControl(page,'[data-theme-preview="foxwarm.vector"]')
+      await page.waitForSelector('[data-theme-preview-dialog]')
+      assert.equal(await page.evaluate(()=>localStorage.getItem('foxwarm_theme_selection_v3')),selection,'preview does not apply a theme')
+      await page.keyboard.press('Escape')
+      await clickReadyControl(page,'[data-theme-option="foxwarm.vector"]')
+      assert.equal(await page.$eval('[data-theme-option="foxwarm.vector"]',el=>el.getAttribute('aria-pressed')),'true')
+    }finally{await page.close()}
+  }
 })

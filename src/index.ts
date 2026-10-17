@@ -150,6 +150,7 @@ let sessionWorkerStore: SessionWorkerStore | undefined;
 let sessionWorkerSupervisor: SessionWorkerSupervisor | undefined;
 let sessionWorkerIngress: SessionWorkerIngressCoordinator | undefined;
 let shutdownSessionWorkers: (() => Promise<void>) | undefined;
+let shutdownLocalSessionTurns: (() => Promise<void>) | undefined;
 
 async function start() {
     const templatesDir = path.join(BASE_DIR, 'templates', 'main', 'memory');
@@ -380,6 +381,12 @@ async function start() {
             ? (sessionId, item) => sessionRuntime.submitAndRun(sessionId, item)
             : undefined,
     );
+    if (!SESSION_WORKERS_ENABLED) {
+        shutdownLocalSessionTurns = () => router.shutdownLocalTurns();
+        // A signal can arrive during asynchronous startup before the router
+        // exists. Such a router must never start a local owner afterward.
+        if (shutdownStarted) void shutdownLocalSessionTurns();
+    }
     const commandHandler = new CommandHandler(router);
     initializeChannelRuntime(
         (ctx, message) => router.handleMessage(ctx, message),
@@ -595,11 +602,22 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.once(signal, () => {
         if (shutdownStarted) return;
         shutdownStarted = true;
+        // Admission closes synchronously, before any service drain yields.
+        // An owner that ignores cancellation is not a successful drain: exit
+        // without dismantling dependencies underneath its still-running turn.
+        const localTurnsDrained = shutdownLocalSessionTurns?.().catch((err: Error) => {
+            logger.error({ err, signal }, 'Local Session owners did not settle; exiting without dependency teardown');
+            // Native work may also block process.exit() during thread-pool
+            // teardown. Kill only Main; service children observe IPC loss and
+            // persistent user execs keep their existing independent lifetime.
+            process.kill(process.pid, 'SIGKILL');
+        });
         void Promise.resolve()
             .then(() => mcpInboundHttp?.stop())
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to stop MCP inbound cleanly'))
             .then(() => mcpExternal.shutdownMcpNotificationReceivers())
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to stop MCP notification receivers cleanly'))
+            .then(() => localTurnsDrained)
             .then(() => shutdownToolScriptRuntime())
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down ToolScript runtime cleanly'))
             .then(() => nodeExecution.shutdownNodeExecution())
