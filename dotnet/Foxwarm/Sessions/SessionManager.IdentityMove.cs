@@ -42,7 +42,9 @@ internal sealed partial class SessionManager
         var live = ExecutionPlacement(owner);
         var node = capturedNode ?? live.Node;
         var cwd =
-            node == "master" ? capturedCwd ?? (useLiveCwd && live.Node == "master" ? live.Cwd : null) : null;
+            node == "master"
+                ? capturedCwd ?? (useLiveCwd && live.Node == "master" ? live.Cwd : null)
+                : null;
         return new(
             agents.AgentDirectory(owner.Agent),
             pendingWrites,

@@ -321,9 +321,16 @@ internal sealed partial class SessionManager
             return paths;
         foreach (var key in new[] { "filePath", "cwd" })
             if (SessionWait.Text(resolved.Args[key]) is string raw)
-                paths.Add(new(key,
-                    resolved.Name is "run_script" or "start_toolscript_run" ? SessionGoal.Trim(raw) : raw,
-                    null, resolved.ExecutionNode));
+                paths.Add(
+                    new(
+                        key,
+                        resolved.Name is "run_script" or "start_toolscript_run"
+                            ? SessionGoal.Trim(raw)
+                            : raw,
+                        null,
+                        resolved.ExecutionNode
+                    )
+                );
         if (
             resolved.Name == "apply_patch"
             && SessionWait.Text(resolved.Args["input"]) is string patch

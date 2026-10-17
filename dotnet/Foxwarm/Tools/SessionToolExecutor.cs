@@ -23,8 +23,9 @@ internal sealed partial class SessionToolExecutor(
             hosted,
             resolved,
             resolved.Name is "run_script" or "start_toolscript_run"
-                ? invocation.Value?.ScriptSource?.Files ?? Files
-                : resolved.Name == "exec" ? ExecFiles : Files,
+                    ? invocation.Value?.ScriptSource?.Files ?? Files
+                : resolved.Name == "exec" ? ExecFiles
+                : Files,
             token
         );
 
@@ -177,7 +178,9 @@ internal sealed partial class SessionToolExecutor(
         hosted.Entry.RequireIdentityAuthority();
         var previous = invocation.Value;
         var placement = sessions.ExecutionPlacement(hosted);
-        var captured = (!Programmatic ? execSnapshot.Value : null) ?? new ExecSnapshot(placement.Node, placement.Cwd);
+        var captured =
+            (!Programmatic ? execSnapshot.Value : null)
+            ?? new ExecSnapshot(placement.Node, placement.Cwd);
         var current = new TurnToolInvocation(SessionWait.Text(call["id"]) ?? "")
         {
             Files = workspace is WorkspaceTools ? sessions.IdentityWorkspace(hosted) : null,
@@ -267,14 +270,23 @@ internal sealed partial class SessionToolExecutor(
                 functionCall["args"] as JsonObject
                 ?? throw new InvalidDataException("Tool arguments must be an object.");
             var resolved = registry.Resolve(name, args, ExecutionNode);
-            if (resolved.Name is "run_script" or "start_toolscript_run" && invocation.Value is { } scriptCall)
+            if (
+                resolved.Name is "run_script" or "start_toolscript_run"
+                && invocation.Value is { } scriptCall
+            )
             {
                 var sourceNode = ToolRegistry.ToolScriptSourceNode(resolved.Args, scriptCall.Node);
                 if (sourceNode is not null)
                 {
-                    var cwd = sourceNode == "master" || sourceNode == scriptCall.Node ? scriptCall.Cwd : null;
-                    scriptCall.ScriptSource = new(sourceNode, cwd,
-                        sessions.IdentityWorkspace(hosted, cwd, "master", useLiveCwd: false));
+                    var cwd =
+                        sourceNode == "master" || sourceNode == scriptCall.Node
+                            ? scriptCall.Cwd
+                            : null;
+                    scriptCall.ScriptSource = new(
+                        sourceNode,
+                        cwd,
+                        sessions.IdentityWorkspace(hosted, cwd, "master", useLiveCwd: false)
+                    );
                 }
             }
             while (true)
@@ -661,7 +673,8 @@ internal sealed partial class SessionToolExecutor(
             owner.Manager.ExecuteNodeToolAsync(owner.Hosted, args, token);
         handlers["node_create_auth_token"] = (owner, args, token) =>
             owner.Manager.CreateNodeAuthTokenAsync(owner.Hosted, args, token);
-        handlers["node_remove"] = (owner, args, _) => Task.FromResult(owner.Manager.RemoveNode(args));
+        handlers["node_remove"] = (owner, args, _) =>
+            Task.FromResult(owner.Manager.RemoveNode(args));
         handlers["node_bootstrap_info"] = (owner, args, _) =>
             Task.FromResult(owner.Manager.NodeBootstrapInfo(args));
         handlers["node_pair_list"] = (owner, args, _) =>

@@ -160,7 +160,8 @@ internal sealed class ToolRegistry(
             name,
             targetArgs,
             ExecutionNode: source == "node" ? targetNode
-                : name is "run_script" or "start_toolscript_run" ? ToolScriptSourceNode(targetArgs, currentNode) ?? "master"
+                : name is "run_script" or "start_toolscript_run"
+                    ? ToolScriptSourceNode(targetArgs, currentNode) ?? "master"
                 : name is "send_file" or "image_write_to_file"
                     ? TargetNode(Text(targetArgs, "node"), currentNode)
                 : "master"

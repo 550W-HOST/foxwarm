@@ -198,16 +198,48 @@ public sealed class TaskStoreTests
         );
         foreach (var note in new[] { false, true })
         {
-            var change = new JsonObject { ["action"] = "update", ["taskId"] = id, ["description"] = "shared scope" };
-            if (note) change["note"] = "shared progress";
+            var change = new JsonObject
+            {
+                ["action"] = "update",
+                ["taskId"] = id,
+                ["description"] = "shared scope",
+            };
+            if (note)
+                change["note"] = "shared progress";
             store.Execute(change, "observer");
         }
         using (var reopened = new TaskStore(temp.Path, value => value, _ => []))
-            Assert.Equal("shared scope", reopened.Execute(new JsonObject { ["action"] = "get", ["taskId"] = id }, "observer").Payload["task"]!["description"]!.GetValue<string>());
+            Assert.Equal(
+                "shared scope",
+                reopened
+                    .Execute(new JsonObject { ["action"] = "get", ["taskId"] = id }, "observer")
+                    .Payload["task"]!["description"]!.GetValue<string>()
+            );
         foreach (var status in new JsonNode?[] { JsonValue.Create("active"), null })
-            Assert.Throws<TaskError>(() => store.Execute(new JsonObject { ["action"] = "update", ["taskId"] = id, ["description"] = "not permitted", ["status"] = status }, "observer"));
+            Assert.Throws<TaskError>(() =>
+                store.Execute(
+                    new JsonObject
+                    {
+                        ["action"] = "update",
+                        ["taskId"] = id,
+                        ["description"] = "not permitted",
+                        ["status"] = status,
+                    },
+                    "observer"
+                )
+            );
         store.Execute(new JsonObject { ["action"] = "complete", ["taskId"] = id }, "owner");
-        Assert.Throws<TaskError>(() => store.Execute(new JsonObject { ["action"] = "update", ["taskId"] = id, ["description"] = "terminal" }, "observer"));
+        Assert.Throws<TaskError>(() =>
+            store.Execute(
+                new JsonObject
+                {
+                    ["action"] = "update",
+                    ["taskId"] = id,
+                    ["description"] = "terminal",
+                },
+                "observer"
+            )
+        );
     }
 
     [Fact]

@@ -243,24 +243,48 @@ public sealed class MainTimerToolsTests
     [InlineData(null, "main-remote")]
     [InlineData("master", "master")]
     [InlineData("captured-remote", "captured-remote")]
-    public async Task Persisted_timer_omission_uses_Agent_main_but_captured_selection_remains_explicit(string? node, string expected)
+    public async Task Persisted_timer_omission_uses_Agent_main_but_captured_selection_remains_explicit(
+        string? node,
+        string expected
+    )
     {
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
         var work = Path.Combine(temp.Path, "work");
         await using var peer = new LoopbackProvider();
         var options = new ResponsesClientOptions(peer.BaseUri, "wire", "a", "", "", 713);
-        await using (var seed = new SessionManager(data, work, options, HostModels.ForTest(options)))
+        await using (
+            var seed = new SessionManager(data, work, options, HostModels.ForTest(options))
+        )
         {
             await seed.LoadAsync();
             await seed.CreateNamedAsync("main", "source", null, null);
             await seed.CreateAgentAsync("timed", false);
             await seed.CreateNamedAsync("timed", "main", null, null, initialNode: "main-remote");
         }
-        var timer = new JsonObject { ["id"] = "legacy-timer", ["sessionId"] = "source", ["message"] = "timer placement", ["createdAt"] = 1, ["at"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - 1, ["newSession"] = true, ["agentName"] = "timed", ["sessionPrefix"] = "scheduled" };
-        if (node is not null) timer["currentNode"] = node;
-        await File.WriteAllTextAsync(Path.Combine(data, "state", "timers.json"), new JsonObject { ["timers"] = new JsonArray(timer) }.ToJsonString());
-        await using var manager = new SessionManager(data, work, options, HostModels.ForTest(options));
+        var timer = new JsonObject
+        {
+            ["id"] = "legacy-timer",
+            ["sessionId"] = "source",
+            ["message"] = "timer placement",
+            ["createdAt"] = 1,
+            ["at"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - 1,
+            ["newSession"] = true,
+            ["agentName"] = "timed",
+            ["sessionPrefix"] = "scheduled",
+        };
+        if (node is not null)
+            timer["currentNode"] = node;
+        await File.WriteAllTextAsync(
+            Path.Combine(data, "state", "timers.json"),
+            new JsonObject { ["timers"] = new JsonArray(timer) }.ToJsonString()
+        );
+        await using var manager = new SessionManager(
+            data,
+            work,
+            options,
+            HostModels.ForTest(options)
+        );
         manager.TimerSessionName = _ => "scheduled";
         await manager.LoadMainHostAsync();
         await peer.Request.Task.WaitAsync(TimeSpan.FromSeconds(5));

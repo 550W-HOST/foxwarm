@@ -395,10 +395,13 @@ internal sealed partial class SessionManager
             throw new InvalidDataException($"Session ID '{id}' is already reserved.");
         if (parentId is not null && Find(parentId) is null)
             throw new InvalidDataException("Parent Session does not exist.");
-        var selectedNode = BoundNode(agentName)
-            ?? (timerCreation ? timerNode
+        var selectedNode =
+            BoundNode(agentName)
+            ?? (
+                timerCreation ? timerNode
                 : parentId is not null ? CurrentNode(Find(parentId)!)
-                : initialNode);
+                : initialNode
+            );
         if (selectedNode is null && agentName != "main")
         {
             var main = await GetExistingAsync(SessionIdentity.Build(agentName, "main"));

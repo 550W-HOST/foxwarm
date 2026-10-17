@@ -104,8 +104,11 @@ internal sealed partial class SessionToolExecutor
             {
                 await sessions.WaitForIdentityMutationAsync(hosted.Id, currentToken);
                 hosted.Entry.RequireIdentityAuthority();
-                var source = rootCall?.ScriptSource
-                    ?? throw new InvalidOperationException("ToolScript source routing was not captured.");
+                var source =
+                    rootCall?.ScriptSource
+                    ?? throw new InvalidOperationException(
+                        "ToolScript source routing was not captured."
+                    );
                 var node = source.Node;
                 var cwd = source.Cwd;
                 var files = source.Files;
@@ -121,15 +124,29 @@ internal sealed partial class SessionToolExecutor
                         currentToken
                     );
                     string? resolvedPath = null;
-                    await sessions.Nodes.ExecuteAsync(node, "read", new JsonObject { ["filePath"] = file },
-                        hosted.Id, hosted.Agent, node, cwd, true, currentToken, hosted,
+                    await sessions.Nodes.ExecuteAsync(
+                        node,
+                        "read",
+                        new JsonObject { ["filePath"] = file },
+                        hosted.Id,
+                        hosted.Agent,
+                        node,
+                        cwd,
+                        true,
+                        currentToken,
+                        hosted,
                         value =>
                         {
                             resolvedPath = SessionWait.Text(value?["filePath"]);
-                            if (resolvedPath is null && value?["__foxwarmResolvedToolPaths"] is JsonArray paths
-                                && paths.Count == 1 && SessionWait.Text(paths[0]?["raw"]) == file)
+                            if (
+                                resolvedPath is null
+                                && value?["__foxwarmResolvedToolPaths"] is JsonArray paths
+                                && paths.Count == 1
+                                && SessionWait.Text(paths[0]?["raw"]) == file
+                            )
                                 resolvedPath = SessionWait.Text(paths[0]?["resolved"]);
-                        });
+                        }
+                    );
                     var transferred = await sessions.ReadNodeFileAsync(
                         hosted,
                         node,
