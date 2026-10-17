@@ -196,12 +196,10 @@ public sealed class RetryPreparationTests
         var preparations = 0;
         await requests.RequestAsync(
             "owner",
-            HostModels.ForTest(options),
-            "a",
-            null,
+            requests.Capture(HostModels.ForTest(options), "a", null),
             "cache",
             "turn",
-            [User("seed")],
+            RequestHistory.FromMutable([User("seed")]),
             (_, _) => Task.FromResult("prompt"),
             null,
             null,
@@ -213,7 +211,9 @@ public sealed class RetryPreparationTests
             {
                 preparations++;
                 throw new InvalidOperationException("Nonordinary request cannot consume input.");
-            }
+            },
+            recaptureSelection: () => throw new InvalidOperationException("Nonordinary request cannot recapture owner selection."),
+            adoptSelection: (_, _, _, _) => throw new InvalidOperationException("Nonordinary request cannot adopt owner selection.")
         );
         Assert.Equal(0, preparations);
         Assert.Equal(2, peer.RequestCount);

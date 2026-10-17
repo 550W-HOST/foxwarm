@@ -49,6 +49,8 @@ internal sealed class SessionChatService(
                 ? selected.RawModel
                 : catalog.DefaultKey;
         var rawEffort = selected.RawEffort;
+        var selectedRawModel = selected.RawModel;
+        var selectionRecaptured = false;
         var turnId = hosted.LogicalTurnId;
         var captured = requests.Capture(catalog, routeKey, rawEffort);
         var cacheKey = await hosted.Entry.SaveLane.EnsurePromptCacheKeyAsync();
@@ -145,7 +147,34 @@ internal sealed class SessionChatService(
                 "normal-turn",
                 0,
                 id => hosted.BeginDraft(id),
-                RequestContext
+                RequestContext,
+                () =>
+                {
+                    var raw = hosted.Entry.WithState(state => SessionWait.Text(state.AuthorityEnvelope["model"]));
+                    if (raw == selectedRawModel)
+                        return null;
+                    var nextCatalog = models.Capture();
+                    var next = hosted.Entry.WithState(state => nextCatalog.Select(state.AuthorityEnvelope));
+                    selectedRawModel = next.RawModel;
+                    selectionRecaptured = true;
+                    captured = requests.Capture(nextCatalog, next.RawModel ?? nextCatalog.DefaultKey, next.RawEffort);
+                    return captured;
+                },
+                async (leaf, effort, failover, token) =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    var current = new EffectiveRequestSelection(
+                        leaf.Key,
+                        hosted.Entry.WithState(state => hosted.ExecutionNode(state.AuthorityEnvelope)),
+                        effort,
+                        selectedRawModel is not null && !captured.Catalog.Contains(selectedRawModel)
+                            ? selectedRawModel : null
+                    );
+                    var changed = await hosted.Entry.SaveLane.AdoptEffectiveSelectionAsync(current, failover);
+                    var rebuild = changed || selectionRecaptured;
+                    selectionRecaptured = false;
+                    return rebuild ? hosted.Entry.WithState(state => RequestHistory.FromSnapshot(state.History.Snapshot())) : null;
+                }
             );
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

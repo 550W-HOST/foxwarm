@@ -85,7 +85,7 @@ internal static class SessionWait
             return timeoutId is null ? [item.CloneItem()] : [];
         if (timeoutId is not null && timeoutId != Text(wait["id"]))
             return [];
-        if (item.Type == QueueItemType.CompactCommit)
+        if (item.Type == QueueItemType.CompactCommit || !item.Trigger)
             return [item.CloneItem()];
         if (wait["waitAll"] is JsonObject all)
         {

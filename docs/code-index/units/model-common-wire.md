@@ -14,7 +14,7 @@ Builds provider-neutral request history, handles HTTP/SSE primitives, repairs re
 - `RequestHistoryRepair` repairs provider retry inputs at the supported safe point; it does not rebuild a missing Session authority.
 - `OpenAIHttp`, `ProviderHttpRequest`, and `OpenAISseReader` own request headers/body/status/SSE parsing and preserve provider error/stream boundaries. The reader optionally accepts a terminal predicate and final-event EOF flush for Messages; existing Completions EOF behavior is unchanged. Provider-specific accumulation remains in the adapters.
 - `OpenAIRequestText` extracts model-visible request text and recognizes only supported historical compatibility strings; it is not a child-handoff receipt consumer.
-- `ProviderImageParts` adapts canonical image refs/inline data; `SessionChatService.ChatAsync`/`ChatCoreAsync` supplies prompt/cache/model request orchestration behind `IChatService`, while `LocalSessionTurnHost` owns the tool loop.
+- `ProviderImageParts` adapts canonical image refs/inline data; `SessionChatService.ChatAsync`/`ChatCoreAsync` supplies prompt/cache/model request orchestration behind `IChatService`, while `LocalSessionTurnHost` owns the tool loop. Its normal-owned callbacks recapture explicitly changed raw model/effort pairs at retry safe points and commit actual concrete model/Node adoption before request serialization; [model routing](./model-configuration.md) owns the attempt/budget contract. New notices and recaptures obtain a fresh immutable root, retaining request-owned JSON and provenance rather than reconstructing from mutable projections.
 
 Callers: `LocalSessionTurnHost`, model-specific services, retry preparation, image pipeline, and `LlmRequestJournalStore` qualification.
 
@@ -26,4 +26,4 @@ Provider input is derived from Session state and request scope. The neutral repa
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Models/JournalHistoryReuseTests.cs`; `dotnet/Foxwarm.Tests/Models/RequestHistoryRepairTests.cs`; `ResponsesClientTests.cs`; `RetryPreparationTests.cs`; `HostedResponsesWsImageTests.cs`; `LlmRequestJournalQualificationTests.cs`.
+`dotnet/Foxwarm.Tests/Models/JournalHistoryReuseTests.cs`; `dotnet/Foxwarm.Tests/Models/RequestHistoryRepairTests.cs`; `ResponsesClientTests.cs`; `RetryPreparationTests.cs`; `EffectiveSelectionTests.cs`; `HostedResponsesWsImageTests.cs`; `LlmRequestJournalQualificationTests.cs`.

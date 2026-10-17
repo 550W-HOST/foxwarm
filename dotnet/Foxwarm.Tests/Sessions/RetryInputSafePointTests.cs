@@ -96,7 +96,7 @@ public sealed class RetryInputSafePointTests
         internal Task Enqueue(string text) =>
             Owner.Registry.Ingress.EnqueueAsync(
                 Owner.Id,
-                QueueItem.UserText(text, clientMessageId: text)
+                new QueueItem(QueueItemType.User, SessionBoundary.ChannelInput([new JsonObject { ["text"] = text }], "webui"), ClientMessageId: text)
             );
 
         internal Task Run() => Owner.Registry.Runner.ProcessQueueAsync(Owner.Id);
@@ -187,6 +187,9 @@ public sealed class RetryInputSafePointTests
             Assert.Contains("late-input", (await peer.RequestAt(2)).Body);
             var state = f.Owner.Entry.Snapshot();
             Assert.Empty(state.Queue);
+            var inputRows = state.History.Materialize();
+            Assert.DoesNotContain("queueInputHint", inputRows.Single(row => SessionWait.Text(row["__meta"]?["clientMessageId"]) == "seed").ToJsonString());
+            Assert.Contains("queueInputHint", inputRows.Single(row => SessionWait.Text(row["__meta"]?["clientMessageId"]) == "queued-one").ToJsonString());
             Assert.Null(f.Owner.Entry.LastBackgroundProcessorFailure);
             Assert.Equal(
                 new[] { "seed", "queued-one", "queued-two", "queued-three", "late-input" },

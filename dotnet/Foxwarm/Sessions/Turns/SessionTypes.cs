@@ -44,6 +44,8 @@ public sealed record QueueItem(
     bool Trigger = true
 )
 {
+    internal bool QueuedInput { get; set; }
+
     // An owner wake is opaque on disk; this exact identity survives only runtime clones.
     internal object? CompactOwner { get; init; }
 

@@ -152,7 +152,9 @@ internal sealed class ModelRequestOwner(
         string journalPurpose = "low-level",
         int journalIteration = 0,
         Action<string>? journalRequestStarted = null,
-        Func<Task<IReadOnlyList<JsonObject>>>? requestContext = null
+        Func<Task<IReadOnlyList<JsonObject>>>? requestContext = null,
+        Func<CapturedRequest?>? recaptureSelection = null,
+        Func<ConcreteHostModel, string, bool, CancellationToken, Task<RequestHistory?>>? adoptSelection = null
     )
     {
         var catalog = captured.Catalog;
@@ -174,6 +176,19 @@ internal sealed class ModelRequestOwner(
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                var explicitSelectionChanged = false;
+                if (attempt > 1 && scope == ModelRequestScope.Canonical && recaptureSelection?.Invoke() is { } next)
+                {
+                    captured = next;
+                    catalog = next.Catalog;
+                    route = next.Route;
+                    request = next.Routing;
+                    rawEffort = next.RawEffort;
+                    explicitSelectionChanged = true;
+                    requestStarted = null;
+                    journalRequestId = null;
+                    journalAttempt = 0;
+                }
                 var selection = request is null ? null : routing.Select(request, cacheKey);
                 var leaf =
                     selection is null ? route
@@ -187,6 +202,21 @@ internal sealed class ModelRequestOwner(
                     rawEffort is not null && leaf.AllowedEfforts.Contains(rawEffort)
                         ? rawEffort
                         : leaf.DefaultEffort!;
+                if (scope == ModelRequestScope.Canonical && adoptSelection is not null)
+                {
+                    var updated = await adoptSelection(
+                        leaf, effort, attempt > 1 && !explicitSelectionChanged && request is not null, cancellationToken
+                    );
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (updated is not null)
+                    {
+                        baseHistory = updated;
+                        history = baseHistory.WithContext(retainedContext);
+                        requestStarted = null;
+                        journalRequestId = null;
+                        journalAttempt = 0;
+                    }
+                }
                 // Local canonical/snapshot/cache/plan preparation is deliberately outside provider retry handling.
                 var instructions = await prompt(leaf, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();

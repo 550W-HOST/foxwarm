@@ -118,6 +118,7 @@ public sealed partial class LocalSessionTurnHost
                         .ConfigureAwait(false);
                 try
                 {
+                    entry.WithState(state => DeferredQueueInput.Mark(state.Queue));
                     if (result.AssistantMessage is null)
                     {
                         if (result.Usage is not null)
@@ -314,6 +315,7 @@ public sealed partial class LocalSessionTurnHost
         AssertCanRetry();
         await (retrySafePoint?.Invoke() ?? SafePointAsync()).ConfigureAwait(false);
         AssertCanRetry();
+        entry.WithState(state => DeferredQueueInput.Mark(state.Queue));
         var batch = SessionTurnRunner.DrainLeading(entry);
         if (batch.Count > 0)
             await AppendQueuedInputsAsync(batch).ConfigureAwait(false);
@@ -376,6 +378,7 @@ public sealed partial class LocalSessionTurnHost
             return;
         await entry.SaveLane.SaveBestEffortAsync().ConfigureAwait(false);
         await (continuationSafePoint?.Invoke() ?? SafePointAsync()).ConfigureAwait(false);
+        entry.WithState(state => DeferredQueueInput.Mark(state.Queue));
         var batch = SessionTurnRunner.DrainLeading(entry);
         if (batch.Count > 0)
         {
@@ -424,7 +427,11 @@ public sealed partial class LocalSessionTurnHost
     public async Task FinalizeStoppedAsync()
     {
         await SafePointAsync().ConfigureAwait(false);
-        var items = entry.WithState(state => state.Queue.ToArray());
+        var items = entry.WithState(state =>
+        {
+            DeferredQueueInput.Mark(state.Queue);
+            return state.Queue.ToArray();
+        });
         foreach (var item in items.Where(item => item.Type != QueueItemType.CompactCommit))
             SessionIngress.EnsureSupportedForRunner(item);
         await entry
@@ -468,7 +475,7 @@ public sealed partial class LocalSessionTurnHost
             }
             if (item.Message is not null)
             {
-                rawMessages.Add((JsonObject)item.Message.DeepClone());
+                rawMessages.Add(DeferredQueueInput.Message(item, (JsonObject)item.Message.DeepClone()));
                 committedAnyInput = true;
                 continue;
             }
@@ -488,7 +495,7 @@ public sealed partial class LocalSessionTurnHost
             };
             if (item.ClientMessageId is not null)
                 message["__meta"] = new JsonObject { ["clientMessageId"] = item.ClientMessageId };
-            rawMessages.Add(message);
+            rawMessages.Add(DeferredQueueInput.Message(item, message));
             committedAnyInput = true;
         }
         return PrepareCanonicalAppend(
@@ -501,7 +508,7 @@ public sealed partial class LocalSessionTurnHost
         );
     }
 
-    private static CanonicalAppendPreparation PrepareCanonicalAppend(
+    internal static CanonicalAppendPreparation PrepareCanonicalAppend(
         SessionState state,
         IReadOnlyList<JsonObject> rawMessages,
         IReadOnlyList<QueueItem> selectedItems,
@@ -655,7 +662,7 @@ public sealed partial class LocalSessionTurnHost
                 $"<foxwarm-system kind=\"session\" currentSessionId=\"{EscapeFoxwarmAttribute(sessionId)}\" />",
         };
 
-    private static string EscapeFoxwarmAttribute(string value)
+    internal static string EscapeFoxwarmAttribute(string value)
     {
         var normalized = new string(
             value

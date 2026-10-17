@@ -400,6 +400,9 @@ public sealed class PersistentSessionAuthorityStore
         var result = item.OpenFields is null
             ? new JsonObject()
             : (JsonObject)item.OpenFields.DeepClone();
+        result.Remove("queuedInput");
+        if (item.QueuedInput)
+            result["queuedInput"] = true;
         result.Remove("trigger");
         if (!item.Trigger)
             result["trigger"] = false;
@@ -486,7 +489,7 @@ public sealed class PersistentSessionAuthorityStore
             && trigger.TryGetValue<bool>(out var shouldTrigger)
                 ? shouldTrigger
                 : true
-        );
+        ) { QueuedInput = value["queuedInput"] is JsonValue queued && queued.TryGetValue<bool>(out var observed) && observed };
     }
 
     private static void SetOptional(JsonObject value, string property, string? content)

@@ -67,6 +67,9 @@ public sealed class SessionTurnRunner
                 }
                 else
                 {
+                    if (entry.WithState(state => SessionWait.Current(state.Meta) is not null)
+                        && !registry.HasRunnableWork(entry))
+                        break;
                     if (!entry.WithState(state => state.Queue.Any(SessionCompactor.Ordinary)))
                         break;
                     if (registry.OnTurnStarting is not null)
@@ -160,6 +163,7 @@ public sealed class SessionTurnRunner
 
     private static async Task<bool> ResumeQueuedOverrideAsync(SessionEntry entry)
     {
+        entry.WithState(state => DeferredQueueInput.Mark(state.Queue));
         var resume = entry.WithState(state =>
         {
             if (state.Meta["runQueuedAfterStop"]?.GetValue<bool>() != true)
@@ -169,7 +173,10 @@ public sealed class SessionTurnRunner
             return true;
         });
         if (resume)
+        {
+            await entry.SaveLane.ClearWaitAsync().ConfigureAwait(false);
             await entry.SaveLane.SaveBestEffortAsync().ConfigureAwait(false);
+        }
         return resume;
     }
 }

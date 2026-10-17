@@ -43,8 +43,9 @@ public sealed class SessionControl
         var count = snapshot.Queue.Count(SessionCompactor.Ordinary);
         if (count == 0)
             return new(0, false, false);
-        if (!snapshot.Busy && registry.HasRunnableWork(entry))
+        if (!snapshot.Busy)
         {
+            await entry.SaveLane.ClearWaitAsync().ConfigureAwait(false);
             registry.Trigger(sessionId);
             return new(count, false, false);
         }

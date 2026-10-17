@@ -149,7 +149,7 @@ public sealed class SessionRegistry
         HasCompletedCompact?.Invoke(entry) == true
         || entry.WithState(state =>
             state.Queue.Any(item =>
-                (item.Type != QueueItemType.Intersession || item.Trigger)
+                item.Trigger
                 && (item.Type != QueueItemType.CompactCommit || item.CompactOwner is null)
             )
         );

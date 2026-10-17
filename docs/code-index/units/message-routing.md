@@ -10,7 +10,7 @@ Normalizes Main-local message ingress, handles commands, resolves exact Session 
 
 - `HandleMessageAsync` resolves presentation commands through catalog first, then obtains the exact `SessionOwner` through `SessionRuntime`.
 - `/fork`, `/session clear`, `/continue`, `/compact`, `/dequeue`, `/stop`, and `/stop compact` map to typed runtime/manager operations and preserve partial/committed error fields.
-- Ordinary text becomes `QueueItem.UserText`; parts are deep-cloned before `SubmitAndRunAsync` or owner-attached submission.
+- Ordinary channel input receives its source-time/hint wrapper through `SessionBoundary.ChannelInput` before `SubmitAndRunAsync` or owner-attached submission. Plain text uses one system part; structured parts are deep-cloned between opening/closing wrapper parts. Client identity is retained. Deferred queue consumption decorates this existing wrapper rather than creating a source wrapper while reconstructing a request.
 - Identity move and deletion commands delegate to `SessionManager` handlers; presentation commands use Main catalog/presentation boundaries.
 
 ## Contract and side effects
@@ -19,4 +19,4 @@ The router returns `202` for accepted ordinary input with a non-durable-completi
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Sessions/SessionTurnTests.cs`; `SessionPresentationTests.cs`; `SessionDeletionTests.cs`; `SessionIdentityMoveTests.cs`.
+`dotnet/Foxwarm.Tests/Sessions/SessionTurnTests.cs`; `SessionPresentationTests.cs`; `SessionDeletionTests.cs`; `SessionIdentityMoveTests.cs`; `DeferredInputTests.cs`; `dotnet/scripts/qualify-attempt-input.mjs` (actual HTTP ingress and delayed input).

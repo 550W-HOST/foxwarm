@@ -10,6 +10,7 @@ Defines stable Session/Agent identity and message shapes used by owner/runtime, 
 
 - `SessionIdentity` is the canonical `(sessionId, agent)` lifetime key; `SessionBoundary`/`SessionContinuation` carry fork/continuation relationships.
 - `CanonicalMessage`, `FunctionCallArguments`, and `ModelRetryNotice` define validated history/tool/retry records; `SessionObservation.cs` supplies message-page and targeted status observation helpers plus the `session` parent-update dispatch. Targeted status resolves aliases to the real hot owner, accounts for that owner's persistent memory snapshot, and does not admit unknown IDs.
+- `SessionBoundary.ChannelInput` creates the existing WebUI source wrapper at ingress, with source time and hint. Plain text uses one wrapper; structured input retains its parts between opening/closing parts. Deferred consumption decorates that source wrapper rather than manufacturing one later.
 - `SessionWait`, `SessionWaitTimeouts`, and `WaitLiveness` distinguish declared durable waits from transient in-flight states.
 - `AgentCatalog`/`AgentMemory` load Agent metadata, selected/conditional memory, manifests, and knowledge references; `SessionListQueries` builds query DTOs but does not own catalog rows.
 - `SessionPresentation`, `SessionGoal`, counters, and source normalization provide stable fields for manager/save-lane/UI operations.
