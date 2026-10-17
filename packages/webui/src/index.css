@@ -2468,6 +2468,15 @@ html .foxwarm-conversation-process .foxwarm-reasoning-card .foxwarm-reasoning-pr
   box-shadow: var(--foxwarm-panel-shadow);
 }
 .dark .mobile-glass-surface { background: color-mix(in srgb, var(--foxwarm-color-surface) 70%, transparent); }
+[data-mobile-session-home] {
+  --foxwarm-home-safe-area-bottom: var(--foxwarm-safe-area-bottom);
+}
+@supports (height: 100dvh) and (height: 100lvh) {
+  [data-mobile-session-home][data-mobile-standalone] {
+    /* Reserve only the safe-area band still inside the installed iOS viewport. */
+    --foxwarm-home-safe-area-bottom: max(0px, calc(var(--foxwarm-safe-area-bottom) + 100dvh - 100lvh));
+  }
+}
 .mobile-primary-nav {
   width: calc(100% - 24px);
   max-width: 440px;
@@ -2476,7 +2485,7 @@ html .foxwarm-conversation-process .foxwarm-reasoning-card .foxwarm-reasoning-pr
   z-index: 30;
   left: 12px;
   right: 12px;
-  bottom: calc(var(--foxwarm-safe-area-bottom) + 12px);
+  bottom: calc(var(--foxwarm-home-safe-area-bottom) + 12px);
   border-radius: calc(var(--foxwarm-radius-large-px) + 12px);
 }
 .mobile-primary-nav [role="tab"] { border-radius: calc(var(--foxwarm-radius-large-px) + 6px); }
