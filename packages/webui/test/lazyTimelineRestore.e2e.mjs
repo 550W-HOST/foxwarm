@@ -203,3 +203,35 @@ test('lazy prepend geometry supersedes an older workbench resize correction', as
     await browser.close()
   }
 })
+
+test('active recent-history expansion starts within 500px and keeps every native-scroll frame stable', async () => {
+  const { browser, page } = await openFixture('missing-meta')
+  try {
+    await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages').scrollTop > 500)
+    await page.evaluate(() => {
+      window.lazyNativeFrames = []
+      const container = document.querySelector('.foxwarm-chat-messages')
+      const start = event => {
+        if (!event.isTrusted || container.scrollTop >= 500 || container.scrollTop < 300) return
+        container.removeEventListener('scroll', start)
+        const sample = () => {
+          window.lazyNativeFrames.push({ distance: container.scrollHeight - container.scrollTop - container.clientHeight, height: container.scrollHeight })
+          if (window.lazyNativeFrames.length < 26) requestAnimationFrame(sample)
+        }
+        sample()
+      }
+      container.addEventListener('scroll', start)
+    })
+    const rect = await page.$eval('.foxwarm-chat-messages', container => {
+      const rect = container.getBoundingClientRect()
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, top: container.scrollTop }
+    })
+    await page.mouse.move(rect.x, rect.y)
+    await page.mouse.wheel({ deltaY: 400 - rect.top })
+    await page.waitForFunction(() => window.lazyNativeFrames.length === 26)
+    const frames = await page.evaluate(() => window.lazyNativeFrames)
+    assert.equal(await page.evaluate(() => document.body.textContent.includes('Scroll upward to load')), false)
+    assert.ok(frames.some(frame => frame.height > frames[0].height))
+    assert.ok(frames.every(frame => Math.abs(frame.distance - frames[0].distance) <= 2), JSON.stringify(frames))
+  } finally { await browser.close() }
+})
