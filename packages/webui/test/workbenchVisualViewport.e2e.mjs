@@ -10,11 +10,18 @@ let browser, server, url
 before(async () => {
   browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox'] })
   server = createServer(async (request, response) => {
-    const relative = new URL(request.url, 'http://fixture').pathname.slice('/ui/'.length)
+    const pathname = new URL(request.url, 'http://fixture').pathname
+    const recordedPwa = pathname.startsWith('/ui/recorded-pwa/')
+    const relative = pathname.slice((recordedPwa ? '/ui/recorded-pwa/' : '/ui/').length)
     try {
       const file = new URL(relative || 'index.html', new URL('../dist/', import.meta.url))
       response.setHeader('Content-Type', relative.endsWith('.js') ? 'text/javascript' : relative.endsWith('.css') ? 'text/css' : 'text/html')
-      response.end(await readFile(file))
+      const source = await readFile(file)
+      // Keep the real fixed viewport at 894px while modeling the independently
+      // recorded 956px large viewport unit. Do not invent a taller hit-test area.
+      response.end(recordedPwa && relative.endsWith('.css')
+        ? source.toString().replaceAll('100lvh', '956px').replaceAll('100dvh', '894px')
+        : source)
     } catch { response.writeHead(404); response.end() }
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -22,23 +29,34 @@ before(async () => {
 })
 after(async () => { await browser?.close(); await new Promise(resolve => server?.close(resolve)) })
 
-async function openMobileApp({ simulateViewport = true, width = 390, height = 844, themeId = 'foxwarm.default', colorMode = 'light', search = '', home = false } = {}) {
+async function openMobileApp({ simulateViewport = true, width = 390, height = 844, themeId = 'foxwarm.default', colorMode = 'light', search = '', home = false, standalone = false, recordedPwa = false } = {}) {
   const page = await browser.newPage()
   await page.setViewport({ width, height })
-  await page.evaluateOnNewDocument(({ simulateViewport, width, height, themeId, colorMode }) => {
+  await page.evaluateOnNewDocument(({ simulateViewport, width, height, themeId, colorMode, standalone }) => {
+    Object.defineProperty(navigator, 'standalone', { value: standalone })
     localStorage.setItem('foxwarm_theme_selection_v3', JSON.stringify({ version: 3, themeId, lightThemeId: themeId, darkThemeId: themeId, colorMode }))
     const tab = { id: 'chat:e2e-a', type: 'chat', sessionId: 'e2e-a', title: 'Viewport fixture' }
     localStorage.setItem('foxwarm_workbench_state_v4', JSON.stringify({ state: { version: 4, tabsById: { [tab.id]: tab }, root: { id: 'pane-main', kind: 'pane', tabIds: [tab.id], activeTabId: tab.id }, focusedPaneId: 'pane-main' }, version: 1 }))
     const session = { id: 'e2e-a', aliases: [], archived: false, parentSessionId: null, childTotal: 0, messageCount: 20, lastMessageTime: 1, busy: false, modelKey: 'fixture/model' }
     const messages = Array.from({ length: 20 }, (_, index) => ({ role: 'user', parts: [{ text: `Viewport row ${index}. ` + 'Loaded content without streaming. '.repeat(15) }], __meta: { seq: index + 1 } }))
     window.__viewportHistoryReads = 0
+    window.__viewportArchiveReads = 0
     const json = body => Promise.resolve(new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } }))
     window.fetch = input => {
-      const pathname = new URL(typeof input === 'string' ? input : input.url, location.href).pathname
+      const requestUrl = new URL(typeof input === 'string' ? input : input.url, location.href)
+      const pathname = requestUrl.pathname
       if (pathname.endsWith('/auth/session')) return json({ role: 'admin' })
       if (pathname.endsWith('/setup/status')) return json({ oobe: false, models: { exists: true, hasPlaceholderSecrets: false }, channels: [] })
       if (pathname.endsWith('/models')) return json({ models: [{ key: 'fixture/model', label: 'Fixture model', contextLimit: 128000 }] })
       if (pathname.endsWith('/session-list/sidebar')) return json({ version: 1, revision: 'r1', sessions: [session], nextCursor: null, children: [], focus: [], pathContext: [], forcedChildren: {} })
+      if (pathname.endsWith('/history/continuous')) {
+        window.__viewportArchiveReads++
+        const before = Number(requestUrl.searchParams.get('beforeSeq')) || Infinity
+        const after = Number(requestUrl.searchParams.get('afterSeq')) || 0
+        const candidates = messages.filter(message => message.__meta.seq < before && message.__meta.seq > after)
+        const rows = after ? candidates.slice(0, 100) : candidates.slice(-100)
+        return json({ messages: rows, firstSeq: rows[0]?.__meta.seq, lastSeq: rows.at(-1)?.__meta.seq, hasMore: candidates.length > 100, latestSeq: 20 })
+      }
       if (pathname.endsWith('/history')) { window.__viewportHistoryReads++; return json({ messages, queuedMessages: [], session, latestSeq: 20, historyVersion: 1, historyComplete: true }) }
       return json({ settings: {}, tasks: [], total: 0, omitted: 0, agents: [], nodes: [], terminals: [], commands: [], results: [] })
     }
@@ -66,10 +84,11 @@ async function openMobileApp({ simulateViewport = true, width = 390, height = 84
       viewport.dispatchEvent(new Event('resize'))
       viewport.dispatchEvent(new Event('scroll'))
     }
-  }, { simulateViewport, width, height, themeId, colorMode })
-  await page.goto(`${url}${search}#tab/chat:e2e-a`)
+  }, { simulateViewport, width, height, themeId, colorMode, standalone })
+  await page.goto(`${url}${recordedPwa ? 'recorded-pwa/' : ''}${search}#tab/chat:e2e-a`)
   await waitForWebUiReady(page)
   await page.waitForSelector('[role="textbox"]')
+  await page.waitForSelector('[data-continuous-history]')
   await page.waitForFunction(() => document.querySelectorAll('[data-chat-message-anchor-key]').length === 20)
   await page.evaluate(() => { window.__originalEditor = document.querySelector('[role="textbox"]'); window.__originalChat = document.querySelector('.foxwarm-chat-root') })
   if (home) {
@@ -93,7 +112,7 @@ async function measure(page) {
       form: rect('.foxwarm-chat-composer-form'),
       sameChat: window.__originalChat === document.querySelector('.foxwarm-chat-root'),
       sameEditor: window.__originalEditor === document.querySelector('[role="textbox"]'),
-      focused: document.activeElement === window.__originalEditor, reads: window.__viewportHistoryReads,
+      focused: document.activeElement === window.__originalEditor, reads: window.__viewportHistoryReads, archiveReads: window.__viewportArchiveReads,
     }
   })
 }
@@ -119,6 +138,7 @@ function assertAligned(state) {
   for (const key of ['left', 'top', 'width', 'height']) assert.ok(Math.abs(state.host[key] - state.slot[key]) < 1, `host ${key} must match slot: ${JSON.stringify(state)}`)
   assert.ok(state.sameChat && state.sameEditor && state.focused)
   assert.equal(state.reads, 1)
+  assert.equal(state.archiveReads, 1)
 }
 
 test('mobile App keeps its stable focused editor aligned during simulated keyboard resize and viewport pan', async () => {
@@ -225,18 +245,21 @@ test('independent mobile Chat leaves retain their own header safe-area spacing',
   } finally { await page.close() }
 })
 
-test('mobile primary navigation uses the visible browser boundary rather than a shorter home shell', async () => {
-  const page = await openMobileApp({ home: true, width: 440, height: 956, themeId: 'foxwarm.550a', colorMode: 'dark' })
+test('iOS standalone home reserves only the bottom safe area overlapping its real viewport', async () => {
+  const page = await openMobileApp({ home: true, width: 440, height: 894, colorMode: 'dark', standalone: true, recordedPwa: true })
   try {
     await page.evaluate(() => {
       document.documentElement.style.setProperty('--foxwarm-safe-area-top', '62px')
       document.documentElement.style.setProperty('--foxwarm-safe-area-bottom', '34px')
-      // Model a PWA-style discrepancy without changing the real fixed viewport.
-      window.__setViewport({ height: 894 })
       window.__homeNav = document.querySelector('.mobile-primary-nav')
     })
     for (const tab of ['sessions', 'tasks', 'search', 'setup', 'sessions']) {
-      await page.click(`#mobile-tab-${tab}`)
+      const point = await page.$eval(`#mobile-tab-${tab}`, element => {
+        const r = element.getBoundingClientRect()
+        return { x: r.left + r.width / 2, y: r.bottom - 2 }
+      })
+      // A real click near each control's lower edge must still activate it.
+      await page.mouse.click(point.x, point.y)
       await page.waitForFunction(tab => document.getElementById(`mobile-tab-${tab}`)?.getAttribute('aria-selected') === 'true' && document.getElementById(`mobile-panel-${tab}`)?.getBoundingClientRect().height > 0, {}, tab)
       const state = await page.evaluate(() => {
         const rect = element => { const r = element.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height, bottom: r.bottom } }
@@ -250,17 +273,22 @@ test('mobile primary navigation uses the visible browser boundary rather than a 
           newSession: rect(document.querySelector('button[aria-label="New session"]')),
           controlsHit: [...nav.querySelectorAll('button')].every(button => {
             const r = button.getBoundingClientRect()
-            const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
-            return hit === button || button.contains(hit)
+            return [[r.left + r.width / 2, r.top + 2], [r.left + r.width / 2, r.bottom - 2],
+              [r.left + 2, r.top + r.height / 2], [r.right - 2, r.top + r.height / 2]].every(([x, y]) => {
+              const hit = document.elementFromPoint(x, y)
+              return hit === button || button.contains(hit)
+            })
           }),
         }
       })
       await captureViewport(page, `home-${tab}`, state)
-      assert.equal(state.shell.bottom, 894, 'the shell still follows the reported visual viewport')
-      assert.equal(state.nav.bottom, state.viewportBottom - 34 - 12, JSON.stringify(state))
+      assert.equal(state.viewportBottom, 894)
+      assert.equal(state.shell.bottom, 894)
+      assert.equal(state.nav.bottom, state.viewportBottom - 12, JSON.stringify(state))
+      assert.ok(state.nav.bottom <= state.viewportBottom, 'the whole navigation stays inside the real hit-test boundary')
       assert.ok(state.sameNav && state.controlsHit && state.bottomHit)
       assert.ok(state.nav.left >= 12 && state.nav.left + state.nav.width <= 440 - 12)
-      if (tab === 'sessions') assert.equal(state.newSession.bottom, state.viewportBottom - 34 - 88)
+      if (tab === 'sessions') assert.equal(state.newSession.bottom, state.viewportBottom - 88)
     }
     await page.click('[data-session-id="e2e-a"]')
     await page.waitForSelector('[data-mobile-chat-header]')
@@ -273,6 +301,24 @@ test('mobile primary navigation uses the visible browser boundary rather than a 
     await page.click('.mobile-header-back')
     assert.ok(await page.$eval('.mobile-primary-nav', element => element === window.__homeNav))
   } finally { await page.close() }
+})
+
+test('ordinary browsers and full-height standalone home retain their original safe-area offsets', async () => {
+  for (const { standalone, recordedPwa, height } of [
+    { standalone: false, recordedPwa: true, height: 894 },
+    { standalone: true, recordedPwa: false, height: 956 },
+  ]) {
+    const page = await openMobileApp({ home: true, width: 440, height, standalone, recordedPwa })
+    try {
+      await page.evaluate(() => document.documentElement.style.setProperty('--foxwarm-safe-area-bottom', '34px'))
+      const bottoms = await page.evaluate(() => ({
+        nav: document.querySelector('.mobile-primary-nav').getBoundingClientRect().bottom,
+        newSession: document.querySelector('button[aria-label="New session"]').getBoundingClientRect().bottom,
+      }))
+      assert.equal(bottoms.nav, height - 34 - 12)
+      assert.equal(bottoms.newSession, height - 34 - 88)
+    } finally { await page.close() }
+  }
 })
 
 
