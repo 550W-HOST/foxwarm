@@ -196,7 +196,7 @@ async function buildFixtureBundle() {
     window.emitFixtureMessage = message => window.emitFixtureEvent({ type: 'message', message })
 
     const fixtureRoot = createRoot(document.getElementById('root'))
-    window.renderFixtureChats = (count = 1, generation = 0, sessionId = 'fixture/main') => fixtureRoot.render(React.createElement('div', { style: new URLSearchParams(location.search).has('nodePicker') ? { height: '100%' } : undefined },
+    window.renderFixtureChats = (count = 1, generation = 0, sessionId = 'fixture/main') => fixtureRoot.render(React.createElement('div', { style: (new URLSearchParams(location.search).has('nodePicker') || new URLSearchParams(location.search).has('pastedText')) ? { height: '100%' } : undefined },
       ...Array.from({ length: count }, (_, index) => React.createElement(Chat, {
         key: generation + '-' + index,
         sessionId, canonicalSessionId: sessionId, sessionDisplayName: 'Fixture',
@@ -246,7 +246,7 @@ before(async () => {
     const tallTimelineCss = request.url?.includes('restoreOldAnchor')
       ? '.foxwarm-chat-messages{height:300px!important;overflow:auto!important}[data-chat-message-anchor-key]{min-height:32px!important}'
       : ''
-    response.end(`<!doctype html><html><head>${request.url?.includes('nodePicker') ? `<style>${composerCss}</style>` : ''}<style>html,body,#root{width:100%;height:100%;margin:0}.foxwarm-chat-root{height:100%}.foxwarm-chat-composer-form-anchor{position:relative}.foxwarm-chat-composer-form-anchor>[data-slash-command-overlay="true"]{position:absolute;left:0;right:0;bottom:calc(100% + .5rem)}${tallTimelineCss}</style></head><body><div id="root"></div><script>${bundle}</script></body></html>`)
+    response.end(`<!doctype html><html><head>${(request.url?.includes('nodePicker') || request.url?.includes('pastedText')) ? `<style>${composerCss}</style>` : ''}<style>html,body,#root{width:100%;height:100%;margin:0}.foxwarm-chat-root{height:100%}.foxwarm-chat-composer-form-anchor{position:relative}.foxwarm-chat-composer-form-anchor>[data-slash-command-overlay="true"]{position:absolute;left:0;right:0;bottom:calc(100% + .5rem)}${tallTimelineCss}</style></head><body><div id="root"></div><script>${bundle}</script></body></html>`)
   })
   await fixtureStartupStage('http-listen', () => new Promise(resolve => server.listen(0, '127.0.0.1', resolve)))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -1616,7 +1616,7 @@ test('pasted text survives a direct user send and canonical history reload with 
         const view = await browser.newPage()
         try {
           await view.setViewport({ width: 1000, height: 720 })
-          await view.goto(fixtureUrl, { waitUntil: 'load' })
+          await view.goto(`${fixtureUrl}?pastedText=1`, { waitUntil: 'load' })
           await view.evaluate(() => window.resolveFixtureHistory(0, []))
           await view.waitForSelector('[role="textbox"][aria-label="Message"]')
           await view.evaluate(value => { window.fixtureShowUserMetadata = value; window.renderFixtureChats() }, showMetadata)
@@ -1639,7 +1639,7 @@ test('pasted text survives a direct user send and canonical history reload with 
           }, { pasted, attachment })
           await view.waitForFunction(hasAttachment => document.querySelectorAll('.foxwarm-composer-pasted-text-chip').length === 1
             && document.querySelectorAll('.foxwarm-composer-attachment-chip').length === (hasAttachment ? 1 : 0), {}, attachment !== 'none')
-          await view.click('button[aria-label="Send message"]')
+          await view.locator('button[aria-label="Send message"]').click()
           await view.waitForFunction(() => window.fixtureMessageBodies.length === 1)
           const sent = await view.evaluate(() => window.fixtureMessageBodies[0])
           const exactText = `<pasted-text>${pasted}</pasted-text>${attachment === 'none' ? '' : '<attachment-ref ref="attachment1" />'}`
@@ -1662,7 +1662,8 @@ test('pasted text survives a direct user send and canonical history reload with 
           assert.equal(await history.$eval('.foxwarm-pasted-text-block', chip => chip.textContent.includes('A'.repeat(72))), true)
           const rawText = await history.evaluate(row => row.textContent)
           assert.equal(rawText.includes('channelType="webui"'), showMetadata)
-          await history.click('.foxwarm-pasted-text-block')
+          await view.locator('[data-chat-message-anchor-key] .foxwarm-pasted-text-block').click()
+          await view.waitForSelector('textarea[aria-label="Full pasted text"]')
           assert.equal(await view.$eval('textarea[aria-label="Full pasted text"]', textarea => textarea.value), pasted)
         } finally {
           await view.close()

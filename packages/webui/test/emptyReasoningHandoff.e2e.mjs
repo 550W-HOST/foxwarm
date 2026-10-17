@@ -18,7 +18,7 @@ const retry = (seq, final = false) => ({ role: 'model', modelVisible: false, par
 const scenarios = {
   tool: [model([empty, call('first'), call('second')], 1, 42), result('first')],
   text: [model([empty, { text: 'The result is ready. This answer remains readable beside its reasoning information.' }], 2, 128)],
-  longText: [model([empty, { text: 'The opening line leaves room for reasoning information, while later lines return to the full reading width. '.repeat(3) }], 31, 128)],
+  longText: [model([empty, { text: 'The opening line leaves room for reasoning information, while later lines return to the full reading width. '.repeat(8) }], 31, 128)],
   shortText: [model([empty, { text: 'Ready.' }], 32, 128)],
   shortPlain: [model([{ text: 'Ready.' }], 33)],
   missing: [model([empty, { text: 'No token estimate.' }], 3)],
@@ -249,6 +249,7 @@ test('wide and narrow prose wraps a right float while original hover controls ov
     assert.equal(geometry.conversationActionsPosition, 'static')
     assert.ok(geometry.conversationActionsBelowBody)
     if (directory) await page.screenshot({ path: path.join(directory, `reasoning-float-${width}.png`), fullPage: true })
+    await page.$eval('#shortText .foxwarm-assistant-message-card', card => card.scrollIntoView({ block: 'center' }))
     const buttons = await page.$('#shortText .foxwarm-assistant-action-buttons')
     const before = await buttons.boundingBox()
     await page.hover('#shortText .foxwarm-assistant-message-card')

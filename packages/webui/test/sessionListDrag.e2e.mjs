@@ -50,7 +50,8 @@ async function getVisibleSessionRow(page) {
     const containerRect = container.getBoundingClientRect()
     return Array.from(document.querySelectorAll('[data-session-id]')).find((candidate) => {
       const rect = candidate.getBoundingClientRect()
-      return rect.top >= containerRect.top + 4 && rect.bottom <= containerRect.bottom - 4
+      const hit = document.elementFromPoint(rect.left + rect.width * 0.55, rect.top + rect.height / 2)
+      return rect.top >= containerRect.top + 4 && rect.bottom <= containerRect.bottom - 4 && candidate.contains(hit)
     }) || null
   })
   const row = handle.asElement()

@@ -119,7 +119,7 @@ const hoverState = () => page.evaluate(() => {
     outer: { hovered: outer.matches(':hover'), line: getComputedStyle(outer.querySelector(':scope > .foxwarm-thread-line-button > .foxwarm-thread-line-stroke')).opacity },
     nested: nested.map(card => ({ hovered: card.matches(':hover'), actions: getComputedStyle(card.querySelector('.foxwarm-tool-header .foxwarm-tool-call-header > .foxwarm-tool-action-buttons')).opacity, line: getComputedStyle(card.querySelector(':scope > .foxwarm-thread-line-button > .foxwarm-thread-line-stroke')).opacity })),
     ctxHovered: ctx.matches(':hover'),
-    assistants: assistants.map(card => ({ hovered: card.matches(':hover'), actions: getComputedStyle(card.querySelector(':scope > .foxwarm-assistant-action-buttons')).opacity })),
+    assistants: assistants.map(card => ({ hovered: card.matches(':hover'), actions: card.querySelector(':scope > .foxwarm-assistant-action-buttons') ? getComputedStyle(card.querySelector(':scope > .foxwarm-assistant-action-buttons')).opacity : null })),
     specials: specials.map(block => ({ hovered: block.matches(':hover'), focused: block.matches(':focus-within'), controls: getComputedStyle(block.querySelector(':scope > [data-special-block-controls]')).opacity })),
     image: { hovered: image?.matches(':hover'), tint: overlay ? getComputedStyle(overlay).backgroundColor : null },
   }
@@ -225,6 +225,7 @@ test('narrow chevron keeps own status headers and does not light non-hovered sib
   await moveTo('#nested .foxwarm-tool-group-header')
   const outer = await hoverState()
   assert.deepEqual(outer.nested.map(card => card.actions), ['0', '0'])
+  assert.ok(outer.assistants.every(card => card.actions === null), 'root-mobile presentation omits assistant action rows')
   await moveTo('#nested .foxwarm-tool-card.foxwarm-tool-tone-neutral:not(.foxwarm-tool-group-card) .foxwarm-tool-header')
   const inner = await hoverState()
   assert.deepEqual(inner.nested.map(card => card.actions), ['1', '0'])

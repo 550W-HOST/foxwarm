@@ -33,7 +33,7 @@ Provides a unified HTTP server with Express, WebSocket support, and instance-tok
 | `start()` | ~175 | Starts the HTTP server |
 | `stop()` | ~185 | Gracefully shuts down the HTTP server |
 | `setHttpServer(instance)` | ~200 | Sets or clears the module-level singleton |
-| `withServer(fn)` (test) | ~5–13 | Test helper that creates, starts, and tears down a server |
+| `withServer(fn)` (test) | ~5–16 | Starts an OS-assigned ephemeral listener, uses its actual address, and tears it down after the assertion |
 
 ## Dependencies
 

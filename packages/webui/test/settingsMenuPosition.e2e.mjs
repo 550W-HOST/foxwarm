@@ -293,19 +293,19 @@ test('sidebar Settings lives in a fixed footer and opens upward on desktop and t
   }
 })
 
-test('mobile Session-list footer settings menu opens above its trigger inside the viewport', async () => {
+test('mobile Session-list workspace tools menu stays inside the viewport and returns focus', async () => {
   await page.setViewport({ width: 320, height: 480, isMobile: true, hasTouch: true })
   await page.goto(fixtureUrl + '?mobile-list', { waitUntil: 'load' })
-  const trigger = '[data-sidebar-footer] button[aria-label="Open UI settings"]'
-  await page.waitForSelector(trigger)
-  assert.deepEqual(await page.$$eval('[data-sidebar-footer] button', buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Search history', 'Open UI settings'])
-  await page.click(trigger)
-  await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-global-ui-settings-menu]')).visibility === 'visible')
-  const geometry = await page.evaluate(() => {
-    const menu = document.querySelector('[data-global-ui-settings-menu]').getBoundingClientRect()
-    const trigger = document.querySelector('[data-sidebar-footer] button[aria-label="Open UI settings"]').getBoundingClientRect()
-    return { menuTop: menu.top, menuBottom: menu.bottom, menuLeft: menu.left, menuRight: menu.right, triggerTop: trigger.top, width: innerWidth }
+  const trigger = 'button[aria-label="Workspace tools"]'
+  await page.locator(trigger).click()
+  await page.waitForSelector('[role="menu"]', { visible: true })
+  const geometry = await page.$eval('[role="menu"]', menu => {
+    const rect = menu.getBoundingClientRect()
+    return { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right, width: innerWidth, height: innerHeight }
   })
-  assert.ok(geometry.menuTop >= 7.5 && geometry.menuBottom < geometry.triggerTop, JSON.stringify(geometry))
-  assert.ok(geometry.menuLeft >= 7.5 && geometry.menuRight <= geometry.width - 7.5, JSON.stringify(geometry))
+  assert.ok(geometry.top >= 0 && geometry.bottom <= geometry.height, JSON.stringify(geometry))
+  assert.ok(geometry.left >= 0 && geometry.right <= geometry.width, JSON.stringify(geometry))
+  await page.keyboard.press('Escape')
+  await page.waitForSelector('[role="menu"]', { hidden: true })
+  assert.equal(await page.$eval(trigger, button => document.activeElement === button), true)
 })
