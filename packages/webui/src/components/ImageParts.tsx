@@ -2,12 +2,15 @@ import { createContext, memo, useContext, useState } from 'react'
 import type { MessagePart } from './chatShared'
 import { makeApiUrl } from '../config'
 import ImagePreviewDialog, { isSafeImagePreviewMime } from './ImagePreviewDialog'
+import { requestImageDownloadUrl, triggerBrowserDownload } from './downloadShared'
 
 export const WebUiImageSessionContext = createContext<string | null>(null)
 
 export function ImageItem({ part, label, imageClassName = 'max-w-[300px] max-h-[200px]' }: { part: MessagePart; label: string; imageClassName?: string }) {
   const [failed, setFailed] = useState(false)
   const [preview, setPreview] = useState(false)
+  const [downloadPending, setDownloadPending] = useState(false)
+  const [downloadError, setDownloadError] = useState('')
   const webUiSessionId = useContext(WebUiImageSessionContext)
   const mimeType = part.inlineDataRef?.mimeType
     || part.inlineData?.mimeType
@@ -26,10 +29,20 @@ export function ImageItem({ part, label, imageClassName = 'max-w-[300px] max-h-[
     return <div className="text-xs text-fw-text-muted">Image unavailable</div>
   }
   if (!isSafeImagePreviewMime(mimeType)) {
+    const download = async () => {
+      if (downloadPending) return
+      setDownloadPending(true); setDownloadError('')
+      try { triggerBrowserDownload(await requestImageDownloadUrl(src, label), label) }
+      catch (err) { setDownloadError(err instanceof Error ? err.message : 'Download unavailable') }
+      finally { setDownloadPending(false) }
+    }
     return (
-      <a className="text-xs text-fw-accent dark:text-fw-accent underline" href={src} download={label} rel="noopener noreferrer">
-        Download image attachment
-      </a>
+      <span>
+        <button type="button" className="text-xs text-fw-accent dark:text-fw-accent underline" disabled={downloadPending} onClick={() => { void download() }}>
+          Download image attachment
+        </button>
+        {downloadError && <span role="alert" className="ml-2 text-xs text-fw-warning">{downloadError}</span>}
+      </span>
     )
   }
 

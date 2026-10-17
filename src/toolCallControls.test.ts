@@ -1,9 +1,11 @@
+import type { ToolBatchResult } from './toolExecutor';
+import { executeTools } from './toolExecutor';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
-import { executeTools } from './llm';
+
 import * as sessionManager from './sessionManager';
 import { call_tool } from './tools';
 import { buildToolDefinitions } from './tools/definitions';
@@ -34,8 +36,8 @@ function recall(review = 'I recalled the applicable communication rules, the use
   return `${INTER_AGENT_HANDOFF_RECALL_PREFIX}\n${review}`;
 }
 
-function responses(message: any): any[] {
-  return message.parts.filter((part: any) => part.functionResponse).map((part: any) => part.functionResponse.response);
+function responses(message: ToolBatchResult): any[] {
+  return message.message.parts.filter((part: any) => part.functionResponse).map((part: any) => part.functionResponse.response);
 }
 
 async function makeSession(id: string, cwd?: string): Promise<Session> {
@@ -296,11 +298,11 @@ test('a canceled handoff bypasses confirmation checks and still produces a paire
   try {
     const call: FunctionCall = { id: 'send-canceled', name: 'send_to_session', args: { sessionId: 'missing', message: 'bad', __cancelTool: true } };
     const result = await executeTools([call], { sessionId, session }, session);
-    assert.equal(result.parts.length, 1);
-    assert.equal(result.parts[0].functionResponse?.tool_use_id, call.id);
-    assert.deepEqual(result.parts[0].functionResponse?.response, { canceled: true, message: 'Tool call canceled before execution.' });
-    assert.equal((result as any).__toolLoopControl, undefined);
-    assert.equal((result as any).__toolPostAction, undefined);
+    assert.equal(result.message.parts.length, 1);
+    assert.equal(result.message.parts[0].functionResponse?.tool_use_id, call.id);
+    assert.deepEqual(result.message.parts[0].functionResponse?.response, { canceled: true, message: 'Tool call canceled before execution.' });
+    assert.equal(result.control, undefined);
+    assert.equal(result.postActions, undefined);
   } finally {
     await sessionManager.deleteSession(sessionId).catch(() => false);
   }

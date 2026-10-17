@@ -1,3 +1,4 @@
+import { executeTools } from './toolExecutor';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
@@ -6,7 +7,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import * as sessionManager from './sessionManager';
 import * as tools from './tools';
-import { executeTools, resolveSessionToolDefinitions } from './llm';
+import { resolveSessionToolDefinitions } from './llm';
 import { tool_search_tools } from './tools/unifiedSearch';
 import { resolveDirectTool } from './tools/resolvedTools';
 import { getAgentDir } from './config';
@@ -32,7 +33,7 @@ async function owner() {
 function context(session: any) { return { sessionId: session.id, session }; }
 async function model(session: any, name: string, args: any) {
   const message = await executeTools([{ id: id(), name, args }], context(session), session);
-  return message.parts[0].functionResponse!.response;
+  return message.message.parts[0].functionResponse!.response;
 }
 async function attach(providers: NodeProviderRegistry, expectedSourceSessionId?: string) {
   const registry = new RpcServiceRegistry();

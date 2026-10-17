@@ -1,9 +1,10 @@
+import { executeTools } from '../toolExecutor';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as mcpClient from '../mcpClient';
 import { nodesManager } from '../nodes/manager';
 import * as sessionManager from '../sessionManager';
-import { executeTools } from '../llm';
+
 import * as nodeExecution from '../nodeExecution';
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './placement';
 import * as tools from '../tools';
@@ -409,7 +410,7 @@ test('direct and unified builtin dispatch keep session-owner tools local under a
       name: 'set_session_compact_threshold',
       args: { thresholdTokens: 1234 },
     }], { sessionId, session }, session);
-    assert.equal(direct.parts[0].functionResponse?.response.error, undefined);
+    assert.equal(direct.message.parts[0].functionResponse?.response.error, undefined);
     assert.equal((await sessionManager.getSession(sessionId)).compactThresholdTokens, 1234);
 
     const unified: any = await call_tool({

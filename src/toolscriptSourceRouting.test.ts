@@ -1,3 +1,4 @@
+import { executeTools } from './toolExecutor';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
@@ -7,7 +8,7 @@ import * as sessionManager from './sessionManager';
 import * as sessionRuntime from './sessionRuntime';
 import * as checks from './isolatedCheck';
 import * as tools from './tools';
-import { executeTools } from './llm';
+
 import { buildToolAuthorizationRequest, parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from './toolAuthorization';
 import { getToolScriptRunForTests, shutdownToolScriptRuntime } from './toolscript';
 import * as nodeExecution from './nodeExecution';
@@ -27,7 +28,7 @@ import { LocalSessionTurnHost } from './sessionTurnRunner';
 function id(): string { return `source_routing_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`; }
 async function model(session: any, name: string, args: any) {
   const message = await executeTools([{ id: id(), name, args }], { sessionId: session.id, session }, session);
-  return message.parts.find(part => part.functionResponse)!.functionResponse!.response;
+  return message.message.parts.find(part => part.functionResponse)!.functionResponse!.response;
 }
 
 test.afterEach(async () => {
@@ -165,7 +166,7 @@ test('Worker other-CLI source preserves authoritative no-cwd through actual sele
       { id: id(), name: 'node', args: { action: 'select', nodeId: other.id } },
       { id: id(), name: 'run_script', args: { node: nodeId, filePath: 'source.py' } },
     ], { sessionId: main.id }, owner, { currentSessionEffects: effects });
-    const results = modern.parts.filter(part => part.functionResponse).map(part => part.functionResponse!.response);
+    const results = modern.message.parts.filter(part => part.functionResponse).map(part => part.functionResponse!.response);
     assert.equal(results[1].result, 'NODE_DEFAULT_SOURCE');
     assert.equal(owner.currentNode, other.id); assert.equal(owner.cwd, undefined);
     assert.equal(main.currentNode, nodeId); assert.equal(main.cwd, oldCwd, 'Main projection is legitimately stale while the Worker owns the Session');
@@ -176,7 +177,7 @@ test('Worker other-CLI source preserves authoritative no-cwd through actual sele
     legacy = true; register();
     const callStart = calls.length; const responseStart = responses.length;
     const oldPeer = await executeTools([{ id: id(), name: 'run_script', args: { node: nodeId, filePath: 'source.py' } }], { sessionId: main.id }, owner, { currentSessionEffects: effects });
-    assert.equal(oldPeer.parts.find(part => part.functionResponse)!.functionResponse!.response.result, 'NODE_DEFAULT_SOURCE');
+    assert.equal(oldPeer.message.parts.find(part => part.functionResponse)!.functionResponse!.response.result, 'NODE_DEFAULT_SOURCE');
     const oldCalls = calls.slice(callStart);
     assert.equal(oldCalls[0].type, 'tool_call'); assert.equal(oldCalls[0].args.filePath, 'source.py');
     assert.equal(Object.prototype.hasOwnProperty.call(oldCalls[0], 'sessionCwd'), false);

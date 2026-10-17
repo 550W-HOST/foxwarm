@@ -1,6 +1,7 @@
+import { checkPathAccess } from '../utils/agentPathAccess';
 import { promises as fsPromises } from 'fs';
 import * as sessionManager from '../sessionManager';
-import { checkPathAccess, checkToolPermissionForSession } from '../isolatedCheck';
+import { checkToolPermissionForSession } from '../isolatedCheck';
 import { TOOL_AUTH_POLICY_LIMITS } from '../toolAuthorization';
 import { configInstaller, ConfigCandidateError, type ConfigTarget } from '../configInstaller';
 import { resolveAgentPath } from '../utils/pathResolve';

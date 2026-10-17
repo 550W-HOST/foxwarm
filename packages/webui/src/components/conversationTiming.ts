@@ -1,7 +1,7 @@
 import type { Message } from './chatShared'
 import { getLlmErrorMessageDetails, parseFoxwarmMetadataLine } from './chatShared'
 import { isCommittedHistoryMessage } from '../chatHistoryState'
-import { isCompactCompletionMaintenanceMessage, isSessionTurnIncomplete } from '../sessionContinuation'
+import { isCompactCompletionMaintenanceMessage, isSessionTurnIncomplete } from '../../../shared/src/sessionContinuation'
 import type { SessionRuntimeState } from '../sessionRuntimeState'
 import { formatCompactDuration } from '../usageTiming'
 import type { TimelineRowView } from './timelineRows'

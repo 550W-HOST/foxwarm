@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Download, X, ZoomIn, ZoomOut } from 'lucide-react'
-import { triggerBrowserDownload } from './downloadShared'
+import { requestImageDownloadUrl, triggerBrowserDownload } from './downloadShared'
 
 const raster = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 export const isSafeImagePreviewMime = (mimeType: unknown) => typeof mimeType === 'string' && raster.has(mimeType.toLowerCase())
@@ -63,11 +63,8 @@ function Preview({ src, mimeType, title, onClose, onDownload, downloadPending, d
     requestRef.current = controller
     setPending(true); setError('')
     try {
-      if (!/^(?:blob:|data:)/i.test(src)) {
-        const response = await fetch(src, { method: 'HEAD', credentials: 'same-origin', signal: controller.signal })
-        if (!response.ok || !isSafeImagePreviewMime((response.headers.get('content-type') || '').split(';')[0].trim())) throw new Error(response.status === 404 ? 'Image unavailable' : 'Download unavailable')
-      }
-      if (!controller.signal.aborted) triggerBrowserDownload(src, title)
+      const downloadUrl = /^(?:blob:|data:)/i.test(src) ? src : await requestImageDownloadUrl(src, title, controller.signal)
+      if (!controller.signal.aborted) triggerBrowserDownload(downloadUrl, title)
     } catch (reason) {
       if (!controller.signal.aborted) setError(reason instanceof Error && reason.message === 'Image unavailable' ? 'Image unavailable' : 'Download unavailable')
     } finally {

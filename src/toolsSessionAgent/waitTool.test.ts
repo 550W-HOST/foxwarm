@@ -1,3 +1,4 @@
+import * as toolExecutor from '../toolExecutor';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
@@ -261,7 +262,7 @@ test('stop during tool execution does not launch auto compact from stale usage',
   const sessionId = makeSessionId('wait_stop_skips_stale_usage_compact');
   const router = new MessageRouter();
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   const originalArchiveIndex = (vector as any).scheduleSessionArchiveIndex;
   let mainTurnCallCount = 0;
   let compactJobCallCount = 0;
@@ -308,10 +309,12 @@ test('stop during tool execution does not launch auto compact from stale usage',
       };
     };
 
-    (llm as any).executeTools = async () => {
+    (toolExecutor as any).executeTools = async () => {
       await sessionManager.requestSessionStop(sessionId);
       return {
-        parts: [{ functionResponse: { tool_use_id: 'stop-during-tool-call', name: 'read', response: { output: 'stopped' } } }],
+        message: {
+          role: 'tool', parts: [{ functionResponse: { tool_use_id: 'stop-during-tool-call', name: 'read', response: { output: 'stopped' } } }]
+        }
       };
     };
 
@@ -328,7 +331,7 @@ test('stop during tool execution does not launch auto compact from stale usage',
     assert.equal(finalSession.queue.some(item => item.type === 'compact-commit'), false);
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
     (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;
     await cleanupSession(sessionId);
   }

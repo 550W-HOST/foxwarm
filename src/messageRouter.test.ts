@@ -1,3 +1,4 @@
+import * as toolExecutor from './toolExecutor';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import axios from 'axios';
@@ -113,11 +114,15 @@ test('local channel inputs commit queue hints to canonical history at continuati
     assert.doesNotMatch(JSON.stringify(queuedParts.get(id)), /queueInputHint=/, 'enqueue does not alter source hints');
   };
   const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: 'red' } }).png().toBuffer();
-  t.mock.method(llm, 'executeTools', async () => {
+  t.mock.method(toolExecutor, 'executeTools', async () => {
     await send('tool', [{ text: 'tool-time correction' }, { inlineData: { mimeType: 'image/png', data: png.toString('base64') } },
       { text: '<foxwarm-file name="notes.txt" node="master" path="notes.txt" mime="text/plain" />' }]);
     rememberQueued('tool');
-    return { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'queued-hint-tool', name: 'session', response: { output: 'ok' } } }] };
+    return {
+      message: {
+        role: 'tool', parts: [{ functionResponse: { tool_use_id: 'queued-hint-tool', name: 'session', response: { output: 'ok' } } }]
+      }
+    };
   });
   const bodies: any[] = [];
   t.mock.method(axios, 'post', async (_url: string, body: any) => {
@@ -1123,7 +1128,7 @@ test('retrySession enters the router directly and runs one ordinary turn without
   });
 
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   let chatCallCount = 0;
   const seenParts: Array<MessagePart[] | null> = [];
   const seenRequests: Message[][] = [];
@@ -1144,14 +1149,15 @@ test('retrySession enters the router directly and runs one ordinary turn without
     await appendMockChatMessages(activeSession, parts, [{ text: 'retried response' }]);
     return { text: 'retried response', allParts: [{ text: 'retried response' }] };
   };
-  (llm as any).executeTools = async () => {
+  (toolExecutor as any).executeTools = async () => {
     await sessionManager.enqueueSessionItem(sessionId, {
       type: 'user',
       parts: [{ text: 'queued during retry tool' }],
     });
     return {
-      role: 'tool',
-      parts: [{ functionResponse: { tool_use_id: 'retry-tool', name: 'read', response: { output: 'ok' } } }],
+      message: {
+        role: 'tool', parts: [{ functionResponse: { tool_use_id: 'retry-tool', name: 'read', response: { output: 'ok' } } }]
+      }
     };
   };
 
@@ -1185,7 +1191,7 @@ test('retrySession enters the router directly and runs one ordinary turn without
     assert.equal(session.history.some(message => message.role === 'model' && message.parts.some(part => part.text === 'retried response')), true);
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
     sessionManager.setSessionRetryCallback(() => {});
     sessionManager.clearActiveSessionRuntimeState(session.id);
     await sessionManager.deleteSession(session.id).catch(() => {});
@@ -1489,7 +1495,7 @@ test('stop signal commits queued work to history without running it', async () =
   session.meta = { lastMessageTime: Date.now() };
 
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   const seenParts: any[] = [];
 
   (llm as any).chat = async (parts: any) => {
@@ -1500,14 +1506,18 @@ test('stop signal commits queued work to history without running it', async () =
     }
     return { text: 'queued response', allParts: [{ text: 'queued response' }] };
   };
-  (llm as any).executeTools = async () => {
+  (toolExecutor as any).executeTools = async () => {
     await sessionManager.enqueueSessionItem(sessionId, {
       type: 'user',
       clientMessageId: 'queued-after-stop-client-id',
       parts: [{ text: 'queued after stop' }],
     });
     await sessionManager.requestSessionStop(sessionId);
-    return { parts: [{ functionResponse: { tool_use_id: 'stop-tool', name: 'read', response: { output: 'stopped' } } }] };
+    return {
+      message: {
+        role: 'tool', parts: [{ functionResponse: { tool_use_id: 'stop-tool', name: 'read', response: { output: 'stopped' } } }]
+      }
+    };
   };
 
   try {
@@ -1529,7 +1539,7 @@ test('stop signal commits queued work to history without running it', async () =
     assert.equal(userTextOccurrences(session, 'queued after stop'), 0);
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
     sessionManager.clearActiveSessionRuntimeState(session.id);
     await sessionManager.deleteSession(session.id).catch(() => {});
   }
@@ -1547,7 +1557,7 @@ test('stop commits content and applies a ready compact commit', async () => {
   session.meta = { lastMessageTime: Date.now() };
 
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
   const originalHasCompletedCompactJob = sessionManager.hasCompletedCompactJob;
   (sessionManager as any).hasCompletedCompactJob = () => session.queue.some(item => item.type === 'compact-commit');
@@ -1559,7 +1569,7 @@ test('stop commits content and applies a ready compact commit', async () => {
     const toolCall = { id: 'stop-mixed-tool', name: 'read', args: { filePath: 'README.md' } };
     return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
   };
-  (llm as any).executeTools = async () => {
+  (toolExecutor as any).executeTools = async () => {
     await sessionManager.enqueueSessionItem(sessionId, {
       type: 'user',
       clientMessageId: 'mixed-user-client-id',
@@ -1575,7 +1585,11 @@ test('stop commits content and applies a ready compact commit', async () => {
     });
     await sessionManager.enqueueSessionItem(sessionId, { type: 'compact-commit' });
     await sessionManager.requestSessionStop(sessionId);
-    return { parts: [{ functionResponse: { tool_use_id: 'stop-mixed-tool', name: 'read', response: { output: 'stopped' } } }] };
+    return {
+      message: {
+        role: 'tool', parts: [{ functionResponse: { tool_use_id: 'stop-mixed-tool', name: 'read', response: { output: 'stopped' } } }]
+      }
+    };
   };
   (sessionManager as any).applyCompletedCompactJob = async () => {
     compactCommitCalls += 1;
@@ -1605,7 +1619,7 @@ test('stop commits content and applies a ready compact commit', async () => {
     assert.equal(queuedHistory[0]?.__meta?.clientMessageId, 'mixed-user-client-id');
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
     (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
     (sessionManager as any).hasCompletedCompactJob = originalHasCompletedCompactJob;
     sessionManager.clearActiveSessionRuntimeState(session.id);
@@ -1625,7 +1639,7 @@ test('stop commits content that arrives while stop history is being finalized', 
   session.meta = { lastMessageTime: Date.now() };
 
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   const turnEffects = router.turnRunner.host.currentSessionEffects;
   const originalAppendQueuedMessages = turnEffects.appendQueuedMessages;
   let chatCallCount = 0;
@@ -1636,10 +1650,14 @@ test('stop commits content that arrives while stop history is being finalized', 
     const toolCall = { id: 'stop-finalizing-tool', name: 'read', args: { filePath: 'README.md' } };
     return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
   };
-  (llm as any).executeTools = async () => {
+  (toolExecutor as any).executeTools = async () => {
     await sessionManager.enqueueSessionItem(sessionId, { type: 'user', parts: [{ text: 'queued before finalization' }] });
     await sessionManager.requestSessionStop(sessionId);
-    return { parts: [{ functionResponse: { tool_use_id: 'stop-finalizing-tool', name: 'read', response: { output: 'stopped' } } }] };
+    return {
+      message: {
+        role: 'tool', parts: [{ functionResponse: { tool_use_id: 'stop-finalizing-tool', name: 'read', response: { output: 'stopped' } } }]
+      }
+    };
   };
   turnEffects.appendQueuedMessages = async (owner: Session, messages: Message[]) => {
     await originalAppendQueuedMessages(owner, messages);
@@ -1671,7 +1689,7 @@ test('stop commits content that arrives while stop history is being finalized', 
       ]);
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
     turnEffects.appendQueuedMessages = originalAppendQueuedMessages;
     sessionManager.clearActiveSessionRuntimeState(session.id);
     await sessionManager.deleteSession(session.id).catch(() => {});
@@ -1686,7 +1704,7 @@ test('input after the stop boundary is handed to a fresh processor instead of lo
   await sessionManager.saveSession(sessionId);
 
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   const originalFinalizeStoppedSession = router.turnRunner.finalizeStoppedSession.bind(router.turnRunner);
   const processedAfterBoundary = new Promise<void>((resolve) => {
     (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
@@ -1701,9 +1719,13 @@ test('input after the stop boundary is handed to a fresh processor instead of lo
       return { text: 'processed after boundary', allParts: [{ text: 'processed after boundary' }] };
     };
   });
-  (llm as any).executeTools = async () => {
+  (toolExecutor as any).executeTools = async () => {
     await sessionManager.requestSessionStop(sessionId);
-    return { parts: [{ functionResponse: { tool_use_id: 'stop-boundary-tool', name: 'read', response: { output: 'stopped' } } }] };
+    return {
+      message: {
+        role: 'tool', parts: [{ functionResponse: { tool_use_id: 'stop-boundary-tool', name: 'read', response: { output: 'stopped' } } }]
+      }
+    };
   };
   router.turnRunner.finalizeStoppedSession = async (...args: any[]) => {
     const committed = await originalFinalizeStoppedSession(...args);
@@ -1723,7 +1745,7 @@ test('input after the stop boundary is handed to a fresh processor instead of lo
     assert.equal(session.queue.length, 0);
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
     sessionManager.clearActiveSessionRuntimeState(session.id);
     await sessionManager.deleteSession(session.id).catch(() => {});
   }
@@ -1741,7 +1763,7 @@ test('dequeue applies ready compaction before resuming the whole ordinary batch'
   session.meta = { lastMessageTime: Date.now() };
 
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   const originalApply = sessionManager.applyCompletedCompactJob;
   const originalHasCompleted = sessionManager.hasCompletedCompactJob;
   let compactCalls = 0;
@@ -1763,7 +1785,7 @@ test('dequeue applies ready compaction before resuming the whole ordinary batch'
     }
     return { text: 'queued response', allParts: [{ text: 'queued response' }] };
   };
-  (llm as any).executeTools = async () => {
+  (toolExecutor as any).executeTools = async () => {
     await sessionManager.enqueueSessionItem(sessionId, {
       type: 'user', source: { platform: 'wework', channelId: 'wework-a', channelUserId: 'chat-a', conversationId: 'chat-a' },
       parts: [{ text: 'queued for dequeue from WeWork' }],
@@ -1774,7 +1796,11 @@ test('dequeue applies ready compaction before resuming the whole ordinary batch'
       parts: [{ text: 'queued for dequeue from QQ' }],
     });
     await sessionManager.requestSessionDequeue(sessionId);
-    return { parts: [{ functionResponse: { tool_use_id: 'dequeue-tool', name: 'read', response: { output: 'dequeued' } } }] };
+    return {
+      message: {
+        role: 'tool', parts: [{ functionResponse: { tool_use_id: 'dequeue-tool', name: 'read', response: { output: 'dequeued' } } }]
+      }
+    };
   };
 
   try {
@@ -1790,7 +1816,7 @@ test('dequeue applies ready compaction before resuming the whole ordinary batch'
     assert.equal(session.busy, false);
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
     (sessionManager as any).applyCompletedCompactJob = originalApply;
     (sessionManager as any).hasCompletedCompactJob = originalHasCompleted;
     sessionManager.clearActiveSessionRuntimeState(session.id);
@@ -1802,7 +1828,7 @@ test('MessageRouter does not replay dispatched parts after an async compact comm
   const router = new MessageRouter() as any;
   const session = await createRouterQueueTestSession('async_compact_commit_no_replay');
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
   const originalHasCompletedCompactJob = sessionManager.hasCompletedCompactJob;
   (sessionManager as any).hasCompletedCompactJob = () => session.queue.some(item => item.type === 'compact-commit');
@@ -1825,13 +1851,17 @@ test('MessageRouter does not replay dispatched parts after an async compact comm
     await appendMockChatMessages(activeSession, parts, [{ text: 'continued after compact commit' }]);
     return { text: 'continued after compact commit', allParts: [{ text: 'continued after compact commit' }] };
   };
-  (llm as any).executeTools = async () => {
+  (toolExecutor as any).executeTools = async () => {
     await sessionManager.enqueueSessionItem(session.id, { type: 'user', parts: [{ text: 'tool-time input before marker' }] });
     await sessionManager.enqueueSessionItem(session.id, { type: 'compact-commit' });
     await sessionManager.enqueueSessionItem(session.id, { type: 'background', parts: [{ text: 'tool-time input after marker' }] });
     toolEntered();
     await release;
-    return { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'compact-race-tool', name: 'read', response: { output: 'ok' } } }] };
+    return {
+      message: {
+        role: 'tool', parts: [{ functionResponse: { tool_use_id: 'compact-race-tool', name: 'read', response: { output: 'ok' } } }]
+      }
+    };
   };
   (sessionManager as any).applyCompletedCompactJob = async () => {
     compactCalls += 1;
@@ -1859,7 +1889,7 @@ test('MessageRouter does not replay dispatched parts after an async compact comm
   } finally {
     releaseTool();
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
     (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
     (sessionManager as any).hasCompletedCompactJob = originalHasCompletedCompactJob;
     sessionManager.clearActiveSessionRuntimeState(session.id);
@@ -1871,7 +1901,7 @@ test('MessageRouter keeps a queued user item behind compact commit separate from
   const router = new MessageRouter() as any;
   const session = await createRouterQueueTestSession('async_compact_commit_queued_input');
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
   const originalHasCompletedCompactJob = sessionManager.hasCompletedCompactJob;
   (sessionManager as any).hasCompletedCompactJob = () => session.queue.some(item => item.type === 'compact-commit');
@@ -1887,10 +1917,14 @@ test('MessageRouter keeps a queued user item behind compact commit separate from
     await appendMockChatMessages(activeSession, parts, [{ text: 'Q handled' }]);
     return { text: 'Q handled', allParts: [{ text: 'Q handled' }] };
   };
-  (llm as any).executeTools = async () => {
+  (toolExecutor as any).executeTools = async () => {
     await sessionManager.enqueueSessionItem(session.id, { type: 'compact-commit' });
     await sessionManager.enqueueSessionItem(session.id, { type: 'user', parts: [{ text: 'Q' }] });
-    return { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'compact-barrier-tool', name: 'read', response: { output: 'ok' } } }] };
+    return {
+      message: {
+        role: 'tool', parts: [{ functionResponse: { tool_use_id: 'compact-barrier-tool', name: 'read', response: { output: 'ok' } } }]
+      }
+    };
   };
   (sessionManager as any).applyCompletedCompactJob = async () => {
     await sessionManager.appendSessionMessage(session, { role: 'user', parts: [{ system: 'compact commit applied' }] });
@@ -1909,7 +1943,7 @@ test('MessageRouter keeps a queued user item behind compact commit separate from
     assert.equal(session.queue.length, 0);
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
     (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
     (sessionManager as any).hasCompletedCompactJob = originalHasCompletedCompactJob;
     sessionManager.clearActiveSessionRuntimeState(session.id);
@@ -1921,7 +1955,7 @@ test('MessageRouter in-tool queue consumption preserves each queued input as sep
   const router = new MessageRouter() as any;
   const session = await createRouterQueueTestSession('in_tool_queue_message_boundaries');
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   const seenRequests: Message[][] = [];
   let chatCount = 0;
 
@@ -1937,13 +1971,17 @@ test('MessageRouter in-tool queue consumption preserves each queued input as sep
     await appendMockChatMessages(activeSession, parts, [{ text: 'handled queued follow-ups' }]);
     return { text: 'handled queued follow-ups', allParts: [{ text: 'handled queued follow-ups' }] };
   };
-  (llm as any).executeTools = async () => {
+  (toolExecutor as any).executeTools = async () => {
     await sessionManager.enqueueSessionItem(session.id, { type: 'user', parts: [{ text: 'queued user follow-up' }] });
     await sessionManager.enqueueSessionItem(session.id, {
       type: 'intersession',
       message: { role: 'user', parts: [{ system: 'queued intersession follow-up' }] },
     });
-    return { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'queue-boundary-tool', name: 'read', response: { output: 'ok' } } }] };
+    return {
+      message: {
+        role: 'tool', parts: [{ functionResponse: { tool_use_id: 'queue-boundary-tool', name: 'read', response: { output: 'ok' } } }]
+      }
+    };
   };
 
   try {
@@ -1959,7 +1997,7 @@ test('MessageRouter in-tool queue consumption preserves each queued input as sep
     assert.equal(session.queue.length, 0);
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
     sessionManager.clearActiveSessionRuntimeState(session.id);
     await sessionManager.deleteSession(session.id).catch(() => {});
   }
@@ -1969,7 +2007,7 @@ test('MessageRouter preserves an already-consumed follow-up once when compact co
   const router = new MessageRouter() as any;
   const session = await createRouterQueueTestSession('async_compact_commit_suffix');
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
   const originalHasCompletedCompactJob = sessionManager.hasCompletedCompactJob;
   (sessionManager as any).hasCompletedCompactJob = () => session.queue.some(item => item.type === 'compact-commit');
@@ -1986,14 +2024,18 @@ test('MessageRouter preserves an already-consumed follow-up once when compact co
     return { text: 'suffix preserved', allParts: [{ text: 'suffix preserved' }] };
   };
   let toolRuns = 0;
-  (llm as any).executeTools = async () => {
+  (toolExecutor as any).executeTools = async () => {
     toolRuns += 1;
     if (toolRuns === 1) {
       await sessionManager.enqueueSessionItem(session.id, { type: 'user', parts: [{ text: 'Q' }] });
     } else {
       await sessionManager.enqueueSessionItem(session.id, { type: 'compact-commit' });
     }
-    return { role: 'tool', parts: [{ functionResponse: { tool_use_id: `suffix-tool-${toolRuns}`, name: 'read', response: { output: 'ok' } } }] };
+    return {
+      message: {
+        role: 'tool', parts: [{ functionResponse: { tool_use_id: `suffix-tool-${toolRuns}`, name: 'read', response: { output: 'ok' } } }]
+      }
+    };
   };
   (sessionManager as any).applyCompletedCompactJob = async () => {
     await sessionManager.appendSessionMessage(session, { role: 'user', parts: [{ system: 'compact commit applied' }] });
@@ -2013,7 +2055,7 @@ test('MessageRouter preserves an already-consumed follow-up once when compact co
     assert.equal(session.queue.length, 0);
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
     (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
     (sessionManager as any).hasCompletedCompactJob = originalHasCompletedCompactJob;
     sessionManager.clearActiveSessionRuntimeState(session.id);
@@ -2110,7 +2152,7 @@ test('MessageRouter exposes running-tool runtime state while tool batch is execu
   session.queue = [{ type: 'user', parts: [{ text: 'use tool' }] }];
   session.meta = { lastMessageTime: Date.now() };
   const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
+  const originalExecuteTools = toolExecutor.executeTools;
   let chatCount = 0;
   let releaseTools!: () => void;
   const toolGate = new Promise<void>(resolve => { releaseTools = resolve; });
@@ -2123,12 +2165,13 @@ test('MessageRouter exposes running-tool runtime state while tool batch is execu
     }
     return { text: 'done' };
   };
-  (llm as any).executeTools = async () => {
+  (toolExecutor as any).executeTools = async () => {
     toolsStarted = true;
     await toolGate;
     return {
-      role: 'tool',
-      parts: [{ functionResponse: { tool_use_id: 'call-read', name: 'read', response: { output: 'ok' } } }],
+      message: {
+        role: 'tool', parts: [{ functionResponse: { tool_use_id: 'call-read', name: 'read', response: { output: 'ok' } } }]
+      }
     };
   };
 
@@ -2149,7 +2192,7 @@ test('MessageRouter exposes running-tool runtime state while tool batch is execu
     assert.equal(sessionManager.buildSessionRuntimeState(session).state, 'idle');
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
+    (toolExecutor as any).executeTools = originalExecuteTools;
     sessionManager.clearActiveSessionRuntimeState(session.id);
     await sessionManager.deleteSession(session.id).catch(() => {});
   }

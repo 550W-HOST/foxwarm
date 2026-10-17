@@ -1,3 +1,5 @@
+import { refreshSessionSnapshotForSession } from './session/agentSettings';
+import type { CurrentSessionTurnEffects } from './session/currentSessionEffects';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { buildBtwDisplayResult, cloneSessionForBtw, ensureBtwPromptCacheKey, executeBtwRequest } from './btw';
@@ -5,10 +7,9 @@ import { logger } from './common';
 import { STATE_DIR, getAgentDir } from './config';
 import { createExecRuntime, type ExecRuntime } from './execManager';
 import { initLlmRequestJournal } from './llmRequestJournal';
-import type { CurrentSessionTurnEffects } from './llm';
 import { RpcError } from './rpc';
 import { initArchiveStore } from './session/archiveStore';
-import { refreshSessionSnapshotForSession } from './session/agentMetadata';
+
 import { cancelSessionCompaction, clearSession, compactToolMessages as compactSessionToolMessages, deleteMessages, forceIndexSession, getEffectiveCompactThresholdTokens, getUsageTotalTokens, processSessionCompactionRequest, tryAutomaticToolResponsePruning, waitForCompactPlanningSettle, type CompactCancellationResult, type SessionHistoryDeps } from './session/history';
 import { getManagedSessionState } from './session/managedState';
 import { captureSessionSemanticState, restoreSessionSemanticState } from './session/metadataStore';

@@ -104,7 +104,7 @@ test('runtime, Setup diagnostics, OOBE, and writes share the data-directory mode
     const fs = require('fs');
     const config = require('./lib/config.js');
     const setup = require('./lib/setupConfig.js');
-    const webui = require('./lib/channels/webuiChannel.js');
+    const webui = require('./lib/channels/webuiSetup.js');
     const before = webui.getModelsSetupDiagnostics();
     const fallback = config.getModelsConfigReadPath();
     const yaml = 'default: local\\nproviders:\\n  local:\\n    providerType: openai-completions\\n    models: [model-a]\\n';

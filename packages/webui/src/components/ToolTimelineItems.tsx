@@ -30,7 +30,7 @@ import { shouldUseStreamingToolPlaceholder } from '../../../shared/src/webuiTool
 import { formatToolScriptExecutionResponse } from '../../../shared/src/toolResponseFormatting'
 import ImageParts from './ImageParts'
 import { SyntaxHighlightedText } from './SyntaxHighlightedText'
-import { buildPathDownloadUrl, triggerBrowserDownload } from './downloadShared'
+import { buildPathDownloadUrl, requestPathDownloadUrl, triggerBrowserDownload } from './downloadShared'
 import DiffPreview, { getUnifiedDiffSearchText } from './DiffPreview'
 import { ExecCommandText, ExecOutputText } from './ToolExecText'
 import ThreadLineButton from './ThreadLineButton'
@@ -116,20 +116,37 @@ const getSendFileDownload = (call: FunctionCall | undefined, resp: FunctionRespo
 }
 
 const ToolDownloadButton = memo(function ToolDownloadButton({ url, fileName }: { url: string; fileName?: string }) {
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState('')
+  const download = async () => {
+    if (pending) return
+    setPending(true); setError('')
+    try {
+      triggerBrowserDownload(await requestPathDownloadUrl(url), fileName)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Download unavailable')
+    } finally {
+      setPending(false)
+    }
+  }
   return (
-    <button
-      type="button"
-      data-search-exclude
-      onClick={(e) => {
-        e.stopPropagation()
-        triggerBrowserDownload(url)
-      }}
-      className="inline-flex items-center gap-1 rounded-lg border border-fw-accent-border bg-fw-accent-surface px-2 py-1 text-xs font-medium text-fw-accent hover:bg-fw-accent-surface dark:border-fw-accent-border dark:bg-fw-accent-surface-strong/20 dark:text-fw-accent dark:hover:bg-fw-accent-surface-strong/30"
-      title={fileName ? `Download ${fileName}` : 'Download file'}
-    >
-      <Download size={12} />
-      <span>{fileName ? `Download ${fileName}` : 'Download file'}</span>
-    </button>
+    <span>
+      <button
+        type="button"
+        data-search-exclude
+        disabled={pending}
+        onClick={(e) => {
+          e.stopPropagation()
+          void download()
+        }}
+        className="inline-flex items-center gap-1 rounded-lg border border-fw-accent-border bg-fw-accent-surface px-2 py-1 text-xs font-medium text-fw-accent hover:bg-fw-accent-surface dark:border-fw-accent-border dark:bg-fw-accent-surface-strong/20 dark:text-fw-accent dark:hover:bg-fw-accent-surface-strong/30"
+        title={fileName ? `Download ${fileName}` : 'Download file'}
+      >
+        <Download size={12} />
+        <span>{fileName ? `Download ${fileName}` : 'Download file'}</span>
+      </button>
+      {error && <span role="alert" className="ml-2 text-xs text-fw-warning">{error}</span>}
+    </span>
   )
 })
 

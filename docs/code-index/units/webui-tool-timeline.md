@@ -25,7 +25,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 |----------|------|-------------|
 | `formatToolResponseText(resp)` | ~1 | Delegates to shared WebUI response formatter for the full response payload |
 | `getSendFileDownload(call, resp)` | ~20 | Extracts download URL/filename for send_file tool responses |
-| `ToolDownloadButton({ url, fileName })` | ~15 | Renders a styled download button that triggers browser download |
+| `ToolDownloadButton({ url, fileName })` | ~35 | Requests an action-local signed URL before native download, with pending/error state |
 | `ToolGroupSummaryCard({ items, onExpand, expanded?, children? })` | ~15 | Neutral Tool-style group card with a persistent counted-tag header (`exec ×4`; failures separate, most frequent first), shared header/line toggle, and nested member body when expanded |
 | `getToolDisplayLabel(call)` | ~1 | Formats a human-readable label for a tool call |
 | `getToolPairStatus(responses, imageParts)` | ~7 | Derives tone (success/error/neutral) for a call-response pair |
@@ -65,7 +65,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 - `../../../shared/src/webuiToolRendering` — pure helpers for streaming partial-tool guards and session-link text parsing tests
 - `./ImageParts` — renders image message parts
 - `./SyntaxHighlightedText` — code syntax highlighting component
-- `./downloadShared` — `buildPathDownloadUrl`, `triggerBrowserDownload`
+- `./downloadShared` — `buildPathDownloadUrl`, `requestPathDownloadUrl`, `triggerBrowserDownload`
 - `./DiffPreview` — renders diff/patch previews
 - `./ThreadLineButton` — collapsible thread line toggle
 
@@ -105,7 +105,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 - `ToolScriptProgressContext` is provided by a parent component and consumed here to show real-time tool script progress
 - Relies on `chatShared` for the core message/part type system and formatting utilities shared across the chat UI
 - `DiffPreview` and `SyntaxHighlightedText` handle rich code rendering within tool bodies
-- Download functionality connects to the authenticated `/download?path=...` route used by WebUI `send_file` results
+- Download functionality requests an administrator-authorized signature before handing the `/download?path=...` resource to the native browser; errors remain next to the tool action. Canonical authority: [D-webui-download-capabilities](../modules/webui.md#d-webui-download-capabilities).
 
 ## Design Decisions
 

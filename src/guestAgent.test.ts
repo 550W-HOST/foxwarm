@@ -1,3 +1,4 @@
+import * as promptSnapshot from './session/promptSnapshot';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
@@ -54,7 +55,7 @@ async function cleanupAgent(agentName: string): Promise<void> {
 test('guestAgent single mode binds new unauthorized conversation to a new session under the target agent', async () => {
   await sessionManager.loadSessions();
   const originalChat = llm.chat;
-  const originalMemory = llm.buildSessionSystemPromptSnapshot;
+  const originalMemory = promptSnapshot.buildSessionSystemPromptSnapshot;
   const originalArchiveIndex = (vector as any).scheduleSessionArchiveIndex;
   const originalConfig = readAppConfigFile();
   const router = new MessageRouter();
@@ -62,7 +63,7 @@ test('guestAgent single mode binds new unauthorized conversation to a new sessio
   const createdSessions: string[] = [];
 
   (vector as any).scheduleSessionArchiveIndex = async () => 0;
-  (llm as any).buildSessionSystemPromptSnapshot = async () => '';
+  (promptSnapshot as any).buildSessionSystemPromptSnapshot = async () => '';
 
   try {
     const baseAgent = makeId('guestbase');
@@ -125,7 +126,7 @@ test('guestAgent single mode binds new unauthorized conversation to a new sessio
     assert.equal(callCount, 2);
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).buildSessionSystemPromptSnapshot = originalMemory;
+    (promptSnapshot as any).buildSessionSystemPromptSnapshot = originalMemory;
     (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;
     writeAppConfigFile(originalConfig);
     for (const sessionId of createdSessions) {
@@ -189,7 +190,7 @@ test('concurrent guest provisioning for one unbound conversation creates one ses
 test('guestAgent inherited mode creates a derived agent main session with inherit + isolation', async () => {
   await sessionManager.loadSessions();
   const originalChat = llm.chat;
-  const originalMemory = llm.buildSessionSystemPromptSnapshot;
+  const originalMemory = promptSnapshot.buildSessionSystemPromptSnapshot;
   const originalArchiveIndex = (vector as any).scheduleSessionArchiveIndex;
   const originalConfig = readAppConfigFile();
   const router = new MessageRouter();
@@ -197,7 +198,7 @@ test('guestAgent inherited mode creates a derived agent main session with inheri
   const createdSessions: string[] = [];
 
   (vector as any).scheduleSessionArchiveIndex = async () => 0;
-  (llm as any).buildSessionSystemPromptSnapshot = async () => '';
+  (promptSnapshot as any).buildSessionSystemPromptSnapshot = async () => '';
 
   try {
     const baseAgent = makeId('guestinherit');
@@ -254,7 +255,7 @@ test('guestAgent inherited mode creates a derived agent main session with inheri
     assert.equal(derivedCallCount, 1);
   } finally {
     (llm as any).chat = originalChat;
-    (llm as any).buildSessionSystemPromptSnapshot = originalMemory;
+    (promptSnapshot as any).buildSessionSystemPromptSnapshot = originalMemory;
     (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;
     writeAppConfigFile(originalConfig);
     for (const sessionId of createdSessions) {
@@ -269,7 +270,7 @@ test('guestAgent inherited mode creates a derived agent main session with inheri
 test('guestAgent inherited mode retries when the first generated main id is archived', async () => {
   await sessionManager.loadSessions();
   const originalChat = llm.chat;
-  const originalMemory = llm.buildSessionSystemPromptSnapshot;
+  const originalMemory = promptSnapshot.buildSessionSystemPromptSnapshot;
   const originalArchiveIndex = (vector as any).scheduleSessionArchiveIndex;
   const originalConfig = readAppConfigFile();
   const originalRandom = Math.random;
@@ -278,7 +279,7 @@ test('guestAgent inherited mode retries when the first generated main id is arch
   const createdSessions: string[] = [];
 
   (vector as any).scheduleSessionArchiveIndex = async () => 0;
-  (llm as any).buildSessionSystemPromptSnapshot = async () => '';
+  (promptSnapshot as any).buildSessionSystemPromptSnapshot = async () => '';
 
   try {
     const baseAgent = makeId('guest_retry_base');
@@ -334,7 +335,7 @@ test('guestAgent inherited mode retries when the first generated main id is arch
   } finally {
     Math.random = originalRandom;
     (llm as any).chat = originalChat;
-    (llm as any).buildSessionSystemPromptSnapshot = originalMemory;
+    (promptSnapshot as any).buildSessionSystemPromptSnapshot = originalMemory;
     (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;
     writeAppConfigFile(originalConfig);
     for (const sessionId of createdSessions) {

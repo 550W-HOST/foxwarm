@@ -5,11 +5,12 @@ import zlib from 'node:zlib';
 import { HttpServer } from './httpServer';
 
 async function withServer(fn: (server: HttpServer, baseUrl: string) => Promise<void>) {
-  const port = 32180 + Math.floor(Math.random() * 1000);
-  const server = new HttpServer(port, 'secret-token');
+  const server = new HttpServer(0, 'secret-token');
   await server.start();
   try {
-    await fn(server, `http://127.0.0.1:${port}`);
+    const address = server['httpServer'].address();
+    assert.ok(address && typeof address !== 'string');
+    await fn(server, `http://127.0.0.1:${address.port}`);
   } finally {
     await server.stop();
   }

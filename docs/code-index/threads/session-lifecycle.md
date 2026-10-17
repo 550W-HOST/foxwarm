@@ -94,6 +94,7 @@ Canonical contract: [context compaction and recall](./context-compaction-and-rec
 - [session context](../modules/session-context.md)
 - [message routing](../modules/message-routing.md)
 - [LLM](../modules/llm.md)
+- [src-session-prompt](../units/src-session-prompt.md)
 - [src-session-manager](../units/src-session-manager.md)
 - [src-session-deletion](../units/src-session-deletion.md)
 - [src-session-agent-ops](../units/src-session-agent-ops.md)

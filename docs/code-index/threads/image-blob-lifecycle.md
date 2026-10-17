@@ -48,7 +48,7 @@ Retained archives may outlive live session deletion, so the first release perfor
 
 [2026-07-29] Durable session history, queued work, managed inboxes, and archive records use canonical content-addressed image blob references, not inline base64. Base64 remains permitted only as transient channel/tool/node/MCP ingress and as server-side provider-request hydration. Hydration clones messages at the provider boundary and request diagnostics must redact hydrated image payloads.
 
-WebUI history, message SSE, CTX-BLOCK expansion, and explicit Debug output never return image base64 or legacy filesystem paths. They expose authenticated deployment-relative blob URLs. Only PNG, JPEG, GIF, and WebP are rendered directly; active or otherwise unsafe formats are download-only/unavailable and served with `nosniff`.
+WebUI history, message SSE, CTX-BLOCK expansion, and explicit Debug output never return image base64 or legacy filesystem paths. They expose authenticated deployment-relative blob URLs. Explicit browser download actions obtain short-lived resource-scoped signatures without changing those canonical display URLs; global issuance stays administrator-only and Session issuance reuses existing scope/reference checks. See [D-webui-download-capabilities](../modules/webui.md#d-webui-download-capabilities). Only PNG, JPEG, GIF, and WebP are rendered directly; active or otherwise unsafe formats are download-only/unavailable and served with `nosniff`.
 
 Compatibility is read-old/write-new and lazy per accessed live session, not a full startup migration. A materialization failure keeps old bytes intact. Automatic garbage collection is deferred because retained archives outlive live session deletion; v1 retains blobs for archive lifetime.
 

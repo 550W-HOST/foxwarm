@@ -1,7 +1,8 @@
+import { refreshSessionSnapshotForSession } from '../session/agentSettings';
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
 import { MODEL_EFFORTS, type ModelEffort } from '../config';
-import { refreshSessionSnapshotForSession } from '../session/agentMetadata';
+
 import { applyNormalizedSessionModelEffortSettings, normalizeProspectiveSessionModelEffortSettings } from '../session/modelEffortSettings';
 import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
 import type { Session } from '../types';

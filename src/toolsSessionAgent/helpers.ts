@@ -1,3 +1,4 @@
+import { checkPathAccess } from '../utils/agentPathAccess';
 import { randomUUID } from 'node:crypto';
 import type { FileDeliveryArtifact } from '../../packages/shared/dist/fileDelivery';
 import path from 'path';
@@ -6,7 +7,7 @@ import * as timers from '../timers';
 import type { ChannelFile } from '../channel';
 import { getAgentDir, MODEL_EFFORTS, resolveModelConfig, type ModelEffort } from '../config';
 import { nodesManager } from '../nodes/manager';
-import { checkPathAccess } from '../isolatedCheck';
+
 import { expandHomePath, resolveAgentPath } from '../utils/pathResolve';
 
 export { expandHomePath, resolveAgentPath };

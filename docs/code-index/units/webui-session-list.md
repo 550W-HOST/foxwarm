@@ -122,7 +122,7 @@ Renders a hierarchical, interactive session list for the Foxwarm web UI. `Sessio
 - `CollapsedSidebar` remains presentational. Its desktop-only `CollapsedSidebarContainer` owns the separate 20-root Default-mode bounded controller, so expanding the sidebar or entering any mobile shell unmounts and fully cleans up that controller while leaving the main App controller intact.
 - Communicates with the backend via `fetch` to `API_BASE_PATH` endpoints (`/sessions/:id`, `/sessions/:id/fork`, `/sessions/:id/promote`)
 - Drag data (`type: 'session'`) integrates with a `@dnd-kit` `DndContext` higher in the component tree for session reparenting
-- Expanded, collapsed, and mobile footers provide [direct Tasks navigation](./webui-tasks.md#d-webui-tasks-navigation) alongside History and settings.
+- Expanded/collapsed desktop footers provide [direct Tasks navigation](./webui-tasks.md#d-webui-tasks-navigation) alongside History and settings. Mobile uses the independently retained primary pages defined by the [mobile shell contract](../threads/webui-mobile-shell.md).
 - `onSelectSession` and `onKeepSession` callbacks connect to the app's routing/tab management
 - Normal App and embedded sidebar roots each provide one bounded controller plus one idle-notification observer. Current/open/watch exact IDs stay subscribed even off-page; off-page absence is not deletion, while exact lookup/SSE deletion explicitly removes the row.
 - `onCreateTerminalTab` / `onCreateSession` connect to the app's tab system

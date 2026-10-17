@@ -215,7 +215,7 @@ for (const browserSpec of browsers) {
       assert.equal(await page.$eval('#attachments', node => node.textContent.includes('before') && node.textContent.includes('middle') && node.textContent.includes('after')), true)
       assert.equal(await page.$eval('#attachments', node => node.textContent.includes('<attachment-ref ref="unresolved" />')), true)
       assert.equal(await page.$$eval('#attachments img', nodes => nodes.length), 2)
-      assert.equal(await page.$eval('#attachments [data-attachment-ref="attachment3"] a', link => link.textContent), 'Download image attachment')
+      assert.equal(await page.$eval('#attachments [data-attachment-ref="attachment3"] button', button => button.textContent), 'Download image attachment')
       assert.match(await page.$eval('#attachments [data-attachment-ref="attachment4"]', node => node.textContent), /Image unavailable/)
       const imagePageUrl=page.url()
       await page.click('#attachments [data-attachment-ref="attachment1"] button[aria-label="Open same_name.png"]')

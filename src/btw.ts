@@ -1,3 +1,4 @@
+import * as promptCache from './session/promptCache';
 import { randomUUID } from 'crypto';
 import { logger } from './common';
 import * as llm from './llm';
@@ -113,7 +114,7 @@ export type BtwExecutionResult = {
 
 export function ensureBtwPromptCacheKey(session: Session): boolean {
   const previousPromptCacheKey = session.promptCacheKey;
-  llm.ensurePromptCacheKey(session);
+  promptCache.ensurePromptCacheKey(session);
   return session.promptCacheKey !== previousPromptCacheKey;
 }
 

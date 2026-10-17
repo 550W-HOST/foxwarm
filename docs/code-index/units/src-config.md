@@ -29,6 +29,7 @@ Owns application/model configuration types, path resolution, YAML readers/writer
 - `ModelDefaults`, `ProviderConfigEntry`, `ProviderConfigValue`, `ProviderModelListItem`, `ModelConfigEntry` (including canonical concrete identity, first-class model effort capabilities/default, and optional OpenAI Responses `webSearch` and hosted `imageGeneration` settings), `ModelsConfig`, and virtual routing config types/guards. A raw provider value may also be a non-empty string alias; raw `webSearch` and `imageGeneration` provider/model values accept a boolean or an options object, and resolved concrete entries contain normalized effort, web-search, and image-generation forms.
 - `MODEL_EFFORTS`, `ModelEffort`, `DEFAULT_MODEL_EFFORT`, `normalizeModelEffortConfig`, and `getConcreteModelEffortConfig`.
 - `expandModelsConfig`, `loadModelsConfig`, `loadModelsConfigFromObject`, `resolveModelConfig`.
+- `getModelIdForMetadata(entry, fallbackKey)` — shared concrete identity for snapshot generation and provider attribution, preferring the canonical config key before provider/model and fallback values.
 - `normalizePositiveIntegerSetting` — strict positive-integer reader shared by startup legacy settings and canonical model/default validation; Setup uses the same check for the two legacy numeric settings.
 
 ### Setup configuration

@@ -1,7 +1,7 @@
 # Unit: WebUI realtime transport
 
 Files: packages/webui/src/realtime.ts, packages/webui/test/realtimeTransport.test.mjs, src/channels/webuiRealtime.ts, src/channels/webuiRealtime.test.ts
-Secondary files: packages/webui/src/boundedSessionList.ts, packages/webui/src/components/ArchitectureView.tsx, packages/webui/src/components/Chat.tsx, src/channels/webuiChannel.ts
+Secondary files: packages/webui/src/boundedSessionList.ts, packages/webui/src/components/ArchitectureView.tsx, packages/webui/src/components/Chat.tsx, packages/webui/src/components/useChatConversationSync.ts, src/channels/webuiChannel.ts
 
 ## Purpose
 
@@ -18,7 +18,7 @@ Owns the authenticated page-scoped WebUI WebSocket and the server-side multiplex
 - fences stale socket generations and reconnect timers, uses bounded exponential backoff with jitter, and suspends cleanly across `pagehide`/`pageshow`;
 - derives `/api/webui/stream` through `makeWebSocketUrl`, preserving deployment prefixes and WS/WSS selection.
 
-`subscriptions-accepted` is the registration boundary: the server has installed subscriptions but has not yet emitted the asynchronous initial snapshots. Chat begins history at this point, preserving the register-before-history/live-event ordering contract. `subscriptions-applied` marks completion of initial snapshots and buffered events but does not re-bootstrap existing logical subscribers.
+`subscriptions-accepted` is the registration boundary: the server has installed subscriptions but has not yet emitted the asynchronous initial snapshots. The mounted Chat synchronization hook begins history at this point, preserving the register-before-history/live-event ordering contract. `subscriptions-applied` marks completion of initial snapshots and buffered events but does not re-bootstrap existing logical subscribers.
 
 The browser sends its first subscription snapshot after receiving the server's `connected` frame, not merely on WebSocket open: WebUI identity authentication can still be asynchronous after the HTTP upgrade, so sending on open could arrive before the server installs its message handler.
 

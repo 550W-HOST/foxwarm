@@ -1,5 +1,9 @@
 /** Canonical per-session queue and turn state machine. */
 
+import type { CurrentSessionTurnEffects, CurrentSessionEffects } from './session/currentSessionEffects';
+import { createDefaultCurrentSessionEffects } from './session/defaultCurrentSessionEffects';
+import * as toolExecutor from './toolExecutor';
+
 import { randomUUID } from 'crypto';
 import { logger } from './common';
 import { ChannelContext, getChannelId, getConversationId } from './channel';
@@ -10,7 +14,8 @@ import { maybeRefreshStaleSessionSnapshot } from './session/snapshotRefresh';
 import { createTaskRequestContext } from './session/taskContext';
 import { isSessionArchiveCommitError } from './session/archive';
 import { isSessionAuthorityPostCommitError } from './session/stateFile';
-import { isSessionTurnIncomplete, SessionContinuationUnavailableError } from './sessionContinuation';
+import { isSessionTurnIncomplete } from '../packages/shared/dist/sessionContinuation';
+import { SessionContinuationUnavailableError } from './sessionContinuation';
 import { buildSessionRuntimeState } from './sessionRuntimeState';
 import { deliverGeneratedImagesToAttachments, snapshotQueueSource, type SessionTurnFinalKind } from './sessionTurnDelivery';
 import { applyChildHandoffQueueItem, resolveChildHandoffBoundary, shouldQueueChildHandoffReminder } from './session/childHandoffState';
@@ -106,7 +111,7 @@ export interface SessionTurnHost {
   clearActiveSessionRuntimeState: typeof sessionManager.clearActiveSessionRuntimeState;
   refreshSessionSnapshot: typeof sessionManager.refreshSessionSnapshot;
   chat: typeof llm.chat;
-  executeTools: typeof llm.executeTools;
+  executeTools: typeof toolExecutor.executeTools;
   sendTyping(sourceCtx: ChannelContext): Promise<void>;
   hasBroadcast(session: Session): boolean;
   broadcast(session: Session, text: string, options?: any): void;
@@ -125,20 +130,20 @@ export type LocalSessionTurnHostOverrides = Partial<Pick<SessionTurnHost,
 
 /** Existing in-process effects, exposed without changing their behavior. */
 export class LocalSessionTurnHost implements SessionTurnHost {
-  private readonly currentSessionEffects: llm.CurrentSessionTurnEffects;
+  private readonly currentSessionEffects: CurrentSessionTurnEffects;
   readonly deliverCommittedFinal?: SessionTurnHost['deliverCommittedFinal'];
   readonly deliverIntermediateText?: SessionTurnHost['deliverIntermediateText'];
   readonly deliverGeneratedImages?: SessionTurnHost['deliverGeneratedImages'];
   readonly ingestPendingQueue?: SessionTurnHost['ingestPendingQueue'];
 
   constructor(
-    effects?: llm.CurrentSessionEffects,
+    effects?: CurrentSessionEffects,
     private readonly ownerSession?: Session,
     private readonly overrides: LocalSessionTurnHostOverrides = {},
   ) {
-    const defaults = llm.createDefaultCurrentSessionEffects();
+    const defaults = createDefaultCurrentSessionEffects();
     effects ||= defaults;
-    const turnEffects = effects as Partial<llm.CurrentSessionTurnEffects>;
+    const turnEffects = effects as Partial<CurrentSessionTurnEffects>;
     const bind = <T extends (...args: any[]) => any>(method: T): T => method.bind(effects) as T;
     const notifyHistoryUpdate = turnEffects.notifyHistoryUpdate ? bind(turnEffects.notifyHistoryUpdate) : defaults.notifyHistoryUpdate;
     this.currentSessionEffects = {
@@ -252,10 +257,10 @@ export class LocalSessionTurnHost implements SessionTurnHost {
       });
     };
   }
-  get executeTools(): typeof llm.executeTools {
+  get executeTools(): typeof toolExecutor.executeTools {
     return (functionCalls, toolContext, session, options) => {
       this.assertOwnerSession(session);
-      return llm.executeTools(functionCalls, toolContext, session, {
+      return toolExecutor.executeTools(functionCalls, toolContext, session, {
         ...options,
         currentSessionEffects: options?.currentSessionEffects || this.currentSessionEffects,
       });
@@ -1205,10 +1210,11 @@ export class SessionTurnRunner {
           },
         };
         this.assertCanContinue();
-        const toolResultMsg = await this.host.executeTools(turnToolCalls, toolContext, session);
+        const toolResult = await this.host.executeTools(turnToolCalls, toolContext, session);
+        const toolResultMsg = toolResult.message;
 
-        const successfulSendTargets = (toolResultMsg as any).__toolPostAction?.successfulSendToSessionTargets;
-        const completedLinkedTask = (toolResultMsg as any).__toolPostAction?.completedLinkedTask?.attachedSessionId === session.id;
+        const successfulSendTargets = toolResult.postActions?.successfulSendToSessionTargets;
+        const completedLinkedTask = toolResult.postActions?.completedLinkedTask?.attachedSessionId === session.id;
         if ((completedLinkedTask || (session.parentSessionId && Array.isArray(successfulSendTargets)
           && successfulSendTargets.includes(session.parentSessionId)))
           && resolveChildHandoffBoundary(session)) {
@@ -1221,16 +1227,16 @@ export class SessionTurnRunner {
           results: this.getToolResultProgress(toolResultMsg),
         }, session, turnId);
 
-        const fatalToolError = (toolResultMsg as any).__toolLoopControl?.fatalError;
+        const fatalToolError = toolResult.control?.fatalError;
         if (fatalToolError && typeof fatalToolError.code === 'string' && typeof fatalToolError.message === 'string') {
           const error = new Error(fatalToolError.message) as Error & { code?: string };
           error.code = fatalToolError.code;
           throw error;
         }
 
-        const waitForReply = (toolResultMsg as any).__toolPostAction?.waitForReply === true;
+        const waitForReply = toolResult.postActions?.waitForReply === true;
         if (waitForReply && !session.stopping && !session.meta?.wait) {
-          const targets = (toolResultMsg as any).__toolPostAction?.successfulWaitAfterSendTargets;
+          const targets = toolResult.postActions?.successfulWaitAfterSendTargets;
           const resolvedTargets = Array.isArray(targets)
             ? [...new Set(targets.filter((target: unknown): target is string => typeof target === 'string' && !!target))]
             : [];
@@ -1271,7 +1277,7 @@ export class SessionTurnRunner {
           break;
         }
 
-        if ((toolResultMsg as any).__toolLoopControl?.stopCurrentTurn) {
+        if (toolResult.control?.stopCurrentTurn) {
           logger.info({ sessionId: session.id, iteration }, 'Tool requested immediate turn stop');
           await this.finishTurnAfterIntermediate(session, broadcast, turnId);
           turnCompleted = true;

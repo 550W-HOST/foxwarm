@@ -30,6 +30,8 @@ Provides the exact user-text wrapper parser and compact read-only history presen
 - `ChatTimeline.CollapsibleUserText` renders parsed segments through the existing user line/blank-space renderer and `PastedTextBlock`.
 - `ChatTimeline.isHeavySystemLikeMessage` classifies only ordinary text segments around valid blocks.
 - `InlineComposerEditor` reuses the preview/count helpers and editable modal, while composer segment/persistence/undo authority remains in [D-composer-pasted-text-editor](./webui-chat-composer.md#d-composer-pasted-text-editor).
+- The direct-send/canonical-reload case in `chatHistoryLoading.e2e.mjs` uses the production stylesheet and a bounded Chat parent for all text/file/image, newline, and metadata variants. This preserves the real attachment-tile and pasted-chip hit geometry while retaining exact canonical text assertions.
+- `pastedTextBlocks.e2e.mjs` checks unsafe-format attachment fallback as an action button, not a saved download link. Signature issuance and native download behavior remain covered by `imageParts.e2e.mjs` under [image preview verification](./webui-image-preview.md#verification).
 
 ## Design decisions
 
