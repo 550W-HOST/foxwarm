@@ -20,7 +20,7 @@ public sealed class MainToolScriptTests
         internal Foxwarm.McpClient Mcp => mcp;
         private Foxwarm.McpClient mcp = null!;
 
-        internal static async Task<Fixture> Create()
+        internal static async Task<Fixture> Create(string? skillsRoot = null)
         {
             var f = new Fixture();
             Console.WriteLine("Owned ToolScript fixture=" + f.Temp.Path);
@@ -34,13 +34,15 @@ public sealed class MainToolScriptTests
                     "",
                     713
                 );
-                f.Manager = new(f.Data, f.Work, options, HostModels.ForTest(options));
+                f.Manager = new(f.Data, f.Work, options, HostModels.ForTest(options), skillsRoot);
                 await f.Manager.LoadMainHostAsync();
                 f.Owner = await f.Manager.CreateNamedAsync("main", "script", null, null);
                 f.Owner.Registry.TriggerOverride = _ => Task.CompletedTask;
                 f.mcp = new(f.Data);
                 var definitions = WorkspaceTools.Definitions();
                 foreach (var item in FileDeliveryDefinitions.Definitions())
+                    definitions.Add(item?.DeepClone());
+                foreach (var item in KnowledgeToolDefinitions.Definitions())
                     definitions.Add(item?.DeepClone());
                 foreach (var item in ObservationToolDefinitions.Definitions())
                     definitions.Add(item?.DeepClone());

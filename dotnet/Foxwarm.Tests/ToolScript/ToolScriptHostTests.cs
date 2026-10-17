@@ -10,6 +10,39 @@ namespace Foxwarm.Tests;
 public sealed class ToolScriptHostTests
 {
     [Fact]
+    public async Task Main_programmatic_directory_read_is_natural_text_while_files_and_opaque_output_stay_structured()
+    {
+        await using var f = await ScriptFixture.Create();
+        await File.WriteAllTextAsync(Path.Combine(f.Work, "item.txt"), "original bytes\n");
+        var ordinary = await f.Call("read", new JsonObject { ["filePath"] = f.Work });
+        Assert.Contains("item.txt", SessionWait.Text(ordinary["output"]));
+        Assert.Null(ordinary["content"]);
+        var opaque = new JsonObject { ["output"] = "not a directory listing" };
+        f.Registry.Register(
+            new JsonObject { ["name"] = "opaque_directory_fixture", ["parameters"] = new JsonObject() },
+            "builtin",
+            false,
+            (_, _, _) => Task.FromResult((JsonObject)opaque.DeepClone())
+        );
+        var run = await f.Call("run_script", new JsonObject
+        {
+            ["code"] = "return {\n"
+                + "    'listing': call_tool('node:master/read', {'filePath': args['directory']}),\n"
+                + "    'file': call_tool('read', {'filePath': 'item.txt'}),\n"
+                + "    'opaque': call_tool('opaque_directory_fixture', {}),\n}",
+            ["args"] = new JsonObject { ["directory"] = f.Work },
+        });
+        Assert.True(SessionWait.Text(run["status"]) == "completed", run.ToJsonString());
+        var result = run["result"]!;
+        Assert.Equal(SessionWait.Text(ordinary["output"]), result["listing"]!.GetValue<string>());
+        Assert.Equal("original bytes\n", SessionWait.Text(result["file"]?["content"]));
+        Assert.Equal(15, result["file"]!["sizeBytes"]!.GetValue<long>());
+        Assert.False(result["file"]!["truncated"]!.GetValue<bool>());
+        Assert.NotNull(result["file"]!["output"]);
+        Assert.True(JsonNode.DeepEquals(opaque, result["opaque"]));
+    }
+
+    [Fact]
     public async Task Native_read_and_exec_use_actual_inclusive_byte_data_without_preview_banners_and_ordinary_calls_remain_unchanged()
     {
         await using var f = await ScriptFixture.Create();

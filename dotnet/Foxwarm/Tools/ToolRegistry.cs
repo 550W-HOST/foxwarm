@@ -208,6 +208,14 @@ internal sealed class ToolRegistry(
         if (owner.Programmatic)
         {
             owner.ScriptBudget!.JsonValue(result);
+            // Local files publish structured data; only directory listings have a sole output field.
+            if (
+                resolved is { Source: "node", ExecutionNode: "master", Name: "read" }
+                && result is JsonObject { Count: 1 } localRead
+                && localRead["output"] is JsonValue output
+                && output.TryGetValue<string>(out var listing)
+            )
+                return JsonValue.Create(listing);
             return result;
         }
         return await ToolOutputGuard.GuardAsync(
