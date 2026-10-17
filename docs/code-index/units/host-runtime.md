@@ -21,6 +21,8 @@ This is the current .NET experiment/host entry, not the repository's switched ro
 
 The separate test container documented in `test/README.md` publishes this executable and the current WebUI through `test/Dockerfile` and `test/docker-compose.yml`. Its Linux x64 image includes native Monty with notices, built Shared/CLI Node archive inputs, tracked Code extensions, the PTY helper and local Git. Official Code workbench assets use an optional read-only Compose override; optional HEIF libraries are not installed. Host build outputs, state and workspace are excluded from the Docker context. This packaging does not switch the root launcher or expand the implementation's phase boundaries.
 
+Resource signatures supplement administrator credentials only at explicitly marked file/global-blob GET/HEAD endpoints. Issuance and unrelated routes retain the administrator gate; see [WebUI file downloads](./dotnet-webui-files-images.md).
+
 Protected `GET /api/auth/session` returns the ordinary administrator role used by the merged WebUI when WebUI is enabled. It uses the same token/cookie middleware as other protected routes; it does not introduce restricted identities or an access-management runtime.
 
 [Outbound MCP OAuth routes](./dotnet-mcp-oauth.md) use the same administrator boundary. Only exact GET `/api/mcp/oauth/client.json` and `/api/mcp/oauth/callback` bypass it. The fixed callback GET reflects no parameters and exchanges no code; its first-party authenticated JSON completion preserves Strict-cookie behavior after cross-site consent. OAuth callbacks derive from captured startup app `url`, not Host or the ordinary address fallback/override; deployment prefixes remain intact.

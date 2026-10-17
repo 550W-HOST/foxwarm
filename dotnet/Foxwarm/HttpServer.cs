@@ -14,6 +14,7 @@ internal sealed class HttpServer
 {
     public WebApplication App { get; }
     internal bool WebUiEnabled { get; }
+    internal Channels.WebUi.WebUiDownloadSignatures Downloads { get; }
 
     public HttpServer(
         string[] args,
@@ -29,6 +30,7 @@ internal sealed class HttpServer
     )
     {
         var address = publicAddress ?? PublicWebAddress.Capture(port);
+        Downloads = new(apiToken);
         WebUiEnabled =
             webUiEnabled ?? HttpServerSettings.Enabled(sessions.Models.ConfigurationOwner);
         var browserCookie = Convert
@@ -171,7 +173,7 @@ internal sealed class HttpServer
                     await context.Response.SendFileAsync(loginFile, context.RequestAborted);
                     return;
                 }
-                if (!valid)
+                if (!valid && !(WebUiEnabled && Downloads.Authorizes(context)))
                 {
                     context.Response.StatusCode = 401;
                     await context.Response.WriteAsJsonAsync(new { error = "Unauthorized" });

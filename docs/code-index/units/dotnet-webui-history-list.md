@@ -1,6 +1,6 @@
 # Unit: WebUI history, Session list, and bounded replay routes
 
-Files: `dotnet/Foxwarm/Channels/WebUi/WebUIChannel.History.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUIChannel.List.cs`
+Files: `dotnet/Foxwarm/Channels/WebUi/WebUIChannel.History.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUiContinuousHistory.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUIChannel.List.cs`
 
 ## Purpose
 
@@ -14,6 +14,8 @@ History routes use `SessionRuntime`/Archive context readers for exact owner/hist
 
 Semantic history/queue/wait comes from active Session authority; identity/topology/presentation/list summaries come from Main catalog; immutable Archive is read-only context/audit. The Debug file route resolves encoded Session IDs through the same raw-target/catalog helper as other Session routes, so ordinary Agent-qualified IDs and aliases locate the real authority file. Pagination/cursor/agent-scope limits are validated before SQL/read work. A missing authority for an already cataloged Session remains an admission integrity error, not an empty replay.
 
+`GET /api/sessions/{id}/history/continuous` resolves the live Session/alias, captures the ordinary snapshot's latest sequence, and calls `WebUiContinuousHistory.Read` on the existing effective Archive reader. Initial/latest and exclusive `beforeSeq` pages read descending; exclusive `afterSeq` reads ascending. Pages contain at most 100 original messages in ascending order, with canonical sequence/timestamp, optional first/last sequence, and direction-relative `hasMore`. One bounded one-record probe determines continuation without counting or materializing the whole Archive. Cumulative fork caps and Archive identity resolution remain storage-owned. Duplicate/unknown/invalid query values and mixed directions fail before paging. After normal image materialization the route rechecks the live catalog binding. It never updates active history, realtime frontiers, Vector state, or a persisted watermark. Canonical consumer semantics: [continuous Chat history](../threads/archive-and-recall.md#d-webui-continuous-chat-history).
+
 ## Tests
 
-`SessionTurnTests.cs`; `SessionCatalogTests.cs`; `SessionCatalogPublicationTests.cs`; `SessionCatalogSourceTests.cs`; bounded replay/list route tests.
+`SessionTurnTests.cs`; `SessionCatalogTests.cs`; `SessionCatalogPublicationTests.cs`; `SessionCatalogSourceTests.cs`; bounded replay/list route tests. `WebUiContinuousHistoryTests` covers reopened cumulative fork pages, exact snapshot bounds, live aliases, image transport and invalid queries; `dotnet/continuous-history-fixture-ts.mjs` seeds original rows through Source persistence APIs for `packages/webui/test/experimentHostContinuousDownloads.e2e.mjs`, which qualifies real compaction, earlier/newer/reconnect/restored-window reads and an archived image in the built original App.

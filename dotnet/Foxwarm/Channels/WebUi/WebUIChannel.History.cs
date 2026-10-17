@@ -151,6 +151,28 @@ internal sealed partial class WebUIChannel
             }
         );
         app.MapGet(
+            "/api/sessions/{id}/history/continuous",
+            async (string id, HttpRequest request) =>
+            {
+                var hosted = await FindRouteAsync(request, id);
+                if (hosted is null)
+                    return Results.NotFound(new { error = "Session not found" });
+                if (!TryReadHistoryQuery(request, ["beforeSeq", "afterSeq"], out var query, out var error)
+                    || !TryParseSafe(query.GetValueOrDefault("beforeSeq"), "beforeSeq", out var before, out error)
+                    || !TryParseSafe(query.GetValueOrDefault("afterSeq"), "afterSeq", out var after, out error))
+                    return Results.BadRequest(new { error });
+                if (before is not null && after is not null)
+                    return Results.BadRequest(new { error = "Choose one paging direction." });
+                var canonicalId = hosted.Id;
+                var latest = hosted.Entry.Snapshot().NextMessageSeq - 1;
+                var page = WebUiContinuousHistory.Read(hosted.Archive, before, after, latest);
+                await sessions.Images.ExternalizeTreeAsync(page, strict: false, request.HttpContext.RequestAborted);
+                if (CatalogRoute(request) != canonicalId)
+                    return Results.Json(new { error = "Session binding changed." }, statusCode: 403);
+                return Results.Ok(page);
+            }
+        );
+        app.MapGet(
             "/api/sessions/{id}/archive/messages/{seq}",
             async (string id, string seq, HttpRequest request) =>
             {

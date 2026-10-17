@@ -12,7 +12,8 @@ internal sealed partial class WebUIChannel(
     SessionManager sessions,
     SessionRuntime runtime,
     MessageRouter router,
-    Foxwarm.Terminal.TerminalRegistry terminals
+    Foxwarm.Terminal.TerminalRegistry terminals,
+    WebUiDownloadSignatures downloads
 )
 {
     private readonly WebUiRealtime realtime = new(runtime);

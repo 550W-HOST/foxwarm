@@ -40,6 +40,8 @@ public sealed class MainToolScriptTests
                 f.Owner.Registry.TriggerOverride = _ => Task.CompletedTask;
                 f.mcp = new(f.Data);
                 var definitions = WorkspaceTools.Definitions();
+                foreach (var item in FileDeliveryDefinitions.Definitions())
+                    definitions.Add(item?.DeepClone());
                 foreach (var item in ObservationToolDefinitions.Definitions())
                     definitions.Add(item?.DeepClone());
                 foreach (var item in ToolScriptToolDefinitions.Definitions())
@@ -88,6 +90,33 @@ public sealed class MainToolScriptTests
                 await mcp.DisposeAsync();
             Temp.Dispose();
         }
+    }
+
+    [Fact]
+    public async Task Successful_nested_file_delivery_preserves_structured_receipt_without_extra_history_or_notifications()
+    {
+        await using var f = await Fixture.Create();
+        f.Manager.AttachWebUi(f.Owner.Id, f.Owner);
+        f.Manager.RegisterWebUiFileDelivery((_, _, _) => { });
+        var path = Path.Combine(f.Work, "nested.txt");
+        await File.WriteAllTextAsync(path, "nested bytes");
+        var before = f.Owner.History().Select(row => row.ToJsonString()).ToArray();
+        var completed = await f.Call("run_script", new JsonObject
+        {
+            ["code"] = "result = call_tool({'toolId':'builtin:send_file'}, {'filePath':'nested.txt'})\nprint('ordinary stdout')\nreturn {'nested': [result]}\n",
+        });
+        Assert.True(SessionWait.Text(completed["status"]) == "completed", completed.ToJsonString());
+        var delivery = completed["result"]!["nested"]![0]!["fileDelivery"]!;
+        Assert.Equal(f.Owner.Id, SessionWait.Text(delivery["targetId"]));
+        Assert.Equal(path, SessionWait.Text(delivery["downloadPath"]));
+        Assert.Equal("nested.txt", SessionWait.Text(delivery["fileName"]));
+        Assert.Equal("text/plain", SessionWait.Text(delivery["mimeType"]));
+        Assert.Equal(12, delivery["sizeBytes"]!.GetValue<long>());
+        Assert.Equal(before, f.Owner.History().Select(row => row.ToJsonString()));
+        Assert.Empty(f.Owner.Entry.Snapshot().Queue);
+        var runId = SessionWait.Text(completed["runId"])!;
+        var inspected = await f.Call("get_toolscript_run", new JsonObject { ["runId"] = runId });
+        Assert.Equal(SessionWait.Text(delivery["deliveryId"]), SessionWait.Text(inspected["result"]?["nested"]?[0]?["fileDelivery"]?["deliveryId"]));
     }
 
     [Fact]

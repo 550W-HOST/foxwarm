@@ -176,7 +176,8 @@ public sealed partial class AsrRoutesTests
                     f.Manager,
                     runtime,
                     new MessageRouter(runtime),
-                    f.Terminals
+                    f.Terminals,
+                    f.Server.Downloads
                 ).Register(f.Server.App);
             }
             await f.Server.App.StartAsync();

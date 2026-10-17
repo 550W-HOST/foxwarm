@@ -19,11 +19,11 @@ Browser WebUI fetch/WebSocket/PTY/Code request
 
 ## Auth and route order
 
-Static WebUI and state-changing routes are served only after normal host auth; `POST /api/auth` is the token exchange. Authenticated `GET /api/auth/session` returns `{ role: 'admin' }` for the current full-access instance-token host. Prefix/base-path handling is deployment-relative. Route handlers validate request IDs/limits before invoking manager/runtime services and translate committed/accepted/partial failures into explicit HTTP payloads.
+Static WebUI and state-changing routes are served only after normal host auth; `POST /api/auth` is the token exchange. Authenticated `GET /api/auth/session` returns `{ role: 'admin' }` for the current full-access instance-token host. Only marked path/global-blob GET/HEAD resource endpoints additionally accept a verified download capability; issuance and unrelated APIs stay protected. See [file/image routes](../units/dotnet-webui-files-images.md). Prefix/base-path handling is deployment-relative. Route handlers validate request IDs/limits before invoking manager/runtime services and translate committed/accepted/partial failures into explicit HTTP payloads.
 
 ## Realtime and history
 
-`WebUiRealtime` carries Session lifecycle, message/tool stream, task, list/presentation, terminal, and Code events with revision/ack semantics. A streamed delta is not automatically active JSON history; the Session turn/save path determines when canonical history is committed. Browser replay/list units use bounded cursors and catalog projections, not Archive reconstruction.
+`WebUiRealtime` carries Session lifecycle, message/tool stream, task, list/presentation, terminal, and Code events with revision/ack semantics. A streamed delta is not automatically active JSON history; the Session turn/save path determines when canonical history is committed. Browser replay/list units use bounded cursors and catalog projections, not Archive reconstruction. The separate continuous-history display route reads bounded effective original Archive pages under the ordinary snapshot upper bound; it never supplies active authority. See [history routes](../units/dotnet-webui-history-list.md).
 
 ## Current gaps
 
@@ -40,6 +40,8 @@ The merged React Node picker now uses real authenticated `GET /api/sessions/{id}
 Targeted merged-client fixtures independently cover pane/iframe/terminal identity, pending History submission behavior, inspector immutability/model disposal and Conversation timing disclosure. These controlled browser fixtures complement, rather than replace, real normal-host/provider qualification. Existing Node, OAuth and Anthropic E2Es remain separate consumers.
 
 The built Vite 8/Rolldown client keeps its recovery script/styles inline in `index.html`; external scripts, styles and lazy chunks remain deployment-relative files under `assets/`. The existing host serves that index with no-store and the original administrator login/prefix boundary, without a new route or endpoint. `experimentHostLegacyNodeProjection.e2e.mjs` qualifies a real prefix/login, browser-only missing root-chunk fault and explicit reload recovery alongside retained Session projection. `experimentHostNodeConsumers.e2e.mjs` uses a normal host, real CLI/Shell peers, the Nodes workbench directory and onboarding dialog, and exact composer Node/cwd consumers. The output must still be supplied as a complete built WebUI directory at the existing host/publish boundary; a C# build alone does not build or deploy client assets.
+
+`experimentHostContinuousDownloads.e2e.mjs` seeds original Source-persisted history, compacts it through a real .NET planner and exercises the built original Conversation consumer with bounded earlier/newer pages, fork caps, live append, reconnect and restored reading windows. It also qualifies archived-image display and cookie-less native file/global-blob downloads under a nested prefix, plus successful direct/nested delivery receipts and exact-target filtering. No frontend substitution or Session-scoped identity route is used.
 
 ## Windows desktop consumer
 

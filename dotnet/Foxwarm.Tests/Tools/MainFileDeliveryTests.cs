@@ -131,6 +131,16 @@ public sealed class MainFileDeliveryTests
         var result = await f.Call("send_file", args);
         Assert.Null(Error(result));
         Assert.Equal(path, SessionWait.Text(result["fullPath"]));
+        var receipt = result["fileDelivery"]!.AsObject();
+        Assert.Equal(1, receipt["version"]!.GetValue<int>());
+        Assert.Equal("session", SessionWait.Text(receipt["targetKind"]));
+        Assert.Equal(f.Owner.Id, SessionWait.Text(receipt["targetId"]));
+        Assert.Equal("ordinary.txt", SessionWait.Text(receipt["fileName"]));
+        Assert.Equal("text/plain", SessionWait.Text(receipt["mimeType"]));
+        Assert.Equal(11, receipt["sizeBytes"]!.GetValue<long>());
+        Assert.Equal(path, SessionWait.Text(receipt["downloadPath"]));
+        Assert.Equal("master", SessionWait.Text(receipt["downloadNodeId"]));
+        Assert.Equal("master", SessionWait.Text(receipt["sourceNodeId"]));
         Assert.Equal("first", caption);
         Assert.Equal(1, callbacks);
         Assert.Equal(history, f.Owner.History().Select(row => row.ToJsonString()));
@@ -158,12 +168,17 @@ public sealed class MainFileDeliveryTests
         Assert.Empty(target.Entry.Snapshot().Queue);
         args = Args(path);
         args["channelTargetId"] = "webui:target";
-        Assert.Null(Error(await f.Call("send_file", args)));
+        var channelResult = await f.Call("send_file", args);
+        Assert.Null(Error(channelResult));
+        Assert.Equal("channel", SessionWait.Text(channelResult["fileDelivery"]?["targetKind"]));
+        Assert.Equal("webui:target", SessionWait.Text(channelResult["fileDelivery"]?["targetId"]));
         foreach (var destination in new[] { "webui:missing", "external:target", "bad" })
         {
             args = Args(path);
             args["channelTargetId"] = destination;
-            Assert.NotNull(Error(await f.Call("send_file", args)));
+            var failed = await f.Call("send_file", args);
+            Assert.NotNull(Error(failed));
+            Assert.Null(failed["fileDelivery"]);
         }
         var channels = JsonNode
             .Parse(await File.ReadAllTextAsync(Path.Combine(f.Data, "state", "channels.json")))!
