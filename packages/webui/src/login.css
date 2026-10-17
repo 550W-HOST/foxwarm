@@ -1,0 +1,46 @@
+:root { color-scheme: light dark; --foxwarm-color-canvas: #f3f4f6; --foxwarm-color-surface: #fff; --foxwarm-color-text: #4b5563; --foxwarm-color-text-strong: #111827; --foxwarm-color-text-muted: #6b7280; --foxwarm-color-accent: #3b82f6; --foxwarm-color-accent-text: #fff; --foxwarm-color-border: #d1d5db; --foxwarm-color-danger: #dc2626; }
+@media (prefers-color-scheme: dark) { :root { --foxwarm-color-canvas: #111827; --foxwarm-color-surface: #1f2937; --foxwarm-color-text: #d1d5db; --foxwarm-color-text-strong: #f9fafb; --foxwarm-color-text-muted: #9ca3af; --foxwarm-color-border: #374151; --foxwarm-color-danger: #f87171; } }
+* { box-sizing: border-box; }
+html { min-height: 100%; background: var(--foxwarm-color-canvas); }
+body { margin: 0; min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; padding: max(28px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left)); color: var(--foxwarm-color-text); background: var(--foxwarm-color-canvas); font-family: var(--foxwarm-ui-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif); -webkit-font-smoothing: antialiased; }
+button, input { font: inherit; }
+button { cursor: pointer; touch-action: manipulation; }
+.login-ambient { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at 12% 18%, color-mix(in srgb, var(--foxwarm-color-accent) 6%, transparent), transparent 48%), radial-gradient(ellipse at 88% 90%, color-mix(in srgb, var(--foxwarm-color-accent) 4%, transparent), transparent 45%); }
+.login-shell { position: relative; display: grid; grid-template-columns: 320px minmax(0, 340px); align-items: center; gap: 80px; width: 100%; max-width: 740px; margin: auto; padding: 32px 0; }
+.login-brand { display: flex; align-items: center; flex-direction: column; gap: 4px; animation: login-arrive 650ms cubic-bezier(.2,.8,.2,1) both; }
+.login-art { position: relative; display: grid; place-items: center; width: 280px; height: 280px; }
+.login-art > svg { position: relative; z-index: 1; width: 220px; height: 220px; }
+.login-panel { width: 100%; min-width: 0; animation: login-fade 400ms ease-out both; }
+.login-panel h1 { margin: 0 0 30px; color: var(--foxwarm-color-text-strong); font-size: 28px; font-weight: 550; letter-spacing: -.8px; line-height: 1.25; }
+.login-panel label { display: block; margin-bottom: 10px; font-size: 13px; font-weight: 500; }
+.login-token-field { position: relative; display: flex; align-items: center; min-height: 52px; border: 1px solid var(--foxwarm-color-border); border-radius: 10px; background: var(--foxwarm-color-surface); transition: border-color 180ms, box-shadow 180ms; }
+.login-token-field:focus-within { border-color: var(--foxwarm-color-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--foxwarm-color-accent) 10%, transparent); }
+.login-key { position: absolute; left: 15px; color: var(--foxwarm-color-text-muted); pointer-events: none; }
+.login-token-field input { width: 100%; min-width: 0; height: 50px; padding: 0 48px 0 43px; border: 0; outline: 0; background: transparent; color: var(--foxwarm-color-text-strong); font-size: 16px; line-height: 1.5; border-radius: inherit; }
+.login-token-field input::placeholder { color: var(--foxwarm-color-text-muted); font-size: 14px; }
+.login-reveal { position: absolute; right: 3px; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 7px; color: var(--foxwarm-color-text-muted); background: transparent; }
+.login-reveal:hover { color: var(--foxwarm-color-text-strong); background: color-mix(in srgb, var(--foxwarm-color-text) 5%, transparent); }
+.login-eye-slash { display: none; }
+.login-reveal[aria-pressed=true] .login-eye-slash { display: block; }
+.login-reveal:focus-visible, .login-submit:focus-visible { outline: 2px solid var(--foxwarm-color-accent); outline-offset: 4px; }
+.login-error { min-height: 20px; margin: 8px 0 16px; color: var(--foxwarm-color-danger); font-size: 12px; line-height: 20px; }
+.login-token-field:has(input[aria-invalid=true]) { border-color: var(--foxwarm-color-danger); }
+.login-submit { position: relative; display: flex; align-items: center; justify-content: center; gap: 9px; width: 100%; height: 48px; padding: 0 18px; border: 0; border-radius: 10px; background: var(--foxwarm-color-accent); color: var(--foxwarm-color-accent-text); font-size: 14px; font-weight: 550; transition: filter 180ms, transform 180ms; }
+.login-submit:hover:not(:disabled) { filter: brightness(1.06); transform: translateY(-1px); }
+.login-submit:active:not(:disabled) { transform: translateY(0); }
+.login-submit:disabled { cursor: default; }
+.login-submit-arrow { position: absolute; right: 17px; transition: transform 180ms; }
+.login-submit:hover:not(:disabled) .login-submit-arrow { transform: translateX(2px); }
+.login-submit-spinner, .login-submit-check { display: none; }
+.login-submit-spinner .fw-fox { --fw-fox-ink: var(--foxwarm-color-accent-text); }
+body[data-state=pending] .login-submit-spinner { display: inline-flex; }
+body[data-state=pending] .login-submit-arrow, body[data-state=success] .login-submit-arrow { display: none; }
+body[data-state=success] .login-submit-check { display: block; }
+body[data-state=success] .login-shell { opacity: 0; transition: opacity 180ms ease-in; }
+@keyframes login-arrive { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes login-fade { from { opacity: 0; } to { opacity: 1; } }
+@media (max-width: 700px) { .login-shell { display: flex; flex-direction: column; max-width: 340px; gap: 40px; padding: 12px 0; } .login-art { width: 180px; height: 180px; } .login-art > svg { width: 146px; height: 146px; } .login-panel h1 { font-size: 24px; margin-bottom: 24px; } }
+@media (max-height: 520px) and (max-width: 700px) { .login-shell { gap: 22px; } .login-art { width: 96px; height: 96px; } .login-art > svg { width: 88px; height: 88px; } .login-panel h1 { margin-bottom: 18px; } }
+@media (max-height: 480px) and (min-width: 701px) { .login-shell { padding: 0; } .login-art { width: 180px; height: 180px; } .login-art > svg { width: 152px; height: 152px; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+@media (forced-colors: active) { .login-ambient { display: none; } .login-token-field { border-color: ButtonText; background: Field; color: FieldText; } .login-submit { background: Highlight; color: HighlightText; border: 1px solid ButtonText; } .login-art .fw-fox { --fw-fox-ink: LinkText; } }

@@ -5,6 +5,8 @@ Secondary files: src/webuiSessionScope.ts, src/channels/webuiAccess.test.ts, src
 
 ## Purpose
 
+The public token sign-in artifact remains at `packages/webui/public/login.html`; its generated view and browser authentication flow are owned by [WebUI login](./webui-login.md).
+
 Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibility SSE, upload/download, setup, model, channel, session, and browser-terminal routes. It translates browser actions into the message router and immutable SessionRuntime DTO operations used by other external interfaces. Destructive lifecycle and channel-attachment flows intentionally retain direct session-manager coordination.
 
 `src/webuiSettings.ts` is primarily documented by [webui-settings](./webui-settings.md). `src/vscodeWebRoutes.ts` is documented by [VS Code Web routes](./src-vscode-web-routes.md).

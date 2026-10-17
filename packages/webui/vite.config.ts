@@ -1,9 +1,10 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { bootHtmlPlugin } from './build/bootHtml'
+import { loginHtmlPlugin } from './build/loginHtml'
 
 export default defineConfig({
-  plugins: [react(), bootHtmlPlugin()],
+  plugins: [react(), loginHtmlPlugin(), bootHtmlPlugin()],
   base: './', // Use relative paths for assets
   build: {
     // Keep the pre-upgrade syntax target instead of adopting Vite's newer default.
