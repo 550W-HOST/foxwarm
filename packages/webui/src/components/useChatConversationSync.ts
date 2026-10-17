@@ -133,7 +133,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
   const archiveBoundaryRef = useRef<{ firstSeq?: number; lastSeq?: number }>({})
   const [historySnapshotRevision, setHistorySnapshotRevision] = useState(0)
   const archiveSnapshotRevisionRef = useRef(-1)
-  const loadArchivePage = useCallback(async (direction: ArchivePageDirection = 'initial'): Promise<Message[]> => {
+  const loadArchivePage = useCallback(async (direction: ArchivePageDirection = 'initial', beforePublish?: (rows: Message[]) => void): Promise<Message[]> => {
     if (archiveRequestRef.current) {
       if (direction !== 'latest') return []
       archiveRequestRef.current.abort()
@@ -167,6 +167,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
       } else data = await fetchPage(query)
       if (controller.signal.aborted) return []
       const rows = Array.isArray(data.messages) ? data.messages as Message[] : []
+      beforePublish?.(rows)
       archiveBoundaryRef.current = {
         firstSeq: direction === 'later' ? boundary.firstSeq ?? data.firstSeq : data.firstSeq ?? boundary.firstSeq,
         lastSeq: direction === 'earlier' ? boundary.lastSeq ?? data.lastSeq : data.lastSeq ?? boundary.lastSeq,

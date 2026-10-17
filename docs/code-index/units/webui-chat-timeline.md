@@ -59,6 +59,8 @@ Row derivation, timing, and thread-card families are documented in [webui-timeli
 
 ## Behavior
 
+Conversation activities retain their mounted identity through overlapping technical-part identities when an earlier page changes the canonical first row. Canonical row keys still own Search, while the mounted identity owns process/nested-tool disclosures. Visible process markers expose the closing source extent so Chat can retain a folded run’s visible reply instead of clipping it at a raw-count boundary.
+
 - Messages use the shared stable identity helper for React reconciliation, including request/segment identity for streamed and canonical model rows. Manual tool expansion is keyed by that message identity and call ID, with an ID-less index scoped only to its own message. The mounted Timeline owns these choices so pairing and group-surface remounts cannot discard them; a Session replacement resets them.
 - Live `AssistantTextCard` subtrees are excluded from browser-native scroll-anchor selection while `message.__meta.streaming` is true. A growing answer or collapsed Conversation preview must not pull a detached native-wheel reader forward merely because the browser anchors to that changing Markdown subtree. Canonical cards return to ordinary native eligibility; the scroller, committed rows, follow latch, and manual-disclosure owner are unchanged.
 - Top-level rows backed by stable committed-message metadata expose `data-chat-message-anchor-key`; nested CTX-BLOCK rows and temporary/synthetic stream rows do not become viewport anchors. `Chat` scopes anchor lookup to the committed timeline so queued previews cannot replace a saved session position.
