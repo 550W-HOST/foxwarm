@@ -28,8 +28,7 @@ public sealed partial class WorkspaceTools
                     );
                 var path = ResolvePatchPath(file, false);
                 var content = await ReadPatchFileAsync(path, ct);
-                var occurrences =
-                    oldText.Length == 0 ? content.Length + 1 : CountOccurrences(content, oldText);
+                var (occurrences, updated) = ExactReplacement.Apply(content, oldText, newText);
                 if (occurrences == 0)
                     return Error(
                         "edit_failed",
@@ -40,11 +39,7 @@ public sealed partial class WorkspaceTools
                         "edit_failed",
                         $"Found {occurrences} occurrences of oldText in file. Make oldText more specific."
                     );
-                var updated =
-                    oldText.Length == 0
-                        ? newText
-                        : content.Replace(oldText, newText, StringComparison.Ordinal);
-                await WritePatchFileAsync(path, updated, true, ct);
+                await WritePatchFileAsync(path, updated!, true, ct);
                 ReportPaths((file, path));
                 return new JsonObject { ["output"] = "File edited successfully" };
             }
@@ -185,18 +180,6 @@ public sealed partial class WorkspaceTools
     {
         value = "";
         return args[key] is JsonValue scalar && scalar.TryGetValue<string>(out value!);
-    }
-
-    private static int CountOccurrences(string text, string needle)
-    {
-        var count = 0;
-        for (
-            var i = 0;
-            (i = text.IndexOf(needle, i, StringComparison.Ordinal)) >= 0;
-            i += needle.Length
-        )
-            count++;
-        return count;
     }
 
     private string ResolvePatchPath(string text, bool allowMissing) => Paths.FilePath(text);

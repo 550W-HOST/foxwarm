@@ -174,8 +174,7 @@ internal sealed class CompactPlanRepairFile : IAsyncDisposable
                 token
             );
             var current = await ReadAsync(target, token);
-            var count =
-                oldText.Length == 0 ? current.Length + 1 : CountOccurrences(current, oldText);
+            var (count, replacement) = ExactReplacement.Apply(current, oldText, newText);
             if (count == 0)
                 throw new InvalidDataException(
                     "Could not find oldText in the pending compact repair file."
@@ -184,10 +183,7 @@ internal sealed class CompactPlanRepairFile : IAsyncDisposable
                 throw new InvalidDataException(
                     $"Found {count} occurrences of oldText in the pending compact repair file."
                 );
-            updated =
-                oldText.Length == 0
-                    ? newText
-                    : current.Replace(oldText, newText, StringComparison.Ordinal);
+            updated = replacement!;
         }
         else if (name == "apply_patch")
         {
@@ -274,18 +270,6 @@ internal sealed class CompactPlanRepairFile : IAsyncDisposable
     }
 
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
-
-    private static int CountOccurrences(string text, string needle)
-    {
-        var count = 0;
-        for (
-            var index = 0;
-            (index = text.IndexOf(needle, index, StringComparison.Ordinal)) >= 0;
-            index += Math.Max(needle.Length, 1)
-        )
-            count++;
-        return count;
-    }
 
     private static void EnsureDirectory(string path, int mode)
     {
