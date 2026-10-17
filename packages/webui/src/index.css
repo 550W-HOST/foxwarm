@@ -2586,10 +2586,12 @@ html .foxwarm-inline-file-ref:focus-visible { outline: 2px solid currentColor; o
 .image-preview-action:hover { background: var(--foxwarm-color-hover); }
 .image-preview-action:disabled { opacity: .4; cursor: default; }
 .image-preview-action:focus-visible { outline: 2px solid var(--foxwarm-color-focus-ring); outline-offset: -2px; }
-.image-preview-stage { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; align-items: center; justify-content: center; overflow: hidden; overscroll-behavior: contain; padding: 16px max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
-.image-preview-stage img { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; cursor: zoom-in; }
-.image-preview-stage[data-actual-size] { overflow: auto; align-items: flex-start; justify-content: flex-start; }
-.image-preview-stage[data-actual-size] img { flex: none; max-width: none; max-height: none; margin: auto; cursor: zoom-out; }
+.image-preview-stage { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; overscroll-behavior: contain; touch-action: none; padding: 16px max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+.image-preview-surface { position: relative; }
+.image-preview-stage img { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: block; max-width: none; max-height: none; object-fit: contain; user-select: none; -webkit-touch-callout: none; cursor: zoom-in; }
+.image-preview-stage[data-actual-size] { overflow: auto; }
+.image-preview-stage[data-actual-size] img { cursor: zoom-out; }
+.image-preview-stage > [role="status"] { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
 .image-preview-loading { position: absolute; color: var(--foxwarm-color-text-muted); font-size: 14px; }
 .image-preview-error { flex: none; padding: 8px max(16px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); color: var(--foxwarm-color-warning); font-size: 12px; }
 @media (forced-colors: active) { .image-preview-dialog, .image-preview-header { background: Canvas; color: CanvasText; } .image-preview-action { border: 1px solid ButtonText; } }
