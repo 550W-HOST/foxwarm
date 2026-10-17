@@ -2,7 +2,8 @@ import { waitForWebUiReady } from './webuiReadiness.mjs'
 import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import path from 'node:path'
 import puppeteer from 'puppeteer-core'
 
 let browser, server, url
@@ -78,8 +79,25 @@ async function measure(page) {
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))))
   return page.evaluate(() => {
     const rect = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height, bottom: r.bottom } }
-    return { slot: rect('[data-workbench-content-slot]'), host: rect('[data-workbench-content-tab]'), layer: rect('[data-workbench-content-layer]'), editor: rect('[role="textbox"]'), sameChat: window.__originalChat === document.querySelector('.foxwarm-chat-root'), sameEditor: window.__originalEditor === document.querySelector('[role="textbox"]'), focused: document.activeElement === window.__originalEditor, reads: window.__viewportHistoryReads }
+    return { pane: rect('[data-pane-id]'), header: rect('[data-mobile-chat-header]'), slot: rect('[data-workbench-content-slot]'), host: rect('[data-workbench-content-tab]'), layer: rect('[data-workbench-content-layer]'), editor: rect('[role="textbox"]'), sameChat: window.__originalChat === document.querySelector('.foxwarm-chat-root'), sameEditor: window.__originalEditor === document.querySelector('[role="textbox"]'), focused: document.activeElement === window.__originalEditor, reads: window.__viewportHistoryReads }
   })
+}
+
+function assertVisibleViewport(state, { height, top = 0, left = 0, width = 390 }) {
+  // Slot/host agreement alone can pass while BOTH follow the wrong shell origin.
+  for (const [key, expected] of Object.entries({ top, left, width, bottom: height })) {
+    assert.ok(Math.abs(state.pane[key] - expected) < 1, `pane ${key} must match visible viewport/safe area: ${JSON.stringify(state)}`)
+  }
+  assert.ok(state.header.top >= top && state.header.bottom <= height, `header must remain visible: ${JSON.stringify(state)}`)
+  assert.ok(state.editor.top >= top && state.editor.bottom <= height, `editor must remain visible: ${JSON.stringify(state)}`)
+}
+
+async function captureViewport(page, phase, state) {
+  const directory = process.env.FOXWARM_E2E_SCREENSHOT_DIR
+  if (!directory) return
+  await mkdir(directory, { recursive: true })
+  await page.screenshot({ path: path.join(directory, `mobile-viewport-${phase}.png`) })
+  await writeFile(path.join(directory, `mobile-viewport-${phase}.json`), `${JSON.stringify(state, null, 2)}\n`)
 }
 
 function assertAligned(state) {
@@ -91,9 +109,16 @@ function assertAligned(state) {
 test('mobile App keeps its stable focused editor aligned during simulated keyboard resize and viewport pan', async () => {
   const page = await openMobileApp()
   try {
-    assertAligned(await measure(page))
+    const initial = await measure(page)
+    assertAligned(initial)
+    assertVisibleViewport(initial, { height: 844 })
+    await page.evaluate(() => window.__setViewport({ height: 500 }))
+    const shrink = await measure(page)
+    assertAligned(shrink)
+    assertVisibleViewport(shrink, { height: 500 })
     await page.evaluate(() => window.__setViewport({ height: 500, offsetTop: 220 }))
     const keyboard = await measure(page)
+    await captureViewport(page, 'keyboard', keyboard)
     if (process.env.FOXWARM_VIEWPORT_SCREENSHOT) {
       await page.evaluate(() => {
         const keyboard = document.createElement('div')
@@ -106,9 +131,16 @@ test('mobile App keeps its stable focused editor aligned during simulated keyboa
       await page.evaluate(() => document.querySelector('[data-simulated-keyboard]').remove())
     }
     assertAligned(keyboard)
-    assert.ok(keyboard.editor.top >= 0 && keyboard.editor.bottom <= 500)
-    await page.evaluate(() => document.documentElement.style.setProperty('--foxwarm-safe-area-top', '24px'))
-    assertAligned(await measure(page))
+    assertVisibleViewport(keyboard, { height: 500 })
+    await page.evaluate(() => {
+      document.documentElement.style.setProperty('--foxwarm-safe-area-top', '24px')
+      document.documentElement.style.setProperty('--foxwarm-safe-area-left', '9px')
+      document.documentElement.style.setProperty('--foxwarm-safe-area-right', '11px')
+    })
+    const safeArea = await measure(page)
+    assertAligned(safeArea)
+    assertVisibleViewport(safeArea, { height: 500, top: 24, left: 9, width: 370 })
+    await captureViewport(page, 'safe-area', safeArea)
     const scroller = await page.$('.foxwarm-chat-messages')
     const box = await scroller.boundingBox()
     const top = await scroller.evaluate(element => element.scrollTop)
@@ -118,12 +150,23 @@ test('mobile App keeps its stable focused editor aligned during simulated keyboa
     await page.waitForFunction(top => document.querySelector('.foxwarm-chat-messages').scrollTop < top - 100, {}, top)
     assertAligned(await measure(page))
     await page.evaluate(() => window.__setViewport({ offsetTop: 280 }))
-    assertAligned(await measure(page))
+    const shifted = await measure(page)
+    assertAligned(shifted)
+    assertVisibleViewport(shifted, { height: 500, top: 24, left: 9, width: 370 })
     // Horizontal pan is retained, not reset; this is a coordinate model, not pinch emulation.
     await page.evaluate(() => window.__setViewport({ offsetLeft: 35, offsetTop: 180, height: 420, width: 260, scale: 1.5 }))
-    assertAligned(await measure(page))
-    await page.evaluate(() => window.__setViewport({ height: 844, width: 390, offsetTop: 0, offsetLeft: 0, scale: 1 }))
-    assertAligned(await measure(page))
+    const panned = await measure(page)
+    assertAligned(panned)
+    assertVisibleViewport(panned, { height: 420, top: 24, left: -26, width: 370 })
+    await page.evaluate(() => {
+      for (const edge of ['top', 'left', 'right']) document.documentElement.style.setProperty(`--foxwarm-safe-area-${edge}`, '0px')
+      window.__setViewport({ height: 844, width: 390, offsetTop: 0, offsetLeft: 0, scale: 1 })
+    })
+    const restored = await measure(page)
+    assertAligned(restored)
+    assertVisibleViewport(restored, { height: 844 })
+    assert.ok(Math.abs(restored.editor.bottom - initial.editor.bottom) < 1, 'closing the keyboard must restore the composer without a leftover gap')
+    await captureViewport(page, 'restored', restored)
   } finally { await page.close() }
 })
 

@@ -2053,7 +2053,11 @@ function App() {
           bounded={boundedPresentation}
         />
       </div>
-      {!showHome && mobilePaneProps && <WorkbenchPane {...mobilePaneProps} />}
+      {!showHome && mobilePaneProps && (
+        <div className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell fixed inset-x-0 overflow-hidden bg-fw-canvas">
+          <WorkbenchPane {...mobilePaneProps} />
+        </div>
+      )}
     </>)
   }
 
