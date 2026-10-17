@@ -1,4 +1,4 @@
-import { registerWebUiFileDownloads } from './webuiFileDownloads';
+import { registerWebUiFileDownloads, registerWebUiBlobDownloads } from './webuiFileDownloads';
 import { AccessConfigRuntime, type NormalizedAccessIdentity } from '../accessConfig';
 import { configInstaller, type ConfigInstaller } from '../configInstaller';
 import { projectWebUiSessionScope, webUiSessionScopeAllows } from '../webuiSessionScope';
@@ -36,7 +36,7 @@ import { normalizeWebUiInstanceName, normalizeWebUiTabIcon, readWebUiSettings, w
 import { renderContextBlockExpansion, searchStructuredRecallSources } from '../toolsSessionAgent/archiveRecall';
 import type { Message, QueueHistoryAppendPresentation, QueueItem, Session } from '../types';
 import { registerVscodeWebRoutes } from '../vscodeWebRoutes';
-import { externalizeMessages, externalizeQueueItems, getSafeRasterMimeType, resolveImageBlobPath } from '../imageBlobs';
+import { externalizeMessages, externalizeQueueItems } from '../imageBlobs';
 import { nodesManager } from '../nodes/manager';
 import { listApprovedNodes } from '../nodes/registry';
 import { listNodeTopology, validateNodeSelection } from '../nodeExecution';
@@ -860,7 +860,7 @@ export class WebUIChannel implements Channel {
   // Middleware for static file protection
   private staticAuthMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
     // Do not intercept public login/auth routes. Also let /download reach its
-    // dedicated route, where token validation is performed before any file is
+    // dedicated route, where download authorization is checked before any file is
     // sent.
     if (req.path === '/login.html' || req.path === '/api/auth' || req.path === '/download') {
       return next();
@@ -891,6 +891,24 @@ export class WebUIChannel implements Channel {
       return auth;
     };
     httpServerInstance.setWebUiIdentityVerifier(verifyWebUiIdentity);
+    const downloadSignatures = registerWebUiFileDownloads(httpServerInstance, this.token);
+    if (this.enableWebUI) registerWebUiBlobDownloads(httpServerInstance, downloadSignatures, async (req, res, sessionId, blobId) => {
+      const auth = await this.requireSessionAccess(req, res, sessionId);
+      if (!auth) return false;
+      // Content-derived IDs are not secrets: scoped issuance and unsigned image
+      // reads both retain the original committed-reference and live scope checks.
+      if (auth.role === 'webui') {
+        const snapshot = await sessionRuntime.getHistory(sessionId);
+        if (!snapshot) { res.status(404).json({ error: 'Session not found' }); return false; }
+        if (sessionManager.getSessionCatalog(sessionId)?.id !== snapshot.session.id || !this.webUiCanAccessSession(auth, sessionId)) {
+          res.status(403).json({ error: 'WebUI identity session binding changed.' }); return false;
+        }
+        if (!snapshot.messages.some(message => message.parts.some(part => part.inlineDataRef?.blobId === blobId))) {
+          res.status(403).json({ error: 'Image is not part of this WebUI identity session.' }); return false;
+        }
+      }
+      return true;
+    });
     if (this.enableWebUI) registerWebUiTaskRoutes(httpServerInstance, taskService);
     this.realtimeHub = new WebUiRealtimeHub({
       checkToken: req => httpServerInstance.checkIncomingToken(req),
@@ -1777,90 +1795,6 @@ export class WebUIChannel implements Channel {
       });
 
       // Get session history (must be before DELETE /:sessionId)
-
-      httpServerInstance.addRoute({
-        path: '/api/blobs/:blobId',
-        method: 'GET',
-        handler: async (req: express.Request, res: express.Response) => {
-          try {
-            const blobId = req.params.blobId as string;
-            const blobPath = resolveImageBlobPath(blobId);
-            const stat = await fs.stat(blobPath);
-            if (!stat.isFile()) return res.status(404).json({ error: 'Image blob not found' });
-            const safeMimeType = getSafeRasterMimeType(blobId);
-            res.setHeader('Content-Type', safeMimeType || 'application/octet-stream');
-            res.setHeader('Content-Length', String(stat.size));
-            res.setHeader('ETag', `"${blobId}"`);
-            res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
-            res.setHeader('X-Content-Type-Options', 'nosniff');
-            if (!safeMimeType) {
-              res.setHeader('Content-Disposition', `attachment; filename="${blobId}"`);
-            }
-            await new Promise<void>((resolve, reject) => {
-              const stream = fs.createReadStream(blobPath);
-              stream.on('error', reject);
-              res.on('finish', resolve);
-              res.on('close', () => { stream.destroy(); resolve(); });
-              stream.pipe(res);
-            });
-          } catch (e: any) {
-            if (e?.code === 'ENOENT') return res.status(404).json({ error: 'Image blob not found' });
-            if (e?.message === 'Invalid image blob id.') return res.status(400).json({ error: e.message });
-            logger.error({ err: e }, 'Failed to serve image blob');
-            if (!res.headersSent) res.status(500).json({ error: 'Failed to serve image blob' });
-          }
-        },
-      });
-
-      httpServerInstance.addRoute({
-        path: '/api/sessions/:sessionId/blobs/:blobId',
-        method: 'GET',
-        auth: 'webui',
-        handler: async (req: express.Request, res: express.Response) => {
-          try {
-            const sessionId = req.params.sessionId as string;
-            const auth = await this.requireSessionAccess(req, res, sessionId);
-            if (!auth) return;
-            const blobId = req.params.blobId as string;
-            // A blob ID is content-derived, not a secret. Require a reference
-            // in the bound Session before serving it to a WebUI identity.
-            if (auth.role === 'webui') {
-              const snapshot = await sessionRuntime.getHistory(sessionId);
-              if (!snapshot) return res.status(404).json({ error: 'Session not found' });
-              if (sessionManager.getSessionCatalog(sessionId)?.id !== snapshot.session.id || !this.webUiCanAccessSession(auth, sessionId)) {
-                return res.status(403).json({ error: 'WebUI identity session binding changed.' });
-              }
-              if (!snapshot.messages.some(message => message.parts.some(part => part.inlineDataRef?.blobId === blobId))) {
-                return res.status(403).json({ error: 'Image is not part of this WebUI identity session.' });
-              }
-            }
-            const blobPath = resolveImageBlobPath(blobId);
-            const stat = await fs.stat(blobPath);
-            if (!stat.isFile()) return res.status(404).json({ error: 'Image blob not found' });
-            const safeMimeType = getSafeRasterMimeType(blobId);
-            res.setHeader('Content-Type', safeMimeType || 'application/octet-stream');
-            res.setHeader('Content-Length', String(stat.size));
-            res.setHeader('ETag', `"${blobId}"`);
-            res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
-            res.setHeader('X-Content-Type-Options', 'nosniff');
-            if (!safeMimeType) {
-              res.setHeader('Content-Disposition', `attachment; filename="${blobId}"`);
-            }
-            await new Promise<void>((resolve, reject) => {
-              const stream = fs.createReadStream(blobPath);
-              stream.on('error', reject);
-              res.on('finish', resolve);
-              res.on('close', () => { stream.destroy(); resolve(); });
-              stream.pipe(res);
-            });
-          } catch (e: any) {
-            if (e?.code === 'ENOENT') return res.status(404).json({ error: 'Image blob not found' });
-            if (e?.message === 'Invalid image blob id.') return res.status(400).json({ error: e.message });
-            logger.error({ err: e }, 'Failed to serve image blob');
-            if (!res.headersSent) res.status(500).json({ error: 'Failed to serve image blob' });
-          }
-        },
-      });
 
       httpServerInstance.addRoute({
         path: '/api/sessions/:sessionId/debug-file',
@@ -3276,8 +3210,6 @@ export class WebUIChannel implements Channel {
 
       logger.info('WebUI endpoints enabled');
     }
-
-    registerWebUiFileDownloads(httpServerInstance, req => httpServer.checkToken(req));
 
   }
 

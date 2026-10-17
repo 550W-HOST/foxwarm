@@ -293,6 +293,47 @@ test('Agent scopes follow real ownership across creation and moves on HTTP, WS, 
       assert.match((await rejectedLogs).message, /not bound/);
       const imageRoute = (id: string) => `/api/sessions/${encodeURIComponent(id)}/blobs/${blobId}`;
       assert.equal((await get(imageRoute(initial))).status, 200);
+      const issueImage = (route: string, token = webUiToken) => fetch(`${baseUrl}${route}/download`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: 'original image.png', preview: '0' }),
+      });
+      const scopedGrant = await issueImage(imageRoute(initial));
+      assert.equal(scopedGrant.status, 200);
+      const scopedUrl = new URL((await scopedGrant.json() as any).url, `${baseUrl}${imageRoute(initial)}`);
+      const cookieLess = await fetch(scopedUrl);
+      assert.equal(cookieLess.status, 200);
+      assert.equal(cookieLess.headers.get('content-type'), 'image/png');
+      assert.match(cookieLess.headers.get('content-disposition')!, /attachment; filename="original image.png"/);
+      assert.ok((await cookieLess.arrayBuffer()).byteLength > 0);
+      const head = await fetch(scopedUrl, { method: 'HEAD' });
+      assert.equal(head.status, 200); assert.equal((await head.arrayBuffer()).byteLength, 0);
+      const globalRoute = `/api/blobs/${blobId}`;
+      assert.equal((await issueImage(globalRoute)).status, 403);
+      assert.equal((await issueImage(imageRoute(child))).status, 403, 'being bound does not grant unreferenced blobs');
+      assert.equal((await issueImage(imageRoute(`${otherAgent}/main`))).status, 403);
+      const unauthenticatedIssuer = await fetch(`${baseUrl}${imageRoute(initial)}/download`, { method: 'POST' });
+      assert.equal(unauthenticatedIssuer.status, 401);
+      // A Session grant cannot become a global, different-Session, different-blob or path grant.
+      for (const target of [globalRoute, imageRoute(child), imageRoute(initial).replace(blobId, `${'f'.repeat(64)}.png`), '/download']) {
+        const swapped = new URL(target, baseUrl); swapped.search = scopedUrl.search;
+        if (target === '/download') swapped.searchParams.set('path', '/not-authorized');
+        assert.equal((await fetch(swapped)).status, 401);
+      }
+      for (const [key, value] of [['filename', 'changed.png'], ['preview', '1'], ['signature', 'wrong']]) {
+        const tampered = new URL(scopedUrl); tampered.searchParams.set(key, value);
+        assert.equal((await fetch(tampered)).status, 401);
+        const validScope = await fetch(tampered, { headers: { Authorization: `Bearer ${webUiToken}` } });
+        assert.equal(validScope.status, 200, 'bad grants do not veto valid Session credentials');
+        await validScope.arrayBuffer();
+      }
+      const globalGrant = await issueImage(globalRoute, adminToken);
+      assert.equal(globalGrant.status, 200);
+      const globalUrl = new URL((await globalGrant.json() as any).url, `${baseUrl}${globalRoute}`);
+      const globalDownload = await fetch(globalUrl);
+      assert.equal(globalDownload.status, 200); await globalDownload.arrayBuffer();
+      const swappedGlobal = new URL(imageRoute(initial), baseUrl); swappedGlobal.search = globalUrl.search;
+      assert.equal((await fetch(swappedGlobal)).status, 401);
+
       const form = new FormData();
       form.append('sessionId', initial);
       form.append('file', new Blob(['private attachment']), 'attachment.txt');
@@ -317,6 +358,9 @@ test('Agent scopes follow real ownership across creation and moves on HTTP, WS, 
       assert.equal((await get(history(movedOut))).status, 403);
       assert.equal((await get(imageRoute(initial))).status, 403);
       assert.equal((await get(imageRoute(movedOut))).status, 403);
+      assert.equal((await issueImage(imageRoute(initial))).status, 403, 'issuance rechecks moved Session ownership');
+      assert.equal((await issueImage(imageRoute(movedOut))).status, 403);
+      assert.equal((await issueImage(imageRoute(initial), exactToken)).status, 200, 'exact bindings retain alias-based issuance');
       assert.equal((await get(history(initial), exactToken)).status, 200, 'exact binding follows its alias across Agents');
       assert.deepEqual(await projected(exactToken), [movedOut]);
       assert.equal((await projected()).includes(movedOut), false);

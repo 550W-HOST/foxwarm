@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Download, File, Image as ImageIcon } from 'lucide-react'
-import { buildPathDownloadUrl, triggerBrowserDownload } from './downloadShared'
+import { buildPathDownloadUrl, requestPathDownloadUrl, triggerBrowserDownload } from './downloadShared'
 import type { ReplyFile } from './replyFiles'
 import ImagePreviewDialog, { isSafeImagePreviewMime } from './ImagePreviewDialog'
 
@@ -22,9 +22,8 @@ function ReplyFileTile({ file }: { file: ReplyFile }) {
     const controller = new AbortController(); request.current = controller
     setPending(true); setError('')
     try {
-      const response = await fetch(url, { method: 'HEAD', credentials: 'same-origin', signal: controller.signal })
-      if (!response.ok || !/^(?:attachment|inline)\b/i.test(response.headers.get('content-disposition') || '')) throw new Error(response.status === 404 ? 'File unavailable' : 'Download unavailable')
-      if (mounted.current && !controller.signal.aborted) triggerBrowserDownload(url, file.fileName)
+      const signedUrl = await requestPathDownloadUrl(url, controller.signal)
+      if (mounted.current && !controller.signal.aborted) triggerBrowserDownload(signedUrl, file.fileName)
     } catch (err) {
       if (mounted.current && !controller.signal.aborted) setError(err instanceof Error && err.message === 'File unavailable' ? 'File unavailable' : 'Download unavailable')
     } finally {
