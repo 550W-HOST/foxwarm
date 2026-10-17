@@ -19,19 +19,27 @@ public sealed class ToolScriptHostTests
         Assert.Null(ordinary["content"]);
         var opaque = new JsonObject { ["output"] = "not a directory listing" };
         f.Registry.Register(
-            new JsonObject { ["name"] = "opaque_directory_fixture", ["parameters"] = new JsonObject() },
+            new JsonObject
+            {
+                ["name"] = "opaque_directory_fixture",
+                ["parameters"] = new JsonObject(),
+            },
             "builtin",
             false,
             (_, _, _) => Task.FromResult((JsonObject)opaque.DeepClone())
         );
-        var run = await f.Call("run_script", new JsonObject
-        {
-            ["code"] = "return {\n"
-                + "    'listing': call_tool('node:master/read', {'filePath': args['directory']}),\n"
-                + "    'file': call_tool('read', {'filePath': 'item.txt'}),\n"
-                + "    'opaque': call_tool('opaque_directory_fixture', {}),\n}",
-            ["args"] = new JsonObject { ["directory"] = f.Work },
-        });
+        var run = await f.Call(
+            "run_script",
+            new JsonObject
+            {
+                ["code"] =
+                    "return {\n"
+                    + "    'listing': call_tool('node:master/read', {'filePath': args['directory']}),\n"
+                    + "    'file': call_tool('read', {'filePath': 'item.txt'}),\n"
+                    + "    'opaque': call_tool('opaque_directory_fixture', {}),\n}",
+                ["args"] = new JsonObject { ["directory"] = f.Work },
+            }
+        );
         Assert.True(SessionWait.Text(run["status"]) == "completed", run.ToJsonString());
         var result = run["result"]!;
         Assert.Equal(SessionWait.Text(ordinary["output"]), result["listing"]!.GetValue<string>());

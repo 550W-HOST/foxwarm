@@ -12,38 +12,61 @@ public sealed class ToolScriptSourceTests
     public async Task Bundled_automation_skill_loads_and_runs_from_explicit_Main_source_with_normal_host_calls()
     {
         var repository = new DirectoryInfo(AppContext.BaseDirectory);
-        while (repository is not null && !File.Exists(Path.Combine(repository.FullName, "skills", "toolscript-automation", "SKILL.md")))
+        while (
+            repository is not null
+            && !File.Exists(
+                Path.Combine(repository.FullName, "skills", "toolscript-automation", "SKILL.md")
+            )
+        )
             repository = repository.Parent;
         Assert.NotNull(repository);
         var skills = Path.Combine(repository.FullName, "skills");
         var examples = Path.Combine(skills, "toolscript-automation", "examples");
         var path = Path.Combine(examples, "automation_basic.py");
         await using var f = await ScriptFixture.Create(skills);
-        var loaded = await f.Call("skill", new JsonObject { ["action"] = "load", ["skillName"] = "toolscript-automation" });
+        var loaded = await f.Call(
+            "skill",
+            new JsonObject { ["action"] = "load", ["skillName"] = "toolscript-automation" }
+        );
         Assert.True(loaded["error"] is null, loaded.ToJsonString());
         Assert.Contains("examples/automation_basic.py", SessionWait.Text(loaded["output"]));
-        var waiting = await f.Call("run_script", new JsonObject
-        {
-            ["node"] = "master",
-            ["filePath"] = path,
-            ["args"] = new JsonObject { ["baseDir"] = examples },
-        });
+        var waiting = await f.Call(
+            "run_script",
+            new JsonObject
+            {
+                ["node"] = "master",
+                ["filePath"] = path,
+                ["args"] = new JsonObject { ["baseDir"] = examples },
+            }
+        );
         Assert.True(SessionWait.Text(waiting["status"]) == "waiting", waiting.ToJsonString());
         Assert.Equal("agent", SessionWait.Text(waiting["waitingReason"]));
-        var record = await f.Manager.ToolScript.Store.ReadAsync(SessionWait.Text(waiting["runId"])!, default);
+        var record = await f.Manager.ToolScript.Store.ReadAsync(
+            SessionWait.Text(waiting["runId"])!,
+            default
+        );
         Assert.Equal("master", SessionWait.Text(record!["sourceNode"]));
         Assert.Equal(path, SessionWait.Text(record["scriptPath"]));
-        var completed = await f.Call("continue_script", new JsonObject
-        {
-            ["runId"] = waiting["runId"]!.DeepClone(),
-            ["continuationId"] = waiting["continuationId"]!.DeepClone(),
-            ["input"] = "EXAMPLE_OK",
-        });
+        var completed = await f.Call(
+            "continue_script",
+            new JsonObject
+            {
+                ["runId"] = waiting["runId"]!.DeepClone(),
+                ["continuationId"] = waiting["continuationId"]!.DeepClone(),
+                ["input"] = "EXAMPLE_OK",
+            }
+        );
         Assert.True(SessionWait.Text(completed["status"]) == "completed", completed.ToJsonString());
         Assert.Equal("EXAMPLE_OK", SessionWait.Text(completed["result"]?["label"]));
-        Assert.Contains("automation_basic.py", SessionWait.Text(completed["result"]?["listingPreview"]));
+        Assert.Contains(
+            "automation_basic.py",
+            SessionWait.Text(completed["result"]?["listingPreview"])
+        );
         var documentation = await File.ReadAllTextAsync(Path.Combine(examples, "README.md"));
-        Assert.Equal(documentation[..160].Replace("\n", " "), SessionWait.Text(completed["result"]?["documentationExcerpt"]));
+        Assert.Equal(
+            documentation[..160].Replace("\n", " "),
+            SessionWait.Text(completed["result"]?["documentationExcerpt"])
+        );
     }
 
     [Theory]
