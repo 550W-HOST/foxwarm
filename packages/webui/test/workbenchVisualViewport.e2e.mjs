@@ -112,7 +112,8 @@ test('mobile App keeps its stable focused editor aligned during simulated keyboa
     const scroller = await page.$('.foxwarm-chat-messages')
     const box = await scroller.boundingBox()
     const top = await scroller.evaluate(element => element.scrollTop)
-    await page.mouse.move(box.x + 80, box.y + 40)
+    // The floating mobile header overlaps the top of the message scroller.
+    await page.mouse.move(box.x + 80, box.y + box.height / 2)
     await page.mouse.wheel({ deltaY: -300 })
     await page.waitForFunction(top => document.querySelector('.foxwarm-chat-messages').scrollTop < top - 100, {}, top)
     assertAligned(await measure(page))

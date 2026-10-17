@@ -116,7 +116,7 @@ async function mountFixture(width = 1100) {
   await page.setViewport({ width, height: 900, isMobile: width < 768, hasTouch: width < 768, deviceScaleFactor: 1 })
   await page.goto(fixtureUrl, { waitUntil: 'load' })
   await page.waitForFunction(expected => document.querySelectorAll('.foxwarm-chat-timeline').length === expected, {}, fixtureIds.length)
-  assert.equal(await page.$$eval('[data-usage-badge]', badges => badges.length), fixtureIds.length - 1)
+  assert.equal(await page.$$eval('[data-usage-badge]', badges => badges.length), width < 768 ? 0 : fixtureIds.length - 1)
 }
 
 async function badgeState(id) {
@@ -291,7 +291,7 @@ test('desktop expansion preserves the external lower-right gap until timeline-sp
   assert.ok(Math.abs(wide.badge.left - wide.message.right - 8) <= 1, 'wide expanded badge remains wholly outside with the original gap')
   assert.ok(wide.badge.right <= wide.timeline.right + 1)
 
-  await page.setViewport({ width: 700, height: 900, isMobile: false, hasTouch: false, deviceScaleFactor: 1 })
+  await page.$eval('#concrete', fixture => { fixture.style.width = '650px' })
   await page.waitForFunction(() => {
     const timeline = document.querySelector('#concrete .foxwarm-chat-timeline')
     const badge = document.querySelector('#concrete [data-usage-badge]')
@@ -301,7 +301,7 @@ test('desktop expansion preserves the external lower-right gap until timeline-sp
   assert.ok(resized.badge.right <= resized.timeline.right + 1)
   assert.ok(resized.badge.left < resized.message.right + 7, 'the resize clamp shifts only when the preferred outside position no longer fits')
 
-  await page.setViewport({ width: 1600, height: 900, isMobile: false, hasTouch: false, deviceScaleFactor: 1 })
+  await page.$eval('#concrete', fixture => { fixture.style.width = '' })
   await page.waitForFunction(() => {
     const timeline = document.querySelector('#concrete .foxwarm-chat-timeline')
     const message = timeline?.firstElementChild?.firstElementChild
@@ -318,7 +318,7 @@ test('constrained desktop clamps expanded long keys to the timeline edge without
   assert.ok(constrained.documentOverflow <= 1, `constrained document overflowed by ${constrained.documentOverflow}px`)
 })
 
-test('mobile expansion stays in the existing flow layout, and the setting still hides badges', async () => {
+test('root-mobile hides usage while desktop restoration retains exact grouped sequence details', async () => {
   await mountFixture(1100)
   await page.click('#longMobile [data-usage-badge]')
   let layout = await badgeState('longMobile')
@@ -327,17 +327,11 @@ test('mobile expansion stays in the existing flow layout, and the setting still 
   assert.equal(await page.$$eval('#hidden [data-usage-badge]', badges => badges.length), 0)
 
   await mountFixture(390)
-  await page.click('#longMobile [data-usage-badge]')
-  layout = await badgeState('longMobile')
-  assert.equal((await badgePosition('longMobile')).anchorPosition, 'static')
-  assert.ok(layout.fixtureOverflow <= 1, `mobile fixture overflowed by ${layout.fixtureOverflow}px`)
-  assert.ok(layout.documentOverflow <= 1, `mobile document overflowed by ${layout.documentOverflow}px`)
-  await page.click('#groupSeq [data-usage-badge-toggle]')
+  assert.equal(await page.$$eval('[data-usage-badge], [data-reasoning-handoff]', badges => badges.length), 0)
+  await page.setViewport({ width: 1100, height: 900, isMobile: false, hasTouch: false, deviceScaleFactor: 1 })
+  await page.waitForFunction(expected => document.querySelectorAll('[data-usage-badge]').length === expected, {}, fixtureIds.length - 1)
+  await page.locator('#groupSeq [data-usage-badge-toggle]').click()
   assert.equal(await page.$eval('#groupSeq [data-usage-seq-value]', node => node.textContent), '123 ~ 130')
-  layout = await badgeState('groupSeq')
-  assert.equal((await badgePosition('groupSeq')).anchorPosition, 'static')
-  assert.ok(layout.fixtureOverflow <= 1, `mobile group fixture overflowed by ${layout.fixtureOverflow}px`)
-  assert.ok(layout.documentOverflow <= 1, `mobile group document overflowed by ${layout.documentOverflow}px`)
 })
 
 test('Seq stays out of the compact badge; expanded copy is a sibling button with the exact session reference', async () => {

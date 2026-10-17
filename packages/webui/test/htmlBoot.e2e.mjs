@@ -437,13 +437,13 @@ test('recovery groups stay centered and compact, with separated actions and keyb
         const fox = bounds('#foxwarm-boot > svg'), title = bounds('#foxwarm-boot-title'), description = bounds('#foxwarm-boot-description')
         const button = bounds('#foxwarm-boot-reload'), details = bounds('#foxwarm-boot-details')
         return { foxWidth: fox.width, centers: [fox, title, description, button, details].map(box => box.left + box.width / 2),
-          centerY: (fox.top + details.bottom) / 2, gap: details.top - button.bottom,
+          centerY: (fox.top + details.bottom) / 2, groupHeight: details.bottom - fox.top, paddingTop: parseFloat(getComputedStyle(document.querySelector('#foxwarm-boot')).paddingTop), gap: details.top - button.bottom,
           collapsed: !document.querySelector('#foxwarm-boot-details').open, hiddenError: bounds('#foxwarm-boot-error').height === 0,
           overflow: document.querySelector('#foxwarm-boot').scrollWidth > innerWidth }
       })
       assert.equal(layout.foxWidth, 88)
       assert.ok(layout.centers.every(center => Math.abs(center - scenario.width / 2) < 1), JSON.stringify(layout))
-      assert.ok(Math.abs(layout.centerY - scenario.height / 2) < 1, JSON.stringify(layout))
+      assert.ok(Math.abs(layout.centerY - Math.max(scenario.height / 2, layout.paddingTop + layout.groupHeight / 2)) < 1, JSON.stringify(layout))
       assert.ok(layout.gap >= 20)
       assert.equal(layout.collapsed, true)
       assert.equal(layout.hiddenError, true)

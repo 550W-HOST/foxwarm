@@ -34,6 +34,11 @@ async function expectHeaderSubtitle(page) {
 }
 
 async function expectCwdSearchWithoutRowDisplay(page) {
+  if (await page.$('[data-mobile-session-home]')) {
+    const back = await page.$('button[aria-label="Back to sessions"]')
+    if (back) await back.click()
+    await page.locator('button[aria-label="Search sessions"]').click()
+  }
   const search = await page.waitForSelector('input[placeholder="Search sessions"]', { timeout: 15_000 })
   await search.click({ clickCount: 3 })
   await search.type(cwdSession.cwd)
@@ -77,13 +82,15 @@ test('desktop list hides cwd but search still finds it, and Chat shows it in the
   }
 })
 
-test('mobile list hides cwd and Chat shows it from its per-session snapshot', async () => {
+test('mobile list searches cwd without displaying it, and Chat retains its compact name-only header', async () => {
   const page = await browser.newPage()
   try {
     await authenticate(page, { width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 1 })
     await expectCwdSearchWithoutRowDisplay(page)
     await page.evaluate((sessionId) => window.foxwarmTest.switchToSession(sessionId), cwdSession.id)
-    await expectHeaderSubtitle(page)
+    await page.waitForSelector('[data-mobile-chat-header] h1')
+    assert.equal(await page.$('[data-session-header-subtitle]'), null)
+    assert.equal(await page.$eval('[data-mobile-chat-header]', (header, cwd) => header.textContent.includes(cwd), cwdSession.cwd), false)
   } finally {
     await page.close()
   }
@@ -103,6 +110,9 @@ test('Code embedded sidebar hides cwd and embedded Chat gets cwd without a globa
     })
     await page.goto(`${baseUrl}/?foxwarmEmbed=chat&foxwarmEmbedNonce=${embedNonce}&sessionId=${encodeURIComponent(cwdSession.id)}&title=Embedded`, { waitUntil: 'networkidle2' })
     await waitForWebUiReady(page)
+    await page.waitForSelector('[data-mobile-chat-header]')
+    assert.equal(await page.$('[data-session-header-subtitle]'), null)
+    await page.setViewport({ width: 1000, height: 800, isMobile: false, hasTouch: false, deviceScaleFactor: 1 })
     await expectHeaderSubtitle(page)
     assert.equal(globalListRequests, 0)
   } finally {
