@@ -1,6 +1,6 @@
 # Unit: src-channels-webui
 
-Files: src/channels/webuiChannel.ts, src/providerModelList.ts, src/providerModelList.test.ts, src/channels/webuiQueuePreview.ts, src/channels/webuiQueuePreview.test.ts, src/channels/webuiAgentsRoute.test.ts, src/channels/webuiUpload.ts, src/channels/webuiUpload.test.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiHistorySearch.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts, src/channels/webuiNodesRoute.test.ts, src/channels/webuiTerminalsRoute.test.ts, src/channels/webuiTrigger.test.ts, src/channels/webuiTerminalStream.test.ts
+Files: src/channels/webuiChannel.ts, src/providerModelList.ts, src/providerModelList.test.ts, src/channels/webuiQueuePreview.ts, src/channels/webuiQueuePreview.test.ts, src/channels/webuiAgentsRoute.test.ts, src/channels/webuiUpload.ts, src/channels/webuiUpload.test.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiHistorySearch.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts, src/channels/webuiNodesRoute.test.ts, src/channels/webuiTerminalsRoute.test.ts, src/channels/webuiTrigger.test.ts, src/channels/webuiTerminalStream.test.ts, src/channels/webuiFileDownloads.ts, src/channels/webuiFileDownloads.test.ts
 Secondary files: src/webuiSessionScope.ts, src/channels/webuiAccess.test.ts, src/channels/webuiSessionNodesRoute.test.ts, src/channels/webuiLogs.ts, src/channels/webuiRealtime.ts, src/channels/webuiRealtime.test.ts, src/webuiSettings.ts, src/webuiSettings.test.ts, src/vscodeWebRoutes.ts
 
 ## Purpose
@@ -141,3 +141,5 @@ Removed browser workspace routes stay removed. File downloads support explicit t
 ## Canonical ownership
 
 Per-session versus global stream ownership is canonical in [D-webui-session-stream-ownership](../modules/webui.md#d-webui-session-stream-ownership). History/debug bootstrap is canonical in [D-webui-history-bootstrap](../modules/webui.md#d-webui-history-bootstrap). Optimistic identity delivery is canonical in [D-streaming-optimistic-message-identity](../threads/streaming-pipeline.md#d-streaming-optimistic-message-identity). Cross-module delivery flow: [streaming pipeline](../threads/streaming-pipeline.md).
+
+`registerWebUiFileDownloads` owns the existing authenticated path download route, HEAD checks, original-name attachment headers, and safe raster-only inline previews for [reply files](../threads/webui-attachment-presentation.md#d-reply-file-deliveries). It does not expand download authority based on receipt metadata.

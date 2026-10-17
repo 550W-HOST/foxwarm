@@ -78,6 +78,7 @@ test('file delivery preserves Main preparation, target routing, WebUI fallback, 
   try {
     const sessionResult = await rpc.client.call('deliver', { sourceSessionId: sourceId,
       intent: { filePath: 'demo.txt', sessionId: 'target-session', caption: 'caption' }, routing: { ...baseRouting, cwd: dir } });
+    assert.equal(sessionResult.fileDelivery?.targetKind, 'session'); assert.equal(sessionResult.fileDelivery?.targetId, 'target-session'); assert.equal(sessionResult.fileDelivery?.fileName, 'demo.txt'); assert.equal(sessionResult.fileDelivery?.sizeBytes, 11);
     assert.match(sessionResult.output, /Delivered: 1/); assert.equal(sessionFiles[0][0], 'target-session');
     assert.equal(await fs.readFile(sessionFiles[0][1].path, 'utf8'), 'master-file');
 
@@ -93,6 +94,7 @@ test('file delivery preserves Main preparation, target routing, WebUI fallback, 
       intent: { filePath: 'remote.txt', sessionId: 'target-session' },
       routing: { runtimeNodeId: 'remote-a', currentNode: 'remote-a', cwd: '/exact/remote' } });
     assert.equal(await fs.readFile(remote.fullPath, 'utf8'), 'remote-file');
+    assert.equal(remote.fileDelivery?.sourceNodeId, 'remote-a'); assert.equal(remote.fileDelivery?.downloadNodeId, 'master'); assert.equal(remote.fileDelivery?.downloadPath, remote.fullPath); assert.equal(remote.fileDelivery?.fileName, 'remote.txt'); assert.notEqual(remote.fileDelivery?.deliveryId, sessionResult.fileDelivery?.deliveryId);
 
     (sessionManager as any).sendFileToChannelTargetId = async () => { throw new Error(`channel failed ${'x'.repeat(20_000)}`); };
     await assert.rejects(() => rpc.client.call('deliver', { sourceSessionId: sourceId,

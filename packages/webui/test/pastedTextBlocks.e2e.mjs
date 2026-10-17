@@ -104,6 +104,16 @@ await writeFile(entryPath, `
   createRoot(document.getElementById('source-file')).render(<ChatTimeline {...commonVisible} messages={[{
     role: 'user', parts: [{ system: sourceOpen + '\\n<attachment-ref ref="attachment1" />\\n<foxwarm-file name="attachment1_notes.txt" node="master" path="/tmp/notes.txt" mime="text/plain" />\\nfile body\\n' + sourceClose }], __meta: { seq: 16 },
   }]} />)
+
+  const queuedParts = [
+    {text:'before <attachment-ref ref="attachment1" /> and <attachment-ref ref="attachment2" /> after'},
+    {system:'<foxwarm-image name="attachment1_first.png" mime="image/png" node="master" path="/first.png" />'},
+    {text:'[image/png attachment preview omitted]'},
+    {system:'<foxwarm-image name="attachment2_second.png" mime="image/png" node="master" path="/second.png" />'},
+    {text:'[image/png attachment preview omitted]'},
+  ]
+  window.queuedParts = queuedParts
+  createRoot(document.getElementById('queued')).render(<ChatTimeline {...common} messages={[{role:'user',parts:queuedParts,__meta:{id:'queued',queuedPreview:true}}]} />)
 `)
 
 before(async () => {
@@ -127,7 +137,7 @@ before(async () => {
       return
     }
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end('<!doctype html><html><head><link rel="stylesheet" href="/fixture.css"></head><body><section id="valid"></section><section id="malformed"></section><section id="non-user"></section><section id="attachments"></section><section id="canonical-flow"></section><section id="optimistic-flow"></section><section id="file-only"></section><section id="legacy-prefixed"></section><section id="split-image-visible"></section><section id="split-image-hidden"></section><section id="split-image-unwrapped"></section><section id="split-image-inline"></section><section id="source-pure"></section><section id="source-file"></section><script type="module" src="/fixture.js"></script></body></html>')
+    response.end('<!doctype html><html><head><link rel="stylesheet" href="/fixture.css"></head><body><section id="valid"></section><section id="malformed"></section><section id="non-user"></section><section id="attachments"></section><section id="canonical-flow"></section><section id="optimistic-flow"></section><section id="file-only"></section><section id="legacy-prefixed"></section><section id="split-image-visible"></section><section id="split-image-hidden"></section><section id="split-image-unwrapped"></section><section id="split-image-inline"></section><section id="source-pure"></section><section id="source-file"></section><section id="queued"></section><script type="module" src="/fixture.js"></script></body></html>')
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -194,7 +204,12 @@ for (const browserSpec of browsers) {
       assert.equal(await page.$eval('#malformed', node => node.querySelectorAll('.foxwarm-pasted-text-block').length), 0)
       assert.equal(await page.$eval('#non-user', node => node.querySelectorAll('.foxwarm-pasted-text-block').length), 0)
       assert.equal(await page.$eval('#non-user', node => node.textContent.includes('<pasted-text>structured body</pasted-text>')), true)
-      assert.deepEqual(await page.$$eval('#attachments .foxwarm-inline-history-attachment', nodes => nodes.map(node => node.dataset.attachmentRef)), [
+      await page.waitForFunction(()=>document.querySelectorAll('#queued .foxwarm-history-attachment').length===2)
+      assert.deepEqual(await page.$$eval('#queued [data-attachment-ref-marker]',els=>els.map(el=>el.textContent)),['FILE 1','FILE 2'])
+      assert.equal(await page.$eval('#queued .foxwarm-user-message-bubble',el=>el.textContent.includes('preview omitted')),false)
+      assert.equal(await page.$eval('#queued',el=>el.textContent.includes('Queued')),true)
+      assert.equal(await page.$$eval('#queued img',els=>els.length),0,'raw queue previews do not invent an image URL')
+      assert.deepEqual(await page.$$eval('#attachments .foxwarm-history-attachment[data-attachment-ref]', nodes => nodes.map(node => node.dataset.attachmentRef)), [
         'attachment1', 'attachment2', 'attachment3', 'attachment4',
       ])
       assert.equal(await page.$eval('#attachments', node => node.textContent.includes('before') && node.textContent.includes('middle') && node.textContent.includes('after')), true)
@@ -202,10 +217,19 @@ for (const browserSpec of browsers) {
       assert.equal(await page.$$eval('#attachments img', nodes => nodes.length), 2)
       assert.equal(await page.$eval('#attachments [data-attachment-ref="attachment3"] a', link => link.textContent), 'Download image attachment')
       assert.match(await page.$eval('#attachments [data-attachment-ref="attachment4"]', node => node.textContent), /Image unavailable/)
+      const imagePageUrl=page.url()
       await page.click('#attachments [data-attachment-ref="attachment1"] button[aria-label="Open same_name.png"]')
-      await page.keyboard.press('Enter')
-      assert.equal(await page.evaluate(() => window.openedImages.length), 2)
-      assert.equal(await page.evaluate(() => window.openedImages.every(args => String(args[0]).startsWith('data:image/png;base64,') && args[1] === '_blank')), true)
+      await page.waitForSelector('[data-image-preview][open]')
+      assert.equal(await page.$eval('[data-image-preview]',dialog=>Math.abs(dialog.getBoundingClientRect().width-innerWidth)<1&&Math.abs(dialog.getBoundingClientRect().height-innerHeight)<1),true)
+      await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.querySelector('[data-image-preview]'))
+      await page.keyboard.press('Enter');await page.waitForSelector('[data-image-preview][open]')
+      await page.click('[aria-label="Close image preview"]');await page.waitForFunction(()=>!document.querySelector('[data-image-preview]'))
+      await page.click('#attachments [data-attachment-ref-marker="attachment1"]')
+      await page.waitForSelector('[data-image-preview][open]')
+      await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.querySelector('[data-image-preview]'))
+      assert.equal(await page.$eval('#attachments [data-attachment-ref-marker="attachment1"]',el=>document.activeElement===el),true)
+      assert.equal(await page.evaluate(() => window.openedImages.length),0)
+      assert.equal(page.url(),imagePageUrl)
       assert.equal(await page.$eval('#file-only [data-attachment-ref="attachment1"]', node => node.textContent.includes('original_name.txt')), true)
       assert.equal(await page.$eval('#file-only', node => node.textContent.includes('attachment1_original_name.txt')), false)
       await page.click('#attachments .foxwarm-pasted-text-block')
@@ -232,7 +256,7 @@ for (const browserSpec of browsers) {
           }
           const a = findTextRect('A ')
           const b = findTextRect(' B')
-          const chip = section.querySelector('[data-attachment-ref="attachment1"]')?.getBoundingClientRect()
+          const chip = section.querySelector('[data-attachment-ref-marker="attachment1"]')?.getBoundingClientRect()
           return a && b && chip ? {
             aRight: a.right, aCenter: (a.top + a.bottom) / 2,
             chipLeft: chip.left, chipRight: chip.right, chipCenter: (chip.top + chip.bottom) / 2,
@@ -257,7 +281,7 @@ for (const browserSpec of browsers) {
           const body = [...section.querySelectorAll('.foxwarm-user-rendered-line')]
             .filter(node => node.textContent.trim() === '(unrelated image)' || node.textContent.trim() === 'body final')
             .map(node => ({ text: node.textContent.trim(), rect: node.getBoundingClientRect() }))
-          const chip = section.querySelector('[data-attachment-ref="attachment1"]').getBoundingClientRect()
+          const chip = section.querySelector('[data-attachment-ref-marker="attachment1"]').getBoundingClientRect()
           return {
             open: { top: metadata[0].top, bottom: metadata[0].bottom },
             close: { top: metadata.at(-1).top, bottom: metadata.at(-1).bottom },
@@ -279,7 +303,7 @@ for (const browserSpec of browsers) {
             }
           }
           const metadata = [...section.querySelectorAll('.foxwarm-lightweight-metadata-line')].map(node => node.getBoundingClientRect().toJSON())
-          return { a: findText('A '), b: findText(' B'), chip: section.querySelector('[data-attachment-ref]').getBoundingClientRect().toJSON(), metadata }
+          return { a: findText('A '), b: findText(' B'), chip: section.querySelector('[data-attachment-ref-marker]').getBoundingClientRect().toJSON(), metadata }
         })
         const centers = [inlineSourceGeometry.a, inlineSourceGeometry.chip, inlineSourceGeometry.b].map(rect => (rect.top + rect.bottom) / 2)
         assert.ok(Math.max(...centers) - Math.min(...centers) < 8, JSON.stringify({ treatment, inlineSourceGeometry }))
@@ -289,7 +313,7 @@ for (const browserSpec of browsers) {
         for (const sectionId of ['source-pure', 'source-file']) {
           const controls = await page.$eval(`#${sectionId}`, section => {
             const metadata = [...section.querySelectorAll('.foxwarm-lightweight-metadata-line')].map(node => node.getBoundingClientRect().toJSON())
-            const chip = section.querySelector('[data-attachment-ref]')?.getBoundingClientRect().toJSON()
+            const chip = section.querySelector('[data-attachment-ref-marker]')?.getBoundingClientRect().toJSON()
             const bodyLine = [...section.querySelectorAll('.foxwarm-user-rendered-line')].find(node => node.textContent.trim() === 'plain body' || node.textContent.trim() === 'file body')?.getBoundingClientRect().toJSON()
             return { metadata, chip, bodyLine }
           })
@@ -314,7 +338,7 @@ for (const browserSpec of browsers) {
         const measure = id => {
           const section = document.getElementById(id)
           const bubble = section.querySelector('.foxwarm-user-message-bubble').getBoundingClientRect()
-          const chip = section.querySelector('[data-attachment-ref]').getBoundingClientRect()
+          const chip = section.querySelector('[data-attachment-ref-marker]').getBoundingClientRect()
           const body = [...section.querySelectorAll('.foxwarm-user-rendered-line')].find(node => node.textContent.trim() === '(unrelated image)').getBoundingClientRect()
           return { height: bubble.height, chipTop: chip.top - bubble.top, bodyTop: body.top - bubble.top }
         }

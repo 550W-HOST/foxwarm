@@ -270,14 +270,19 @@ export async function executeSendFileMain(args: ToolArgs, ctx?: ToolContext) {
 
   const file = await prepareChannelFile(filePath.trim(), ctx);
   const sendOptions = { caption };
+  const delivery = {
+    targetKind: normalizedChannelTargetId ? 'channel' as const : 'session' as const,
+    targetId: normalizedChannelTargetId || sessionManager.getSessionCatalog(normalizedSessionId!)?.id || normalizedSessionId!,
+    sourceNodeId: ctx?.runtimeNodeId || ctx?.session?.currentNode || 'master',
+  };
 
   if (normalizedChannelTargetId) {
     if (normalizedChannelTargetId.startsWith('webui:')) {
-      return buildSendFileResult(`File \`${file.name}\` is ready for WebUI target \`${normalizedChannelTargetId}\`.`, file);
+      return buildSendFileResult(`File \`${file.name}\` is ready for WebUI target \`${normalizedChannelTargetId}\`.`, file, delivery);
     }
 
     await sessionManager.sendFileToChannelTargetId(normalizedChannelTargetId, file, sendOptions);
-    return buildSendFileResult(`File \`${file.name}\` sent to channel target \`${normalizedChannelTargetId}\``, file);
+    return buildSendFileResult(`File \`${file.name}\` sent to channel target \`${normalizedChannelTargetId}\``, file, delivery);
   }
 
   const result = await sessionManager.sendFileToSession(normalizedSessionId, file, sendOptions);
@@ -285,7 +290,7 @@ export async function executeSendFileMain(args: ToolArgs, ctx?: ToolContext) {
   const output = formatSendFileSessionResult(normalizedSessionId, file, result);
 
   if (hasWebUiDownloadFallback && result.deliveredChannels.length === 0 && result.failedChannels.length === 0) {
-    return buildSendFileResult(output, file);
+    return buildSendFileResult(output, file, delivery);
   }
 
   if (result.deliveredChannels.length === 0) {
@@ -293,10 +298,10 @@ export async function executeSendFileMain(args: ToolArgs, ctx?: ToolContext) {
   }
 
   if (hasWebUiDownloadFallback) {
-    return buildSendFileResult(output, file);
+    return buildSendFileResult(output, file, delivery);
   }
 
-  return buildSendFileResult(output, file);
+  return buildSendFileResult(output, file, delivery);
 }
 
 export async function tool_send_file(args: ToolArgs, ctx?: ToolContext) {

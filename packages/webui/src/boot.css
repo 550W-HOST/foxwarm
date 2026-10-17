@@ -2,23 +2,39 @@
 html { background: var(--foxwarm-color-canvas, #f3f4f6); }
 body { margin: 0; }
 html:not([data-foxwarm-boot-ready]) #root { visibility: hidden; }
-#foxwarm-boot { color: var(--foxwarm-color-text, #111827); font: 15px/1.5 system-ui, sans-serif; padding: 24px; box-sizing: border-box; }
+#foxwarm-boot { color: var(--foxwarm-color-text, #111827); font: 14px/1.5 system-ui, sans-serif; padding: 24px; box-sizing: border-box; }
 #foxwarm-boot > svg { width: min(40vmin, 200px); height: min(40vmin, 200px); flex-shrink: 0; }
 #foxwarm-boot [hidden] { display: none; }
 [data-foxwarm-boot-leaf] #foxwarm-boot[data-state='shown'] { display: none; }
-#foxwarm-boot[data-state='error'] { opacity: 1; visibility: visible; pointer-events: auto; overflow: auto; }
+#foxwarm-boot[data-state='error'] { opacity: 1; visibility: visible; pointer-events: auto; overflow: auto; justify-content: safe center; padding: 32px 24px; }
+#foxwarm-boot[data-state='error'] > svg { width: 88px; height: 88px; margin-bottom: 20px; }
 #foxwarm-boot[data-state='error'] .fw-fox * { animation: none; stroke-dashoffset: 0; }
-#foxwarm-boot-recovery { max-width: 560px; width: 100%; text-align: center; }
-#foxwarm-boot h1 { font: inherit; font-size: 22px; font-weight: 600; margin: 20px 0 8px; }
-#foxwarm-boot p { margin: 0 0 16px; }
-#foxwarm-boot-error { font: 13px/1.5 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 25vh; overflow: auto; text-align: left; }
-#foxwarm-boot button { appearance: none; background: var(--foxwarm-color-accent, #e27022); color: var(--foxwarm-color-accent-text, #fff); border: 0; border-radius: 6px; padding: 10px 24px; font: inherit; cursor: pointer; }
-#foxwarm-boot button:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }
+#foxwarm-boot-recovery { flex-shrink: 0; max-width: 420px; width: 100%; text-align: center; }
+#foxwarm-boot h1 { font: inherit; font-size: 22px; line-height: 1.3; font-weight: 600; margin: 0; text-wrap: balance; }
+#foxwarm-boot p { margin: 8px 0 0; color: color-mix(in srgb, var(--foxwarm-color-text, #111827) 78%, transparent); }
+#foxwarm-boot .foxwarm-boot-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; margin-top: 20px; }
+#foxwarm-boot button { appearance: none; box-sizing: border-box; min-height: 36px; background: var(--foxwarm-color-accent, #e27022); color: var(--foxwarm-color-accent-text, #fff); border: 1px solid transparent; border-radius: 6px; padding: 6px 18px; font: inherit; cursor: pointer; }
+#foxwarm-boot button:hover { filter: brightness(.95); }
+#foxwarm-boot button:focus-visible, #foxwarm-boot summary:focus-visible { outline: 2px solid var(--foxwarm-color-accent, #e27022); outline-offset: 3px; }
+#foxwarm-boot-details { margin-top: 20px; min-width: 0; }
+#foxwarm-boot-details:not([open]) #foxwarm-boot-error { display: none; }
+#foxwarm-boot-details summary { display: flex; width: fit-content; max-width: 100%; align-items: center; justify-content: center; gap: 8px; min-height: 28px; margin-inline: auto; border-radius: 4px; list-style: none; cursor: pointer; font-size: 12px; color: color-mix(in srgb, var(--foxwarm-color-text, #111827) 78%, transparent); }
+#foxwarm-boot-details summary::-webkit-details-marker { display: none; }
+#foxwarm-boot-details summary::before { content: ''; width: 5px; height: 5px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); flex-shrink: 0; }
+#foxwarm-boot-details[open] summary::before { transform: rotate(45deg); }
+#foxwarm-boot-details summary:hover { color: var(--foxwarm-color-text, #111827); }
+#foxwarm-boot-error { box-sizing: border-box; margin: 10px 0 0; padding: 12px; border: 1px solid color-mix(in srgb, currentColor 16%, transparent); border-radius: 6px; background: color-mix(in srgb, currentColor 3%, transparent); font: 12px/1.5 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; max-height: min(160px, 30dvh); overflow: auto; text-align: left; }
+@media (pointer: coarse) { #foxwarm-boot button { min-height: 44px; } #foxwarm-boot-details summary { min-height: 44px; } }
 @media (prefers-reduced-motion: reduce) { #foxwarm-boot { transition: none; } }
 
 /* Later module failures must not cover an already usable app or local fallback. */
-#foxwarm-boot[data-state='notice'] { inset: auto 16px 16px auto; width: min(520px, calc(100vw - 32px)); align-items: stretch; padding: 16px; border: 1px solid currentColor; border-radius: 10px; box-shadow: 0 4px 24px #0002; }
+#foxwarm-boot[data-state='notice'] { inset: auto 16px 16px auto; width: min(400px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; align-items: stretch; padding: 20px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 10px; box-shadow: 0 4px 24px #0002; }
 #foxwarm-boot[data-state='notice'] > svg { display: none; }
-#foxwarm-boot[data-state='notice'] h1 { margin: 0 0 8px; font-size: 18px; }
-#foxwarm-boot[data-state='notice'] pre { max-height: 100px; }
-#foxwarm-boot-dismiss { margin-left: 8px; }
+#foxwarm-boot[data-state='notice'] #foxwarm-boot-recovery { text-align: left; }
+#foxwarm-boot[data-state='notice'] h1 { font-size: 16px; }
+#foxwarm-boot[data-state='notice'] p { font-size: 13px; }
+#foxwarm-boot[data-state='notice'] .foxwarm-boot-actions { justify-content: flex-start; margin-top: 16px; }
+#foxwarm-boot[data-state='notice'] #foxwarm-boot-details { margin-top: 12px; }
+#foxwarm-boot[data-state='notice'] summary { margin-inline: 0; }
+#foxwarm-boot[data-state='notice'] pre { max-height: min(120px, 25dvh); }
+#foxwarm-boot #foxwarm-boot-dismiss { background: transparent; color: inherit; border-color: color-mix(in srgb, currentColor 20%, transparent); }

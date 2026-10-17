@@ -43,7 +43,7 @@ Compact-threshold settings, child-model settings, snapshot refresh, and current 
 | `formatBlockIdRange` | Formats a block ID range label |
 | `shouldEnforceIsolatedMasterPathAccess` | Checks if isolated path restrictions apply |
 | `prepareChannelFile` / `prepareRemoteChannelFile` | Prepares file metadata for channel delivery |
-| `formatSendFileSessionResult` / `buildSendFileResult` | Formats send_file tool results |
+| `formatSendFileSessionResult` / `buildSendFileResult` | Formats send_file tool results with bounded delivery identity, target, original metadata and source/cache provenance |
 
 ### toolsSessionAgent/interSession.ts — Inter-session communication
 | Function | Description |

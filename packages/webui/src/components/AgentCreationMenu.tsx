@@ -9,6 +9,8 @@ interface AgentCreationMenuProps {
   agents: AgentSummary[]
   currentAgent?: string
   compact?: boolean
+  triggerLabel?: string
+  triggerClassName?: string
   onCreateAgent: (agentId: string, inheritAgent?: string) => Promise<void>
   onCreateSession: (agentId: string, sessionId?: string) => Promise<void>
 }
@@ -17,6 +19,8 @@ export default function AgentCreationMenu({
   agents,
   currentAgent,
   compact = false,
+  triggerLabel,
+  triggerClassName,
   onCreateAgent,
   onCreateSession,
 }: AgentCreationMenuProps) {
@@ -132,14 +136,15 @@ export default function AgentCreationMenu({
         ref={triggerRef}
         type="button"
         onClick={openSessionModal}
-        className={compact
+        className={triggerClassName ?? (compact
           ? 'inline-flex items-center justify-center rounded-lg border border-fw-border-strong px-2 transition-colors bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised/60 dark:text-fw-text-strong dark:hover:bg-fw-hover'
-          : 'inline-flex h-8 w-8 items-center justify-center rounded-lg text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse transition'}
+          : 'inline-flex h-8 w-8 items-center justify-center rounded-lg text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse transition')}
         title="New session"
         aria-label="New session"
         aria-haspopup="dialog"
       >
         <Plus className="h-4 w-4" />
+        {triggerLabel && <span>{triggerLabel}</span>}
       </button>
 
       {mode && createPortal(

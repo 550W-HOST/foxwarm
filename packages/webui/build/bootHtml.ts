@@ -32,10 +32,15 @@ export async function renderBootHtml(html: string): Promise<string> {
     </svg>
     <div id="foxwarm-boot-recovery" hidden>
       <h1 id="foxwarm-boot-title">Foxwarm couldn’t load</h1>
-      <p id="foxwarm-boot-description">Check your connection, then reload to try again.</p>
-      <pre id="foxwarm-boot-error"></pre>
-      <button id="foxwarm-boot-reload" type="button">Reload</button>
-      <button id="foxwarm-boot-dismiss" type="button" hidden>Dismiss</button>
+      <p id="foxwarm-boot-description">Reload to try again.</p>
+      <div class="foxwarm-boot-actions">
+        <button id="foxwarm-boot-reload" type="button">Reload</button>
+        <button id="foxwarm-boot-dismiss" type="button" hidden>Dismiss</button>
+      </div>
+      <details id="foxwarm-boot-details">
+        <summary>Error details</summary>
+        <pre id="foxwarm-boot-error"></pre>
+      </details>
     </div>
   </div>`
   // Escape the HTML parser's script terminator, including in bundled theme data.

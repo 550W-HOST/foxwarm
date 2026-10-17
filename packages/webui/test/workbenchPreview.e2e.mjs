@@ -3296,3 +3296,152 @@ test('playful runtime and short right-side queue work in App and Appearance', as
     if (process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR) await appearance.screenshot({ path: `${process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR}/appearance-playful-status.png` })
   } finally { await appearance.close() }
 })
+
+test('mobile home is a flat session-first layout and mobile Chats omit desktop tabs without deleting them', async () => {
+  const page = await openFixture({width: 390, height: 844, themeId: 'foxwarm.foxwarm', tabs: [system, chat('e2e-a', false), chat('e2e-b', false)]})
+  try {
+    await page.waitForSelector('[data-mobile-session-home]')
+    await page.waitForSelector('button[aria-label="Session display options"]')
+    assert.deepEqual(await page.$$eval('[data-sidebar-footer] button', buttons => buttons.map(button => button.textContent.trim())), ['Sessions', 'Tasks', 'Search', 'Settings'])
+    assert.equal(await page.$('[data-mobile-session-home] button[title="Create terminal tab"]'), null)
+    assert.equal(await page.$('[data-mobile-session-home] button[title="Open code"]'), null)
+    assert.equal(await page.$('.session-pin'), null)
+    const primaryWorkspace = Object.keys((await state(page)).tabsById).sort()
+    for (const tab of ['tasks', 'search', 'setup', 'sessions']) {
+      await page.click(`#mobile-tab-${tab}`)
+      await page.waitForFunction(tab => document.getElementById(`mobile-tab-${tab}`)?.getAttribute('aria-selected') === 'true' && document.getElementById(`mobile-panel-${tab}`)?.getBoundingClientRect().height > 0, {}, tab)
+      assert.ok(await page.$('[data-mobile-session-home] [data-sidebar-footer]'))
+      assert.deepEqual(Object.keys((await state(page)).tabsById).sort(), primaryWorkspace, 'mobile primary tabs do not create desktop workbench pages')
+      assert.ok(await page.$eval('.mobile-primary-nav', el => { const c=getComputedStyle(el),r=el.getBoundingClientRect(); return parseFloat(c.borderRadius)>=20 && c.backdropFilter==='blur(5px)' && c.backgroundColor.includes('/ 0.75)') && r.left>=12 && r.right<=innerWidth-12 && r.bottom<=innerHeight-12 }), `floating frosted navigation on ${tab}`)
+      await workbenchScreenshot(page, `mobile-primary-${tab}.png`)
+
+    }
+    const spacing = await page.$eval('[data-session-id="e2e-a"]', row => {
+      const title = row.querySelector('span[title]'), bounds = row.getBoundingClientRect()
+      return {inset: title.getBoundingClientRect().left - bounds.left, disclosure: !!row.querySelector('.session-compact-disclosure'), height: bounds.height}
+    })
+    assert.ok(spacing.inset >= 10 && spacing.inset <= 14 && !spacing.disclosure && spacing.height >= 56, JSON.stringify(spacing))
+    await workbenchScreenshot(page, 'mobile-session-home.png')
+    await page.click('button[aria-label="Workspace tools"]')
+    await page.waitForSelector('[role="menu"]')
+    await page.click('[role="menu"] button::-p-text(Code)')
+    await page.waitForSelector('dialog[open]')
+    assert.equal(await page.$eval('dialog', node => node.querySelector('#mobile-tool-title').textContent), 'Code')
+    assert.ok(await page.$('dialog select'))
+    await workbenchScreenshot(page, 'mobile-code-tools.png')
+    await page.keyboard.press('Escape')
+    await page.waitForSelector('dialog', {hidden: true})
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), 'Workspace tools')
+    await page.click('button[aria-label="New session"]')
+    await page.waitForSelector('[role="dialog"][aria-labelledby="creation-dialog-title"]')
+    await page.keyboard.press('Escape')
+    await page.waitForSelector('[role="dialog"][aria-labelledby="creation-dialog-title"]', {hidden: true})
+    const before = Object.keys((await state(page)).tabsById).sort()
+    await page.click('[data-session-id="e2e-a"]')
+    await page.waitForSelector('.foxwarm-chat-root')
+    const header = '.foxwarm-chat-root > div:first-of-type'
+    assert.equal(await page.$('.foxwarm-chat-root button[aria-label="Find in chat"]'), null)
+    assert.equal(await page.$('.foxwarm-chat-root button[title="Code"]'), null)
+    assert.equal(await page.$('.foxwarm-chat-root button[title="Terminal"]'), null)
+    assert.equal(await page.$eval('.foxwarm-chat-root [data-session-header-subtitle]', node => !!node).catch(() => false), false)
+    await page.click('.foxwarm-chat-root button[aria-label="Open session options"]')
+    await page.waitForSelector('[data-session-ui-settings-menu]')
+    assert.equal(await page.$$eval('[data-session-ui-settings-menu] button', buttons => buttons.some(button => button.textContent.includes('Show usage badges'))), false)
+    await page.click('[data-session-ui-settings-menu] button::-p-text(Find in chat)')
+    await page.waitForSelector('[data-chat-search] input')
+    await page.click('button[aria-label="Close search"]')
+    assert.ok(await page.$(header))
+    assert.equal(await page.$('[data-tab-id]'), null)
+    assert.equal(await page.$('[role="tablist"][aria-label="Pane tabs"]'), null)
+    assert.equal(await page.$('[data-workbench-tab-close]'), null)
+    assert.deepEqual(Object.keys((await state(page)).tabsById).sort(), before)
+    await workbenchScreenshot(page, 'mobile-chat-without-tabs.png')
+    await page.click('.foxwarm-chat-root button[title="Back"]')
+    await page.waitForSelector('[data-mobile-session-home]')
+    await page.setViewport({width: 1400, height: 900})
+    await page.waitForSelector('[data-tab-id="chat:e2e-a"]')
+    assert.equal(await page.$('[data-mobile-session-home]'), null)
+    assert.deepEqual(Object.keys((await state(page)).tabsById).sort(), before)
+  } finally { await page.close() }
+})
+
+
+test('mobile suppresses per-round and reasoning token statistics without changing desktop usage preference', async () => {
+  const messages = [
+    {role:'user',parts:[{text:'A small fixture request'}],__meta:{seq:1,timestamp:1700000000000}},
+    {role:'model',parts:[{thinking:'A short fixture analysis.'},{text:'A complete fixture answer.'}],__meta:{seq:2,timestamp:1700000001000,usage:{cachedTokens:120,inputTokens:40,outputTokens:20,reasoningTokens:10}}},
+  ]
+  const page = await openFixture({responsiveChat:true,chatMessages:messages,hash:'#tab/chat:e2e-a',tabs:[chat('e2e-a',false)]})
+  try {
+    await page.waitForSelector('[data-usage-badge-anchor]')
+    const preference = await page.evaluate(() => localStorage.getItem('foxwarm_show_usage_badge_v1'))
+    await page.setViewport({width:390,height:844})
+    await page.waitForSelector('[data-usage-badge-anchor]', {hidden:true})
+    assert.equal(await page.$('[data-reasoning-token-badge]'), null)
+    assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_show_usage_badge_v1')), preference)
+    await page.waitForFunction(()=>document.querySelector('.foxwarm-assistant-message-card')&&!document.querySelector('.foxwarm-assistant-action-buttons'))
+    await page.setViewport({width:1400,height:900})
+    await page.waitForSelector('.foxwarm-assistant-action-buttons')
+    await page.waitForSelector('[data-usage-badge-anchor]')
+  } finally {await page.close()}
+})
+
+test('mobile navigation is capped on tablet widths and mobile Conversation preferences stay independent', async () => {
+  const page = await openFixture({width:390,height:844,chatMessages:[{role:'model',parts:[{text:'A visible answer.'}],__meta:{seq:1,timestamp:1}}],timelineView:'grouped'})
+  const options = async () => {
+    await waitForWebUiReady(page)
+    if (await page.$eval('[data-mobile-session-home]', el => !!el.getClientRects().length).catch(() => false)) await clickReadyControl(page, '[data-session-id="e2e-a"]')
+    await page.waitForSelector('.foxwarm-chat-root button[aria-label="Open session options"]', {visible:true})
+    if (!await page.$('[data-session-ui-settings-menu]')) await clickReadyControl(page, '.foxwarm-chat-root button[aria-label="Open session options"]')
+    await page.waitForSelector('[data-session-ui-settings-menu]')
+  }
+  try {
+    await page.waitForSelector('.mobile-primary-nav')
+    await page.setViewport({width:740,height:900})
+    await page.waitForFunction(()=>Math.abs(document.querySelector('.mobile-primary-nav')?.getBoundingClientRect().width-440)<1)
+    assert.ok(await page.$eval('.mobile-primary-nav',el=>{const r=el.getBoundingClientRect();return Math.abs(r.left-(innerWidth-r.width)/2)<1}))
+    await workbenchScreenshot(page,'mobile-nav-tablet.png')
+    await page.setViewport({width:390,height:844})
+    await options()
+    await page.waitForFunction(()=>document.querySelector('[role="radiogroup"][aria-label="Timeline view"] [aria-checked="true"]')?.textContent==='Conversation')
+    await page.click('[role="radio"]::-p-text(Detailed)')
+    assert.deepEqual(await page.evaluate(()=>[localStorage.getItem('foxwarm_mobile_timeline_view_v1'),localStorage.getItem('foxwarm_timeline_view_v1')]),['detailed','grouped'])
+    await page.keyboard.press('Escape')
+    const header=await page.$eval('[data-mobile-chat-header]',el=>{const css=getComputedStyle(el),back=el.querySelector('.mobile-header-back'),capsule=el.querySelector('.mobile-header-capsule');return {position:css.position,background:css.backgroundColor,image:css.backgroundImage,border:css.borderTopWidth,backRadius:getComputedStyle(back).borderRadius,capsuleRadius:getComputedStyle(capsule).borderRadius,blur:getComputedStyle(capsule).backdropFilter}})
+    assert.deepEqual(header,{position:'absolute',background:'rgba(0, 0, 0, 0)',image:'none',border:'0px',backRadius:'50%',capsuleRadius:'28px',blur:'blur(5px)'})
+    await page.reload({waitUntil:'load'});await options()
+    await page.waitForFunction(()=>document.querySelector('[role="radio"][aria-checked="true"]')?.textContent==='Detailed')
+    await page.keyboard.press('Escape')
+    await page.setViewport({width:1400,height:900})
+    await page.waitForSelector('[data-tab-id="chat:e2e-a"]')
+    await options()
+    await page.waitForFunction(()=>document.querySelector('[role="radio"][aria-checked="true"]')?.textContent==='Grouped')
+    assert.equal(await page.$('[data-mobile-chat-header]'),null)
+    assert.equal(await page.evaluate(()=>localStorage.getItem('foxwarm_mobile_timeline_view_v1')),'detailed')
+  } finally {await page.close()}
+})
+
+test('compact theme swatches retain direct selection and independent preview on desktop and mobile', async () => {
+  const setup = {id:'system:setup',type:'setup',title:'Setup'}
+  for (const width of [1400,390]) {
+    const page=await openFixture(width<768 ? {width,height:900} : {tabs:[setup],activeTabId:setup.id,hash:'#setup',width,height:900})
+    try {
+      if(width<768){await clickReadyControl(page,'#mobile-tab-setup')}
+      await page.waitForSelector('[data-theme-manager]',{visible:true})
+      const geometry=await page.$eval('[data-theme-manager]',root=>{
+        const grid=root.querySelector('.theme-card-grid'),card=grid.querySelector('.theme-option-card'),preview=card.querySelector('.theme-card-preview'),rect=card.getBoundingClientRect()
+        return {height:rect.height,width:rect.width,previewHeight:preview.getBoundingClientRect().height,columns:getComputedStyle(grid).gridTemplateColumns.split(' ').length,overflow:root.scrollWidth>root.clientWidth}
+      })
+      assert.ok(geometry.height<=135&&geometry.previewHeight<90&&!geometry.overflow,JSON.stringify({width,geometry}))
+      if(width<768)assert.equal(geometry.columns,2)
+      await workbenchScreenshot(page,`compact-theme-gallery-${width}.png`)
+      const selection=await page.evaluate(()=>localStorage.getItem('foxwarm_theme_selection_v3'))
+      await clickReadyControl(page,'[data-theme-preview="foxwarm.vector"]')
+      await page.waitForSelector('[data-theme-preview-dialog]')
+      assert.equal(await page.evaluate(()=>localStorage.getItem('foxwarm_theme_selection_v3')),selection,'preview does not apply a theme')
+      await page.keyboard.press('Escape')
+      await clickReadyControl(page,'[data-theme-option="foxwarm.vector"]')
+      assert.equal(await page.$eval('[data-theme-option="foxwarm.vector"]',el=>el.getAttribute('aria-pressed')),'true')
+    }finally{await page.close()}
+  }
+})

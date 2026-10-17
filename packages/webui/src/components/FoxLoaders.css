@@ -1,4 +1,4 @@
-/* Fox loader collection — all strokes derive from the theme accent. */
+/* Fox loader collection — semantic ink, accent by default and warning for waiting. */
 .fw-fox {
   --fw-fox-ink: var(--foxwarm-color-accent, #e27022);
   --fw-fox-soft: color-mix(in srgb, var(--fw-fox-ink) 55%, transparent);
@@ -105,4 +105,16 @@
   .fw-fox-thinking-copy { transition: none !important; }
   .fw-fox-thinking-phrases > span { animation: none !important; clip-path: none; }
   .fw-fox-thinking-phrases > [data-thinking-phrase="outgoing"] { display: none; }
+}
+
+/* Waiting has no comet or caption timer: a gently breathing, sleeping fox. */
+.fw-fox-dozing { position: relative; line-height: 0; }
+.fw-fox-dozing .fw-fox { --fw-fox-ink: currentColor; stroke-width: 7; }
+.fw-fox-dozing .fw-fox-body { animation: fw-fox-breathe 4.2s ease-in-out infinite; }
+.fw-fox-dozing::before, .fw-fox-dozing::after { content: 'z'; position: absolute; line-height: 1; font-family: ui-sans-serif, system-ui, sans-serif; font-weight: 600; animation: fw-fox-snooze 3.2s ease-in-out infinite; }
+.fw-fox-dozing::after { right: -.08em; top: -.08em; font-size: .38em; }
+.fw-fox-dozing::before { right: -.8em; top: -.6em; font-size: .28em; animation-delay: -.8s; }
+@keyframes fw-fox-snooze { 0%, 100% { opacity: .5; transform: translateY(0); } 50% { opacity: .95; transform: translateY(-1px); } }
+@media (prefers-reduced-motion: reduce) {
+  .fw-fox-dozing::before, .fw-fox-dozing::after { animation: none; transform: none; opacity: .8; }
 }

@@ -261,7 +261,11 @@ for (const spec of browsers) {
     await page.keyboard.type('pointer send')
     await page.click('button[aria-label="Send message"]')
     await page.waitForFunction(() => window.fixtureEditor().contentEditable === 'false')
-    assert.equal(await page.evaluate(() => document.activeElement.tagName), 'BODY')
+    // Chromium can retain focus on the disabled Send control; the editor must not take it while noneditable.
+    assert.equal(await page.evaluate(() => {
+      const active = document.activeElement
+      return active === document.body || active instanceof HTMLButtonElement && active.disabled && active.getAttribute('aria-label') === 'Send message'
+    }), true)
     await page.evaluate(() => window.fixtureReleaseSend())
     await settleSend(page)
     assert.equal(await page.evaluate(() => window.fixtureEditor() === window.fixtureOriginalEditor), true)
@@ -1001,7 +1005,7 @@ for (const spec of [browsers[0]]) {
     await page.reload({ waitUntil: 'load' })
     await page.waitForSelector(editor)
     await page.waitForFunction(() => document.querySelectorAll('.foxwarm-composer-attachment-chip').length === 2)
-    assert.deepEqual(await page.$$eval('.foxwarm-composer-attachment-chip', chips => chips.map(chip => chip.textContent.includes('Reattach required'))), [true, true])
+    assert.deepEqual(await page.$$eval('.foxwarm-composer-attachment-chip', chips => chips.map(chip => chip.dataset.attachmentMissing === 'true')), [true, true])
     await page.locator('.foxwarm-composer-caret-anchor').click()
     await page.waitForFunction(() => document.querySelector('.foxwarm-composer-caret-anchor')?.contains(getSelection()?.anchorNode))
     await page.keyboard.press('ArrowRight')
@@ -1020,7 +1024,7 @@ for (const spec of [browsers[0]]) {
       Object.defineProperty(input, 'files', { configurable: true, value: transfer.files })
       input.dispatchEvent(new Event('change', { bubbles: true }))
     })
-    await page.waitForFunction(() => !document.querySelector('.foxwarm-composer-attachment-chip')?.textContent.includes('Reattach required'))
+    await page.waitForFunction(() => document.querySelector('.foxwarm-composer-attachment-chip')?.dataset.attachmentMissing === 'false')
     assert.deepEqual(await page.$$eval('.foxwarm-composer-attachment-chip', chips => chips.map(chip => chip.dataset.composerAttachmentRef)), refs)
     await page.$$eval('.foxwarm-composer-attachment-chip', chips => chips[1].click())
     await page.waitForSelector('[role="dialog"][aria-label="Attachment information"]')
@@ -1161,7 +1165,7 @@ for (const spec of browsers) {
     })
     const selectedStyles = await page.$$eval('[data-composer-block-selected]', chips => chips.map(chip => {
       const style = getComputedStyle(chip)
-      const remove = chip.querySelector('[data-composer-block-remove]')
+      const remove = chip.querySelector('[data-composer-block-remove]') || (chip.dataset.composerAttachmentRef && document.querySelector(`[data-attachment-preview-ref="${chip.dataset.composerAttachmentRef}"] .composer-attachment-remove`))
       const image = chip.querySelector('img')
       const preview = chip.querySelector('.foxwarm-composer-pasted-text-preview')
       return {
@@ -1226,11 +1230,12 @@ for (const spec of browsers) {
       })
       const consoleStyles = await page.$$eval('[data-composer-block-selected]', chips => chips.map(chip => {
         const style = getComputedStyle(chip)
-        return { shadow: style.boxShadow, color: style.color, remove: !!chip.querySelector('[data-composer-block-remove]') }
+        return { shadow: style.boxShadow, color: style.color, remove: !!(chip.querySelector('[data-composer-block-remove]') || (chip.dataset.composerAttachmentRef && document.querySelector(`[data-attachment-preview-ref="${chip.dataset.composerAttachmentRef}"] .composer-attachment-remove`))) }
       }))
       assert.equal(consoleStyles.every(style => style.shadow !== 'none' && style.remove && style.color !== 'rgba(0, 0, 0, 0)'), true, JSON.stringify(consoleStyles))
     }
-    await page.mouse.click(points.end.x, points.end.y)
+    await page.focus(editor)
+    await page.keyboard.press('ArrowRight')
     await page.focus('[data-composer-block-remove]')
     await page.waitForFunction(() => document.querySelectorAll('[data-composer-block-selected]').length === 0)
     await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
@@ -1278,8 +1283,8 @@ test('Chromium removes image, file, and missing-file blocks without opening thei
     await page.evaluate(sessionId => window.fixtureSetSession(sessionId), sessionId)
     await page.waitForFunction((sessionId) => window.fixtureCurrentSession === sessionId
       && document.querySelector('button[aria-label="Remove attachment notes.txt"]')
-      && [...document.querySelectorAll('.foxwarm-composer-attachment-chip')].every(node => node.textContent.includes('Reattach required')), {}, sessionId)
-    assert.equal(await page.$eval('.foxwarm-composer-attachment-chip', node => node.textContent.includes('Reattach required')), true)
+      && [...document.querySelectorAll('.foxwarm-composer-attachment-chip')].every(node => node.dataset.attachmentMissing === 'true'), {}, sessionId)
+    assert.equal(await page.$eval('.foxwarm-composer-attachment-chip', node => node.dataset.attachmentMissing === 'true'), true)
     const missingDraft = attachmentDraft
     await page.locator('button[aria-label="Remove attachment notes.txt"]').click()
     assert.notEqual(await page.evaluate(() => window.fixtureDraft), missingDraft)
