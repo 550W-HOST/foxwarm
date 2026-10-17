@@ -177,9 +177,11 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
             return new(200, new { success = true, stoppedCurrent = stopped.StoppedCurrent });
         }
         var parts = message.Parts ?? [new JsonObject { ["text"] = message.Text }];
-        var item = new QueueItem(QueueItemType.User,
+        var item = new QueueItem(
+            QueueItemType.User,
             SessionBoundary.ChannelInput(parts, context.Platform),
-            ClientMessageId: message.ClientMessageId);
+            ClientMessageId: message.ClientMessageId
+        );
         if (attachmentOwner is null)
             await runtime.SubmitAndRunAsync(context.SessionId, item);
         else

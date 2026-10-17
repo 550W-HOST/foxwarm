@@ -154,7 +154,13 @@ internal sealed class ModelRequestOwner(
         Action<string>? journalRequestStarted = null,
         Func<Task<IReadOnlyList<JsonObject>>>? requestContext = null,
         Func<CapturedRequest?>? recaptureSelection = null,
-        Func<ConcreteHostModel, string, bool, CancellationToken, Task<RequestHistory?>>? adoptSelection = null
+        Func<
+            ConcreteHostModel,
+            string,
+            bool,
+            CancellationToken,
+            Task<RequestHistory?>
+        >? adoptSelection = null
     )
     {
         var catalog = captured.Catalog;
@@ -177,7 +183,11 @@ internal sealed class ModelRequestOwner(
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var explicitSelectionChanged = false;
-                if (attempt > 1 && scope == ModelRequestScope.Canonical && recaptureSelection?.Invoke() is { } next)
+                if (
+                    attempt > 1
+                    && scope == ModelRequestScope.Canonical
+                    && recaptureSelection?.Invoke() is { } next
+                )
                 {
                     captured = next;
                     catalog = next.Catalog;
@@ -205,7 +215,10 @@ internal sealed class ModelRequestOwner(
                 if (scope == ModelRequestScope.Canonical && adoptSelection is not null)
                 {
                     var updated = await adoptSelection(
-                        leaf, effort, attempt > 1 && !explicitSelectionChanged && request is not null, cancellationToken
+                        leaf,
+                        effort,
+                        attempt > 1 && !explicitSelectionChanged && request is not null,
+                        cancellationToken
                     );
                     cancellationToken.ThrowIfCancellationRequested();
                     if (updated is not null)

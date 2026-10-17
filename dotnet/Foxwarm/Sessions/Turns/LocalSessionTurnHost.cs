@@ -475,7 +475,9 @@ public sealed partial class LocalSessionTurnHost
             }
             if (item.Message is not null)
             {
-                rawMessages.Add(DeferredQueueInput.Message(item, (JsonObject)item.Message.DeepClone()));
+                rawMessages.Add(
+                    DeferredQueueInput.Message(item, (JsonObject)item.Message.DeepClone())
+                );
                 committedAnyInput = true;
                 continue;
             }

@@ -67,8 +67,10 @@ public sealed class SessionTurnRunner
                 }
                 else
                 {
-                    if (entry.WithState(state => SessionWait.Current(state.Meta) is not null)
-                        && !registry.HasRunnableWork(entry))
+                    if (
+                        entry.WithState(state => SessionWait.Current(state.Meta) is not null)
+                        && !registry.HasRunnableWork(entry)
+                    )
                         break;
                     if (!entry.WithState(state => state.Queue.Any(SessionCompactor.Ordinary)))
                         break;

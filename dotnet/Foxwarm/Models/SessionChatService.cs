@@ -150,14 +150,22 @@ internal sealed class SessionChatService(
                 RequestContext,
                 () =>
                 {
-                    var raw = hosted.Entry.WithState(state => SessionWait.Text(state.AuthorityEnvelope["model"]));
+                    var raw = hosted.Entry.WithState(state =>
+                        SessionWait.Text(state.AuthorityEnvelope["model"])
+                    );
                     if (raw == selectedRawModel)
                         return null;
                     var nextCatalog = models.Capture();
-                    var next = hosted.Entry.WithState(state => nextCatalog.Select(state.AuthorityEnvelope));
+                    var next = hosted.Entry.WithState(state =>
+                        nextCatalog.Select(state.AuthorityEnvelope)
+                    );
                     selectedRawModel = next.RawModel;
                     selectionRecaptured = true;
-                    captured = requests.Capture(nextCatalog, next.RawModel ?? nextCatalog.DefaultKey, next.RawEffort);
+                    captured = requests.Capture(
+                        nextCatalog,
+                        next.RawModel ?? nextCatalog.DefaultKey,
+                        next.RawEffort
+                    );
                     return captured;
                 },
                 async (leaf, effort, failover, token) =>
@@ -165,15 +173,25 @@ internal sealed class SessionChatService(
                     token.ThrowIfCancellationRequested();
                     var current = new EffectiveRequestSelection(
                         leaf.Key,
-                        hosted.Entry.WithState(state => hosted.ExecutionNode(state.AuthorityEnvelope)),
+                        hosted.Entry.WithState(state =>
+                            hosted.ExecutionNode(state.AuthorityEnvelope)
+                        ),
                         effort,
                         selectedRawModel is not null && !captured.Catalog.Contains(selectedRawModel)
-                            ? selectedRawModel : null
+                            ? selectedRawModel
+                            : null
                     );
-                    var changed = await hosted.Entry.SaveLane.AdoptEffectiveSelectionAsync(current, failover);
+                    var changed = await hosted.Entry.SaveLane.AdoptEffectiveSelectionAsync(
+                        current,
+                        failover
+                    );
                     var rebuild = changed || selectionRecaptured;
                     selectionRecaptured = false;
-                    return rebuild ? hosted.Entry.WithState(state => RequestHistory.FromSnapshot(state.History.Snapshot())) : null;
+                    return rebuild
+                        ? hosted.Entry.WithState(state =>
+                            RequestHistory.FromSnapshot(state.History.Snapshot())
+                        )
+                        : null;
                 }
             );
         }

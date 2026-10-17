@@ -489,7 +489,13 @@ public sealed class PersistentSessionAuthorityStore
             && trigger.TryGetValue<bool>(out var shouldTrigger)
                 ? shouldTrigger
                 : true
-        ) { QueuedInput = value["queuedInput"] is JsonValue queued && queued.TryGetValue<bool>(out var observed) && observed };
+        )
+        {
+            QueuedInput =
+                value["queuedInput"] is JsonValue queued
+                && queued.TryGetValue<bool>(out var observed)
+                && observed,
+        };
     }
 
     private static void SetOptional(JsonObject value, string property, string? content)

@@ -81,14 +81,30 @@ internal static class SessionBoundary
                 .Replace(":", "", StringComparison.Ordinal);
     }
 
-    internal static IReadOnlyList<JsonObject> ChannelInput(IReadOnlyList<JsonObject> parts, string platform)
+    internal static IReadOnlyList<JsonObject> ChannelInput(
+        IReadOnlyList<JsonObject> parts,
+        string platform
+    )
     {
-        var opening = $"<foxwarm-message type=\"channel\" channelType=\"{Escape(platform)}\" time=\"{LocalTime()}\" hint=\"direct user message via channel\">";
+        var opening =
+            $"<foxwarm-message type=\"channel\" channelType=\"{Escape(platform)}\" time=\"{LocalTime()}\" hint=\"direct user message via channel\">";
         if (parts.All(part => part.Count == 1 && SessionWait.Text(part["text"]) is not null))
-            return [new JsonObject { ["system"] = opening + "\n" + string.Join("\n", parts.Select(part => part["text"]!.GetValue<string>())).Trim() + "\n</foxwarm-message>" }];
+            return
+            [
+                new JsonObject
+                {
+                    ["system"] =
+                        opening
+                        + "\n"
+                        + string.Join("\n", parts.Select(part => part["text"]!.GetValue<string>()))
+                            .Trim()
+                        + "\n</foxwarm-message>",
+                },
+            ];
         return new[] { new JsonObject { ["system"] = opening } }
             .Concat(parts.Select(part => (JsonObject)part.DeepClone()))
-            .Append(new JsonObject { ["system"] = "</foxwarm-message>" }).ToArray();
+            .Append(new JsonObject { ["system"] = "</foxwarm-message>" })
+            .ToArray();
     }
 
     internal static string SessionEvent(string type, string message) =>

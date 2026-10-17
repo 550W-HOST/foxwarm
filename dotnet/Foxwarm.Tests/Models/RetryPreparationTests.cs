@@ -212,8 +212,14 @@ public sealed class RetryPreparationTests
                 preparations++;
                 throw new InvalidOperationException("Nonordinary request cannot consume input.");
             },
-            recaptureSelection: () => throw new InvalidOperationException("Nonordinary request cannot recapture owner selection."),
-            adoptSelection: (_, _, _, _) => throw new InvalidOperationException("Nonordinary request cannot adopt owner selection.")
+            recaptureSelection: () =>
+                throw new InvalidOperationException(
+                    "Nonordinary request cannot recapture owner selection."
+                ),
+            adoptSelection: (_, _, _, _) =>
+                throw new InvalidOperationException(
+                    "Nonordinary request cannot adopt owner selection."
+                )
         );
         Assert.Equal(0, preparations);
         Assert.Equal(2, peer.RequestCount);
