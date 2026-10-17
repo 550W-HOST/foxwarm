@@ -33,7 +33,9 @@ internal sealed class WebUiDownloadSignatures(string token, Func<long>? now = nu
     )
     {
         var input = new StringBuilder("[");
-        foreach (var value in new[] { "download-v1", kind, resource, null, filename, preview, expires })
+        foreach (
+            var value in new[] { "download-v1", kind, resource, null, filename, preview, expires }
+        )
         {
             if (input.Length > 1)
                 input.Append(',');

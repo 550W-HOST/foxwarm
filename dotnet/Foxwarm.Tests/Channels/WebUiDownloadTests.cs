@@ -125,23 +125,56 @@ public sealed class WebUiDownloadTests
         Assert.False(signer.Verify("path", "/tmp/文.txt", parsed));
     }
 
-    public static TheoryData<string, string, string?, string?, string> SourceMacCases => new()
-    {
-        { "path", "/tmp/😀.txt", "😀.txt", "0", "0b533788e1bf8542760efbbae952cd19f0c6da04ef1c1dfa9585a0e810dae925" },
-        { "path", "/tmp/control.txt", new string(Enumerable.Range(0, 32).Select(value => (char)value).ToArray()) + ".txt", "0", "e5e980ebcbc958891ef86c47ec3ae61d5242af2d77590fdc022b12d23c9ee544" },
-        { "blob", "ab12.png", "quote\" backslash\\ slash/ <>& café 文 \u2028\u2029 🦊.png", "1", "fbfd33a1276efd4bfd13227620f516469077ed5af63ae054ea37fe34ac47af57" },
-        { "path", "/tmp/e\u0301.txt", null, null, "c06cc718edbf6c899b383ac173ce1baf376c12f0bc223f20eeb3aaf73acab175" },
-    };
+    public static TheoryData<string, string, string?, string?, string> SourceMacCases =>
+        new()
+        {
+            {
+                "path",
+                "/tmp/😀.txt",
+                "😀.txt",
+                "0",
+                "0b533788e1bf8542760efbbae952cd19f0c6da04ef1c1dfa9585a0e810dae925"
+            },
+            {
+                "path",
+                "/tmp/control.txt",
+                new string(Enumerable.Range(0, 32).Select(value => (char)value).ToArray()) + ".txt",
+                "0",
+                "e5e980ebcbc958891ef86c47ec3ae61d5242af2d77590fdc022b12d23c9ee544"
+            },
+            {
+                "blob",
+                "ab12.png",
+                "quote\" backslash\\ slash/ <>& café 文 \u2028\u2029 🦊.png",
+                "1",
+                "fbfd33a1276efd4bfd13227620f516469077ed5af63ae054ea37fe34ac47af57"
+            },
+            {
+                "path",
+                "/tmp/e\u0301.txt",
+                null,
+                null,
+                "c06cc718edbf6c899b383ac173ce1baf376c12f0bc223f20eeb3aaf73acab175"
+            },
+        };
 
     [Theory]
     [MemberData(nameof(SourceMacCases))]
     public void Source_produced_MACs_match_and_verify_for_Unicode_controls_and_escaping(
-        string kind, string resource, string? filename, string? preview, string sourceMac
+        string kind,
+        string resource,
+        string? filename,
+        string? preview,
+        string sourceMac
     )
     {
         // Fixed Source JSON.stringify/HMAC vectors at clock 1700000000, token source-token.
         var signer = new WebUiDownloadSignatures("source-token", () => 1700000000);
-        var issued = signer.Issue(kind, resource, new JsonObject { ["filename"] = filename, ["preview"] = preview });
+        var issued = signer.Issue(
+            kind,
+            resource,
+            new JsonObject { ["filename"] = filename, ["preview"] = preview }
+        );
         var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(issued.Query);
         Assert.Equal(sourceMac, query["signature"]);
         query["signature"] = sourceMac;

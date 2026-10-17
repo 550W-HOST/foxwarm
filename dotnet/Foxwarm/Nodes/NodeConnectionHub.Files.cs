@@ -21,7 +21,12 @@ internal sealed partial class NodeConnectionHub
         TaskCompletionSource<JsonObject> Result
     );
 
-    internal sealed record TransferFile(byte[] Bytes, string Path, string Name, string? MimeType = null);
+    internal sealed record TransferFile(
+        byte[] Bytes,
+        string Path,
+        string Name,
+        string? MimeType = null
+    );
 
     internal async Task<TransferFile> ReadFileAsync(
         string node,

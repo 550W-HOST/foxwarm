@@ -108,10 +108,21 @@ public sealed class MainFileDeliveryTests
     [InlineData(null, "application/octet-stream")]
     [InlineData("", "application/octet-stream")]
     [InlineData("application/yaml", "application/yaml")]
-    public void Receipt_preserves_remote_MIME_or_uses_ordinary_fallback(string? remoteMime, string expected)
+    public void Receipt_preserves_remote_MIME_or_uses_ordinary_fallback(
+        string? remoteMime,
+        string expected
+    )
     {
         using var temp = new TempDirectory();
-        var receipt = FileDeliveryArtifact.Create("session", "main/target", "config.yaml", 12, Path.Combine(temp.Path, "config.yaml"), "two", remoteMime);
+        var receipt = FileDeliveryArtifact.Create(
+            "session",
+            "main/target",
+            "config.yaml",
+            12,
+            Path.Combine(temp.Path, "config.yaml"),
+            "two",
+            remoteMime
+        );
         Assert.Equal(expected, SessionWait.Text(receipt["mimeType"]));
     }
 

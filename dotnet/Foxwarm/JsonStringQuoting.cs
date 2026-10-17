@@ -47,5 +47,4 @@ internal static class JsonStringQuoting
         }
         builder.Append('"');
     }
-
 }
