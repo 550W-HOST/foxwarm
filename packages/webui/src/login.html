@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f3f4f6">
+  <title>Sign in · Foxwarm</title>
+  <!-- foxwarm-login-head -->
+</head>
+<body>
+  <div class="login-ambient" aria-hidden="true"></div>
+  <main class="login-shell">
+    <div class="login-brand" aria-hidden="true">
+      <div class="login-art"><!-- foxwarm-login-fox --></div>
+    </div>
+    <section class="login-panel" aria-labelledby="login-title">
+      <h1 id="login-title">Sign in</h1>
+      <form id="loginForm">
+        <label for="token">Access token</label>
+        <div class="login-token-field" id="tokenField">
+          <svg class="login-key" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="9" r="4"/><path d="m11 12 9 9m-4-4 3-3m-6 0 3-3"/></svg>
+          <input type="password" id="token" name="token" placeholder="Paste your token" autocomplete="current-password" autocapitalize="none" spellcheck="false" aria-describedby="error" required>
+          <button class="login-reveal" id="reveal" type="button" aria-label="Show token" aria-pressed="false" title="Show token">
+            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/><path class="login-eye-slash" d="m3 3 18 18"/></svg>
+          </button>
+        </div>
+        <div class="login-error" id="error" role="alert" aria-live="polite"></div>
+        <button class="login-submit" id="submit" type="submit">
+          <span class="login-submit-spinner" aria-hidden="true"><!-- foxwarm-login-spinner --></span>
+          <span id="submitLabel">Sign in</span>
+          <svg class="login-submit-arrow" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h15m-6-6 6 6-6 6"/></svg>
+          <svg class="login-submit-check" viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>
+        </button>
+      </form>
+      <noscript><p class="login-error">JavaScript is required to sign in.</p></noscript>
+    </section>
+  </main>
+</body>
+</html>
