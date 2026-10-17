@@ -170,6 +170,11 @@ export class McpInboundHttpService {
         connection.initialized = true;
         this.connections.set(id, connection);
       },
+      // The SDK awaits this hook before acknowledging a successful DELETE.
+      onsessionclosed: async () => {
+        const connection = this.liveConnection(id);
+        if (connection) await this.dispose(connection);
+      },
     });
     const server = new Server<ServerRequest, Notification>({ name: 'foxwarm', version: '1.0.0' }, {
       capabilities: { tools: {}, experimental: { [MCP_NOTIFICATION_CAPABILITY]: { version: 1 } } },
