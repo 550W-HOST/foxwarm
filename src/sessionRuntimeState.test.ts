@@ -193,3 +193,23 @@ test('busy session without transient active state falls back to requesting-model
   assert.equal(runtimeState.since, 1234);
   assert.equal(runtimeState.active?.phase, 'unknown');
 });
+
+test('retry, stopping and background compaction are orthogonal to foreground tool execution', async () => {
+  const { setCompactionRuntimeState, clearCompactionRuntimeState } = await import('./sessionRuntimeState');
+  const session = makeSession({busy:true,stopping:true});
+  try {
+    setActiveSessionRuntimeState(session.id,{state:'running-tool',tool:{name:'read',invocationName:'call_tool',source:'node',target:'report.md',startedAt:1}});
+    setCompactionRuntimeState(session.id,{operationId:'one',phase:'planning',background:true,retry:{attempt:1,maxAttempts:6,nextAttempt:2,reason:'temporary\n '+ 'x'.repeat(2000)}});
+    const first=buildSessionRuntimeState(session);
+    assert.equal(first.state,'running-tool');assert.equal(first.tool?.name,'read');assert.equal(first.stopping,true);
+    assert.equal(first.compaction?.phase,'planning');assert.equal(first.retry,undefined);
+    assert.equal(first.compaction?.retry?.reason?.length,1024);assert.doesNotMatch(first.compaction?.retry?.reason || '',/\n/);
+    first.compaction!.retry!.reason='mutated clone';
+    assert.notEqual(buildSessionRuntimeState(session).compaction?.retry?.reason,'mutated clone');
+    setCompactionRuntimeState(session.id,{operationId:'two',phase:'committing',background:true});
+    clearCompactionRuntimeState(session.id,'one');assert.equal(buildSessionRuntimeState(session).compaction?.operationId,'two');
+    clearActiveSessionRuntimeState(session.id);session.busy=false;
+    assert.equal(buildSessionRuntimeState(session).state,'idle');assert.equal(buildSessionRuntimeState(session).stopping,undefined);
+    assert.equal(buildSessionRuntimeState(session).compaction?.operationId,'two');
+  } finally { clearActiveSessionRuntimeState(session.id);clearCompactionRuntimeState(session.id,'two');clearCompactionRuntimeState(session.id,'one'); }
+});

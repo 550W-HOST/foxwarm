@@ -1,3 +1,4 @@
+import { getSessionRuntimeTone } from '../sessionRuntimeState'
 import { WorkbenchHeaderDragArea, WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -84,11 +85,8 @@ const renderMetaBadge = (label: string, tone: 'default' | 'active' | 'warning' |
 }
 
 const getStatusTone = (session: Session) => {
-  const state = getSessionRuntimeStateName(session)
-  if (state === 'requesting-model') return 'bg-fw-accent'
-  if (state === 'running-tool') return 'bg-fw-special'
-  if (state === 'waiting') return 'bg-fw-warning'
-  return 'bg-fw-border-strong dark:bg-fw-text'
+  const tone = getSessionRuntimeTone(session)
+  return tone === 'muted' ? 'bg-fw-border-strong dark:bg-fw-text' : `bg-fw-${tone}`
 }
 
 function SummaryMetric({ label, value, detail, icon, active, onClick }: {

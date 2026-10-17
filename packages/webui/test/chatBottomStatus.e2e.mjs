@@ -30,7 +30,15 @@ before(async () => {
       const url = String(input)
       if (init?.method === 'POST' && url.includes('/message')) {
         const body = JSON.parse(init.body)
-        if (body.text) window.commands.push(body.text)
+        window.lastControlRequest = body
+        if (body.text) {
+          window.commands.push(body.text)
+          if (window.fixture.autoFeedback !== false && body.controlRequestId) queueMicrotask(() => {
+            const action = body.text === '/stop' ? 'stop' : body.text === '/continue' ? 'continue' : 'dequeue'
+            emit({type:'session-event',event:{type:'session-control-feedback',requestId:body.controlRequestId,feedback:{action,status:'accepted',message:'Accepted'}}})
+            if(action==='stop') { runtimeState={...runtimeState,stopping:true};emit({type:'session-state',session:session()}) }
+          })
+        }
         if (body.parts) window.sentMessages.push(body.parts.map(part => part.text || '').join(''))
         if (!body.text) await new Promise(resolve => { pendingPost = resolve })
         return Response.json({ accepted: true })
@@ -53,7 +61,9 @@ before(async () => {
     window.WebSocket = Socket
     const emit = event => Socket.current.emit({ ...event, sessionId: 'fixture/status' })
     window.fixture = {
-      state(state, extra = {}) { runtimeState = { ...runtimeState, state, busy: state === 'requesting-model' || state === 'running-tool', ...extra }; emit({ type: 'session-state', session: session() }) },
+      autoFeedback:true,
+      feedback(requestId,feedback){emit({type:'session-event',event:{type:'session-control-feedback',requestId,feedback}})},
+      state(state, extra = {}) { runtimeState = { ...runtimeState, stopping: undefined, state, busy: state === 'requesting-model' || state === 'running-tool', ...extra }; emit({ type: 'session-state', session: session() }) },
       queue(count, withPreview = true) {
         runtimeState = { ...runtimeState, queueLength: count }; historyVersion++
         queuedMessages = withPreview ? Array.from({ length: count }, (_, index) => ({ role: 'user', parts: [{ text: 'Queued follow-up ' + index }], __meta: { id: 'queued-' + index, timestamp: 1700000000050 + index } })) : []
@@ -63,7 +73,7 @@ before(async () => {
       theme(themeId) { setThemeSelection({ themeId, colorMode: 'dark' }) },
       append(text, role = 'model') { const message = { role, parts: [{ text }], __meta: { seq: messages.length + 1, timestamp: 1700000000100 + messages.length } }; messages.push(message); emit({ type: 'message', message }) }
     }
-    createRoot(document.getElementById('root')).render(<Chat sessionId="fixture/status" canonicalSessionId="fixture/status" sessionDisplayName="Mock preview · status and queue" timelineView={new URLSearchParams(location.search).get('view') || 'detailed'} />)
+    createRoot(document.getElementById('root')).render(<Chat historyMode="active" sessionId="fixture/status" canonicalSessionId="fixture/status" sessionDisplayName="Mock preview · status and queue" timelineView={new URLSearchParams(location.search).get('view') || 'detailed'} />)
   `
   const bundle = await build({ stdin: { contents: source, resolveDir: webui, sourcefile: 'chat-bottom-status-fixture.tsx', loader: 'tsx' }, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
   server = createServer((_request, response) => {
@@ -203,11 +213,11 @@ test('status visibility is stable and queue actions follow the final visible mes
   await page.evaluate(() => window.fixture.state('requesting-model'))
   await page.type('.foxwarm-chat-composer-textarea', 'queued input')
   await page.click('button[type="submit"]')
-  await page.waitForSelector('[aria-label="Loading"]')
+  await page.waitForSelector('[data-composer-action="send"][disabled]')
   const loading = await geometry()
   assert.ok(Math.abs(loading.top - baseline.top) <= 1 && loading.scrollHeight === baseline.scrollHeight, JSON.stringify({ baseline, loading }))
   await page.evaluate(() => window.fixture.releaseSend())
-  await page.waitForFunction(() => !document.querySelector('[aria-label="Loading"]'))
+  await page.waitForSelector('[data-composer-action="stop"]:not([disabled])')
   await clickControl('Stop')
   assert.ok(await page.evaluate(() => window.commands.includes('/stop')))
   const noQueueLayout = await page.evaluate(() => {
@@ -218,11 +228,13 @@ test('status visibility is stable and queue actions follow the final visible mes
   assert.ok(baseline.slot === 56 && noQueueLayout.gap >= 16 && noQueueLayout.border === '0px' && noQueueLayout.background === 'rgba(0, 0, 0, 0)', JSON.stringify(noQueueLayout))
   if (process.env.FOXWARM_PREVIEW_SCREENSHOT_DIR) console.log('no-queue layout', JSON.stringify({ ...noQueueLayout, referenceTop: baseline.top, scrollHeight: baseline.scrollHeight, slot: baseline.slot }))
   await screenshot('status-no-queue')
+  await page.evaluate(() => { window.fixture.state('idle'); window.fixture.state('requesting-model') })
+  await page.waitForSelector('[data-runtime-presentation="request"]')
 
   await page.evaluate(() => window.fixture.queue(2, false))
   await page.waitForFunction(() => document.querySelector('[data-processing-queue-status]')?.textContent.includes('2 queued'))
   assert.equal(await page.$$eval('[data-processing-queue-status]', blocks => blocks.length), 1)
-  assert.ok((await page.$eval('[data-processing-status-slot] [role="status"]', element => element.textContent)).includes('Working'))
+  assert.ok((await page.$eval('[data-processing-status-slot] [role="status"]', element => element.textContent)).includes('Requesting model'))
   assert.equal((await geometry()).slot, baseline.slot)
   await clickControl('Run queued')
   assert.ok(await page.evaluate(() => window.commands.includes('/dequeue')))
@@ -234,7 +246,7 @@ test('status visibility is stable and queue actions follow the final visible mes
     const spacer = document.querySelector('[data-chat-composer-spacer]').getBoundingClientRect()
     const form = document.querySelector('.foxwarm-chat-composer-form').getBoundingClientRect()
     const footer = document.querySelector('[data-processing-queue-footer]')
-    const controls = [...slot.querySelectorAll('button')]
+    const controls = [...slot.querySelectorAll('button:not([aria-haspopup="dialog"])')]
     return { blocks: slot.querySelectorAll('[role="status"]').length, separate: controls.length === 0 && !slot.contains(footer) && footer.querySelectorAll('button').length === 1, ordered: block.getBoundingClientRect().bottom <= preview.top && document.querySelector('[data-queued-preview] .foxwarm-user-message-bubble').getBoundingClientRect().bottom <= footer.getBoundingClientRect().top && footer.getBoundingClientRect().bottom <= spacer.top, clear: footer.getBoundingClientRect().bottom < form.top }
   })
   assert.deepEqual(queueLayout, { blocks: 1, separate: true, ordered: true, clear: true })
@@ -250,7 +262,7 @@ test('status visibility is stable and queue actions follow the final visible mes
     const rect = button.getBoundingClientRect()
     return { visible: rect.left >= 0 && rect.right <= innerWidth && rect.height > 0, hit: button.contains(document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)) }
   }))
-  assert.ok(controls.length === 2 && controls.every(control => control.visible && control.hit), JSON.stringify(controls))
+  assert.ok(controls.length === 3 && controls.every(control => control.visible && control.hit), JSON.stringify(controls))
   const primary = await page.$eval('[data-processing-status-slot] [role="status"]', block => { const css = getComputedStyle(block); return { border: css.borderTopWidth, bounded: block.scrollWidth <= block.clientWidth + 1 } })
   assert.deepEqual(primary, { border: '0px', bounded: true })
   await screenshot('status-narrow-queue')
@@ -336,4 +348,24 @@ test('composer swaps empty running drafts to Stop while text and whitespace reta
     await page.evaluate(() => window.fixture.state('idle'))
     await page.waitForSelector('[data-composer-action="send"][disabled]')
   }
+})
+
+test('Stop feedback is correlated, does not insert receipts, and stays Stopping until authoritative state settles', async () => {
+  await mount(false,390)
+  await page.evaluate(()=>{window.fixture.autoFeedback=false;window.fixture.state('requesting-model')})
+  await page.waitForSelector('[data-composer-action="stop"]:not([disabled])')
+  const before=await page.$$eval('[data-chat-message-anchor-key]',rows=>rows.length)
+  await page.click('[aria-label="Stop session"]')
+  await page.waitForSelector('[data-runtime-presentation="stopping"]')
+  await page.evaluate(()=>window.fixture.feedback('unrelated-request',{action:'stop',status:'error',message:'Should not appear'}))
+  assert.equal(await page.$('[data-control-feedback]'),null)
+  await page.evaluate(()=>window.fixture.feedback(window.lastControlRequest.controlRequestId,{action:'stop',status:'accepted',message:'Stop requested'}))
+  await page.waitForSelector('[data-composer-action="stop"][disabled]')
+  assert.match(await page.$eval('[data-runtime-caption]',el=>el.textContent),/Stopping/)
+  await page.evaluate(()=>window.fixture.state('running-tool',{stopping:true,tool:{name:'exec',startedAt:1}}))
+  await page.waitForSelector('[data-composer-action="stop"][disabled]')
+  await page.evaluate(()=>window.fixture.state('idle'))
+  await page.waitForSelector('[data-composer-action="send"][disabled]')
+  assert.equal(await page.$$eval('[data-chat-message-anchor-key]',rows=>rows.length),before)
+  assert.doesNotMatch(await page.$eval('.foxwarm-chat-messages',el=>el.textContent),/Stop requested|Stop signal sent|in-flight LLM/)
 })

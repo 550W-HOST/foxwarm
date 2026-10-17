@@ -1,3 +1,5 @@
+import { createSessionNoticeMessage, markSystemFailurePublished, isSystemFailurePublished } from '../sessionNotices';
+import { setCompactionRuntimeState, clearCompactionRuntimeState, boundRuntimeRetry } from '../sessionRuntimeState';
 import * as promptSnapshot from './promptSnapshot';
 import * as promptCache from './promptCache';
 import * as llm from '../llm';
@@ -148,6 +150,7 @@ export type SessionHistoryDeps = {
   getSessionById: (sessionId: string) => Session | undefined;
   getExistingSession: (sessionId: string) => Promise<Session | null>;
   saveSession: (sessionId: string) => Promise<void>;
+  appendSystemNotice?: (sessionId: string, message: Message) => Promise<void>;
   enqueueSessionItem?: (sessionId: string, item: QueueItem) => Promise<void>;
   notifyHistoryUpdate?: (sessionId: string, message: Message) => void;
   beginCompactionRuntimeState?: (sessionId: string) => () => void;
@@ -290,11 +293,31 @@ function beginCompactOperation(sessionId: string, owner: CompactOperationOwner):
     planningSettled: new Promise<void>(resolve => { resolvePlanningSettled = resolve; }), resolvePlanningSettled,
   };
   compactOperations.set(sessionId, operation);
+  publishCompactRuntime(sessionId, operation);
   return operation;
+}
+
+async function publishCompactFailure(deps: SessionHistoryDeps, sessionId: string, operation: CompactOperation, error: unknown): Promise<void> {
+  if (isSystemFailurePublished(sessionId, error)) return;
+  const details = error instanceof Error ? error.message : String(error);
+  const notice = createSessionNoticeMessage({ id: `compact:${operation.id}`, source: 'compaction', severity: 'error', title: 'Compaction failed',
+    summary: operation.phase === 'committing' ? 'Could not apply the compaction result.' : 'Could not prepare a compaction plan.', details });
+  try {
+    if (deps.appendSystemNotice) await deps.appendSystemNotice(sessionId, notice);
+    else if (deps.notifyHistoryUpdate) deps.notifyHistoryUpdate(sessionId, { ...notice, __meta: { ...notice.__meta, temporary: true } });
+    else return;
+    markSystemFailurePublished(sessionId, error);
+  } catch (noticeError) { logger.warn({ err: noticeError, sessionId }, 'Unable to publish compaction failure notice'); }
+}
+
+function publishCompactRuntime(sessionId: string, operation: CompactOperation, retry?: Parameters<typeof boundRuntimeRetry>[0]): void {
+  if (compactOperations.get(sessionId) !== operation) return;
+  setCompactionRuntimeState(sessionId, { operationId: String(operation.id), phase: operation.phase, background: operation.owner === 'background', ...(retry ? { retry: boundRuntimeRetry(retry) } : {}) });
 }
 
 function finishCompactOperation(sessionId: string, operation: CompactOperation): void {
   if (compactOperations.get(sessionId) === operation) compactOperations.delete(sessionId);
+  clearCompactionRuntimeState(sessionId, String(operation.id));
   operation.resolvePlanningSettled();
   operation.resolveCompletion();
 }
@@ -1338,6 +1361,12 @@ async function runCompactJob(
           await appendTransientSessionMessage(transientSession, message);
           mirrorTemporaryCompactMessage(deps, sessionId, message);
         },
+        onAttempt: () => publishCompactRuntime(sessionId, operation),
+        onRetry: event => { publishCompactRuntime(sessionId, operation, {
+          ...(event.final ? { final: true } : {}),
+          attempt: event.attempt, maxAttempts: event.maxRetries, nextAttempt: event.nextAttempt,
+          retryAt: Date.now() + (event.delayMs || 0), reason: [event.status, event.reason].filter(Boolean).join(': '),
+        }); },
         notifySessionEvents: false,
         registerAbortController: false,
         abortSignal: operation.controller.signal,
@@ -1623,6 +1652,7 @@ async function runCompaction(deps: SessionHistoryDeps, sessionId: string, option
 
     const result = await runCompactJob(deps, snapshot, operation, 'awaited');
     operation.phase = 'committing';
+    publishCompactRuntime(sessionId, operation);
     return await applyCompactJobResult(deps, sessionId, result, operation);
   } catch (e) {
     if (e instanceof CompactCancelledError || (isCompactCancelled(operation) && llm.isAbortError(e))) {
@@ -1686,6 +1716,7 @@ async function startBackgroundCompaction(deps: SessionHistoryDeps, sessionId: st
       const result = await runCompactJob(deps, snapshot, operation, 'background');
       if (isCompactCancelled(operation) || compactOperations.get(sessionId) !== operation) throw new CompactCancelledError();
       operation.phase = 'enqueueing';
+      publishCompactRuntime(sessionId, operation);
       compactJobStates.set(sessionId, {
         status: 'ready',
         startedAt: Date.now(),
@@ -1748,7 +1779,7 @@ async function startBackgroundCompaction(deps: SessionHistoryDeps, sessionId: st
         return;
       }
     }
-    if (compactOperations.get(sessionId) === operation) operation.phase = 'ready';
+    if (compactOperations.get(sessionId) === operation) { operation.phase = 'ready'; publishCompactRuntime(sessionId, operation); }
   })().catch(error => {
     logger.error({ err: error, sessionId }, 'Background compact job wrapper failed unexpectedly');
   });
@@ -1795,12 +1826,14 @@ export async function applyCompletedCompactJob(deps: SessionHistoryDeps, session
   if (!operation || operation.id !== state.operationId) return false;
 
   if (state.status === 'failed') {
+    await publishCompactFailure(deps, sessionId, operation, state.error || new Error('Background compact job failed.'));
     compactPreviewLastTimestamp.delete(sessionId);
     finishCompactOperation(sessionId, operation);
     throw state.error || new Error('Background compact job failed.');
   }
 
   operation.phase = 'committing';
+    publishCompactRuntime(sessionId, operation);
   try {
     return await applyCompactJobResult(deps, sessionId, state.result!, operation);
   } catch (error) {

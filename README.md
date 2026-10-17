@@ -72,7 +72,7 @@ Start with the [documentation site](https://foxwarm.550w.host/docs/) for install
 - [Model options and routing](https://foxwarm.550w.host/docs/model-options/)
 - [Long conversations and history search](https://foxwarm.550w.host/docs/history-search/)
 - [External MCP clients](website/src/content/docs/docs/mcp-inbound.md)
-- [ToolScript examples](examples/toolscript/README.md)
+- [ToolScript examples](skills/toolscript-automation/examples/README.md)
 
 ## Development
 

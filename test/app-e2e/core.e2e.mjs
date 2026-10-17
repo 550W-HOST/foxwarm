@@ -364,6 +364,22 @@ test('WS compact planning and BTW use purpose-scoped request keys without replac
   assert.equal(syncStoredKey, syncBefore.promptCacheKey)
   assertCommittedCompaction(syncAuthority, syncBefore, 'compact_sync summary')
 
+  // Conversation browses raw Archive; the ordinary context route still owns the summary.
+  await page.click('[aria-label="Open session options"]')
+  await page.$$eval('[role="radio"]', buttons => buttons.find(button => button.textContent === 'Conversation').click())
+  await page.keyboard.press('Escape')
+  await page.waitForSelector('[data-continuous-history]')
+  await page.waitForSelector('[data-chat-message-anchor-key="seq-local-1"]')
+  const raw = await api(`/api/sessions/${encodeURIComponent(syncId)}/history/continuous`)
+  assert.deepEqual(raw.messages.slice(0, 20).map(message => message.__meta.seq), Array.from({ length: 20 }, (_, index) => index + 1))
+  assert.equal(raw.messages.some(message => message.__meta?.contextBlock), false)
+  assert.equal((await history(syncId)).messages[0].__meta.contextBlock.id, 1)
+  assert.equal(await page.$('[aria-label="Expand CTX-BLOCK B#1"]'), null)
+  await page.click('[aria-label="Open session options"]')
+  await page.$$eval('[role="radio"]', buttons => buttons.find(button => button.textContent === 'Detailed').click())
+  await page.keyboard.press('Escape')
+  await page.waitForSelector('[aria-label="Expand CTX-BLOCK B#1"]')
+
   const backgroundId = 'core-compact-background'
   const backgroundBefore = JSON.parse(await fs.readFile(path.join(dataRoot, 'state', 'sessions', `${backgroundId}.json`), 'utf8'))
   await openSession(backgroundId)

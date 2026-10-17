@@ -122,3 +122,5 @@ Code-specific persistence is canonical in [D-code-persistent-workspace](../threa
 ### D-webui-app-client-preferences
 
 Theme package/selection, layout, navigation, and Code launch choices stay browser-local unless the setting is explicitly instance-wide. Theme details are owned by [webui-theme-system](./webui-theme-system.md).
+
+App stages a selected desktop Chat before replacing its preview, and supplies readable already-loaded Session names to communication cards. See [Session navigation](../threads/webui-session-navigation.md) and [Session messages](./webui-session-messages.md).

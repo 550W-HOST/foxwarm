@@ -58,6 +58,8 @@ export interface ToolContext {
     sessionPlacement?: 'local' | 'session-worker';
     /** Per-invocation UI-only file paths, never included in model-visible tool results. */
     onResolvedPaths?: (paths: ResolvedToolPath[]) => void;
+    /** A real successful Session send, projected locally for UI; never a tool argument or RPC callback. */
+    onSessionMessageDelivered?: (delivery: { targetSessionId: string; message: string }) => void;
     /** Per-invocation ToolScript activity for persisted UI metadata, never model-visible result data. */
     onToolScriptSubCalls?: (subCalls: ToolScriptSubCall[]) => void;
     /** In-process receipt of a real builtin Task completion; never a tool argument or RPC callback. */

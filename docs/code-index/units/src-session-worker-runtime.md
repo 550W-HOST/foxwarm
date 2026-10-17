@@ -90,3 +90,5 @@ The bound runner reports no completed background compact job (`hasCompletedCompa
 ## Canonical ownership
 
 The cross-module placement, durability, fencing, idle, and future worker-owned session decisions are canonical in [process topology and RPC](../threads/process-topology-and-rpc.md#design-decisions).
+
+Worker owner history callbacks append display-only operational notices. Final error delivery excludes WebUI because its canonical/temporary typed event is the presentation path; other channels keep ordinary error delivery. See [runtime presentation](../threads/session-runtime-presentation.md).

@@ -57,11 +57,13 @@ before(async () => {
       const prefs = useChatPreferences()
       const [messages,setMessages] = React.useState(original)
       const [slice,setSlice] = React.useState([0,undefined])
+      const [currentHistory,setCurrentHistory] = React.useState(undefined)
       const [draft,setDraft] = React.useState(null)
       const [runtime,setRuntime] = React.useState({state:'running-tool',tool:{name:'exec',startedAt:1700000000000},since:1700000000000,busy:true,queueLength:2})
       window.fixture.prefs=prefs
       window.fixture.setMessages=setMessages
       window.fixture.setSlice=setSlice
+      window.fixture.setCurrentHistory=setCurrentHistory
       window.fixture.setDraft=setDraft
       window.fixture.setRuntime=setRuntime
       window.fixture.runtime=runtime
@@ -69,7 +71,7 @@ before(async () => {
       window.fixture.matches = term => findSessionSearchMatches(projectSessionSearchFields(messages,prefs.timelineView),term)
       return <div className="foxwarm-chat-root">
         <SessionUiSettingsMenu {...prefs} onSendKeyModeChange={prefs.setSendKeyMode} onTimelineViewChange={prefs.setTimelineView} onShowUsageBadgeChange={prefs.setShowUsageBadge} onShowUserMessageMetadataChange={prefs.setShowUserMessageMetadata} onOpenDebugInfo={()=>{}} />
-        <div id="timeline"><ChatTimeline sessionId="fixture/main" messages={[...messages.slice(...slice),...(draft?[draft]:[])]} historyMessages={messages} runtimeState={runtime} isRunningTool={runtime.state==='running-tool'} isMobile={false} timelineView={prefs.timelineView} showUsageBadge={prefs.showUsageBadge} showUserMessageMetadata={prefs.showUserMessageMetadata} /></div>
+        <div id="timeline"><ChatTimeline sessionId="fixture/main" messages={[...messages.slice(...slice),...(draft?[draft]:[])]} historyMessages={messages} currentHistoryMessages={currentHistory} runtimeState={runtime} isRunningTool={runtime.state==='running-tool'} isMobile={false} timelineView={prefs.timelineView} showUsageBadge={prefs.showUsageBadge} showUserMessageMetadata={prefs.showUserMessageMetadata} /></div>
         <div id="status"><ProcessingStatus timelineView={prefs.timelineView} runtimeState={runtime} sessionBusy={runtime.busy} sessionQueueLength={2} turnIncomplete={runtime.state==='idle'} loading={false} isMobile={false} onContinue={()=>window.fixture.controls.push('continue')} onRunQueued={()=>window.fixture.controls.push('queued')} /></div>
         <div id="queue"><ChatTimeline sessionId="fixture/main" messages={queued} isMobile={false} timelineView={prefs.timelineView} showUsageBadge={false} showTimeDividers={false} renderMessageFooter={alignment=><QueuedMessageStatus count={2} alignment={alignment} isMobile={false} onRunQueued={()=>window.fixture.controls.push('queued')} />} /></div>
       </div>
@@ -117,7 +119,7 @@ test('Conversation retains ordered commentary, final text, images and literal us
   assert.deepEqual(await page.$eval('#timeline', root => [...root.querySelectorAll('.foxwarm-assistant-message-card, img')].map(el => el.tagName === 'IMG' ? 'image' : el.textContent.trim())), ['image', 'COMMENTARY_BODY', 'image', 'MIDDLE_BODY', 'AFTER_CALL_BODY', 'FINAL_BODY'])
   const body = await page.$eval('#timeline', root => root.textContent)
   for (const text of ['QUOTED_USER_BODY', 'PASTED_USER_BODY', 'SUMMARY_40', '</foxwarm-system>']) assert.ok(body.includes(text), text)
-  for (const text of ['TECHNICAL_', 'SECRET_REASONING', 'INTERNAL_']) assert.ok(!body.includes(text), text)
+  for (const text of ['TECHNICAL_', 'SECRET_REASONING', 'INTERNAL_EVENT', 'INTERNAL_TOOL_RESULT']) assert.ok(!body.includes(text), text)
   assert.equal(await page.$eval('#timeline', root => root.querySelectorAll('[aria-label="Show process usage"]').length), 1)
   if (process.env.FOXWARM_E2E_SCREENSHOT_PATH) await page.screenshot({ path: process.env.FOXWARM_E2E_SCREENSHOT_PATH, fullPage: true })
   await page.$eval('#timeline', root => [...root.querySelectorAll('[aria-label="Expand activity"]')].forEach(button => button.click()))
@@ -130,7 +132,7 @@ test('Conversation retains ordered commentary, final text, images and literal us
   await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('INTERNAL_TOOL_RESULT'))
   assert.equal(await page.$eval('#timeline', root => root.querySelectorAll('img:not([data-activity-details] img)').length), 2)
   assert.equal(await countMatches('TECHNICAL_mixed'), 0)
-  assert.equal(await countMatches('INTERNAL_HANDOFF'), 0)
+  assert.equal(await countMatches('INTERNAL_HANDOFF'), 1)
   assert.equal(await countMatches('SECRET_REASONING'), 0)
   assert.equal(await countMatches('COMMENTARY_BODY'), 1)
   assert.equal(await countMatches('foxwarm-system kind="event"'), 1, 'the direct user quote is searchable, not the internal event')
@@ -163,21 +165,21 @@ test('CTX stays visible and one-layer lazy in every mode, including already expa
   assert.equal(await page.evaluate(() => window.fixture.fetches.length), 2)
 })
 
-test('live status owns Working once; pending internal inputs do not become activity or completed work, and controls survive', async () => {
-  assert.ok((await page.$eval('#status', root => root.textContent)).includes('Working…'))
-  assert.equal(await page.$eval('#root', root => (root.textContent.match(/Working…/g) || []).length), 1)
+test('live status names the actual tool; pending internal inputs do not become activity or completed work, and controls survive', async () => {
+  assert.ok((await page.$eval('#status', root => root.textContent)).includes('Executing exec'))
+  assert.equal(await page.$eval('#root', root => (root.textContent.match(/Executing exec/g) || []).length), 1)
   assert.equal(await page.$eval('#queue', root => root.querySelectorAll('[data-timeline-activity]').length), 0)
   assert.equal((await page.$eval('#queue .foxwarm-user-message-text', root => root.textContent)).trim(), 'QUEUED_USER')
   assert.equal(await page.$('#status button::-p-text(Stop)'), null)
   await page.evaluate(() => window.fixture.setRuntime({ state: 'waiting', busy: false, queueLength: 2, waiting: { waitingFor: 'input', reason: 'Please choose a target' } }))
   await page.waitForSelector('#status [data-processing-runtime-state="waiting"]')
-  assert.equal(await page.$eval('#status [data-processing-runtime-state="waiting"] [title]', label => label.textContent), 'Waiting')
+  assert.equal(await page.$eval('#status [data-processing-runtime-state="waiting"] [title]', label => label.textContent), 'Waiting for input')
   assert.equal(await page.$eval('#status', root => [...root.querySelectorAll('button')].some(button => button.textContent === 'Stop')), false)
   await page.evaluate(() => window.fixture.setRuntime({ state: 'waiting', busy: false, queueLength: 2, waiting: { waitingFor: 'input' } }))
   await page.waitForFunction(() => !window.fixture.runtime.waiting.reason)
-  assert.equal(await page.$eval('#status [data-processing-runtime-state="waiting"] [title]', label => label.textContent), 'Waiting')
+  assert.equal(await page.$eval('#status [data-processing-runtime-state="waiting"] [title]', label => label.textContent), 'Waiting for input')
   await page.evaluate(() => window.fixture.setRuntime({ state: 'idle', busy: false, queueLength: 2 }))
-  await page.waitForFunction(() => document.querySelector('#status').textContent.includes('Turn interrupted'))
+  await page.waitForFunction(() => document.querySelector('#status').textContent.includes('Interrupted'))
   await page.$eval('#status', root => [...root.querySelectorAll('button')].forEach(button => button.click()))
   await page.click('#queue button::-p-text(Run queued)')
   assert.deepEqual(await page.evaluate(() => window.fixture.controls), ['continue', 'queued'])
@@ -268,9 +270,11 @@ test('Activity counts use direct recorded outcomes, not script code or asynchron
   ]
   await page.evaluate(records => { window.fixture.setMessages(records); window.fixture.setSlice([0,undefined]) }, records)
   await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('2 child sessions'))
-  assert.deepEqual(await page.$$eval('#timeline [data-timeline-activity] [aria-label$="activity"]', buttons => buttons.map(button => button.textContent)), [
+  assert.deepEqual(await page.$$eval('#timeline [data-timeline-activity] [aria-label$="activity"]', buttons => buttons.filter(button=>button.dataset.activityToggle!=='bottom').map(button => button.textContent)), [
     '2 calls',
-    '4 calls · 2 child sessions · 1 sent · 3 received',
+    '4 calls · 2 child sessions · 1 sent',
+    'Activity',
+    '2 received',
     '1 call',
     '1 call',
   ])
@@ -285,10 +289,10 @@ test('Activity counts use direct recorded outcomes, not script code or asynchron
   assert.equal(wrapped.align, 'left')
   assert.ok(wrapped.lefts.length > 1, 'the real summary wraps in a narrow container')
   assert.ok(wrapped.lefts.every(left => Math.abs(left - wrapped.lefts[0]) < 1), 'wrapped lines keep the same left edge')
-  await page.$eval('#timeline', root => [...root.querySelectorAll('[aria-label="Expand activity"]')].find(button => button.textContent.includes('child sessions')).click())
+  await page.$$eval('#timeline [aria-label="Expand activity"]', buttons => buttons.forEach(button=>button.click()))
   await page.$$eval('[data-activity-details] [aria-label="Expand send_to_channel tool"]', buttons => buttons.forEach(button => button.click()))
-  await page.waitForFunction(() => document.querySelector('[data-activity-details]').textContent.includes('SEND_FAILED'))
-  assert.ok((await page.$eval('[data-activity-details]', root => root.textContent)).includes('SEND_FAILED'))
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-activity-details]')].some(element=>element.textContent.includes('SEND_FAILED')))
+  assert.ok((await page.$eval('#timeline', root => root.textContent)).includes('SEND_FAILED'))
   assert.ok((await page.$eval('#timeline', root => root.textContent)).includes('QUOTED_MCP_XML'), 'ordinary authored XML remains visible rather than becoming received communication')
   await page.evaluate(start => window.fixture.setSlice([start,undefined]), records.length - 2)
   await page.waitForFunction(() => document.querySelector('#timeline').querySelectorAll('[data-timeline-activity]').length === 1)
@@ -361,8 +365,9 @@ const boundaryRecords = () => [
   timed(9,101,'model',[{thinking:'LATE_REASONING'}],{id:'request-3'}),
   timed(10,120,'model',[{text:'DONE_BODY'}],{id:'request-3',start:100,end:120,offset:1}),
 ]
-const headers = () => page.$$eval('#timeline [data-timeline-activity] [aria-label$="activity"]', buttons => buttons.map(button => button.textContent))
+const headers = () => page.$$eval('#timeline [data-timeline-activity] [aria-label$="activity"]', buttons => buttons.filter(button=>button.dataset.activityToggle!=='bottom').map(button => button.textContent))
 const setRecords = async (records, runtime = {state:'idle',busy:false,queueLength:0}, now = epoch + 120000) => {
+  await mode('conversation')
   await page.evaluate(({records,runtime,now}) => { window.fixture.setNow(now); window.fixture.setDraft(null); window.fixture.setSlice([0,undefined]); window.fixture.setMessages(records); window.fixture.setRuntime(runtime) }, {records,runtime,now})
   await page.waitForFunction(() => window.fixture.prefs.timelineView === 'conversation')
 }
@@ -372,27 +377,27 @@ test('Activity elapsed uses adjacent visible boundaries, retaining leading idle 
   await setRecords(records)
   // The displayed divider at the first 70s input excludes the earlier idle minute.
   await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Waited 28s'))
-  assert.deepEqual(await headers(), ['Worked 10s', 'Worked 22s · Waited 28s · 2 received'])
+  assert.deepEqual(await headers(), ['Worked 10s', 'Worked 2s · Waited 28s', 'Worked 20s'])
   assert.deepEqual(await page.$$eval('#timeline .foxwarm-assistant-message-markdown', bodies => bodies.map(body => body.textContent.trim())), ['ARRANGED_BODY','DONE_BODY'])
-  assert.equal(await page.$eval('#timeline', root => root.querySelectorAll('[data-timeline-activity]').length), 2)
-  await page.$eval('#timeline', root => [...root.querySelectorAll('[aria-label="Expand activity"]')][1].click())
-  await page.waitForFunction(() => document.querySelector('[data-activity-details]').textContent.includes('AFTER_RECEIVE_REASONING'))
+  assert.equal(await page.$eval('#timeline', root => root.querySelectorAll('[data-timeline-activity]').length), 3)
+  await page.$$eval('#timeline [data-timeline-activity]', activities => { const button=activities[1].querySelector('[data-activity-toggle="top"]'); if(button.getAttribute('aria-expanded')!=='true')button.click() })
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-activity-details]')].some(element=>element.textContent.includes('AFTER_RECEIVE_REASONING')))
   assert.equal(await page.$eval('#timeline', root => root.querySelectorAll('.foxwarm-assistant-message-markdown').length), 2)
   assert.equal(await countMatches('LATE_REASONING'), 0)
   // A successful empty request without committed segments produces no model history record.
   // A later request beginning at the next input cannot account for that earlier processing.
   await setRecords(records.filter((_,index) => index !== 4 && index !== 5))
-  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Elapsed 1m50s'))
-  assert.deepEqual(await headers(), ['Worked 10s','Elapsed 1m50s · 2 received'])
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Elapsed 30s'))
+  assert.deepEqual(await headers(), ['Worked 10s','Elapsed 30s','Worked 20s'])
   // Missing request data must not become an invented waiting interval.
   delete records[9].__meta.llmRequestTiming
   await setRecords(records)
-  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Elapsed 1m50s'))
-  assert.deepEqual(await headers(), ['Worked 10s','Elapsed 1m50s · 2 received'])
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Elapsed 20s'))
+  assert.deepEqual(await headers(), ['Worked 10s','Worked 2s · Waited 28s','Elapsed 20s'])
   delete records[2].__meta.timestamp
   await setRecords(records)
-  await page.waitForFunction(() => !document.querySelector('#timeline').textContent.includes('Elapsed'))
-  assert.deepEqual(await headers(), ['Activity','2 received'])
+  await page.waitForFunction(() => document.querySelector('[data-activity-toggle="top"]')?.textContent==='Activity')
+  assert.deepEqual(await headers(), ['Activity','Worked 2s · Waited 28s','Elapsed 20s'])
 })
 
 test('Shared logical request and parallel tools clip across text-plus-call and user boundaries without double work', async () => {
@@ -420,24 +425,24 @@ test('Shared logical request and parallel tools clip across text-plus-call and u
 test('Open Activity clocks update from actual runtime and canonical endpoints, not streaming text arrival; idle coordination also waits', async () => {
   const records = boundaryRecords()
   await setRecords(records.slice(0,-1), {state:'requesting-model',since:epoch+100000,busy:true,queueLength:0}, epoch+110000)
-  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Worked 12s'))
-  assert.deepEqual(await headers(), ['Worked 10s','Worked 12s · Waited 28s · 2 received'])
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Worked 10s'))
+  assert.deepEqual(await headers(), ['Worked 10s','Worked 2s · Waited 28s','Worked 10s'])
   await page.evaluate(() => window.fixture.setDraft({role:'model',parts:[{text:'DONE_BODY'}],__meta:{temporary:true,synthetic:'draft',llmRequestId:'request-3',llmSegment:{outputStart:1,outputEndExclusive:2,complete:false}}}))
   await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('DONE_BODY'))
   await page.evaluate(() => window.fixture.setNow(1700000120000))
-  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Worked 22s'))
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Worked 20s'))
   await setRecords(records)
   await page.waitForFunction(() => !document.querySelector('[data-conversation-preview]')?.textContent.includes('DONE_BODY'))
   assert.equal(await page.$$eval('#timeline .foxwarm-assistant-message-markdown', bodies => bodies.filter(body => body.textContent.includes('DONE_BODY')).length), 1, 'canonical reply replaces the provisional process preview without duplicating its text')
   await page.evaluate(() => window.fixture.setNow(1700000600000))
   await new Promise(resolve => setTimeout(resolve,1100))
-  assert.deepEqual(await headers(), ['Worked 10s','Worked 22s · Waited 28s · 2 received'], 'closed boundaries do not grow with wall time')
+  assert.deepEqual(await headers(), ['Worked 10s','Worked 2s · Waited 28s','Worked 20s'], 'closed boundaries do not grow with wall time')
   await setRecords(records.slice(0,6), {state:'idle',busy:false,queueLength:0}, epoch+110000)
-  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Worked 2s · 1 received'))
-  assert.deepEqual(await headers(), ['Worked 10s','Worked 2s · 1 received'], 'a completed commentary-only request fixes its persisted endpoint while idle')
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Worked 2s'))
+  assert.deepEqual(await headers(), ['Worked 10s','Worked 2s'], 'a completed commentary-only request fixes its persisted endpoint while idle')
   await page.evaluate(() => { window.fixture.setNow(1700000120000); window.fixture.setRuntime({state:'idle',busy:false,queueLength:0,since:1700000120000}) })
   await page.waitForFunction(() => window.fixture.runtime.since === 1700000120000)
-  assert.deepEqual(await headers(), ['Worked 10s','Worked 2s · 1 received'])
+  assert.deepEqual(await headers(), ['Worked 10s','Worked 2s'])
   await setRecords(records.slice(0,3), undefined, epoch+200000)
   await page.waitForFunction(() => document.querySelector('#timeline').querySelectorAll('[data-timeline-activity]').length === 1)
   assert.deepEqual(await headers(), ['Worked 10s'], 'no forever-growing empty waiting row after the last visible model text')
@@ -449,18 +454,18 @@ test('Terminal LLM errors close at their stored timestamp; CTX and missing Stop 
   error.__meta.noticeType='llm-retry'; error.__meta.retry={attempt:3,maxAttempts:3,final:true}
   await setRecords([...records.slice(0,-1),error], undefined,epoch+200000)
   await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('FINAL_FAILURE'))
-  assert.deepEqual(await headers(), ['Worked 10s','Elapsed 1m50s · 2 received'])
+  assert.deepEqual(await headers(), ['Worked 10s','Worked 2s · Waited 28s','Elapsed 20s'])
   await page.evaluate(() => window.fixture.setNow(1700000600000))
   await new Promise(resolve => setTimeout(resolve,1100))
-  assert.deepEqual(await headers(), ['Worked 10s','Elapsed 1m50s · 2 received'])
+  assert.deepEqual(await headers(), ['Worked 10s','Worked 2s · Waited 28s','Elapsed 20s'])
   // Normal Stop currently leaves idle unfinished history and no durable stop time. Do not fabricate one.
   await setRecords(records.slice(0,-1), {state:'idle',busy:false,queueLength:0}, epoch+200000)
   await page.waitForFunction(() => !document.querySelector('#timeline').textContent.includes('FINAL_FAILURE'))
-  assert.deepEqual(await headers(), ['Worked 10s','2 received'])
+  assert.deepEqual(await headers(), ['Worked 10s','Worked 2s · Waited 28s','Activity'])
   const block = ctx(80); block.__meta.timestamp=epoch+90000
   await setRecords([...records.slice(0,6),block,...records.slice(7)])
   await page.waitForSelector('[aria-label="Expand CTX-BLOCK B#80"]')
-  assert.deepEqual(await headers(), ['Worked 10s','Elapsed 1m20s · 1 received','Worked 20s · 1 received'])
+  assert.deepEqual(await headers(), ['Worked 10s','Elapsed 20s','Worked 20s'])
 })
 
 test('Direct Task notifications and hosted web search count actual effects; scripts remain ordinary top-level calls', async () => {
@@ -505,8 +510,8 @@ test('Conversation keeps the 08:11 processing disclosure and 08:15 body under on
   await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('UNIT_DONE'))
   const expected = [new Date(base).toISOString(),new Date(base+660000).toISOString()]
   assert.deepEqual(await dividerTimes(), expected, 'the later request start is not a divider inside the processing/body unit')
-  assert.deepEqual(await headers(), ['Worked 1m15s · Waited 2m50s · 1 call · 1 received'], 'the text accounting boundary and counts are unchanged')
-  assert.deepEqual(await page.$eval('#timeline', root => [...root.querySelectorAll('[data-timeline-time-separator], [data-timeline-activity], .foxwarm-assistant-message-card')].map(node => node.matches('[data-timeline-time-separator]') ? node.querySelector('time').dateTime : node.matches('[data-timeline-activity]') ? 'activity' : node.querySelector('.foxwarm-assistant-message-markdown').textContent.trim())), [...expected,'activity','UNIT_DONE'])
+  assert.deepEqual(await headers(), ['Worked 10s · Waited 50s · 1 call','Worked 1m5s · Waited 2m'], 'visible communication separates work periods without duplicating measured work or wait')
+  assert.deepEqual(await page.$eval('#timeline', root => [...root.querySelectorAll('[data-timeline-time-separator], [data-timeline-activity], .foxwarm-assistant-message-card')].map(node => node.matches('[data-timeline-time-separator]') ? node.querySelector('time').dateTime : node.matches('[data-timeline-activity]') ? 'activity' : node.querySelector('.foxwarm-assistant-message-markdown').textContent.trim())), [...expected,'activity','activity','UNIT_DONE'])
   assert.equal(await countMatches('UNIT_DONE'),1)
   await page.evaluate(() => { window.unitBody=document.querySelector('#timeline .foxwarm-assistant-message-card') })
   if (process.env.FOXWARM_E2E_SCREENSHOT_PATH) await page.screenshot({path:process.env.FOXWARM_E2E_SCREENSHOT_PATH,fullPage:true})
@@ -708,4 +713,92 @@ test('Every progress update separates adjacent technical spans, including early 
     await page.setViewport({width:600,height:900})
     await (await page.$('#timeline')).screenshot({path:process.env.FOXWARM_CONVERSATION_PREVIEW_PATH})
   }
+})
+
+
+test('active history owns retry status independently of a loaded Archive source', async () => {
+  await mode('conversation')
+  await page.evaluate(() => {
+    const retry = { role: 'model', parts: [{ text: '⚠️ LLM Error: ARCHIVE_STATUS_RETRY' }], __meta: { seq: 700, noticeType: 'llm-retry' } }
+    window.fixture.archiveStatusRetry = retry
+    window.fixture.setMessages([retry])
+    window.fixture.setSlice([0, undefined])
+    window.fixture.setCurrentHistory([{ role: 'user', parts: [{ text: 'Later active input' }], __meta: { seq: 701 } }])
+  })
+  await page.waitForFunction(() => document.querySelector('#timeline [data-timeline-activity]'))
+  assert.equal(await page.$('#timeline [data-system-message-kind="llm error"]'), null)
+  await page.evaluate(() => window.fixture.setCurrentHistory([structuredClone(window.fixture.archiveStatusRetry)]))
+  await page.waitForSelector('#timeline [data-system-message-kind="llm error"]')
+  assert.match(await page.$eval('#timeline [data-system-message-kind="llm error"]', node => node.textContent), /ARCHIVE_STATUS_RETRY/)
+  await page.evaluate(() => window.fixture.setCurrentHistory([]))
+  await page.waitForFunction(() => !document.querySelector('#timeline [data-system-message-kind="llm error"]'))
+  await page.evaluate(() => window.fixture.setCurrentHistory(undefined))
+})
+
+test('trusted system events stay identifiable in every timeline mode and never reinterpret ordinary Error prose', async () => {
+  const records=[
+    {role:'user',parts:[{text:'Review this result'}],__meta:{seq:800}},
+    {role:'model',parts:[{text:'Error: this is ordinary assistant prose.'}],__meta:{seq:801}},
+    {role:'model',parts:[{text:'Internal diagnostic'}],modelVisible:false,__meta:{seq:802,noticeType:'system-event',sessionNotice:{version:1,id:'failure-demo',source:'compaction',severity:'error',title:'Compaction failed',summary:'No valid plan was produced.',details:'All supplied segments are ineligible. <img src=x onerror=alert(1)>'}}},
+    {role:'model',parts:[{text:'Error: ordinary text after the event.'}],__meta:{seq:803}},
+    {role:'model',parts:[{text:'Planner text must not become a reply.'}],__meta:{temporary:true,compactPreview:true}},
+  ]
+  await page.evaluate(records=>{window.fixture.setCurrentHistory(undefined);window.fixture.setMessages(records);window.fixture.setSlice([0,undefined]);window.fixture.setDraft(null)},records)
+  for(const selectedMode of ['conversation','detailed','grouped']){
+    await mode(selectedMode)
+    await page.waitForSelector('#timeline [data-system-event]')
+    assert.equal(await page.$$eval('#timeline [data-system-event]',rows=>rows.length),1)
+    assert.equal(await countMatches('Compaction failed'),1)
+    assert.equal(await countMatches('Internal diagnostic'),0)
+    assert.equal(await page.$eval('#timeline [data-system-event]',el=>!!el.closest('[data-timeline-activity]')),false)
+    assert.equal(await page.$eval('#timeline [data-event-details]',el=>el.open),false)
+    assert.match(await page.$eval('#timeline',el=>el.innerText),/Error: this is ordinary assistant prose/)
+    assert.match(await page.$eval('#timeline',el=>el.innerText),/ordinary text after the event/)
+    assert.doesNotMatch(await page.$eval('#timeline',el=>el.innerText),/Planner text must not become a reply/)
+    await page.click('#timeline [data-event-details] summary')
+    assert.match(await page.$eval('#timeline [data-event-details] pre',el=>el.textContent),/<img src=x/)
+    assert.equal(await page.$('#timeline [data-event-details] img'),null)
+    await page.click('#timeline [data-event-details] summary')
+  }
+})
+
+test('Conversation shows successful sent and received Session messages as distinct readable cards, not Activity', async () => {
+  const records=[
+    {role:'user',parts:[{text:'Coordinate the verification.'}],__meta:{seq:900}},
+    {role:'model',parts:[{text:'I will ask the reviewer to verify the result.'},{functionCall:{id:'send-demo',name:'send_to_session',args:{sessionId:'review/main',message:'Please verify the paired measurements.'}}}],__meta:{seq:901}},
+    {role:'tool',parts:[{functionResponse:{tool_use_id:'send-demo',name:'send_to_session',response:{output:'Delivered'}}}],__meta:{seq:902}},
+    {role:'user',parts:[{system:'<foxwarm-message type="inter-agent" sourceSessionId="review/main">\nThe measurements are consistent.\n</foxwarm-message>'}],__meta:{seq:903}},
+    {role:'model',parts:[{functionCall:{id:'failed-demo',name:'send_to_session',args:{sessionId:'missing/main',message:'Must not be shown as sent.'}}}],__meta:{seq:904}},
+    {role:'tool',parts:[{functionResponse:{tool_use_id:'failed-demo',name:'send_to_session',response:{error:'Not found'}}}],__meta:{seq:905}},
+    {role:'tool',parts:[{functionResponse:{tool_use_id:'script-demo',name:'run_script',response:{output:'Done'},__meta:{toolScriptSubCalls:[{id:'sub-send',name:'builtin:send_to_session',status:'completed',startedAt:1,sessionMessage:{targetSessionId:'analysis/main',message:'Please inspect the memory measurements.'}}]}}}],__meta:{seq:906}},
+  ]
+  await page.evaluate(records=>{window.fixture.setCurrentHistory(undefined);window.fixture.setMessages(records);window.fixture.setSlice([0,undefined]);window.fixture.setDraft(null)},records)
+  await mode('conversation')
+  await page.waitForSelector('[data-session-communication="received"]')
+  assert.equal(await page.$$eval('[data-session-communication]',els=>els.length),3)
+  const outgoing=await page.$eval('[data-session-communication="sent"]',el=>({text:el.innerText,inside:!!el.closest('[data-timeline-activity]'),bubble:!!el.closest('.foxwarm-user-message-bubble')}))
+  assert.match(outgoing.text,/To.*review\/main/s);assert.match(outgoing.text,/Please verify the paired measurements/);assert.equal(outgoing.inside,false);assert.equal(outgoing.bubble,false)
+  assert.match(await page.$eval('[data-session-communication="received"]',el=>el.innerText),/From.*review\/main.*measurements are consistent/s)
+  assert.equal(await countMatches('Please verify the paired measurements'),1)
+  assert.equal(await countMatches('The measurements are consistent'),1)
+  assert.doesNotMatch(await page.$eval('#timeline',el=>el.innerText),/Must not be shown as sent|foxwarm-message type/)
+  await page.evaluate(()=>{window.communicationNode=document.querySelector('[data-session-communication]');window.fixture.setMessages(previous=>[...previous,{role:'model',parts:[{text:'Verification complete.'}],__meta:{seq:907}}])})
+  await page.waitForFunction(()=>document.getElementById('timeline').innerText.includes('Verification complete'))
+  assert.equal(await page.evaluate(()=>window.communicationNode===document.querySelector('[data-session-communication]')),true)
+})
+
+test('expanded Activity retains top and bottom collapse controls without duplicating metrics', async () => {
+  const records=[{role:'user',parts:[{text:'Inspect the files.'}],__meta:{seq:1000}}]
+  for(let index=0;index<24;index++) records.push({role:'model',parts:[{functionCall:{id:'read-'+index,name:'read',args:{filePath:'report-'+index+'.md'}}}],__meta:{seq:1001+index*2}},{role:'tool',parts:[{functionResponse:{tool_use_id:'read-'+index,name:'read',response:{output:'Inspection result '+index}}}],__meta:{seq:1002+index*2}})
+  await page.evaluate(records=>{window.fixture.setCurrentHistory(undefined);window.fixture.setMessages(records);window.fixture.setSlice([0,undefined]);window.fixture.setDraft(null)},records)
+  await mode('conversation')
+  await page.focus('[data-timeline-activity] button[aria-label="Expand activity"]');await page.keyboard.press('Enter')
+  await page.waitForSelector('[data-timeline-activity] [aria-label="Collapse activity"]')
+  const geometry=await page.$eval('[data-timeline-activity]',el=>{const details=el.querySelector('[data-activity-details]'),control=el.querySelector('[data-activity-toggle="bottom"]');return {bottom:details.getBoundingClientRect().bottom,top:control.getBoundingClientRect().top,count:el.querySelectorAll('[aria-label="Collapse activity"]').length,focused:document.activeElement===el.querySelector('[data-activity-toggle="top"]')}})
+  assert.equal(geometry.count,2);assert.ok(geometry.top>=geometry.bottom-1,JSON.stringify(geometry));assert.equal(geometry.focused,true)
+  await page.waitForFunction(()=>document.querySelector('[data-timeline-activity]').style.height==='')
+  await page.click('[data-timeline-activity] [data-activity-toggle="bottom"]')
+  await page.waitForSelector('[data-activity-details]',{hidden:true})
+  assert.equal(await page.$('[data-activity-details]'),null)
+  assert.ok(await page.$('[data-timeline-activity] [aria-label="Expand activity"]'))
 })

@@ -139,6 +139,14 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
         window.__sent.push({ path: pathname, body: options.body })
         return json({ ok: true })
       }
+      if (pathname.includes('/api/sessions/') && pathname.endsWith('/history/continuous')) {
+        const messages = (chatMessages || (responsiveChat ? Array.from({ length: 35 }, (_, index) => ({ role: index % 2 ? 'model' : 'user', parts: [{ text: 'Responsive message ' + index + '\n\n' + 'Pane-local content wraps normally. '.repeat(8) }], __meta: { seq: index + 1, timestamp: 1700000000000 + index } })) : [])).filter(message => !message.__meta?.contextBlock)
+        const before = Number(url.searchParams.get('beforeSeq')) || Infinity
+        const after = Number(url.searchParams.get('afterSeq')) || 0
+        const candidates = messages.filter(message => message.__meta?.seq < before && message.__meta?.seq > after)
+        const rows = after ? candidates.slice(0, 100) : candidates.slice(-100)
+        return json({ messages: rows, firstSeq: rows[0]?.__meta?.seq, lastSeq: rows.at(-1)?.__meta?.seq, hasMore: candidates.length > 100 })
+      }
       if (pathname.includes('/api/sessions/') && pathname.endsWith('/history')) {
         window.__historyReads.push(pathname + url.search)
         const messages = chatMessages || (responsiveChat ? Array.from({ length: 35 }, (_, index) => ({ role: index % 2 ? 'model' : 'user', parts: [{ text: 'Responsive message ' + index + '\n\n' + 'Pane-local content wraps normally. '.repeat(8) }], __meta: { seq: index + 1, timestamp: 1700000000000 + index } })) : [])
@@ -2055,6 +2063,8 @@ test('Timeline, Composer, History and Tasks share the reading column and pane-lo
       await aligned()
     }
     await page.setViewport({ width: 1800, height: 900 })
+    await page.waitForFunction(() => !!document.querySelector('.foxwarm-desktop-workbench-shell')
+      && document.querySelector('.foxwarm-chat-root')?.getBoundingClientRect().width > 1100)
     await page.evaluate(() => {
       localStorage.setItem('foxwarm.contextScrollbar.showScrollbar', 'true')
       localStorage.setItem('foxwarm.contextScrollbar.showMinimap', 'false')
@@ -3474,4 +3484,52 @@ test('compact theme swatches retain direct selection and independent preview on 
       assert.equal(await page.$eval('[data-theme-option="foxwarm.vector"]',el=>el.getAttribute('aria-pressed')),'true')
     }finally{await page.close()}
   }
+})
+
+test('Sidebar navigation stages one bounded history read and swaps directly to populated content without an empty target frame', async () => {
+  const page=await openFixture({responsiveChat:true,chatMessages:[{role:'model',parts:[{text:'Source A content'}],__meta:{seq:1}}],timelineView:'conversation'})
+  try {
+    await page.waitForFunction(()=>document.querySelector('[data-workbench-content-tab="chat:e2e-a"]')?.textContent.includes('Source A content'))
+    await page.evaluate(()=>{
+      const original=window.fetch
+      window.navigationFrames=[];window.preparedReads=0;window.traceNavigation=true
+      const trace=()=>{if(!window.traceNavigation)return;const host=document.querySelector('[data-workbench-content-tab="chat:e2e-b"]');window.navigationFrames.push({target:!!host,body:!!host?.textContent.includes('Target B content')});requestAnimationFrame(trace)};requestAnimationFrame(trace)
+      window.fetch=(input,options={})=>{
+        const url=String(input)
+        if(url.includes('/sessions/e2e-b/history/continuous'))return Promise.resolve(new Response(JSON.stringify({messages:[{role:'model',parts:[{text:'Target B content'}],__meta:{seq:1}}],firstSeq:1,lastSeq:1,hasMore:false}),{status:200,headers:{'Content-Type':'application/json'}}))
+        if(url.includes('/sessions/e2e-b/history')){window.preparedReads++;return new Promise(resolve=>{window.releasePrepared=()=>resolve(new Response(JSON.stringify({session:{id:'e2e-b',messageCount:1,historyVersion:1,busy:false,runtimeState:{state:'idle',busy:false,queueLength:0}},messages:[{role:'model',parts:[{text:'Target B content'}],__meta:{seq:1}}],historyVersion:1,historyComplete:true,latestSeq:1,queueLength:0,queuedMessages:[]}),{status:200,headers:{'Content-Type':'application/json'}}))})}
+        return original(input,options)
+      }
+    })
+    await page.click('[data-session-id="e2e-b"]')
+    await page.waitForSelector('[data-pane-navigation-pending="e2e-b"] [role="status"]')
+    assert.equal((await state(page)).root.activeTabId,'chat:e2e-a')
+    assert.match(await page.$eval('[data-workbench-content-tab="chat:e2e-a"]',el=>el.textContent),/Source A content/)
+    assert.equal(await page.$eval('[data-workbench-content-tab="chat:e2e-a"] > div',el=>el.inert),true)
+    await page.evaluate(()=>window.releasePrepared())
+    await page.waitForFunction(()=>document.querySelector('[data-workbench-content-tab="chat:e2e-b"]')?.textContent.includes('Target B content'))
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>{window.traceNavigation=false;resolve()}))))
+    const evidence=await page.evaluate(()=>({frames:window.navigationFrames,reads:window.preparedReads}))
+    assert.equal(evidence.reads,1)
+    assert.ok(evidence.frames.some(frame=>frame.target&&frame.body))
+    assert.equal(evidence.frames.some(frame=>frame.target&&!frame.body),false,JSON.stringify(evidence))
+    assert.equal(await page.$('[data-pane-navigation-pending]'),null)
+  }finally{await page.close()}
+})
+
+test('a later sidebar choice wins even when an abandoned history response ignores AbortSignal', async () => {
+ const page=await openFixture({reducedMotion:true})
+ try{
+  await page.evaluate(()=>{const original=window.fetch;window.fetch=(input,options={})=>{
+   const url=String(input)
+   if(url.includes('/sessions/e2e-b/history'))return new Promise(resolve=>{window.releaseOldNavigation=()=>original(input,{}).then(resolve)})
+   return original(input,options)
+  }})
+  await page.click('[data-session-id="e2e-b"]');await page.waitForFunction(()=>typeof window.releaseOldNavigation==='function')
+  await page.click('[data-session-id="e2e-c"]');await page.waitForSelector('[data-tab-id="chat:e2e-c"]')
+  await page.evaluate(()=>window.releaseOldNavigation());await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))
+  assert.equal((await state(page)).root.activeTabId,'chat:e2e-c')
+  assert.equal(await page.$('[data-pane-navigation-pending]'),null)
+  assert.equal(await page.$eval('[data-workbench-content-tab="chat:e2e-c"]',el=>el.getAnimations().length),0)
+ }finally{await page.close()}
 })

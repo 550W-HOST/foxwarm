@@ -1159,13 +1159,27 @@ async function executeScriptHostCall(
     try {
       // Nested runs must not replace the outer invocation's presentation metadata.
       const { onToolScriptSubCalls: _outerSubCalls, ...nestedContext } = ctx;
-      const result = await toolsModule.call_tool(wrapperArgs, { ...nestedContext, programmatic: true });
+      const captureDelivery = (delivery: {targetSessionId:string;message:string}) => {
+        const subCall = state.subCalls.find(item => item.id === subCallId);
+        if (subCall) subCall.sessionMessage = { targetSessionId:delivery.targetSessionId,message:delivery.message.slice(0,32768),
+          ...(delivery.message.length > 32768 ? {truncated:true} : {}) };
+      };
+      const isSessionSend = wrapperArgs.toolId === 'builtin:send_to_session' || wrapperArgs.source === 'builtin' && wrapperArgs.name === 'send_to_session';
+      const result = await toolsModule.call_tool(wrapperArgs, { ...nestedContext, programmatic: true,
+        ...(isSessionSend ? {onSessionMessageDelivered:captureDelivery} : {}),
+      });
       state.executedTools.push(summaryName);
       finishHostCall('completed');
 
       // Emit completed progress
       const sc = state.subCalls.find(s => s.id === subCallId);
       if (sc) {
+        const target = result?.__toolPostAction?.successfulSendToSessionTarget;
+        if (!sc.sessionMessage && (wrapperArgs.toolId === 'builtin:send_to_session' || wrapperArgs.source === 'builtin' && wrapperArgs.name === 'send_to_session')
+            && typeof target === 'string' && typeof wrapperArgs.args?.message === 'string') {
+          sc.sessionMessage = { targetSessionId: target, message: wrapperArgs.args.message.slice(0, 32768),
+            ...(wrapperArgs.args.message.length > 32768 ? { truncated: true } : {}) };
+        }
         sc.status = 'completed';
         sc.completedAt = Date.now();
         sc.durationMs = sc.completedAt - sc.startedAt;
@@ -1364,6 +1378,21 @@ function buildMontyResumeError(type: string, message: string): Error {
   return error;
 }
 
+async function resumeMontyHostException(snapshot: any, type: string, message: string): Promise<any> {
+  try {
+    return await snapshot.resumeError(buildMontyResumeError(type, message));
+  } catch (error: any) {
+    // Monty native 0.0.19 can reject a multiline traceback's column range.
+    // Keep the delivery failure and the exact exception being delivered; a
+    // previous host call is not evidence of a later VM error's cause.
+    if (typeof error?.message === 'string'
+      && error.message.startsWith('monty worker protocol error: invalid exception payload:')) {
+      throw new Error(`${error.message}\n\nHost-call exception being delivered: ${type}: ${message}\nThe original Python traceback is unavailable.`);
+    }
+    throw error;
+  }
+}
+
 async function dumpMontySnapshot(progress: any): Promise<string> {
   return Buffer.from(await progress.dump()).toString('base64');
 }
@@ -1450,7 +1479,7 @@ async function advanceExecution(args: {
         await saveRun(record);
         return buildBaseResult(record);
       }
-      progress = await progress.resumeError(buildMontyResumeError('RuntimeError', toolFailureMessage(error, ctx.signal)));
+      progress = await resumeMontyHostException(progress, 'RuntimeError', toolFailureMessage(error, ctx.signal));
       continue;
     }
 
@@ -1668,10 +1697,10 @@ async function resumeRun(record: ToolScriptRunRecord, resumeValue: any, ctx: Too
       throw new Error('ToolScript persisted snapshot is not a resumable Foxwarm host-call snapshot.');
     }
     const resumed = resumeValue && typeof resumeValue === 'object' && (resumeValue as any).__toolscriptResumeException
-      ? await snapshot.resumeError(buildMontyResumeError(
+      ? await resumeMontyHostException(snapshot,
         String((resumeValue as any).__toolscriptResumeException?.type || 'RuntimeError'),
         String((resumeValue as any).__toolscriptResumeException?.message || 'ToolScript host call failed'),
-      ))
+      )
       : await snapshot.resume(normalizeMontyValue(resumeValue));
     return await advanceExecution({ progress: resumed, record, runtimeState, ctx: { ...ctx, toolScriptRunId: record.runId }, monty });
   } catch (error: any) {

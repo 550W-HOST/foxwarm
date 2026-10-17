@@ -118,3 +118,26 @@
 @media (prefers-reduced-motion: reduce) {
   .fw-fox-dozing::before, .fw-fox-dozing::after { animation: none; transform: none; opacity: .8; }
 }
+
+/* Runtime poses share the loader family and semantic currentColor. */
+.fw-runtime-fox-wrap { display: inline-flex; flex: none; line-height: 0; }
+.fw-runtime-fox-wrap .fw-fox { --fw-fox-ink: currentColor; }
+/* New poses use one weight and open negative space; no overlapping prop badges. */
+.fw-runtime-fox { display: block; flex: none; overflow: visible; fill: none; stroke: currentColor; stroke-width: 4.08; stroke-linecap: round; stroke-linejoin: round; }
+.fw-runtime-fox-nose { fill: currentColor; stroke: none; }
+.fw-runtime-fox-step { transform-origin: 60px 70px; animation: fw-runtime-fox-step 1.4s ease-in-out infinite; }
+.fw-runtime-fox-gather { transform-origin: 66px 82px; animation: fw-runtime-fox-gather 2.8s ease-in-out infinite; }
+.fw-runtime-fox-glance { animation: fw-runtime-fox-glance 3.6s ease-in-out infinite; }
+.fw-runtime-fox-puzzle { animation: fw-runtime-fox-puzzle 4.2s ease-in-out infinite; }
+.fw-runtime-fox[data-runtime-fox='stopping'] .fw-runtime-fox-paw { transform-origin: 42px 60px; animation: fw-runtime-fox-settle 2s ease-in-out infinite; }
+@keyframes fw-runtime-fox-step { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-2px) rotate(-1deg); } }
+@keyframes fw-runtime-fox-gather { 0%,100% { transform: scale(1); } 50% { transform: scale(.97, .95); } }
+@keyframes fw-runtime-fox-glance { 0%,20%,100% { transform: rotate(0); } 45%,65% { transform: rotate(-9deg); } }
+@keyframes fw-runtime-fox-puzzle { 0%,25%,100% { transform: rotate(0); } 50%,70% { transform: rotate(7deg); } }
+@keyframes fw-runtime-fox-settle { 0%,100% { transform: rotate(0); } 50% { transform: rotate(-5deg); } }
+@media (prefers-reduced-motion: reduce) { .fw-runtime-fox, .fw-runtime-fox * { animation: none !important; } }
+.fw-runtime-fox[data-animated="false"], .fw-runtime-fox[data-animated="false"] *,
+.fw-runtime-fox:not([data-animated]), .fw-runtime-fox:not([data-animated]) * { animation: none !important; }
+.fw-runtime-fox-wrap[data-animated="false"] *,
+.fw-runtime-fox-wrap[data-animated="false"] *::before,
+.fw-runtime-fox-wrap[data-animated="false"] *::after { animation: none; transition: none; }

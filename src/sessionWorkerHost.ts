@@ -972,6 +972,7 @@ export class SessionWorkerHost {
     return {
       getSessionById: id => { this.assertId(id); return this.session; },
       getExistingSession: async id => { this.assertId(id); return this.session || null; },
+      appendSystemNotice: async (_id, message) => { await appendSessionMessagesForSession(this.session!, [message], () => this.persistOwner(), () => {}); },
       saveSession: async id => { this.assertId(id); await this.persistOwner(); },
       notifyHistoryUpdate: () => {},
       beginCompactionRuntimeState: beginCompactionSessionRuntimeState,

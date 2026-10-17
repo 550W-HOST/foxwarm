@@ -156,3 +156,5 @@ The optional bounded global summary retains validated `cachedTokens`, `inputToke
 `sessionListDensity.e2e.mjs` also covers bounded cross-tree and same-tree selection with nested disclosures, unrelated manual collapse, same-active refresh, and pruned-child reopening, using isolated synthetic data.
 
 Mobile-specific navigation, headers, and preferences follow the [mobile shell contract](../threads/webui-mobile-shell.md); desktop data and workbench owners remain unchanged.
+
+Runtime labels and semantic tones reuse [the shared presentation mapping](./webui-runtime-status.md), retaining bounded list data, remote placement and busy-ring behavior.

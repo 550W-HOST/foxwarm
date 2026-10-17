@@ -1,3 +1,5 @@
+import { projectSessionCommunications, receivedSessionCommunication, type SessionCommunication } from './sessionCommunications'
+import { getSessionNotice } from '../sessionNotices'
 import type { TimelineView } from '../chatPreferences'
 import {
   formatToolLabel,
@@ -86,6 +88,7 @@ export interface ConversationActivityView {
 }
 
 export interface TimelineRowView {
+  readonly communication?: SessionCommunication
   readonly key: string
   readonly msg: Message
   readonly reasoningPresentation: readonly (ReasoningPartPresentation | undefined)[]
@@ -135,6 +138,7 @@ export interface TimelineRowsInput {
   readonly nestedDepth: number
   readonly activityDetails?: boolean
   readonly timing?: ConversationTimingContext
+  readonly currentHistoryMessages?: readonly Message[]
   readonly historyMessages?: readonly Message[]
   readonly expandedGroupKeys: ReadonlySet<string>
 }
@@ -205,6 +209,7 @@ const getMessageUsageAttribution = (msg: Message, timing: DerivedRequestTiming):
 
 /** Whole event/reminder wrappers and metadata-classified display-only LLM retry notices may join a tool run; quoted content does not. */
 const getGroupableSystemKind = (msg: Message): 'event' | 'goal-reminder' | 'llm-error' | null => {
+  if (getSessionNotice(msg)) return null
   if (getLlmErrorMessageDetails(msg)) return 'llm-error'
   if (msg.role !== 'user' || msg.parts.length !== 1) return null
   const part = msg.parts[0]
@@ -223,9 +228,10 @@ const getGroupableSystemKind = (msg: Message): 'event' | 'goal-reminder' | 'llm-
 
 const isGroupableSystemMessage = (msg: Message): boolean => getGroupableSystemKind(msg) !== null
 
-const isToolGroupableMessage = (msg: Message): boolean => msg.role === 'model' || msg.role === 'tool' || isGroupableSystemMessage(msg)
+const isToolGroupableMessage = (msg: Message): boolean => !getSessionNotice(msg) && (msg.role === 'model' || msg.role === 'tool' || isGroupableSystemMessage(msg))
 
 const isHeavySystemLikeMessage = (message: Message): boolean => {
+  if (getSessionNotice(message)) return true
   if (getLlmErrorMessageDetails(message)) return true
   if (message.role === 'model') return false
   return (
@@ -240,6 +246,7 @@ const isHeavySystemLikeMessage = (message: Message): boolean => {
 
 /** Structured ingress wins; legacy recognition is restricted to whole standalone wrappers. */
 const getConversationInputKind = (message: Message): 'activity' | 'user' | 'legacy-user' => {
+  if (receivedSessionCommunication(message)) return 'legacy-user'
   if (message.__meta?.queuedPreview && message.__meta.queueType !== 'user') return 'activity'
   let direct = !!message.__meta?.clientMessageId || message.__meta?.queueType === 'user'
   for (const part of message.parts) {
@@ -551,6 +558,8 @@ const sameRowView = (a: TimelineRowView, b: TimelineRowView): boolean => (
   && a.conversationPartIndex === b.conversationPartIndex
   && a.conversationImageOnly === b.conversationImageOnly
   && a.literalUserText === b.literalUserText
+  && a.communication?.key === b.communication?.key && a.communication?.direction === b.communication?.direction
+  && a.communication?.peerSessionId === b.communication?.peerSessionId && a.communication?.message === b.communication?.message && a.communication?.truncated === b.communication?.truncated
   && a.activity === b.activity
   && a.prevMsg === b.prevMsg
   && a.nextMsg === b.nextMsg
@@ -668,6 +677,12 @@ const applyConversationTimeMarkers = (
 }
 
 export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRowsCache | null): TimelineRowsResult => {
+  // Planner transcripts remain diagnostics; never render them as ordinary replies or inflate foreground usage.
+  const preview = (message: Message) => message.__meta?.compactPreview === true && message.__meta?.temporary === true
+  if (input.messages.some(preview) || input.historyMessages?.some(preview)) input = { ...input,
+    messages: input.messages.filter(message => !preview(message)),
+    ...(input.historyMessages ? { historyMessages: input.historyMessages.filter(message => !preview(message)) } : {}),
+  }
   const { messages, isRunningTool = false, isMobile, timelineView, showUsageBadge, showTimeDividers, nestedDepth, expandedGroupKeys, activityDetails, historyMessages } = input
   const grouped = timelineView === 'grouped'
   const reasoningPresentation = input.reasoningPresentation || deriveReasoningPresentation(messages, message => (
@@ -685,11 +700,11 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
   let foldedThinkingOwnerKey: string | null = null
 
   const anchoredMessages = new Set<number>()
-  const emitRow = (index: number, group: TimelineGroupView | null, isGroupStart: boolean, foldedOwnerKey: string | null, conversation?: { key: string; partIndex?: number; imageOnly?: boolean; literalUserText?: boolean; activity?: TimelineRowView['activity'] }): void => {
+  const emitRow = (index: number, group: TimelineGroupView | null, isGroupStart: boolean, foldedOwnerKey: string | null, conversation?: { key: string; partIndex?: number; imageOnly?: boolean; literalUserText?: boolean; activity?: TimelineRowView['activity']; communication?: SessionCommunication }): void => {
     const msg = messages[index]
     const prevMsg = index > 0 ? messages[index - 1] : null
     const nextMsg = index < messages.length - 1 ? messages[index + 1] : null
-    const systemLikeMessage = conversation && !conversation.activity && msg.role === 'user' ? false : isHeavySystemLikeMessage(msg)
+    const systemLikeMessage = !!conversation?.communication || (conversation && !conversation.activity && msg.role === 'user' ? false : isHeavySystemLikeMessage(msg))
     const threadLikeMessage = systemLikeMessage || msg.role === 'model' || msg.role === 'tool'
     const shouldSkipMargin = threadLikeMessage && previousIsThreadLike
     previousIsThreadLike = threadLikeMessage
@@ -730,6 +745,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       runningTool: isRunningTool && index === finalStandaloneStartIdx,
       requestTiming,
       group,
+      ...(conversation?.communication ? { communication: conversation.communication } : {}),
       collapsedGroup,
       renderSummary: grouped && isGroupStart && activeGroup !== null && !groupExpanded && !activeGroup.keepExpanded,
       hideFoldedThinking: grouped && foldedOwnerKey !== null && !expandedGroupKeys.has(foldedOwnerKey),
@@ -760,11 +776,13 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
   }
 
   if (timelineView === 'conversation') {
-    const historyTailLlmError = historyMessages ? getHistoryTailLlmError(historyMessages) : undefined
+    const authoritativeHistory = input.currentHistoryMessages ?? historyMessages
+    const historyTailLlmError = authoritativeHistory ? getHistoryTailLlmError(authoritativeHistory) : undefined
     const requests = conversationRequests(historyMessages || messages, messages)
     const summaryForActivity = buildConversationActivitySummary(messages, historyMessages)
     // Every ordinary text part is a visible boundary, including commentary and streaming prefixes.
     const boundary = (msg: Message, partIndex?: number): 'visible' | 'context' | undefined => {
+      if (getSessionNotice(msg)) return 'visible'
       if (getContextBlockMetaFromMessage(msg)) return 'context'
       if (msg.role === 'user' && getConversationInputKind(msg) !== 'activity') return 'visible'
       if (msg.role === 'model' && !getLlmErrorMessageDetails(msg) && (partIndex === undefined ? msg.parts.some(hasConversationText) : hasConversationText(msg.parts[partIndex]))) return 'visible'
@@ -829,11 +847,18 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       } else activityMessages.push(fragment)
       lastActivitySource = index
     }
+    const communications = projectSessionCommunications(messages, input.historyMessages || messages)
     messages.forEach((msg, index) => {
       const contextBlock = msg.role === 'model' && getContextBlockMetaFromMessage(msg)
-      if (contextBlock || nestedDepth === 0 && msg === historyTailLlmError) {
+      if (getSessionNotice(msg) || contextBlock || nestedDepth === 0 && (msg === historyTailLlmError || historyTailLlmError?.__meta?.seq !== undefined && msg.__meta?.seq === historyTailLlmError.__meta.seq)) {
         flushActivity()
         emitRow(index, null, false, null, { key: messageKeys[index] })
+        return
+      }
+      const deliveries = communications.get(msg)
+      if (deliveries?.[0]?.direction === 'received') {
+        flushActivity()
+        emitRow(index, null, false, null, { key: messageKeys[index], communication: deliveries[0] })
         return
       }
       if (msg.role === 'user') {
@@ -847,6 +872,10 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       }
       if (msg.role === 'tool' || getLlmErrorMessageDetails(msg)) {
         addActivity(index, msg)
+        if (deliveries?.length) {
+          flushActivity()
+          for (const communication of deliveries) emitRow(index, null, false, null, { key: `${messageKeys[index]}-communication-${communication.key}`, communication })
+        }
         if (msg.__meta?.retry?.final === true) flushActivity()
         return
       }

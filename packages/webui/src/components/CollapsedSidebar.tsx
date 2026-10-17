@@ -1,3 +1,4 @@
+import { getSessionRuntimeTone } from '../sessionRuntimeState'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
 import { PanelLeftOpen, Plus, History, ClipboardList } from 'lucide-react'
 import type { Session } from './SessionListCore'
@@ -68,13 +69,10 @@ export default function CollapsedSidebar({
           const initial = getSessionInitial(session)
           const runtimeState = getSessionRuntimeStateName(session)
           const activeRuntime = isSessionRuntimeActive(session)
-          const showRuntimeIndicator = activeRuntime || runtimeState === 'waiting'
+          const showRuntimeIndicator = activeRuntime || runtimeState === 'waiting' || !!session.runtimeState?.compaction
           const isUnread = unreadSessionIds.has(session.id)
-          const indicatorColor = runtimeState === 'running-tool'
-            ? 'bg-fw-special'
-            : runtimeState === 'waiting'
-              ? 'bg-fw-warning'
-              : 'bg-fw-accent'
+          const tone = getSessionRuntimeTone(session)
+          const indicatorColor = tone === 'muted' ? 'bg-fw-text-muted' : `bg-fw-${tone}`
           return (
             <button
               key={session.id}
@@ -91,7 +89,7 @@ export default function CollapsedSidebar({
               {initial}
               {showRuntimeIndicator && (
                 activeRuntime
-                  ? <svg aria-hidden="true" data-runtime-perimeter viewBox="0 0 32 32" className={`collapsed-runtime-perimeter pointer-events-none absolute inset-0 h-full w-full ${runtimeState === 'running-tool' ? 'text-fw-special' : 'text-fw-accent'}`}>
+                  ? <svg aria-hidden="true" data-runtime-perimeter viewBox="0 0 32 32" className={`collapsed-runtime-perimeter pointer-events-none absolute inset-0 h-full w-full ${tone === 'muted' ? 'text-fw-text-muted' : `text-fw-${tone}`}`}>
                       <rect className="collapsed-runtime-perimeter-segment" x="1" y="1" width="30" height="30" rx="7" pathLength="100" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
                     </svg>
                   : <span aria-hidden="true" className={`absolute top-0.5 right-0.5 h-2 w-2 rounded-full ring-1 ring-fw-focus-ring dark:ring-fw-focus-ring ${indicatorColor}`} />

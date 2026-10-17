@@ -156,12 +156,13 @@ test('canonical ToolScript automation example runs and resumes end to end', asyn
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_canonical_example');
   const session = await sessionManager.getSession(sessionId);
-  const examplePath = path.join(__dirname, '..', 'examples', 'toolscript', 'automation_basic.py');
+  const examplePath = path.join(__dirname, '..', 'skills', 'toolscript-automation', 'examples', 'automation_basic.py');
   const baseDir = path.dirname(examplePath);
 
   try {
     const waiting = await tool_run_script({
       filePath: examplePath,
+      node: 'master',
       args: { baseDir },
     }, { sessionId, session });
 
@@ -183,7 +184,8 @@ test('canonical ToolScript automation example runs and resumes end to end', asyn
     assert.equal(completed.stdout, undefined);
     assert.equal(completed.result?.label, 'EXAMPLE_OK');
     assert.match(completed.result?.listingPreview || '', /automation_basic\.py/);
-    assert.match(completed.result?.documentationExcerpt || '', /ToolScript examples/);
+    const documentation = await fs.readFile(path.join(baseDir, 'README.md'), 'utf8');
+    assert.equal(completed.result?.documentationExcerpt, documentation.slice(0, 160).replace(/\n/g, ' '));
   } finally {
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);
@@ -481,6 +483,99 @@ test('host calls do not mask a later script traceback with a second snapshot res
       }
     }
   } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
+test('host exceptions remain readable for single-line and multiline calls without changing catch or fail-stop', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_host_exception');
+  const session = await sessionManager.getSession(sessionId);
+  const missingFile = `$fw_agentdir/${makeId('missing')}.txt`;
+  const calls = [
+    'call_tool("read", {"filePath": args["path"]})',
+    'call_tool({\n    "source": "node",\n    "name": "read",\n    "args": {"filePath": args["path"]},\n})',
+  ];
+  try {
+    for (const call of calls) {
+      const failed = await tool_run_script({
+        code: `print("before")\nvalue = ${call}\nprint("after")\nreturn value`,
+        args: { path: missingFile },
+      }, { sessionId, session });
+      assert.equal(failed.status, 'failed');
+      assert.match(failed.error || '', /RuntimeError: ENOENT: no such file or directory/);
+      assert.equal(failed.stdout, 'before\n');
+      assert.doesNotMatch(failed.error || '', /ToolScript context:|hostCallCount|stdoutTail/);
+      const record = await getToolScriptRunForTests(failed.runId);
+      assert.equal(record?.hostCallCount, 1);
+      assert.match(record?.lastHostCall?.error || '', /ENOENT/);
+
+      const caught = await tool_run_script({
+        code: `try:\n${`    value = ${call}`.replace(/\n/g, '\n    ')}\nexcept Exception as error:\n    value = str(error)\nprint("after")\nreturn value`,
+        args: { path: missingFile },
+      }, { sessionId, session });
+      assert.equal(caught.status, 'completed');
+      assert.match(caught.result, /ENOENT: no such file or directory/);
+      assert.equal(caught.stdout, 'after\n');
+    }
+
+    const laterFailure = await tool_run_script({
+      code: `try:\n    ${calls[0]}\nexcept Exception:\n    pass\nraise ValueError("script failure after catch")`,
+      args: { path: missingFile },
+    }, { sessionId, session });
+    assert.equal(laterFailure.status, 'failed');
+    assert.match(laterFailure.error || '', /ValueError: script failure after catch/);
+    assert.doesNotMatch(laterFailure.error || '', /ENOENT|Host-call exception/);
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
+test('timeout continuation delivers the saved host exception with readable failures and normal catch behavior', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_timeout_exception');
+  const session = await sessionManager.getSession(sessionId);
+  const originalCallTool = tools.call_tool;
+  (tools as any).call_tool = async (...args: Parameters<typeof originalCallTool>) => {
+    try {
+      return await originalCallTool(...args);
+    } finally {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  };
+  try {
+    for (const caught of [false, true]) {
+      const call = 'value = call_tool({\n    "source": "node",\n    "name": "read",\n    "args": {"filePath": args["path"]},\n})';
+      const code = caught
+        ? `try:\n${call.split('\n').map(line => `    ${line}`).join('\n')}\nexcept Exception as error:\n    value = str(error)\nprint("after")\nreturn value`
+        : `${call}\nprint("after")\nreturn value`;
+      const paused = await tool_run_script({
+        code,
+        timeoutSecs: 0.05,
+        args: { path: `$fw_agentdir/${makeId('missing')}.txt` },
+      }, { sessionId, session });
+      assert.equal(paused.status, 'waiting');
+      assert.equal(paused.waitingReason, 'timeout');
+      const record = await getToolScriptRunForTests(paused.runId);
+      assert.equal(record?.waiting?.timeout?.pendingResume?.mode, 'exception');
+      // Diagnostics are not the pending exception's source of truth.
+      record!.lastHostCall!.error = 'unrelated diagnostic error';
+      await fs.writeJson(path.join(STATE_DIR, 'toolscript-runs', `${paused.runId}.json`), record);
+      await resetToolScriptMontyRuntimeForTests();
+      const continued = await tool_continue_script({
+        runId: paused.runId,
+        continuationId: paused.continuationId,
+        timeoutSecs: 30,
+      }, { sessionId, session });
+      assert.equal(continued.status, caught ? 'completed' : 'failed');
+      assert.match(caught ? continued.result : continued.error || '', /ENOENT: no such file or directory/);
+      assert.doesNotMatch(continued.error || '', /unrelated diagnostic error|ToolScript context:/);
+      assert.equal(continued.stdout, caught ? 'after\n' : undefined);
+    }
+  } finally {
+    (tools as any).call_tool = originalCallTool;
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);
   }
@@ -1379,16 +1474,7 @@ test('background ToolScript controller run can wait for managed inbox events and
   const originalChat = llm.chat;
   const parentId = makeId('toolscript_bg_parent');
   const childId = makeId('toolscript_bg_child');
-  const scriptName = `${makeId('script')}.py`;
-  await writeScript(scriptName, asMain([
-    `lease = open_managed_session("${childId}")`,
-    `event = wait_for_managed_event("${childId}", lease["leaseId"], lease["revision"])`,
-    `step = session_step("${childId}", lease["leaseId"], event["revision"], message="controller woke")`,
-    `release = release_managed_session(step["sessionId"], step["leaseId"], step["revision"])`,
-    `step["releasedPendingInboxCount"] = release["releasedPendingInboxCount"]`,
-    `result = step`,
-    'return result',
-  ].join('\n')));
+  const examplePath = path.join(__dirname, '..', 'skills', 'toolscript-managed-controller', 'examples', 'managed_controller_basic.py');
 
   sessionManager.setSessionTriggerCallback((sessionId) => router.processSessionQueue(sessionId));
   (llm as any).chat = async (_parts: any, activeSession: Session) => {
@@ -1404,7 +1490,12 @@ test('background ToolScript controller run can wait for managed inbox events and
   await sessionManager.getSession(childId);
 
   try {
-    const started = await tool_start_toolscript_run({ filePath: scriptName }, { sessionId: parentId, session: parent });
+    const started = await tool_run_script({
+      filePath: examplePath,
+      node: 'master',
+      mode: 'background',
+      args: { target_session_id: childId },
+    }, { sessionId: parentId, session: parent });
     assert.equal((await getToolScriptRunForTests(started.runId))?.mode, 'background');
     assert.equal(started.status, 'waiting');
     assert.equal(started.waitingReason, 'managed_event');
@@ -1428,7 +1519,9 @@ test('background ToolScript controller run can wait for managed inbox events and
     assert.equal(completed?.lastResult?.releasedPendingInboxCount, 0);
 
     const child = await sessionManager.getSession(childId);
-    assert.match(child.history[child.history.length - 1]?.parts?.[0]?.text || '', /controller woke/);
+    assert.ok(child.history.some(message => message.role === 'user'
+      && message.parts.some(part => part.text === 'outside event')));
+    assert.equal(child.history[child.history.length - 1]?.role, 'model');
     assert.equal(await managedSessions.getManagedSessionStateForTests(childId), undefined);
   } finally {
     (llm as any).chat = originalChat;
@@ -1436,7 +1529,6 @@ test('background ToolScript controller run can wait for managed inbox events and
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(childId).catch(() => false);
     await sessionManager.deleteSession(parentId).catch(() => false);
-    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
   }
 });
 

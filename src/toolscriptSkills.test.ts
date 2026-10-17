@@ -5,6 +5,7 @@ import path from 'path';
 import { FunctionSnapshot, Monty } from '@pydantic/monty';
 
 import { listSkills, loadSkillDocuments } from './skills';
+import { tool_skill } from './toolsSessionAgent/skills';
 import { definitions } from './tools/definitions';
 
 test('global ToolScript skills are visible and loadable', async () => {
@@ -23,6 +24,10 @@ test('global ToolScript skills are visible and loadable', async () => {
   assert.ok(!names.includes('agent-skill-creator/docs/superpowers/plans/2026-05-27-agent-skill-creator-v5-artifacts-first'));
 
   const automation = await loadSkillDocuments('toolscript-automation', { agentName: 'main' });
+  assert.ok(automation.info.resourceFiles.includes('examples/automation_basic.py'));
+  assert.ok(automation.info.resourceFiles.includes('examples/README.md'));
+  const loadedAutomation = await tool_skill({ action: 'load', skillName: 'toolscript-automation' });
+  assert.ok(loadedAutomation.includes('examples/automation_basic.py'));
   const automationText = automation.documents.map(doc => doc.content).join('\n\n');
   assert.match(automationText, /run_script/);
   assert.match(automationText, /mode:\s*["']background["']/);
@@ -32,7 +37,7 @@ test('global ToolScript skills are visible and loadable', async () => {
   assert.doesNotMatch(automationText, /200,000 allocations/i);
 
   const automationExample = await fs.readFile(
-    path.join(__dirname, '..', 'examples', 'toolscript', 'automation_basic.py'),
+    path.join(automation.info.dir, 'examples', 'automation_basic.py'),
     'utf8',
   );
   const builtinReferences = Array.from(
@@ -48,6 +53,10 @@ test('global ToolScript skills are visible and loadable', async () => {
   assert.doesNotMatch(automationExample, /builtin:list_files/);
 
   const managed = await loadSkillDocuments('toolscript-managed-controller', { agentName: 'main' });
+  assert.ok(managed.info.resourceFiles.includes('examples/managed_controller_basic.py'));
+  assert.ok(await fs.pathExists(path.join(managed.info.dir, 'examples', 'managed_controller_basic.py')));
+  const loadedManaged = await tool_skill({ action: 'load', skillName: 'toolscript-managed-controller' });
+  assert.ok(loadedManaged.includes('examples/managed_controller_basic.py'));
   const managedText = managed.documents.map(doc => doc.content).join('\n\n');
   assert.match(managedText, /open_managed_session/);
   assert.match(managedText, /wait_for_managed_event/);

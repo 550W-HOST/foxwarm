@@ -1,3 +1,4 @@
+import { replySessionControl } from './sessionControlFeedback';
 import { ChannelContext, getChannelId, getChannelType, getConversationId } from '../channel';
 import { getManagedChannelIds, getChannelRuntimeStatus, listChannelRuntimeStatuses } from '../channelRuntime';
 import { nodesManager } from '../nodes/manager';
@@ -308,7 +309,7 @@ export async function buildNodeListReply(currentNode: string, boundNode?: string
   return reply
 }
 
-export async function handleCompactCommand(ctx: ChannelContext, args: string[], sessionId?: string, session?: CommandSession) {
+async function handleCompactCommandImpl(ctx: ChannelContext, args: string[], sessionId?: string, session?: CommandSession) {
   if (!sessionId || !session) return
 
   if (args[0] === 'tools') {
@@ -321,11 +322,11 @@ export async function handleCompactCommand(ctx: ChannelContext, args: string[], 
     }
 
     const compact = await sessionRuntime.requestCompaction(sessionId, keepPercent, true)
-    if (compact.kind === 'empty') { ctx.reply('History is empty.'); return }
-    if (compact.kind === 'unsupported') { ctx.reply(`⚠️ ${compact.message}`); return }
+    if (compact.kind === 'empty') { replySessionControl(ctx, 'compact', { status: 'noop', message: 'History is empty' }, 'History is empty.'); return }
+    if (compact.kind === 'unsupported') { replySessionControl(ctx, 'compact', { status: 'noop', message: 'Compaction unavailable', details: compact.message }, `⚠️ ${compact.message}`); return }
     if (compact.kind !== 'tool-noise') throw new Error('Unexpected historical tool-response pruning result.')
     const result = compact.result
-    ctx.reply(
+    replySessionControl(ctx, 'compact', { status: 'accepted', message: 'Tool outputs pruned' },
       `🧹 Historical tool-response pruning finished. Pruned ${result.replacedFunctionResponses} oversized response(s) across ${result.touchedMessages} message(s); tool-call arguments were unchanged. `
       + `Inspected ${result.inspectedMessages} older message(s), kept the most recent ${Math.max(0, commandSessionMessageCount(session) - result.keepStartIndex)} message(s) untouched, `
       + `and estimated ${result.estimatedTokensSaved} token(s) saved (${result.estimatedTokensBefore} → ${result.estimatedTokensAfter}).`
@@ -343,24 +344,29 @@ export async function handleCompactCommand(ctx: ChannelContext, args: string[], 
 
   const result = await sessionRuntime.requestCompaction(sessionId, keepPercent)
 
-  if (result.kind === 'empty') { ctx.reply('History is empty.'); return }
+  if (result.kind === 'empty') { replySessionControl(ctx, 'compact', { status: 'noop', message: 'History is empty' }, 'History is empty.'); return }
   if (result.kind === 'worker') {
-    ctx.reply(result.compacted ? '🗜️ Compaction completed.' : 'ℹ️ No compactable history was found.')
+    replySessionControl(ctx, 'compact', { status: result.compacted ? 'accepted' : 'noop', message: result.compacted ? 'Compaction completed' : 'No compactable history' }, result.compacted ? '🗜️ Compaction completed.' : 'ℹ️ No compactable history was found.')
     return
   }
   if (result.kind !== 'local') throw new Error('Unexpected compaction result.')
 
   if (result.alreadyQueued) {
-    ctx.reply('ℹ️ Compaction is already pending for this session.')
+    replySessionControl(ctx, 'compact', { status: 'noop', message: 'Compaction is already pending' }, 'ℹ️ Compaction is already pending for this session.')
     return
   }
 
   if (result.startedImmediately) {
-    ctx.reply(result.runsInBackground
+    replySessionControl(ctx, 'compact', { status: 'accepted', message: 'Compaction requested' }, result.runsInBackground
       ? '🗜️ Compaction requested. It runs in parallel, so this chat can continue normally.'
       : '🗜️ Compaction started. This session will remain busy until awaited compaction finishes.')
     return
   }
 
-  ctx.reply('⚠️ This model disables background compaction. Stop or wait for the current run to finish, then request compaction again.')
+  replySessionControl(ctx, 'compact', { status: 'noop', message: 'Compaction requires an idle session', details: 'Background compaction is disabled for this model.' }, '⚠️ This model disables background compaction. Stop or wait for the current run to finish, then request compaction again.')
+}
+
+export const handleCompactCommand = async (...args: Parameters<typeof handleCompactCommandImpl>): Promise<void> => {
+  try { await handleCompactCommandImpl(...args); }
+  catch (error) { replySessionControl(args[0], 'compact', { status: 'error', message: 'Compaction failed', details: error instanceof Error ? error.message : String(error) }, `❌ Compaction failed: ${error instanceof Error ? error.message : String(error)}`); }
 }

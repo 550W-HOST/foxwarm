@@ -19,7 +19,8 @@ export async function requestImageDownloadUrl(src: string, fileName: string, sig
   const endpoint = new URL(resourceUrl)
   endpoint.pathname += '/download'
   endpoint.search = ''
-  return requestSignedDownload(endpoint, resourceUrl, { filename: fileName, preview: '0' }, signal, 'Image unavailable')
+  const archiveSeq = resourceUrl.searchParams.get('archiveSeq')
+  return requestSignedDownload(endpoint, resourceUrl, { ...(archiveSeq ? { archiveSeq } : {}), filename: fileName, preview: '0' }, signal, 'Image unavailable')
 }
 
 async function requestSignedDownload(endpoint: URL, resourceUrl: URL, body: Record<string, string>, signal: AbortSignal | undefined, unavailable: string): Promise<string> {

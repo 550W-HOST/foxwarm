@@ -150,6 +150,57 @@ test('every POST/GET/DELETE independently authenticates and checks session owner
   });
 });
 
+test('successful SDK DELETE waits for asynchronous context cleanup before committing its response', async () => {
+  let beginCleanup!: () => void;
+  let finishCleanup!: () => void;
+  const cleanupStarted = new Promise<void>(resolve => { beginCleanup = resolve; });
+  const cleanupGate = new Promise<void>(resolve => { finishCleanup = resolve; });
+  let cleanupComplete = false;
+  let deleteHeadersAfterCleanup: boolean | undefined;
+  const server = new HttpServer(0, 'instance-token');
+  server.app.use('/mcp', (req, res, next) => {
+    if (req.method === 'DELETE') {
+      const writeHead = res.writeHead.bind(res);
+      res.writeHead = ((...args: Parameters<typeof res.writeHead>) => {
+        deleteHeadersAfterCleanup = cleanupComplete;
+        return writeHead(...args);
+      }) as typeof res.writeHead;
+    }
+    next();
+  });
+  const inbound = new McpInboundHttpService(config, {
+    async listTools() { return tools; },
+    async callTool() { return { content: [] }; },
+    async releaseContext(context) {
+      assert.equal(context.disposed, true);
+      beginCleanup();
+      await cleanupGate;
+      cleanupComplete = true;
+    },
+  });
+  inbound.register(server);
+  await server.start();
+  const address = server['httpServer'].address();
+  assert.ok(address && typeof address !== 'string');
+  const peer = sdkClient(new URL(`http://127.0.0.1:${address.port}/mcp`), alphaToken);
+  let terminated: Promise<void> | undefined;
+  try {
+    await peer.client.connect(peer.transport);
+    terminated = peer.transport.terminateSession();
+    await cleanupStarted;
+    assert.equal(deleteHeadersAfterCleanup, undefined, 'DELETE must not acknowledge while owner cleanup is held');
+    finishCleanup();
+    await terminated;
+    assert.equal(deleteHeadersAfterCleanup, true);
+  } finally {
+    finishCleanup();
+    await terminated?.catch(() => {});
+    await peer.client.close();
+    await inbound.stop();
+    await server.stop();
+  }
+});
+
 test('SSE reconnect stays bound to same owner and sessions expire within a bounded idle window', async () => {
   await withInbound(undefined, async (url, service) => {
     const initialized = await fetch(url, { method: 'POST', headers: rawHeaders(alphaToken), body: JSON.stringify({

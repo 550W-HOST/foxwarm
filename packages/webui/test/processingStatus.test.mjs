@@ -56,165 +56,87 @@ const activeRuntimeState = (state, extra = {}) => ({
   ...extra,
 })
 
-test('compacting status is blue and animated, with short queue metadata and controls', () => {
-  const html = render({
-    sessionBusy: true,
-    sessionQueueLength: 2,
-    runtimeState: activeRuntimeState('requesting-model', { active: { phase: 'compaction' } }),
-  })
 
-  assert.match(html, /data-processing-runtime-state="requesting-model"/)
+test('model requests use the primary fox spinner and retain decorative captions', () => {
+  const html = render({ sessionBusy: true, runtimeState: activeRuntimeState('requesting-model', { active: { phase: 'normal-turn' } }) })
+  assert.match(html, /data-runtime-presentation="request"/)
   assert.match(html, /text-fw-accent/)
-  assert.match(html, /Compacting\.\.\./)
+  assert.match(html, /data-fox-loader="spinner"/)
+  assert.match(html, /data-fox-thinking-copy/)
+  assert.doesNotMatch(html, />Stop<|>Continue</)
+})
+
+test('all tools use their real names, special ink and the working pose without decorative tool captions', () => {
+  for (const name of ['exec', 'read', 'functions.exec', 'node:demo/exec', 'execute', 'exec_file']) {
+    const html = render({ runtimeState: activeRuntimeState('running-tool', { tool: { name, index: 0, total: 2, executionNode: 'demo-node', startedAt: 1 } }) })
+    assert.match(html, /data-runtime-presentation="tool"/)
+    assert.match(html, /text-fw-special/)
+    assert.match(html, /data-runtime-fox="tool"/)
+    assert.match(html, /demo-node/)
+    assert.match(html, /aria-haspopup="dialog"/)
+    assert.doesNotMatch(html, /Working|data-fox-thinking-copy|data-processing-tool-tag/)
+  }
+})
+
+test('compaction is an explicit maintenance pose and does not accidentally offer ordinary Stop', () => {
+  const html = render({ sessionQueueLength: 2, runtimeState: activeRuntimeState('requesting-model', { active: { phase: 'compaction' } }) })
+  assert.match(html, /data-runtime-presentation="compact"/)
+  assert.match(html, /text-fw-accent/)
+  assert.match(html, /data-runtime-fox="compact"/)
+  assert.match(html, /Compacting context/)
   assert.match(html, /2 queued/)
-  assert.equal((html.match(/runtime-busy-spinner/g) || []).length, 1)
-  assert.doesNotMatch(html, /animate-bounce/)
-  assert.doesNotMatch(html, />Stop<\/button>/)
-  assert.match(html, />Run queued<\/button>/)
-  assert.doesNotMatch(html, />Continue<\/button>/)
+  assert.doesNotMatch(html, /data-fox-thinking-copy|>Stop</)
 })
 
-test('exec status uses a purple action caption and short queue metadata', () => {
-  const html = render({
-    sessionBusy: true,
-    sessionQueueLength: 1,
-    runtimeState: activeRuntimeState('running-tool', {
-      tool: { name: 'exec', index: 1, total: 4, startedAt: 1 },
-    }),
-  })
-
-  assert.match(html, /data-processing-runtime-state="running-tool"/)
-  assert.match(html, /text-fw-special/)
-  assert.match(html, /tool: exec 2\/4/)
-  assert.match(html, /1 queued/)
-  assert.equal((html.match(/runtime-busy-spinner/g) || []).length, 0)
-  assert.match(html, /data-fox-copy-mode="exec"/)
-  assert.doesNotMatch(html, /data-processing-tool-tag/)
-  assert.doesNotMatch(html, /animate-bounce/)
-  assert.doesNotMatch(html, />Stop<\/button>/)
-  assert.match(html, />Run queued<\/button>/)
-})
-
-test('waiting status has a sleeping fox, truthful summary, and no Stop action', () => {
-  const html = render({
-    sessionBusy: false,
-    sessionQueueLength: 2,
-    runtimeState: activeRuntimeState('waiting', {
-      waiting: { waitId: 'children', waitingFor: 'all-sessions', waitAllSessions: ['a', 'b'], satisfiedSessions: ['a'] },
-    }),
-  })
-
-  assert.match(html, /data-processing-runtime-state="waiting"/)
-  assert.match(html, /text-fw-warning/)
+test('waiting shows remaining dependencies, a sleeping fox and no Stop or Continue', () => {
+  const html = render({ runtimeState: activeRuntimeState('waiting', { waiting: { waitId: 'demo', waitingFor: 'all-sessions', waitAllSessions: ['a','b'], satisfiedSessions: ['a'] } }) })
+  assert.match(html, /Waiting for 1 session/)
   assert.match(html, /data-fox-loader="sleeping"/)
-  assert.doesNotMatch(html, /data-processing-status-dot|data-fox-loader="spinner"|data-fox-thinking-copy/)
-  assert.match(html, /waiting: sessions 1\/2/)
-  assert.doesNotMatch(html, /animate-bounce|runtime-busy-spinner/)
-  assert.match(html, /2 queued/)
-  assert.doesNotMatch(html, />Stop<\/button>/)
-  assert.match(html, />Run queued<\/button>/)
-  assert.doesNotMatch(html, />Continue<\/button>/)
+  assert.match(html, /text-fw-warning/)
+  assert.doesNotMatch(html, />Stop<|>Continue<|data-fox-thinking-copy/)
 })
 
-test('idle interrupted status has one static dot and Continue only, with queued actions preserved', () => {
-  const interrupted = render({
-    turnIncomplete: true,
-    runtimeState: activeRuntimeState('idle'),
-  })
-  assert.match(interrupted, /data-processing-runtime-state="interrupted"/)
-  assert.match(interrupted, /Turn interrupted/)
-  assert.match(interrupted, />Continue<\/button>/)
-  assert.doesNotMatch(interrupted, />Stop<\/button>|>Run queued<\/button>|animate-bounce|runtime-busy-spinner/)
-  assert.equal((interrupted.match(/data-processing-status-dot="static"/g) || []).length, 1)
-
-  const withQueue = render({
-    turnIncomplete: true,
-    sessionQueueLength: 2,
-    runtimeState: activeRuntimeState('idle'),
-  })
-  assert.match(withQueue, /2 queued/)
-  assert.match(withQueue, />Continue<\/button>/)
-  assert.match(withQueue, />Run queued<\/button>/)
+test('interrupted and failed idle turns have static poses and permission-gated Continue', () => {
+  const interrupted = render({ turnIncomplete: true, runtimeState: activeRuntimeState('idle') })
+  assert.match(interrupted, /data-runtime-presentation="interrupted"/)
+  assert.match(interrupted, />Continue</)
+  assert.doesNotMatch(interrupted, /data-animated="true"/)
+  const failed = render({ turnIncomplete: true, runtimeState: activeRuntimeState('idle'), failure: { title: 'Request failed', details: 'Connection closed' } })
+  assert.match(failed, /data-runtime-presentation="error"/)
+  assert.match(failed, /text-fw-danger/)
+  const restricted = render({ turnIncomplete: true, runtimeState: activeRuntimeState('idle'), onContinue: undefined })
+  assert.doesNotMatch(restricted, />Continue</)
 })
 
-test('idle queue keeps its pending action and canonical idle overrides legacy busy', () => {
-  const queuedHtml = render({ sessionQueueLength: 1, runtimeState: activeRuntimeState('idle') })
-  assert.match(queuedHtml, /1 queued/)
-  assert.match(queuedHtml, />Run queued<\/button>/)
-  assert.doesNotMatch(queuedHtml, /data-processing-runtime-state/)
-  assert.doesNotMatch(queuedHtml, /thinking|runtime-busy-spinner/)
-  assert.doesNotMatch(queuedHtml, />Stop<\/button>/)
-
-  const canonicalIdleHtml = render({ sessionBusy: true, runtimeState: activeRuntimeState('idle') })
-  assert.doesNotMatch(canonicalIdleHtml, /role="status"|runtime-busy-spinner|button/)
-  assert.match(canonicalIdleHtml, /data-processing-status-slot/)
-
-  const legacyBusyHtml = render({ sessionBusy: true })
-  assert.match(legacyBusyHtml, /data-processing-runtime-state="requesting-model"/)
-  assert.match(legacyBusyHtml, /Thinking\.\.\./)
-  assert.match(legacyBusyHtml, /data-fox-loader="thinking"/)
-  assert.doesNotMatch(legacyBusyHtml, /runtime-busy-spinner/)
-  assert.doesNotMatch(legacyBusyHtml, />Stop<\/button>/)
+test('idle is quiet, canonical state overrides legacy busy, and queued work remains separate', () => {
+  const idle = render({ sessionBusy: true, runtimeState: activeRuntimeState('idle'), sessionQueueLength: 2 })
+  assert.doesNotMatch(idle, /data-processing-runtime-state/)
+  assert.match(idle, /2 queued/)
+  assert.match(idle, />Run queued</)
+  const unknown = render({ sessionBusy: true })
+  assert.match(unknown, /data-runtime-presentation="unknown"/)
+  assert.doesNotMatch(unknown, /data-fox-thinking-copy/)
 })
 
-test('loading indicator still takes precedence over runtime status', () => {
-  const html = render({
-    sessionBusy: true,
-    loading: true,
-    runtimeState: activeRuntimeState('running-tool', { tool: { name: 'exec', startedAt: 1 } }),
-  })
-
-  assert.doesNotMatch(html, /data-processing-runtime-state/)
-  assert.doesNotMatch(html, /tool: exec|runtime-busy-spinner|fw-processing-exec|fw-processing-animated/)
-  assert.equal((html.match(/data-fox-loader="thinking"/g) || []).length, 1)
-  assert.match(html, /aria-label="Loading"/)
-  assert.doesNotMatch(html, />Stop<\/button>/)
+test('submission, retry and stop request phases are explicit and do not look like ordinary thinking', () => {
+  const sending = render({ loading: true })
+  assert.match(sending, /Sending/)
+  assert.match(render({loading:true,runtimeState:activeRuntimeState('running-tool',{tool:{name:'exec',startedAt:1}})}), /data-runtime-presentation="tool"/)
+  assert.doesNotMatch(sending, /data-fox-thinking-copy/)
+  const stopping = render({ pendingControl: 'stop', runtimeState: activeRuntimeState('running-tool') })
+  assert.match(stopping, /data-runtime-presentation="stopping"/)
+  assert.match(stopping, /Stopping/)
+  const retry = render({ runtimeState: activeRuntimeState('requesting-model', { retry: { attempt: 1, nextAttempt: 2, maxAttempts: 6, retryAt: Date.now()+60000 } }) })
+  assert.match(retry, /data-runtime-presentation="retry"/)
+  assert.match(retry, /2\/6/)
+  assert.doesNotMatch(retry, /data-fox-thinking-copy/)
 })
 
-
-test('thinking captions do not replace other real statuses', () => {
-  for (const timelineView of ['grouped', 'conversation']) {
-    const ordinary = render({ sessionBusy: true, timelineView })
-    assert.match(ordinary, /data-fox-thinking-copy/)
-    assert.match(ordinary, /aria-hidden="true"[^>]*title=/)
-    for (const props of [
-      { runtimeState: activeRuntimeState('requesting-model', { active: { phase: 'compaction' } }) },
-      { runtimeState: activeRuntimeState('running-tool', { tool: { name: 'read', startedAt: 1 } }) },
-      { runtimeState: activeRuntimeState('waiting') },
-      { runtimeState: activeRuntimeState('idle') },
-      { loading: true },
-    ]) assert.doesNotMatch(render({ sessionBusy: true, timelineView, ...props }), /data-fox-thinking-copy/)
-  }
-})
-
-
-test('only actual exec tool names select the distinct action-caption pool', () => {
-  for (const timelineView of ['grouped', 'conversation']) {
-    for (const name of ['exec', 'functions.exec', 'node:fixture/exec']) {
-      const html = render({timelineView, runtimeState: activeRuntimeState('running-tool', {
-        tool: {name, index: 0, total: 2, executionNode: 'fixture-node', argsPreview: 'echo WORK', startedAt: 1},
-      })})
-      assert.match(html, /data-fox-copy-mode="exec"/)
-      assert.doesNotMatch(html, /data-processing-tool-tag/)
-      assert.match(html, /fixture-node/)
-      assert.match(html, /echo WORK/)
-      assert.match(html, /1\/2/)
-    }
-    for (const name of ['read', 'execute', 'exec_file']) assert.doesNotMatch(render({timelineView,
-      runtimeState: activeRuntimeState('running-tool', {tool: {name, startedAt: 1}}),
-    }), /data-fox-copy-mode="exec"/)
-  }
-})
-
-
-test('visible state and queue metadata do not grant absent action callbacks', () => {
-  for (const props of [
-    { sessionBusy: true },
-    { turnIncomplete: true, runtimeState: activeRuntimeState('idle') },
-    { runtimeState: activeRuntimeState('idle') },
-  ]) {
-    const html = render({ ...props, sessionQueueLength: 2, onStop: undefined, onContinue: undefined, onRunQueued: undefined })
-    assert.match(html, /2 queued/)
-    assert.doesNotMatch(html, /<button/)
-  }
+test('successful control feedback is silent; failed or no-op controls stay out of chat history', () => {
+  assert.doesNotMatch(render({controlFeedback:{action:'stop',status:'accepted',message:'Stop requested'}}), /data-control-feedback/)
+  const failed = render({controlFeedback:{action:'stop',status:'error',message:'Action not confirmed',details:'Connection interrupted'}})
+  assert.match(failed, /data-control-feedback/)
+  assert.match(failed, /role="alert"/)
+  assert.match(failed, /<details/)
+  assert.doesNotMatch(failed, /Stop signal sent|in-flight LLM/)
 })

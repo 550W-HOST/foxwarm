@@ -1,3 +1,4 @@
+import { getSessionNotice } from '../sessionNotices'
 import type { TimelineView } from '../chatPreferences'
 import type { Message } from './chatShared'
 import { formatStructuredSystemText, getLlmErrorMessageDetails, getSystemMessagePreviewDescriptor, isSystemLikeText, renderAssistantMarkdownSegments, renderMarkdownSegments } from './chatShared'
@@ -10,7 +11,7 @@ import { parsePastedTextSegments } from '../pastedText'
 import { findAttachmentCorrelations, getConversationUserPartText, getPartDisplayText, stripGeneratedDescriptorLines } from './ChatTimeline'
 import { getReasoningText, isReasoningPart } from './reasoningParts'
 
-export type SearchSurface = 'user' | 'pasted' | 'system' | 'model' | 'reasoning' | 'ctx' | 'call' | 'response'
+export type SearchSurface = 'user' | 'pasted' | 'system' | 'model' | 'reasoning' | 'ctx' | 'call' | 'response' | 'communication'
 export interface SearchField {
   rowKey: string
   groupKey?: string
@@ -50,7 +51,7 @@ const literalOccurrences = (text: string, query: string): Array<{ offset: number
 }
 
 /** Only called while Search is open; recompute on committed history changes, not on each keystroke. */
-export function projectSessionSearchFields(messages: Message[], timelineView: TimelineView): SearchField[] {
+export function projectSessionSearchFields(messages: Message[], timelineView: TimelineView, currentHistoryMessages: readonly Message[] = messages): SearchField[] {
   const committed: Message[] = []
   const sourceIndices = new Map<Message, number>()
   messages.forEach((message, index) => {
@@ -58,7 +59,7 @@ export function projectSessionSearchFields(messages: Message[], timelineView: Ti
     committed.push(message)
     sourceIndices.set(message, index)
   })
-  const input = { messages: committed, isMobile: false, timelineView, showUsageBadge: false, showTimeDividers: false, nestedDepth: 0, historyMessages: messages, expandedGroupKeys: new Set<string>() }
+  const input = { messages: committed, isMobile: false, timelineView, showUsageBadge: false, showTimeDividers: false, nestedDepth: 0, historyMessages: messages, currentHistoryMessages, expandedGroupKeys: new Set<string>() }
   const initial = buildTimelineRows(input, null)
   // The normal collapsed render omits whole Event/Goal reminder rows inside groups.
   // Reuse the same row builder in data-only expanded mode so their own row/group keys survive.
@@ -77,13 +78,16 @@ export function projectSessionSearchFields(messages: Message[], timelineView: Ti
       const source = row.activity.sources?.find(message => message.__meta === preview.message.__meta)
       fields.push({ rowKey: row.key, sourceIndex: sourceIndices.get(source || preview.message) ?? sourceIndices.get(row.msg)!, surface: 'model', partIndex: preview.partIndex, text: assistantText(preview.message.parts[preview.partIndex].text || '') })
     }
-    if (row.activity || timelineView === 'conversation' && getLlmErrorMessageDetails(row.msg)) continue
+    if (row.activity || timelineView === 'conversation' && getLlmErrorMessageDetails(row.msg) && !getSessionNotice(row.msg)) continue
     const { msg, key: rowKey } = row
     const groupKey = row.group?.key
     const sourceIndex = sourceIndices.get(msg)!
     const add = (surface: SearchSurface, partIndex: number, text: string, toolIndex?: number, responseIndex?: number, pastedIndex?: number) => {
       if (text.trim()) fields.push({ rowKey, groupKey, sourceIndex, groupStartIndex: groupKey ? groupStarts.get(groupKey) : undefined, surface, partIndex, ...(toolIndex !== undefined ? { toolIndex } : {}), ...(responseIndex !== undefined ? { responseIndex } : {}), ...(pastedIndex !== undefined ? { pastedIndex } : {}), text })
     }
+    if (row.communication) { add('communication', 0, markdownText(row.communication.message, true)); continue }
+    const notice = getSessionNotice(msg)
+    if (notice) { add('system', 0, [notice.title, notice.summary, notice.details || ''].join('\u0000')); continue }
     if (row.systemLikeMessage) {
       const descriptor = getSystemMessagePreviewDescriptor(msg)
       const body = descriptor.bodyText || msg.parts.map(part => part.system ? formatStructuredSystemText(part.system) : part.text || '').filter(Boolean).join('\n')

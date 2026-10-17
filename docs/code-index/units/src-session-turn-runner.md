@@ -86,3 +86,5 @@ The Router and Worker host suites also capture actual serialized provider reques
 ## Canonical ownership
 
 The user-visible rules are canonical in [message processing pipeline](../threads/message-processing-pipeline.md). This unit records implementation ownership only and introduces no new product decisions.
+
+A blocking compact-planning wait publishes an owned compaction phase and clears only that exact runtime instance. Prepared physical attempts restore the normal model phase after retry preparation. Terminal/fenced errors use durable or temporary [system notices](./src-session-notices.md), with Session-scoped deduplication before WebUI plain-final delivery is excluded.

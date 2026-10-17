@@ -1,3 +1,5 @@
+import { parseSessionControlFeedback, getSessionControlAction } from '../../packages/shared/dist/sessionControlFeedback';
+import { readContinuousHistoryPage } from './webuiContinuousHistory';
 import { registerWebUiFileDownloads, registerWebUiBlobDownloads } from './webuiFileDownloads';
 import { AccessConfigRuntime, type NormalizedAccessIdentity } from '../accessConfig';
 import { configInstaller, type ConfigInstaller } from '../configInstaller';
@@ -903,7 +905,19 @@ export class WebUIChannel implements Channel {
         if (sessionManager.getSessionCatalog(sessionId)?.id !== snapshot.session.id || !this.webUiCanAccessSession(auth, sessionId)) {
           res.status(403).json({ error: 'WebUI identity session binding changed.' }); return false;
         }
-        if (!snapshot.messages.some(message => message.parts.some(part => part.inlineDataRef?.blobId === blobId))) {
+        let referenced = snapshot.messages.some(message => message.parts.some(part => part.inlineDataRef?.blobId === blobId));
+        const rawSeq = req.query.archiveSeq ?? req.body?.archiveSeq;
+        if (!referenced && typeof rawSeq === 'string' && /^[1-9]\d*$/.test(rawSeq) && Number.isSafeInteger(Number(rawSeq))) {
+          const seq = Number(rawSeq);
+          const frontier = snapshot.latestSeq;
+          if (seq <= frontier) {
+            const page = await readEffectiveArchiveMessagePage(snapshot.session.id, { startSeq: seq, endSeq: seq, limit: 1 });
+            const archived = (await materializeWebUiMessages(page.records.map(record => record.message))).messages;
+            referenced = archived.some(message => message.parts.some(part => part.inlineDataRef?.blobId === blobId));
+          }
+        }
+        if (!referenced || !this.webUiCanAccessSession(auth, sessionId)
+          || sessionManager.getSessionCatalog(sessionId)?.id !== snapshot.session.id) {
           res.status(403).json({ error: 'Image is not part of this WebUI identity session.' }); return false;
         }
       }
@@ -1939,6 +1953,38 @@ export class WebUIChannel implements Channel {
             const status = error?.statusCode || 500;
             if (status >= 500) logger.error({ code: error?.code || 'HISTORY_SEARCH_FAILED' }, 'History window failed');
             return res.status(status).json({ error: error?.message || 'History window failed', code: error?.code || 'HISTORY_SEARCH_INVALID' });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/sessions/:sessionId/history/continuous', method: 'GET', auth: 'webui',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionId = req.params.sessionId as string;
+            const auth = await this.requireSessionAccess(req, res, sessionId);
+            if (!auth) return;
+            const q = historySearchQuery(req, ['beforeSeq', 'afterSeq']);
+            const beforeSeq = historySearchSeq(q.beforeSeq, 'beforeSeq');
+            const afterSeq = historySearchSeq(q.afterSeq, 'afterSeq');
+            if (beforeSeq && afterSeq) return res.status(400).json({ error: 'Choose one paging direction.' });
+            const canonicalId = sessionManager.getSessionCatalog(sessionId)?.id;
+            if (!canonicalId) return res.status(404).json({ error: 'Session not found' });
+            const snapshot = await sessionRuntime.getHistory(canonicalId);
+            if (!snapshot) return res.status(404).json({ error: 'Session not found' });
+            const page = await readContinuousHistoryPage(canonicalId, { beforeSeq, afterSeq }, snapshot.latestSeq);
+            const messages = await materializeHistoryViewerMessages(page.messages);
+            for (const message of messages) for (const part of message.parts) {
+              if (part.inlineDataRef?.blobId) (part.inlineDataRef as any).apiPath =
+                `/sessions/${encodeURIComponent(canonicalId)}/blobs/${encodeURIComponent(part.inlineDataRef.blobId)}?archiveSeq=${message.__meta?.seq}`;
+            }
+            if (sessionManager.getSessionCatalog(sessionId)?.id !== canonicalId
+              || (auth.role === 'webui' && !this.webUiCanAccessSession(auth, sessionId))) {
+              return res.status(403).json({ error: 'Session binding changed.' });
+            }
+            res.json({ ...page, messages });
+          } catch (error: any) {
+            res.status(error?.statusCode || 500).json({ error: error?.message || 'History could not be loaded.' });
           }
         },
       });
@@ -3008,7 +3054,10 @@ export class WebUIChannel implements Channel {
             const sessionId = req.params.sessionId as string;
             const auth = await this.requireSessionAccess(req, res, sessionId);
             if (!auth) return;
-            const { text, parts, filePaths, uploadedFiles } = req.body;
+            const { text, parts, filePaths, uploadedFiles, controlRequestId } = req.body;
+            if (controlRequestId !== undefined && (typeof controlRequestId !== 'string' || !controlRequestId || controlRequestId.length > 128)) {
+              return res.status(400).json({ error: 'Invalid control request ID' });
+            }
             const clientMessageId = typeof req.body?.clientMessageId === 'string'
               && req.body.clientMessageId.length > 0
               && req.body.clientMessageId.length <= 160
@@ -3044,7 +3093,15 @@ export class WebUIChannel implements Channel {
               conversationId: sessionId,
               username: 'webui',
               platform: 'webui',
-              reply: async (replyText: string) => {
+              reply: async (replyText: string, replyOptions?: any) => {
+                const action = getSessionControlAction(typeof text === 'string' ? text : Array.isArray(finalParts) ? finalParts.map(part => typeof part?.text === 'string' ? part.text : '').join('\n') : '');
+                const feedback = parseSessionControlFeedback(replyOptions?.sessionControlFeedback)
+                  || (action ? { action, status: 'error' as const, message: 'Action could not be completed', details: replyText.slice(0, 4096) } : null);
+                if (feedback) {
+                  this.broadcastSessionEvent(sessionId, { type: 'session-control-feedback', requestId: controlRequestId, feedback });
+                  this.broadcastSessionStateUpdate(sessionId);
+                  return;
+                }
                 // Check if this is a command response by checking if message starts with /
                 const messageText = (text || finalParts.map((p: any) => p.text || '').join('\n')).trim();
                 const isCommand = messageText.startsWith('/');

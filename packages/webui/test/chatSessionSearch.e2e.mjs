@@ -95,7 +95,7 @@ before(async () => {
         window.fixture.compactHistory=messages;window.fixture.now=now;window.fixture.compactRuntime=runtime
         window.fixture.socket.onmessage({data:JSON.stringify({type:'session-state',sessionId:window.fixture.compactSessionId,session:{id:window.fixture.compactSessionId,busy:runtime.busy,busyStartedAt:window.fixture.compactBusyStartedAt,runtimeState:runtime,queueLength:0,messageCount:messages.length,historyVersion:0,modelKey:'fixture/model'}})})
       }
-      return React.createElement(Chat,{sessionId,timelineView,showUsageBadge:false,showUserMessageMetadata,onShowUserMessageMetadataChange:setMetadata})
+      return React.createElement(Chat,{sessionId,timelineView,historyMode:'active',showUsageBadge:false,showUserMessageMetadata,onShowUserMessageMetadataChange:setMetadata})
     }
     createRoot(document.getElementById('root')).render(React.createElement(Fixture))
   `
@@ -243,13 +243,13 @@ test('finds already-loaded older unmounted rows, read results, reasoning, render
   await page.click('[aria-label="Close search"]')
 })
 
-test('LLM retry Search indexes the metadata-classified body without its warning prefix',async()=>{
+test('LLM retry Search indexes the typed event and its original diagnostic',async()=>{
   await page.click('button[aria-label="Find in chat"]')
   await query('LLM_RETRY_SEARCH_TARGET')
   await page.waitForFunction(()=>[...CSS.highlights].some(([name,h])=>name.startsWith('foxwarm-chat-search-')&&[...h][0]?.toString()==='LLM_RETRY_SEARCH_TARGET'))
   assert.equal((await snapshot()).hits,'1/1')
   await query('LLM Error')
-  await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent==='0/0')
+  await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent==='1/1')
   await page.click('[aria-label="Close search"]')
 })
 
@@ -387,7 +387,7 @@ test('Conversation Search navigates body and CTX summaries without revealing act
   await page.evaluate(() => window.fixture.setTimelineView('conversation'))
   await page.waitForSelector('[data-timeline-activity]')
   await page.click('button[aria-label="Find in chat"]')
-  for (const term of ['command-needle', 'CJK目标尾部', 'thought-needle', 'GROUP_EVENT_TARGET', 'LLM_RETRY_SEARCH_TARGET']) {
+  for (const term of ['command-needle', 'CJK目标尾部', 'thought-needle', 'GROUP_EVENT_TARGET']) {
     await query(term)
     await page.waitForFunction(() => document.querySelector('[role="search"] [aria-live]')?.textContent === '0/0')
     assert.equal(await page.$('[data-activity-details]'), null)
@@ -397,16 +397,20 @@ test('Conversation Search navigates body and CTX summaries without revealing act
   await page.waitForSelector('[data-activity-details]')
   await query('command-needle')
   assert.equal((await snapshot()).hits, '0/0')
-  for (const term of ['visible-needle', 'CTX摘要末尾', 'OLD_ONLY_MATCH']) {
+  for (const term of ['visible-needle', 'CTX摘要末尾', 'OLD_ONLY_MATCH', 'LLM_RETRY_SEARCH_TARGET']) {
     await query(term)
     await page.waitForFunction(value => [...CSS.highlights].some(([name, hits]) => name.startsWith('foxwarm-chat-search-') && [...hits][0]?.toString() === value), { timeout: 3000 }, term)
     assert.equal((await snapshot()).visible, true)
     assert.equal((await snapshot()).hits, '1/1')
   }
   assert.equal((await snapshot()).archive, 0)
+  const viewport = await page.$eval('.foxwarm-chat-messages', el => { const rect = el.getBoundingClientRect(); return {x:rect.left+rect.width/2,y:rect.top+rect.height/2} })
+  await page.mouse.move(viewport.x, viewport.y)
+  await page.mouse.wheel({deltaY:-300})
+  await page.waitForSelector('[aria-label="Scroll to bottom"]')
   await page.evaluate(() => { const container = document.querySelector('.foxwarm-chat-messages'); container.scrollTop = 1200; container.dispatchEvent(new Event('scroll')); window.fixture.emitStream('CONVERSATION_STREAM_UPDATE') })
   await page.waitForFunction(() => document.querySelector('[data-chat-timeline="committed"]').textContent.includes('CONVERSATION_STREAM_UPDATE'))
-  assert.ok(Math.abs((await snapshot()).scrollTop - 1200) < 4)
+  assert.ok(Math.abs((await snapshot()).scrollTop - 1200) < 4, JSON.stringify(await snapshot()))
   await page.click('[aria-label="Close search"]')
   assert.ok((await snapshot()).distance > 500)
 })
@@ -476,7 +480,7 @@ const showCompact = async (records,second,runtime={state:'idle',busy:false,queue
   await page.waitForFunction(text=>document.querySelector('.foxwarm-chat-messages')?.textContent.includes(text),{},text)
   await page.waitForFunction(()=>document.querySelectorAll('[data-timeline-activity]').length===1)
 }
-const compactHeaders = () => page.$$eval('[data-timeline-activity] [aria-label$="activity"]',buttons=>buttons.map(button=>button.textContent))
+const compactHeaders = () => page.$$eval('[data-timeline-activity] [aria-label$="activity"]',buttons=>buttons.filter(button=>button.dataset.activityToggle!=='bottom').map(button=>button.textContent))
 const continueVisible = () => page.$$eval('button',buttons=>buttons.some(button=>button.textContent.trim()==='Continue'))
 
 test('Actual Chat leaves compact-only maintenance unclocked both at the completed tail and after a new user boundary',async()=>{
@@ -505,8 +509,10 @@ test('Actual Chat retains real idle coordination timing through maintenance and 
   const completed={role:'model',parts:[],__meta:{seq:307,timestamp:compactEpoch+17000,llmRequestId:'coordination',llmRequestTiming:request,llmSegment:{complete:true}}}
   const maintenance={...compactMessage(true),__meta:{...compactMessage(true).__meta,seq:308,timestamp:compactEpoch+18000}}
   await showCompact([compactStart,compactReply,incoming,reasoning,completed,maintenance],30)
-  await page.waitForFunction(()=>document.querySelector('[data-timeline-activity] [aria-label$="activity"]')?.textContent.includes('Waited 4s'))
-  assert.match((await compactHeaders()).join(' '),/Worked 2s.*Waited 4s.*1 received/)
+  await page.waitForFunction(()=>document.querySelector('[data-timeline-activity] [aria-label$="activity"]')?.textContent.includes('Worked 2s'))
+  assert.match((await compactHeaders()).join(' '),/Worked 2s/)
+  assert.doesNotMatch((await compactHeaders()).join(' '),/Waited 4s|1 received/)
+  assert.match(await page.$eval('[data-session-communication="received"]',element=>element.textContent),/From.*REAL_COORDINATION/s)
   assert.equal(await continueVisible(),false,'Continue=false does not mean that real coordination cannot wait')
   const mixed={...maintenance,parts:[...maintenance.parts,...incoming.parts],__meta:{...maintenance.__meta,seq:309,timestamp:compactEpoch+18000}}
   await showCompact([compactStart,compactReply,mixed],30,{state:'requesting-model',busy:true,since:compactEpoch+18000,queueLength:0})

@@ -1,4 +1,8 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
+import { CHAT_BOOTSTRAP_TAIL_LENGTH, peekPreparedChatHistory, peekPreparedChatArchive, discardPreparedChatHistory } from '../preparedChatHistory'
+import { createLocalSessionNotice } from '../sessionNotices'
+import { getSessionControlAction, parseSessionControlFeedback, type SessionControlAction, type SessionControlFeedback } from '../../../shared/src/sessionControlFeedback'
+import { appendContinuousCommits, mergeContinuousHistory, type HistoryMode } from '../continuousHistory'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { API_BASE_PATH } from '../config'
 import type { Message, MessagePart, SessionStreamEvent, ToolScriptSubCall } from './chatShared'
 import type { ChildPolicyChainEntry } from './childModelState'
@@ -22,7 +26,8 @@ import {
   reconcileHistoryMessage,
 } from '../chatHistoryState'
 
-const HISTORY_BOOTSTRAP_TAIL_LENGTH = 100
+const HISTORY_BOOTSTRAP_TAIL_LENGTH = CHAT_BOOTSTRAP_TAIL_LENGTH
+type ArchivePageDirection = 'initial' | 'earlier' | 'later' | 'latest'
 
 type ChatSessionRecord = {
   id: string
@@ -59,7 +64,7 @@ type ChatSessionRecord = {
   isolated?: boolean
 }
 
-type HistoryResponse = {
+export type HistoryResponse = {
   session?: ChatSessionRecord
   messages?: Message[]
   persistentMemorySnapshot?: string
@@ -76,16 +81,41 @@ type HistoryResponse = {
 type HistoryFetchMode = 'bootstrap' | 'full' | 'after' | 'reconcile'
 type PendingQueueAppend = { historyVersion: number; startSeq: number; endSeq: number }
 
-type TimelineState = { messages: Message[]; queuedMessages: Message[] }
+type TimelineState = { messages: Message[]; queuedMessages: Message[]; archiveMessages: Message[]; archivePendingMessages: Message[]; archiveStatus: 'idle' | 'loading' | 'loaded' }
 type TimelineAction =
-  | { type: 'messages'; update: Message[] | ((messages: Message[]) => Message[]) }
+  | { type: 'archive-start'; replace?: boolean }
+  | { type: 'archive'; messages: Message[]; reset?: boolean; replace?: boolean }
+  | { type: 'messages'; update: Message[] | ((messages: Message[]) => Message[]); archiveMessages?: Message[] }
   | { type: 'queue'; update: Message[] | ((messages: Message[]) => Message[]) }
-  | { type: 'atomic'; messages: Message[] | ((messages: Message[]) => Message[]); queuedMessages: Message[] }
+  | { type: 'atomic'; messages: Message[] | ((messages: Message[]) => Message[]); queuedMessages: Message[]; archiveMessages?: Message[] }
 
 function timelineReducer(state: TimelineState, action: TimelineAction): TimelineState {
-  if (action.type === 'atomic') return { messages: typeof action.messages === 'function' ? action.messages(state.messages) : action.messages, queuedMessages: action.queuedMessages }
-  if (action.type === 'messages') return { ...state, messages: typeof action.update === 'function' ? action.update(state.messages) : action.update }
-  return { ...state, queuedMessages: typeof action.update === 'function' ? action.update(state.queuedMessages) : action.update }
+  if (action.type === 'archive-start') {
+    return { ...state, archiveStatus: 'loading', archivePendingMessages: action.replace ? [] : state.archivePendingMessages }
+  }
+  if (action.type === 'archive') {
+    const originals = mergeContinuousHistory(action.replace ? [] : state.archiveMessages, action.messages)
+    return {
+      ...state,
+      archiveStatus: action.reset ? 'idle' : 'loaded',
+      archiveMessages: action.reset ? [] : appendContinuousCommits(originals, state.archivePendingMessages),
+      archivePendingMessages: [],
+    }
+  }
+  if (action.type === 'queue') {
+    return { ...state, queuedMessages: typeof action.update === 'function' ? action.update(state.queuedMessages) : action.update }
+  }
+  const update = action.type === 'atomic' ? action.messages : action.update
+  const messages = typeof update === 'function' ? update(state.messages) : update
+  return {
+    ...state,
+    messages,
+    archiveMessages: action.archiveMessages && state.archiveStatus !== 'idle'
+      ? appendContinuousCommits(state.archiveMessages, action.archiveMessages) : state.archiveMessages,
+    archivePendingMessages: action.archiveMessages && state.archiveStatus === 'loading'
+      ? mergeContinuousHistory(state.archivePendingMessages, action.archiveMessages) : state.archivePendingMessages,
+    ...(action.type === 'atomic' ? { queuedMessages: action.queuedMessages } : {}),
+  }
 }
 
 type ConfirmedSessionSettings = Partial<Pick<ChatSessionRecord,
@@ -97,14 +127,92 @@ type ConfirmedSessionSettings = Partial<Pick<ChatSessionRecord,
 >>
 
 /** One mounted Chat's history, queue, draft and send lifetime; viewport and physical transport stay separate. */
-export function useChatConversationSync(sessionId: string, webUiIdentityMode: boolean) {
-  const [timelineState, dispatchTimeline] = useReducer(timelineReducer, { messages: [], queuedMessages: [] })
+export function useChatConversationSync(sessionId: string, webUiIdentityMode: boolean, historyMode: HistoryMode = 'active', initialArchiveSeq?: number) {
+  const prepared = useMemo(() => peekPreparedChatHistory(sessionId), [sessionId])
+  const preparedArchive = useMemo(() => {
+    const archive = historyMode === 'continuous' ? peekPreparedChatArchive(sessionId) : undefined
+    return archive?.anchorSeq === initialArchiveSeq ? archive : undefined
+  }, [sessionId,historyMode,initialArchiveSeq])
+  const preparedResponseRef = useRef(prepared)
+  const [timelineState, dispatchTimeline] = useReducer(timelineReducer, { messages: prepared?.messages || [], queuedMessages: prepared?.queuedMessages || [], archiveMessages: preparedArchive ? mergeContinuousHistory([],preparedArchive.messages) : [], archivePendingMessages: [], archiveStatus: preparedArchive ? 'loaded' : 'idle' })
   const messages = timelineState.messages
   const queuedMessages = timelineState.queuedMessages
-  const setMessages = useCallback((update: Message[] | ((messages: Message[]) => Message[])) => dispatchTimeline({ type: 'messages', update }), [])
+  const [archivePage, setArchivePage] = useState({ loaded: !!preparedArchive, loading: false, error: false, hasEarlier: !!preparedArchive?.hasEarlier, hasLater: !!preparedArchive?.hasLater, direction: 'initial' as ArchivePageDirection })
+  const archiveRequestRef = useRef<AbortController | null>(null)
+  const archiveBoundaryRef = useRef<{ firstSeq?: number; lastSeq?: number }>({firstSeq:preparedArchive?.firstSeq,lastSeq:preparedArchive?.lastSeq})
+  const [historySnapshotRevision, setHistorySnapshotRevision] = useState(0)
+  const archiveSnapshotRevisionRef = useRef(preparedArchive ? 0 : -1)
+  const loadArchivePage = useCallback(async (direction: ArchivePageDirection = 'initial', beforePublish?: (rows: Message[]) => void): Promise<Message[]> => {
+    if (archiveRequestRef.current) {
+      if (direction !== 'latest') return []
+      archiveRequestRef.current.abort()
+    }
+    const controller = new AbortController()
+    archiveRequestRef.current = controller
+    const restoringAnchor = direction === 'initial' && initialArchiveSeq !== undefined
+    setArchivePage(previous => ({ ...previous, loading: true, error: false, direction, ...(restoringAnchor ? { hasLater: true } : {}) }))
+    const boundary = archiveBoundaryRef.current
+    const replace = direction === 'initial' || direction === 'latest'
+    dispatchTimeline({ type: 'archive-start', replace })
+    const seq = direction === 'earlier' ? boundary.firstSeq : direction === 'later' ? boundary.lastSeq : undefined
+    const query = seq ? `?${direction === 'earlier' ? 'beforeSeq' : 'afterSeq'}=${seq}` : ''
+    const fetchPage = async (pageQuery: string) => {
+      const response = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/history/continuous${pageQuery}`, { signal: controller.signal })
+      if (!response.ok) throw new Error('History could not be loaded')
+      return response.json()
+    }
+    try {
+      // Two bounded pages surround the saved row, leaving room to restore its pixel offset.
+      // No previously loaded pages or whole-Archive scan are needed after a remount.
+      let data
+      if (restoringAnchor) {
+        const [earlier, later] = await Promise.all([
+          fetchPage(`?beforeSeq=${initialArchiveSeq! + 1}`),
+          fetchPage(`?afterSeq=${initialArchiveSeq}`),
+        ])
+        data = { messages: [...earlier.messages, ...later.messages],
+          firstSeq: earlier.firstSeq ?? later.firstSeq, lastSeq: later.lastSeq ?? earlier.lastSeq,
+          hasEarlier: earlier.hasMore, hasLater: later.hasMore }
+      } else data = await fetchPage(query)
+      if (controller.signal.aborted) return []
+      const rows = Array.isArray(data.messages) ? data.messages as Message[] : []
+      beforePublish?.(rows)
+      archiveBoundaryRef.current = {
+        firstSeq: direction === 'later' ? boundary.firstSeq ?? data.firstSeq : data.firstSeq ?? boundary.firstSeq,
+        lastSeq: direction === 'earlier' ? boundary.lastSeq ?? data.lastSeq : data.lastSeq ?? boundary.lastSeq,
+      }
+      dispatchTimeline({ type: 'archive', messages: rows, replace })
+      setArchivePage(previous => ({ loaded: true, loading: false, error: false, direction,
+        hasEarlier: restoringAnchor ? !!data.hasEarlier : direction === 'later' ? previous.hasEarlier : !!data.hasMore,
+        hasLater: restoringAnchor ? !!data.hasLater : direction === 'earlier' ? previous.hasLater : direction === 'later' && !!data.hasMore }))
+      return rows
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setArchivePage(previous => ({ ...previous, loading: false, error: true }))
+        controller.abort()
+      }
+      return []
+    } finally {
+      if (archiveRequestRef.current === controller) archiveRequestRef.current = null
+    }
+  }, [initialArchiveSeq, sessionId])
+  const setMessages = useCallback((update: Message[] | ((messages: Message[]) => Message[]), archiveMessages?: Message[]) => dispatchTimeline({ type: 'messages', update, archiveMessages }), [])
   const setQueuedMessages = useCallback((update: Message[] | ((messages: Message[]) => Message[])) => dispatchTimeline({ type: 'queue', update }), [])
   const [sessionMissing, setSessionMissing] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [pendingControl, setPendingControl] = useState<SessionControlAction | null>(null)
+  const [controlFeedback, setControlFeedback] = useState<SessionControlFeedback | null>(null)
+  const pendingControlRef = useRef<{ id: string; action: SessionControlAction; timer: number; accepted: boolean; queuedAtStart: number } | null>(null)
+  const lastControlIdRef = useRef<string | null>(null)
+  const clearPendingControl = useCallback(() => {
+    if (pendingControlRef.current) window.clearTimeout(pendingControlRef.current.timer)
+    pendingControlRef.current = null
+    setPendingControl(null)
+  }, [])
+  useEffect(() => {
+    setPendingControl(null); setControlFeedback(null); lastControlIdRef.current = null
+    return () => { if (pendingControlRef.current) window.clearTimeout(pendingControlRef.current.timer); pendingControlRef.current = null }
+  }, [sessionId])
   const [sessionBusy, setSessionBusy] = useState(false)
   const [sessionQueueLength, setSessionQueueLength] = useState(0)
   const [connectionState, setConnectionState] = useState<'connected' | 'connecting' | 'disconnected' | 'reconnecting'>('connecting')
@@ -116,9 +224,9 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     setStreamingAssistantDraft(null)
   }, [])
   const [toolScriptProgress, setToolScriptProgress] = useState<Record<string, ToolScriptSubCall[]>>({})
-  const [sessionRecord, setSessionRecord] = useState<ChatSessionRecord | null>(null)
+  const [sessionRecord, setSessionRecord] = useState<ChatSessionRecord | null>(prepared?.session || null)
   const [persistentMemorySnapshot, setPersistentMemorySnapshot] = useState('')
-  const [historyLoaded, setHistoryLoaded] = useState(false)
+  const [historyLoaded, setHistoryLoaded] = useState(!!prepared)
   const [isFullHistoryLoaded, setIsFullHistoryLoaded] = useState(false)
   const [earlierHistoryError, setEarlierHistoryError] = useState(false)
   const lastKnownTimestampRef = useRef<number>(0)
@@ -151,34 +259,41 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
   const historyRefreshTimeoutRef = useRef<number | null>(null)
 
   useEffect(() => {
-    setMessages([])
-    setHistoryLoaded(false)
-    setIsFullHistoryLoaded(false)
+    preparedResponseRef.current = prepared
+    setMessages(prepared?.messages || [])
+    dispatchTimeline({ type: 'archive', messages: preparedArchive?.messages || [], reset: !preparedArchive, replace: true })
+    archiveRequestRef.current?.abort()
+    archiveRequestRef.current = null
+    archiveBoundaryRef.current = {firstSeq:preparedArchive?.firstSeq,lastSeq:preparedArchive?.lastSeq}
+    archiveSnapshotRevisionRef.current = preparedArchive ? 0 : -1
+    setArchivePage({ loaded: !!preparedArchive, loading: false, error: false, hasEarlier: !!preparedArchive?.hasEarlier, hasLater: !!preparedArchive?.hasLater, direction: 'initial' })
+    setHistoryLoaded(!!prepared)
+    setIsFullHistoryLoaded(prepared?.historyComplete === true)
     setEarlierHistoryError(false)
     clearStreamingAssistantDraft()
     setToolScriptProgress({})
-    setQueuedMessages([])
-    setSessionRecord(null)
-    setSessionBusy(false)
-    setSessionQueueLength(0)
-    sessionBusyRef.current = false
-    sessionQueueLengthRef.current = 0
-    sessionMessageCountRef.current = 0
-    sessionHistoryVersionRef.current = 0
-    representedMessageCountRef.current = 0
-    representedHistoryVersionRef.current = 0
-    latestCommittedSeqRef.current = 0
+    setQueuedMessages(prepared?.queuedMessages || [])
+    setSessionRecord(prepared?.session || null)
+    setSessionBusy(!!prepared?.session && isSessionRuntimeActive(prepared.session))
+    setSessionQueueLength(prepared?.queueLength || 0)
+    sessionBusyRef.current = !!prepared?.session && isSessionRuntimeActive(prepared.session)
+    sessionQueueLengthRef.current = prepared?.queueLength || 0
+    sessionMessageCountRef.current = prepared?.session?.messageCount || 0
+    sessionHistoryVersionRef.current = prepared?.historyVersion || 0
+    representedMessageCountRef.current = countCommittedHistoryMessages(prepared?.messages || [])
+    representedHistoryVersionRef.current = prepared?.historyVersion || 0
+    latestCommittedSeqRef.current = getLatestCommittedMessageSeq(prepared?.messages || [])
     hasTrustedHistoryFrontierRef.current = false
     historyBootstrapStartedRef.current = false
-    fullHistoryLoadedRef.current = false
+    fullHistoryLoadedRef.current = prepared?.historyComplete === true
     reconnectAwaitingStateRef.current = false
     queueRefreshNeededRef.current = false
     historyGapDetectedRef.current = false
     pendingQueueAppendRef.current = null
     atomicRecoveryScheduledRef.current = false
-    queuedMessagesRef.current = []
+    queuedMessagesRef.current = prepared?.queuedMessages || []
     pendingSentMessageIdsRef.current.clear()
-    sessionStateInitializedRef.current = false
+    sessionStateInitializedRef.current = !!prepared?.session
     historyRequestGateRef.current.invalidate()
     historyAbortControllerRef.current?.abort()
     historyAbortControllerRef.current = null
@@ -212,10 +327,21 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
   const applySessionState = useCallback((session: ChatSessionRecord | null | undefined) => {
     if (!session || typeof session.id !== 'string') return
     const nextBusy = isSessionRuntimeActive(session)
+    const previousBusy = sessionBusyRef.current
     const nextQueueLength = typeof session.queueLength === 'number' ? session.queueLength : 0
     const nextMessageCount = typeof session.messageCount === 'number' ? session.messageCount : 0
     const nextHistoryVersion = typeof session.historyVersion === 'number' ? session.historyVersion : 0
     sessionBusyRef.current = nextBusy
+    const pending = pendingControlRef.current
+    if (pending && (pending.action === 'continue' && nextBusy
+      || pending.action === 'stop' && (previousBusy && !nextBusy || !!session.runtimeState?.stopping)
+      || pending.action === 'dequeue' && nextQueueLength < pending.queuedAtStart
+      || pending.action === 'cancel-compaction' && !session.runtimeState?.compaction
+      || pending.action === 'compact' && !!session.runtimeState?.compaction)) clearPendingControl()
+    if (previousBusy !== nextBusy) setControlFeedback(previous => {
+      if (!previous || previous.status === 'accepted' || previous.status === 'noop') return null
+      return previous.action === 'stop' && !nextBusy || previous.action === 'continue' && nextBusy ? null : previous
+    })
     sessionQueueLengthRef.current = nextQueueLength
     sessionMessageCountRef.current = nextMessageCount
     sessionHistoryVersionRef.current = nextHistoryVersion
@@ -223,7 +349,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     setSessionRecord(session)
     setSessionBusy(nextBusy)
     setSessionQueueLength(nextQueueLength)
-  }, [])
+  }, [clearPendingControl])
 
   const fetchHistory = useCallback(async (requestedMode: HistoryFetchMode = 'full') => {
     let mode = requestedMode
@@ -261,6 +387,12 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     historyAbortControllerRef.current = controller
 
     const requestJson = async (query = ''): Promise<{ response: Response; data: HistoryResponse }> => {
+      if (mode === 'bootstrap' && preparedResponseRef.current && query === `?tail=${HISTORY_BOOTSTRAP_TAIL_LENGTH}`) {
+        const data = preparedResponseRef.current
+        preparedResponseRef.current = null
+        discardPreparedChatHistory(sessionId)
+        return { response: new Response(null, { status: 200 }), data }
+      }
       const response = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/history${query}`, {
         signal: controller.signal,
       })
@@ -274,6 +406,8 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
         if (response.status !== 404) return null
         if (historyStateEventVersionRef.current > stateEventVersionAtStart) return true
         setSessionMissing(true)
+        archiveRequestRef.current?.abort()
+        dispatchTimeline({ type: 'archive', messages: [], reset: true })
         setMessages([])
         setQueuedMessages([])
         setSessionQueueLength(0)
@@ -429,6 +563,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
         const snapshotMessages = Array.isArray(data.messages) ? data.messages : []
         if (!applyFullSnapshot(data, snapshotMessages)) return true
         maybeClearDraft(snapshotMessages)
+        setHistorySnapshotRevision(revision => revision + 1)
         historyGapDetectedRef.current = false
         reconnectAwaitingStateRef.current = false
         historyEventsRef.current = []
@@ -529,6 +664,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
         updateFrontier(data, appendedMessages, true)
         updateLastTimestamp(appendedMessages)
         maybeClearDraft(appendedMessages)
+        setHistorySnapshotRevision(revision => revision + 1)
         historyGapDetectedRef.current = false
         reconnectAwaitingStateRef.current = false
         historyEventsRef.current = []
@@ -608,6 +744,17 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
       },
       onMessage: data => {
         try {
+        if (data.type === 'session-event' && data.event?.type === 'session-control-feedback') {
+          const feedback = parseSessionControlFeedback(data.event.feedback)
+          if (!feedback || data.event.requestId !== lastControlIdRef.current) return
+          setControlFeedback(feedback)
+          if (feedback.status === 'accepted' && pendingControlRef.current) {
+            window.clearTimeout(pendingControlRef.current.timer)
+            if (feedback.action === 'continue' && !sessionBusyRef.current || feedback.action === 'stop' && sessionBusyRef.current) pendingControlRef.current.accepted = true
+            else clearPendingControl()
+          } else clearPendingControl()
+          return
+        }
         if (data.type === 'session-state') {
           historyStateEventVersionRef.current += 1
           const hadSessionState = sessionStateInitializedRef.current
@@ -639,6 +786,8 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
         }
 
         if (data.type === 'session-deleted') {
+          archiveRequestRef.current?.abort()
+          dispatchTimeline({ type: 'archive', messages: [], reset: true })
           historyRequestGateRef.current.invalidate()
           historyAbortControllerRef.current?.abort()
           historyAbortControllerRef.current = null
@@ -736,6 +885,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
           }
           dispatchTimeline({
             type: 'atomic',
+            archiveMessages: incomingMessages,
             messages: currentMessages => {
               const merged = mergeHistoryMessages(currentMessages, incomingMessages)
               representedMessageCountRef.current = countCommittedHistoryMessages(merged)
@@ -809,7 +959,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
             const next = reconcileHistoryMessage(prev, incomingMessage)
             representedMessageCountRef.current += countCommittedHistoryMessages(next) - beforeCount
             return next
-          })
+          }, [incomingMessage])
 
           if (fullHistoryLoadedRef.current && historyGapDetectedRef.current) scheduleHistoryRefresh()
 
@@ -842,7 +992,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
       },
     })
     return unsubscribe
-  }, [applySessionState, clearStreamingAssistantDraft, fetchHistory, scheduleAtomicRecovery, scheduleHistoryRefresh, sessionId])
+  }, [applySessionState, clearStreamingAssistantDraft, clearPendingControl, fetchHistory, scheduleAtomicRecovery, scheduleHistoryRefresh, sessionId])
 
   useEffect(() => {
     const unsubscribe = subscribeRealtime()
@@ -861,9 +1011,47 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     }
   }, [subscribeRealtime])
 
+  const sendSessionCommand = useCallback(async (command: string): Promise<boolean> => {
+    if (sessionMissing) return false
+    const action = getSessionControlAction(command)
+    if (pendingControlRef.current && action !== 'stop') return false
+    const id = globalThis.crypto?.randomUUID?.() || `control-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    if (action) {
+      clearPendingControl()
+      lastControlIdRef.current = id
+      const timer = window.setTimeout(() => {
+        if (pendingControlRef.current?.id !== id) return
+        clearPendingControl()
+        setControlFeedback({ action, status: 'error', message: 'Action not confirmed', details: 'Check the session state before trying again.' })
+      }, 30000)
+      pendingControlRef.current = { id, action, timer, accepted: false, queuedAtStart: sessionQueueLengthRef.current }
+      setPendingControl(action)
+      setControlFeedback(null)
+    }
+    try {
+      const response = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/message`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: command, ...(action ? { controlRequestId: id } : {}) }),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data?.error || `Command failed (${response.status})`)
+      }
+      return true
+    } catch (error) {
+      if (action && pendingControlRef.current?.id === id) {
+        clearPendingControl()
+        setControlFeedback({ action, status: 'error', message: 'Action not confirmed', details: error instanceof Error ? error.message.slice(0, 4096) : 'The request could not be completed.' })
+      }
+      return false
+    }
+  }, [clearPendingControl, sessionId, sessionMissing])
+
   const sendMessage = useCallback(async ({ text, attachments }: { text: string; attachments: Array<{ ref: string; file: File }> }) => {
     if (sessionMissing || (!text.trim() && attachments.length === 0) || loading) return false
+    if (!webUiIdentityMode && attachments.length === 0 && getSessionControlAction(text)) return sendSessionCommand(text.trim())
 
+    setControlFeedback(null)
     setLoading(true)
 
     const userMessage = text.trim()
@@ -939,7 +1127,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
               message.__meta?.optimistic
               && getClientMessageId(message) === clientMessageId
             )),
-            { role: 'model', parts: [{ text: 'Error: Failed to send message' }], __meta: { temporary: true, timestamp: Date.now() } },
+            createLocalSessionNotice('Message not confirmed', 'Draft kept.', e instanceof Error ? e.message : 'Failed to send message'),
           ]
       })
       setLoading(false)
@@ -948,29 +1136,8 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
 
     setLoading(false)
     return true
-  }, [loading, scheduleHistoryRefresh, sessionId, sessionMissing, webUiIdentityMode])
+  }, [loading, scheduleHistoryRefresh, sendSessionCommand, sessionId, sessionMissing, webUiIdentityMode])
 
-  const sendSessionCommand = useCallback(async (command: string) => {
-    if (sessionMissing) return
-    try {
-      const response = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/message`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: command }),
-      })
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}))
-        throw new Error(data?.error || `Command failed (${response.status})`)
-      }
-    } catch (error) {
-      console.error(`Failed to send ${command}:`, error)
-      setMessages(prev => [...prev, {
-        role: 'model',
-        parts: [{ text: `Error: ${error instanceof Error ? error.message : `Failed to send ${command}`}` }],
-        __meta: { temporary: true, timestamp: Date.now() },
-      }])
-    }
-  }, [sessionId, sessionMissing])
 
   // Confirmed settings do not advance history/runtime authority or invalidate an active draft.
   const mergeConfirmedSettings = useCallback((settings: ConfirmedSessionSettings) => {
@@ -982,13 +1149,33 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     return fetchHistory('full')
   }, [fetchHistory])
 
+  useEffect(() => {
+    if (historyMode !== 'continuous' || connectionState !== 'connected' || sessionMissing || archivePage.loading) return
+    if (archiveSnapshotRevisionRef.current === historySnapshotRevision) return
+    archiveSnapshotRevisionRef.current = historySnapshotRevision
+    void loadArchivePage(archiveBoundaryRef.current.firstSeq === undefined ? 'initial' : 'later')
+  }, [historyMode, connectionState, historySnapshotRevision, loadArchivePage, sessionMissing, archivePage.loading])
+
+  useEffect(() => () => { archiveRequestRef.current?.abort() }, [sessionId])
+
+  const continuousMessages = useMemo(() => {
+    const canonicalClientIds = new Set(timelineState.archiveMessages.map(getClientMessageId).filter(Boolean))
+    return [...timelineState.archiveMessages, ...messages.filter(message => message.__meta?.temporary
+      && (!getClientMessageId(message) || !canonicalClientIds.has(getClientMessageId(message))))]
+  }, [messages, timelineState.archiveMessages])
+
   return {
+    continuousMessages,
+    archivePage,
+    loadArchivePage,
     messages,
     queuedMessages,
     sessionRecord,
     sessionMissing,
     sessionBusy,
     sessionQueueLength,
+    pendingControl,
+    controlFeedback,
     persistentMemorySnapshot,
     streamingAssistantDraft,
     toolScriptProgress,

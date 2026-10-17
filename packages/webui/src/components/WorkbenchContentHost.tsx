@@ -1,3 +1,4 @@
+import { FoxSpinner } from './FoxLoaders'
 import { createContext, useCallback, useContext, useLayoutEffect, useMemo, useRef, type ReactNode, type SyntheticEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { WorkbenchTabHeaderProvider } from './WorkbenchTabHeader'
@@ -159,6 +160,7 @@ type ContentHostProps = Pick<WorkbenchPaneProps,
   tab: WorkbenchTab
   visible: boolean
   canClose?: boolean
+  navigationPending?: {sessionId:string;title:string;showLoader:boolean} | null
   renderContent: () => ReactNode
 }
 
@@ -170,6 +172,13 @@ export default function WorkbenchContentHost(props: ContentHostProps) {
   const { tab, paneId, visible, tabs, dragEnabled = true, hideTabStrip, renderContent, onFocusPane, onCloseTab } = props
   const positions = useContext(ContentPositions)!
   const elementRef = useRef<HTMLDivElement | null>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => { if (bodyRef.current) bodyRef.current.inert = !!props.navigationPending }, [props.navigationPending])
+  useLayoutEffect(() => {
+    if (!visible || tab.type !== 'chat' || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    const animation = elementRef.current?.animate([{opacity:0.86},{opacity:1}], {duration:130,easing:'ease-out'})
+    return () => animation?.cancel()
+  }, [tab.id, tab.type, visible])
   const beforeResize = useRef<(() => void) | null>(null)
   const handleOverlayMount = useCallback((element: HTMLDivElement | null) => {
     if (element) positions.measure()
@@ -205,7 +214,7 @@ export default function WorkbenchContentHost(props: ContentHostProps) {
     data-workbench-content-tab={tab.id} data-workbench-content-pane={paneId}
     data-history-search-portal={tab.type === 'search' ? tab.id : undefined}
     onPointerDownCapture={activate} onFocusCapture={activate}>
-    <div className="h-full min-h-0 overflow-hidden" style={{ borderRadius: 'inherit' }}>
+    <div ref={bodyRef} className="h-full min-h-0 overflow-hidden transition-opacity duration-150 motion-reduce:transition-none" style={{ opacity: props.navigationPending?.showLoader ? 0.65 : 1, borderRadius: 'inherit' }}>
       <ContentBeforeResizeContext.Provider value={beforeResize}>
         <WorkbenchTabHeaderProvider value={header}>
           <WorkbenchTabErrorBoundary tabId={tab.id} tabTitle={tab.title} canClose={props.canClose !== false}
@@ -216,6 +225,9 @@ export default function WorkbenchContentHost(props: ContentHostProps) {
       </ContentBeforeResizeContext.Provider>
     </div>
     {visible && <PaneDropTargets paneId={paneId} onOverlayMount={handleOverlayMount} />}
+    {props.navigationPending && <div data-pane-navigation-pending={props.navigationPending.sessionId} className="absolute inset-0 flex items-center justify-center" style={{borderRadius:'inherit'}}>
+      {props.navigationPending.showLoader && <div role="status" className="inline-flex max-w-[80%] items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-sm"><FoxSpinner size={20}/><span className="truncate">Opening {props.navigationPending.title}</span></div>}
+    </div>}
     {menu}
   </div>
 }

@@ -187,6 +187,7 @@ type RequestLlmOnceOptions = {
     maxRetries?: number;
     timeoutMs?: number;
     onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
+    onAttempt?: (attempt: number) => void | Promise<void>;
     purpose?: LlmRequestPurpose;
     compactPlanBackground?: boolean;
     currentSessionEffects?: CurrentSessionEffects;
@@ -1336,6 +1337,7 @@ export async function chat(
         registerAbortController?: boolean;
         abortSignal?: AbortSignal;
         onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
+    onAttempt?: (attempt: number) => void | Promise<void>;
         prepareRetry?: (signal: AbortSignal) => Promise<boolean>;
         requestContext?: () => Promise<Message[]>;
         maxRetries?: number;
@@ -1440,6 +1442,7 @@ export async function chat(
         registerAbortController: options?.registerAbortController,
         abortSignal: options?.abortSignal,
         onRetry: options?.onRetry,
+        onAttempt: options?.onAttempt,
         maxRetries: options?.maxRetries,
         purpose: options?.purpose || 'normal-turn',
         compactPlanBackground: options?.compactPlanBackground,
@@ -2602,6 +2605,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
 
     try {
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            if (abortController.signal.aborted) throw makeAbortError();
             let explicitSelectionChanged = false;
             if (attempt > 1) {
                 // The previous lane/checkpoint and abortable backoff have settled.
@@ -2690,6 +2694,9 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
                 attempt,
                 requestedEffort,
             });
+            if (abortController.signal.aborted) throw makeAbortError();
+            await options.onAttempt?.(attempt);
+            if (abortController.signal.aborted) throw makeAbortError();
             if (!requestJournalStarted) {
                 await beginLlmRequestJournal({
                     requestId,
