@@ -418,6 +418,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   }, [historyMode, setBottomFollow])
 
   const captureCurrentViewportState = useCallback((): ChatViewportState | null => {
+    // A pending restore owns the position until its rows arrive or user input cancels it.
+    const pending = pendingViewportRestoreRef.current
+    if (pending?.kind === 'state') return pending.state
     if (pendingContentResizeRef.current) return pendingContentResizeRef.current.state
     const followState = updateBottomFollowState()
     const bottomThresholdPx = followState.pendingUserLeave
