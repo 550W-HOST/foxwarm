@@ -26,6 +26,13 @@ internal static class NodeToolDefinitions
                     }, "required": ["nodeId", "filePath"] }
                   },
                   {
+                    "type": "function", "name": "node_remove",
+                    "description": "Remove an approved Node and revoke its credentials. Disconnects its active connection without stopping the client process or deleting files, containers, Agents, or Sessions.",
+                    "parameters": { "type": "object", "properties": {
+                      "nodeId": { "type": "string", "description": "Approved Node ID to remove." }
+                    }, "required": ["nodeId"], "additionalProperties": false }
+                  },
+                  {
                     "type": "function", "name": "node_bootstrap_info",
                     "description": "Get Node setup instructions, bootstrap endpoints, and the pairing token. Commands use config.url when set; otherwise replace the example address with one reachable from the new Node. Treat the pairing token as a secret.",
                     "parameters": { "type": "object", "properties": {} }

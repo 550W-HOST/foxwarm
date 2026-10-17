@@ -86,7 +86,7 @@ internal static class AgentToolDefinitions
                     ),
                     ["title"] = String("Task title. Required when action is create."),
                     ["description"] = String(
-                        "Problem or scope description for a new task, or replacement description when updating. For long description or result text, use ToolScript to compose the operation so you do not regenerate duplicate content."
+                        "Problem or scope description for a new task, or replacement description when updating. Any Session may update the description of an open or active task, subject to tool permissions. For long description or result text, use ToolScript to compose the operation so you do not regenerate duplicate content."
                     ),
                     ["parentTaskId"] = String(
                         "Existing parent task ID for a simple child task. Set only when creating."

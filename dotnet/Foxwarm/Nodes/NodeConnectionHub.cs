@@ -316,10 +316,12 @@ internal sealed partial class NodeConnectionHub : IDisposable
         Close(connection, reason, true);
     }
 
-    internal void Remove(string id)
+    internal bool Remove(string id)
     {
+        bool disconnected;
         lock (gate)
         {
+            disconnected = nodes.ContainsKey(id);
             try
             {
                 Registry.Remove(id);
@@ -332,6 +334,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
             Disconnect(id, "Node credentials removed");
         }
         Changed?.Invoke();
+        return disconnected;
     }
 
     internal void Rename(string oldId, string newId)

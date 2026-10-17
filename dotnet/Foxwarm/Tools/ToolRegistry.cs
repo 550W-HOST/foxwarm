@@ -78,9 +78,9 @@ internal sealed class ToolRegistry(
                 direct.Source,
                 invocation,
                 (JsonObject)args.DeepClone(),
-                ExecutionNode: direct.Source == "node"
-                    || invocation is "run_script" or "start_toolscript_run"
-                        ? currentNode
+                ExecutionNode: direct.Source == "node" ? currentNode
+                    : invocation is "run_script" or "start_toolscript_run"
+                        ? ToolScriptSourceNode(args, currentNode) ?? "master"
                     : invocation is "send_file" or "image_write_to_file"
                         ? TargetNode(Text(args, "node"), currentNode)
                     : "master"
@@ -160,7 +160,7 @@ internal sealed class ToolRegistry(
             name,
             targetArgs,
             ExecutionNode: source == "node" ? targetNode
-                : name is "run_script" or "start_toolscript_run" ? currentNode
+                : name is "run_script" or "start_toolscript_run" ? ToolScriptSourceNode(targetArgs, currentNode) ?? "master"
                 : name is "send_file" or "image_write_to_file"
                     ? TargetNode(Text(targetArgs, "node"), currentNode)
                 : "master"
@@ -215,6 +215,17 @@ internal sealed class ToolRegistry(
             owner.CurrentCallId,
             owner.ToolScriptExecution
         );
+    }
+
+    internal static string? ToolScriptSourceNode(JsonObject args, string currentNode)
+    {
+        if (!string.IsNullOrWhiteSpace(Text(args, "code")))
+        {
+            if (args.ContainsKey("node"))
+                throw new InvalidDataException("node applies only to filePath, not inline code.");
+            return null;
+        }
+        return TargetNode(Text(args, "node"), currentNode);
     }
 
     internal static string TargetNode(string? node, string currentNode) =>

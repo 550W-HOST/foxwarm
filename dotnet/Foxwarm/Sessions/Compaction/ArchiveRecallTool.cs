@@ -22,7 +22,7 @@ internal static class ArchiveRecallTool
                       },
                       "target": {
                         "type": "string",
-                        "description": "What to open: overview (default), blocks, a block such as B#126, its raw messages with msg:B#126, or messages such as msg#10637 or msg#10637-10680. block#126 is also accepted."
+                        "description": "What to open: overview (default), blocks, a block such as B#126, its raw messages with msg:B#126, or messages such as msg#10637 or msg#10637-10680. block#126 is also accepted. `msg#N` is the archived message sequence shown in logs and user references; it reads archived context and is not an offset into a Session's live context (see `get_session_messages.start`)."
                       },
                       "previewLength": {
                         "type": "number",

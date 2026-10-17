@@ -611,14 +611,10 @@ internal sealed class TaskStore : IDisposable
         }
         else
         {
-            var noteOnlyUpdate =
-                action == "update"
-                && args.ContainsKey("note")
-                && !args.ContainsKey("description")
-                && !args.ContainsKey("status");
+            var sharedUpdate = action == "update" && !args.ContainsKey("status");
             var permitted =
                 actorKind == "user"
-                || noteOnlyUpdate
+                || sharedUpdate
                 || (
                     action is "assign" or "cancel"
                         ? actor == creator || actor == owner

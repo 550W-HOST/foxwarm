@@ -395,6 +395,16 @@ internal sealed partial class SessionManager
             throw new InvalidDataException($"Session ID '{id}' is already reserved.");
         if (parentId is not null && Find(parentId) is null)
             throw new InvalidDataException("Parent Session does not exist.");
+        var selectedNode = BoundNode(agentName)
+            ?? (timerCreation ? timerNode
+                : parentId is not null ? CurrentNode(Find(parentId)!)
+                : initialNode);
+        if (selectedNode is null && agentName != "main")
+        {
+            var main = await GetExistingAsync(SessionIdentity.Build(agentName, "main"));
+            if (main is not null && CurrentNode(main) is { } mainNode && mainNode != "master")
+                selectedNode = mainNode;
+        }
         return await WithCreationIdentityAsync(
             id,
             async () =>
@@ -423,14 +433,7 @@ internal sealed partial class SessionManager
                         state.AuthorityEnvelope["parentSessionId"] = parentId;
                     if (displayName is not null)
                         state.AuthorityEnvelope["displayName"] = displayName;
-                    state.AuthorityEnvelope["currentNode"] =
-                        BoundNode(agentName)
-                        ?? (
-                            timerCreation ? timerNode
-                            : parentId is not null ? CurrentNode(Find(parentId)!)
-                            : initialNode
-                        )
-                        ?? "master";
+                    state.AuthorityEnvelope["currentNode"] = selectedNode ?? "master";
                     if (model is not null)
                         state.AuthorityEnvelope["model"] = model;
                     if (effort is not null)

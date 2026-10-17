@@ -17,6 +17,8 @@ Discovers concrete tools, projects model definitions, applies output/control pol
 
 Definition discovery is not authorization: execution calls `ToolAuthorizationEvaluation` before local/MCP/Node effects. Tools that change Session state use owner/save-lane boundaries; a model-visible success is not emitted before the underlying operation reports its committed/accepted outcome. Provider-hosted tools remain provider-scoped. JSON source values and model/history projection follow [the cross-module tool contract](../threads/tools-permissions-and-exec.md#outbound-mcp-values-and-trusted-control).
 
+The discoverable hidden `node_remove` builtin shares the existing credential revocation/disconnection owner without Provider or environment effects; the [external Node unit](./external-nodes.md) owns its commit/failure contract. ToolScript starter resolution uses its root `node` only as file-source/authorization selection, not VM placement or nested execution placement. Live-context message offsets and archived `msg#N` sequences remain distinct in observation/recall tool guidance.
+
 The discoverable hidden `node_create_auth_token` builtin always resolves to Main and returns only Node ID/file path. Its file/registry ordering and private-path boundary are owned by [the external Node unit](./external-nodes.md).
 
 Default model requests project the selected compatible Node's advertised tools, including `exec`, through current concrete visibility policy. An absent capability or hidden tool is not injected from Master. Builtin name collisions remain source-qualified, and explicit schema overrides retain their existing projection behavior.

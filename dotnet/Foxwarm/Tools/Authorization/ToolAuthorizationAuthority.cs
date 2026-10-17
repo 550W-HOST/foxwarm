@@ -208,7 +208,7 @@ public sealed partial class WorkspaceTools
                 ))
                 .ToArray();
         }
-        if (name == "send_file" && raw is not null)
+        if (name is "send_file" or "run_script" or "start_toolscript_run" && raw is not null)
             raw = SessionGoal.Trim(raw);
         if (raw is null || raw.Length == 0)
             return [];

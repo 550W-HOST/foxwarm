@@ -166,7 +166,7 @@ public sealed class TaskStoreTests
     }
 
     [Fact]
-    public void NonOwnerSessionMayAddNoteOnlyAndOwnerReceivesCommentTarget()
+    public void NonOwnerSessionMayUpdateDescriptionAndNoteButNotStatus()
     {
         using var temp = new TempDirectory();
         using var store = new TaskStore(temp.Path, id => id, _ => []);
@@ -196,17 +196,18 @@ public sealed class TaskStoreTests
             details.Payload["notes"]!.AsArray(),
             note => note?["text"]?.GetValue<string>() == "progress from a non-owner"
         );
-        Assert.Throws<TaskError>(() =>
-            store.Execute(
-                new JsonObject
-                {
-                    ["action"] = "update",
-                    ["taskId"] = id,
-                    ["description"] = "not allowed",
-                },
-                "observer"
-            )
-        );
+        foreach (var note in new[] { false, true })
+        {
+            var change = new JsonObject { ["action"] = "update", ["taskId"] = id, ["description"] = "shared scope" };
+            if (note) change["note"] = "shared progress";
+            store.Execute(change, "observer");
+        }
+        using (var reopened = new TaskStore(temp.Path, value => value, _ => []))
+            Assert.Equal("shared scope", reopened.Execute(new JsonObject { ["action"] = "get", ["taskId"] = id }, "observer").Payload["task"]!["description"]!.GetValue<string>());
+        foreach (var status in new JsonNode?[] { JsonValue.Create("active"), null })
+            Assert.Throws<TaskError>(() => store.Execute(new JsonObject { ["action"] = "update", ["taskId"] = id, ["description"] = "not permitted", ["status"] = status }, "observer"));
+        store.Execute(new JsonObject { ["action"] = "complete", ["taskId"] = id }, "owner");
+        Assert.Throws<TaskError>(() => store.Execute(new JsonObject { ["action"] = "update", ["taskId"] = id, ["description"] = "terminal" }, "observer"));
     }
 
     [Fact]

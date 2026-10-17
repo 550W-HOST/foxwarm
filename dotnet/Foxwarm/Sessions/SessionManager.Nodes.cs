@@ -146,6 +146,15 @@ internal sealed partial class SessionManager
         };
     }
 
+    internal JsonObject RemoveNode(JsonObject args)
+    {
+        ToolRegistry.Keys(args, ["nodeId"]);
+        var id = ToolRegistry.Text(args, "nodeId")?.Trim();
+        if (string.IsNullOrEmpty(id))
+            throw new InvalidDataException("nodeId is required.");
+        return new JsonObject { ["nodeId"] = id, ["disconnected"] = Nodes.Remove(id) };
+    }
+
     internal async Task<JsonObject> ExecuteNodeToolAsync(
         SessionOwner owner,
         JsonObject args,

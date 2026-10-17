@@ -134,7 +134,9 @@ internal sealed partial class MainToolScript : IAsyncDisposable
         if (closing)
             throw new InvalidOperationException("ToolScript host is closing.");
         var supplied = Text(args["code"]);
-        var file = Text(args["filePath"]);
+        var file = Text(args["filePath"]) is { } filePath ? SessionGoal.Trim(filePath) : null;
+        var sourceNode = Foxwarm.Tools.ToolRegistry.ToolScriptSourceNode(args,
+            context.SourceNode ?? SessionManager.ResolveExecutionNode(context.Owner.Entry.Snapshot().AuthorityEnvelope));
         string code;
         string path;
         if (!string.IsNullOrWhiteSpace(supplied))
@@ -205,6 +207,8 @@ internal sealed partial class MainToolScript : IAsyncDisposable
                 ["updatedAt"] = now,
                 ["startedAt"] = now,
             };
+            if (sourceNode is not null)
+                record["sourceNode"] = sourceNode;
             return await RunAsync(record, context, token, code, input, resume: null);
         }
     }

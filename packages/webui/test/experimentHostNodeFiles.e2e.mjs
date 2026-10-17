@@ -11,7 +11,7 @@ import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
 
 const fixture = await createHostFixture('node-files', { env: { FOXWARM_EXPERIMENT_MONTY_BINARY: process.env.FOXWARM_EXPERIMENT_MONTY_BINARY } })
 const plans = new Map(), rounds = new Map(), requests = [], wire = [], failures = [], clients = [], sockets = new Set(), connections = new Map()
-const held = new Map(), holdWrites = new Set()
+const held = new Map(), holdWrites = new Set(), credentialsByNode = new Map()
 const exists = path => access(path).then(() => true, () => false)
 const route = id => '/api/sessions/' + encodeURIComponent(id)
 const saved = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)
@@ -59,7 +59,7 @@ proxy.on('connection', (downstream, request) => {
   })
   upstream.on('message', bytes => {
     const value = JSON.parse(bytes)
-    wire.push({ node, direction: 'request', type: value.type, transferId: value.transferId, filePath: value.filePath, sessionId: value.sessionId, agentName: value.agentName, restrict: value.restrictToAgentDir, size: value.dataBase64?.length })
+    wire.push({ node, direction: 'request', type: value.type, transferId: value.transferId, filePath: value.filePath, sessionId: value.sessionId, agentName: value.agentName, restrict: value.restrictToAgentDir, size: value.dataBase64?.length, tool: value.tool, args: value.args, sessionCwd: value.sessionCwd })
     if (downstream.readyState === WebSocket.OPEN) downstream.send(bytes.toString())
   })
   for (const [source, target] of [[downstream, upstream], [upstream, downstream]]) {
@@ -90,7 +90,11 @@ try {
   for (const [node, paths] of Object.entries(homes)) {
     for (const path of [paths.runtime, paths.project, join(paths.agents, 'main'), join(paths.agents, 'bound')]) await mkdir(path, { recursive: true })
     const credentials = (await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: node })).body
-    const child = spawn(process.execPath, [resolve('packages/cli-node/dist/client.js'), '--host', nodeHost, '--id', node, '--auth-token', credentials.authToken, '--credentials-file', join(paths.runtime, 'credentials.json'), '--no-local-trigger'], { cwd: paths.runtime, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, FOXWARM_AGENTS_DIR: paths.agents } })
+    credentialsByNode.set(node, credentials)
+    const clientArgs = node === 'two'
+      ? ['-e', `const {NodeClient} = require(${JSON.stringify(resolve('packages/cli-node/dist/client.js'))}); const client = new NodeClient(${JSON.stringify({ host: nodeHost, nodeId: node, authToken: credentials.authToken, credentialsFile: join(paths.runtime, 'credentials.json'), localTrigger: false }).slice(0, -1)}, toolCallInterceptor: async (tool, args) => tool !== 'read' || !args.filePath.endsWith('reject.py')}); client.connect(); process.on('SIGTERM', async () => { await client.disconnect(); process.exit(0) });`]
+      : [resolve('packages/cli-node/dist/client.js'), '--host', nodeHost, '--id', node, '--auth-token', credentials.authToken, '--credentials-file', join(paths.runtime, 'credentials.json'), '--no-local-trigger']
+    const child = spawn(process.execPath, clientArgs, { cwd: paths.runtime, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, FOXWARM_AGENTS_DIR: paths.agents } })
     const handle = { child, output: '' }; clients.push(handle)
     for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { handle.output = (handle.output + bytes).slice(-20000) })
     await online(node)
@@ -121,10 +125,37 @@ try {
   await writeFile(join(homes.one.project, 'whole.py'), source)
   state = await turn(actor, 'source', [[call('preview', 'read', { filePath: 'whole.py' }), call('source', 'run_script', { filePath: 'whole.py' })]])
   assert(!good(state, 'preview').output.includes('last_line_executed')); assert(JSON.stringify(good(state, 'source')).includes('last_line_executed')); assert.equal(await readFile(join(remoteTwo, 'monty-copy.txt'), 'utf8'), unicode)
+  // File-source selection does not move Monty or nested tool dispatch. Another Node receives no unrelated owner cwd.
+  await writeFile(join(fixture.work, 'main-source.py'), 'return call_tool("read", {"filePath":"cwd-only.txt"})["content"]')
+  await writeFile(join(remoteTwo, 'other-source.py'), 'return call_tool("read", {"filePath":"cwd-only.txt"})["content"]')
+  state = await turn(actor, 'independent-source', [[call('main-source', 'run_script', { node: 'master', filePath: '  ' + join(fixture.work, 'main-source.py') + '  ' }), call('other-source', 'call_tool', { toolId: 'builtin:start_toolscript_run', args: { node: 'two', filePath: ' other-source.py ' } }), call('inline-source-invalid', 'run_script', { node: 'master', code: 'return 1' })]])
+  assert.equal(good(state, 'main-source').result, 'real selected cwd'); assert.equal(good(state, 'other-source').result, 'real selected cwd'); assert(pair(state, 'inline-source-invalid').error)
+  assert.equal(wire.findLast(entry => entry.node === 'two' && entry.tool === 'read' && entry.args?.filePath === 'other-source.py').sessionCwd, undefined)
+  const otherRun = JSON.parse(await readFile(join(fixture.data, 'state/toolscript-runs', good(state, 'other-source').runId + '.json'), 'utf8')); assert.equal(otherRun.sourceNode, 'two')
+  await writeFile(join(remoteTwo, 'reject.py'), 'return "must not execute"')
+  const rejectedTransfers = wire.filter(entry => entry.node === 'two' && entry.type === 'file_read_request').length
+  state = await turn(actor, 'approval-rejected', [[call('approval-rejected', 'run_script', { node: 'two', filePath: 'reject.py' })]])
+  assert(pair(state, 'approval-rejected').error); assert.equal(wire.filter(entry => entry.node === 'two' && entry.type === 'file_read_request').length, rejectedTransfers)
+  for (const name of ['run_script', 'read']) {
+    await writeFile(join(fixture.work, 'source-policy.yaml'), `version: 1
+rules:
+- id: source-denied
+  action: deny
+  match:
+    tool: {source: ${name === 'read' ? 'node' : 'builtin'}, name: ${name}}
+    targetNode: two
+`)
+    state = await turn(actor, 'source-policy-' + name, [[call('install-source-policy-' + name, 'call_tool', { toolId: 'builtin:set_config', args: { target: 'tool-rules', filePath: join(fixture.work, 'source-policy.yaml') } })]]); good(state, 'install-source-policy-' + name)
+    const readsBefore = wire.filter(entry => entry.node === 'two' && entry.tool === 'read').length
+    state = await turn(actor, 'source-denied-' + name, [[call('source-denied-' + name, 'run_script', { node: 'two', filePath: 'other-source.py' })]])
+    assert(pair(state, 'source-denied-' + name).error); assert.equal(wire.filter(entry => entry.node === 'two' && entry.tool === 'read').length, readsBefore)
+  }
+  await writeFile(join(fixture.work, 'source-policy.yaml'), 'version: 1\nrules: []\n')
+  state = await turn(actor, 'source-policy-clear', [[call('source-policy-clear', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'tool-rules', filePath: join(fixture.work, 'source-policy.yaml') } })]]); good(state, 'source-policy-clear')
   await writeFile(join(homes.one.project, 'invalid.py'), Buffer.from([0xff, 0xfe]))
   state = await turn(actor, 'invalid-source', [[call('invalid-source', 'run_script', { filePath: 'invalid.py' })]])
   assert(pair(state, 'invalid-source').error || pair(state, 'invalid-source').status === 'failed')
-  await writeFile(join(homes.one.project, 'waiting.py'), 'print("before")\nanswer = ask_agent("Continue remote source?")\nr = call_tool("node:two/read", {"filePath": "café.txt"})\nreturn {"answer": answer, "remote": r["content"]}\n')
+  await writeFile(join(homes.one.project, 'waiting.py'), 'print("before")\nanswer = ask_agent("Continue remote source?")\nr = call_tool("read", {"filePath": "café.txt"})\nreturn {"answer": answer, "remote": r["content"]}\n')
   state = await turn(actor, 'source-wait', [[call('source-wait', 'run_script', { filePath: 'waiting.py', mode: 'background' })]])
   const paused = good(state, 'source-wait'); assert.equal(paused.status, 'waiting'); assert.equal(paused.stdout, 'before\n')
   const sourceReads = wire.filter(entry => entry.type === 'file_read_request' && entry.filePath === join(homes.one.project, 'waiting.py')).length
@@ -254,6 +285,11 @@ try {
   await writeFile(join(fixture.work, 'policy.yaml'), 'version: 1\nrules: []\n')
   state = await turn(actor, 'node-file-clear', [[call('node-file-clear', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'tool-rules', filePath: join(fixture.work, 'policy.yaml') } })]])
   good(state, 'node-file-clear')
+  const isolatedSource = join(fixture.work, 'agents/bound/source.py')
+  await writeFile(isolatedSource, 'return "own Main source"'); await writeFile(join(homes.one.agents, 'bound/source.py'), 'return "own bound source"')
+  state = await turn(bound, 'isolated-sources', [[call('isolated-main-source', 'run_script', { node: 'master', filePath: isolatedSource }), call('isolated-bound-source', 'run_script', { filePath: 'source.py' }), call('isolated-other-source', 'run_script', { node: 'two', filePath: 'other-source.py' }), call('isolated-outside-source', 'run_script', { node: 'master', filePath: join(fixture.work, 'main-source.py') })]])
+  assert.equal(good(state, 'isolated-main-source').result, 'own Main source'); assert.equal(good(state, 'isolated-bound-source').result, 'own bound source')
+  assert(pair(state, 'isolated-other-source').error); assert(pair(state, 'isolated-outside-source').error)
   // Stop/disconnect after a real CLI write but before its reply: preserve bytes, never replay or continue effects.
   for (const kind of ['cancel', 'disconnect']) {
     const id = await create(kind); await turn(id, 'select-' + kind, [[call('select-' + kind, 'node', { action: 'select', nodeId: 'one' })]])
@@ -270,6 +306,34 @@ try {
     assert.equal(wire.filter(entry => entry.direction === 'request' && entry.type === 'file_write_request' && entry.sessionId === id).length, 1)
     assert(!await exists(join(remoteOne, 'must-not-follow-' + kind))); assert(!await exists(join(fixture.work, kind + '.txt')))
   }
+  assert.equal((await fixture.api('POST', '/api/agents', { agentId: 'following' })).status, 201)
+  state = await turn('following/main', 'following-main-select', [[call('following-main-select', 'node', { action: 'select', nodeId: 'one' })]]); good(state, 'following-main-select')
+  for (const name of ['named', undefined]) {
+    const response = await fixture.api('POST', '/api/sessions', { agentId: 'following', ...(name ? { sessionId: name } : {}) }); assert.equal(response.status, 200)
+    const created = await saved(response.body.sessionId); assert.equal(created.currentNode, 'one'); assert.equal(created.cwd, undefined)
+  }
+  // Shared description edits go through TaskService, ordinary discovery and native Monty rather than a second policy path.
+  state = await turn(actor, 'shared-task-create', [[call('shared-task-create', 'task', { action: 'create', title: 'shared scope' })]])
+  const taskId = (await fixture.api('GET', '/api/tasks')).body.tasks.find(task => task.title === 'shared scope').id
+  state = await turn(target, 'shared-task-update', [[call('shared-task-update', 'run_script', { code: `return call_tool('builtin:task', {'action':'update', 'taskId':'${taskId}', 'description':'shared replacement', 'note':'cross-session progress'})` })]])
+  good(state, 'shared-task-update'); assert.equal((await fixture.api('GET', '/api/tasks/' + taskId)).body.task.description, 'shared replacement')
+  state = await turn(target, 'shared-task-status-denied', [[call('shared-task-status-denied', 'task', { action: 'update', taskId, description: 'not accepted', status: 'active' })]])
+  assert(pair(state, 'shared-task-status-denied').error)
+  await writeFile(join(fixture.work, 'policy.yaml'), 'version: 1\nrules:\n- id: task-and-remove\n  action: deny\n  match:\n    tool: {source: builtin, name: [task, node_remove]}\n')
+  state = await turn(actor, 'deny-capabilities', [[call('deny-capabilities', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'tool-rules', filePath: join(fixture.work, 'policy.yaml') } })]]); good(state, 'deny-capabilities')
+  state = await turn(target, 'denied-shared-description', [[call('denied-shared-description', 'call_tool', { toolId: 'builtin:task', args: { action: 'update', taskId, description: 'denied' } }), call('denied-active-remove', 'call_tool', { toolId: 'builtin:node_remove', args: { nodeId: 'two' } })]])
+  assert(pair(state, 'denied-shared-description').error); assert(pair(state, 'denied-active-remove').error)
+  assert.equal((await fixture.api('GET', '/api/tasks/' + taskId)).body.task.description, 'shared replacement'); await online('two')
+  await writeFile(join(fixture.work, 'policy.yaml'), 'version: 1\nrules: []\n')
+  state = await turn(actor, 'clear-capability-denial', [[call('clear-capability-denial', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'tool-rules', filePath: join(fixture.work, 'policy.yaml') } })]]); good(state, 'clear-capability-denial')
+  const offline = (await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: 'remove-offline' })).body
+  state = await turn(actor, 'remove-offline', [[call('discover-remove', 'search_tools', { query: 'node_remove', sources: ['builtin'], limit: 1 }), call('remove-offline', 'run_script', { code: 'return call_tool("builtin:node_remove", {"nodeId":"remove-offline"})' })]])
+  assert(good(state, 'discover-remove').output.includes('builtin:node_remove')); assert.deepEqual(good(state, 'remove-offline').result, { nodeId: 'remove-offline', disconnected: false })
+  assert(requests.every(request => !(request.body.tools || []).some(tool => tool.name === 'node_remove')))
+  state = await turn(actor, 'remove-active', [[call('remove-active', 'call_tool', { toolId: 'builtin:node_remove', args: { nodeId: 'two' } })]])
+  assert.deepEqual(good(state, 'remove-active'), { nodeId: 'two', disconnected: true }); assert.equal(clients[1].child.exitCode, null); assert.equal(clients[1].child.signalCode, null)
+  assert(!(await nodes()).some(node => node.id === 'two')); assert.equal(await readFile(join(remoteTwo, 'other-source.py'), 'utf8'), 'return call_tool("read", {"filePath":"cwd-only.txt"})["content"]')
+  const revoked = new WebSocket(fixture.origin.replace(/^http/, 'ws') + '/node_ws?id=two&auth=' + encodeURIComponent(credentialsByNode.get('two').authToken)); const [revokedCode] = await once(revoked, 'close'); assert.equal(revokedCode, 1008)
   const boundArchive = new Map(fixture.sql('SELECT seq,message_json FROM archive_messages WHERE session_id = ? ORDER BY seq', [bound]).map(([seq, json]) => [seq, JSON.parse(json)]))
   for (const row of (await saved(bound)).history) assert.deepEqual(boundArchive.get(row.__meta.seq), row)
   const archive = fixture.sql('SELECT seq,message_json FROM archive_messages WHERE session_id = ? ORDER BY seq', [actor]), archived = new Map(archive.map(([seq, json]) => [seq, JSON.parse(json)]))

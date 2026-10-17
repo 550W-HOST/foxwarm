@@ -14,5 +14,6 @@ internal sealed record ToolScriptContext(
         CancellationToken,
         Task<(string Path, string Code)>
     > ReadSource,
-    Action<JsonArray>? Progress = null
+    Action<JsonArray>? Progress = null,
+    string? SourceNode = null
 );

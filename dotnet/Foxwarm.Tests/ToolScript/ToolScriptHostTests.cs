@@ -333,7 +333,7 @@ public sealed class ToolScriptHostTests
         var scripts = Path.Combine(f.Work, "scripts");
         Directory.CreateDirectory(scripts);
         await File.WriteAllTextAsync(
-            Path.Combine(scripts, " source.py "),
+            Path.Combine(scripts, "source.py"),
             "def main(args):\n    print('file')\n    return args['value']\n"
         );
         await f.Owner.UpdateCwdAsync(scripts);

@@ -17,9 +17,13 @@ internal static class ToolScriptToolDefinitions
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "node": {
+          "type": "string",
+          "description": "Node containing filePath. Omit or use current for this Session's current Node, or use master for Main. Source selection does not change script execution or nested tools' default Node."
+        },
         "filePath": {
           "type": "string",
-          "description": "Script path. Relative paths use the session working directory, or the agent directory if unset."
+          "description": "Script path on the source Node. Relative paths follow that Node's file-tool path rules; surrounding whitespace is trimmed. Omit when using inline code."
         },
         "code": {
           "type": "string",
@@ -57,9 +61,13 @@ internal static class ToolScriptToolDefinitions
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "node": {
+          "type": "string",
+          "description": "Node containing filePath. Omit or use current for this Session's current Node, or use master for Main. Source selection does not change script execution or nested tools' default Node."
+        },
         "filePath": {
           "type": "string",
-          "description": "Script path. Relative paths use the session working directory, or the agent directory if unset."
+          "description": "Script path on the source Node. Relative paths follow that Node's file-tool path rules; surrounding whitespace is trimmed. Omit when using inline code."
         },
         "code": {
           "type": "string",

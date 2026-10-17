@@ -127,7 +127,8 @@ internal sealed partial class SessionManager
         ResolvedTool resolved,
         WorkspaceTools? files,
         CancellationToken token,
-        SessionOwner? concreteTarget = null
+        SessionOwner? concreteTarget = null,
+        bool toolScriptSourceRead = false
     )
     {
         owner.Entry.RequireIdentityAuthority();
@@ -135,12 +136,15 @@ internal sealed partial class SessionManager
             throw new InvalidOperationException(
                 "Tool source is no longer the current Session owner."
             );
-        if (
-            resolved.Source == "node"
-            || resolved.Source == "builtin"
-                && resolved.Name is "run_script" or "start_toolscript_run"
-        )
-            RequireNodeBoundary(owner, resolved.ExecutionNode);
+        if (resolved.Source == "node")
+        {
+            if (toolScriptSourceRead && resolved.ExecutionNode == "master")
+                RequireFileNodeBoundary(owner, resolved.ExecutionNode);
+            else
+                RequireNodeBoundary(owner, resolved.ExecutionNode);
+        }
+        if (resolved.Source == "builtin" && resolved.Name is "run_script" or "start_toolscript_run")
+            RequireFileNodeBoundary(owner, resolved.ExecutionNode);
         if (resolved.Source == "builtin" && resolved.Name is "send_file" or "image_write_to_file")
             RequireFileNodeBoundary(owner, resolved.ExecutionNode);
         if (resolved.Source == "builtin" && resolved.Name == "copy_between_nodes")
@@ -241,6 +245,8 @@ internal sealed partial class SessionManager
     {
         if (name == "call_tool" && source == "builtin")
             return true;
+        if (source == "builtin" && name is "run_script" or "start_toolscript_run")
+            unknownNode = true;
         var targetNode =
             node
             ?? (
@@ -315,7 +321,9 @@ internal sealed partial class SessionManager
             return paths;
         foreach (var key in new[] { "filePath", "cwd" })
             if (SessionWait.Text(resolved.Args[key]) is string raw)
-                paths.Add(new(key, raw, null, resolved.ExecutionNode));
+                paths.Add(new(key,
+                    resolved.Name is "run_script" or "start_toolscript_run" ? SessionGoal.Trim(raw) : raw,
+                    null, resolved.ExecutionNode));
         if (
             resolved.Name == "apply_patch"
             && SessionWait.Text(resolved.Args["input"]) is string patch

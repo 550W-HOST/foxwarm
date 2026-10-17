@@ -104,12 +104,14 @@ internal sealed partial class SessionToolExecutor
             {
                 await sessions.WaitForIdentityMutationAsync(hosted.Id, currentToken);
                 hosted.Entry.RequireIdentityAuthority();
-                var node = rootCall?.Node ?? ExecutionNode;
-                var cwd = rootCall?.Cwd ?? ExecutionCwd;
-                var files = Files ?? sessions.IdentityWorkspace(hosted);
+                var source = rootCall?.ScriptSource
+                    ?? throw new InvalidOperationException("ToolScript source routing was not captured.");
+                var node = source.Node;
+                var cwd = source.Cwd;
+                var files = source.Files;
                 if (node != "master")
                 {
-                    var raw = RemoteSourcePath(file, cwd);
+                    var raw = file;
                     await sessions.AuthorizeNodeFileAsync(
                         hosted,
                         node,
@@ -118,17 +120,27 @@ internal sealed partial class SessionToolExecutor
                         files,
                         currentToken
                     );
-                    var source = await sessions.ReadNodeFileAsync(
+                    string? resolvedPath = null;
+                    await sessions.Nodes.ExecuteAsync(node, "read", new JsonObject { ["filePath"] = file },
+                        hosted.Id, hosted.Agent, node, cwd, true, currentToken, hosted,
+                        value =>
+                        {
+                            resolvedPath = SessionWait.Text(value?["filePath"]);
+                            if (resolvedPath is null && value?["__foxwarmResolvedToolPaths"] is JsonArray paths
+                                && paths.Count == 1 && SessionWait.Text(paths[0]?["raw"]) == file)
+                                resolvedPath = SessionWait.Text(paths[0]?["resolved"]);
+                        });
+                    var transferred = await sessions.ReadNodeFileAsync(
                         hosted,
                         node,
-                        raw,
+                        resolvedPath ?? RemoteSourcePath(file, cwd),
                         files,
                         currentToken,
                         size => budget.Charge(checked(8L * size))
                     );
                     return (
-                        source.Path,
-                        new System.Text.UTF8Encoding(false, true).GetString(source.Bytes)
+                        transferred.Path,
+                        new System.Text.UTF8Encoding(false, true).GetString(transferred.Bytes)
                     );
                 }
                 var actual = files.Paths.FilePath(file);
@@ -141,7 +153,8 @@ internal sealed partial class SessionToolExecutor
                         new JsonObject { ["filePath"] = file }
                     ),
                     files,
-                    currentToken
+                    currentToken,
+                    toolScriptSourceRead: true
                 );
                 sessions.RequireToolScriptPath(hosted, actual);
                 if (!WorkspaceTools.RegularFile(actual))
@@ -182,7 +195,8 @@ internal sealed partial class SessionToolExecutor
                             ["subCalls"] = calls.DeepClone(),
                         }
                     );
-                }
+                },
+            rootCall?.ScriptSource?.Node
         );
         return await sessions.ToolScript.ExecuteAsync(name, args, context, token);
     }

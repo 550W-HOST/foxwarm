@@ -22,7 +22,9 @@ internal sealed partial class SessionToolExecutor(
         sessions.AuthorizeToolAsync(
             hosted,
             resolved,
-            resolved.Name == "exec" ? ExecFiles : Files,
+            resolved.Name is "run_script" or "start_toolscript_run"
+                ? invocation.Value?.ScriptSource?.Files ?? Files
+                : resolved.Name == "exec" ? ExecFiles : Files,
             token
         );
 
@@ -175,7 +177,7 @@ internal sealed partial class SessionToolExecutor(
         hosted.Entry.RequireIdentityAuthority();
         var previous = invocation.Value;
         var placement = sessions.ExecutionPlacement(hosted);
-        var captured = execSnapshot.Value ?? new ExecSnapshot(placement.Node, placement.Cwd);
+        var captured = (!Programmatic ? execSnapshot.Value : null) ?? new ExecSnapshot(placement.Node, placement.Cwd);
         var current = new TurnToolInvocation(SessionWait.Text(call["id"]) ?? "")
         {
             Files = workspace is WorkspaceTools ? sessions.IdentityWorkspace(hosted) : null,
@@ -265,6 +267,16 @@ internal sealed partial class SessionToolExecutor(
                 functionCall["args"] as JsonObject
                 ?? throw new InvalidDataException("Tool arguments must be an object.");
             var resolved = registry.Resolve(name, args, ExecutionNode);
+            if (resolved.Name is "run_script" or "start_toolscript_run" && invocation.Value is { } scriptCall)
+            {
+                var sourceNode = ToolRegistry.ToolScriptSourceNode(resolved.Args, scriptCall.Node);
+                if (sourceNode is not null)
+                {
+                    var cwd = sourceNode == "master" || sourceNode == scriptCall.Node ? scriptCall.Cwd : null;
+                    scriptCall.ScriptSource = new(sourceNode, cwd,
+                        sessions.IdentityWorkspace(hosted, cwd, "master", useLiveCwd: false));
+                }
+            }
             while (true)
             {
                 await sessions.WaitForIdentityMutationAsync(hosted.Id, cancellationToken);
@@ -649,6 +661,7 @@ internal sealed partial class SessionToolExecutor(
             owner.Manager.ExecuteNodeToolAsync(owner.Hosted, args, token);
         handlers["node_create_auth_token"] = (owner, args, token) =>
             owner.Manager.CreateNodeAuthTokenAsync(owner.Hosted, args, token);
+        handlers["node_remove"] = (owner, args, _) => Task.FromResult(owner.Manager.RemoveNode(args));
         handlers["node_bootstrap_info"] = (owner, args, _) =>
             Task.FromResult(owner.Manager.NodeBootstrapInfo(args));
         handlers["node_pair_list"] = (owner, args, _) =>
@@ -693,6 +706,7 @@ internal sealed partial class SessionToolExecutor(
                         "mcp_config"
                         or "set_agent_isolated"
                         or "node_create_auth_token"
+                        or "node_remove"
                         or "node_bootstrap_info"
                         or "node_pair_list"
                         or "node_pair_approve"
@@ -736,6 +750,8 @@ internal sealed record TurnToolReceipt(
     string? AttachedSessionId
 );
 
+internal sealed record ToolScriptSourcePlacement(string Node, string? Cwd, WorkspaceTools Files);
+
 internal sealed class TurnToolInvocation(string callId)
 {
     internal string CallId { get; } = callId;
@@ -743,6 +759,7 @@ internal sealed class TurnToolInvocation(string callId)
     internal string? Cwd { get; set; }
     internal WorkspaceTools? Files { get; set; }
     internal WorkspaceTools? ExecFiles { get; set; }
+    internal ToolScriptSourcePlacement? ScriptSource { get; set; }
     internal JsonObject? Timing { get; set; }
     internal JsonArray? ResolvedPaths { get; set; }
     internal string? DeferredCwd { get; set; }

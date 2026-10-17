@@ -84,13 +84,13 @@ internal static class ObservationToolDefinitions
             ),
             Definition(
                 "get_session_messages",
-                "Read a page of a session's messages and its current execution state. Defaults to the latest 10 messages. Filters narrow the selected page, not the entire conversation. Use recall to inspect archived context blocks or exact message ranges.",
+                "Review a Session's live context (its current message list, not archived history) to recover context, check evidence, or investigate a specific issue. Returns a page of messages and the current execution state. For delegated work, normally use completion reports or wait rather than repeatedly reading progress. With neither start nor count, returns the latest 10 messages. Filters apply to the selected page. To open a message referenced as `msg#N` (the archived sequence), use `recall`.",
                 new JsonObject
                 {
                     ["sessionId"] = Field("string", "Session to read."),
                     ["start"] = Field(
                         "number",
-                        "Zero-based message offset. Negative values count back from the end; -10 starts at the tenth-last message."
+                        "Zero-based offset into this Session's live context, not the archived `msg#N` sequence. Negative values count back from the end; -10 starts at the tenth-last message."
                     ),
                     ["count"] = Field("number", "Number of messages to retrieve."),
                     ["previewLength"] = Field(

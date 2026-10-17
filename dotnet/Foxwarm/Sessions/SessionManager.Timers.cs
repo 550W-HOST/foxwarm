@@ -251,7 +251,7 @@ internal sealed partial class SessionManager
         var settings = (JsonObject)timer.DeepClone();
         NormalizeTimerSettings(settings);
         var inherited = (SessionWait.Text(settings["model"]), SessionWait.Text(settings["effort"]));
-        var node = TimerArguments.Optional(timer["currentNode"]) ?? "master";
+        var node = TimerArguments.Optional(timer["currentNode"]);
         var prefix = TimerArguments.Prefix(timer["sessionPrefix"]);
         using var creation = TrackCreation();
         while (true)

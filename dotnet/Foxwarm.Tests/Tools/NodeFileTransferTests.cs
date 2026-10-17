@@ -138,6 +138,55 @@ public sealed class NodeFileTransferTests
     }
 
     [Fact]
+    public async Task File_source_current_Node_and_cwd_are_captured_before_authorization_while_nested_tools_follow_actual_selection()
+    {
+        await using var f = new Fixture();
+        await f.Start();
+        var socket = await f.Connect("live-target");
+        var scripts = Path.Combine(f.Work, "captured-source");
+        Directory.CreateDirectory(scripts);
+        await File.WriteAllTextAsync(Path.Combine(scripts, "source.py"), "return call_tool('read', {'filePath':'nested.txt'})['content']");
+        await f.Owner.UpdateCwdAsync(scripts);
+        var policy = Path.Combine(f.Data, "state", "tool-authorization.yaml");
+        await File.WriteAllTextAsync(policy, "version: 1\nrules: null\n");
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var authority = new ToolAuthorizationAuthority(f.Data, retryDelay: async token =>
+        {
+            reached.TrySetResult();
+            await release.Task.WaitAsync(token);
+        });
+        typeof(SessionManager).GetField("authorization", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.SetValue(f.Manager, authority);
+        await using var mcp = new Foxwarm.McpClient(f.Data);
+        var definitions = ToolScriptToolDefinitions.Definitions();
+        foreach (var definition in WorkspaceTools.Definitions()) definitions.Add(definition?.DeepClone());
+        var registry = SessionToolExecutor.CreateRegistry(definitions, mcp, _ => f.Work, f.Manager.Nodes);
+        var tools = new SessionToolExecutor(new WorkspaceTools(f.Work), f.Owner, f.Manager, registry);
+        using var batch = tools.CaptureDirectExecSegment();
+        var running = tools.ExecuteAsync(new JsonObject { ["name"] = "run_script", ["args"] = new JsonObject { ["node"] = "current", ["filePath"] = "source.py" } }, default);
+        try
+        {
+            await reached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await f.Manager.SelectNodeAsync(f.Owner, "live-target");
+            await f.Owner.UpdateCwdAsync("remote-live-directory");
+            await File.WriteAllTextAsync(policy, "version: 1\ndefaultAction: allow\nrules:\n- id: captured-source\n  action: deny\n  match:\n    tool: {source: builtin, name: run_script}\n    path: {anyNotWithin: " + JsonValue.Create(scripts)!.ToJsonString() + "}\n");
+        }
+        finally { release.TrySetResult(); }
+        var request = await Fixture.Read(socket);
+        Assert.Equal("tool_call", request["type"]!.GetValue<string>());
+        Assert.Equal("read", request["tool"]!.GetValue<string>());
+        Assert.Equal("nested.txt", request["args"]!["filePath"]!.GetValue<string>());
+        Assert.Equal("remote-live-directory", request["sessionCwd"]!.GetValue<string>());
+        await Fixture.Send(socket, new JsonObject { ["type"] = "tool_call_response", ["callId"] = request["callId"]!.DeepClone(), ["result"] = new JsonObject { ["content"] = "live remote nested" } });
+        var done = (await running.WaitAsync(TimeSpan.FromSeconds(10)))!.AsObject();
+        Assert.True(done["error"] is null, done.ToJsonString());
+        Assert.Equal("live remote nested", done["result"]!.GetValue<string>());
+        var saved = await f.Manager.ToolScript.Store.ReadAsync(done["runId"]!.GetValue<string>(), default);
+        Assert.Equal("master", saved!["sourceNode"]!.GetValue<string>());
+        Assert.Equal(Path.Combine(scripts, "source.py"), saved["scriptPath"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task Whole_binary_transfer_correlates_exact_connection_type_and_integrity()
     {
         await using var f = new Fixture();

@@ -35,13 +35,14 @@ internal sealed partial class SessionManager
     internal WorkspaceTools IdentityWorkspace(
         SessionOwner owner,
         string? capturedCwd = null,
-        string? capturedNode = null
+        string? capturedNode = null,
+        bool useLiveCwd = true
     )
     {
         var live = ExecutionPlacement(owner);
         var node = capturedNode ?? live.Node;
         var cwd =
-            node == "master" ? capturedCwd ?? (live.Node == "master" ? live.Cwd : null) : null;
+            node == "master" ? capturedCwd ?? (useLiveCwd && live.Node == "master" ? live.Cwd : null) : null;
         return new(
             agents.AgentDirectory(owner.Agent),
             pendingWrites,
