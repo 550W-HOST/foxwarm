@@ -11,8 +11,9 @@ Use this skill when you want a ToolScript run to act like a **controller** for a
 
 Before grepping tests, read:
 
-- `examples/toolscript/managed_controller_basic.py`
-- `examples/toolscript/README.md`
+- `examples/managed_controller_basic.py`
+
+Load `toolscript-automation` for general execution and source-path guidance. The resource path above is relative to this skill directory. To execute it, pass its resolved path as `run_script.filePath` and select the Node that holds that file; loading the skill does not change the session working directory or current Node.
 
 As with normal ToolScript automation, first verify the target session and the surrounding tool/runtime flow in the regular agent loop, then encode the known controller flow into a script.
 

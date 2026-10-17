@@ -143,7 +143,7 @@ Point users to the repository docs for deeper details:
 - `docs/multi-agent.md` — agent/session/child-session collaboration.
 - `docs/node-client.md` — node bootstrap and pairing.
 - `docs/vector-memory.md` — vector memory.
-- `examples/toolscript/README.md` — ToolScript examples.
+- `../toolscript-automation/examples/README.md` — ToolScript examples.
 
 ## Answering style
 
