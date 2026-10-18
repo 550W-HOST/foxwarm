@@ -15,6 +15,8 @@ internal sealed class AnthropicMessagesService(
     TimeProvider? clock = null
 ) : IChatService
 {
+    private TimeSpan RequestTimeout => options.HardTimeoutMs == 0 ? Timeout.InfiniteTimeSpan : TimeSpan.FromMilliseconds(options.HardTimeoutMs ?? timeoutMs);
+
     public async Task<ChatResult> ChatAsync(
         string sessionId,
         IReadOnlyList<JsonObject> history,
@@ -56,7 +58,7 @@ internal sealed class AnthropicMessagesService(
         if (streaming)
             timer.Change(TimeSpan.FromMilliseconds(180000), Timeout.InfiniteTimeSpan);
         else
-            activity.CancelAfter(timeoutMs);
+            activity.CancelAfter(RequestTimeout);
         var watch = Stopwatch.StartNew();
         try
         {
@@ -66,7 +68,7 @@ internal sealed class AnthropicMessagesService(
                 activity.Token
             );
             if (!streaming)
-                activity.CancelAfter(timeoutMs);
+                activity.CancelAfter(RequestTimeout);
             await using var stream = await response.Content.ReadAsStreamAsync(activity.Token);
             using var registration = activity.Token.Register(() =>
             {
@@ -194,7 +196,7 @@ internal sealed class AnthropicMessagesService(
             var count = await stream.ReadAsync(bytes, activity.Token);
             if (count == 0)
                 break;
-            activity.CancelAfter(timeoutMs);
+            activity.CancelAfter(RequestTimeout);
             var keep = success
                 ? count
                 : Math.Min(count, Math.Max(0, 64 * 1024 - (int)buffer.Length));
