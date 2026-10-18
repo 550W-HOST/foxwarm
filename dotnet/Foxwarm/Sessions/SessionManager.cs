@@ -112,7 +112,11 @@ internal sealed partial class SessionManager : IAsyncDisposable
         );
         skills = new Skills(
             agents,
-            Path.GetFullPath(skillsRoot ?? hostPaths?.SkillsRoot ?? Path.Combine(AppContext.BaseDirectory, "skills"))
+            Path.GetFullPath(
+                skillsRoot
+                    ?? hostPaths?.SkillsRoot
+                    ?? Path.Combine(AppContext.BaseDirectory, "skills")
+            )
         );
         memory = new AgentMemory(agents, skills);
         executor = new LocalExecManager(

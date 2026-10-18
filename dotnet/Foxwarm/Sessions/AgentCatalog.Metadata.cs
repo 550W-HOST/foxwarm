@@ -154,12 +154,14 @@ internal sealed partial class AgentCatalog
     }
 
     private JsonObject Payload(IEnumerable<string> names, JsonObject metadata) =>
-        canonicalLayout ? metadata : new()
-        {
-            ["version"] = 2,
-            ["agents"] = new JsonArray(
-                names.Select(name => (JsonNode?)JsonValue.Create(name)).ToArray()
-            ),
-            ["metadata"] = metadata,
-        };
+        canonicalLayout
+            ? metadata
+            : new()
+            {
+                ["version"] = 2,
+                ["agents"] = new JsonArray(
+                    names.Select(name => (JsonNode?)JsonValue.Create(name)).ToArray()
+                ),
+                ["metadata"] = metadata,
+            };
 }

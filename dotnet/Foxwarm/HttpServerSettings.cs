@@ -17,7 +17,8 @@ internal sealed record HttpServerSettings(
     bool HttpEnabled = true
 )
 {
-    internal static bool Enabled(ModelConfiguration? configuration) => Feature(configuration, "enableWebUI");
+    internal static bool Enabled(ModelConfiguration? configuration) =>
+        Feature(configuration, "enableWebUI");
 
     internal static bool Feature(ModelConfiguration? configuration, string name)
     {
@@ -34,7 +35,8 @@ internal sealed record HttpServerSettings(
         string dataRoot
     )
     {
-        var portOverride = Environment.GetEnvironmentVariable("FOXWARM_HTTP_PORT")
+        var portOverride =
+            Environment.GetEnvironmentVariable("FOXWARM_HTTP_PORT")
             ?? Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_PORT");
         int port;
         if (portOverride is not null)
@@ -56,7 +58,8 @@ internal sealed record HttpServerSettings(
         }
         if (port is <= 0 or > 65535)
             throw new InvalidDataException("HTTP port must be between 1 and 65535.");
-        var bindAddress = Environment.GetEnvironmentVariable("FOXWARM_BIND_ADDRESS")
+        var bindAddress =
+            Environment.GetEnvironmentVariable("FOXWARM_BIND_ADDRESS")
             ?? Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_BIND_ADDRESS");
         if (string.IsNullOrWhiteSpace(bindAddress))
             bindAddress = "0.0.0.0";
@@ -64,18 +67,27 @@ internal sealed record HttpServerSettings(
             !System.Net.IPAddress.TryParse(bindAddress, out var parsedBindAddress)
             || parsedBindAddress.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork
         )
-            throw new InvalidDataException(
-                "HTTP bind address must be an IPv4 address."
-            );
+            throw new InvalidDataException("HTTP bind address must be an IPv4 address.");
         var configuredUrl = SessionWait.Text(configuration.AppConfiguration["url"]);
         var address = PublicWebAddress.Capture(port, configuredUrl);
         var enabled = Enabled(configuration);
         var trigger = Feature(configuration, "enableTrigger");
-        var http = enabled || trigger || configuration.Access.Snapshot.Values.Any(identity => identity.Mcp);
+        var http =
+            enabled
+            || trigger
+            || configuration.Access.Snapshot.Values.Any(identity => identity.Mcp);
         var token = http ? await LoadOrCreateTokenAsync(dataRoot) : "";
         if (http && string.IsNullOrWhiteSpace(token))
             throw new InvalidDataException("HTTP access token must not be blank.");
-        return new(port, token, bindAddress, address, enabled, TriggerEnabled: trigger, HttpEnabled: http);
+        return new(
+            port,
+            token,
+            bindAddress,
+            address,
+            enabled,
+            TriggerEnabled: trigger,
+            HttpEnabled: http
+        );
     }
 
     // Desktop deliberately ignores the server bind/port/public URL settings. Kestrel

@@ -19,18 +19,28 @@ else
 {
     var packaged = Path.Combine(paths.ResourceRoot, "webui-dist");
     var installed = Path.Combine(paths.ApplicationRoot, "packages", "webui", "dist");
-    distRoot = Directory.Exists(packaged) ? packaged : Directory.Exists(installed) ? installed : null;
+    distRoot =
+        Directory.Exists(packaged) ? packaged
+        : Directory.Exists(installed) ? installed
+        : null;
 }
-if (http.WebUiEnabled && distRoot is not null
-    && (!File.Exists(Path.Combine(distRoot, "index.html"))
-        || !Directory.Exists(Path.Combine(distRoot, "assets"))))
+if (
+    http.WebUiEnabled
+    && distRoot is not null
+    && (
+        !File.Exists(Path.Combine(distRoot, "index.html"))
+        || !Directory.Exists(Path.Combine(distRoot, "assets"))
+    )
+)
     throw new InvalidOperationException("Configured WebUI dist needs index.html and assets/.");
 await using var host = await MainHost.CreateAsync(args, configuration, http, distRoot);
 host.Lifetime.ApplicationStarted.Register(() =>
 {
-    Console.WriteLine(host.HttpEnabled
-        ? "Main HTTP listening: " + string.Join(", ", host.App.Urls)
-        : "Main started without HTTP.");
+    Console.WriteLine(
+        host.HttpEnabled
+            ? "Main HTTP listening: " + string.Join(", ", host.App.Urls)
+            : "Main started without HTTP."
+    );
 });
 await host.StartAsync();
 await host.WaitForShutdownAsync();

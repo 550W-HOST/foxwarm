@@ -49,11 +49,15 @@ internal sealed class HttpServer
                 )
             )
             .ToLowerInvariant();
-        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
-        {
-            Args = args,
-            ContentRootPath = sessions.Models.ConfigurationOwner?.Paths.ApplicationRoot ?? AppContext.BaseDirectory,
-        });
+        var builder = WebApplication.CreateBuilder(
+            new WebApplicationOptions
+            {
+                Args = args,
+                ContentRootPath =
+                    sessions.Models.ConfigurationOwner?.Paths.ApplicationRoot
+                    ?? AppContext.BaseDirectory,
+            }
+        );
         // Node authentication uses Source-compatible query credentials. Do not log request URLs.
         builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
         builder.WebHost.UseUrls($"http://{bindAddress}:{port}");

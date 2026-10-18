@@ -60,7 +60,9 @@ internal sealed record HostPaths(
             app,
             resources,
             data,
-            string.IsNullOrEmpty(config) ? Path.Combine(data, "state", "config.yaml") : Path.GetFullPath(config, app),
+            string.IsNullOrEmpty(config)
+                ? Path.Combine(data, "state", "config.yaml")
+                : Path.GetFullPath(config, app),
             Path.Combine(data, "agents"),
             Path.Combine(app, "skills"),
             Path.Combine(data, "state", "mcp.json")
@@ -100,5 +102,6 @@ internal sealed record HostPaths(
         return Path.GetFullPath(value, applicationRoot);
     }
 
-    private static string? Nonblank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string? Nonblank(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

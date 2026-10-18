@@ -101,9 +101,11 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
 
     private void Persist(JsonObject servers)
     {
-        new LinuxAtomicJsonFile(Path.GetDirectoryName(configPath ?? Path.Combine(root, "state", "mcp.json"))!, Path.GetFileName(configPath ?? "mcp.json"), privateFile: true).WritePayload(
-            new JsonObject { ["servers"] = servers.DeepClone() }
-        );
+        new LinuxAtomicJsonFile(
+            Path.GetDirectoryName(configPath ?? Path.Combine(root, "state", "mcp.json"))!,
+            Path.GetFileName(configPath ?? "mcp.json"),
+            privateFile: true
+        ).WritePayload(new JsonObject { ["servers"] = servers.DeepClone() });
     }
 
     internal void Close()

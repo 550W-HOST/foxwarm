@@ -134,7 +134,8 @@ internal sealed partial class ModelConfiguration
     public double CompactKeep { get; }
     public double CompactThreshold { get; }
 
-    internal ModelConfiguration(string dataRoot) : this(HostPaths.ForDataRoot(dataRoot)) { }
+    internal ModelConfiguration(string dataRoot)
+        : this(HostPaths.ForDataRoot(dataRoot)) { }
 
     internal ModelConfiguration(HostPaths paths)
     {

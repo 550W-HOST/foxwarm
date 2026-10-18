@@ -12,15 +12,24 @@ internal sealed class MainHost : IAsyncDisposable
     private readonly TerminalRegistry terminals;
     private readonly McpInboundHttp? inboundMcp;
     private readonly IHost host;
-    internal WebApplication App => host as WebApplication
+    internal WebApplication App =>
+        host as WebApplication
         ?? throw new InvalidOperationException("HTTP is disabled for this host.");
-    internal IHostApplicationLifetime Lifetime => host.Services.GetRequiredService<IHostApplicationLifetime>();
+    internal IHostApplicationLifetime Lifetime =>
+        host.Services.GetRequiredService<IHostApplicationLifetime>();
     internal bool HttpEnabled => host is WebApplication;
+
     internal Task StartAsync() => host.StartAsync();
+
     private readonly object lifecycle = new();
     private Task? disposal;
 
-    private MainHost(SessionManager sessions, TerminalRegistry terminals, IHost host, McpInboundHttp? inboundMcp)
+    private MainHost(
+        SessionManager sessions,
+        TerminalRegistry terminals,
+        IHost host,
+        McpInboundHttp? inboundMcp
+    )
     {
         this.sessions = sessions;
         this.terminals = terminals;
@@ -33,8 +42,16 @@ internal sealed class MainHost : IAsyncDisposable
         ModelConfiguration configuration,
         HttpServerSettings http,
         string? distRoot = null
-    ) => CreateAsync(args, configuration.Paths.DataRoot, configuration.Paths.WorkspaceRoot,
-        configuration, http, distRoot, configuration.Paths);
+    ) =>
+        CreateAsync(
+            args,
+            configuration.Paths.DataRoot,
+            configuration.Paths.WorkspaceRoot,
+            configuration,
+            http,
+            distRoot,
+            configuration.Paths
+        );
 
     internal static async Task<MainHost> CreateAsync(
         string[] args,
@@ -61,7 +78,8 @@ internal sealed class MainHost : IAsyncDisposable
             workspaceRoot,
             options,
             configuration.Models,
-            paths?.SkillsRoot ?? Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_SKILLS_ROOT"),
+            paths?.SkillsRoot
+                ?? Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_SKILLS_ROOT"),
             paths
         );
         TerminalRegistry? terminals = null;
@@ -75,14 +93,17 @@ internal sealed class MainHost : IAsyncDisposable
             var router = new MessageRouter(runtime);
             if (!http.HttpEnabled)
             {
-                var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
-                {
-                    Args = args,
-                    ContentRootPath = paths?.ApplicationRoot ?? AppContext.BaseDirectory,
-                });
+                var builder = Host.CreateApplicationBuilder(
+                    new HostApplicationBuilderSettings
+                    {
+                        Args = args,
+                        ContentRootPath = paths?.ApplicationRoot ?? AppContext.BaseDirectory,
+                    }
+                );
                 builder.Logging.ClearProviders();
                 headless = builder.Build();
-                headless.Services.GetRequiredService<IHostApplicationLifetime>()
+                headless
+                    .Services.GetRequiredService<IHostApplicationLifetime>()
                     .ApplicationStopping.Register(sessions.BeginShutdown);
                 return new MainHost(sessions, terminals, headless, null);
             }

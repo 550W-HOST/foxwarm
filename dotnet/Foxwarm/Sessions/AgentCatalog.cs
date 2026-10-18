@@ -27,15 +27,19 @@ internal sealed partial class AgentCatalog
     {
         this.workspaceRoot = Path.GetFullPath(workspaceRoot);
         this.canonicalLayout = canonicalLayout;
-        agentRoot = canonicalLayout ? this.workspaceRoot : Path.Combine(this.workspaceRoot, "agents");
+        agentRoot = canonicalLayout
+            ? this.workspaceRoot
+            : Path.Combine(this.workspaceRoot, "agents");
         indexPath = Path.Combine(Path.GetFullPath(dataRoot), "state", "agents.json");
         if (File.Exists(indexPath))
         {
-            var index = JsonNode.Parse(File.ReadAllText(indexPath)) as JsonObject
+            var index =
+                JsonNode.Parse(File.ReadAllText(indexPath)) as JsonObject
                 ?? throw new InvalidDataException("Agent metadata must be an object.");
             // Only the identified C# envelope selects the retained list reader.
             // Source metadata may itself contain Agents named version or agents.
-            var legacy = index["version"] is JsonValue versionValue
+            var legacy =
+                index["version"] is JsonValue versionValue
                 && versionValue.TryGetValue<int>(out var storedVersion)
                 && storedVersion is 1 or 2
                 && index["agents"] is JsonArray;
@@ -46,13 +50,17 @@ internal sealed partial class AgentCatalog
                         "Retained C# Agent data requires its original workspace. Supply the existing FOXWARM_EXPERIMENT_TOOL_ROOT override; no files were relocated."
                     );
                 var version = index["version"]!.GetValue<int>();
-                if (index.Count != (version == 1 ? 2 : 3) || version == 2 && index["metadata"] is not JsonObject)
+                if (
+                    index.Count != (version == 1 ? 2 : 3)
+                    || version == 2 && index["metadata"] is not JsonObject
+                )
                     throw new InvalidDataException("Unsupported retained Agent catalog format.");
                 if (version == 2)
                     metadata = (JsonObject)index["metadata"]!.DeepClone();
                 foreach (var item in index["agents"]!.AsArray())
                 {
-                    var name = item?.GetValue<string>()
+                    var name =
+                        item?.GetValue<string>()
                         ?? throw new InvalidDataException("Invalid Agent catalog entry.");
                     ValidateName(name);
                     if (name == "main" || !known.Add(name))
@@ -62,10 +70,12 @@ internal sealed partial class AgentCatalog
             else
                 metadata = (JsonObject)index.DeepClone();
         }
-        if (canonicalLayout
+        if (
+            canonicalLayout
             && !Directory.Exists(Path.Combine(agentRoot, "main"))
             && !File.Exists(indexPath)
-            && HasRetainedMainOnlyAuthority(Path.GetFullPath(dataRoot)))
+            && HasRetainedMainOnlyAuthority(Path.GetFullPath(dataRoot))
+        )
             throw new InvalidDataException(
                 "Retained C# Session data has no canonical main Agent directory. Supply its original FOXWARM_EXPERIMENT_TOOL_ROOT workspace; startup will not initialize a second main memory tree."
             );
@@ -78,15 +88,27 @@ internal sealed partial class AgentCatalog
             foreach (var name in known.Where(name => name != "main"))
             {
                 var directory = Path.Combine(agentRoot, name);
-                if (!Directory.Exists(directory)
-                    || (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
-                    if (name != recoveringOwnedAgent
-                        || Directory.Exists(directory) && (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
-                        throw new InvalidDataException($"Agent '{name}' directory is missing or invalid.");
+                if (
+                    !Directory.Exists(directory)
+                    || (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0
+                )
+                    if (
+                        name != recoveringOwnedAgent
+                        || Directory.Exists(directory)
+                            && (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0
+                    )
+                        throw new InvalidDataException(
+                            $"Agent '{name}' directory is missing or invalid."
+                        );
             }
-        if (recoveringOwnedAgent is not null
+        if (
+            recoveringOwnedAgent is not null
             && Directory.Exists(Path.Combine(agentRoot, recoveringOwnedAgent))
-            && (File.GetAttributes(Path.Combine(agentRoot, recoveringOwnedAgent)) & FileAttributes.ReparsePoint) != 0)
+            && (
+                File.GetAttributes(Path.Combine(agentRoot, recoveringOwnedAgent))
+                & FileAttributes.ReparsePoint
+            ) != 0
+        )
             throw new InvalidDataException("Owned identity destination cannot be a symbolic link.");
     }
 
@@ -104,10 +126,13 @@ internal sealed partial class AgentCatalog
             {
                 using var stream = File.OpenRead(file);
                 using var document = JsonDocument.Parse(stream);
-                if (document.RootElement.ValueKind == JsonValueKind.Object
+                if (
+                    document.RootElement.ValueKind == JsonValueKind.Object
                     && document.RootElement.TryGetProperty("sessionStateVersion", out var version)
                     && version.ValueKind == JsonValueKind.Number
-                    && version.TryGetInt32(out var number) && number == 1)
+                    && version.TryGetInt32(out var number)
+                    && number == 1
+                )
                     return true;
             }
             catch (JsonException)
@@ -118,11 +143,13 @@ internal sealed partial class AgentCatalog
         return false;
     }
 
-    private IEnumerable<string> DirectoryMembers() => Directory.EnumerateDirectories(agentRoot)
-        .Where(path => (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0)
-        .Select(Path.GetFileName)
-        .OfType<string>()
-        .Where(name => AgentName().IsMatch(name));
+    private IEnumerable<string> DirectoryMembers() =>
+        Directory
+            .EnumerateDirectories(agentRoot)
+            .Where(path => (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0)
+            .Select(Path.GetFileName)
+            .OfType<string>()
+            .Where(name => AgentName().IsMatch(name));
 
     public static void ValidateName(string name)
     {
@@ -149,7 +176,13 @@ internal sealed partial class AgentCatalog
     public string[] List()
     {
         lock (stateGate)
-            return (canonicalLayout ? known.Concat(DirectoryMembers()).Distinct(StringComparer.Ordinal) : known).Order(StringComparer.Ordinal).ToArray();
+            return (
+                canonicalLayout
+                    ? known.Concat(DirectoryMembers()).Distinct(StringComparer.Ordinal)
+                    : known
+            )
+                .Order(StringComparer.Ordinal)
+                .ToArray();
     }
 
     public string AgentDirectory(string name)
@@ -162,7 +195,8 @@ internal sealed partial class AgentCatalog
     public string MemoryDirectory(string name) => Path.Combine(AgentDirectory(name), "memory");
 
     public string FrameworkSystemPath => Path.Combine(agentRoot, "00_SYSTEM.md");
-    public string MainFallbackSystemPath => Path.Combine(SourceDirectory("main"), "memory", "00_SYSTEM.md");
+    public string MainFallbackSystemPath =>
+        Path.Combine(SourceDirectory("main"), "memory", "00_SYSTEM.md");
 
     public async Task CreateAsync(string name, string? initialMemory = null, string? inherit = null)
     {
