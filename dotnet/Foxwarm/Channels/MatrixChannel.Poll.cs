@@ -36,11 +36,12 @@ internal sealed partial class MatrixChannel
                 JsonObject sync;
                 try
                 {
+                    var queryTimeout = catchingUp || reconnecting ? 0 : 30000;
                     var query =
                         "filter="
                         + Uri.EscapeDataString(cursor is null ? initial.ToJsonString() : filterId)
                         + "&timeout="
-                        + (catchingUp || reconnecting ? "0" : "30000")
+                        + queryTimeout
                         + "&org.matrix.msc4222.use_state_after=true"
                         + (
                             cursor is null
@@ -51,7 +52,8 @@ internal sealed partial class MatrixChannel
                         HttpMethod.Get,
                         "_matrix/client/v3/sync?" + query,
                         null,
-                        stopping.Token
+                        stopping.Token,
+                        TimeSpan.FromMilliseconds(queryTimeout + 80000)
                     );
                 }
                 catch (Exception error) when (!stopping.IsCancellationRequested)
@@ -69,14 +71,14 @@ internal sealed partial class MatrixChannel
                 foreach (
                     var (room, raw) in sync["rooms"]?["invite"] as JsonObject ?? new JsonObject()
                 )
-                    ProcessMembership(room, raw?["invite_state"]?["events"] as JsonArray);
+                    ProcessRoomState(room, raw?["invite_state"]?["events"] as JsonArray);
                 foreach (var section in new[] { "join", "leave" })
                 foreach (
                     var (room, raw) in sync["rooms"]?[section] as JsonObject ?? new JsonObject()
                 )
                 {
-                    ProcessMembership(room, raw?["state"]?["events"] as JsonArray);
-                    ProcessMembership(
+                    ProcessRoomState(room, raw?["state"]?["events"] as JsonArray);
+                    ProcessRoomState(
                         room,
                         raw?["org.matrix.msc4222.state_after"]?["events"] as JsonArray
                     );
@@ -86,7 +88,7 @@ internal sealed partial class MatrixChannel
                         ).OfType<JsonObject>()
                     )
                     {
-                        ProcessMembership(room, new JsonArray(item.DeepClone()));
+                        ProcessRoomState(room, new JsonArray(item.DeepClone()));
                         // The SDK event emitter does not join async application timeline handlers.
                         _ = ObserveAsync(ProcessTimelineAsync(room, item));
                     }
@@ -151,11 +153,15 @@ internal sealed partial class MatrixChannel
     }
 
     private readonly Dictionary<string, string> memberships = new(StringComparer.Ordinal);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> encryptedRooms = new(StringComparer.Ordinal);
 
-    private void ProcessMembership(string room, JsonArray? events)
+    private void ProcessRoomState(string room, JsonArray? events)
     {
         foreach (var item in (events ?? []).OfType<JsonObject>())
         {
+            if (SessionWait.Text(item["type"]) == "m.room.encryption"
+                && SessionWait.Text(item["state_key"]) == "")
+                encryptedRooms.TryAdd(room, 0);
             if (
                 SessionWait.Text(item["type"]) != "m.room.member"
                 || SessionWait.Text(item["state_key"]) != user

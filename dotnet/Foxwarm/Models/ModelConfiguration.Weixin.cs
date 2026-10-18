@@ -122,10 +122,7 @@ internal sealed partial class ModelConfiguration
         // Source command saves directly, then restarts one instance. It does not wait on a Setup
         // installer that may itself be joining this command's Weixin polling handler.
         // Keep the same configuration validation/atomic writer, without acquiring the Setup apply lane.
-        var bytes = candidate();
-        var raw = System.Text.Encoding.UTF8.GetString(bytes).TrimStart('\uFEFF');
-        await ValidateAppCandidateAsync(raw);
-        await ReplaceRawAsync(AppPath, bytes, CancellationToken.None);
+        await PersistAppAsync(_ => Task.FromResult(candidate()), CancellationToken.None);
         var notApplied = new List<string>();
         if (ManagedChannels is { } runtime)
         {

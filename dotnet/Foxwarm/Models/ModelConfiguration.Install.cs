@@ -70,6 +70,8 @@ internal sealed partial class ModelConfiguration
             if (authorize is not null)
                 await authorize(token);
             token.ThrowIfCancellationRequested();
+            if (target == "config")
+                return await InstallAppAsync(candidate, token);
             var bytes = await candidate(token);
             if (target == "tool-rules")
             {
@@ -102,65 +104,95 @@ internal sealed partial class ModelConfiguration
                 );
                 return Installed(target, ["models"], [], []);
             }
-            if (target != "config")
-                throw new InvalidDataException("Unknown configuration target.");
-            var (config, access) = await ValidateAppCandidateAsync(raw);
-            var restart = app.Select(pair => pair.Key)
-                .Concat(config.Select(pair => pair.Key))
-                .Distinct(StringComparer.Ordinal)
-                .Where(key =>
-                    key is not ("access" or "channels")
-                    && !JsonNode.DeepEquals(app[key], config[key])
-                )
-                .ToList();
-            if (!JsonNode.DeepEquals(app["channels"]?["webui"], config["channels"]?["webui"]))
-                restart.Add("channels.webui");
-            var notApplied = new List<string>();
-            if (access.Values.Any(identity => identity.Mcp) && !Access.McpRuntimeAvailable)
-            {
-                notApplied.Add("access.surfaces.mcp");
-                restart.Add("access.surfaces.mcp");
-            }
-            if (ManagedChannels is not null && restart.Contains("channels.webui"))
-                notApplied.Add("channels.webui");
-            if (
-                ManagedChannels is null
-                && (config.ContainsKey("channels") || app.ContainsKey("channels"))
-            )
-                notApplied.Add("channels");
-            await ReplaceRawAsync(AppPath, bytes, token);
-            try
-            {
-                await Access.ApplyAsync(access);
-            }
-            catch (IOException)
-            {
-                notApplied.Add("access.connections");
-            }
-            var applied = Access.McpRuntimeAvailable
-                ? new List<string> { "access.identities", "access.surfaces.mcp" }
-                : new List<string> { "access.identities" };
-            JsonObject? reload = null;
-            if (ManagedChannels is { } runtime)
-            {
-                reload = await runtime.ReloadAsync();
-                applied.Add("channels");
-                foreach (var status in (reload["statuses"] as JsonArray ?? []).OfType<JsonObject>())
-                    if (
-                        SessionCatalog.Flag(status["enabled"])
-                        && !SessionCatalog.Flag(status["running"])
-                    )
-                        notApplied.Add("channels." + SessionWait.Text(status["channelId"]));
-            }
-            // Other Main app settings remain startup snapshots.
-            var result = Installed(target, applied, notApplied, restart);
-            if (reload is not null)
-                result["reload"] = reload;
-            return result;
+            throw new InvalidDataException("Unknown configuration target.");
         }
         finally
         {
             mutation.Release();
+        }
+    }
+
+    private async Task<JsonObject> InstallAppAsync(
+        Func<CancellationToken, Task<byte[]>> candidate,
+        CancellationToken token
+    )
+    {
+        var (config, access) = await PersistAppAsync(candidate, token);
+        var restart = app.Select(pair => pair.Key)
+            .Concat(config.Select(pair => pair.Key))
+            .Distinct(StringComparer.Ordinal)
+            .Where(key =>
+                key is not ("access" or "channels")
+                && !JsonNode.DeepEquals(app[key], config[key])
+            )
+            .ToList();
+        if (!JsonNode.DeepEquals(app["channels"]?["webui"], config["channels"]?["webui"]))
+            restart.Add("channels.webui");
+        var notApplied = new List<string>();
+        if (access.Values.Any(identity => identity.Mcp) && !Access.McpRuntimeAvailable)
+        {
+            notApplied.Add("access.surfaces.mcp");
+            restart.Add("access.surfaces.mcp");
+        }
+        if (ManagedChannels is not null && restart.Contains("channels.webui"))
+            notApplied.Add("channels.webui");
+        if (
+            ManagedChannels is null
+            && (config.ContainsKey("channels") || app.ContainsKey("channels"))
+        )
+            notApplied.Add("channels");
+        try
+        {
+            await Access.ApplyAsync(access);
+        }
+        catch (IOException)
+        {
+            notApplied.Add("access.connections");
+        }
+        var applied = Access.McpRuntimeAvailable
+            ? new List<string> { "access.identities", "access.surfaces.mcp" }
+            : new List<string> { "access.identities" };
+        JsonObject? reload = null;
+        if (ManagedChannels is { } runtime)
+        {
+            reload = await runtime.ReloadAsync();
+            applied.Add("channels");
+            foreach (var status in (reload["statuses"] as JsonArray ?? []).OfType<JsonObject>())
+                if (
+                    SessionCatalog.Flag(status["enabled"])
+                    && !SessionCatalog.Flag(status["running"])
+                )
+                    notApplied.Add("channels." + SessionWait.Text(status["channelId"]));
+        }
+        // Other Main app settings remain startup snapshots.
+        var result = Installed("config", applied, notApplied, restart);
+        if (reload is not null)
+            result["reload"] = reload;
+        return result;
+    }
+
+    private async Task<(
+        JsonObject Config,
+        System.Collections.Immutable.ImmutableDictionary<string, AccessIdentity> Access
+    )> PersistAppAsync(
+        Func<CancellationToken, Task<byte[]>> candidate,
+        CancellationToken token
+    )
+    {
+        // Only persistence is shared with direct command saves. Release before access/runtime
+        // application, which may join a Weixin handler that is itself confirming a login.
+        await appPersistence.WaitAsync(token);
+        try
+        {
+            var bytes = await candidate(token);
+            var raw = new UTF8Encoding(false, true).GetString(bytes).TrimStart('\uFEFF');
+            var validated = await ValidateAppCandidateAsync(raw);
+            await ReplaceRawAsync(AppPath, bytes, token);
+            return validated;
+        }
+        finally
+        {
+            appPersistence.Release();
         }
     }
 

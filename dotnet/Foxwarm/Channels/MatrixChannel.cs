@@ -153,6 +153,11 @@ internal sealed partial class MatrixChannel : IManagedChannel
 
     private Task SendEventAsync(string room, JsonObject content, CancellationToken token)
     {
+        // The SDK refuses known encrypted rooms before adding the event to its send scheduler.
+        if (encryptedRooms.ContainsKey(room))
+            return Task.FromException(new InvalidOperationException(
+                "This room is configured to use encryption, but your client does not support encryption."
+            ));
         var completion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -313,20 +318,22 @@ internal sealed partial class MatrixChannel : IManagedChannel
         HttpMethod method,
         string path,
         JsonObject? body,
-        CancellationToken token
+        CancellationToken token,
+        TimeSpan? localTimeout = null
     )
     {
         using var content = body is null
             ? null
             : new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
-        return await RequestContentAsync(method, path, content, token);
+        return await RequestContentAsync(method, path, content, token, localTimeout);
     }
 
     private async Task<JsonObject> RequestContentAsync(
         HttpMethod method,
         string path,
         HttpContent? content,
-        CancellationToken token
+        CancellationToken token,
+        TimeSpan? localTimeout = null
     )
     {
         using var request = new HttpRequestMessage(
@@ -339,9 +346,8 @@ internal sealed partial class MatrixChannel : IManagedChannel
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-        timeout.CancelAfter(
-            TimeSpan.FromSeconds(path.Contains("/sync?", StringComparison.Ordinal) ? 110 : 100)
-        );
+        if (localTimeout is { } budget)
+            timeout.CancelAfter(budget);
         using var response = await http.SendAsync(request, timeout.Token);
         var raw = await response.Content.ReadAsStringAsync(timeout.Token);
         JsonObject? result = null;
@@ -352,14 +358,19 @@ internal sealed partial class MatrixChannel : IManagedChannel
         catch (System.Text.Json.JsonException) { }
         if (!response.IsSuccessStatusCode)
         {
-            var retry =
+            var code = SessionWait.Text(result?["errcode"]);
+            var rateLimited = code == "M_LIMIT_EXCEEDED"
+                || (code is null or "M_UNKNOWN" && (int)response.StatusCode == 429);
+            TimeSpan? retry = rateLimited ?
                 response.Headers.RetryAfter?.Delta
                 ?? (
                     response.Headers.RetryAfter?.Date is { } date
                         ? date - DateTimeOffset.UtcNow
                         : null
-                );
-            retry ??= SessionWait.Number(result?["retry_after_ms"]) is { } ms
+                ) : null;
+            retry ??= code == "M_LIMIT_EXCEEDED"
+                && SessionWait.Number(result?["retry_after_ms"]) is { } ms
+                && double.IsInteger(ms)
                 ? TimeSpan.FromMilliseconds(ms)
                 : null;
             throw new MatrixApiException((int)response.StatusCode, result, retry);

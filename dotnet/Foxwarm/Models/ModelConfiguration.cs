@@ -9,6 +9,7 @@ internal sealed partial class ModelConfiguration
 {
     private readonly object gate = new();
     private readonly SemaphoreSlim mutation = new(1);
+    private readonly SemaphoreSlim appPersistence = new(1);
     private readonly JsonObject app;
     private HostModels? catalog;
     private string? cachedRaw;
