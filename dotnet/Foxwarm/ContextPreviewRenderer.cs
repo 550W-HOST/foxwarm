@@ -246,7 +246,9 @@ internal sealed partial class ContextPreviewRenderer
         var matched = (maxItems is { } maximum ? selected.Take(maximum) : selected).ToArray();
         var selectionOmitted = selected.Count() - matched.Length;
         if (selectionOmitted > 0)
-            notices.Add($"[selection] {selectionOmitted} additional matched item(s) omitted by the requested result limit.");
+            notices.Add(
+                $"[selection] {selectionOmitted} additional matched item(s) omitted by the requested result limit."
+            );
         var priority = (extraNotices ?? [])
             .Concat(matched.SelectMany(item => item.PriorityNotices ?? []))
             .Select(SessionGoal.Trim)
@@ -271,7 +273,10 @@ internal sealed partial class ContextPreviewRenderer
                 used += bounded.Length + separator;
             }
             var priorityText = string.Join('\n', priority);
-            Append(priorityText, Math.Min(priorityText.Length, Math.Max(0, Math.Min(700, available - used))));
+            Append(
+                priorityText,
+                Math.Min(priorityText.Length, Math.Max(0, Math.Min(700, available - used)))
+            );
             var medium = string.Join('\n', notices);
             Append(medium, Math.Min(medium.Length, Math.Max(0, available - used)));
             Append(context, Math.Max(0, Math.Min(560, available - used)));

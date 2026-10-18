@@ -164,18 +164,36 @@ public sealed class VectorMainCallerTests
         };
         try
         {
-            await ForkClearLifecycleTests.AppendAsync(owner, VectorFixture.Message(new string('a', 25000)));
+            await ForkClearLifecycleTests.AppendAsync(
+                owner,
+                VectorFixture.Message(new string('a', 25000))
+            );
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            await ForkClearLifecycleTests.AppendAsync(owner, VectorFixture.Message("violet queued suffix"));
+            await ForkClearLifecycleTests.AppendAsync(
+                owner,
+                VectorFixture.Message("violet queued suffix")
+            );
             var forced = manager.ForceVectorIndexAsync(owner);
             // FIFO dispatch makes this a transport barrier without releasing the held background run.
-            Assert.Equal(2, VectorRuntime.Integer((await manager.Vector.StatusAsync(owner.Id))["latestLocalMessageSeq"]));
+            Assert.Equal(
+                2,
+                VectorRuntime.Integer(
+                    (await manager.Vector.StatusAsync(owner.Id))["latestLocalMessageSeq"]
+                )
+            );
             release.TrySetResult();
             if (failTarget)
             {
-                await Assert.ThrowsAsync<HttpRequestException>(() => forced.WaitAsync(TimeSpan.FromSeconds(10)));
+                await Assert.ThrowsAsync<HttpRequestException>(() =>
+                    forced.WaitAsync(TimeSpan.FromSeconds(10))
+                );
                 Assert.Equal(1, owner.Archive.VectorCheckpoint().RawLastIndexedSeq);
-                Assert.Equal(0, VectorRuntime.Integer(owner.Entry.Snapshot().AuthorityEnvelope["vectorIndexPosition"]));
+                Assert.Equal(
+                    0,
+                    VectorRuntime.Integer(
+                        owner.Entry.Snapshot().AuthorityEnvelope["vectorIndexPosition"]
+                    )
+                );
             }
             else
             {
@@ -183,7 +201,12 @@ public sealed class VectorMainCallerTests
                 var status = await manager.Vector.StatusAsync(owner.Id);
                 Assert.Equal(2, VectorRuntime.Integer(status["lastIndexedSeq"]));
                 Assert.Equal(0, VectorRuntime.Integer(status["pendingMessageCount"]));
-                Assert.Equal(2, VectorRuntime.Integer(owner.Entry.Snapshot().AuthorityEnvelope["vectorIndexPosition"]));
+                Assert.Equal(
+                    2,
+                    VectorRuntime.Integer(
+                        owner.Entry.Snapshot().AuthorityEnvelope["vectorIndexPosition"]
+                    )
+                );
             }
         }
         finally
@@ -199,12 +222,19 @@ public sealed class VectorMainCallerTests
         await using var manager = await f.ManagerAsync();
         var source = await manager.CreateNamedAsync("main", "retained", null, null);
         var caller = await manager.CreateNamedAsync("main", "caller", null, null);
-        await ForkClearLifecycleTests.AppendAsync(source, VectorFixture.Message("violet retained authority marker"));
+        await ForkClearLifecycleTests.AppendAsync(
+            source,
+            VectorFixture.Message("violet retained authority marker")
+        );
         await manager.ForceVectorIndexAsync(source);
         await manager.DeleteAsync(source.Id);
         Assert.Null(manager.Catalog.Get(source.Id));
         Assert.Single(manager.ArchiveReader(source.Id).ReadMessages());
-        var result = await Recall(manager, caller, new() { ["vector_query"] = "violet", ["scope"] = "current-agent" });
+        var result = await Recall(
+            manager,
+            caller,
+            new() { ["vector_query"] = "violet", ["scope"] = "current-agent" }
+        );
         Assert.Contains("retained authority marker", result.ToJsonString());
     }
 
@@ -216,16 +246,36 @@ public sealed class VectorMainCallerTests
         {
             new("selected", "selected body", "selected", null, ["SelectedSourceNotice"]),
             new("limited", "limited body", "limited", null, ["LimitedSourceNotice"]),
-            new("excluded", "excluded body", "excluded", null, ["ExcludedSourceNotice"])
+            new("excluded", "excluded body", "excluded", null, ["ExcludedSourceNotice"]),
         };
-        var output = renderer.RenderItems(items, "", _ => "TitleMarker", "EmptyMarker", ["QueryNotice"], maxItems: 1);
+        var output = renderer.RenderItems(
+            items,
+            "",
+            _ => "TitleMarker",
+            "EmptyMarker",
+            ["QueryNotice"],
+            maxItems: 1
+        );
         Assert.Contains("QueryNotice", output);
         Assert.Contains("SelectedSourceNotice", output);
         Assert.DoesNotContain("LimitedSourceNotice", output);
         Assert.DoesNotContain("ExcludedSourceNotice", output);
-        Assert.True(output.IndexOf("QueryNotice", StringComparison.Ordinal) < output.IndexOf("SelectedSourceNotice", StringComparison.Ordinal));
-        Assert.True(output.IndexOf("SelectedSourceNotice", StringComparison.Ordinal) < output.IndexOf("TitleMarker", StringComparison.Ordinal));
-        var empty = renderer.RenderItems(items, "", _ => "TitleMarker", "EmptyMarker", ["QueryNotice"], maxItems: 0);
+        Assert.True(
+            output.IndexOf("QueryNotice", StringComparison.Ordinal)
+                < output.IndexOf("SelectedSourceNotice", StringComparison.Ordinal)
+        );
+        Assert.True(
+            output.IndexOf("SelectedSourceNotice", StringComparison.Ordinal)
+                < output.IndexOf("TitleMarker", StringComparison.Ordinal)
+        );
+        var empty = renderer.RenderItems(
+            items,
+            "",
+            _ => "TitleMarker",
+            "EmptyMarker",
+            ["QueryNotice"],
+            maxItems: 0
+        );
         Assert.Contains("QueryNotice", empty);
         Assert.DoesNotContain("SelectedSourceNotice", empty);
     }
@@ -239,26 +289,45 @@ public sealed class VectorMainCallerTests
         foreach (var count in new[] { 25, 35 })
         {
             var source = await manager.CreateNamedAsync("main", "notice-" + count, null, null);
-            await ForkClearLifecycleTests.AppendAsync(source, Enumerable.Range(1, count).Select(seq => VectorFixture.Message(
-                seq == 1 ? "violet literalneedle" : seq == count ? "violet includeneedle" : "violet surrounding context"
-            )).ToArray());
+            await ForkClearLifecycleTests.AppendAsync(
+                source,
+                Enumerable
+                    .Range(1, count)
+                    .Select(seq =>
+                        VectorFixture.Message(
+                            seq == 1 ? "violet literalneedle"
+                            : seq == count ? "violet includeneedle"
+                            : "violet surrounding context"
+                        )
+                    )
+                    .ToArray()
+            );
             await manager.ForceVectorIndexAsync(source);
         }
         var args = new JsonObject
         {
-            ["vector_query"] = "violet", ["scope"] = "current-agent",
-            ["contentFilter"] = "literalneedle", ["includeRegex"] = "includeneedle", ["previewLength"] = 20000
+            ["vector_query"] = "violet",
+            ["scope"] = "current-agent",
+            ["contentFilter"] = "literalneedle",
+            ["includeRegex"] = "includeneedle",
+            ["previewLength"] = 20000,
         };
-        var all = (await Recall(manager, caller, (JsonObject)args.DeepClone()))["output"]!.GetValue<string>();
+        var all = (await Recall(manager, caller, (JsonObject)args.DeepClone()))[
+            "output"
+        ]!.GetValue<string>();
         Assert.Contains("`msg#25`", all);
         Assert.Contains("`msg#35`", all);
         args["excludeRegex"] = "violet";
-        var excluded = (await Recall(manager, caller, (JsonObject)args.DeepClone()))["output"]!.GetValue<string>();
+        var excluded = (await Recall(manager, caller, (JsonObject)args.DeepClone()))[
+            "output"
+        ]!.GetValue<string>();
         Assert.DoesNotContain("`msg#25`", excluded);
         Assert.DoesNotContain("`msg#35`", excluded);
         args.Remove("excludeRegex");
         args["limit"] = 1;
-        var limited = (await Recall(manager, caller, (JsonObject)args.DeepClone()))["output"]!.GetValue<string>();
+        var limited = (await Recall(manager, caller, (JsonObject)args.DeepClone()))[
+            "output"
+        ]!.GetValue<string>();
         var selectedFirst = limited.Contains("session:notice-25;", StringComparison.Ordinal);
         Assert.Contains(selectedFirst ? "`msg#25`" : "`msg#35`", limited);
         Assert.DoesNotContain(selectedFirst ? "`msg#35`" : "`msg#25`", limited);
@@ -364,18 +433,44 @@ public sealed class VectorMainCallerTests
         Assert.Null(manager.Catalog.Get(source.Id));
         Assert.Equal(source.Id, manager.ArchiveReader(oldId).CanonicalSessionId);
         Assert.False(manager.VectorCanonicalSourceAllowed(oldId, authorized.Options));
-        Assert.DoesNotContain("transferred authority marker", (await Recall(
-            manager, caller, new() { ["vector_query"] = "violet", ["scope"] = "current-agent" }
-        )).ToJsonString());
-        Assert.Empty((await VectorRecall.SearchAsync(
-            manager.Vector,
-            _ => throw new InvalidOperationException("Deleted foreign sources must not reach fallback."),
-            "violet", 5, authorized.Options, authorized.Scope, authorized.SessionId,
-            sourceAllowed: id => manager.VectorCanonicalSourceAllowed(id, authorized.Options)
-        )).Items);
-        Assert.Contains("transferred authority marker", (await Recall(
-            manager, fork, new() { ["vector_query"] = "violet", ["scope"] = "current-session" }
-        )).ToJsonString());
+        Assert.DoesNotContain(
+            "transferred authority marker",
+            (
+                await Recall(
+                    manager,
+                    caller,
+                    new() { ["vector_query"] = "violet", ["scope"] = "current-agent" }
+                )
+            ).ToJsonString()
+        );
+        Assert.Empty(
+            (
+                await VectorRecall.SearchAsync(
+                    manager.Vector,
+                    _ =>
+                        throw new InvalidOperationException(
+                            "Deleted foreign sources must not reach fallback."
+                        ),
+                    "violet",
+                    5,
+                    authorized.Options,
+                    authorized.Scope,
+                    authorized.SessionId,
+                    sourceAllowed: id =>
+                        manager.VectorCanonicalSourceAllowed(id, authorized.Options)
+                )
+            ).Items
+        );
+        Assert.Contains(
+            "transferred authority marker",
+            (
+                await Recall(
+                    manager,
+                    fork,
+                    new() { ["vector_query"] = "violet", ["scope"] = "current-session" }
+                )
+            ).ToJsonString()
+        );
     }
 
     [Fact]

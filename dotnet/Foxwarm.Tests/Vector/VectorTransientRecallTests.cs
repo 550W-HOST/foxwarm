@@ -16,25 +16,40 @@ public sealed class VectorTransientRecallTests
         var wrapped = new JsonObject
         {
             ["role"] = "user",
-            ["parts"] = new JsonArray(new JsonObject
-            {
-                ["system"] = "<foxwarm-message type=\"channel\">\nactual inbound body\n</foxwarm-message>",
-                ["text"] = "SiblingOnlyIdentifier"
-            })
+            ["parts"] = new JsonArray(
+                new JsonObject
+                {
+                    ["system"] =
+                        "<foxwarm-message type=\"channel\">\nactual inbound body\n</foxwarm-message>",
+                    ["text"] = "SiblingOnlyIdentifier",
+                }
+            ),
         };
         var ordinary = new JsonObject
         {
             ["role"] = "user",
-            ["parts"] = new JsonArray(new JsonObject { ["system"] = "stable context", ["text"] = "OrdinaryDualIdentifier" })
+            ["parts"] = new JsonArray(
+                new JsonObject
+                {
+                    ["system"] = "stable context",
+                    ["text"] = "OrdinaryDualIdentifier",
+                }
+            ),
         };
         wrapped["__meta"] = new JsonObject { ["seq"] = 1, ["timestamp"] = 1000 };
         ordinary["__meta"] = new JsonObject { ["seq"] = 2, ["timestamp"] = 2000 };
-        f.Archive(id).WriteMessages([
-            ArchiveMessageRecord.Create(id, "main", 1, 1000, wrapped),
-            ArchiveMessageRecord.Create(id, "main", 2, 2000, ordinary)
-        ]);
+        f.Archive(id)
+            .WriteMessages([
+                ArchiveMessageRecord.Create(id, "main", 1, 1000, wrapped),
+                ArchiveMessageRecord.Create(id, "main", 2, 2000, ordinary),
+            ]);
         var dense = VectorText.Message(wrapped);
-        var substantive = VectorText.Message(wrapped, rolePrefix: false, substantive: true, toolLimit: 0);
+        var substantive = VectorText.Message(
+            wrapped,
+            rolePrefix: false,
+            substantive: true,
+            toolLimit: 0
+        );
         Assert.Contains("actual inbound body", dense);
         Assert.Contains("actual inbound body", substantive);
         Assert.DoesNotContain("SiblingOnlyIdentifier", dense);

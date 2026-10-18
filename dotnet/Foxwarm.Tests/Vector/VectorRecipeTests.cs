@@ -100,9 +100,18 @@ public sealed class VectorRecipeTests
                         ["system"] =
                             "  <FOXWARM-MESSAGE type=\"channel\">\nreal channel\nsecond line\n</FOXWARM-MESSAGE> ",
                         ["text"] = "SiblingOnlyIdentifier",
-                        ["functionCall"] = new JsonObject { ["id"] = "ignored-sibling", ["name"] = "ignoredSiblingCall", ["args"] = new JsonObject() },
+                        ["functionCall"] = new JsonObject
+                        {
+                            ["id"] = "ignored-sibling",
+                            ["name"] = "ignoredSiblingCall",
+                            ["args"] = new JsonObject(),
+                        },
                     },
-                    new JsonObject { ["system"] = "stable context", ["text"] = "ordinary dual-field text" },
+                    new JsonObject
+                    {
+                        ["system"] = "stable context",
+                        ["text"] = "ordinary dual-field text",
+                    },
                     new JsonObject { ["text"] = "--- RELEVANT MEMORY SNIPPETS (RAG) --- ignored" }
                 ),
             },
