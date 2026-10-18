@@ -90,7 +90,10 @@ public sealed class WindowsLocalToolsTests
         var terminal = await terminals.CreateAsync("/", 100, 30, default);
         var before = terminal.Describe();
         Assert.True(before["pid"]!.GetValue<int>() > 0);
-        Assert.Equal(Foxwarm.Code.CodeNativePaths.Transport(Path.GetPathRoot(Environment.CurrentDirectory)!), before["cwd"]!.GetValue<string>());
+        Assert.Equal(
+            Foxwarm.Code.CodeNativePaths.Transport(Path.GetPathRoot(Environment.CurrentDirectory)!),
+            before["cwd"]!.GetValue<string>()
+        );
         await terminal.InputAsync("Write-Output 'native 雪'\r");
         terminal.Resize(120, 40);
         Assert.Equal(120, terminal.Describe()["cols"]!.GetValue<int>());

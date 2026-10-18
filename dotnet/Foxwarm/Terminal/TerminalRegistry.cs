@@ -43,8 +43,13 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
         var value = cwd.Trim();
         // Code sends mapped drive URIs; ordinary terminals retain native path
         // resolution, including Windows's current-drive root for "/".
-        if (OperatingSystem.IsWindows() && value.Length >= 4 && value[0] == '/'
-            && char.IsAsciiLetter(value[1]) && value[2] == ':')
+        if (
+            OperatingSystem.IsWindows()
+            && value.Length >= 4
+            && value[0] == '/'
+            && char.IsAsciiLetter(value[1])
+            && value[2] == ':'
+        )
             value = Foxwarm.Code.CodeNativePaths.Native(value);
         var full = Path.GetFullPath(value);
         if (!Directory.Exists(full))
