@@ -259,18 +259,23 @@ public sealed class InboundMcpTests
         foreach (var type in new[] { "image", "audio", "resource" })
         foreach (var data in new[] { "AB", "AB==" })
         {
-            var block = type == "resource"
-                ? new JsonObject
-                {
-                    ["type"] = type,
-                    ["resource"] = new JsonObject { ["uri"] = "ordinary-blob", ["blob"] = data },
-                }
-                : new JsonObject
-                {
-                    ["type"] = type,
-                    ["data"] = data,
-                    ["mimeType"] = type == "image" ? "image/png" : "audio/wav",
-                };
+            var block =
+                type == "resource"
+                    ? new JsonObject
+                    {
+                        ["type"] = type,
+                        ["resource"] = new JsonObject
+                        {
+                            ["uri"] = "ordinary-blob",
+                            ["blob"] = data,
+                        },
+                    }
+                    : new JsonObject
+                    {
+                        ["type"] = type,
+                        ["data"] = data,
+                        ["mimeType"] = type == "image" ? "image/png" : "audio/wav",
+                    };
             var expected = new JsonObject { ["content"] = new JsonArray(block) };
             var tag = type + "-" + data;
             // The SDK raw-response API parses the actual JSON-RPC wire without
@@ -289,7 +294,10 @@ public sealed class InboundMcpTests
             );
         }
         Assert.Equal(5, (await client.ListToolsAsync(new ListToolsRequestParams())).Tools.Count);
-        Assert.Contains("id", Text(await InboundMcpFixture.ConcreteAsync(client, "mcp:peer/probe")));
+        Assert.Contains(
+            "id",
+            Text(await InboundMcpFixture.ConcreteAsync(client, "mcp:peer/probe"))
+        );
         Assert.Single(
             await peer.EventsAsync(),
             row => row["kind"]!.GetValue<string>() == "initialize"
