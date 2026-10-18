@@ -242,6 +242,61 @@ public sealed class InboundMcpTests
     }
 
     [Fact]
+    public async Task Nonzero_base64_pad_bits_preserve_original_media_after_one_effect_and_retain_context()
+    {
+        await using var f = await InboundMcpFixture.CreateAsync();
+        await using var peer = await OutboundSdkPeer.StartAsync(Path.Combine(f.Temp.Path, "peer"));
+        await f.Manager.OutboundMcp.ConfigureAsync(
+            new JsonObject
+            {
+                ["name"] = "peer",
+                ["url"] = peer.Url + "/mcp",
+                ["transport"] = "streamable-http",
+            },
+            default
+        );
+        await using var client = await f.ClientAsync();
+        foreach (var type in new[] { "image", "audio", "resource" })
+        foreach (var data in new[] { "AB", "AB==" })
+        {
+            var block = type == "resource"
+                ? new JsonObject
+                {
+                    ["type"] = type,
+                    ["resource"] = new JsonObject { ["uri"] = "ordinary-blob", ["blob"] = data },
+                }
+                : new JsonObject
+                {
+                    ["type"] = type,
+                    ["data"] = data,
+                    ["mimeType"] = type == "image" ? "image/png" : "audio/wav",
+                };
+            var expected = new JsonObject { ["content"] = new JsonArray(block) };
+            var tag = type + "-" + data;
+            // The SDK raw-response API parses the actual JSON-RPC wire without
+            // imposing its typed content parser's separate Base64 restriction.
+            var result = await InboundMcpFixture.ConcreteAsync(
+                client,
+                "mcp:peer/result",
+                new JsonObject { ["rawResult"] = expected.DeepClone(), ["tag"] = tag }
+            );
+            Assert.True(JsonNode.DeepEquals(expected, result), result.ToJsonString());
+            Assert.Single(
+                await peer.EventsAsync(),
+                row =>
+                    row["kind"]!.GetValue<string>() == "effect"
+                    && row["tag"]?.GetValue<string>() == tag
+            );
+        }
+        Assert.Equal(5, (await client.ListToolsAsync(new ListToolsRequestParams())).Tools.Count);
+        Assert.Contains("id", Text(await InboundMcpFixture.ConcreteAsync(client, "mcp:peer/probe")));
+        Assert.Single(
+            await peer.EventsAsync(),
+            row => row["kind"]!.GetValue<string>() == "initialize"
+        );
+    }
+
+    [Fact]
     public async Task External_raw_validation_runs_inside_existing_OAuth_guard_and_preserves_binary_media_without_weakening_internal_checks()
     {
         await using var f = await InboundMcpFixture.CreateAsync();

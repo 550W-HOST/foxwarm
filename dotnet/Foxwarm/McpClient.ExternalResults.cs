@@ -170,16 +170,15 @@ internal sealed partial class McpClient
     {
         if (value?.GetValueKind() != JsonValueKind.String)
             throw new JsonException("Invalid MCP binary data.");
-        // Source uses atob: ASCII whitespace and omitted padding are legal. The
-        // discarded SDK validation copy needs padding; the returned raw data does not.
+        // Source uses atob: ASCII whitespace, omitted padding and nonzero unused
+        // pad bits are legal. Canonicalize only the discarded SDK validation copy.
         var compact = string.Concat(
             value.GetValue<string>().Where(c => c is not (' ' or '\t' or '\r' or '\n' or '\f'))
         );
         if (compact.Length % 4 == 1 || compact.Length % 4 != 0 && compact.Contains('='))
             throw new JsonException("Invalid MCP binary data.");
         var padded = compact.PadRight((compact.Length + 3) / 4 * 4, '=');
-        _ = Convert.FromBase64String(padded);
-        return padded;
+        return Convert.ToBase64String(Convert.FromBase64String(padded));
     }
 
     private static void ValidateExternalAnnotations(JsonNode value)
