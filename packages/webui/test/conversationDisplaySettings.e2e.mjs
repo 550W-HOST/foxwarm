@@ -283,23 +283,67 @@ test('short and genuinely clipped To/From cards share native fade and full-body 
   assert.deepEqual(await page.evaluate(()=>window.fixture.navigations),['fixture/peer'])
 })
 
-test('folded long deliveries retain disclosure and do not steal detached reading on stream or resize', async () => {
+test('folded long deliveries retain disclosure and do not steal detached reading on stream or resize', async context => {
+  const client = await page.createCDPSession()
+  await client.send('Emulation.setCPUThrottlingRate', { rate: 4 })
+  context.after(async () => {
+    await client.send('Emulation.setCPUThrottlingRate', { rate: 1 })
+    await client.detach()
+  })
   await choose('Show inter-agent messages'); await closeMenu()
   await page.waitForFunction(()=>!document.querySelector('[data-session-communication]:not([data-activity-details] [data-session-communication])'))
   await expandActivities()
   await page.waitForFunction(()=>document.querySelectorAll('[data-activity-details] [data-overflow-fade="bottom"]').length===2)
   await page.$eval('[data-activity-details] [data-session-communication="sent"] [aria-label="Expand message"]',button=>button.click())
-  await page.waitForFunction(()=>!document.querySelector('[data-session-communication="sent"]').style.height)
+  await page.waitForFunction(() => {
+    const card = document.querySelector('[data-session-communication="sent"]')
+    const body = card.querySelector('[data-search-surface="communication"]')
+    return !card.style.height && body.clientHeight >= body.scrollHeight - 1
+      && [...document.querySelectorAll('[data-timeline-activity]')].every(node => !node.style.height)
+  })
+  // Expansion can already detach follow. Start at the actual bottom so the wheel
+  // enters a nonzero reading position rather than clamping a small old offset to zero.
+  await page.click('[aria-label="Scroll to bottom"]')
+  await page.waitForFunction(() => {
+    const node = document.querySelector('.foxwarm-chat-messages')
+    return node.scrollHeight - node.scrollTop - node.clientHeight < 1
+      && !document.querySelector('[aria-label="Scroll to bottom"]')
+  })
+  const wheelTarget = await page.$eval('.foxwarm-chat-messages', node => {
+    const target = node.scrollTop - 500
+    window.fixture.readingScroll = null
+    const record = () => {
+      if (Math.abs(node.scrollTop - target) > 1) return
+      window.fixture.readingScroll = node.scrollTop
+      node.removeEventListener('scroll', record)
+    }
+    node.addEventListener('scroll', record)
+    return target
+  })
+  assert.ok(wheelTarget > 0, 'expanded delivery leaves room for an interior reading position')
   const view=await page.$eval('.foxwarm-chat-messages',node=>node.getBoundingClientRect().toJSON())
   await page.mouse.move(view.left+view.width/2,view.top+view.height/2)
   await page.mouse.wheel({deltaY:-500})
+  // The follow button acknowledges intent, not completed native movement.
+  await page.waitForFunction(target => window.fixture.readingScroll !== null
+    && Math.abs(window.fixture.readingScroll - target) <= 1, {}, wheelTarget)
   await page.waitForSelector('[aria-label="Scroll to bottom"]')
   const before=await page.$eval('.foxwarm-chat-messages',node=>node.scrollTop)
+  assert.ok(Math.abs(before - wheelTarget) <= 1)
   await page.evaluate(()=>window.fixture.emit({type:'model-stream-update',streamId:'detached-display',text:'DETACHED_STREAM'}))
   await page.setViewport({width:420,height:820})
   await page.waitForFunction(()=>document.querySelector('.foxwarm-chat-messages').textContent.includes('DETACHED_STREAM'))
-  const after=await page.$eval('.foxwarm-chat-messages',node=>node.scrollTop)
-  assert.ok(Math.abs(after-before)<30,`${before} -> ${after}`)
+  const after = await page.evaluate(async () => {
+    const node = document.querySelector('.foxwarm-chat-messages')
+    const samples = [node.scrollTop]
+    // Observe the resize correction frames as well as the first rendered stream.
+    for (let frame = 0; frame < 4; frame++) {
+      await new Promise(requestAnimationFrame)
+      samples.push(node.scrollTop)
+    }
+    return samples
+  })
+  assert.ok(after.every(top => Math.abs(top - before) < 30), JSON.stringify({ before, after }))
   assert.ok(await page.$('[aria-label="Scroll to bottom"]'))
   await page.click('[aria-label="Scroll to bottom"]')
   await page.waitForFunction(()=>{const node=document.querySelector('.foxwarm-chat-messages');return node.scrollHeight-node.scrollTop-node.clientHeight<3})
