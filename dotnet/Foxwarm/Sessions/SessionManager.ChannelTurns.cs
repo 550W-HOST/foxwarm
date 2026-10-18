@@ -307,15 +307,14 @@ internal sealed partial class SessionManager
             {
                 var decorated = ChannelProgress.Decorate(turn.Id, target, text);
                 _ = ChannelProgress.BestEffortAsync(
-                        value =>
-                            channel.Send(conversation, value, new(final), CancellationToken.None),
-                        decorated
+                    value => channel.Send(conversation, value, new(final), CancellationToken.None),
+                    decorated
                 );
             }
             else if (final && channel.Finalize is { } finish)
                 _ = ChannelProgress.BestEffortAsync(
-                        _ => finish(conversation, new(true), CancellationToken.None),
-                        ""
+                    _ => finish(conversation, new(true), CancellationToken.None),
+                    ""
                 );
         }
         // Ordinary Main broadcasts never wait for platform acknowledgement, including terminal lifecycle.
