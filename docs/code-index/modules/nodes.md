@@ -54,7 +54,7 @@ The operator-facing deployment/configuration workflow is documented by the singl
 
 - The master persists only SHA-256 authentication-token hashes. Plaintext is returned once for direct creation or held temporarily in the pending approval/claim handoff; the agent-facing `node_create_auth_token` path writes plaintext only to its newly created owner-only file and returns only its Node ID and path.
 - Pending pairings expire after one hour; unclaimed approved handoffs are cleaned with their node record.
-- Node IDs are slugged, validated against reserved IDs, and deduplicated.
+- Authenticated CLI Node IDs retain their slug/reserved-ID/deduplication contract. Executable-provider Core IDs are qualified by Provider; see [generic providers](../threads/tool-dispatch-node-execution.md#d-dispatch-generic-node-providers).
 - Master-side WebSocket heartbeat sends protocol ping frames every 30 seconds and requires liveness within 10 seconds.
 - Pre-authentication messages are queued and replayed after authentication.
 - Authenticated registration negotiates the shared 1-3 core Node protocol before capability admission. Missing metadata selects executable legacy generation 1, the current CLI selects generation 3, and only malformed/disjoint clients remain connected and visible as upgrade-required without executable capabilities, dispatch, selection, or application events. Canonical contract: [D-node-thread-core-protocol-compatibility](../threads/node-communication.md#d-node-thread-core-protocol-compatibility).

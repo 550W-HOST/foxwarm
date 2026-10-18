@@ -18,6 +18,7 @@ import { LocalRpcTransport, RpcClient, RpcServiceRegistry } from '../rpc';
 import { callTool } from '../tools';
 import { getAgentDir } from '../config';
 import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from '../toolAuthorization';
+import { MAX_CORE_NODE_ID_LENGTH } from '../../packages/shared/dist/nodeIdentity';
 import { NODE_TRANSFER_CHUNK_BYTES } from '../../packages/shared/dist/nodeFileTransfer';
 
 async function fixture(run: (value: {
@@ -272,5 +273,101 @@ test('Main and Worker write the same owned image under image-target authorizatio
     await fileDelivery.shutdownFileDelivery(); fileDelivery.resetFileDeliveryForTests();
     await transport.drain(); transport.close();
     await fs.remove(ownerRoot); await fs.remove(otherRoot);
+  }
+}));
+
+
+test('Provider-only policy checks real copy effects on every endpoint and preserves Worker caller-current facts', async () => fixture(async f => {
+  const providerId = (await f.providers.resolveNode(f.left))!.provider.id;
+  setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`version: 1\ndefaultAction: deny\nrules:\n- session: ${JSON.stringify(f.sourceId)}\n  node: { provider: ${JSON.stringify(providerId)} }\n  action: allow\n`));
+  await fs.writeFile(path.join(f.roots.left, 'cwd/allowed.bin'), bytes);
+  const masterSource = path.join(f.main, 'master-source.bin');
+  await fs.writeFile(masterSource, 'Main must not become a permitted leg');
+  const ctx: any = { sessionId: f.sourceId, session: f.session };
+  await callTool('copy_between_nodes', { sourceNode: f.left, sourcePath: 'allowed.bin', targetNode: f.right, targetPath: 'allowed.bin' }, ctx);
+  assert.deepEqual(await fs.readFile(path.join(f.roots.right, 'cwd/allowed.bin')), bytes);
+  for (const intent of [
+    { sourceNode: 'master', sourcePath: masterSource, targetNode: f.right, targetPath: 'forbidden-master-source.bin' },
+    { sourceNode: f.left, sourcePath: 'allowed.bin', targetNode: 'master', targetPath: path.join(f.main, 'forbidden-master-target.bin') },
+    { sourceNode: f.left, sourcePath: 'allowed.bin', targetNode: f.broken, targetPath: 'forbidden-provider.bin' },
+  ]) await assert.rejects(() => callTool('copy_between_nodes', intent, ctx), /denies builtin capability/);
+  assert.equal(await fs.pathExists(path.join(f.roots.right, 'cwd/forbidden-master-source.bin')), false);
+  assert.equal(await fs.pathExists(path.join(f.main, 'forbidden-master-target.bin')), false);
+  assert.equal(await fs.pathExists(path.join(f.roots.broken, 'cwd/forbidden-provider.bin')), false);
+  setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`version: 1\ndefaultAction: deny\nrules:\n- session: ${JSON.stringify(f.sourceId)}\n  node: { current: true }\n  action: allow\n`));
+  const hot = { ...f.session, currentNode: f.right };
+  await callTool('copy_between_nodes', { sourceNode: f.right, sourcePath: 'allowed.bin', targetNode: f.right, targetPath: 'worker-current.bin' }, {
+    sessionId: f.sourceId, session: hot, sessionPlacement: 'session-worker', persistCurrentSession: async () => {},
+  });
+  assert.deepEqual(await fs.readFile(path.join(f.roots.right, 'cwd/worker-current.bin')), bytes);
+  assert.equal(f.session.currentNode, f.left, 'trusted Worker caller-current facts do not mutate Main catalog authority');
+}));
+
+test('Provider-only image permission is target-local for both Main and the private Worker handoff', async () => fixture(async f => {
+  const providerId = (await f.providers.resolveNode(f.left))!.provider.id;
+  setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`version: 1\ndefaultAction: deny\nrules:\n- session: ${JSON.stringify(f.sourceId)}\n  node: { provider: ${JSON.stringify(providerId)} }\n  action: allow\n`));
+  const image = await sharp({ create: { width: 1, height: 1, channels: 4, background: '#112233' } }).png().toBuffer();
+  f.session.history.push({ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: image.toString('base64') }, imageMeta: { imageId: 'provider-only-image', mimeType: 'image/png' } }] });
+  await sessionManager.saveSession(f.session);
+  const services = new RpcServiceRegistry();
+  services.register(fileDeliveryServiceDescriptor, createFileDeliveryServiceHandler({ expectedSourceSessionId: f.sourceId }));
+  const transport = new LocalRpcTransport(services);
+  await fileDelivery.initializeFileDelivery({ transport, placement: 'child-reverse' });
+  try {
+    const ctx: any = { sessionId: f.sourceId, session: f.session, persistCurrentSession: async () => sessionManager.saveSession(f.session) };
+    await callTool('image_write_to_file', { id: 'provider-only-image', node: f.right, filePath: 'provider-main.png' }, ctx);
+    await callTool('image_write_to_file', { id: 'provider-only-image', node: f.right, filePath: 'provider-worker.png' }, { ...ctx, sessionPlacement: 'session-worker' });
+    assert.deepEqual(await fs.readFile(path.join(f.roots.right, 'cwd/provider-main.png')), image);
+    assert.deepEqual(await fs.readFile(path.join(f.roots.right, 'cwd/provider-worker.png')), image);
+    await assert.rejects(() => nodeExecution.copyBetweenNodes(f.sourceId, { sourceNode: 'master', sourcePath: 'not-an-image-source', targetNode: f.right, targetPath: 'forbidden-copy' }), /denies builtin capability/);
+  } finally {
+    await fileDelivery.shutdownFileDelivery(); fileDelivery.resetFileDeliveryForTests();
+    await transport.drain(); transport.close();
+    await fs.remove(getImageWriteHandoffRoot(f.session.agent, f.sourceId));
+  }
+}));
+
+test('maximum qualified IDs survive Provider delivery receipts and Worker image routing without leaking bytes', async () => fixture(async f => {
+  const root = path.join(f.root, 'maximum-id');
+  await fs.ensureDir(path.join(root, 'cwd'));
+  await fs.writeFile(path.join(root, 'cwd/source.bin'), bytes);
+  const provider = new ExecutableNodeProvider({ id: 'p'.repeat(64), type: 'executable', command: process.execPath,
+    args: [path.join(__dirname, 'primitiveExecTestFixture.js'), root, 'normal', 'n'.repeat(128)], timeoutMs: 5000 });
+  const registry = new NodeProviderRegistry([provider]);
+  const id = (await registry.listNodes())[0].id;
+  assert.equal(id.length, MAX_CORE_NODE_ID_LENGTH);
+  const originalRead = nodeProviderRegistry.readTransferFile;
+  const originalWrite = nodeProviderRegistry.writeTransferFile;
+  nodeProviderRegistry.readTransferFile = request => registry.readTransferFile(request);
+  nodeProviderRegistry.writeTransferFile = request => registry.writeTransferFile(request);
+  const services = new RpcServiceRegistry();
+  services.register(fileDeliveryServiceDescriptor, createFileDeliveryServiceHandler({ expectedSourceSessionId: f.sourceId }));
+  const transport = new LocalRpcTransport(services);
+  const client = new RpcClient(fileDeliveryServiceDescriptor, transport);
+  const cached: string[] = [];
+  await fileDelivery.initializeFileDelivery({ transport, placement: 'child-reverse' });
+  try {
+    const main: any = await callTool('send_file', { node: id, filePath: 'source.bin', channelTargetId: 'webui:maximum-node' }, { sessionId: f.sourceId, session: f.session });
+    cached.push(main.fullPath);
+    assert.equal(main.fileDelivery.sourceNodeId, id);
+    assert.deepEqual(await fs.readFile(main.fullPath), bytes);
+    const reverse = await client.call('deliver', { sourceSessionId: f.sourceId, intent: { filePath: 'source.bin', channelTargetId: 'webui:maximum-node' }, routing: { runtimeNodeId: id, currentNode: id } });
+    cached.push(reverse.fullPath);
+    assert.equal(reverse.fileDelivery?.sourceNodeId, id);
+    assert.deepEqual(await fs.readFile(reverse.fullPath), bytes);
+    const image = await sharp({ create: { width: 1, height: 1, channels: 4, background: '#123456' } }).png().toBuffer();
+    f.session.history.push({ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: image.toString('base64') }, imageMeta: { imageId: 'maximum-node-image', mimeType: 'image/png' } }] });
+    await sessionManager.saveSession(f.session);
+    await callTool('image_write_to_file', { id: 'maximum-node-image', filePath: 'maximum.png' }, {
+      sessionId: f.sourceId, session: { ...f.session, currentNode: id }, sessionPlacement: 'session-worker', persistCurrentSession: async () => {},
+    });
+    assert.deepEqual(await fs.readFile(path.join(root, 'cwd/maximum.png')), image);
+  } finally {
+    nodeProviderRegistry.readTransferFile = originalRead;
+    nodeProviderRegistry.writeTransferFile = originalWrite;
+    await fileDelivery.shutdownFileDelivery(); fileDelivery.resetFileDeliveryForTests();
+    await transport.drain(); transport.close(); await registry.shutdown();
+    for (const file of cached) await fs.remove(file);
+    await fs.remove(getImageWriteHandoffRoot(f.session.agent, f.sourceId));
   }
 }));

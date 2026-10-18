@@ -105,7 +105,7 @@ export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) 
     }
 
     if (ctx.sessionPlacement === 'session-worker') {
-        const result = await copyBetweenNodes(ctx.sessionId, { sourceNode, sourcePath, targetNode, targetPath, overwrite: overwrite === true });
+        const result = await copyBetweenNodes(ctx.sessionId, { sourceNode, sourcePath, targetNode, targetPath, overwrite: overwrite === true, callerCurrentNode: ctx.session?.currentNode || 'master' });
         const lines = [`Copied \`${sourcePath}\` from node \`${sourceNode}\` to \`${targetPath}\` on node \`${targetNode}\`.`,
             `Size: ${result.sizeBytes} B`, `SHA256: ${result.sha256}`, `Overwrote existing file: ${result.overwritten ? 'yes' : 'no'}`];
         if (result.absolutePath) lines.push(`Target absolute path: ${result.absolutePath}`);
@@ -185,7 +185,7 @@ export const tool_change_current_node = async (args: ToolArgs, ctx: ToolContext)
         if (sessionManager.isSessionEffectivelyIsolated(session)) {
             throw new Error('This session is isolated and cannot switch node via tools. Use /node from the user channel.');
         }
-        const validated = await validateNodeSelection(ctx.sessionId, nodeId);
+        const validated = await validateNodeSelection(ctx.sessionId, nodeId, ctx.session?.currentNode || 'master');
         session.currentNode = validated.nodeId; delete session.cwd;
         await ctx.persistCurrentSession();
         return `Current node changed to \`${validated.nodeId}\`. Session cwd cleared. Subsequent exec calls will use the node default cwd: \`${validated.defaultCwd}\`.`;
@@ -196,7 +196,7 @@ export const tool_change_current_node = async (args: ToolArgs, ctx: ToolContext)
         throw new Error('This session is isolated and cannot switch node via tools. Use /node from the user channel.');
     }
     
-    const validated = await validateNodeSelection(ctx.sessionId, nodeId);
+    const validated = await validateNodeSelection(ctx.sessionId, nodeId, ctx.session?.currentNode || 'master');
     await sessionRuntime.updateSettings(ctx.sessionId, { currentNode: validated.nodeId, cwd: null });
     return `Current node changed to \`${validated.nodeId}\`. Session cwd cleared. Subsequent exec calls will use the node default cwd: \`${validated.defaultCwd}\`.`;
 };
@@ -236,6 +236,7 @@ export async function tool_node(args: ToolArgs, ctx: ToolContext): Promise<any> 
             }
             return executeNodeLifecycle(ctx.sessionId, {
                 action,
+                callerCurrentNode: ctx.session?.currentNode || 'master',
                 providerId: args.providerId.trim(),
                 ...(args.nodeId === undefined ? {} : { nodeId: args.nodeId }),
                 parameters,
@@ -245,13 +246,14 @@ export async function tool_node(args: ToolArgs, ctx: ToolContext): Promise<any> 
             if (args.nodeId !== undefined || Object.keys(parameters).length || typeof args.providerId !== 'string' || !args.providerId.trim()) {
                 throw new Error('Provider inspection requires providerId and does not accept nodeId or parameters.');
             }
-            return executeNodeLifecycle(ctx.sessionId, { action, providerId: args.providerId.trim() });
+            return executeNodeLifecycle(ctx.sessionId, { action, providerId: args.providerId.trim(), callerCurrentNode: ctx.session?.currentNode || 'master' });
         }
         if (typeof args.nodeId !== 'string' || !args.nodeId.trim()) {
             throw new Error(`node.nodeId is required for action="${action}".`);
         }
         return executeNodeLifecycle(ctx.sessionId, {
             action: action as 'inspect' | 'destroy',
+            callerCurrentNode: ctx.session?.currentNode || 'master',
             nodeId: args.nodeId.trim(),
             parameters,
             ...(action === 'destroy' ? { confirmation: args.confirmation } : {}),

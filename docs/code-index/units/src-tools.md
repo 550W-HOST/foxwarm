@@ -123,7 +123,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 | Function | Description |
 |----------|-------------|
 | `resolveDirectTool` | Resolves direct provider invocations into one builtin or Node operation |
-| `resolveUnifiedTool` | Resolves `call_tool` IDs/descriptors; omitted Node IDs use the current target and builtin aliases for Node capabilities are rejected |
+| `resolveUnifiedTool` | Resolves `call_tool` IDs/descriptors (qualified Node IDs use the final slash before the tool name); omitted Node IDs use the current target and builtin aliases for Node capabilities are rejected |
 | `executeResolvedTool` | Authorizes the resolved concrete target and dispatches through local, Node, or MCP owners; `call_tool` itself is permission-neutral |
 | `resolvedToolAuthorizationSession` | Applies only the resolved ToolScript source cwd to read-only authorization facts, shared by model preflight and canonical dispatch; raw args and the live execution owner remain unchanged |
 | `buildUnifiedToolId` | Constructs the source-qualified identifier used by discovery |

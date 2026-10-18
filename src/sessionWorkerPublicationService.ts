@@ -1,3 +1,4 @@
+import { MAX_CORE_NODE_ID_LENGTH } from '../packages/shared/dist/nodeIdentity';
 import { defineRpcService, rpcMethod, RpcError, type RpcServiceHandler } from './rpc';
 import { stableSessionWorkerJson } from './sessionWorkerStableJson';
 import type { SessionWorkerProjection } from './sessionWorkerPersistence';
@@ -83,7 +84,7 @@ function validateProjection(value: unknown, sessionId: string): SessionWorkerPro
     || !(projection.busyStartedAt === null || safeInt(projection.busyStartedAt)) || !safeInt(projection.queueLength)
     || !safeInt(projection.messageCount) || !safeInt(projection.historyVersion) || !safeInt(projection.lastMessageTime)
     || !validRuntime || !validStats || runtime.busy !== projection.busy || runtime.queueLength !== projection.queueLength
-    || typeof projection.currentNode !== 'string' || !projection.currentNode || projection.currentNode.length > 128
+    || typeof projection.currentNode !== 'string' || !projection.currentNode || projection.currentNode.length > MAX_CORE_NODE_ID_LENGTH
     || !nullableString(projection.cwd, 4096) || !nullableString(projection.model, 512)
     || !(projection.effort === null || ['none','low','medium','high','xhigh','max'].includes(projection.effort))
     || !nullableString(projection.childModelDefault, 512)

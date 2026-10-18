@@ -1,3 +1,4 @@
+import { isCoreNodeId } from '../packages/shared/dist/nodeIdentity';
 import express from 'express';
 import path from 'path';
 import fs from 'fs-extra';
@@ -115,7 +116,7 @@ function parseBool(value: unknown): boolean {
 
 function normalizeNodeId(value: unknown): string {
   const nodeId = typeof value === 'string' && value.trim() ? value.trim() : 'master';
-  if (!/^[A-Za-z0-9._-]+$/.test(nodeId)) {
+  if (!isCoreNodeId(nodeId)) {
     throw new VscodeWebFsError('InvalidNode', `Invalid node id: ${nodeId}`);
   }
   return nodeId;

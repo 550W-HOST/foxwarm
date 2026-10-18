@@ -63,12 +63,12 @@ Ordinary file and exec tools remain unchanged:
 ```text
 node(action="list")
 node(action="inspect", providerId="linux-machines")
-node(action="select", nodeId="build-linux")
+node(action="select", nodeId="linux-machines/build-linux")
 read(filePath="README.md")
 exec(command="printf 'hello from Linux\n'", timeout=5)
 ```
 
-Programmatic Node listing includes structured `nodes` and `providers`. The same Node appears in the WebUI directory and Session picker. File/exec capability does not imply Code, terminal, browser or cross-Node copy support. Selection routes execution; it does not create an Agent, assign work, reserve a machine or grant isolation.
+Core qualifies the configured adapter-local `build-linux` identity as `linux-machines/build-linux`; direct protocol requests still use the local ID. Programmatic Node listing includes structured `nodes` and `providers`. The same Node appears in the WebUI directory and Session picker. File/exec capability does not imply Code, terminal, browser or cross-Node copy support. Selection routes execution; it does not create an Agent, assign work, reserve a machine or grant isolation.
 
 File paths, home expansion, relative cwd, symlinks and file permissions use the target Linux namespace. Core applies edit and patch semantics over the adapter's basic filesystem operations. The reference does not restrict an SSH account to the configured cwd; configure a genuinely restricted account or independent containment if that is required.
 

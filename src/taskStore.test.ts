@@ -183,7 +183,7 @@ test('runtime validates action-specific fields, types, required fields, sizes an
   assert.throws(() => store.execute({ action: 'create', title: 'No actor' }, ''), /current Session/);
   assert.throws(() => store.execute({ action: 'get', taskId: 'missing' }, 'coordinator'), /Task missing not found/);
   assert.equal(store.execute({ action: 'list' }, 'coordinator').total, 0);
-  assert.deepEqual(TASK_LIST_SCOPES, ['current-session', 'current-agent', 'all']);
+  assert.deepEqual(TASK_LIST_SCOPES, ['current-session', 'owned', 'current-agent', 'all']);
 });
 
 test('WebUI user actor is separate from Session actors for create, comment and owner changes', t => {

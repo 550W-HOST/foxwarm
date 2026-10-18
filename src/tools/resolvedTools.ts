@@ -23,7 +23,7 @@ export type ResolvedTool = {
   targetNode?: string;
   server?: string;
   localBuiltinName?: string;
-  routingSnapshot?: { currentNode: string; cwd?: string };
+  routingSnapshot?: { currentNode: string; callerCurrentNode?: string; cwd?: string };
 };
 
 type Runtime = {
@@ -59,7 +59,7 @@ export function parseUnifiedToolId(toolId: string): { source: UnifiedToolSource;
   for (const source of ['mcp', 'node'] as const) {
     const rest = toolId.slice(source.length + 1);
     if (!toolId.startsWith(`${source}:`) || !rest.includes('/')) continue;
-    const split = rest.indexOf('/');
+    const split = source === 'node' ? rest.lastIndexOf('/') : rest.indexOf('/');
     if (split <= 0 || split === rest.length - 1) throw new Error(`Invalid ${source} toolId: ${toolId}`);
     return { source, name: rest.slice(split + 1), ...(source === 'mcp' ? { server: rest.slice(0, split) } : { nodeId: rest.slice(0, split) }) };
   }
@@ -90,8 +90,8 @@ function validatePlacement(resolved: ResolvedTool, ctx: ToolContext): ResolvedTo
 function resolveNode(invocationName: string, name: string, args: ToolArgs, ctx: ToolContext, nodeId: string, current: string): ResolvedTool {
   const localBuiltinName = NODE_ENVIRONMENT_BUILTIN_NAMES.includes(name as any) ? name : undefined;
   if (nodeId === 'master' && !localBuiltinName) throw new Error(`Tool \`${name}\` not available on node \`master\``);
-  const routingSnapshot = ctx.sessionPlacement === 'session-worker' && nodeId !== 'master' && nodeId === current
-    ? { currentNode: current, ...(typeof ctx.session?.cwd === 'string' ? { cwd: ctx.session.cwd } : {}) }
+  const routingSnapshot = ctx.sessionPlacement === 'session-worker' && nodeId !== 'master'
+    ? { currentNode: current, callerCurrentNode: current, ...(nodeId === current && typeof ctx.session?.cwd === 'string' ? { cwd: ctx.session.cwd } : {}) }
     : undefined;
   return validatePlacement({ invocationName, source: 'node', name, args: { ...args }, executionNode: nodeId,
     permissionNode: nodeId, ...(localBuiltinName ? { localBuiltinName } : {}), ...(routingSnapshot ? { routingSnapshot } : {}) }, ctx);
@@ -126,7 +126,7 @@ function resolveBuiltin(invocationName: string, name: string, rawArgs: ToolArgs,
   if (sourceNode !== undefined) {
     const owner = ctx.session?.id === ctx.sessionId ? ctx.session : ctx.sessionId ? sessionManager.getSessionCatalog(ctx.sessionId) : undefined;
     const usesOwnerCwd = sourceNode === 'master' || owner?.currentNode === sourceNode;
-    routingSnapshot = { currentNode: sourceNode, ...(usesOwnerCwd && typeof owner?.cwd === 'string' ? { cwd: owner.cwd } : {}) };
+    routingSnapshot = { currentNode: sourceNode, callerCurrentNode: current, ...(usesOwnerCwd && typeof owner?.cwd === 'string' ? { cwd: owner.cwd } : {}) };
   }
   return validatePlacement({ invocationName, source: 'builtin', name, args, executionNode: placement.executionNode,
     permissionNode, ...(nodeSelectsPlacement ? { targetNode } : {}), ...(routingSnapshot ? { routingSnapshot } : {}) }, ctx);
@@ -158,7 +158,7 @@ export async function resolveDirectTool(name: string, args: ToolArgs, ctx: ToolC
   const current = await currentNode(ctx, snapshot);
   if (NODE_ENVIRONMENT_BUILTIN_NAMES.includes(name as any)) {
     const resolved = resolveNode(name, name, args, ctx, current, current);
-    if (snapshot) resolved.routingSnapshot = snapshot;
+    if (snapshot) resolved.routingSnapshot = { ...snapshot, callerCurrentNode: current };
     return resolved;
   }
   return resolveBuiltin(name, name, args, ctx, current);

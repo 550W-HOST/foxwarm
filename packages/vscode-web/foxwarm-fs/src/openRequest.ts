@@ -1,3 +1,4 @@
+import { isCoreNodeId } from '../../../shared/src/nodeIdentity';
 export type FoxwarmOpenRequest =
   | { kind: 'addFolder'; nodeId: string; path: string }
   | { kind: 'openFile'; nodeId: string; path: string; startLine?: number; startColumn?: number; endLine?: number }
@@ -40,7 +41,7 @@ export function normalizeFoxwarmOpenRequest(value: unknown): NormalizedFoxwarmOp
     throw new Error('Invalid Foxwarm open request.')
   }
   const request = value as Record<string, unknown>
-  if (typeof request.nodeId !== 'string' || !/^[A-Za-z0-9._-]+$/.test(request.nodeId)) {
+  if (typeof request.nodeId !== 'string' || !isCoreNodeId(request.nodeId)) {
     throw new Error('Foxwarm node id is invalid.')
   }
   const nodeId = request.nodeId

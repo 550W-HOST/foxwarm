@@ -27,7 +27,7 @@ type ToolContext = {
   session?: Session;
   broadcast?: (text: string, options?: any) => Promise<void>;
   runtimeNodeId?: string;
-  toolScriptSourceRouting?: { currentNode: string; cwd?: string };
+  toolScriptSourceRouting?: { currentNode: string; callerCurrentNode?: string; cwd?: string };
   toolScriptRunId?: string;
   toolUseId?: string;
   onToolScriptSubCalls?: (subCalls: ToolScriptSubCall[]) => void;
@@ -427,7 +427,7 @@ function extractToolNameFromToolId(toolId: string | undefined): string | undefin
   if (!toolId || typeof toolId !== 'string') {
     return undefined;
   }
-  const nodeMatch = toolId.match(/^node:[^/]+\/(.+)$/);
+  const nodeMatch = toolId.match(/^node:.+\/([^/]+)$/);
   if (nodeMatch) {
     return nodeMatch[1];
   }
@@ -1548,7 +1548,7 @@ async function readScriptSource(filePath: string, sourceNode: string, ctx: ToolC
   const normalizedPath = filePath.trim();
   const agentName = session.agent || 'main';
   const routingSnapshot = ctx.toolScriptSourceRouting || {
-    currentNode: sourceNode,
+    currentNode: sourceNode, callerCurrentNode: session.currentNode || 'master',
     ...((sourceNode === 'master' || session.currentNode === sourceNode) && typeof session.cwd === 'string' ? { cwd: session.cwd } : {}),
   };
   const scriptPath = sourceNode === 'master' ? resolveAgentPath(normalizedPath, agentName, routingSnapshot.cwd) : normalizedPath;

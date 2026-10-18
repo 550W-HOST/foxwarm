@@ -170,3 +170,8 @@ export function resolveToolScriptSourceNode(args: Record<string, any>, currentNo
   const node = typeof selector === 'string' ? selector.trim() : '';
   return !node || node.toLowerCase() === 'current' ? currentNode : node;
 }
+
+/** Builtins whose unsupplied arguments can select concrete Node effects (not a ToolScript VM). */
+export function builtinHasNodeEffectSelector(name: string): boolean {
+  return builtinNodeArgumentSelectsPlacement(name) || name === 'copy_between_nodes' || name === 'node';
+}
