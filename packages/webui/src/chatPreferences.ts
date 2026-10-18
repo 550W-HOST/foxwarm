@@ -9,6 +9,8 @@ export type ChatPreferences = {
   timelineView: TimelineView
   showUsageBadge: boolean
   showUserMessageMetadata: boolean
+  showInterAgentMessages: boolean
+  showCommentary: boolean
   fullWidth: boolean
 }
 
@@ -18,6 +20,8 @@ const TIMELINE_VIEW_STORAGE_KEY = 'foxwarm_timeline_view_v1'
 const MOBILE_TIMELINE_VIEW_STORAGE_KEY = 'foxwarm_mobile_timeline_view_v1'
 const SHOW_USAGE_BADGE_STORAGE_KEY = 'foxwarm_show_usage_badge_v1'
 const SHOW_USER_MESSAGE_METADATA_STORAGE_KEY = 'foxwarm_show_user_message_metadata_v1'
+const SHOW_INTER_AGENT_MESSAGES_STORAGE_KEY = 'foxwarm_show_inter_agent_messages_v1'
+const SHOW_COMMENTARY_STORAGE_KEY = 'foxwarm_show_commentary_v1'
 const FULL_WIDTH_STORAGE_KEY = 'foxwarm_chat_full_width_v1'
 const CHAT_PREFERENCE_STORAGE_KEYS = new Set([
   SEND_KEY_MODE_STORAGE_KEY,
@@ -27,6 +31,8 @@ const CHAT_PREFERENCE_STORAGE_KEYS = new Set([
   SHOW_USAGE_BADGE_STORAGE_KEY,
   SHOW_USER_MESSAGE_METADATA_STORAGE_KEY,
   FULL_WIDTH_STORAGE_KEY,
+  SHOW_INTER_AGENT_MESSAGES_STORAGE_KEY,
+  SHOW_COMMENTARY_STORAGE_KEY,
 ])
 
 const mobileQuery = '(max-width: 767px)'
@@ -50,6 +56,8 @@ export function readChatPreferences(mobile = false): ChatPreferences {
     timelineView,
     showUsageBadge: localStorage.getItem(SHOW_USAGE_BADGE_STORAGE_KEY) !== 'false',
     showUserMessageMetadata: localStorage.getItem(SHOW_USER_MESSAGE_METADATA_STORAGE_KEY) === 'true',
+    showInterAgentMessages: localStorage.getItem(SHOW_INTER_AGENT_MESSAGES_STORAGE_KEY) !== 'false',
+    showCommentary: localStorage.getItem(SHOW_COMMENTARY_STORAGE_KEY) !== 'false',
     fullWidth: localStorage.getItem(FULL_WIDTH_STORAGE_KEY) !== 'false',
   }
 }
@@ -89,6 +97,16 @@ export function useChatPreferences() {
     setPreferences(current => current.showUserMessageMetadata === showUserMessageMetadata ? current : { ...current, showUserMessageMetadata })
   }, [])
 
+  const setShowInterAgentMessages = useCallback((showInterAgentMessages: boolean) => {
+    localStorage.setItem(SHOW_INTER_AGENT_MESSAGES_STORAGE_KEY, showInterAgentMessages ? 'true' : 'false')
+    setPreferences(current => current.showInterAgentMessages === showInterAgentMessages ? current : { ...current, showInterAgentMessages })
+  }, [])
+
+  const setShowCommentary = useCallback((showCommentary: boolean) => {
+    localStorage.setItem(SHOW_COMMENTARY_STORAGE_KEY, showCommentary ? 'true' : 'false')
+    setPreferences(current => current.showCommentary === showCommentary ? current : { ...current, showCommentary })
+  }, [])
+
   const setFullWidth = useCallback((fullWidth: boolean) => {
     localStorage.setItem(FULL_WIDTH_STORAGE_KEY, fullWidth ? 'true' : 'false')
     setPreferences(current => current.fullWidth === fullWidth ? current : { ...current, fullWidth })
@@ -101,6 +119,8 @@ export function useChatPreferences() {
     setShowUsageBadge,
     setShowUserMessageMetadata,
     setFullWidth,
+    setShowInterAgentMessages,
+    setShowCommentary,
   }
 }
 

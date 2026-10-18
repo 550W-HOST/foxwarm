@@ -1259,6 +1259,7 @@ function getSessionHistoryDeps() {
     getSessionById: (sessionId: string) => sessions.get(sessionId),
     getExistingSession,
     saveSession: saveSessionCritical,
+    appendSystemNotice: async (sessionId: string, message: Message) => { await appendSessionMessage(sessionId, message); },
     enqueueSessionItem,
     notifyHistoryUpdate,
     beginCompactionRuntimeState: beginCompactionSessionRuntimeState,

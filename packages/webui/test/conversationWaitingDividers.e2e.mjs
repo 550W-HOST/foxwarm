@@ -55,7 +55,7 @@ before(async () => {
   await page.waitForFunction(() => !!window.fixture?.setMessages)
 })
 after(async () => { await browser?.close(); if (server) await new Promise(resolve => server.close(resolve)) })
-const headers = () => page.$$eval('[data-timeline-activity] button[aria-label$="activity"]', buttons => buttons.map(button => button.textContent))
+const headers = () => page.$$eval('[data-timeline-activity] [data-activity-toggle="top"]', buttons => buttons.map(button => button.textContent))
 const derive = (records, showTimeDividers = true, timing = {}) => page.evaluate((records, showTimeDividers, timing) => window.fixture.derive(records, showTimeDividers, timing), records, showTimeDividers, timing)
 const activities = rows => rows.filter(row => row.activity)
 const show = async (records, runtime = { state: 'idle', busy: false, queueLength: 0 }) => {
@@ -66,25 +66,37 @@ const show = async (records, runtime = { state: 'idle', busy: false, queueLength
 test('The 07:15 divider excludes overnight idle, retains real waits and leaves work, counts and usage unchanged', async () => {
   for (const type of ['task', 'inter-agent']) {
     const records = recordsFor(type)
-    const [marked] = activities(await derive(records))
+    const markedRows = await derive(records)
+    const [marked] = activities(markedRows)
     const [unmarked] = activities(await derive(records, false))
-    assert.equal(marked.timeMarker.timestamp, morning, 'the real divider retains seconds and milliseconds')
-    assert.equal(marked.activity.summary, 'Worked 6m7s · Waited 30s · 1 call · 1 received')
-    assert.equal(unmarked.activity.summary, 'Worked 6m7s · Waited 11h16m · 1 call · 1 received', 'disabling dividers preserves the original leading idle')
+    const morningRow = markedRows.find(row => row.timeMarker?.timestamp === morning)
+    assert.ok(morningRow, 'the real divider retains seconds and milliseconds')
+    const summary = type === 'task' ? 'Worked 6m7s · Waited 30s · 1 call · 1 received' : 'Worked 6m7s · Waited 30s · 1 call'
+    assert.equal(marked.activity.summary, summary)
+    if (type === 'task') {
+      assert.equal(morningRow, marked)
+      assert.equal(unmarked.activity.summary, 'Worked 6m7s · Waited 11h16m · 1 call · 1 received', 'disabling dividers preserves the original leading idle')
+    } else {
+      assert.equal(morningRow.communication.direction, 'received')
+      assert.equal(morningRow.communication.message, 'Inspect the implementation.')
+      assert.equal(marked.timeMarker, null, 'the process does not duplicate the standalone communication divider')
+      assert.equal(unmarked.activity.summary, summary, 'the standalone communication bounds the process even without dividers')
+    }
     const withoutWait = ({ summary, ...facts }) => ({ ...facts, summary: summary.replace(/ · Waited [^·]+/, '').trim() })
     assert.deepEqual(withoutWait(marked.activity), withoutWait(unmarked.activity), 'Worked, counts and logical request usage do not change')
     assert.equal(marked.activity.usage.callCount, 2)
     assert.deepEqual(marked.activity.usage.usage, { cachedTokens: 15, inputTokens: 60, outputTokens: 80 })
     await show(records)
+    await page.waitForFunction(received => document.querySelectorAll('[data-session-communication="received"]').length === received, {}, type === 'inter-agent' ? 1 : 0)
     await page.waitForFunction(() => document.querySelector('main').textContent.includes('The morning check is complete.'))
     assert.deepEqual(await page.$$eval('[data-timeline-time-separator] time', times => times.map(time => time.dateTime)), [previous - 2000, morning].map(value => new Date(value).toISOString()))
-    assert.deepEqual(await headers(), ['Worked 6m7s · Waited 30s · 1 call · 1 received'])
+    assert.deepEqual(await headers(), [summary])
     assert.equal(await page.$eval('main', node => node.textContent.includes('11h16m')), false)
     if (type === 'task' && process.env.FOXWARM_E2E_SCREENSHOT_PATH) await page.screenshot({ path: process.env.FOXWARM_E2E_SCREENSHOT_PATH, fullPage: true })
     await page.click('[aria-label="Expand activity"]')
     await page.waitForSelector('[data-activity-details]')
-    assert.deepEqual(await headers(), ['Worked 6m7s · Waited 30s · 1 call · 1 received'])
-    await page.click('[aria-label="Collapse activity"]')
+    assert.deepEqual(await headers(), [summary])
+    await page.click('[data-activity-toggle="top"][aria-label="Collapse activity"]')
     await page.waitForFunction(() => !document.querySelector('[data-activity-details]'))
   }
   const [exactCutoff] = activities(await derive(recordsFor('task', 2000)))

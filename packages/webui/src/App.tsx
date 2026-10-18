@@ -1,3 +1,5 @@
+import { prepareChatHistory, discardPreparedChatHistory } from './preparedChatHistory'
+import { SessionMessageNamesContext } from './components/SessionMessageCard'
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
 import Chat from './components/Chat'
@@ -450,13 +452,26 @@ function App() {
   const [focusModelsRequest, setFocusModelsRequest] = useState(0)
   const [activeTerminals, setActiveTerminals] = useState<TerminalRegistryRecord[] | null>(null)
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768)
+  const pendingChatRef = useRef<{ sessionId: string; paneId: string; fromTabId: string | null; controller: AbortController } | null>(null)
+  const [pendingChatNavigation, setPendingChatNavigation] = useState<{sessionId:string;paneId:string;title:string;showLoader:boolean} | null>(null)
+  const cancelPendingChatNavigation = useCallback(() => {
+    const pending = pendingChatRef.current
+    if (pending) { pending.controller.abort(); discardPreparedChatHistory(pending.sessionId); pendingChatRef.current = null }
+    setPendingChatNavigation(null)
+  }, [])
+  useEffect(() => () => {
+    const pending = pendingChatRef.current
+    pendingChatRef.current = null
+    if (pending) { pending.controller.abort(); discardPreparedChatHistory(pending.sessionId) }
+  }, [])
+
   const [showSessionList, setShowSessionList] = useState<boolean>(() => !window.location.hash)
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY) || 256)
     return Number.isFinite(saved) ? Math.min(420, Math.max(180, saved)) : 256
   })
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true')
-  const { sendKeyMode, setSendKeyMode, timelineView, setTimelineView, showUsageBadge, setShowUsageBadge, showUserMessageMetadata, setShowUserMessageMetadata, fullWidth, setFullWidth } = useChatPreferences()
+  const { sendKeyMode, setSendKeyMode, timelineView, setTimelineView, showUsageBadge, setShowUsageBadge, showUserMessageMetadata, setShowUserMessageMetadata, showInterAgentMessages, setShowInterAgentMessages, showCommentary, setShowCommentary, fullWidth, setFullWidth } = useChatPreferences()
   const [webUiSettings, setWebUiSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
   const [vscodeFrameStarted, setVscodeFrameStarted] = useState(false)
   const vscodeFrameRef = useRef<VscodeWebFrameHostHandle | null>(null)
@@ -862,6 +877,7 @@ function App() {
   }, [route.tabId, flattenedTabIds.length, focusedPaneId, paneIds.join('|')])
 
   const navigateToTab = (tabId: string, origin: SessionNavigationOrigin = 'user', options?: { reveal?: boolean }) => {
+    cancelPendingChatNavigation()
     if (options?.reveal !== false) setTabRevealRequest({ tabId })
     pendingRouteTabIdRef.current = tabId
     currentRouteTabIdRef.current = tabId
@@ -969,7 +985,7 @@ function App() {
       || null
   }
 
-  const openChatTab = (sessionId: string, origin: SessionNavigationOrigin = 'user') => {
+  const commitChatTab = (sessionId: string, origin: SessionNavigationOrigin = 'user') => {
     const title = sessionTitle(sessionId)
     const existingTab = findPreferredChatTab(sessionId)
 
@@ -996,6 +1012,31 @@ function App() {
     upsertTab(tab, { activate: true })
     navigateToTab(tab.id, origin)
   }
+
+  const openChatTab = async (sessionId: string, origin: SessionNavigationOrigin = 'user') => {
+    if (pendingChatRef.current?.sessionId === sessionId) return
+    cancelPendingChatNavigation()
+    const preferred = findPreferredChatTab(sessionId)
+    const existingPane = preferred ? findPaneContainingTab(useWorkbenchStore.getState().root, preferred.id) : null
+    if (isMobile || preferred && existingPane?.activeTabId === preferred.id && !existingPane.collapsed) { commitChatTab(sessionId, origin); return }
+    const paneId = focusedPaneId || paneIds[0]
+    const controller = new AbortController()
+    const request = {sessionId,paneId,fromTabId:route.tabId,controller}
+    pendingChatRef.current = request
+    setPendingChatNavigation({sessionId,paneId,title:sessionTitle(sessionId),showLoader:false})
+    const loader = window.setTimeout(() => { if (pendingChatRef.current === request) setPendingChatNavigation(value => value ? {...value,showLoader:true} : value) },120)
+    const deadline = window.setTimeout(() => controller.abort(),8000)
+    await prepareChatHistory(sessionId,controller.signal,timelineView === 'conversation')
+    window.clearTimeout(loader);window.clearTimeout(deadline)
+    if (pendingChatRef.current !== request) return
+    pendingChatRef.current = null
+    setPendingChatNavigation(null)
+    commitChatTab(sessionId,origin)
+  }
+  useEffect(() => {
+    const pending = pendingChatRef.current
+    if (pending && (route.tabId !== pending.fromTabId || focusedPaneId !== pending.paneId)) cancelPendingChatNavigation()
+  }, [route.tabId, focusedPaneId, cancelPendingChatNavigation])
 
   const openNodesTab = () => {
     upsertTab({ id: NODES_TAB_ID, type: 'nodes', title: 'Nodes' }, { activate: true })
@@ -1579,6 +1620,10 @@ function App() {
           sendKeyMode={sendKeyMode}
           timelineView={timelineView}
           showUsageBadge={showUsageBadge}
+          showInterAgentMessages={showInterAgentMessages}
+          onShowInterAgentMessagesChange={setShowInterAgentMessages}
+          showCommentary={showCommentary}
+          onShowCommentaryChange={setShowCommentary}
           fullWidth={fullWidth}
           onFullWidthChange={setFullWidth}
           showUserMessageMetadata={showUserMessageMetadata}
@@ -1945,7 +1990,8 @@ function App() {
   }
 
   const mobilePaneId = focusedPaneId || paneIds[0]
-  const renderStableContent = () => <WorkbenchContentLayer>{allTabs.map(tab => {
+  const communicationNames = useMemo(() => Object.fromEntries(sessions.flatMap(session => [session.id, ...(session.aliases || [])].map(id => [id, session.displayName || session.id]))),[sessions])
+  const renderStableContent = () => <SessionMessageNamesContext.Provider value={communicationNames}><WorkbenchContentLayer>{allTabs.map(tab => {
     const pane = findPaneContainingTab(root, tab.id)
     if (!pane) return null
     const visible = (isMobile || !pane.collapsed) && pane.activeTabId === tab.id
@@ -1956,9 +2002,10 @@ function App() {
     if (tab.type === 'vscode' && !vscodeFrameStarted) return null
     const props = getPaneProps(pane.id, getPaneCollapseDirection(root, pane.id))!
     return <WorkbenchContentHost key={tab.id} {...props} tab={tab} visible={visible}
+      navigationPending={pendingChatNavigation?.paneId === pane.id ? pendingChatNavigation : null}
       canClose={!(tab.type === 'setup' && setupOobe)}
       renderContent={() => renderTabContent(tab, isMobile ? handleBackToList : undefined)} />
-  })}</WorkbenchContentLayer>
+  })}</WorkbenchContentLayer></SessionMessageNamesContext.Provider>
 
   const renderWorkbenchSurface = (content: ReactNode) => (
     <DndContext

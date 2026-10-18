@@ -759,20 +759,23 @@ test('expanded group member usage remains outside its card edge and clickable in
 
 test('a completed worker keeps its expanded process and tool in place through resize and later content', async () => {
   await mount('conversation-completed', false, 1100, 800)
-  assert.equal(await page.$$eval('[data-timeline-activity]', nodes => nodes.length), 1)
+  assert.equal(await page.$$eval('[data-timeline-activity]', nodes => nodes.length), 2)
+  assert.equal(await page.$eval('[data-session-communication="received"]', node => !!node.closest('[data-timeline-activity]')), false)
+  const processSelector = '[data-timeline-activity][data-chat-message-anchor-key="seq-local-4"]'
+  await page.waitForSelector(processSelector)
   assert.equal(await page.$$eval('.foxwarm-conversation-reply', nodes => nodes.length), 1)
   const position = () => page.evaluate(() => {
     const scroll = document.querySelector('.foxwarm-chat-messages')
-    return { top: document.querySelector('[data-timeline-activity] button[aria-expanded]').getBoundingClientRect().top, scrollTop: scroll.scrollTop, distance: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight }
+    return { top: document.querySelector('[data-timeline-activity][data-chat-message-anchor-key="seq-local-4"] [data-activity-toggle="top"]').getBoundingClientRect().top, scrollTop: scroll.scrollTop, distance: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight }
   })
   const before = await position()
-  await page.click('[aria-label="Expand activity"]')
+  await page.click(`${processSelector} [aria-label="Expand activity"]`)
   const processFrames = await page.evaluate(async () => {
     const frames = []
     for (let index = 0; index < 24; index++) {
       await new Promise(requestAnimationFrame)
       const scroll = document.querySelector('.foxwarm-chat-messages')
-      frames.push({ top: document.querySelector('[data-timeline-activity] button[aria-expanded]').getBoundingClientRect().top, scrollTop: scroll.scrollTop })
+      frames.push({ top: document.querySelector('[data-timeline-activity][data-chat-message-anchor-key="seq-local-4"] [data-activity-toggle="top"]').getBoundingClientRect().top, scrollTop: scroll.scrollTop })
     }
     return frames
   })

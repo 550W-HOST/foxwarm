@@ -128,7 +128,7 @@ export const formatToolLabel = (name: string, args?: any): string => {
 export interface FunctionResponse {
   tool_use_id?: string
   executionTiming?: { startedAt: number; completedAt: number; durationMs: number }
-  __meta?: { resolvedPaths?: Array<{ raw: string; resolved: string; nodeId: string }>; toolScriptSubCalls?: ToolScriptSubCall[] }
+  __meta?: { resolvedPaths?: Array<{ raw: string; resolved: string; nodeId: string }>; toolScriptSubCalls?: ToolScriptSubCall[]; sessionMessages?: Array<{ id: string; targetSessionId: string; message: string; truncated?: boolean }> }
   name: string
   response: any
 }
@@ -198,6 +198,7 @@ export interface MessagePart {
 }
 
 export interface ToolScriptSubCall {
+  sessionMessage?: { targetSessionId: string; message: string; truncated?: boolean };
   id: string
   name: string
   status: 'running' | 'completed' | 'failed'
@@ -905,13 +906,13 @@ export const summarizeToolTagCounts = (items: ToolTagItem[]): ToolTagItem[] => {
     }))
 }
 
-export const SessionHashLink = ({ sessionId, className = '' }: { sessionId: string; className?: string }) => (
+export const SessionHashLink = ({ sessionId, displayName, className = '' }: { sessionId: string; displayName?: string; className?: string }) => (
   <a
     href={`#session/${encodeURIComponent(sessionId)}`}
-    className={`foxwarm-session-hash-link font-mono underline decoration-dotted underline-offset-2 hover:text-fw-accent dark:hover:text-fw-accent ${className}`.trim()}
+    className={`foxwarm-session-hash-link ${displayName ? '' : 'font-mono'} underline decoration-dotted underline-offset-2 hover:text-fw-accent dark:hover:text-fw-accent ${className}`.trim()}
     title={`Open session ${sessionId}`}
   >
-    {sessionId}
+    {displayName || sessionId}
   </a>
 )
 

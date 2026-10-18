@@ -106,7 +106,6 @@ export interface RunningExecEntry {
   logPath: string;
   statusPath: string;
   cwdPath: string;
-  scriptPath?: string;
   startedAt: number;
   notifyOnCompletion: boolean;
   completionCapability?: string;
@@ -159,9 +158,6 @@ export interface PersistentExecManagerOptions {
   completionDispatcher?: ExecCompletionDispatcher;
   processOperations?: ProcessOperations;
   processSnapshotProvider?: () => Promise<ProcessSnapshotEntry[]>;
-  processTreeFormatter?: (entries: ProcessSnapshotEntry[], rootPid: number) => string;
-  isEntryRunning?: (entry: RunningExecEntry) => boolean | Promise<boolean>;
-  readEntryWorkingDirectory?: (entry: RunningExecEntry) => Promise<string | null>;
   onRegistryIdle?: () => void;
   onTrackingExpired?: (entry: RunningExecEntry) => void;
   /** Test seam for petname selection. Production uses crypto.randomInt. */
@@ -599,9 +595,6 @@ export class PersistentExecManager {
           logPath: raw.logPath,
           statusPath: raw.statusPath,
           cwdPath: typeof raw.cwdPath === 'string' && raw.cwdPath.trim().length > 0 ? raw.cwdPath : `${raw.logPath}.cwd.txt`,
-          scriptPath: typeof raw.scriptPath === 'string' && raw.scriptPath.trim().length > 0
-            ? raw.scriptPath
-            : path.join(path.dirname(raw.logPath), `${raw.id}.command${this.processOperations.platform === 'win32' ? '.ps1' : '.sh'}`),
           startedAt: Number(raw.startedAt),
           notifyOnCompletion: raw.notifyOnCompletion === true,
           completionCapability: typeof raw.completionCapability === 'string' ? raw.completionCapability : undefined,
@@ -809,7 +802,6 @@ export class PersistentExecManager {
       logPath: resolvedPaths.logPath,
       statusPath: resolvedPaths.statusPath,
       cwdPath: resolvedPaths.cwdPath,
-      scriptPath,
       startedAt: processStartedAt,
       notifyOnCompletion: false,
       completionCapability: options.completionCapability,
@@ -985,7 +977,7 @@ export class PersistentExecManager {
   private async buildLiveProcessTree(entry: RunningExecEntry): Promise<string> {
     try {
       const entries = await (this.options.processSnapshotProvider || (() => this.processOperations.inspectSnapshot()))();
-      return this.options.processTreeFormatter ? this.options.processTreeFormatter(entries, entry.pid) : formatProcessTreeSnapshot(entries, entry.pid);
+      return formatProcessTreeSnapshot(entries, entry.pid);
     } catch (err) {
       this.options.logger?.warn?.({ err, execId: entry.id, pid: entry.pid }, 'Failed to inspect background exec process tree');
       return `Process tree (best-effort live snapshot; managed shell-script root PID ${entry.pid}):\n(Process tree unavailable: process inspection failed or is unsupported on this platform.)`;
@@ -1010,7 +1002,7 @@ export class PersistentExecManager {
   private async ensureFallbackStatus(entry: RunningExecEntry): Promise<ExecStatus | null> {
     const existing = await this.readExecStatus(entry.statusPath);
     if (existing) return existing;
-    if (this.options.isEntryRunning ? await this.options.isEntryRunning(entry) : await this.processOperations.isRunning(entry.pid)) return null;
+    if (await this.processOperations.isRunning(entry.pid)) return null;
     if (Date.now() - entry.startedAt < MISSING_STATUS_GRACE_MS) return null;
     const fallback: ExecStatus = { exitCode: null, finishedAt: new Date().toISOString(), error: MISSING_STATUS_ERROR };
     await fs.ensureDir(path.dirname(entry.statusPath));
@@ -1101,7 +1093,7 @@ export class PersistentExecManager {
   }
 
   async readLiveExecWorkingDirectory(entry: RunningExecEntry): Promise<string | null> {
-    return this.options.readEntryWorkingDirectory ? await this.options.readEntryWorkingDirectory(entry) : await this.processOperations.readWorkingDirectory(entry.pid);
+    return await this.processOperations.readWorkingDirectory(entry.pid);
   }
 
   listRunningExecs(): RunningExecEntry[] {

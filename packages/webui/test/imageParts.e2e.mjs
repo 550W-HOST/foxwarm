@@ -215,6 +215,20 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
     await page.waitForSelector('#large button')
     await page.click('#large button')
     await page.waitForFunction(()=>document.querySelector('[data-image-preview] img')?.naturalWidth===1600)
+    await page.waitForFunction(() => {
+      const stage = document.querySelector('.image-preview-stage')
+      const image = stage?.querySelector('img')
+      const control = document.querySelector('[aria-label="Actual size"]')
+      if (!stage || !image || !control || control.disabled || !image.naturalWidth || !image.naturalHeight) return false
+      const style = getComputedStyle(stage)
+      const availableWidth = stage.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+      const availableHeight = stage.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)
+      const fit = Math.min(1, availableWidth / image.naturalWidth, availableHeight / image.naturalHeight)
+      const rendered = image.getBoundingClientRect()
+      return fit > 0
+        && Math.abs(rendered.width - image.naturalWidth * fit) < 1
+        && Math.abs(rendered.height - image.naturalHeight * fit) < 1
+    })
     const touch=await page.createCDPSession()
     const input=async(type,points,settle=true)=>{
       await touch.send('Input.dispatchTouchEvent',{type,touchPoints:points.map(([id,x,y])=>({id,x,y,radiusX:4,radiusY:4}))})

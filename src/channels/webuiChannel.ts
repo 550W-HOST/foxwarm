@@ -1,3 +1,4 @@
+import { parseSessionControlFeedback, getSessionControlAction } from '../../packages/shared/dist/sessionControlFeedback';
 import { readContinuousHistoryPage } from './webuiContinuousHistory';
 import { registerWebUiFileDownloads, registerWebUiBlobDownloads } from './webuiFileDownloads';
 import { AccessConfigRuntime, type NormalizedAccessIdentity } from '../accessConfig';
@@ -3053,7 +3054,10 @@ export class WebUIChannel implements Channel {
             const sessionId = req.params.sessionId as string;
             const auth = await this.requireSessionAccess(req, res, sessionId);
             if (!auth) return;
-            const { text, parts, filePaths, uploadedFiles } = req.body;
+            const { text, parts, filePaths, uploadedFiles, controlRequestId } = req.body;
+            if (controlRequestId !== undefined && (typeof controlRequestId !== 'string' || !controlRequestId || controlRequestId.length > 128)) {
+              return res.status(400).json({ error: 'Invalid control request ID' });
+            }
             const clientMessageId = typeof req.body?.clientMessageId === 'string'
               && req.body.clientMessageId.length > 0
               && req.body.clientMessageId.length <= 160
@@ -3089,7 +3093,15 @@ export class WebUIChannel implements Channel {
               conversationId: sessionId,
               username: 'webui',
               platform: 'webui',
-              reply: async (replyText: string) => {
+              reply: async (replyText: string, replyOptions?: any) => {
+                const action = getSessionControlAction(typeof text === 'string' ? text : Array.isArray(finalParts) ? finalParts.map(part => typeof part?.text === 'string' ? part.text : '').join('\n') : '');
+                const feedback = parseSessionControlFeedback(replyOptions?.sessionControlFeedback)
+                  || (action ? { action, status: 'error' as const, message: 'Action could not be completed', details: replyText.slice(0, 4096) } : null);
+                if (feedback) {
+                  this.broadcastSessionEvent(sessionId, { type: 'session-control-feedback', requestId: controlRequestId, feedback });
+                  this.broadcastSessionStateUpdate(sessionId);
+                  return;
+                }
                 // Check if this is a command response by checking if message starts with /
                 const messageText = (text || finalParts.map((p: any) => p.text || '').join('\n')).trim();
                 const isCommand = messageText.startsWith('/');

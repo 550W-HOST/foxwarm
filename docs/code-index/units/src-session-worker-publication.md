@@ -39,3 +39,5 @@ Coverage proves exact DTO/source/generation fencing, nested runtime validation a
 ## Design Decisions
 
 Committed projection and lifecycle resync semantics are canonical in [D-process-topology-session-events](../threads/process-topology-and-rpc.md#d-process-topology-session-events).
+
+Strict runtime publication validates and clones retry/final-attempt, stopping, compact-operation and resolved-tool presentation fields. Stopping requires an active busy state; malformed extensions remain rejected. See [runtime presentation](../threads/session-runtime-presentation.md).

@@ -47,8 +47,8 @@ test('turn delivery broadcasts without source targeting and sends empty finals o
     } }]);
 
     sent.length = 0;
-    assert.deepEqual(await client.call('deliverCommittedFinal', { sourceSessionId: 'owner', outcome: 'error', text: 'failed turn' }), { attempted: 4, delivered: 3 });
-    assert.equal(sent.some(item => item.id === 'webui'), true, 'error final preserves ordinary broadcast inclusion');
+    assert.deepEqual(await client.call('deliverCommittedFinal', { sourceSessionId: 'owner', outcome: 'error', text: 'failed turn' }), { attempted: 3, delivered: 2 });
+    assert.equal(sent.some(item => item.id === 'webui'), false, 'WebUI receives the typed history event rather than a duplicate plain-text final');
     await assert.rejects(() => (client.call as any)('deliverIntermediateText', {
       sourceSessionId: 'owner', turnId: 'turn-legacy', text: 'legacy source rejected',
       source: { platform: 'wework', channelUserId: 'legacy-room', preferDirectReply: true },

@@ -1,5 +1,4 @@
 import path from 'path';
-import type { ExternalNodeOwner } from '../packages/shared/dist/nodeProtocol';
 import { STATE_DIR, getAgentDir } from './config';
 import { logger } from './common';
 import * as sessionManager from './sessionManager';
@@ -29,16 +28,10 @@ export interface ExecRuntimeOptions {
   getDefaultCwd: (agentName: string) => string;
   getExecTempDir: (agentName: string) => string;
   getAgentDir?: (agentName: string) => string;
-  getExternalDefaultCwd?: (owner: ExternalNodeOwner) => string;
-  getExternalExecTempDir?: (owner: ExternalNodeOwner) => string;
   registryPath?: string;
   nodeId?: string;
   completionDispatcher?: ExecCompletionDispatcher;
   processOperations?: ProcessOperations;
-  processTreeFormatter?: (entries: import('../packages/shared/dist/processOperations').ProcessSnapshotEntry[], rootPid: number) => string;
-  isEntryRunning?: (entry: RunningExecEntry) => boolean | Promise<boolean>;
-  readEntryWorkingDirectory?: (entry: RunningExecEntry) => Promise<string | null>;
-  onRegistryIdle?: () => void;
 }
 
 export interface ExecRuntime {
@@ -64,17 +57,11 @@ export function createExecRuntime(options: ExecRuntimeOptions): ExecRuntime {
     getDefaultCwd: options.getDefaultCwd,
     getExecTempDir: options.getExecTempDir,
     getAgentDir: options.getAgentDir,
-    getExternalDefaultCwd: options.getExternalDefaultCwd,
-    getExternalExecTempDir: options.getExternalExecTempDir,
     registryPath: options.registryPath,
     nodeId,
     logger,
     completionDispatcher: async (entry, status, message) => completionDispatcher(entry, status, message),
     processOperations: options.processOperations || nativeProcessOperations,
-    processTreeFormatter: options.processTreeFormatter,
-    isEntryRunning: options.isEntryRunning,
-    readEntryWorkingDirectory: options.readEntryWorkingDirectory,
-    onRegistryIdle: options.onRegistryIdle,
   });
 
   return {

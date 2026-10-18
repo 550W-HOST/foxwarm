@@ -1159,13 +1159,27 @@ async function executeScriptHostCall(
     try {
       // Nested runs must not replace the outer invocation's presentation metadata.
       const { onToolScriptSubCalls: _outerSubCalls, ...nestedContext } = ctx;
-      const result = await toolsModule.call_tool(wrapperArgs, { ...nestedContext, programmatic: true });
+      const captureDelivery = (delivery: {targetSessionId:string;message:string}) => {
+        const subCall = state.subCalls.find(item => item.id === subCallId);
+        if (subCall) subCall.sessionMessage = { targetSessionId:delivery.targetSessionId,message:delivery.message.slice(0,32768),
+          ...(delivery.message.length > 32768 ? {truncated:true} : {}) };
+      };
+      const isSessionSend = wrapperArgs.toolId === 'builtin:send_to_session' || wrapperArgs.source === 'builtin' && wrapperArgs.name === 'send_to_session';
+      const result = await toolsModule.call_tool(wrapperArgs, { ...nestedContext, programmatic: true,
+        ...(isSessionSend ? {onSessionMessageDelivered:captureDelivery} : {}),
+      });
       state.executedTools.push(summaryName);
       finishHostCall('completed');
 
       // Emit completed progress
       const sc = state.subCalls.find(s => s.id === subCallId);
       if (sc) {
+        const target = result?.__toolPostAction?.successfulSendToSessionTarget;
+        if (!sc.sessionMessage && (wrapperArgs.toolId === 'builtin:send_to_session' || wrapperArgs.source === 'builtin' && wrapperArgs.name === 'send_to_session')
+            && typeof target === 'string' && typeof wrapperArgs.args?.message === 'string') {
+          sc.sessionMessage = { targetSessionId: target, message: wrapperArgs.args.message.slice(0, 32768),
+            ...(wrapperArgs.args.message.length > 32768 ? { truncated: true } : {}) };
+        }
         sc.status = 'completed';
         sc.completedAt = Date.now();
         sc.durationMs = sc.completedAt - sc.startedAt;

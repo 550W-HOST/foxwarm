@@ -1148,7 +1148,7 @@ test('post-request stream state wins over an older history session snapshot', as
 
   assert.equal(await page.$eval('[data-session-header-subtitle]', element => element.getAttribute('title')), '/live/cwd')
   assert.ok(await page.$('[title="live/model"]'))
-  assert.equal(await page.$eval('[data-processing-runtime-state="requesting-model"]', block => block.textContent.includes('Thinking...')), true)
+  assert.equal(await page.$eval('[data-processing-runtime-state="requesting-model"]', block => block.getAttribute('aria-label') === 'Requesting model…'), true)
   assert.equal(await page.$eval('[data-processing-queue-status]', block => block.textContent.includes('3 queued')), true)
   assert.equal(await page.evaluate(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('live streaming text')), true)
   assert.equal(await page.evaluate(() => window.fixtureHistoryRequestCount), 2)
@@ -1777,7 +1777,9 @@ for (const segmented of [false, true]) {
     await page.click('[aria-label="Send message"]')
     await page.waitForFunction(() => window.fixtureMessageBodies.length === 2)
     await page.evaluate(() => window.rejectNextFixtureMessage())
-    await page.waitForFunction(() => document.body.textContent.includes('Error: Failed to send message'))
+    await page.waitForSelector('[data-system-event][aria-label="Message not confirmed"]')
+    assert.equal(await page.$eval('[data-system-event][aria-label="Message not confirmed"] h3', node => node.textContent), 'Message not confirmed: Draft kept.')
+    assert.equal(await page.$eval('[data-system-event][aria-label="Message not confirmed"] [data-event-details] pre', node => node.textContent), 'Failed to fetch')
     assert.equal(await readDraft(), 'Before send after send plus overlap continues')
     await emit(delta(sequence++, 'Before send after send plus overlap continues'.length, ' alive'))
     await page.waitForFunction(selector => document.querySelector(selector)?.textContent.trim().endsWith(' continues alive'), {}, draftSelector)
@@ -2032,14 +2034,16 @@ test('continuous Chat Search follows active retry visibility instead of the Arch
   const chatPage = await openContinuousChat()
   try {
     await chatPage.evaluate(() => {
-      const retry = { role: 'model', parts: [{ text: '⚠️ LLM Error: Old archived retry' }], __meta: { seq: 601, timestamp: 1700000000601, noticeType: 'llm-retry' } }
+      const retry = { role: 'model', modelVisible: false, parts: [{ text: '⚠️ LLM Error: Old archived retry' }], __meta: { seq: 601, timestamp: 1700000000601, noticeType: 'llm-retry', retry: { final: true } } }
       window.fixtureArchive.push(retry)
       window.emitFixtureMessage(retry)
       window.emitFixtureEvent({ type: 'session-state', session: { id: 'fixture/main', busy: false, runtimeState: { state: 'idle' }, queueLength: 0, messageCount: 1, historyVersion: 2, modelKey: 'fixture/model' } })
     })
+    await chatPage.waitForSelector('[data-chat-timeline="committed"] [data-system-event]')
+    assert.equal(await chatPage.$eval('[data-chat-timeline="committed"] [data-system-event]', node => !!node.closest('[data-activity-details]')), false)
     await chatPage.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
     await chatPage.evaluate(() => window.resolveFixtureHistory(0, [{ role: 'model', parts: [{ text: 'Summary covering the old retry' }], __meta: { contextBlock: { id: 2, level: 1, sourceKind: 'message', rawStartSeq: 1, rawEndSeq: 601 } } }], 2, { latestSeq: 601 }))
-    await chatPage.waitForFunction(() => !document.querySelector('[data-chat-timeline="committed"] [data-system-message-kind="llm error"]'))
+    await chatPage.waitForFunction(() => !document.querySelector('[data-chat-timeline="committed"] [data-system-event]'))
     await chatPage.click('[aria-label="Find in chat"]')
     await chatPage.type('[aria-label="Search messages"]', 'Old archived retry')
     await chatPage.waitForFunction(() => document.querySelector('[role="search"] [aria-live]')?.textContent === '0/0')

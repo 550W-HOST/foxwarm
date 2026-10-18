@@ -19,6 +19,8 @@ export interface ToolContext {
   runtimeNodeId?: string;
   /** In-process owner hook for persisting ctx.session; never serialized as a tool/RPC DTO. */
   persistCurrentSession?: () => Promise<void>;
+  /** In-process UI receipt, never serialized or supplied by tool arguments. */
+  onSessionMessageDelivered?: (delivery: { targetSessionId: string; message: string }) => void;
   sessionPlacement?: 'local' | 'session-worker';
   /** Process-local persistent exec owner used to validate exact waitExecIds. */
   execRuntime?: import('../execManager').ExecRuntime;

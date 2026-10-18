@@ -65,7 +65,7 @@ export interface FunctionResponse {
   /** Measured duration of the tool invocation until its result returns. */
   executionTiming?: { startedAt: number; completedAt: number; durationMs: number };
   /** Persisted presentation metadata, excluded from model requests. */
-  __meta?: { resolvedPaths?: Array<{ raw: string; resolved: string; nodeId: string }>; toolScriptSubCalls?: ToolScriptSubCall[] };
+  __meta?: { resolvedPaths?: Array<{ raw: string; resolved: string; nodeId: string }>; toolScriptSubCalls?: ToolScriptSubCall[]; sessionMessages?: Array<{ id: string; targetSessionId: string; message: string; truncated?: boolean }> };
   /**
    * Internal timing for the model request which produced this tool batch.
    * It is persisted with the first tool response so serializers never need to
@@ -176,6 +176,7 @@ export interface CompactionPlannerDebug {
 }
 
 export interface ToolScriptSubCall {
+  sessionMessage?: { targetSessionId: string; message: string; truncated?: boolean };
   id: string;
   name: string;
   status: 'running' | 'completed' | 'failed';

@@ -9,7 +9,6 @@ Main-owned generic Node discovery/provider resolution plus authenticated remote-
 - [Shell HTTP Node](../units/src-nodes-shell-http.md) — POSIX sh/curl exec-only transport, bounded output, and existing scoped background completion.
 
 - [src-node-providers](../units/src-node-providers.md) — generic safe descriptors/registry, optional provider lifecycle, master and authenticated-remote adapters, and startup-configured executable sandbox providers.
-- [src-docker-worktree-provider](../units/src-docker-worktree-provider.md) — resident first-party Linux Docker provider for one existing worktree, read-only Git metadata, strict lifecycle state, and shared file capabilities.
 - [src-nodes-manager](../units/src-nodes-manager.md) — connected-node map, model-tool dispatch, backend-service request/command/event routing, and session access checks.
 - [src-nodes-external-exec-ownership](../units/src-nodes-external-exec-ownership.md) — ephemeral Main authority for external CLI command IDs, signed receipts and scoped results.
 - [src-node-execution](../units/src-node-execution.md) — fixed versioned Main RPC boundary for generic non-master Node capability execution, topology, selection, provider lifecycle, and compound copy.
@@ -47,7 +46,7 @@ Unauthenticated bootstrap routes are:
 
 The source archive normally includes the built CLI bundles produced by the master build. `run.sh` uses `client.bundle.js` without installing the CLI dependency tree; if the bundle is absent it requires npm and builds shared/CLI as a fallback. The optional `node-pty` runtime is installed separately. Bare-metal failure leaves non-PTY capabilities available; Docker image preparation treats its required installation path as fatal.
 
-The operator-facing deployment/configuration workflow is documented by the single `skills/node-setup/SKILL.md` source skill. Temporary isolated-worker creation remains a separate `skills/isolated-worker/SKILL.md` workflow: it may bind an already-online Node or compose one configured provider `ensure` plus read-only inspect before agent/session creation. It does not create Git worktrees, add a lease/ownership layer, or replace node setup.
+The operator-facing deployment/configuration workflow is documented by the single `skills/node-setup/SKILL.md` source skill. Temporary isolated-worker creation remains a separate `skills/isolated-worker/SKILL.md` workflow: it binds an already-online Node before agent/session creation. It does not create Git worktrees, add a lease/ownership layer, or replace node setup.
 
 ## Invariants
 
@@ -62,7 +61,6 @@ The operator-facing deployment/configuration workflow is documented by the singl
 - Backend services are versioned fixed protocols and do not pass through model-tool approval.
 - Generic Node capability execution resolves the exact non-master provider in Main; unsupported capabilities never fall back to master.
 - Executable providers are startup-only trusted configuration and advertise sandbox-kind Nodes through fixed filesystem (`read` or `read-write`) and optional exec backends. Core derives canonical file tools over parent/stat/ranged-read/readdir/whole-write/mkdir/remove primitives; provider path and restriction semantics remain authoritative. Authenticated remote Nodes retain their resident complete-tool adapter internally.
-- Docker worktree providers are startup-configured resident Main providers. They accept only existing allowlisted Git worktrees, mount source writable and Git administration read-only, and implement provider-neutral filesystem primitives plus canonical resident exec. Already-ready first-party instances also accept verified inbound external owners through the same primitives and generation runtime; external file reads cannot open their execution-artifact directory. See [inbound Node execution](../units/src-mcp-inbound-node-service.md).
 - Node lifecycle is a provider-neutral Main-owned control plane through the existing `node` builtin. Create/ensure route by exact configured provider ID; inspect/destroy resolve the exact existing Node owner. Provider effect and data-retention text remains descriptive rather than a generic deletion or security guarantee.
 
 ## Compatibility
@@ -92,10 +90,6 @@ The authenticated node ID is mandatory input to master-side session-event author
 Bootstrap distributes one minimal dynamic source archive with prebuilt CLI bundles when available, plus an explicit build fallback and separately installed optional PTY runtime.
 
 Generic Node/provider ownership is canonical in [D-dispatch-generic-node-providers](../threads/tool-dispatch-node-execution.md#d-dispatch-generic-node-providers).
-
-### D-node-isolated-worker-provider-compose
-
-[2026-08-21] The bundled `isolated-worker` ToolScript may optionally compose the existing provider-neutral `ensure`/`inspect` lifecycle before creating a bound isolated agent and parent-linked session. Provider ID and exact existing worktree path are explicit inputs; absent-Node dry run remains mutation-free and reports deferred canonical evidence. The human-readable Node list is section-parsed exactly so Node IDs and provider IDs cannot alias across the `Lifecycle providers:` boundary. Apply validates the exact ready Docker-worktree descriptor/details before agent mutation. Post-ensure accounting separates raw exact requested-Node presence from full workflow validation and reports `present` or `unknown`, with unknown represented as a possible survivor. This orchestration is fail-fast and non-transactional, preserves the existing explicit agent cleanup boundary, never auto-destroys a Node, and does not imply Node ownership or exclusivity. Preflight absence plus post-ensure presence is only an observation and possible surviving mutation, not proof that this workflow created or owns the Node; cleanup retains it by default and requires independent confirmation before any separate explicit destroy.
 
 ### D-node-android-adb-host
 

@@ -72,9 +72,6 @@ export type NodeToolRequest = NodeToolRequestBase & ({
   };
 });
 
-/** In-process opt-in only: executable providers cannot claim external primitive ownership. */
-export const FIRST_PARTY_DOCKER_EXTERNAL_OWNER = Symbol('foxwarm.first-party-docker-external-owner');
-
 export type NodeDefaultCwdRequest = {
   sourceSessionId: string;
   nodeId: string;
@@ -88,12 +85,11 @@ export type NodeProviderCallOptions = {
   signal?: AbortSignal;
   /** Main-local external context fence, checked immediately before a provider effect. */
   assertExternalOwnerActive?: () => void;
-  /** Resident Docker-only: bind a Main-owned result to the exact runtime generation. */
-  bindExternalGeneration?: (generation: string) => void;
 };
 
 export type NodeFilesystemOperation = 'parent' | 'stat' | 'read' | 'readdir' | 'write' | 'mkdir' | 'remove';
 export type NodeFilesystemRequest = {
+  sourceSessionId: string;
   nodeId: string;
   operation: NodeFilesystemOperation;
   path: string;
@@ -101,21 +97,10 @@ export type NodeFilesystemRequest = {
   count?: number;
   contentBase64?: string;
   flag?: 'w' | 'wx';
-} & ({
-  sourceSessionId: string; owner?: never;
   context: Extract<NodeToolRequest, { sourceSessionId: string }>['context'];
-} | {
-  owner: ExternalNodeOwner; sourceSessionId?: never;
-  context: Extract<NodeToolRequest, { owner: ExternalNodeOwner }>['context'];
-});
+};
 
-export type NodeExecRequest = Omit<NodeToolRequestBase, 'toolName'> & ({
-  sourceSessionId: string; owner?: never;
-  context: Extract<NodeToolRequest, { sourceSessionId: string }>['context'];
-} | {
-  owner: ExternalNodeOwner; sourceSessionId?: never;
-  context: Extract<NodeToolRequest, { owner: ExternalNodeOwner }>['context'];
-});
+export type NodeExecRequest = Omit<Extract<NodeToolRequest, { sourceSessionId: string }>, 'toolName'>;
 
 export type NodeLifecycleAction = 'create' | 'ensure' | 'inspect' | 'destroy';
 
@@ -151,7 +136,6 @@ export interface NodeProvider {
   /** Cancellation ends foreground exec waiting with a real background receipt, never by killing its launcher. */
   readonly supportsExecWaitCancellation?: true;
   readonly id: string;
-  readonly [FIRST_PARTY_DOCKER_EXTERNAL_OWNER]?: true;
   initialize?(): Promise<void>;
   shutdown?(): Promise<void>;
   /** Expensive/failure-prone discovery is consulted only when fixed in-process providers do not own the exact Node ID. */
@@ -325,7 +309,11 @@ export class NodeProviderRegistry {
         ? options.signal : options.hardCancellationSignal };
     }
     if (resolved.descriptor.primitiveBackends) {
-      return this.invokePrimitiveTool(resolved.provider, resolved.descriptor, request, options);
+      if (request.owner) {
+        throw new NodeProviderError('NODE_EXTERNAL_OWNER_UNSUPPORTED', `Node \`${request.nodeId}\` does not yet support external-owner primitive tools.`);
+      }
+      return this.invokePrimitiveTool(resolved.provider, resolved.descriptor,
+        request as Extract<NodeToolRequest, { sourceSessionId: string }>, options);
     }
     if (!resolved.provider.invokeTool) {
       throw new NodeProviderError('NODE_EXECUTION_TOOL_UNAVAILABLE', `Tool \`${request.toolName}\` not available on node \`${request.nodeId}\`.`);
@@ -385,14 +373,10 @@ export class NodeProviderRegistry {
   private async invokePrimitiveTool(
     provider: NodeProvider,
     descriptor: NodeDescriptor,
-    request: NodeToolRequest,
+    request: Extract<NodeToolRequest, { sourceSessionId: string }>,
     options?: NodeProviderCallOptions,
   ): Promise<unknown> {
-    if (request.owner && (provider[FIRST_PARTY_DOCKER_EXTERNAL_OWNER] !== true
-      || descriptor.kind !== 'sandbox' || descriptor.type !== 'docker-worktree')) {
-      throw new NodeProviderError('NODE_EXTERNAL_OWNER_UNSUPPORTED', `Node \`${request.nodeId}\` does not yet support external-owner primitive tools.`);
-    }
-    const source = request.owner ? { owner: request.owner } : { sourceSessionId: request.sourceSessionId };
+    const source = { sourceSessionId: request.sourceSessionId };
     if (request.toolName === 'exec') {
       rejectUnsupportedAgentPathVariable(request.args.cwd);
       if (!descriptor.primitiveBackends?.exec || !provider.invokeExec) {
@@ -412,9 +396,8 @@ export class NodeProviderRegistry {
     }
     const { operations, providerParent } = this.filesystemBackend(provider, request, options);
     const context = {
-      ...(request.owner
-        ? { externalOwner: request.owner, externalCwd: request.context.cwd }
-        : { sessionId: request.sourceSessionId, session: { agent: request.context.agent, cwd: request.context.cwd, currentNode: request.nodeId } }),
+      sessionId: request.sourceSessionId,
+      session: { agent: request.context.agent, cwd: request.context.cwd, currentNode: request.nodeId },
       ...(request.context.programmatic ? { programmatic: true as const } : {}),
       fileOperations: operations,
       resolveFilePath: (filePath: string) => filePath,
@@ -425,29 +408,19 @@ export class NodeProviderRegistry {
     return tool(request.args, context);
   }
 
-  private filesystemBackend(provider: NodeProvider, request: NodeToolRequest, options?: NodeProviderCallOptions) {
-    const source = request.owner ? { owner: request.owner } : { sourceSessionId: request.sourceSessionId };
-    let externalMutationAttempted = false;
+  private filesystemBackend(provider: NodeProvider, request: Extract<NodeToolRequest, { sourceSessionId: string }>, options?: NodeProviderCallOptions) {
     const call = async (operation: NodeFilesystemOperation, fields: Partial<NodeFilesystemRequest>) => {
-      if (request.owner && ['write', 'mkdir', 'remove'].includes(operation)) externalMutationAttempted = true;
-      try {
-        return await provider.invokeFilesystem!({
-          ...source,
-          nodeId: request.nodeId,
-          operation,
-          path: fields.path!,
-          ...(fields.offset === undefined ? {} : { offset: fields.offset }),
-          ...(fields.count === undefined ? {} : { count: fields.count }),
-          ...(fields.contentBase64 === undefined ? {} : { contentBase64: fields.contentBase64 }),
-          ...(fields.flag === undefined ? {} : { flag: fields.flag }),
-          context: request.context,
-        } as NodeFilesystemRequest, options);
-      } catch (error) {
-        if (externalMutationAttempted) {
-          throw new NodeProviderError('NODE_FILE_EFFECT_UNCERTAIN', 'Node file effect may have completed or partially completed; do not retry automatically.');
-        }
-        throw error;
-      }
+      return provider.invokeFilesystem!({
+        sourceSessionId: request.sourceSessionId,
+        nodeId: request.nodeId,
+        operation,
+        path: fields.path!,
+        ...(fields.offset === undefined ? {} : { offset: fields.offset }),
+        ...(fields.count === undefined ? {} : { count: fields.count }),
+        ...(fields.contentBase64 === undefined ? {} : { contentBase64: fields.contentBase64 }),
+        ...(fields.flag === undefined ? {} : { flag: fields.flag }),
+        context: request.context,
+      }, options);
     };
     const operations: FileOperations = {
       stat: async filePath => this.normalizeFileStat(await call('stat', { path: filePath })),

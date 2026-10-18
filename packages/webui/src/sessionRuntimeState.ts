@@ -1,10 +1,30 @@
+import { getRuntimeStatusView } from './runtimeStatus'
 export type SessionRuntimeStateName = 'requesting-model' | 'running-tool' | 'waiting' | 'idle'
 export type SessionRuntimeWaitingFor = 'all-sessions' | 'any-session' | 'exec' | 'input' | 'fallback'
+
+export interface SessionRuntimeRetryDetails {
+  final?: true;
+  attempt: number
+  maxAttempts: number
+  nextAttempt?: number
+  retryAt?: number
+  reason?: string
+}
+
+export interface SessionRuntimeCompactionDetails {
+  operationId: string
+  phase: 'planning' | 'enqueueing' | 'ready' | 'committing'
+  background: boolean
+  retry?: SessionRuntimeRetryDetails
+}
 
 export interface SessionRuntimeState {
   state: SessionRuntimeStateName
   since?: number
   note?: string
+  retry?: SessionRuntimeRetryDetails
+  stopping?: true
+  compaction?: SessionRuntimeCompactionDetails
   queueLength: number
   busy: boolean
   active?: {
@@ -14,6 +34,11 @@ export interface SessionRuntimeState {
     streamId?: string
   }
   tool?: {
+  invocationName?: string
+    source?: 'builtin' | 'node' | 'mcp'
+    server?: string
+    action?: string
+    target?: string
     id?: string
     name: string
     index?: number
@@ -61,46 +86,11 @@ export function getSessionRuntimeStateName(session: RuntimeStateSessionLike): Se
 }
 
 export function getRuntimeStateSummary(runtimeState?: SessionRuntimeState | null, fallbackBusy = false): string {
-  if (!runtimeState) {
-    return fallbackBusy ? 'thinking' : 'idle'
-  }
+  return getRuntimeStatusView(runtimeState || undefined, fallbackBusy)?.label || 'idle'
+}
 
-  if (runtimeState.state === 'requesting-model') {
-    if (runtimeState.active?.phase === 'compaction') return 'compacting'
-    return runtimeState.active?.phase && runtimeState.active.phase !== 'normal-turn'
-      ? `thinking · ${runtimeState.active.phase}`
-      : 'thinking'
-  }
-
-  if (runtimeState.state === 'running-tool') {
-    const toolName = runtimeState.tool?.name || 'tool'
-    const index = typeof runtimeState.tool?.index === 'number' && typeof runtimeState.tool?.total === 'number'
-      ? ` ${runtimeState.tool.index + 1}/${runtimeState.tool.total}`
-      : ''
-    return `tool: ${toolName}${index}`
-  }
-
-  if (runtimeState.state === 'waiting') {
-    const waiting = runtimeState.waiting
-    if (!waiting) return 'waiting'
-    if (waiting.waitingFor === 'all-sessions') {
-      const total = waiting.waitAllSessions?.length || 0
-      const satisfied = waiting.satisfiedSessions?.length || 0
-      return total > 0 ? `waiting: sessions ${satisfied}/${total}` : 'waiting: sessions'
-    }
-    if (waiting.waitingFor === 'any-session') return `waiting: any session ${waiting.waitAnySessions?.length || 0}`
-    if (waiting.waitingFor === 'exec') {
-      const count = waiting.waitExecIds?.length || 0
-      return count > 0 ? `waiting: exec ${count}` : 'waiting: exec'
-    }
-    if (waiting.waitingFor === 'input') return 'waiting: input'
-    if (waiting.waitingFor === 'fallback') {
-      return waiting.timeoutSeconds ? `waiting: fallback ${waiting.timeoutSeconds}s` : 'waiting: fallback'
-    }
-    return `waiting: ${waiting.waitingFor}`
-  }
-
-  return 'idle'
+export function getSessionRuntimeTone(session: RuntimeStateSessionLike): 'accent' | 'special' | 'warning' | 'danger' | 'muted' {
+  return getRuntimeStatusView(session.runtimeState, !!session.busy)?.tone || 'muted'
 }
 
 export function getSessionRuntimeSummary(session: RuntimeStateSessionLike): string {

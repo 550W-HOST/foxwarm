@@ -48,7 +48,12 @@ function validateProjection(value: unknown, sessionId: string): SessionWorkerPro
     && (active.iteration === undefined || safeInt(active.iteration))
     && (active.phase === undefined || ['normal-turn','compaction','managed-step','unknown'].includes(active.phase))
     && (active.modelKey === undefined || shortString(active.modelKey)) && (active.streamId === undefined || shortString(active.streamId)));
-  const validTool = tool === undefined || (exactKeys(tool, ['id','name','index','total','executionNode','argsPreview','startedAt'], ['name','startedAt'])
+  const validTool = tool === undefined || (exactKeys(tool, ['id','name','index','total','executionNode','argsPreview','startedAt','invocationName','source','server','action','target'], ['name','startedAt'])
+    && (tool.invocationName === undefined || shortString(tool.invocationName))
+    && (tool.source === undefined || typeof tool.source === 'string' && ['builtin','node','mcp'].includes(tool.source))
+    && (tool.server === undefined || shortString(tool.server))
+    && (tool.action === undefined || shortString(tool.action, 64))
+    && (tool.target === undefined || shortString(tool.target, 160))
     && shortString(tool.name) && safeInt(tool.startedAt) && (tool.id === undefined || shortString(tool.id))
     && (tool.index === undefined || safeInt(tool.index)) && (tool.total === undefined || safeInt(tool.total))
     && (tool.executionNode === undefined || shortString(tool.executionNode)) && (tool.argsPreview === undefined || shortString(tool.argsPreview, 4096)));
@@ -59,11 +64,21 @@ function validateProjection(value: unknown, sessionId: string): SessionWorkerPro
     && (waiting.waitForInput === undefined || waiting.waitForInput === true)
     && (waiting.timeoutSeconds === undefined || (Number.isFinite(waiting.timeoutSeconds) && waiting.timeoutSeconds >= 0))
     && (waiting.timeoutAt === undefined || safeInt(waiting.timeoutAt)));
-  const validRuntime = exactKeys(runtime, ['state','since','note','queueLength','busy','active','tool','waiting'], ['state','queueLength','busy'])
+  const validRetry = (retry: any) => retry === undefined || (exactKeys(retry, ['attempt','maxAttempts','nextAttempt','retryAt','reason','final'], ['attempt','maxAttempts'])
+    && (retry.final === undefined || retry.final === true)
+    && safeInt(retry.attempt) && retry.attempt > 0 && safeInt(retry.maxAttempts) && retry.maxAttempts > 0
+    && (retry.nextAttempt === undefined || safeInt(retry.nextAttempt) && retry.nextAttempt > 0)
+    && (retry.retryAt === undefined || safeInt(retry.retryAt)) && (retry.reason === undefined || shortString(retry.reason, 1024)));
+  const compact = runtime?.compaction;
+  const validCompact = compact === undefined || (exactKeys(compact, ['operationId','phase','background','retry'], ['operationId','phase','background'])
+    && shortString(compact.operationId, 128) && ['planning','enqueueing','ready','committing'].includes(compact.phase)
+    && typeof compact.background === 'boolean' && validRetry(compact.retry));
+  const validRuntime = exactKeys(runtime, ['state','since','note','queueLength','busy','active','tool','waiting','retry','stopping','compaction'], ['state','queueLength','busy'])
     && ['requesting-model','running-tool','waiting','idle'].includes(runtime.state) && safeInt(runtime.queueLength)
     && typeof runtime.busy === 'boolean' && (runtime.since === undefined || safeInt(runtime.since))
     && (runtime.note === undefined || (typeof runtime.note === 'string' && runtime.note.length <= 4096))
-    && validActive && validTool && validWaiting;
+    && validActive && validTool && validWaiting && validRetry(runtime.retry) && validCompact
+    && (runtime.stopping === undefined || runtime.stopping === true && runtime.busy);
   if (projection.sessionId !== sessionId || !safeInt(projection.lastAppliedMailboxId) || typeof projection.busy !== 'boolean'
     || !(projection.busyStartedAt === null || safeInt(projection.busyStartedAt)) || !safeInt(projection.queueLength)
     || !safeInt(projection.messageCount) || !safeInt(projection.historyVersion) || !safeInt(projection.lastMessageTime)

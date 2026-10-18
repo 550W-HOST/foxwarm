@@ -1,3 +1,4 @@
+import { replySessionControl } from './commands/sessionControlFeedback';
 import { getChannelId, getConversationId } from './channel';
 import { logger } from './common';
 import { nodesManager } from './nodes/manager';
@@ -251,30 +252,30 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
         try {
           const result = await sessionRuntime.cancelCompaction(sessionId)
-          if (result.outcome === 'none') ctx.reply('⚠️ No active compaction to cancel.')
-          else if (result.outcome === 'completed') ctx.reply('⚠️ Compaction had already committed; cancellation was too late.')
-          else ctx.reply('🛑 Compaction cancelled. The current Session run was not stopped.')
-        } catch (e: any) { ctx.reply(`❌ Compaction cancellation failed: ${e.message}`) }
+          if (result.outcome === 'none') replySessionControl(ctx, 'cancel-compaction', { status: 'noop', message: 'No active compaction' }, '⚠️ No active compaction to cancel.')
+          else if (result.outcome === 'completed') replySessionControl(ctx, 'cancel-compaction', { status: 'noop', message: 'Compaction already applied' }, '⚠️ Compaction had already committed; cancellation was too late.')
+          else replySessionControl(ctx, 'cancel-compaction', { status: 'accepted', message: 'Compaction cancelled' }, '🛑 Compaction cancelled. The current Session run was not stopped.')
+        } catch (e: any) { replySessionControl(ctx, 'cancel-compaction', { status: 'error', message: 'Could not cancel compaction', details: e.message }, `❌ Compaction cancellation failed: ${e.message}`) }
         return
       }
       // Use the placement-neutral runtime view: under Session-worker placement
       // the raw catalog stub's busy flag is only refreshed at handback, so it
       // would falsely report "not running" mid-turn.
       const runtime = await sessionRuntime.getSession(sessionId)
-      if (!runtime?.busy) { ctx.reply('⚠️ Session is not currently running.'); return }
+      if (!runtime?.busy) { replySessionControl(ctx, 'stop', { status: 'noop', message: 'No active run' }, '⚠️ Session is not currently running.'); return }
       try {
         const { abortedInFlight, stoppedCurrent } = await sessionRuntime.control(sessionId, 'stop')
         if (stoppedCurrent === false) {
-          ctx.reply('⚠️ No main Session run was stopped. Compaction continues; use `/stop compact` to cancel it.')
+          replySessionControl(ctx, 'stop', { status: 'noop', message: 'Only compaction is running', details: 'Use Cancel compaction to stop it.' }, '⚠️ No main Session run was stopped. Compaction continues; use `/stop compact` to cancel it.')
           return
         }
         const queuedNote = (runtime.queueLength ?? 0) > 0
           ? ' Queued inputs will be added to history without being run.'
           : ''
-        ctx.reply(abortedInFlight
+        replySessionControl(ctx, 'stop', { status: 'accepted', message: 'Stop requested' }, abortedInFlight
           ? `🛑 Stop signal sent. The in-flight LLM request was aborted.${queuedNote}`
           : `🛑 Stop signal sent. The session will stop after the current tool call completes.${queuedNote}`)
-      } catch (e: any) { ctx.reply(`❌ Stop failed: ${e.message}`) }
+      } catch (e: any) { replySessionControl(ctx, 'stop', { status: 'error', message: e?.code?.includes('OUTCOME_UNKNOWN') ? 'Stop outcome unknown' : 'Could not stop the run', details: e.message }, `❌ Stop failed: ${e.message}`) }
     }
   },
   '/dequeue': {
@@ -284,15 +285,15 @@ export const COMMANDS: Record<string, CommandDef> = {
       if (!sessionId) return
       try {
         const { queuedItems = 0, stoppedCurrent, abortedInFlight } = await sessionRuntime.control(sessionId, 'dequeue')
-        if (queuedItems === 0) { ctx.reply('⚠️ No queued items to run.'); return }
+        if (queuedItems === 0) { replySessionControl(ctx, 'dequeue', { status: 'noop', message: 'No queued messages' }, '⚠️ No queued items to run.'); return }
         if (stoppedCurrent) {
-          ctx.reply(abortedInFlight
+          replySessionControl(ctx, 'dequeue', { status: 'accepted', message: 'Queued messages requested' }, abortedInFlight
             ? `▶️ Running ${queuedItems} queued item${queuedItems > 1 ? 's' : ''}. The in-flight LLM request was aborted first.`
             : `▶️ Running ${queuedItems} queued item${queuedItems > 1 ? 's' : ''} after the current tool call stops.`)
           return
         }
-        ctx.reply(`▶️ Running ${queuedItems} queued item${queuedItems > 1 ? 's' : ''}.`)
-      } catch (e: any) { ctx.reply(`❌ Dequeue failed: ${e.message}`) }
+        replySessionControl(ctx, 'dequeue', { status: 'accepted', message: 'Queued messages requested' }, `▶️ Running ${queuedItems} queued item${queuedItems > 1 ? 's' : ''}.`)
+      } catch (e: any) { replySessionControl(ctx, 'dequeue', { status: 'error', message: 'Could not run queued messages', details: e.message }, `❌ Dequeue failed: ${e.message}`) }
     }
   },
   '/continue': {
@@ -302,21 +303,21 @@ export const COMMANDS: Record<string, CommandDef> = {
       if (!sessionId || !session) return
       try {
         const runtime = await sessionRuntime.getSession(sessionId)
-        if (!runtime) { ctx.reply('⚠️ No active session to continue.'); return }
-        if (runtime.busy) { ctx.reply('⚠️ Session is already running.'); return }
+        if (!runtime) { replySessionControl(ctx, 'continue', { status: 'noop', message: 'Session unavailable' }, '⚠️ No active session to continue.'); return }
+        if (runtime.busy) { replySessionControl(ctx, 'continue', { status: 'noop', message: 'Session is already running' }, '⚠️ Session is already running.'); return }
         if (runtime.runtimeState?.state === 'waiting') {
-          ctx.reply('⚠️ Session is waiting and cannot be continued manually.')
+          replySessionControl(ctx, 'continue', { status: 'noop', message: 'Session is waiting', details: 'Continue is available only for an interrupted turn.' }, '⚠️ Session is waiting and cannot be continued manually.')
           return
         }
-        ctx.reply('▶️ Continuing interrupted turn...')
+        replySessionControl(ctx, 'continue', { status: 'accepted', message: 'Continue requested' }, '▶️ Continuing interrupted turn...')
         await sessionRuntime.control(sessionId, 'retry')
       } catch (e: any) {
         if (e?.code === 'SESSION_WORKER_RETRY_OUTCOME_UNKNOWN') {
-          ctx.reply('⚠️ Continue outcome is unknown: it may already be committed or delivered. Inspect session history before continuing again.')
+          replySessionControl(ctx, 'continue', { status: 'error', message: 'Continue outcome unknown', details: 'Inspect session history before trying again.' }, '⚠️ Continue outcome is unknown: it may already be committed or delivered. Inspect session history before continuing again.')
         } else if (e?.code === 'SESSION_CONTINUATION_NOT_AVAILABLE') {
-          ctx.reply(`⚠️ ${e.message}`)
+          replySessionControl(ctx, 'continue', { status: 'noop', message: 'Continue unavailable', details: e.message }, `⚠️ ${e.message}`)
         } else {
-          ctx.reply(`❌ Continue failed: ${e.message}`)
+          replySessionControl(ctx, 'continue', { status: 'error', message: 'Could not continue', details: e.message }, `❌ Continue failed: ${e.message}`)
         }
       }
     }

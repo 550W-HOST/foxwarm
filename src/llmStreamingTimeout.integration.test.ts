@@ -52,6 +52,7 @@ test('stream timeout aborts only one SSE attempt and normal outer retry succeeds
     clear() {},
   });
   const configs: any[] = [];
+  const attempts: number[] = [];
   let calls = 0;
   (axios as any).post = async (_url: string, _data: any, config: any) => {
     configs.push(config);
@@ -76,8 +77,10 @@ test('stream timeout aborts only one SSE attempt and normal outer retry succeeds
       systemPrompt: '', model: 'fixture/model', promptCacheKey: 'stream-timeout',
       toolDefinitions: [], notifySessionEvents: false, registerAbortController: false,
       maxRetries: 2,
+      onAttempt: attempt => { attempts.push(attempt); assert.equal(calls, attempt-1); },
     });
     assert.equal(result.text, 'ok');
+    assert.deepEqual(attempts, [1,2]);
     assert.equal(calls, 2);
     assert.equal(configs[0].timeout, 0);
     assert.equal(configs[1].timeout, 0);

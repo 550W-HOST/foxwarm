@@ -14,6 +14,7 @@ Canonical image references in live history, queues, archives, and forks are owne
 
 ## Units
 
+- [Operational notices](../units/src-session-notices.md) — display-only failures and channel-specific control feedback; governing [runtime presentation](../threads/session-runtime-presentation.md).
 - [src-session-prompt](../units/src-session-prompt.md) — filesystem/memory snapshot assembly, concrete snapshot identity and persisted prompt-cache keys without provider execution.
 
 - [src-session-manager](../units/src-session-manager.md) — façade, in-memory map, lazy hydration, queue/wait coordination, callbacks, and restart recovery.

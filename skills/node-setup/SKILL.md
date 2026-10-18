@@ -598,8 +598,7 @@ Use **`agent-management`** when the task is mainly about:
 - snapshot refresh after editing another agent's memory
 
 Use **`isolated-worker`** when a coordinator should create a temporary isolated
-agent/session on an already-online Node or through a configured Docker-worktree
-provider for one exact existing worktree.
+agent/session on an already-online Node.
 
 ## WebUI onboarding
 

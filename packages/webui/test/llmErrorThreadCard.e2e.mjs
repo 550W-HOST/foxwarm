@@ -38,7 +38,17 @@ const ungroupedMessages = [
 const standaloneMessages = [llmRetry('⚠️ LLM Error: Attempt 1/5 failed: standalone', 31)]
 const missingPrefixMessages = [llmRetry('Attempt 1/5 failed without warning prefix\nsecond line', 41)]
 const ordinaryTextMessages = [{ role: 'model', parts: [{ text: 'ordinary assistant text mentions llm error but is not a retry notice' }], __meta: { seq: 51 } }]
-const fixtureCases = { groupedMessages, tailMessages, ungroupedMessages, standaloneMessages, missingPrefixMessages, ordinaryTextMessages }
+const operationalEventMessages = [
+  call('before-event', 61),
+  result('before-event', 62),
+  { role: 'model', modelVisible: false, parts: [{ text: 'Internal compaction diagnostic' }], __meta: { seq: 63, noticeType: 'system-event', sessionNotice: {
+    version: 1, id: 'compaction-fixture', source: 'compaction', severity: 'error', title: 'Compaction failed', summary: 'No valid plan was produced.', details: 'Original compaction diagnostic',
+  } } },
+  call('after-event', 64),
+  result('after-event', 65),
+  { role: 'model', parts: [{ text: 'answer after event' }], __meta: { seq: 66 } },
+]
+const fixtureCases = { groupedMessages, tailMessages, ungroupedMessages, standaloneMessages, missingPrefixMessages, ordinaryTextMessages, operationalEventMessages }
 
 let browser
 let page
@@ -87,83 +97,103 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-const cardSnapshot = async (selector) => page.$eval(selector, card => ({
-  kind: card.getAttribute('data-system-message-kind'),
-  tag: card.querySelector('.foxwarm-system-message-tag span:last-child')?.textContent,
-  preview: card.querySelector('.foxwarm-system-message-preview')?.textContent,
-  body: card.querySelector('.foxwarm-system-message-body')?.textContent?.trim() || null,
+const cardSnapshot = async selector => page.$eval(selector, card => ({
+  title: card.getAttribute('aria-label'),
+  severity: card.getAttribute('data-event-severity'),
+  heading: card.querySelector('h3')?.textContent,
+  details: card.querySelector('[data-event-details] pre')?.textContent,
+  open: card.querySelector('[data-event-details]')?.open,
 }))
 
 const groupTags = async (id) => page.$$eval(`#${id} [data-tool-group-card] [data-tool-tag-tone]`, tags => tags.map(tag => [tag.querySelector('span:last-child')?.textContent, tag.getAttribute('data-tool-tag-tone')]))
 
-test('LLM retry notices render as body-only thread cards and count body lines in tool groups', async () => {
+test('typed LLM retry cards retain line-count tags, tool pairing and historical group disclosure', async () => {
   assert.deepEqual(await groupTags('groupedMessages'), [
     ['LLM error ×5', 'system'],
     ['exec ×2', 'neutral'],
   ])
-  assert.equal(await page.$$('#groupedMessages [data-system-message-card]').then(nodes => nodes.length), 0, 'collapsed groups hide the member card')
+  assert.equal(await page.$$('#groupedMessages [data-system-event]').then(nodes => nodes.length), 0, 'collapsed groups hide the member cards')
   assert.match(await page.$eval('#groupedMessages', root => root.textContent), /ordinary answer/)
 
   await page.click('#groupedMessages [aria-label="Expand tool group"]')
-  await page.waitForSelector('#groupedMessages [data-tool-group-card] [data-system-message-card]')
-  await page.$$eval('#groupedMessages [data-system-message-card] button', buttons => buttons.forEach(button => button.click()))
-  await page.waitForFunction(() => document.querySelectorAll('#groupedMessages .foxwarm-system-message-body').length === 2)
-  const cards = await page.$$eval('#groupedMessages [data-system-message-card]', nodes => nodes.map(card => ({
-    kind: card.getAttribute('data-system-message-kind'),
-    tag: card.querySelector('.foxwarm-system-message-tag span:last-child')?.textContent,
-    body: card.querySelector('.foxwarm-system-message-body')?.textContent?.trim() || null,
+  await page.waitForSelector('#groupedMessages [data-tool-group-card] [data-system-event]')
+  assert.equal(await page.$$eval('#groupedMessages [data-system-event]', nodes => nodes.length), 2)
+  assert.equal(await page.$$eval('#groupedMessages [data-event-details]', nodes => nodes.every(node => !node.open)), true)
+  await page.$$eval('#groupedMessages [data-event-details] summary', summaries => summaries.forEach(summary => summary.click()))
+  const cards = await page.$$eval('#groupedMessages [data-system-event]', nodes => nodes.map(card => ({
+    title: card.getAttribute('aria-label'),
+    severity: card.getAttribute('data-event-severity'),
+    details: card.querySelector('[data-event-details] pre')?.textContent,
+    open: card.querySelector('[data-event-details]')?.open,
     insideGroup: !!card.closest('[data-tool-group-card]'),
   })))
   assert.deepEqual(cards, [
-    { kind: 'llm error', tag: 'LLM error ×4', body: 'Attempt 1/5 failed: first line\nAttempt 2/5 failed: second line\n\nAttempt 3/5 failed: third line', insideGroup: true },
-    { kind: 'llm error', tag: 'LLM error ×1', body: 'Attempt 1/5 failed: one line', insideGroup: true },
+    { title: 'Request retry', severity: 'warning', details: '⚠️ LLM Error: Attempt 1/5 failed: first line\nAttempt 2/5 failed: second line\n\nAttempt 3/5 failed: third line', open: true, insideGroup: true },
+    { title: 'Request retry', severity: 'warning', details: '⚠️ LLM Error: Attempt 1/5 failed: one line', open: true, insideGroup: true },
   ])
-  assert.equal(await page.$eval('#groupedMessages', root => root.textContent.includes('LLM ERROR:')), false, 'the source prefix is not rendered')
-  assert.equal(await page.$eval('#groupedMessages', root => root.textContent.includes('llm error:')), false, 'the source prefix is not rendered in any case')
+  const results = await page.$$eval('#groupedMessages .foxwarm-tool-card:not([data-tool-group-card])', cards => cards.map(card => card.textContent))
+  assert.equal(results.length, 2, 'retry records do not break or duplicate paired tool cards')
+  assert.match(results[0], /one result/)
+  assert.match(results[1], /two result/)
+  await page.click('#groupedMessages [aria-label="Collapse tool group"]')
+  await page.waitForSelector('#groupedMessages [data-system-event]', { hidden: true })
+  assert.equal(await page.$('#groupedMessages [data-system-event]'), null, 'explicit group collapse still hides retry cards')
 })
 
-test('group tools off keeps the LLM error card and tool error response separate', async () => {
-  const card = await cardSnapshot('#ungroupedMessages [data-system-message-card]')
-  assert.deepEqual(card, {
-    kind: 'llm error',
-    tag: 'LLM error ×1',
-    preview: 'Attempt 1/5 failed: visible without grouping',
-    body: null,
+test('Detailed keeps the typed retry card and tool error response separate', async () => {
+  assert.deepEqual(await cardSnapshot('#ungroupedMessages [data-system-event]'), {
+    title: 'Request retry',
+    severity: 'warning',
+    heading: 'Request retry: A model request attempt failed.',
+    details: '⚠️ LLM Error: Attempt 1/5 failed: visible without grouping',
+    open: false,
   })
-  assert.equal(await page.$$('#ungroupedMessages [data-system-message-card]').then(nodes => nodes.length), 1)
+  assert.equal(await page.$$('#ungroupedMessages [data-system-event]').then(nodes => nodes.length), 1)
+  assert.equal(await page.$eval('#ungroupedMessages [data-system-event]', node => !!node.closest('[data-tool-group]')), false)
   assert.ok(await page.$eval('#ungroupedMessages', root => root.textContent.includes('llm error: tool response text')))
   assert.ok(await page.$eval('#ungroupedMessages', root => root.textContent.includes('assistant quote: llm error: not a prefix')))
-  assert.equal(await page.$$('#ungroupedMessages [data-system-message-kind="llm error"] .foxwarm-system-message-body').then(nodes => nodes.length), 0, 'collapsed card body is not mounted until opened')
+  assert.ok(await page.$eval('#ungroupedMessages', root => root.textContent.includes('quoted content: llm error: not a prefix')))
 })
 
-test('tail LLM errors stay in the forced-open historical group', async () => {
-  const card = await cardSnapshot('#tailMessages [data-system-message-card]')
-  assert.deepEqual(card, {
-    kind: 'llm error',
-    tag: 'LLM error ×1',
-    preview: 'Attempt 1/5 failed: tail error',
-    body: null,
+test('tail retry events stay in the forced-open historical tool run', async () => {
+  assert.deepEqual(await cardSnapshot('#tailMessages [data-system-event]'), {
+    title: 'Request retry',
+    severity: 'warning',
+    heading: 'Request retry: A model request attempt failed.',
+    details: '⚠️ LLM Error: Attempt 1/5 failed: tail error',
+    open: false,
   })
   assert.equal(await page.$$('#tailMessages [aria-label="Expand tool group"]').then(nodes => nodes.length), 0)
-  assert.equal(await page.$eval('#tailMessages [data-system-message-card]', node => !!node.closest('[data-tool-group]')), true)
+  assert.equal(await page.$eval('#tailMessages [data-system-event]', node => !!node.closest('[data-tool-group]')), true)
 })
 
-test('a standalone LLM retry is a normal thread card and malformed prefix text remains intact', async () => {
-  const card = await cardSnapshot('#standaloneMessages [data-system-message-card]')
-  assert.deepEqual(card, {
-    kind: 'llm error',
-    tag: 'LLM error ×1',
-    preview: 'Attempt 1/5 failed: standalone',
-    body: null,
+test('standalone and missing-prefix retries retain complete diagnostics without classifying ordinary prose', async () => {
+  assert.deepEqual(await cardSnapshot('#standaloneMessages [data-system-event]'), {
+    title: 'Request retry',
+    severity: 'warning',
+    heading: 'Request retry: A model request attempt failed.',
+    details: '⚠️ LLM Error: Attempt 1/5 failed: standalone',
+    open: false,
   })
-  assert.equal(await page.$$('#standaloneMessages [data-system-message-body]').then(nodes => nodes.length), 0)
-  const malformed = await cardSnapshot('#missingPrefixMessages [data-system-message-card]')
-  assert.deepEqual(malformed, {
-    kind: 'llm error',
-    tag: 'LLM error ×2',
-    preview: 'Attempt 1/5 failed without warning prefix',
-    body: null,
+  assert.deepEqual(await cardSnapshot('#missingPrefixMessages [data-system-event]'), {
+    title: 'Request retry',
+    severity: 'warning',
+    heading: 'Request retry: A model request attempt failed.',
+    details: 'Attempt 1/5 failed without warning prefix\nsecond line',
+    open: false,
   })
-  assert.equal(await page.$$('#ordinaryTextMessages [data-system-message-card]').then(nodes => nodes.length), 0)
+  assert.equal(await page.$('#ordinaryTextMessages [data-system-event]'), null)
   assert.ok(await page.$eval('#ordinaryTextMessages', root => root.textContent.includes('ordinary assistant text mentions llm error')))
+})
+
+test('non-retry operational events still split Grouped tool runs and remain standalone', async () => {
+  assert.deepEqual(await groupTags('operationalEventMessages'), [['exec ×1', 'neutral'], ['exec ×1', 'neutral']])
+  assert.equal(await page.$eval('#operationalEventMessages [data-system-event]', node => !!node.closest('[data-tool-group]')), false)
+  assert.deepEqual(await cardSnapshot('#operationalEventMessages [data-system-event]'), {
+    title: 'Compaction failed',
+    severity: 'error',
+    heading: 'Compaction failed: No valid plan was produced.',
+    details: 'Original compaction diagnostic',
+    open: false,
+  })
 })

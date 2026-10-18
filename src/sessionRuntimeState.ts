@@ -12,6 +12,11 @@ export interface SessionRuntimeActiveDetails {
 }
 
 export interface SessionRuntimeToolDetails {
+  invocationName?: string;
+  source?: 'builtin' | 'node' | 'mcp';
+  server?: string;
+  action?: string;
+  target?: string;
   id?: string;
   name: string;
   index?: number;
@@ -35,6 +40,22 @@ export interface SessionRuntimeWaitingDetails {
   waitForInput?: true;
 }
 
+export interface SessionRuntimeRetryDetails {
+  final?: true;
+  attempt: number;
+  maxAttempts: number;
+  nextAttempt?: number;
+  retryAt?: number;
+  reason?: string;
+}
+
+export interface SessionRuntimeCompactionDetails {
+  operationId: string;
+  phase: 'planning' | 'enqueueing' | 'ready' | 'committing';
+  background: boolean;
+  retry?: SessionRuntimeRetryDetails;
+}
+
 export interface SessionRuntimeState {
   state: SessionRuntimeStateName;
   since?: number;
@@ -44,6 +65,9 @@ export interface SessionRuntimeState {
   active?: SessionRuntimeActiveDetails;
   tool?: SessionRuntimeToolDetails;
   waiting?: SessionRuntimeWaitingDetails;
+  retry?: SessionRuntimeRetryDetails;
+  stopping?: true;
+  compaction?: SessionRuntimeCompactionDetails;
 }
 
 export type ActiveSessionRuntimeStateInput = Omit<SessionRuntimeState, 'queueLength' | 'busy' | 'waiting'> & {
@@ -53,6 +77,7 @@ export type ActiveSessionRuntimeStateInput = Omit<SessionRuntimeState, 'queueLen
 type RuntimeStateUpdateCallback = (sessionId: string) => void;
 
 const activeRuntimeStates = new Map<string, ActiveSessionRuntimeStateInput>();
+const compactRuntimeStates = new Map<string, SessionRuntimeCompactionDetails>();
 const catalogStubQueueLengths = new WeakMap<Session, number>();
 let updateCallback: RuntimeStateUpdateCallback | undefined;
 
@@ -167,10 +192,33 @@ function deriveWaitingDetails(session: Session): SessionRuntimeWaitingDetails | 
 function mergeActiveState(session: Session, active: ActiveSessionRuntimeStateInput): SessionRuntimeState {
   return {
     ...active,
+    ...(active.retry ? { retry: boundRuntimeRetry(active.retry) } : {}),
     since: active.since || active.tool?.startedAt || Date.now(),
     queueLength: getEffectiveSessionQueueLength(session),
     busy: true,
   };
+}
+
+/** Bounded transient retry/compact projections; no history or scheduling ownership. */
+export function boundRuntimeRetry(retry: SessionRuntimeRetryDetails): SessionRuntimeRetryDetails {
+  return {
+    ...(retry.final ? { final: true as const } : {}),
+    attempt: Math.max(1, Math.floor(retry.attempt)), maxAttempts: Math.max(1, Math.floor(retry.maxAttempts)),
+    ...(retry.nextAttempt === undefined ? {} : { nextAttempt: Math.max(1, Math.floor(retry.nextAttempt)) }),
+    ...(retry.retryAt === undefined ? {} : { retryAt: Math.max(0, Math.floor(retry.retryAt)) }),
+    ...(retry.reason ? { reason: retry.reason.replace(/\s+/g, ' ').trim().slice(0, 1024) } : {}),
+  };
+}
+
+export function setCompactionRuntimeState(sessionId: string, state: SessionRuntimeCompactionDetails): void {
+  compactRuntimeStates.set(sessionId, { ...state, ...(state.retry ? { retry: boundRuntimeRetry(state.retry) } : {}) });
+  updateCallback?.(sessionId);
+}
+
+export function clearCompactionRuntimeState(sessionId: string, operationId: string): void {
+  if (compactRuntimeStates.get(sessionId)?.operationId !== operationId) return;
+  compactRuntimeStates.delete(sessionId);
+  updateCallback?.(sessionId);
 }
 
 export function setSessionRuntimeStateUpdateCallback(callback: RuntimeStateUpdateCallback | undefined): void {
@@ -226,7 +274,7 @@ export function getActiveSessionRuntimeState(sessionId: string): ActiveSessionRu
   return activeRuntimeStates.get(sessionId);
 }
 
-export function buildSessionRuntimeState(session: Session): SessionRuntimeState {
+function deriveSessionRuntimeState(session: Session): SessionRuntimeState {
   const queueLength = getEffectiveSessionQueueLength(session);
   const active = getActiveSessionRuntimeState(session.id);
   if (active) {
@@ -264,10 +312,19 @@ export function buildSessionRuntimeState(session: Session): SessionRuntimeState 
   };
 }
 
+export function buildSessionRuntimeState(session: Session): SessionRuntimeState {
+  const state = deriveSessionRuntimeState(session);
+  const compaction = compactRuntimeStates.get(session.id);
+  return { ...state, ...(session.stopping && state.busy ? { stopping: true as const } : {}), ...(state.retry ? { retry: { ...state.retry } } : {}), ...(compaction ? { compaction: { ...compaction, ...(compaction.retry ? { retry: { ...compaction.retry } } : {}) } } : {}) };
+}
+
 export function formatSessionRuntimeStateSummary(runtimeState: SessionRuntimeState | undefined): string {
   if (!runtimeState) {
     return 'idle';
   }
+
+  if (runtimeState.stopping) return 'stopping';
+  if (runtimeState.retry) return `retrying ${runtimeState.retry.nextAttempt || runtimeState.retry.attempt}/${runtimeState.retry.maxAttempts}`;
 
   if (runtimeState.state === 'running-tool') {
     const toolName = runtimeState.tool?.name || 'tool';

@@ -101,7 +101,6 @@ function unitGroups() {
   const backend = requireFiles(inventory.backend.map(compiledPath), 'backend tests')
   const shared = requireFiles(inventory.shared.map(compiledPath), 'shared tests')
   const cli = requireFiles(inventory['cli-node'].map(compiledPath), 'CLI Node tests')
-  const sandbox = requireFiles(inventory['sandbox-node'].map(compiledPath), 'sandbox tests')
   const browserNode = requireFiles(inventory['browser-node'], 'browser Node tests')
   const scripts = requireFiles(inventory.scripts, 'script tests')
   const skillNode = requireFiles(inventory['skill-node'], 'skill Node tests')
@@ -123,7 +122,6 @@ function unitGroups() {
     },
     { name: 'shared', steps: [nodeTestStep('shared', shared, { concurrency: 4, timeoutMs: 240_000 })] },
     { name: 'cli-node', steps: [nodeTestStep('cli-node', cli, { concurrency: 4, timeoutMs: 180_000 })] },
-    { name: 'sandbox-node', steps: [nodeTestStep('sandbox-node', sandbox, { concurrency: 2, timeoutMs: 180_000 })] },
     { name: 'browser-node', steps: [nodeTestStep('browser-node', browserNode, { concurrency: 2, timeoutMs: 120_000 })] },
     { name: 'scripts', steps: [nodeTestStep('scripts', scripts, { concurrency: 4, timeoutMs: 180_000 })] },
     { name: 'skill-node', steps: [nodeTestStep('skill-node', skillNode, { concurrency: 1, timeoutMs: 120_000 })] },

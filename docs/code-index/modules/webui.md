@@ -6,6 +6,10 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 
 ## Modules and units
 
+- [Runtime status](../units/webui-runtime-status.md) — explicit operation labels, semantic fox poses, details and system-event cards.
+
+- [webui-login](../units/webui-login.md) — asset-independent token sign-in, shared fox/theme rendering, generated public HTML and authentication feedback.
+
 - [webui-app](../units/webui-app.md) — authenticated entry, routing, restricted WebUI identity chat root, global administrator list state, embedded leaf roots, URL helpers, and Code frame host.
 - [webui-session-list](../units/webui-session-list.md) — hierarchy, search, order, pinning, and drag behavior.
 - [webui-nodes](../units/webui-nodes.md) — independent Node directory, status, onboarding and singleton/popup navigation.

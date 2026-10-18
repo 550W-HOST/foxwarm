@@ -310,6 +310,13 @@ test('primitive Node backends derive canonical file tools and preserve provider-
   const tools = Object.fromEntries((await registry.listNodes()).map(node => [node.id, node.tools.map(tool => tool.name)]));
   assert.deepEqual(tools['primitive-rw'], ['read', 'write', 'edit', 'apply_patch']);
   assert.deepEqual(tools['primitive-ro'], ['read']);
+  for (const toolName of ['read', 'write']) {
+    await assert.rejects(() => registry.invokeTool({
+      owner: { kind: 'external', externalId: 'fixture', contextId: 'fixture-context' },
+      nodeId: 'primitive-rw', toolName, args: { filePath: 'urn:existing', content: 'not applied' }, context: {},
+    }), (error: any) => error?.code === 'NODE_EXTERNAL_OWNER_UNSUPPORTED');
+  }
+  assert.equal(observed.length, 0, 'external owners never reach primitive effects');
   const base = { sourceSessionId: 'source', nodeId: 'primitive-rw', context: { agent: 'agent', currentNode: 'primitive-rw', cwd: 'urn:cwd' } };
   assert.equal(
     await registry.invokeTool({ ...base, toolName: 'read', args: { filePath: 'urn:existing' } }),

@@ -2775,6 +2775,8 @@ for (const reading of [false, true]) {
 test('idle continuous viewport resize lets upward wheel replace pending bottom restoration', async () => {
   const page = await openIdleViewportChat()
   try {
+    // Exercise native wheel delivery while a previous resize scroll is still queued.
+    if (!firefox) await page.emulateCPUThrottling(8)
     const before = await idleViewportSnapshot(page)
     const box = await (await page.$('.foxwarm-chat-messages')).boundingBox()
     await page.mouse.move(box.x + 100, box.y + 100)
@@ -2782,14 +2784,30 @@ test('idle continuous viewport resize lets upward wheel replace pending bottom r
     await page.evaluate(() => {
       const container = document.querySelector('.foxwarm-chat-messages')
       let wheelSeen = false
-      container.addEventListener('wheel', event => { if (event.deltaY < 0) wheelSeen = true })
+      window.__idleResizeTrace = []
+      const record = (event, deltaY) => {
+        if (window.__idleResizeTrace.length === 128) window.__idleResizeTrace.shift()
+        window.__idleResizeTrace.push({
+          event, at: performance.now(), deltaY, top: container.scrollTop,
+          height: container.clientHeight, scrollHeight: container.scrollHeight,
+          bottomAction: !!document.querySelector('[aria-label="Scroll to bottom"]'),
+        })
+      }
+      record('initial')
+      container.addEventListener('wheel', event => {
+        if (event.deltaY < 0) wheelSeen = true
+        record('wheel', event.deltaY)
+      })
       container.addEventListener('scroll', () => {
+        record('scroll')
         if (!wheelSeen || window.__idleUserAnchor || container.scrollHeight - container.clientHeight - container.scrollTop < 399) return
         const top = container.getBoundingClientRect().top
         const row = [...document.querySelectorAll('[data-chat-message-anchor-key]')].find(row => row.getBoundingClientRect().bottom > top + 1)
         if (row) window.__idleUserAnchor = { key: row.dataset.chatMessageAnchorKey, offset: row.getBoundingClientRect().top - top }
       })
-      window.addEventListener('resize', () => window.__idleResizeWheel().then(() => { window.__idleWheelDone = true }), { once: true })
+      window.addEventListener('resize', () => record('viewport-resize'))
+      new ResizeObserver(() => record('scroller-resize')).observe(container)
+      window.addEventListener('resize', () => window.__idleResizeWheel().then(() => { window.__idleWheelDone = true; record('wheel-command-done') }), { once: true })
     })
     for (const height of [1050, 1000, 950, 900, 850, 800]) {
       await page.setViewport({ width: 1400, height })
@@ -2802,8 +2820,9 @@ test('idle continuous viewport resize lets upward wheel replace pending bottom r
     assert.ok(after.rootSame)
     assert.equal(after.historyReads, before.historyReads)
     assert.equal(after.rows, before.rows)
-    assert.ok(after.distance >= 399, `deferred resize correction must not take back user wheel movement: ${JSON.stringify({ after, userAnchor })}`)
-    assert.ok(Math.abs(after.offset - userAnchor.offset) <= 2, 'subsequent resize retains the user-selected reading anchor')
+    const resizeEvidence = JSON.stringify({ before, after, userAnchor, trace: await page.evaluate(() => window.__idleResizeTrace) })
+    assert.ok(after.distance >= 399, `deferred resize correction must not take back user wheel movement: ${resizeEvidence}`)
+    assert.ok(Math.abs(after.offset - userAnchor.offset) <= 2, `subsequent resize retains the user-selected reading anchor: ${resizeEvidence}`)
     await clickReadyControl(page, '[aria-label="Scroll to bottom"]')
     await waitForIdleBottom(page)
     await page.setViewport({ width: 1400, height: 900 })
@@ -3294,7 +3313,7 @@ test('playful runtime and short right-side queue work in App and Appearance', as
     await page.keyboard.press('Backspace')
     await publish()
     await page.waitForFunction(() => document.querySelector('[data-processing-queue-status]')?.textContent.includes('3 queued'))
-    assert.equal(await page.$eval('[data-fox-thinking-copy] .sr-only', el => el.textContent), 'Thinking...')
+    assert.equal(await page.$eval('[data-fox-thinking-copy] .sr-only', el => el.textContent), 'Requesting model…')
     await page.locator('[data-processing-queue-status] button').click()
     await page.waitForFunction(() => window.__sent.length === 1)
     await page.locator('button[aria-label="Stop session"]').click()
@@ -3483,5 +3502,94 @@ test('compact theme swatches retain direct selection and independent preview on 
       await clickReadyControl(page,'[data-theme-option="foxwarm.vector"]')
       assert.equal(await page.$eval('[data-theme-option="foxwarm.vector"]',el=>el.getAttribute('aria-pressed')),'true')
     }finally{await page.close()}
+  }
+})
+
+test('Sidebar navigation stages one bounded history read and swaps directly to populated content without an empty target frame', async () => {
+  const page=await openFixture({responsiveChat:true,chatMessages:[{role:'model',parts:[{text:'Source A content'}],__meta:{seq:1}}],timelineView:'conversation'})
+  try {
+    await page.waitForFunction(()=>document.querySelector('[data-workbench-content-tab="chat:e2e-a"]')?.textContent.includes('Source A content'))
+    await page.evaluate(()=>{
+      const original=window.fetch
+      window.navigationFrames=[];window.preparedReads=0;window.traceNavigation=true
+      const trace=()=>{if(!window.traceNavigation)return;const host=document.querySelector('[data-workbench-content-tab="chat:e2e-b"]');window.navigationFrames.push({target:!!host,body:!!host?.textContent.includes('Target B content')});requestAnimationFrame(trace)};requestAnimationFrame(trace)
+      window.fetch=(input,options={})=>{
+        const url=String(input)
+        if(url.includes('/sessions/e2e-b/history/continuous'))return Promise.resolve(new Response(JSON.stringify({messages:[{role:'model',parts:[{text:'Target B content'}],__meta:{seq:1}}],firstSeq:1,lastSeq:1,hasMore:false}),{status:200,headers:{'Content-Type':'application/json'}}))
+        if(url.includes('/sessions/e2e-b/history')){window.preparedReads++;return new Promise(resolve=>{window.releasePrepared=()=>resolve(new Response(JSON.stringify({session:{id:'e2e-b',messageCount:1,historyVersion:1,busy:false,runtimeState:{state:'idle',busy:false,queueLength:0}},messages:[{role:'model',parts:[{text:'Target B content'}],__meta:{seq:1}}],historyVersion:1,historyComplete:true,latestSeq:1,queueLength:0,queuedMessages:[]}),{status:200,headers:{'Content-Type':'application/json'}}))})}
+        return original(input,options)
+      }
+    })
+    await page.click('[data-session-id="e2e-b"]')
+    await page.waitForSelector('[data-pane-navigation-pending="e2e-b"] [role="status"]')
+    assert.equal((await state(page)).root.activeTabId,'chat:e2e-a')
+    assert.match(await page.$eval('[data-workbench-content-tab="chat:e2e-a"]',el=>el.textContent),/Source A content/)
+    assert.equal(await page.$eval('[data-workbench-content-tab="chat:e2e-a"] > div',el=>el.inert),true)
+    await page.evaluate(()=>window.releasePrepared())
+    await page.waitForFunction(()=>document.querySelector('[data-workbench-content-tab="chat:e2e-b"]')?.textContent.includes('Target B content'))
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>{window.traceNavigation=false;resolve()}))))
+    const evidence=await page.evaluate(()=>({frames:window.navigationFrames,reads:window.preparedReads}))
+    assert.equal(evidence.reads,1)
+    assert.ok(evidence.frames.some(frame=>frame.target&&frame.body))
+    assert.equal(evidence.frames.some(frame=>frame.target&&!frame.body),false,JSON.stringify(evidence))
+    assert.equal(await page.$('[data-pane-navigation-pending]'),null)
+  }finally{await page.close()}
+})
+
+test('a later sidebar choice wins even when an abandoned history response ignores AbortSignal', async () => {
+ const page=await openFixture({reducedMotion:true})
+ try{
+  await page.evaluate(()=>{const original=window.fetch;window.fetch=(input,options={})=>{
+   const url=String(input)
+   if(url.includes('/sessions/e2e-b/history'))return new Promise(resolve=>{window.releaseOldNavigation=()=>original(input,{}).then(resolve)})
+   return original(input,options)
+  }})
+  await page.click('[data-session-id="e2e-b"]');await page.waitForFunction(()=>typeof window.releaseOldNavigation==='function')
+  await page.click('[data-session-id="e2e-c"]');await page.waitForSelector('[data-tab-id="chat:e2e-c"]')
+  await page.evaluate(()=>window.releaseOldNavigation());await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))
+  assert.equal((await state(page)).root.activeTabId,'chat:e2e-c')
+  assert.equal(await page.$('[data-pane-navigation-pending]'),null)
+  assert.equal(await page.$eval('[data-workbench-content-tab="chat:e2e-c"]',el=>el.getAnimations().length),0)
+ }finally{await page.close()}
+})
+
+for (const liveDuringCatchup of [false, true]) test(`prepared continuous history catches up between the two prepared snapshots${liveDuringCatchup ? ' while merging live commits without draining newer pages' : ''}`, async () => {
+  const page = await openFixture({ responsiveChat: true, chatMessages: [{ role: 'model', parts: [{ text: 'Source A content' }], __meta: { seq: 1 } }], timelineView: 'conversation' })
+  try {
+    await page.evaluate(liveDuringCatchup => {
+      const original = window.fetch
+      window.probeArchiveReads = []
+      const first = { role: 'model', parts: [{ text: 'Earlier B message' }], __meta: { seq: 1, timestamp: 1700000000000 } }
+      const second = { role: 'model', parts: [{ text: 'Newest B message' }], __meta: { seq: 2, timestamp: 1700000001000 } }
+      window.probeBState = { id: 'e2e-b', messageCount: 2, historyVersion: 2, busy: false, runtimeState: { state: 'idle', busy: false, queueLength: 0 } }
+      const json = data => Promise.resolve(new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      window.fetch = (input, options = {}) => {
+        const url = String(input)
+        if (url.includes('/sessions/e2e-b/history/continuous')) {
+          window.probeArchiveReads.push(url)
+          if (window.probeArchiveReads.length === 1) return json({ messages: [first], firstSeq: 1, lastSeq: 1, hasMore: false })
+          if (liveDuringCatchup) {
+            window.__emitRealtime({ type: 'message', sessionId: 'e2e-b', message: second })
+            window.__emitRealtime({ type: 'message', sessionId: 'e2e-b', message: { role: 'model', parts: [{ text: 'Live B message' }], __meta: { seq: 3, timestamp: 1700000002000 } } })
+          }
+          return json({ messages: [second], firstSeq: 2, lastSeq: 2, hasMore: liveDuringCatchup })
+        }
+        if (url.includes('/sessions/e2e-b/history')) return json({ session: window.probeBState, messages: [first, second], historyVersion: 2, historyComplete: true, latestSeq: 2, queueLength: 0, queuedMessages: [] })
+        return original(input, options)
+      }
+    }, liveDuringCatchup)
+    await page.click('[data-session-id="e2e-b"]')
+    await page.waitForSelector('[data-workbench-content-tab="chat:e2e-b"]')
+    await page.evaluate(() => window.__emitRealtime({ type: 'session-state', session: window.probeBState }))
+    await page.waitForFunction(() => document.querySelector('[data-workbench-content-tab="chat:e2e-b"]')?.textContent.includes('Newest B message'), { timeout: 3000 })
+    const result = await page.evaluate(() => ({ archiveReads: window.probeArchiveReads, body: document.querySelector('[data-workbench-content-tab="chat:e2e-b"]').textContent }))
+    assert.equal(result.archiveReads.length, 2)
+    assert.match(result.archiveReads[1], /afterSeq=1/)
+    assert.match(result.body, /Earlier B message/)
+    assert.match(result.body, /Newest B message/)
+    assert.equal(result.body.match(/Newest B message/g).length, 1, 'page/live duplicates render once')
+    if (liveDuringCatchup) assert.match(result.body, /Live B message/)
+  } finally {
+    await page.close()
   }
 })

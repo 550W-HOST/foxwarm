@@ -98,3 +98,5 @@ A failed planning request cannot submit or partially apply a compact plan. Provi
 ### D-history-independent-goal-reminder
 
 Historical compact completions and Goal reminders remain separately identifiable structured system parts for read compatibility. New compaction emits only its one lifecycle marker; task reminders are request-only under [D-tasks-replace-goal](src-session-task-context.md#d-tasks-replace-goal).
+
+Compact operations publish planning/enqueueing/ready/committing metadata and request retries without acquiring foreground runtime ownership. Owner-safe failure application emits a [typed display-only event](./src-session-notices.md); temporary planner transcripts are not foreground conversation content.

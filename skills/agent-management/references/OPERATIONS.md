@@ -522,5 +522,4 @@ Use **`node-setup`** when the task is primarily about:
 - isolated-agent binding as part of node deployment
 
 Use **`isolated-worker`** when the task is to create one parent-linked temporary
-isolated worker on an already-online Node or through a configured
-Docker-worktree provider for one exact existing worktree.
+isolated worker on an already-online Node.
