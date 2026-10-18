@@ -118,25 +118,29 @@ internal sealed partial class McpClient
                         }
                         try
                         {
-                        await entry.Receiver.Ready.WaitAsync(TimeSpan.FromSeconds(60), request);
-                        await authorize(request);
-                        check();
-                        lock (poolGate)
-                        {
-                            if (notificationsStopped || entry.Invalid || !entry.Receiver.Receiving)
-                                throw new InvalidOperationException(
-                                    "MCP notification stream is unavailable."
-                                );
-                            if (entry.Reception is null)
+                            await entry.Receiver.Ready.WaitAsync(TimeSpan.FromSeconds(60), request);
+                            await authorize(request);
+                            check();
+                            lock (poolGate)
                             {
-                                var reception = new Reception(authorize, check, receive);
-                                entry.Reception = reception;
-                                entry.Idle?.Cancel();
-                                entry.Idle = null;
-                                TrackClosing(PingNotificationsAsync(entry, reception, client));
+                                if (
+                                    notificationsStopped
+                                    || entry.Invalid
+                                    || !entry.Receiver.Receiving
+                                )
+                                    throw new InvalidOperationException(
+                                        "MCP notification stream is unavailable."
+                                    );
+                                if (entry.Reception is null)
+                                {
+                                    var reception = new Reception(authorize, check, receive);
+                                    entry.Reception = reception;
+                                    entry.Idle?.Cancel();
+                                    entry.Idle = null;
+                                    TrackClosing(PingNotificationsAsync(entry, reception, client));
+                                }
+                                return Status(server, entry);
                             }
-                            return Status(server, entry);
-                        }
                         }
                         finally
                         {
@@ -154,7 +158,8 @@ internal sealed partial class McpClient
         {
             ["server"] = server,
             ["state"] =
-                entry is null || entry.Reception is null && entry.NotificationStarts == 0 ? "stopped"
+                entry is null || entry.Reception is null && entry.NotificationStarts == 0
+                    ? "stopped"
                 : entry.Invalid ? "unavailable"
                 : entry.Receiver.Receiving ? "receiving"
                 : "disconnected",
