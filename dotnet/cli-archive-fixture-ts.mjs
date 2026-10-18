@@ -29,6 +29,8 @@ if (mode === 'seed') {
     rawStartTimestamp: 1001, rawEndTimestamp: 1002, summary: 'Source retained summary', memoryFacts: [{ kind: 'fact', text: 'Source fact', attributedTo: 'user' }], frictionScore: 32, createdAt: 1003 }])
   const childId = await sm.forkSession(parent.id, 'legacy_child')
   await sm.appendSessionMessage(childId, { role: 'user', parts: [{ text: 'Child local' }], __meta: { timestamp: 1004 } })
+  const coldId = artifacts === 'with-cold-session'
+    ? (await sm.createEmptySession('legacy_cold')).session.id : undefined
   const request = await journal.beginLlmRequestJournal({ purpose: 'cli', iteration: 0, systemPrompt: 'Source CLI system', toolDefinitions: [],
     messages: [{ role: 'user', parts: [{ text: 'Source CLI prompt' }] }], requestedModelKey: 'fixture/wire', promptCacheKey: 'source-fixture-lineage' })
   await journal.appendLlmAttemptStart({ requestId: request.requestId, attempt: 1, concreteModelId: 'fixture/wire', providerType: 'openai', semanticPayload: { model: 'wire' } })
@@ -50,8 +52,8 @@ if (mode === 'seed') {
   await fs.cp(path.join(root, 'state/sessions'), path.join(legacy, 'state/sessions'), { recursive: true })
   await fs.copyFile(path.join(root, 'state/config.yaml'), path.join(legacy, 'state/config.yaml'))
   await fs.copyFile(path.join(root, 'state/models.yaml'), path.join(legacy, 'state/models.yaml'))
-  await fs.writeFile(path.join(legacy, 'fixture.json'), JSON.stringify({ parentId: parent.id, childId, requestId: request.requestId }))
-  console.log(JSON.stringify({ legacy, parentId: parent.id, childId, requestId: request.requestId, expected, messages: expected.records - 1 }))
+  await fs.writeFile(path.join(legacy, 'fixture.json'), JSON.stringify({ parentId: parent.id, childId, coldId, requestId: request.requestId }))
+  console.log(JSON.stringify({ legacy, parentId: parent.id, childId, coldId, requestId: request.requestId, expected, messages: expected.records - 1 }))
 } else if (mode === 'read-legacy') {
   const { runSqliteOnlyArchivesMigration } = await load('migrations/index.js')
   await runSqliteOnlyArchivesMigration()

@@ -26,10 +26,13 @@ public sealed partial class SqliteArchiveMessageStore
                     ?? []
             );
         }
-        // A C# catalog belongs to identity recovery, not legacy bootstrap.
-        // Its branches and committed aliases already have SQLite/ledger owners;
-        // retired metadata and versioned authority files are not legacy input.
-        var loaded = File.Exists(Path.Combine(root, "state", "catalog.sqlite"));
+        // A catalog is not a legacy candidate inventory or alias authority.
+        // It can retain Source lineage after accepted catalog migration has
+        // retired sessions.json but has not imported the physical Archive logs.
+        using var catalog = File.Exists(Path.Combine(root, "state", "catalog.sqlite"))
+            ? new SessionCatalog(root)
+            : null;
+        var loaded = catalog is not null;
         var primary = Path.Combine(root, "state", "sessions.json");
         foreach (
             var candidate in new[] { primary }
@@ -98,7 +101,13 @@ public sealed partial class SqliteArchiveMessageStore
                     ..^(relative.EndsWith(".blocks.jsonl", StringComparison.Ordinal) ? 13 : 6)
                 ];
                 if (!result.ContainsKey(id))
-                    Add(id, null);
+                {
+                    Add(id, catalog?.Get(id));
+                    // Catalog presentation aliases are reconciled only by the
+                    // identity owner, after pending directional recovery.
+                    if (catalog is not null)
+                        result[id] = result[id] with { Aliases = [] };
+                }
             }
         return result.Values.OrderBy(candidate => candidate.Id, StringComparer.Ordinal).ToArray();
     }
