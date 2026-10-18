@@ -68,7 +68,10 @@ internal sealed class InboundMcpFixture : IAsyncDisposable
         return app;
     }
 
-    internal static async Task<InboundMcpFixture> CreateAsync(bool allow = true, Action<WebApplication>? configure = null)
+    internal static async Task<InboundMcpFixture> CreateAsync(
+        bool allow = true,
+        Action<WebApplication>? configure = null
+    )
     {
         var f = new InboundMcpFixture();
         try
@@ -117,7 +120,11 @@ internal sealed class InboundMcpFixture : IAsyncDisposable
     internal Task PolicyAsync(string yaml) =>
         Manager.Authorization.InstallAsync(Encoding.UTF8.GetBytes(yaml), default);
 
-    internal async Task<SdkClient> ClientAsync(string token = Alpha, bool standaloneGet = true, McpClientOptions? options = null)
+    internal async Task<SdkClient> ClientAsync(
+        string token = Alpha,
+        bool standaloneGet = true,
+        McpClientOptions? options = null
+    )
     {
         var transport = new HttpClientTransport(
             new HttpClientTransportOptions

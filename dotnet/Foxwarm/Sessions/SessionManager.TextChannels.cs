@@ -5,18 +5,33 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionManager
 {
-    internal async Task<JsonObject> SendToChannelAsync(SessionOwner owner, JsonObject args, CancellationToken token)
+    internal async Task<JsonObject> SendToChannelAsync(
+        SessionOwner owner,
+        JsonObject args,
+        CancellationToken token
+    )
     {
         ToolRegistry.Keys(args, ["channelTargetId", "message"]);
         var target = ToolRegistry.Text(args, "channelTargetId");
         var message = ToolRegistry.Text(args, "message");
         if (string.IsNullOrEmpty(target) || string.IsNullOrEmpty(message))
             throw new InvalidDataException("send_to_channel requires channelTargetId and message.");
-        await AuthorizeToolAsync(owner, new("send_to_channel", "builtin", "send_to_channel", args), null, token);
+        await AuthorizeToolAsync(
+            owner,
+            new("send_to_channel", "builtin", "send_to_channel", args),
+            null,
+            token
+        );
         using var admission = BeginOwnerMutation(owner);
-        if (AgentIsolated(owner.Agent)
-            && SessionCatalog.Text(deletionChannels.ReadForDelivery()["channels"]?[target]?["sessionId"]) != owner.Id)
-            throw new ToolAuthorizationDeniedException("Isolated Session can only send messages to its own attached channel.");
+        if (
+            AgentIsolated(owner.Agent)
+            && SessionCatalog.Text(
+                deletionChannels.ReadForDelivery()["channels"]?[target]?["sessionId"]
+            ) != owner.Id
+        )
+            throw new ToolAuthorizationDeniedException(
+                "Isolated Session can only send messages to its own attached channel."
+            );
         owner.Entry.RequireIdentityAuthority();
         if (!IsCurrentOwner(owner))
             throw new InvalidOperationException("Channel source Session is no longer current.");

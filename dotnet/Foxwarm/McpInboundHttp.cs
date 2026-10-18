@@ -205,22 +205,41 @@ internal sealed class McpInboundHttp : IAsyncDisposable, IHostedService
             }
         );
         connection.Server = McpServer.Create(connection.Transport, options);
-        connection.Context.ReplyChannel = new(catalog.TextChannels, connection.Context.Id, () =>
-        {
-            connection.Context.Require();
-            if (!connection.Initialized || !connection.Attachment.Active
-                || !McpClient.SupportsNotifications(connection.Server.ClientCapabilities?.Experimental))
-                throw new McpInboundSafeException("An active Foxwarm notification receiver is required for replies.");
-        }, async (message, token) =>
-        {
-            connection.Context.ReplyChannel!.Require();
-            var sent = await connection.Attachment.SendAsync(() => connection.Server.SendNotificationAsync(
-                McpClient.SessionMessageMethod,
-                new JsonObject { ["message"] = message, ["endpoint"] = connection.Context.ReplyChannel.TargetId },
-                cancellationToken: token));
-            if (!sent)
-                throw new InvalidOperationException("MCP reply destination is unavailable.");
-        });
+        connection.Context.ReplyChannel = new(
+            catalog.TextChannels,
+            connection.Context.Id,
+            () =>
+            {
+                connection.Context.Require();
+                if (
+                    !connection.Initialized
+                    || !connection.Attachment.Active
+                    || !McpClient.SupportsNotifications(
+                        connection.Server.ClientCapabilities?.Experimental
+                    )
+                )
+                    throw new McpInboundSafeException(
+                        "An active Foxwarm notification receiver is required for replies."
+                    );
+            },
+            async (message, token) =>
+            {
+                connection.Context.ReplyChannel!.Require();
+                var sent = await connection.Attachment.SendAsync(() =>
+                    connection.Server.SendNotificationAsync(
+                        McpClient.SessionMessageMethod,
+                        new JsonObject
+                        {
+                            ["message"] = message,
+                            ["endpoint"] = connection.Context.ReplyChannel.TargetId,
+                        },
+                        cancellationToken: token
+                    )
+                );
+                if (!sent)
+                    throw new InvalidOperationException("MCP reply destination is unavailable.");
+            }
+        );
         connection.Run = connection.Server.RunAsync();
         connection.Get = connection.Transport.HandleGetRequestAsync(connection.Attachment);
         live.Add(connection.Context.Id, connection);

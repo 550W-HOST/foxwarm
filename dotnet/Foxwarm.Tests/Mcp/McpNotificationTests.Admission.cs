@@ -9,25 +9,46 @@ public sealed partial class McpNotificationTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Reply_registration_retains_only_real_accepted_effects_when_strict_admission_fails(bool committed)
+    public async Task Reply_registration_retains_only_real_accepted_effects_when_strict_admission_fails(
+        bool committed
+    )
     {
-        var context = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        await using var peer = await InboundMcpFixture.CreateAsync(configure: app => app.Use(async (http, next) =>
-        {
-            await next(http);
-            if (http.Request.Method == "POST" && !http.Request.Headers.ContainsKey("Mcp-Session-Id")
-                && http.Response.Headers["Mcp-Session-Id"].ToString() is { Length: > 0 } id)
-                context.TrySetResult(id);
-        }));
+        var context = new TaskCompletionSource<string>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        await using var peer = await InboundMcpFixture.CreateAsync(configure: app =>
+            app.Use(
+                async (http, next) =>
+                {
+                    await next(http);
+                    if (
+                        http.Request.Method == "POST"
+                        && !http.Request.Headers.ContainsKey("Mcp-Session-Id")
+                        && http.Response.Headers["Mcp-Session-Id"].ToString() is { Length: > 0 } id
+                    )
+                        context.TrySetResult(id);
+                }
+            )
+        );
         await using var f = await OutboundMcpFixture.CreateAsync();
         await Connect(f, peer);
         await Notifications(f, "start");
         var id = await context.Task.WaitAsync(TimeSpan.FromSeconds(10));
         var directory = Path.Combine(peer.Data, "state", "experiment-faults");
         Directory.CreateDirectory(directory);
-        await File.WriteAllTextAsync(Path.Combine(directory, SessionIdentity.ExecDirectorySegment(peer.Target.Id)
-            + (committed ? ".wait-after-rename" : ".wait-before-rename")), "fault");
-        var failed = await f.CallAsync(f.First, "foxwarm_session", Send(peer.Target.Id, "strict reply input"));
+        await File.WriteAllTextAsync(
+            Path.Combine(
+                directory,
+                SessionIdentity.ExecDirectorySegment(peer.Target.Id)
+                    + (committed ? ".wait-after-rename" : ".wait-before-rename")
+            ),
+            "fault"
+        );
+        var failed = await f.CallAsync(
+            f.First,
+            "foxwarm_session",
+            Send(peer.Target.Id, "strict reply input")
+        );
         Assert.True(failed!["isError"]!.GetValue<bool>());
         Assert.Null(failed["accepted"]);
         Assert.Equal(committed ? 1 : 0, Queue(peer.Target).Length);
@@ -51,10 +72,16 @@ public sealed partial class McpNotificationTests
         await using var f = await OutboundMcpFixture.CreateAsync();
         await Connect(f, peer);
         await Notifications(f, "start");
-        var target = Target(await f.CallAsync(f.First, "foxwarm_session", Send(peer.Target.Id, "one")));
+        var target = Target(
+            await f.CallAsync(f.First, "foxwarm_session", Send(peer.Target.Id, "one"))
+        );
         var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var lane = f.First.Entry.SaveLane.MutateIdentityAsync(async () => { held.TrySetResult(); await release.Task; });
+        var lane = f.First.Entry.SaveLane.MutateIdentityAsync(async () =>
+        {
+            held.TrySetResult();
+            await release.Task;
+        });
         await held.Task;
         Assert.Null((await Reply(peer, target, "late received input"))!["error"]);
         var stop = Notifications(f, "stop");
@@ -69,18 +96,26 @@ public sealed partial class McpNotificationTests
     [Fact]
     public async Task Failed_physical_GET_reports_unavailable_without_waiting_for_POST_initialization_or_replaying_a_call()
     {
-        await using var peer = await InboundMcpFixture.CreateAsync(configure: app => app.Use(async (http, next) =>
-        {
-            if (http.Request.Method == "GET")
-                http.Response.StatusCode = 405;
-            else
-                await next(http);
-        }));
+        await using var peer = await InboundMcpFixture.CreateAsync(configure: app =>
+            app.Use(
+                async (http, next) =>
+                {
+                    if (http.Request.Method == "GET")
+                        http.Response.StatusCode = 405;
+                    else
+                        await next(http);
+                }
+            )
+        );
         await using var f = await OutboundMcpFixture.CreateAsync();
         await Connect(f, peer);
         var start = await Notifications(f, "start").WaitAsync(TimeSpan.FromSeconds(10));
         Assert.NotNull(start!["error"]);
-        var ordinary = await f.CallAsync(f.First, "foxwarm_session", Send(peer.Target.Id, "ordinary still usable", false));
+        var ordinary = await f.CallAsync(
+            f.First,
+            "foxwarm_session",
+            Send(peer.Target.Id, "ordinary still usable", false)
+        );
         Assert.True(ordinary!["accepted"]!.GetValue<bool>());
         Assert.Single(Queue(peer.Target));
     }

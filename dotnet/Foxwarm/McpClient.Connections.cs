@@ -271,7 +271,11 @@ internal sealed partial class McpClient
 
     // Called under poolGate. Cancellation fences initialization and removes the binding
     // before a subsequent acquisition; SDK disposal owns any HTTP DELETE.
-    private void InvalidateEntry(PoolEntry entry, bool preserveActiveStdio = false, bool drainActive = false)
+    private void InvalidateEntry(
+        PoolEntry entry,
+        bool preserveActiveStdio = false,
+        bool drainActive = false
+    )
     {
         if (entry.Invalid)
             return;
@@ -405,7 +409,12 @@ internal sealed partial class McpClient
                 idle.Token
             );
             lock (poolGate)
-                if (entry.Active == 0 && entry.Reception is null && entry.Idle == idle && !entry.Invalid)
+                if (
+                    entry.Active == 0
+                    && entry.Reception is null
+                    && entry.Idle == idle
+                    && !entry.Invalid
+                )
                     InvalidateEntry(entry);
         }
         catch (OperationCanceledException) { }
@@ -480,15 +489,26 @@ internal sealed partial class McpClient
                     _ => HttpTransportMode.AutoDetect,
                 },
             };
-            HttpMessageHandler Observe(HttpMessageHandler inner) => entry is null ? inner
-                : new ReceiveTransport.Handler(entry.Receiver, () =>
-                {
-                    lock (poolGate)
-                        InvalidateEntry(entry);
-                }, inner, config["oauth"] is not null, OAuth.Credentials);
+            HttpMessageHandler Observe(HttpMessageHandler inner) =>
+                entry is null
+                    ? inner
+                    : new ReceiveTransport.Handler(
+                        entry.Receiver,
+                        () =>
+                        {
+                            lock (poolGate)
+                                InvalidateEntry(entry);
+                        },
+                        inner,
+                        config["oauth"] is not null,
+                        OAuth.Credentials
+                    );
             var http = config["oauth"] is not null
                 ? OAuth.ResourceClient(server, config, Observe)
-                : new HttpClient(Observe(new HttpClientHandler())) { Timeout = Timeout.InfiniteTimeSpan };
+                : new HttpClient(Observe(new HttpClientHandler()))
+                {
+                    Timeout = Timeout.InfiniteTimeSpan,
+                };
             transport = new HttpClientTransport(options, http, ownsHttpClient: true);
         }
         try
@@ -498,12 +518,26 @@ internal sealed partial class McpClient
                 new McpClientOptions
                 {
                     InitializationTimeout = TimeSpan.FromSeconds(60),
-                    Capabilities = new() { Experimental = entry?.Key.Owner is not null ? NotificationCapability() : null },
+                    Capabilities = new()
+                    {
+                        Experimental = entry?.Key.Owner is not null
+                            ? NotificationCapability()
+                            : null,
+                    },
                     Handlers = new()
                     {
                         NotificationHandlers = entry?.Key.Owner is not null
-                            ? [new KeyValuePair<string, Func<JsonRpcNotification, CancellationToken, ValueTask>>(
-                                SessionMessageMethod, (message, notificationToken) => ReceiveNotificationAsync(entry, message, notificationToken))]
+                            ?
+                            [
+                                new KeyValuePair<
+                                    string,
+                                    Func<JsonRpcNotification, CancellationToken, ValueTask>
+                                >(
+                                    SessionMessageMethod,
+                                    (message, notificationToken) =>
+                                        ReceiveNotificationAsync(entry, message, notificationToken)
+                                ),
+                            ]
                             : [],
                     },
                 },

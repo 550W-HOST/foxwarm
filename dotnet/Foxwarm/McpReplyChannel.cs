@@ -4,7 +4,12 @@ using Foxwarm.Channels;
 namespace Foxwarm;
 
 // A context-owned send-only text adapter. Only successful input admission retains it.
-internal sealed class McpReplyChannel(TextChannels channels, string contextId, Action available, Func<string, CancellationToken, Task> send)
+internal sealed class McpReplyChannel(
+    TextChannels channels,
+    string contextId,
+    Action available,
+    Func<string, CancellationToken, Task> send
+)
 {
     private readonly TextChannels registry = channels;
     private readonly object gate = new();
@@ -20,7 +25,9 @@ internal sealed class McpReplyChannel(TextChannels channels, string contextId, A
         lock (gate)
         {
             if (stopped)
-                throw new McpInboundSafeException("An active Foxwarm notification receiver is required for replies.");
+                throw new McpInboundSafeException(
+                    "An active Foxwarm notification receiver is required for replies."
+                );
             available();
         }
     }
@@ -47,7 +54,10 @@ internal sealed class McpReplyChannel(TextChannels channels, string contextId, A
             Require();
             if (!registered || conversation != "reply")
                 throw new InvalidOperationException("MCP reply destination is unavailable.");
-            if (Sessions.SessionGoal.Trim(message).Length == 0 || Encoding.UTF8.GetByteCount(message) > McpClient.MaxNotificationBytes)
+            if (
+                Sessions.SessionGoal.Trim(message).Length == 0
+                || Encoding.UTF8.GetByteCount(message) > McpClient.MaxNotificationBytes
+            )
                 throw new InvalidDataException("MCP reply message exceeds its limit.");
         }
         return send(message, token);
@@ -66,11 +76,13 @@ internal sealed class McpReplyChannel(TextChannels channels, string contextId, A
     internal sealed class Lease(McpReplyChannel owner) : IDisposable
     {
         private bool released;
+
         internal void Commit()
         {
             lock (owner.gate)
                 owner.committed = true;
         }
+
         public void Dispose()
         {
             lock (owner.gate)

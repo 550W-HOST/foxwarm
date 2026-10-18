@@ -4,7 +4,8 @@ namespace Foxwarm.Channels;
 internal sealed class TextChannels
 {
     private readonly object gate = new();
-    private readonly Dictionary<string, Func<string, string, CancellationToken, Task>> channels = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Func<string, string, CancellationToken, Task>> channels =
+        new(StringComparer.Ordinal);
 
     internal void Register(string id, Func<string, string, CancellationToken, Task> send)
     {
@@ -22,11 +23,16 @@ internal sealed class TextChannels
     {
         var colon = target.IndexOf(':');
         if (colon <= 0 || colon == target.Length - 1)
-            throw new InvalidDataException("Invalid channelTargetId format. Use <channel-instance-id>:<conversation-id>.");
+            throw new InvalidDataException(
+                "Invalid channelTargetId format. Use <channel-instance-id>:<conversation-id>."
+            );
         Func<string, string, CancellationToken, Task> send;
         lock (gate)
-            send = channels.GetValueOrDefault(target[..colon])
-                ?? throw new InvalidOperationException("Channel instance is unavailable: " + target[..colon]);
+            send =
+                channels.GetValueOrDefault(target[..colon])
+                ?? throw new InvalidOperationException(
+                    "Channel instance is unavailable: " + target[..colon]
+                );
         token.ThrowIfCancellationRequested();
         return send(target[(colon + 1)..], message, token);
     }

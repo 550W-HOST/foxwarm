@@ -12,11 +12,17 @@ public sealed partial class McpNotificationTests
         await using var peer = await McpOAuthPeer.StartAsync();
         await using var f = await OutboundMcpFixture.CreateAsync("https://localhost/preview");
         await f.ConfigureAsync(peer.Resource);
-        await f.Mcp.SetAuthorizationAsync("peer", new JsonObject { ["authentication"] = "oauth", ["scope"] = "read" });
+        await f.Mcp.SetAuthorizationAsync(
+            "peer",
+            new JsonObject { ["authentication"] = "oauth", ["scope"] = "read" }
+        );
         await peer.AuthorizeAsync(f.Mcp);
         Assert.Equal("receiving", State(await Notifications(f, "start")));
         var original = McpOAuthPeer.Value(await f.CallAsync(f.First, "state"));
-        var oldAccess = (await peer.StateAsync())["accessTokens"]!.AsArray().Last()!.GetValue<string>();
+        var oldAccess = (await peer.StateAsync())["accessTokens"]!
+            .AsArray()
+            .Last()!
+            .GetValue<string>();
         await peer.SetAsync(new() { ["force401"] = 1 });
         var refreshed = McpOAuthPeer.Value(await f.CallAsync(f.First, "state"));
         Assert.Equal(original["context"]!.GetValue<int>(), refreshed["context"]!.GetValue<int>());
@@ -24,18 +30,27 @@ public sealed partial class McpNotificationTests
         using var http = new HttpClient();
         async Task Notify(string text)
         {
-            using var response = await http.PostAsJsonAsync(peer.Url + "/fixture/notify", new JsonObject { ["message"] = text, ["endpoint"] = "oauth-peer" });
+            using var response = await http.PostAsJsonAsync(
+                peer.Url + "/fixture/notify",
+                new JsonObject { ["message"] = text, ["endpoint"] = "oauth-peer" }
+            );
             response.EnsureSuccessStatusCode();
         }
         await Notify("old GET credential: " + oldAccess);
         await Notify("ordinary after refresh");
         await Until(() => Queue(f.First).Length == 1);
-        Assert.Equal("ordinary after refresh", Queue(f.First)[0].Parts![1]["text"]!.GetValue<string>());
+        Assert.Equal(
+            "ordinary after refresh",
+            Queue(f.First)[0].Parts![1]["text"]!.GetValue<string>()
+        );
         await peer.SetAsync(new() { ["requiredScope"] = "write" });
         Assert.NotNull((await f.CallAsync(f.First, "state"))!["error"]);
         Assert.Equal("receiving", State(await Notifications(f, "status")));
         await peer.SetAsync(new() { ["requiredScope"] = "" });
-        Assert.Equal(original["context"]!.GetValue<int>(), McpOAuthPeer.Value(await f.CallAsync(f.First, "state"))["context"]!.GetValue<int>());
+        Assert.Equal(
+            original["context"]!.GetValue<int>(),
+            McpOAuthPeer.Value(await f.CallAsync(f.First, "state"))["context"]!.GetValue<int>()
+        );
         f.Mcp.OAuth.Disconnect("peer");
         Assert.Equal("stopped", State(await Notifications(f, "status")));
         await Notify("after disconnect");
@@ -49,16 +64,41 @@ public sealed partial class McpNotificationTests
         await using var peer = await InboundMcpFixture.CreateAsync();
         await using var f = await OutboundMcpFixture.CreateAsync();
         await Connect(f, peer);
-        await f.Mcp.ConfigureAsync(new JsonObject { ["name"] = "other", ["transport"] = "streamable-http", ["url"] = peer.Url, ["token"] = InboundMcpFixture.Beta }, default);
+        await f.Mcp.ConfigureAsync(
+            new JsonObject
+            {
+                ["name"] = "other",
+                ["transport"] = "streamable-http",
+                ["url"] = peer.Url,
+                ["token"] = InboundMcpFixture.Beta,
+            },
+            default
+        );
         await Notifications(f, "start");
         await Notifications(f, "start", f.Second, "other");
-        var alpha = Target(await f.CallAsync(f.First, "foxwarm_session", Send(peer.Target.Id, "alpha")));
-        var betaCall = new JsonObject { ["name"] = "call_tool", ["args"] = new JsonObject { ["toolId"] = "mcp:other/foxwarm_session", ["args"] = Send(peer.Target.Id, "beta") } };
+        var alpha = Target(
+            await f.CallAsync(f.First, "foxwarm_session", Send(peer.Target.Id, "alpha"))
+        );
+        var betaCall = new JsonObject
+        {
+            ["name"] = "call_tool",
+            ["args"] = new JsonObject
+            {
+                ["toolId"] = "mcp:other/foxwarm_session",
+                ["args"] = Send(peer.Target.Id, "beta"),
+            },
+        };
         var beta = Target(await f.Tools(f.Second).ExecuteAsync(betaCall, default));
-        await peer.Configuration.Access.ApplyAsync(AccessConfiguration.Normalize(InboundMcpFixture.App(webui: true)["access"]));
+        await peer.Configuration.Access.ApplyAsync(
+            AccessConfiguration.Normalize(InboundMcpFixture.App(webui: true)["access"])
+        );
         Assert.Null((await Reply(peer, alpha, "still alpha"))!["error"]);
         await Until(() => Queue(f.First).Length == 1);
-        await peer.Configuration.Access.ApplyAsync(AccessConfiguration.Normalize(InboundMcpFixture.App("synthetic-rotated-alpha")["access"]));
+        await peer.Configuration.Access.ApplyAsync(
+            AccessConfiguration.Normalize(
+                InboundMcpFixture.App("synthetic-rotated-alpha")["access"]
+            )
+        );
         Assert.NotNull((await Reply(peer, alpha, "revoked"))!["error"]);
         Assert.Null((await Reply(peer, beta, "beta unaffected"))!["error"]);
         await Until(() => Queue(f.Second).Length == 1);
@@ -71,27 +111,78 @@ public sealed partial class McpNotificationTests
     {
         await using var f = await OutboundMcpFixture.CreateAsync();
         var sent = new List<string>();
-        f.Manager.TextChannels.Register("controlled", (conversation, text, _) =>
-        {
-            if (text == "adapter failure")
-                throw new InvalidOperationException("Synthetic transport failure.");
-            sent.Add(conversation + "=" + text);
-            return Task.CompletedTask;
-        });
+        f.Manager.TextChannels.Register(
+            "controlled",
+            (conversation, text, _) =>
+            {
+                if (text == "adapter failure")
+                    throw new InvalidOperationException("Synthetic transport failure.");
+                sent.Add(conversation + "=" + text);
+                return Task.CompletedTask;
+            }
+        );
         var args = Channel("controlled:conversation:with:colons", "direct");
         var tool = f.Tools(f.First);
-        Assert.Null((await tool.ExecuteAsync(new JsonObject { ["name"] = "send_to_channel", ["args"] = args.DeepClone() }, default))!["error"]);
+        Assert.Null(
+            (
+                await tool.ExecuteAsync(
+                    new JsonObject { ["name"] = "send_to_channel", ["args"] = args.DeepClone() },
+                    default
+                )
+            )!["error"]
+        );
         Assert.Equal(new[] { "conversation:with:colons=direct" }, sent);
-        await f.Manager.Authorization.InstallAsync(System.Text.Encoding.UTF8.GetBytes("version: 1\nrules:\n  - id: deny-channel\n    action: deny\n    match: {tool: {source: builtin, name: send_to_channel}}\n"), default);
-        Assert.NotNull((await tool.ExecuteAsync(new JsonObject { ["name"] = "send_to_channel", ["args"] = args.DeepClone() }, default))!["error"]);
-        Assert.NotNull((await tool.ExecuteAsync(new JsonObject { ["name"] = "call_tool", ["args"] = new JsonObject { ["toolId"] = "builtin:send_to_channel", ["args"] = args.DeepClone() } }, default))!["error"]);
-        var native = await f.ScriptAsync("return call_tool('builtin:send_to_channel', {'channelTargetId': 'controlled:conversation:with:colons', 'message': 'native denied'})");
-        Assert.True(native?["error"] is not null || native?["result"]?["error"] is not null, native?.ToJsonString());
+        await f.Manager.Authorization.InstallAsync(
+            System.Text.Encoding.UTF8.GetBytes(
+                "version: 1\nrules:\n  - id: deny-channel\n    action: deny\n    match: {tool: {source: builtin, name: send_to_channel}}\n"
+            ),
+            default
+        );
+        Assert.NotNull(
+            (
+                await tool.ExecuteAsync(
+                    new JsonObject { ["name"] = "send_to_channel", ["args"] = args.DeepClone() },
+                    default
+                )
+            )!["error"]
+        );
+        Assert.NotNull(
+            (
+                await tool.ExecuteAsync(
+                    new JsonObject
+                    {
+                        ["name"] = "call_tool",
+                        ["args"] = new JsonObject
+                        {
+                            ["toolId"] = "builtin:send_to_channel",
+                            ["args"] = args.DeepClone(),
+                        },
+                    },
+                    default
+                )
+            )!["error"]
+        );
+        var native = await f.ScriptAsync(
+            "return call_tool('builtin:send_to_channel', {'channelTargetId': 'controlled:conversation:with:colons', 'message': 'native denied'})"
+        );
+        Assert.True(
+            native?["error"] is not null || native?["result"]?["error"] is not null,
+            native?.ToJsonString()
+        );
         Assert.Single(sent);
-        await f.Manager.Authorization.InstallAsync(System.Text.Encoding.UTF8.GetBytes("version: 1\nrules: []\n"), default);
+        await f.Manager.Authorization.InstallAsync(
+            System.Text.Encoding.UTF8.GetBytes("version: 1\nrules: []\n"),
+            default
+        );
         args["message"] = "adapter failure";
-        var failed = await tool.ExecuteAsync(new JsonObject { ["name"] = "send_to_channel", ["args"] = args.DeepClone() }, default);
-        Assert.Contains("Synthetic transport failure", failed!["error"]!["message"]!.GetValue<string>());
+        var failed = await tool.ExecuteAsync(
+            new JsonObject { ["name"] = "send_to_channel", ["args"] = args.DeepClone() },
+            default
+        );
+        Assert.Contains(
+            "Synthetic transport failure",
+            failed!["error"]!["message"]!.GetValue<string>()
+        );
         Assert.Single(sent);
     }
 }

@@ -161,7 +161,12 @@ internal sealed class McpInboundSessions(
         );
         await authorization.RequireAsync(context, permission, token);
         using var reply = allowReply
-            ? (context.ReplyChannel ?? throw new McpInboundSafeException("A Foxwarm notification receiver is required for replies.")).Acquire()
+            ? (
+                context.ReplyChannel
+                ?? throw new McpInboundSafeException(
+                    "A Foxwarm notification receiver is required for replies."
+                )
+            ).Acquire()
             : null;
         var owner =
             await runtime.GetOwnerAsync(id, token)
@@ -187,9 +192,18 @@ internal sealed class McpInboundSessions(
             + SecurityElement.Escape(context.Id)
             + "\" time=\""
             + DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz")
-            + (allowReply ? "\" channelTargetId=\"" + SecurityElement.Escape(context.ReplyChannel!.TargetId) : "")
+            + (
+                allowReply
+                    ? "\" channelTargetId=\""
+                        + SecurityElement.Escape(context.ReplyChannel!.TargetId)
+                    : ""
+            )
             + "\" hint=\"Message from an external MCP client."
-            + (allowReply ? " For an explicit reply, use send_to_channel with the channelTargetId shown here. Ordinary assistant replies are not sent to this connection." : "")
+            + (
+                allowReply
+                    ? " For an explicit reply, use send_to_channel with the channelTargetId shown here. Ordinary assistant replies are not sent to this connection."
+                    : ""
+            )
             + "\">";
         var item = new QueueItem(
             QueueItemType.User,
@@ -217,7 +231,9 @@ internal sealed class McpInboundSessions(
         catch (AuthorityCommittedException)
         {
             reply?.Commit();
-            throw new McpInboundSafeException("Session admission failed; its outcome may be unknown. Do not retry automatically.");
+            throw new McpInboundSafeException(
+                "Session admission failed; its outcome may be unknown. Do not retry automatically."
+            );
         }
         catch
         {
