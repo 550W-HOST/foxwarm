@@ -16,17 +16,35 @@ public sealed class WeixinLifecycleTests
         var polls = 0;
         peer.Respond = async call =>
         {
-            if (call.Path.EndsWith("/getupdates", StringComparison.Ordinal) && Interlocked.Increment(ref polls) == 1)
+            if (
+                call.Path.EndsWith("/getupdates", StringComparison.Ordinal)
+                && Interlocked.Increment(ref polls) == 1
+            )
             {
                 entered.TrySetResult();
                 await release.Task;
-                return Results.Json(new JsonObject { ["ret"] = 0, ["msgs"] = new JsonArray(ExternalProtocolPeer.WeixinText("alice", "/channel stop alpha")) });
+                return Results.Json(
+                    new JsonObject
+                    {
+                        ["ret"] = 0,
+                        ["msgs"] = new JsonArray(
+                            ExternalProtocolPeer.WeixinText("alice", "/channel stop alpha")
+                        ),
+                    }
+                );
             }
             return null;
         };
-        var config = new JsonObject { ["alpha"] = ExternalChannelFixture.Channel(), ["weixin"] = peer.Weixin() };
+        var config = new JsonObject
+        {
+            ["alpha"] = ExternalChannelFixture.Channel(),
+            ["weixin"] = peer.Weixin(),
+        };
         config["weixin"]!["longPollTimeoutMs"] = 10000;
-        var f = await ExternalChannelFixture.CreateAsync(config, dependencies: telegram.Dependencies);
+        var f = await ExternalChannelFixture.CreateAsync(
+            config,
+            dependencies: telegram.Dependencies
+        );
         await f.Manager.ManagedChannels!.ReloadAsync();
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
         config["weixin"]!["longPollTimeoutMs"] = 80;
@@ -40,6 +58,7 @@ public sealed class WeixinLifecycleTests
         Assert.NotNull(f.Manager.ChannelRegistry.Get("weixin"));
         await f.DisposeAsync();
     }
+
     [Fact]
     public async Task Command_confirmation_uses_the_same_config_owner_without_waiting_for_Setup_to_join_its_Weixin_handler()
     {
@@ -50,17 +69,36 @@ public sealed class WeixinLifecycleTests
         var polls = 0;
         peer.Respond = async call =>
         {
-            if (call.Key == "source-token" && call.Path.EndsWith("/getupdates", StringComparison.Ordinal) && Interlocked.Increment(ref polls) == 1)
+            if (
+                call.Key == "source-token"
+                && call.Path.EndsWith("/getupdates", StringComparison.Ordinal)
+                && Interlocked.Increment(ref polls) == 1
+            )
             {
-                entered.TrySetResult(); await release.Task;
-                return Results.Json(new JsonObject { ["ret"] = 0, ["msgs"] = new JsonArray(ExternalProtocolPeer.WeixinText("alice", "/channel weixin wait " + key)) });
+                entered.TrySetResult();
+                await release.Task;
+                return Results.Json(
+                    new JsonObject
+                    {
+                        ["ret"] = 0,
+                        ["msgs"] = new JsonArray(
+                            ExternalProtocolPeer.WeixinText("alice", "/channel weixin wait " + key)
+                        ),
+                    }
+                );
             }
             return null;
         };
-        var config = new JsonObject { ["a-default"] = peer.Weixin("default-token"), ["z-source"] = peer.Weixin("source-token") };
+        var config = new JsonObject
+        {
+            ["a-default"] = peer.Weixin("default-token"),
+            ["z-source"] = peer.Weixin("source-token"),
+        };
         config["z-source"]!["longPollTimeoutMs"] = 10000;
         var f = await ExternalChannelFixture.CreateAsync(config, dependencies: peer.Dependencies);
-        var login = await f.Manager.ManagedChannels!.Weixin.StartLoginAsync(peer.Address.ToString());
+        var login = await f.Manager.ManagedChannels!.Weixin.StartLoginAsync(
+            peer.Address.ToString()
+        );
         key = SessionWait.Text(login["sessionKey"])!;
         await f.Manager.ManagedChannels.ReloadAsync();
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
@@ -70,8 +108,14 @@ public sealed class WeixinLifecycleTests
         release.TrySetResult();
         Assert.Same(reload, await Task.WhenAny(reload, Task.Delay(2000)));
         await reload;
-        Assert.Equal("confirmed-token", SessionWait.Text(f.Configuration.CurrentChannels()["a-default"]!["token"]));
-        Assert.DoesNotContain("owner", SessionWait.Strings(f.Configuration.CurrentChannels()["a-default"]!["allowedUsers"]));
+        Assert.Equal(
+            "confirmed-token",
+            SessionWait.Text(f.Configuration.CurrentChannels()["a-default"]!["token"])
+        );
+        Assert.DoesNotContain(
+            "owner",
+            SessionWait.Strings(f.Configuration.CurrentChannels()["a-default"]!["allowedUsers"])
+        );
         Assert.NotNull(f.Manager.ChannelRegistry.Get("a-default"));
         Assert.NotNull(f.Manager.ChannelRegistry.Get("z-source"));
         await f.DisposeAsync();

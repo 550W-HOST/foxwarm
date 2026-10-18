@@ -35,13 +35,23 @@ internal sealed partial class ModelConfiguration
             if (JsonNode.Parse(currentRaw) is JsonObject json)
             {
                 json["channels"] = channels.DeepClone();
-                return Encoding.UTF8.GetBytes(json.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+                return Encoding.UTF8.GetBytes(
+                    json.ToJsonString(
+                        new System.Text.Json.JsonSerializerOptions { WriteIndented = true }
+                    )
+                );
             }
         }
         catch (System.Text.Json.JsonException) { }
         var serialized = ChannelsYamlForObject(channels).TrimEnd();
-        var section = serialized.Length == 0 || serialized == "{}" ? "channels: {}"
-            : "channels:\n" + string.Join("\n", serialized.Split('\n').Select(line => line.Length == 0 ? line : "  " + line));
+        var section =
+            serialized.Length == 0 || serialized == "{}"
+                ? "channels: {}"
+                : "channels:\n"
+                    + string.Join(
+                        "\n",
+                        serialized.Split('\n').Select(line => line.Length == 0 ? line : "  " + line)
+                    );
         return Encoding.UTF8.GetBytes(ReplaceTopLevelSection(currentRaw, "channels", section));
     }
 
@@ -154,14 +164,14 @@ internal sealed partial class ModelConfiguration
         }
     }
 
-    private async Task<(JsonObject Config, System.Collections.Immutable.ImmutableDictionary<string, AccessIdentity> Access)> ValidateAppCandidateAsync(string raw)
+    private async Task<(
+        JsonObject Config,
+        System.Collections.Immutable.ImmutableDictionary<string, AccessIdentity> Access
+    )> ValidateAppCandidateAsync(string raw)
     {
         var config = ConfigurationYaml.Parse(raw, "app config");
         AppConfigurationRules.Validate(config);
-        var access = AccessConfiguration.Normalize(
-            config["access"],
-            config.ContainsKey("access")
-        );
+        var access = AccessConfiguration.Normalize(config["access"], config.ContainsKey("access"));
         Access.Validate(access);
         AccessConfiguration.Validate(
             access,

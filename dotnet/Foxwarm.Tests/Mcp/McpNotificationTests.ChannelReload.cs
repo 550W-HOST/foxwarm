@@ -25,7 +25,12 @@ public sealed partial class McpNotificationTests
             )
         );
         var app = JsonNode.Parse(peer.Configuration.ReadCurrentAppRaw())!.AsObject();
-        app["channels"] = new JsonObject { ["alpha"] = ExternalChannelFixture.Channel(), ["matrix"] = protocol.Matrix(), ["weixin"] = protocol.Weixin() };
+        app["channels"] = new JsonObject
+        {
+            ["alpha"] = ExternalChannelFixture.Channel(),
+            ["matrix"] = protocol.Matrix(),
+            ["weixin"] = protocol.Weixin(),
+        };
         var first = await peer.Configuration.SaveAppAsync(app.ToJsonString());
         Assert.Equal(3, first["reload"]!["started"]!.AsArray().Count);
         var second = await peer.Configuration.SaveAppAsync(app.ToJsonString());

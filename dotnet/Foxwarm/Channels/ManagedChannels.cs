@@ -84,55 +84,55 @@ internal sealed class ManagedChannels(
 
     internal async Task<JsonObject> ReloadAsync()
     {
-            if (closed)
-                throw new InvalidOperationException("Channel runtime is shutting down.");
-            sessions.ChannelProgress.Reset();
-            string[] previous;
-            lock (gate)
-                previous = running.Keys.Order(StringComparer.Ordinal).ToArray();
-            var stopped = new JsonArray();
-            foreach (var id in previous)
-                try
-                {
-                    if (await StopCoreAsync(id))
-                        stopped.Add(id);
-                }
-                catch (Exception error)
-                {
-                    RecordError(id, error);
-                }
-            var started = new JsonArray();
-            foreach (
-                var (id, raw) in configuration
-                    .CurrentChannels()
-                    .OrderBy(pair => pair.Key, StringComparer.Ordinal)
-            )
+        if (closed)
+            throw new InvalidOperationException("Channel runtime is shutting down.");
+        sessions.ChannelProgress.Reset();
+        string[] previous;
+        lock (gate)
+            previous = running.Keys.Order(StringComparer.Ordinal).ToArray();
+        var stopped = new JsonArray();
+        foreach (var id in previous)
+            try
             {
-                var config = raw as JsonObject ?? new JsonObject();
-                if (
-                    id is "webui" or "tui"
-                    || !Implemented(Type(id, config))
-                    || config["enabled"]?.GetValue<bool>() == false
-                    || !ModelConfiguration.IsConfigured(Type(id, config), config)
-                )
-                    continue;
-                try
-                {
-                    if (await StartCoreAsync(id))
-                        started.Add(id);
-                }
-                catch (Exception error)
-                {
-                    RecordError(id, error);
-                }
+                if (await StopCoreAsync(id))
+                    stopped.Add(id);
             }
-            return new JsonObject
+            catch (Exception error)
             {
-                ["started"] = started,
-                ["stopped"] = stopped,
-                ["statuses"] = Statuses(),
-                ["available"] = true,
-            };
+                RecordError(id, error);
+            }
+        var started = new JsonArray();
+        foreach (
+            var (id, raw) in configuration
+                .CurrentChannels()
+                .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+        )
+        {
+            var config = raw as JsonObject ?? new JsonObject();
+            if (
+                id is "webui" or "tui"
+                || !Implemented(Type(id, config))
+                || config["enabled"]?.GetValue<bool>() == false
+                || !ModelConfiguration.IsConfigured(Type(id, config), config)
+            )
+                continue;
+            try
+            {
+                if (await StartCoreAsync(id))
+                    started.Add(id);
+            }
+            catch (Exception error)
+            {
+                RecordError(id, error);
+            }
+        }
+        return new JsonObject
+        {
+            ["started"] = started,
+            ["stopped"] = stopped,
+            ["statuses"] = Statuses(),
+            ["available"] = true,
+        };
     }
 
     internal async Task ChangeAsync(string action, string id)
@@ -167,10 +167,32 @@ internal sealed class ManagedChannels(
         var config = Config(id);
         IManagedChannel channel = Type(id, config) switch
         {
-            "telegram" => new TelegramChannel(id, config, sessions, router, dependencies, error => RecordError(id, error)),
-            "matrix" => new MatrixChannel(id, config, sessions, router, dependencies, error => RecordError(id, error)),
-            "weixin" => new WeixinChannel(id, config, router, Weixin, error => RecordError(id, error)),
-            _ => throw new InvalidOperationException("Adapter is not implemented on this server: " + id),
+            "telegram" => new TelegramChannel(
+                id,
+                config,
+                sessions,
+                router,
+                dependencies,
+                error => RecordError(id, error)
+            ),
+            "matrix" => new MatrixChannel(
+                id,
+                config,
+                sessions,
+                router,
+                dependencies,
+                error => RecordError(id, error)
+            ),
+            "weixin" => new WeixinChannel(
+                id,
+                config,
+                router,
+                Weixin,
+                error => RecordError(id, error)
+            ),
+            _ => throw new InvalidOperationException(
+                "Adapter is not implemented on this server: " + id
+            ),
         };
         try
         {
@@ -182,7 +204,10 @@ internal sealed class ManagedChannels(
                 errors.Remove(id);
             }
             if (
-                SessionWait.Text(config[Type(id, config) == "matrix" ? "botUserId" : "mainAttachUser"]) is { Length: > 0 } conversation
+                SessionWait.Text(
+                    config[Type(id, config) == "matrix" ? "botUserId" : "mainAttachUser"]
+                )
+                    is { Length: > 0 } conversation
                 && sessions.ChannelBinding(id + ":" + conversation) is null
             )
                 sessions.AttachConfiguredChannel(id + ":" + conversation, "main");
@@ -221,11 +246,11 @@ internal sealed class ManagedChannels(
 
     internal async Task StopIngressAsync()
     {
-            closed = true;
-            IManagedChannel[] current;
-            lock (gate)
-                current = running.Values.ToArray();
-            await Task.WhenAll(current.Select(channel => channel.StopAsync()));
+        closed = true;
+        IManagedChannel[] current;
+        lock (gate)
+            current = running.Values.ToArray();
+        await Task.WhenAll(current.Select(channel => channel.StopAsync()));
     }
 
     public async ValueTask DisposeAsync()
