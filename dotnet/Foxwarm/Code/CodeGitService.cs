@@ -17,6 +17,7 @@ internal static partial class CodeGitService
         bool discover = false
     )
     {
+        workspace = CodeNativePaths.Native(workspace);
         var start = new ProcessStartInfo("git")
         {
             RedirectStandardOutput = true,
@@ -199,8 +200,8 @@ internal static partial class CodeGitService
         return new()
         {
             ["nodeId"] = "master",
-            ["workspace"] = top,
-            ["topLevel"] = top,
+            ["workspace"] = CodeNativePaths.Transport(top),
+            ["topLevel"] = CodeNativePaths.Transport(top),
             ["changes"] = changes,
         };
     }
@@ -280,6 +281,7 @@ internal static partial class CodeGitService
             string.IsNullOrWhiteSpace(value)
             || value.Contains('\0')
             || value.Replace('\\', '/').StartsWith('/')
+            || OperatingSystem.IsWindows() && Path.IsPathRooted(value)
         )
             throw new CodeServiceException(
                 "InvalidPath",
@@ -305,6 +307,7 @@ internal static partial class CodeGitService
         CancellationToken token
     )
     {
+        workspace = CodeNativePaths.Native(workspace);
         var normalized = RelativePath(workspace, relative);
         var full = Path.Combine(workspace, normalized);
         var chosen = ContentRef(reference);

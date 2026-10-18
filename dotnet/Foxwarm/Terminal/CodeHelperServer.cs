@@ -1,4 +1,5 @@
 using System.Net.Sockets;
+using System.IO.Pipes;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -13,6 +14,8 @@ internal sealed class CodeHelperServer : IAsyncDisposable
     private readonly Dictionary<string, string> capabilities = new(StringComparer.Ordinal);
     private readonly object gate = new();
     private Socket? listener;
+    private CancellationTokenSource? pipeStop;
+    private Task pipeAccept = Task.CompletedTask;
     private string? socketPath;
     private string? helperDirectory;
     private int closed;
@@ -36,7 +39,7 @@ internal sealed class CodeHelperServer : IAsyncDisposable
             capabilities[capability] = terminalId;
         var directory = helperDirectory!;
         Directory.CreateDirectory(Path.Combine(directory, "bin"));
-        var path = Path.Combine(directory, "bin", "code");
+        var path = Path.Combine(directory, "bin", OperatingSystem.IsWindows() ? "code.ps1" : "code");
         if (!File.Exists(path))
             await WriteWrapperAsync(path);
         return (
@@ -62,13 +65,20 @@ internal sealed class CodeHelperServer : IAsyncDisposable
 
     private async Task StartAsync()
     {
-        if (listener is not null)
+        if (listener is not null || pipeStop is not null)
             return;
         lock (gate)
             if (listener is not null)
                 return;
         helperDirectory = Path.Combine(stateRoot, ".temp", $"code-helper-{Environment.ProcessId}");
         Directory.CreateDirectory(helperDirectory);
+        if (OperatingSystem.IsWindows())
+        {
+            socketPath = $"foxwarm-code-{Environment.ProcessId}-{Guid.NewGuid():N}";
+            pipeStop = new CancellationTokenSource();
+            pipeAccept = AcceptPipeLoopAsync(pipeStop.Token);
+            return;
+        }
         socketPath = Path.Combine(Path.GetTempPath(), $"foxwarm-code-{Environment.ProcessId}.sock");
         try
         {
@@ -91,6 +101,16 @@ internal sealed class CodeHelperServer : IAsyncDisposable
             Environment.ProcessPath
             ?? throw new InvalidOperationException("Main process path is unavailable.");
         var assembly = typeof(CodeHelperServer).Assembly.Location;
+        if (OperatingSystem.IsWindows())
+        {
+            var prefix = Path.GetFileNameWithoutExtension(process).Equals("dotnet", StringComparison.OrdinalIgnoreCase)
+                ? $"{PsQuote(process)} {PsQuote(assembly)}" : PsQuote(process);
+            // The pipeline waits for a GUI-subsystem Desktop helper as well as a console host.
+            await File.WriteAllTextAsync(path, $"& {prefix} --code-helper @args | Out-Host\nif ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}\n", new UTF8Encoding(true));
+            var cmd = Path.ChangeExtension(path, ".cmd");
+            await File.WriteAllTextAsync(cmd, $"@echo off\r\n\"{Foxwarm.Tools.LocalExecManager.WindowsPowerShell}\" -NoProfile -ExecutionPolicy Bypass -File \"%~dp0code.ps1\" %*\r\n");
+            return;
+        }
         var launcher = Path.GetFileNameWithoutExtension(process)
             .Equals("dotnet", StringComparison.OrdinalIgnoreCase)
             ? $"exec {ShQuote(process)} {ShQuote(assembly)} --code-helper"
@@ -101,6 +121,31 @@ internal sealed class CodeHelperServer : IAsyncDisposable
                 path,
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
             );
+    }
+
+    private static string PsQuote(string value) => "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
+
+    private async Task AcceptPipeLoopAsync(CancellationToken token)
+    {
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                var pipe = new NamedPipeServerStream(socketPath!, PipeDirection.InOut, 16, PipeTransmissionMode.Byte,
+                    PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+                try
+                {
+                    await pipe.WaitForConnectionAsync(token);
+                }
+                catch
+                {
+                    await pipe.DisposeAsync();
+                    throw;
+                }
+                _ = HandleStreamAsync(pipe);
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
     }
 
     private static string ShQuote(string value) =>
@@ -120,9 +165,11 @@ internal sealed class CodeHelperServer : IAsyncDisposable
         catch (SocketException) when (Volatile.Read(ref closed) != 0) { }
     }
 
-    private async Task HandleAsync(Socket client)
+    private Task HandleAsync(Socket client) => HandleStreamAsync(new NetworkStream(client, ownsSocket: true));
+
+    private async Task HandleStreamAsync(Stream connection)
     {
-        await using var stream = new NetworkStream(client, ownsSocket: true);
+        await using var stream = connection;
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(25));
         string? line;
         try
@@ -277,18 +324,21 @@ internal sealed class CodeHelperServer : IAsyncDisposable
             throw new InvalidOperationException("--add requires a directory.");
         if (go && Directory.Exists(path))
             throw new InvalidOperationException("--goto requires a file.");
-        return new(add || Directory.Exists(path) ? "addFolder" : "openFile", path, line, column);
+        return new(add || Directory.Exists(path) ? "addFolder" : "openFile", Foxwarm.Code.CodeNativePaths.Transport(path), line, column);
     }
 
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref closed, 1) != 0)
             return;
+        pipeStop?.Cancel();
+        await pipeAccept;
+        pipeStop?.Dispose();
         listener?.Dispose();
         listener = null;
         lock (gate)
             capabilities.Clear();
-        if (socketPath is not null)
+        if (socketPath is not null && !OperatingSystem.IsWindows())
             try
             {
                 File.Delete(socketPath);
@@ -369,27 +419,44 @@ internal static class CodeHelperClient
                 },
                 JsonOptions
             ) + "\n";
-        var client = new UnixDomainSocketEndPoint(socketPath);
-        using var socket = new Socket(
-            AddressFamily.Unix,
-            SocketType.Stream,
-            ProtocolType.Unspecified
-        );
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(25));
-        await socket.ConnectAsync(client, timeout.Token);
-        var payloadBytes = Encoding.UTF8.GetBytes(payload);
-        var sent = 0;
-        while (sent < payloadBytes.Length)
-            sent += await socket.SendAsync(
-                payloadBytes.AsMemory(sent),
-                SocketFlags.None,
-                timeout.Token
-            );
+        Stream connection;
+        if (OperatingSystem.IsWindows())
+        {
+            var pipe = new NamedPipeClientStream(".", socketPath, PipeDirection.InOut, PipeOptions.Asynchronous);
+            try
+            {
+                await pipe.ConnectAsync(timeout.Token);
+            }
+            catch
+            {
+                pipe.Dispose();
+                throw;
+            }
+            connection = pipe;
+        }
+        else
+        {
+            var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+            try
+            {
+                await socket.ConnectAsync(new UnixDomainSocketEndPoint(socketPath), timeout.Token);
+            }
+            catch
+            {
+                socket.Dispose();
+                throw;
+            }
+            connection = new NetworkStream(socket, ownsSocket: true);
+        }
+        await using var stream = connection;
+        await stream.WriteAsync(Encoding.UTF8.GetBytes(payload), timeout.Token);
+        await stream.FlushAsync(timeout.Token);
         var buffer = new byte[8192];
         var text = new StringBuilder();
         while (true)
         {
-            var count = await socket.ReceiveAsync(buffer, SocketFlags.None, timeout.Token);
+            var count = await stream.ReadAsync(buffer, timeout.Token);
             if (count == 0)
                 break;
             if (text.Length + count > 64 * 1024)

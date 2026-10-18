@@ -1608,7 +1608,7 @@ function App() {
           onOpenCodeFile={(filePath, lines, target) => {
             const request = target
               ? resolveToolCodeFileTarget(target.resolvedPath, target.nodeId, undefined, lines)
-              : (filePath.startsWith('/') ? resolveToolCodeFileTarget(filePath, sessionRecord?.currentNode, undefined, lines) : null)
+              : resolveToolCodeFileTarget(filePath, sessionRecord?.currentNode, undefined, lines)
             if (!request) {
               window.alert('This path cannot be opened in Code yet.')
               return

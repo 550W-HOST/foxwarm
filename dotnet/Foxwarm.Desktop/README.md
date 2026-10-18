@@ -48,11 +48,15 @@ settings do not change the desktop's loopback listener.
 
 ## Prototype limits
 
-This is the existing WebUI and .NET host, not a complete Windows tool port.
-Local Linux shell execution, local PTY terminals and native Monty ToolScript
-execution are unavailable on Windows. Unsupported local exec/ToolScript tools
-are not advertised; supported connected Nodes retain their own capabilities.
-Chat, provider setup, file tools and persistent settings/history are available.
+The existing WebUI and .NET host provide native Windows PowerShell execution,
+ConPTY terminals and ordinary Monty 0.0.19 ToolScript. Independent exec commands
+survive normal Main shutdown; interactive terminals belong to Main and close
+with it. The same Desktop executable serves the private Code helper before
+UI/single-instance startup. No console apphost/runtimeconfig, Node installation,
+WSL or alternate backend is required. Native Code drive paths use the existing
+Code URI mapping; UNC/device paths are not supported. Connected Nodes retain
+their own capabilities. Chat, setup, file tools and persistent history remain
+available.
 Linux directory-fsync durability is not claimed on Windows. Code workbench
 assets, optional external tools/services and optional HEIF support are not
 supplied by this package. There is no updater, autostart or installer.
@@ -71,6 +75,12 @@ see `Foxwarm-icon-LICENSE.txt`. The WebView2 SDK is version 1.0.4258.31;
 its notice/license is included with the package.
 
 ## Build from source
+
+Native worker preparation needs Python 3 (`python3` on Linux, `python` on
+Windows) and access to the official npm registry during the first target build.
+The exact official Monty 0.0.19 standalone worker is cached only under `obj`
+and copied with its notices into output; no native binary is tracked. Git is
+an optional external tool for Code SCM, not a bundled dependency.
 
 Build the current WebUI first (`npm ci`, `npm --prefix packages/webui ci`,
 `npm --prefix packages/webui run build`), then use the .NET 10 SDK:

@@ -1,8 +1,11 @@
 # ToolScript native protocol dependencies
 
 The native ToolScript engine is the official Pydantic Monty 0.0.19 standalone
-Linux x64 GNU `monty subprocess` executable, obtained separately from the
-`@pydantic/monty-linux-x64-gnu` package. It is not bundled in this repository.
+Linux x64 GNU or Windows x64 MSVC `monty subprocess` executable. Builds acquire
+the exact official `@pydantic/monty-linux-x64-gnu` or
+`@pydantic/monty-win32-x64-msvc` 0.0.19 package for the target RID and include
+only its standalone worker in application output. Native binaries are build
+outputs, not tracked repository source.
 The protocol schema is from official Monty tag v0.0.19. Its MIT license is
 included in `MONTY-LICENSE`.
 

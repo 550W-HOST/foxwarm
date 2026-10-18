@@ -47,14 +47,16 @@ export function getVscodeWebPath(apiBasePath: string): string {
 
 export function normalizeCodePath(value: unknown): string | null {
   if (typeof value !== 'string') return null
-  const trimmed = value.trim()
+  let trimmed = value.trim()
+  if (/^[A-Za-z]:[\\/]/.test(trimmed)) trimmed = `/${trimmed[0].toUpperCase()}${trimmed.slice(1).replaceAll('\\', '/')}`
   if (!trimmed.startsWith('/') || trimmed.includes('\0')) return null
 
   const segments: string[] = []
+  const rootDepth = /^\/[A-Za-z]:\//.test(trimmed) ? 1 : 0
   for (const segment of trimmed.split('/')) {
     if (!segment || segment === '.') continue
     if (segment === '..') {
-      segments.pop()
+      if (segments.length > rootDepth) segments.pop()
       continue
     }
     segments.push(segment)
@@ -72,11 +74,10 @@ export function resolveToolCodeFileTarget(
   if (!/^[A-Za-z0-9._-]+$/.test(normalizedNodeId)) return null
   if (typeof filePath !== 'string' || !filePath.trim() || filePath.trim().startsWith('~')) return null
   const rawPath = filePath.trim()
-  const absolutePath = rawPath.startsWith('/')
-    ? normalizeCodePath(rawPath)
-    : (typeof cwd === 'string' && normalizeCodePath(cwd)
-      ? normalizeCodePath(`${normalizeCodePath(cwd)}/${rawPath}`)
-      : null)
+  const normalizedCwd = normalizeCodePath(cwd)
+  const relative = normalizedCwd && /^\/[A-Za-z]:\//.test(normalizedCwd) ? rawPath.replaceAll('\\', '/') : rawPath
+  const absolutePath = normalizeCodePath(rawPath)
+    || (normalizedCwd ? normalizeCodePath(`${normalizedCwd}/${relative}`) : null)
   if (!absolutePath) return null
 
   const normalizeLine = (value: unknown): number | undefined => {
@@ -159,7 +160,7 @@ export function resolveSessionCodeTarget(nodeId: unknown, cwd: unknown): CodeTar
 export function makeCodeWorkspaceUri(target: CodeTarget): string {
   const path = normalizeCodePath(target.path)
   if (!/^[A-Za-z0-9._-]+$/.test(target.nodeId) || !path) {
-    throw new Error('Code workspace target must use a valid node and an absolute POSIX path')
+    throw new Error('Code workspace target must use a valid node and an absolute path')
   }
   const encodedPath = path.split('/').map((segment) => encodeURIComponent(segment)).join('/')
   return `foxwarm://node+${encodeURIComponent(target.nodeId)}${encodedPath || '/'}`

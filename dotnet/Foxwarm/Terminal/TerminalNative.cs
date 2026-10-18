@@ -10,7 +10,9 @@ internal static class TerminalNative
         AppContext.BaseDirectory,
         "libfoxwarm-pty.so"
     );
-    internal static bool IsSupported => OperatingSystem.IsLinux() && File.Exists(NativePath);
+    internal static bool IsSupported =>
+        OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763)
+        || OperatingSystem.IsLinux() && File.Exists(NativePath);
 
     static TerminalNative()
     {
@@ -78,6 +80,7 @@ internal static class TerminalNative
     internal sealed class Handle : IDisposable
     {
         private IntPtr pointer;
+        private readonly WindowsPseudoConsole? windows;
         internal IntPtr Pointer => pointer;
         internal int Pid { get; }
         internal int Session { get; }
@@ -91,6 +94,13 @@ internal static class TerminalNative
                 throw new IOException($"PTY controlling session unavailable: errno {-Session}.");
         }
 
+        private Handle(WindowsPseudoConsole windows)
+        {
+            this.windows = windows;
+            Pid = windows.Pid;
+            Session = windows.Pid;
+        }
+
         internal static Handle Spawn(
             string shell,
             IReadOnlyList<string> arguments,
@@ -100,6 +110,8 @@ internal static class TerminalNative
             int rows
         )
         {
+            if (OperatingSystem.IsWindows())
+                return new Handle(WindowsPseudoConsole.Spawn(shell, arguments, cwd, environment, cols, rows));
             if (!IsSupported)
                 throw new PlatformNotSupportedException(
                     "Main terminal PTY is unavailable on this Linux host."
@@ -137,10 +149,15 @@ internal static class TerminalNative
             }
         }
 
-        internal long Read(byte[] buffer) => fw_read(Pointer, buffer, (nuint)buffer.Length);
+        internal long Read(byte[] buffer) => windows?.Read(buffer) ?? fw_read(Pointer, buffer, (nuint)buffer.Length);
 
         internal void Write(byte[] buffer)
         {
+            if (windows is not null)
+            {
+                windows.Write(buffer);
+                return;
+            }
             nuint offset = 0;
             while (offset < (nuint)buffer.Length)
             {
@@ -158,17 +175,33 @@ internal static class TerminalNative
 
         internal void Resize(int cols, int rows)
         {
+            if (windows is not null)
+            {
+                windows.Resize(cols, rows);
+                return;
+            }
             var error = fw_resize(Pointer, checked((ushort)cols), checked((ushort)rows));
             if (error != 0)
                 throw new IOException($"Terminal resize failed (errno {error}).");
         }
 
-        internal int Foreground => fw_foreground(Pointer);
+        internal int Foreground => windows?.Pid ?? fw_foreground(Pointer);
 
-        internal void CancelRead() => fw_cancel(Pointer);
+        internal void CancelRead()
+        {
+            if (windows is not null)
+                windows.Close();
+            else
+                fw_cancel(Pointer);
+        }
 
         internal void SignalForeground(int signal)
         {
+            if (windows is not null)
+            {
+                windows.Close();
+                return;
+            }
             var error = fw_signal_foreground(Pointer, signal);
             if (error != 0 && error != 1 && error != 3)
                 throw new IOException($"Terminal foreground signal failed (errno {error}).");
@@ -176,6 +209,11 @@ internal static class TerminalNative
 
         internal void SignalShell(int signal)
         {
+            if (windows is not null)
+            {
+                windows.Close();
+                return;
+            }
             var error = fw_signal_shell(Pointer, signal);
             if (error != 0 && error != 3)
                 throw new IOException($"Terminal shell signal failed (errno {error}).");
@@ -183,12 +221,19 @@ internal static class TerminalNative
 
         internal (int Error, int Code, int Signal) Wait()
         {
+            if (windows is not null)
+                return windows.Wait();
             var error = fw_wait(Pointer, out var code, out var signal);
             return (error, code, signal);
         }
 
         public void Dispose()
         {
+            if (windows is not null)
+            {
+                windows.Dispose();
+                return;
+            }
             var value = Interlocked.Exchange(ref pointer, IntPtr.Zero);
             if (value != IntPtr.Zero)
             {
@@ -198,7 +243,7 @@ internal static class TerminalNative
             }
         }
 
-        internal static int OwnedFdCount => fw_owned_fds();
+        internal static int OwnedFdCount => OperatingSystem.IsWindows() ? 0 : fw_owned_fds();
     }
 
     private sealed class NativeStrings : IDisposable

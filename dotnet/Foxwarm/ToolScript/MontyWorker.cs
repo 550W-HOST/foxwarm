@@ -11,7 +11,8 @@ namespace Foxwarm.ToolScript;
 internal sealed class MontyWorker : IAsyncDisposable
 {
     internal static bool IsSupported =>
-        OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture == Architecture.X64;
+        (OperatingSystem.IsLinux() || OperatingSystem.IsWindows())
+        && RuntimeInformation.ProcessArchitecture == Architecture.X64;
     internal const string Version = "0.0.19";
     private readonly Process process;
     private readonly Task stderrDrain;
@@ -24,7 +25,7 @@ internal sealed class MontyWorker : IAsyncDisposable
     {
         if (!IsSupported)
             throw new PlatformNotSupportedException(
-                "ToolScript native execution requires the qualified Linux x64 GNU Monty 0.0.19 executable."
+                "ToolScript native execution requires the packaged Monty 0.0.19 executable for this platform."
             );
         var info = new ProcessStartInfo(Path.GetFullPath(binary))
         {
@@ -35,6 +36,8 @@ internal sealed class MontyWorker : IAsyncDisposable
         };
         info.ArgumentList.Add("subprocess");
         info.Environment.Clear();
+        if (OperatingSystem.IsWindows() && Environment.GetEnvironmentVariable("SystemRoot") is { } systemRoot)
+            info.Environment["SystemRoot"] = systemRoot;
         process = Process.Start(info) ?? throw new IOException("Unable to start native Monty.");
         // Native protocol carries actionable errors. Drain stderr without accumulating another unbounded string.
         stderrDrain = DrainStderrAsync();

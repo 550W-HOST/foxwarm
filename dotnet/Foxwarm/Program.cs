@@ -6,7 +6,7 @@ using Foxwarm.Sessions;
 if (await Foxwarm.Vector.VectorChild.TryRunAsync(args))
     return;
 
-if (await Foxwarm.Terminal.CodeHelperClient.TryRunAsync(args))
+if (await Foxwarm.Terminal.NativeHelperEntry.TryRunAsync(args))
     return;
 
 static string Required(string name) =>

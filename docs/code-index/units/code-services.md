@@ -1,6 +1,6 @@
 # Unit: Code workbench and Git/file services
 
-Files: `dotnet/Foxwarm/Code/CodeFileService.cs`, `dotnet/Foxwarm/Code/CodeGitService.Commit.cs`, `dotnet/Foxwarm/Code/CodeGitService.cs`, `dotnet/Foxwarm/Code/CodeWorkbench.Routes.cs`, `dotnet/Foxwarm/Code/CodeWorkbench.cs`
+Files: `dotnet/Foxwarm/Code/CodeFileService.cs`, `dotnet/Foxwarm/Code/CodeNativePaths.cs`, `dotnet/Foxwarm/Code/CodeGitService.Commit.cs`, `dotnet/Foxwarm/Code/CodeGitService.cs`, `dotnet/Foxwarm/Code/CodeWorkbench.Routes.cs`, `dotnet/Foxwarm/Code/CodeWorkbench.cs`
 
 ## Purpose
 
@@ -16,7 +16,7 @@ Callers and adjacent boundaries: HttpServer; WebUI workbench components; Termina
 
 `CodeWorkbench` keeps the existing deployment-relative workbench, static assets, capability URLs, persistent multi-root workspace and browser bridge. Filesystem routes select Master-local `CodeFileService` or the captured Node's advertised `vscode-fs` operations. Write/read retain the inclusive 50 MiB file boundary; oversized requests reject before dispatch. Remote binary content crosses the official base64 service envelope, not an exec command or ordinary model tool.
 
-Status/content select local `CodeGitService` or `vscode-git`; commit details require service version 2 and retain immutable commit IDs and bounded content. The HTTP response stamps the requested authenticated Node namespace for Git consumers rather than accepting a peer-supplied identity. SCM remains read-only. Absolute POSIX paths and `foxwarm://node+<id>/...` preserve the concrete remote namespace; earlier URI readers remain available. Native Windows Code workspace mapping is not added.
+Status/content select local `CodeGitService` or `vscode-git`; commit details require service version 2 and retain immutable commit IDs and bounded content. The HTTP response stamps the requested authenticated Node namespace for Git consumers rather than accepting a peer-supplied identity. SCM remains read-only. Absolute POSIX paths and `foxwarm://node+<id>/...` preserve the concrete remote namespace; earlier URI readers remain available. Windows Main maps absolute drive paths at the [Code URI boundary](../threads/code-integration.md#d-code-real-path-uri); local filesystem/Git calls receive native paths while remote payloads retain their existing POSIX semantics. `CodeNativePaths.Native`/`Transport` own that mapping. Windows stat uses native file metadata/link resolution and rename uses MoveFileEx without cross-volume copy or rollback. Typed bootstrap URI components decode escaped path segments, including drive colons, spaces and Unicode. Git remains an optional external executable and missing Git reports unavailable rather than borrowing a shell implementation.
 
 The fixed workspace-root response remains Master-only and authoritative for app/data/config commands, independent of Session-selected Node/cwd. Normal instance-token authentication remains distinct from capability and exact browser bridge checks; there is no generic Origin URL gate or fabricated model caller. [Code integration](../threads/code-integration.md) owns these shared contracts.
 

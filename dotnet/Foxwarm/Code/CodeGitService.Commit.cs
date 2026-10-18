@@ -103,7 +103,7 @@ internal static partial class CodeGitService
         return new()
         {
             ["nodeId"] = "master",
-            ["workspace"] = top,
+            ["workspace"] = CodeNativePaths.Transport(top),
             ["commit"] = new JsonObject
             {
                 ["oid"] = oid,

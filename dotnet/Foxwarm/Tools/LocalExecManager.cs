@@ -9,10 +9,10 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Tools;
 
-/// <summary>Trusted single-host Linux exec with owned on-disk artifacts. Cwd is not an OS sandbox.</summary>
+/// <summary>Trusted single-host native exec with owned on-disk artifacts. Cwd is not an OS sandbox.</summary>
 internal sealed partial class LocalExecManager : IAsyncDisposable
 {
-    internal static bool IsSupported => OperatingSystem.IsLinux();
+    internal static bool IsSupported => OperatingSystem.IsLinux() || OperatingSystem.IsWindows();
 
     private const int PageBytes = 16 * 1024;
     private const int DisplayChars = 16 * 1024;
@@ -470,6 +470,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         CancellationToken ct
     )
     {
+        if (OperatingSystem.IsWindows())
+            return await LaunchWindowsAsync(allocated, agentDirectory, ct);
         var scriptPath = Path.Combine(allocated.Directory, "command.sh");
         // The wrapper owns its log/status descriptors and survives the ASP.NET host process.
         var wrapper =
@@ -534,7 +536,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             throw new ArgumentException(
                 $"Cannot start exec: working directory is invalid (not an accessible directory). Resolved cwd: `{path}`."
             );
-        if (Access(path, 5) != 0)
+        if (!OperatingSystem.IsWindows() && Access(path, 5) != 0)
             throw new UnauthorizedAccessException(
                 $"Cannot start exec: working directory is not readable/searchable: `{path}`."
             );
@@ -554,6 +556,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
 
     private static string? ReadLiveCwd(ExecRecord record)
     {
+        if (OperatingSystem.IsWindows())
+            return null; // Windows does not expose another process's live shell location.
         var identity = ReadProcessIdentity(record.Pid);
         if (
             identity.Ticks is null
@@ -697,12 +701,31 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
     {
         try
         {
+            if (OperatingSystem.IsWindows())
+            {
+                using var process = Process.GetProcessById(pid);
+                return process.HasExited
+                    ? (null, '?')
+                    : (process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture), 'R');
+            }
             var raw = File.ReadAllText($"/proc/{pid}/stat");
             var close = raw.LastIndexOf(')');
             if (close < 0 || close + 2 >= raw.Length)
                 return (null, '?');
             var fields = raw[(close + 2)..].Split(' ', StringSplitOptions.RemoveEmptyEntries);
             return fields.Length > 19 ? (fields[19], fields[0][0]) : (null, '?');
+        }
+        catch (ArgumentException)
+        {
+            return (null, '?');
+        }
+        catch (InvalidOperationException)
+        {
+            return (null, '?');
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return (null, '?');
         }
         catch (IOException)
         {

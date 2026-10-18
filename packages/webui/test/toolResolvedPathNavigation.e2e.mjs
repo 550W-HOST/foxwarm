@@ -77,3 +77,19 @@ test('Code icons use historical per-response Node and resolved path, preserve ra
     { raw: '$fw_tmp/b.txt', target: { resolvedPath: '/agent/tmp/b.txt', nodeId: 'remote-a' } },
   ])
 })
+
+
+test('Windows native resolved paths retain their real callback target and plain raw label', async () => {
+  await page.goto(url)
+  await page.evaluate(() => window.renderCase('read',
+    { id: 'windows-read', name: 'read', args: { filePath: '$fw_agentdir/input.txt' } },
+    { tool_use_id: 'windows-read', name: 'read', response: { output: 'ok' }, __meta: { resolvedPaths: [
+      { raw: '$fw_agentdir/input.txt', resolved: 'W:\\work space\\input.txt', nodeId: 'master' },
+    ] } }))
+  await page.waitForSelector('#read .foxwarm-tool-code-open')
+  assert.equal(await page.$eval('#read .foxwarm-tool-code-path', element => element.textContent), '$fw_agentdir/input.txt')
+  await page.click('#read .foxwarm-tool-code-open')
+  assert.deepEqual(await page.evaluate(() => window.clicks), [
+    { raw: '$fw_agentdir/input.txt', lines: {}, target: { resolvedPath: 'W:\\work space\\input.txt', nodeId: 'master' } },
+  ])
+})

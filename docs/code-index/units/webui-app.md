@@ -124,3 +124,5 @@ Code-specific persistence is canonical in [D-code-persistent-workspace](../threa
 Theme package/selection, layout, navigation, and Code launch choices stay browser-local unless the setting is explicitly instance-wide. Theme details are owned by [webui-theme-system](./webui-theme-system.md).
 
 App stages a selected desktop Chat before replacing its preview, and supplies readable already-loaded Session names to communication cards. See [Session navigation](../threads/webui-session-navigation.md) and [Session messages](./webui-session-messages.md).
+
+Windows drive paths normalize to the existing slash-based Code URI representation at presentation; stored Session cwd and ordinary tool metadata remain native. See [Code URI ownership](../threads/code-integration.md#d-code-real-path-uri).

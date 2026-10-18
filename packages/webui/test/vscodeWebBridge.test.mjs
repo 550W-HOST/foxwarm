@@ -118,3 +118,17 @@ test('tool Code paths keep plain text and expose only an adjacent native icon ac
   assert.doesNotMatch(component, /role="button"|tabIndex=/)
   assert.doesNotMatch(component, /hover:underline cursor-pointer|text-blue|dark:text-blue/)
 })
+
+
+test('Windows drive paths use the same Code URI while preserving relative resolution and drive roots', () => {
+  assert.equal(normalizeCodePath('w:\\work space\\file.txt'), '/W:/work space/file.txt')
+  assert.equal(normalizeCodePath('W:/../file.txt'), '/W:/file.txt')
+  assert.equal(normalizeCodePath('W:relative'), null)
+  assert.equal(normalizeCodePath('\\\\server\\share'), null)
+  assert.deepEqual(resolveToolCodeFileTarget('sub\\file.txt', 'master', 'w:\\work'), {
+    kind: 'openFile', nodeId: 'master', path: '/W:/work/sub/file.txt',
+  })
+  assert.deepEqual(resolveToolCodeFileTarget('w:\\file.txt', 'master', '/elsewhere'), {
+    kind: 'openFile', nodeId: 'master', path: '/W:/file.txt',
+  })
+})

@@ -40,15 +40,16 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
             );
         if (string.IsNullOrWhiteSpace(cwd))
             throw new ArgumentException("cwd is required.");
-        var full = Path.GetFullPath(cwd.Trim());
+        var full = Path.GetFullPath(Foxwarm.Code.CodeNativePaths.Native(cwd.Trim()));
         if (!Directory.Exists(full))
             throw new DirectoryNotFoundException(full);
         cols = Math.Max(20, cols);
         rows = Math.Max(5, rows);
-        if (cols > ushort.MaxValue || rows > ushort.MaxValue)
+        if (cols > (OperatingSystem.IsWindows() ? short.MaxValue : ushort.MaxValue)
+            || rows > (OperatingSystem.IsWindows() ? short.MaxValue : ushort.MaxValue))
             throw new ArgumentOutOfRangeException(nameof(cols));
 
-        var environment = new Dictionary<string, string>(StringComparer.Ordinal);
+        var environment = new Dictionary<string, string>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
         foreach (System.Collections.DictionaryEntry item in Environment.GetEnvironmentVariables())
             if (item.Key is string key && item.Value is string value)
                 environment[key] = value;
@@ -60,9 +61,9 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
         var shell =
             configuredShell.Length > 0 && File.Exists(configuredShell)
                 ? configuredShell
-                : "/bin/bash";
+                : OperatingSystem.IsWindows() ? Foxwarm.Tools.LocalExecManager.WindowsPowerShell : "/bin/bash";
         if (!File.Exists(shell))
-            throw new FileNotFoundException("A usable POSIX shell is unavailable.", shell);
+            throw new FileNotFoundException("A usable terminal shell is unavailable.", shell);
 
         await creation.WaitAsync(token);
         try
@@ -72,9 +73,9 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
             var id = Guid.NewGuid().ToString("N");
             Directory.CreateDirectory(terminalDirectory);
             var cwdFile = Path.Combine(terminalDirectory, id + ".cwd");
-            var rcFile = shell.Contains("bash", StringComparison.Ordinal)
-                ? Path.Combine(terminalDirectory, id + ".bashrc")
-                : null;
+            var powershell = OperatingSystem.IsWindows() && Path.GetFileNameWithoutExtension(shell).Contains("powershell", StringComparison.OrdinalIgnoreCase);
+            var rcFile = powershell ? Path.Combine(terminalDirectory, id + ".ps1")
+                : shell.Contains("bash", StringComparison.Ordinal) ? Path.Combine(terminalDirectory, id + ".bashrc") : null;
             environment["FOXWARM_TERMINAL_ID"] = id;
             environment["FOXWARM_TERMINAL_CWD_PATH"] = cwdFile;
             var helperInfo = await helper.RegisterAsync(id);
@@ -84,12 +85,14 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
             try
             {
                 if (rcFile is not null)
-                    await File.WriteAllTextAsync(rcFile, BashRc);
+                    await File.WriteAllTextAsync(rcFile, powershell ? PowerShellRc : BashRc, new UTF8Encoding(powershell));
                 if (rcFile is not null && OperatingSystem.IsLinux())
                     File.SetUnixFileMode(rcFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
                 var native = TerminalNative.Handle.Spawn(
                     shell,
-                    rcFile is null ? ["-i"] : ["--rcfile", rcFile, "-i"],
+                    powershell ? ["-NoLogo", "-NoProfile", "-NoExit", "-ExecutionPolicy", "Bypass", "-File", rcFile!]
+                        : OperatingSystem.IsWindows() ? []
+                        : rcFile is null ? ["-i"] : ["--rcfile", rcFile, "-i"],
                     full,
                     environment,
                     cols,
@@ -126,6 +129,17 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
             creation.Release();
         }
     }
+
+    private const string PowerShellRc = """
+        function global:prompt {
+          $tmp = "$env:FOXWARM_TERMINAL_CWD_PATH.tmp.$PID"
+          try {
+            [IO.File]::WriteAllText($tmp, (Get-Location).Path)
+            Move-Item -LiteralPath $tmp -Destination $env:FOXWARM_TERMINAL_CWD_PATH -Force
+          } catch {}
+          "PS $($executionContext.SessionState.Path.CurrentLocation)> "
+        }
+        """;
 
     private const string BashRc = """
         if [ -f /etc/bash.bashrc ]; then source /etc/bash.bashrc; fi
@@ -274,7 +288,7 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
                 ["id"] = Id,
                 ["nodeId"] = "master",
                 ["pid"] = native.Pid,
-                ["cwd"] = Cwd,
+                ["cwd"] = Foxwarm.Code.CodeNativePaths.Transport(Cwd),
                 ["shell"] = Shell,
                 ["cols"] = Cols,
                 ["rows"] = Rows,
@@ -352,7 +366,8 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
         {
             cols = Math.Max(20, cols);
             rows = Math.Max(5, rows);
-            if (cols > ushort.MaxValue || rows > ushort.MaxValue)
+            if (cols > (OperatingSystem.IsWindows() ? short.MaxValue : ushort.MaxValue)
+            || rows > (OperatingSystem.IsWindows() ? short.MaxValue : ushort.MaxValue))
                 throw new ArgumentOutOfRangeException(nameof(cols));
             lock (gate)
             {

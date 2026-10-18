@@ -93,7 +93,7 @@ internal sealed partial class CodeWorkbench
                 "Active configuration descriptors are unavailable."
             );
         static JsonObject Descriptor(string path) =>
-            new() { ["nodeId"] = "master", ["path"] = path };
+            new() { ["nodeId"] = "master", ["path"] = CodeNativePaths.Transport(path) };
         return new()
         {
             ["version"] = 1,
@@ -111,7 +111,7 @@ internal sealed partial class CodeWorkbench
     }
 
     internal static string FoxwarmUri(string path) =>
-        "foxwarm://node+master" + string.Join('/', path.Split('/').Select(Uri.EscapeDataString));
+        "foxwarm://node+master" + string.Join('/', CodeNativePaths.Transport(path).Split('/').Select(Uri.EscapeDataString));
 
     private static JsonObject UriParts(string text)
     {
@@ -124,7 +124,7 @@ internal sealed partial class CodeWorkbench
             {
                 ["scheme"] = "foxwarm",
                 ["authority"] = match.Groups[1].Value,
-                ["path"] = match.Groups[2].Value.Length > 0 ? match.Groups[2].Value : "/",
+                ["path"] = match.Groups[2].Value.Length > 0 ? Uri.UnescapeDataString(match.Groups[2].Value) : "/",
                 ["query"] = match.Groups[3].Value,
                 ["fragment"] = match.Groups[4].Value,
             };

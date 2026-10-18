@@ -9,6 +9,8 @@ internal static class Program
     {
         if (Foxwarm.Vector.VectorChild.TryRunAsync(args).GetAwaiter().GetResult())
             return;
+        if (Foxwarm.Terminal.NativeHelperEntry.TryRunAsync(args).GetAwaiter().GetResult())
+            return;
         ApplicationConfiguration.Initialize();
         using var instance = new Mutex(
             false,

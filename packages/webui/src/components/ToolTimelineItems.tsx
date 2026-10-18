@@ -1,4 +1,5 @@
 import { memo, useCallback, useContext, useMemo, useState } from 'react'
+import { normalizeCodePath } from '../vscodeWeb'
 import type { ReactNode } from 'react'
 import { Code2, FileJson, Download, Timer } from 'lucide-react'
 import {
@@ -232,7 +233,7 @@ type DisplayResolvedPaths = NonNullable<FunctionResponse['__meta']>['resolvedPat
 const resolvedCodePath = (paths: DisplayResolvedPaths | undefined, raw: unknown, index = 0): ResolvedCodePath | undefined => {
   if (typeof raw !== 'string') return undefined
   const match = paths?.[index]
-  if (!match || match.raw !== raw || typeof match.resolved !== 'string' || !match.resolved.startsWith('/')
+  if (!match || match.raw !== raw || typeof match.resolved !== 'string' || !normalizeCodePath(match.resolved)
     || typeof match.nodeId !== 'string') return undefined
   return { nodeId: match.nodeId, resolvedPath: match.resolved }
 }
@@ -247,7 +248,7 @@ const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFil
 }) {
   const pathFade = useThreadCardOverflowFade<HTMLSpanElement>('right', collapsed)
   const displayPath = typeof filePath === 'string' ? filePath : 'Path unavailable'
-  const canOpenCode = typeof filePath === 'string' && !!onOpenCodeFile && (!!target || filePath.startsWith('/'))
+  const canOpenCode = typeof filePath === 'string' && !!onOpenCodeFile && (!!target || !!normalizeCodePath(filePath))
   const layoutClass = collapsed
     ? 'foxwarm-tool-code-path-collapsed min-w-0 max-w-full truncate whitespace-nowrap'
     : 'min-w-0 max-w-full whitespace-normal break-words'

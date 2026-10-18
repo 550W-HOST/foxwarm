@@ -133,9 +133,14 @@ internal static class CodeFileService
     [DllImport("libc", EntryPoint = "rename", SetLastError = true)]
     private static extern int RenameNative(string oldPath, string newPath);
 
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool MoveFileExW(string oldPath, string newPath, uint flags);
+
     private static CodeServiceException NativeError(string path)
     {
         var errno = Marshal.GetLastPInvokeError();
+        if (OperatingSystem.IsWindows())
+            return new(errno switch { 2 or 3 => "FileNotFound", 5 => "NoPermissions", 80 or 183 => "FileExists", _ => "Unknown" }, new System.ComponentModel.Win32Exception(errno).Message + ": " + path);
         var code = errno switch
         {
             2 or 20 => "FileNotFound",
@@ -160,6 +165,31 @@ internal static class CodeFileService
 
     internal static JsonObject StatFile(string path)
     {
+        path = CodeNativePaths.Native(path);
+        if (OperatingSystem.IsWindows())
+        {
+            try
+            {
+                var attributes = File.GetAttributes(path);
+                var directory = (attributes & FileAttributes.Directory) != 0;
+                FileSystemInfo info = directory ? new DirectoryInfo(path) : new FileInfo(path);
+                var isLink = (attributes & FileAttributes.ReparsePoint) != 0;
+                if (isLink && info.ResolveLinkTarget(true) is { } target)
+                    info = target;
+                directory = (info.Attributes & FileAttributes.Directory) != 0;
+                return new()
+                {
+                    ["type"] = (directory ? 2 : 1) | (isLink ? 64 : 0),
+                    ["ctime"] = new DateTimeOffset(info.CreationTimeUtc).ToUnixTimeMilliseconds(),
+                    ["mtime"] = new DateTimeOffset(info.LastWriteTimeUtc).ToUnixTimeMilliseconds(),
+                    ["size"] = directory ? 0UL : checked((ulong)((FileInfo)info).Length),
+                };
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                throw CodeServiceException.FileError(error);
+            }
+        }
         var link = Stat(path, true);
         var actual = (link.Mode & 0xf000) == 0xa000 ? Stat(path, false) : link;
         var type = (actual.Mode & 0xf000) switch
@@ -202,6 +232,7 @@ internal static class CodeFileService
 
     internal static JsonObject ReadDirectory(string path)
     {
+        path = CodeNativePaths.Native(path);
         if (!DirectoryStat(StatFile(path)))
             throw new CodeServiceException("FileNotADirectory", "Path is not a directory.");
         var entries = new JsonArray();
@@ -226,6 +257,7 @@ internal static class CodeFileService
 
     internal static async Task<byte[]> ReadFileAsync(string path, CancellationToken token)
     {
+        path = CodeNativePaths.Native(path);
         var stat = StatFile(path);
         if ((stat["type"]!.GetValue<int>() & 1) == 0)
             throw new CodeServiceException("FileIsADirectory", "Path is not a file.");
@@ -272,6 +304,7 @@ internal static class CodeFileService
         CancellationToken token
     )
     {
+        path = CodeNativePaths.Native(path);
         Parent(path);
         var exists = Exists(path);
         if (!exists && !create)
@@ -300,6 +333,7 @@ internal static class CodeFileService
 
     internal static JsonObject CreateDirectory(string path)
     {
+        path = CodeNativePaths.Native(path);
         Parent(path);
         if (Exists(path))
             throw new CodeServiceException("FileExists", "Path already exists.");
@@ -309,6 +343,7 @@ internal static class CodeFileService
 
     internal static JsonObject Delete(string path, bool recursive)
     {
+        path = CodeNativePaths.Native(path);
         if (DirectoryStat(StatFile(path)))
             Directory.Delete(path, recursive);
         else
@@ -318,6 +353,8 @@ internal static class CodeFileService
 
     internal static JsonObject Rename(string oldPath, string newPath, bool overwrite)
     {
+        oldPath = CodeNativePaths.Native(oldPath);
+        newPath = CodeNativePaths.Native(newPath);
         _ = StatFile(oldPath);
         Parent(newPath);
         if (Exists(newPath))
@@ -326,7 +363,7 @@ internal static class CodeFileService
                 throw new CodeServiceException("FileExists", "Destination already exists.");
             Delete(newPath, true);
         }
-        if (RenameNative(oldPath, newPath) != 0)
+        if (OperatingSystem.IsWindows() ? !MoveFileExW(oldPath, newPath, 0) : RenameNative(oldPath, newPath) != 0)
             throw NativeError(oldPath);
         return new() { ["success"] = true };
     }

@@ -489,11 +489,16 @@ public sealed class CodeRoutesTests
         var match = System.Text.RegularExpressions.Regex.Match(html, "data-settings=\"([^\"]+)\"");
         var config = JsonNode.Parse(WebUtility.HtmlDecode(match.Groups[1].Value))!;
         Assert.Equal(
-            CodeWorkbench.FoxwarmUri(workspace),
+            Uri.UnescapeDataString(CodeWorkbench.FoxwarmUri(workspace)),
             "foxwarm://"
                 + config["workspaceUri"]!["authority"]!.ToString()
                 + config["workspaceUri"]!["path"]!.ToString()
         );
+        var encodedFolder = "foxwarm://node+master/W%3A/work%20space/%E9%9B%AA";
+        var folderHtml = await f.Client.GetStringAsync("/vscode-web/?folderUri=" + Uri.EscapeDataString(encodedFolder));
+        var folderMatch = System.Text.RegularExpressions.Regex.Match(folderHtml, "data-settings=\"([^\"]+)\"");
+        var folderConfig = JsonNode.Parse(WebUtility.HtmlDecode(folderMatch.Groups[1].Value))!;
+        Assert.Equal("/W:/work space/雪", folderConfig["folderUri"]!["path"]!.GetValue<string>());
         Assert.Contains("foxwarm-terminal", config["additionalBuiltinExtensions"]!.ToJsonString());
         Assert.DoesNotContain("@@", html);
         var retained = JsonNode.Parse(await File.ReadAllTextAsync(workspace))!;
